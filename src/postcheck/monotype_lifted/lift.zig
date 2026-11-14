@@ -8,6 +8,8 @@ const Common = @import("../common.zig");
 const Mono = @import("../monotype/ast.zig");
 const MonoType = @import("../monotype/type.zig");
 const Ast = @import("ast.zig");
+const body_copy = @import("body_copy.zig");
+const sequenced = @import("sequenced.zig");
 const checked = @import("check").CheckedModule;
 const BinderId = @import("check").CheckedBodies.BinderId;
 
@@ -162,9 +164,9 @@ pub fn run(
 
     try lifter.lowerDefsAndRoots();
     program.next_symbol = lifter.symbols.next;
+    try lifter.copySharedBodies();
 
-    try @import("normalize.zig").run(&program);
-
+    try sequenced.verify(&program);
     verifyCaptureInvariants(&program);
 
     owned.deinit();
@@ -407,6 +409,10 @@ const Lifter = struct {
     fn_bodies: std.ArrayList(?MonoFnBody),
     nested_fn_ids: collections.DenseMap(Ast.FnId, void),
     initialized_fns: collections.DenseMap(Ast.FnId, void),
+    /// Functions whose body reaches an expression or a statement an earlier
+    /// parent already holds. Each takes a copy of its own body once lifting
+    /// has finished (`copySharedBodies`).
+    shared_bodies: collections.DenseMap(Ast.FnId, void),
     symbols: Common.SymbolGen,
     /// Solved capture set per lifted function, indexed by `Ast.FnId`. Computed
     /// as a least fixed point over the function-reference graph before any body
@@ -436,6 +442,7 @@ const Lifter = struct {
             .fn_bodies = .empty,
             .nested_fn_ids = collections.DenseMap(Ast.FnId, void).init(allocator),
             .initialized_fns = collections.DenseMap(Ast.FnId, void).init(allocator),
+            .shared_bodies = collections.DenseMap(Ast.FnId, void).init(allocator),
             .symbols = .{ .next = source.next_symbol },
             .fn_captures = &.{},
             .fn_capture_rows = &.{},
@@ -445,6 +452,7 @@ const Lifter = struct {
     fn deinit(self: *Lifter) void {
         self.allocator.free(self.fn_capture_rows);
         self.allocator.free(self.fn_captures);
+        self.shared_bodies.deinit();
         self.initialized_fns.deinit();
         self.nested_fn_ids.deinit();
         self.fn_bodies.deinit(self.allocator);
@@ -627,6 +635,35 @@ const Lifter = struct {
         captures: []const Ast.TypedLocal,
     };
 
+    /// The body being rewritten reached an expression or a statement that an
+    /// earlier parent holds: Monotype names one restored constant from every
+    /// place that reads it.
+    fn noteSharedBody(self: *Lifter) Allocator.Error!void {
+        const owner = self.output.shapes_owner orelse Common.invariant("a lifted expression was rewritten outside any function body");
+        try self.shared_bodies.put(owner, {});
+    }
+
+    /// Give each function whose body reaches a subtree an earlier parent
+    /// holds a copy of its own body, so every expression with expressions
+    /// inside it has exactly one parent (design.md "Operand Sequencing").
+    /// The earlier parent keeps the original.
+    fn copySharedBodies(self: *Lifter) Allocator.Error!void {
+        if (self.shared_bodies.count() == 0) return;
+        for (0..self.output.fnCount()) |index| {
+            const fn_id: Ast.FnId = @fromBackingInt(@intCast(index));
+            if (!self.shared_bodies.contains(fn_id)) continue;
+            var function = self.output.getFn(fn_id);
+            const body = switch (function.body) {
+                .roc => |body| body,
+                .hosted => Common.invariant("a hosted function was recorded as reaching a shared expression"),
+            };
+            const outer_shapes = self.output.beginFnShapes(fn_id);
+            function.body = .{ .roc = try body_copy.copy(self.output, body) };
+            function.shapes = self.output.finishFnShapes(outer_shapes);
+            self.output.setFn(fn_id, function);
+        }
+    }
+
     fn rewriteExpr(self: *Lifter, root: Mono.ExprId) Allocator.Error!void {
         var work: std.ArrayList(RewriteWork) = .empty;
         defer {
@@ -660,7 +697,10 @@ const Lifter = struct {
 
     fn pushRewriteStmtWork(self: *Lifter, work: *std.ArrayList(RewriteWork), stmt_id: Mono.StmtId) Allocator.Error!void {
         const index = @backingInt(stmt_id);
-        if (self.stmt_done.isSet(index)) return;
+        if (self.stmt_done.isSet(index)) {
+            try self.noteSharedBody();
+            return;
+        }
         self.stmt_done.set(index);
 
         const stmt = self.output.getStmt(stmt_id);
@@ -679,7 +719,10 @@ const Lifter = struct {
 
     fn pushRewriteExprWork(self: *Lifter, work: *std.ArrayList(RewriteWork), expr_id: Mono.ExprId) Allocator.Error!void {
         const index = @backingInt(expr_id);
-        if (self.expr_done.isSet(index)) return;
+        if (self.expr_done.isSet(index)) {
+            if (!self.output.getExpr(expr_id).data.isLeaf()) try self.noteSharedBody();
+            return;
+        }
         self.expr_done.set(index);
 
         const output = self.output;

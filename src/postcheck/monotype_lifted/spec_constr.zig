@@ -20472,49 +20472,44 @@ test "loop exit projection orders an earlier opaque item before a later block ch
     }
 }
 
-test "SpecConstr operand sequencing preserves nested mutable versions" {
+test "SpecConstr reads a mutable version bound ahead of the operand that assigned it" {
     const allocator = std.testing.allocator;
-    for ([_]bool{ false, true }) |use_let| {
-        var program = emptyLiftedProgramForTest(allocator);
-        defer program.deinit();
-        const ty = try program.types.add(.{ .primitive = .u8 });
-        const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ty}) });
-        const binder: check.CheckedBodies.BinderId = @fromBackingInt(@intCast(1));
-        const initial = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, binder);
-        const version = try program.addLocalWithBinder(@fromBackingInt(@intCast(2)), ty, binder);
-        const initial_pat = try program.addPat(.{ .ty = ty, .data = .{ .bind = initial } });
-        const version_pat = try program.addPat(.{ .ty = ty, .data = .{ .bind = version } });
-        const zero = try program.addExpr(.{ .ty = ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 0)), .kind = .u128 } } });
-        const seven = try program.addExpr(.{ .ty = ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 7)), .kind = .u128 } } });
-        const declaration = try program.addStmt(.{ .let_ = .{ .pat = initial_pat, .value = zero } });
-        const nested = if (use_let)
-            try program.addExpr(.{ .ty = ty, .data = .{ .let_ = .{ .bind = version_pat, .value = seven, .rest = zero } } })
-        else
-            try program.addExpr(.{ .ty = ty, .data = .{ .block = .{
-                .statements = try program.addStmtSpan(&.{try program.addStmt(.{ .let_ = .{ .pat = version_pat, .value = seven } })}),
-                .final_expr = zero,
-            } } });
-        const tuple = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&.{nested}) } });
-        const discarded = try program.addStmt(.{ .expr = tuple });
-        const later_read = try program.addExpr(.{ .ty = ty, .data = .{ .local = version } });
-        const body = try program.addExpr(.{ .ty = ty, .data = .{ .block = .{
-            .statements = try program.addStmtSpan(&.{ declaration, discarded }),
-            .final_expr = later_read,
-        } } });
-        const fn_id = try program.addFn(.{
-            .symbol = @fromBackingInt(@intCast(3)),
-            .args = .empty(),
-            .captures = .empty(),
-            .body = .{ .roc = body },
-            .ret = ty,
-        });
-        program.next_symbol = 4;
-        try @import("normalize.zig").run(&program);
-        var pass = try Pass.init(allocator, &program);
-        defer pass.deinit();
-        var cloner = Cloner.initForRewrite(&pass);
-        defer cloner.deinit();
-        const result = try cloner.cloneExpr(program.getFn(fn_id).body.roc);
-        try std.testing.expectEqualDeep(program.getExpr(seven).data, program.getExpr(result).data);
-    }
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const ty = try program.types.add(.{ .primitive = .u8 });
+    const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ty}) });
+    const binder: check.CheckedBodies.BinderId = @fromBackingInt(@intCast(1));
+    const initial = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, binder);
+    const version = try program.addLocalWithBinder(@fromBackingInt(@intCast(2)), ty, binder);
+    const initial_pat = try program.addPat(.{ .ty = ty, .data = .{ .bind = initial } });
+    const version_pat = try program.addPat(.{ .ty = ty, .data = .{ .bind = version } });
+    const zero = try program.addExpr(.{ .ty = ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 0)), .kind = .u128 } } });
+    const seven = try program.addExpr(.{ .ty = ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 7)), .kind = .u128 } } });
+    // The sequenced form of `var $v = 0; _ = ({ $v = 7; 0 },); $v`: the
+    // operand's assignment stands in the body's statement list, ahead of the
+    // tuple it was an operand of.
+    const declaration = try program.addStmt(.{ .let_ = .{ .pat = initial_pat, .value = zero } });
+    const assignment = try program.addStmt(.{ .let_ = .{ .pat = version_pat, .value = seven } });
+    const tuple = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&.{zero}) } });
+    const discarded = try program.addStmt(.{ .expr = tuple });
+    const later_read = try program.addExpr(.{ .ty = ty, .data = .{ .local = version } });
+    const body = try program.addExpr(.{ .ty = ty, .data = .{ .block = .{
+        .statements = try program.addStmtSpan(&.{ declaration, assignment, discarded }),
+        .final_expr = later_read,
+    } } });
+    const fn_id = try program.addFn(.{
+        .symbol = @fromBackingInt(@intCast(3)),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = body },
+        .ret = ty,
+    });
+    program.next_symbol = 4;
+    try std.testing.expectEqual(@as(?@import("sequenced.zig").Violation, null), try @import("sequenced.zig").check(&program));
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    const result = try cloner.cloneExpr(program.getFn(fn_id).body.roc);
+    try std.testing.expectEqualDeep(program.getExpr(seven).data, program.getExpr(result).data);
 }

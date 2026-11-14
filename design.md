@@ -18659,6 +18659,84 @@ from the same draft owner may reuse an in-progress nested body. Final
 specialization identity and capture ABI identity remain responsible for durable
 deduplication after owner-local bodies have been sealed.
 
+### Operand Sequencing
+
+Monotype emits every body operand-sequenced, and every later `.lss` stage
+reads bodies in that form: the order of a statement list is evaluation order,
+and a binding is in lexical scope for everything that follows it in its list.
+Monotype threads reassigned binders as explicit state, so a block, a `let` or
+a state merge used as an operand binds the mutable variable version that
+later source expressions name. Sequencing is what puts that binding in their
+scope.
+
+The sequenced form is:
+
+- Strict operands are evaluated left to right, before their consumer. An
+  operand is never a block or a `let`: the statements it carried stand in the
+  statement list that encloses the consumer. Where a later operand contributes
+  statements, every earlier operand that is not a local or a literal is bound
+  to a new local at its own position first. This is sequencing, not code
+  motion: nothing is speculated or reordered, and even a pure call keeps its
+  place relative to every later operand's statements.
+- An operand that transfers control ends its sequence. Its consumer is not
+  emitted and no binding is emitted for its absent value: the transfer is the
+  last statement of its list, nothing follows it there, and an `unreachable`
+  marker remains only as the final expression of the block that list belongs
+  to.
+- A function body, a match branch body, an `if` branch body and false
+  continuation, a loop body, a join body and remainder, a try ok body, an
+  initialized-payload arm, an `expect` condition, a recursive binding's value,
+  a compile-time value's initializer and a static-data candidate's runtime
+  value are each the whole of a scope of their own. The statements such an
+  expression carries form a block there. A block appears nowhere else, has at
+  least one statement, and does not end in another block.
+- No `let` expression remains; its binding is a statement.
+- An `if` has one condition. A later condition of a source chain executes
+  only when every earlier one is false, so it and its statements live in the
+  preceding false continuation, never before the first `if`.
+- A match branch's bindings are a statement list of their own, which the
+  guard's statements join. A guard whose evaluation transfers control ends
+  the bindings there and leaves the branch without a guard.
+- The child of a `dbg`, a row widening, a typed boundary or a `return` joins
+  the sequence of the expression that holds it without being a strict
+  operand, so it may itself transfer control.
+- An expression that has expressions inside it has exactly one parent. Only
+  locals, literals and markers are named from more than one place.
+
+The lowerer produces this form as it builds each body, not by rewriting
+bodies afterwards. Every body expression is added through one function
+(`BodyContext.addExprWithTypeCell`), which sequences the expression's
+operands as it adds it. When statements belong before an expression whose
+enclosing statement list does not exist yet, the draft records them as that
+expression's leading statements, and whichever consumer, statement list or
+scope takes the expression next places them. Placing them leaves the record
+in place and gives the consumer an expression of its own to name, so an
+expression that several consumers name carries its statements to each of
+them. An expression none of whose operands carries statements or transfers
+control is added exactly as given, so sequencing costs work only where it
+changes something. Draft sealing gives each function body, and each value a
+sealed draft hands back, its scope. A reservation that sealing fills in place
+with an expression that carries statements or transfers control changes the
+sequence of the expressions already built around it, so that draft's bodies
+are sequenced again in place before they are sealed, each expression keeping
+its id.
+
+A few expressions are assembled outside any body, from sealed operands: a
+compile-time constant restored for a static-data request or a
+procedure-binding root, and that root's call of it. They are added through
+`Builder.addProgramExpr`, which applies the same rule to operands that are
+each a value or one sealed block.
+
+Lifting keeps the form: it rewrites callable expressions in place and adds no
+statements. Monotype restores each compile-time constant once and names that
+one expression wherever the constant is read, so a body can reach an
+expression or a statement that an earlier parent already holds. Lifting
+records each function whose rewrite reaches one, and once lifting has
+finished it gives that function a structural copy of its own body
+(`monotype_lifted/body_copy.zig`); the earlier parent keeps the original, and
+every other body stays exactly as Monotype emitted it. Debug builds then
+verify the form on every lifted body (`monotype_lifted/sequenced.zig`).
+
 ### Monotype Specialization
 
 Monotype specialization is `.lss`-only and root driven.
@@ -20170,21 +20248,6 @@ No `for` node exists after Monotype IR.
 
 ## Monotype Lifted IR
 
-The lifting boundary sequences strict expression operands before outputting lifted
-bodies. A block or `let` used as an operand contributes its bindings to the
-enclosing continuation, so a mutable variable version named by later source
-expressions is explicitly in lexical scope. Operands are evaluated from left to
-right; opaque computations are named at their original position before any
-following operand's bindings. This transformation does not speculate or reorder
-work. Branches, loop bodies, joins, expect contexts, and compile-time evidence
-retain their own execution scopes. Later `if` conditions remain inside the
-preceding false continuation. State-merge patterns emitted by Monotype carry
-branch mutations into the enclosing continuation; sequencing consumes those
-explicit patterns rather than rediscovering writes or declining optimization.
-A strict operand that transfers control terminates its sequence explicitly; no
-consumer binding is emitted for its absent value, and an `unreachable` marker
-remains only the final expression of the terminated block.
-
 Monotype Lifted IR is `.lss`-only. It removes closures and local functions from
 expression position. Its type store is the Monotype type store.
 
@@ -20197,10 +20260,13 @@ Callable lifting rewrites the expression variants whose callable meaning changes
 - a direct-call callee changes from a Monotype function template to a lifted
   function id
 
-Operand sequencing then appends the explicit ordered bodies, retaining source
-patterns and local identities and propagating source locations and regions.
-Function definitions refer to the sequenced body roots. Literal and local leaves
-can continue to reference the transferred prefix.
+Monotype's bodies arrive operand-sequenced (Operand Sequencing), and these
+rewrites keep them so: a callable expression is replaced where it stands, and
+the capture operands lifting adds are locals. A function whose body reaches a
+subtree an earlier parent holds takes a structural copy of its body, which
+gives every expression with expressions inside it one parent. Debug builds
+verify the sequenced form of every lifted body before the program leaves
+lifting.
 
 This is a representation-sharing rule, not a license for later stages to accept
 pre-lift callable forms. After lifting, a valid lifted program has no reachable

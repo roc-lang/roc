@@ -6388,7 +6388,193 @@ const Builder = struct {
     const ConstExprId = Ast.ExprId;
 
     fn addExpr(self: *Builder, expr: Ast.Expr) Allocator.Error!Ast.ExprId {
-        return self.program.addExpr(expr);
+        return try self.addProgramExpr(expr);
+    }
+
+    /// Add an expression assembled outside any body, in sequenced form
+    /// (design.md "Operand Sequencing"). Its operands are sealed: each is a
+    /// value, or the block that a sealed draft's root or an earlier
+    /// expression added here became. The statements of such a block stand
+    /// ahead of the expression, which becomes the final expression of one
+    /// block of its own.
+    fn addProgramExpr(self: *Builder, expr: Ast.Expr) Allocator.Error!Ast.ExprId {
+        const program = self.program;
+        var operands: std.ArrayList(Ast.ExprId) = .empty;
+        defer operands.deinit(self.allocator);
+        switch (expr.data) {
+            .list, .tuple => |items| for (0..items.len) |index| try operands.append(self.allocator, GuardedList.at(program.exprSpan(items), index)),
+            .tag => |tag| for (0..tag.payloads.len) |index| try operands.append(self.allocator, GuardedList.at(program.exprSpan(tag.payloads), index)),
+            .low_level => |call| for (0..call.args.len) |index| try operands.append(self.allocator, GuardedList.at(program.exprSpan(call.args), index)),
+            .record => |fields| for (0..fields.len) |index| try operands.append(self.allocator, GuardedList.at(program.fieldExprSpan(fields), index).value),
+            .nominal => |value| try operands.append(self.allocator, value),
+            .call_value => |call| {
+                try operands.append(self.allocator, call.callee);
+                for (0..call.args.len) |index| try operands.append(self.allocator, GuardedList.at(program.exprSpan(call.args), index));
+            },
+            .unit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bytes_lit,
+            .crash,
+            .checked_error,
+            => return try program.addExpr(expr),
+            .local,
+            .@"unreachable",
+            .static_data_candidate,
+            .comptime_value,
+            .typed_boundary,
+            .row_widen,
+            .record_update,
+            .let_,
+            .lambda,
+            .def_ref,
+            .fn_def,
+            .fn_ref,
+            .call_proc,
+            .field_access,
+            .tuple_access,
+            .structural_eq,
+            .structural_hash,
+            .match_,
+            .if_,
+            .uninitialized,
+            .uninitialized_payload,
+            .if_initialized_payload,
+            .try_sequence,
+            .try_record_sequence,
+            .block,
+            .loop_,
+            .break_,
+            .continue_,
+            .join_point,
+            .jump,
+            .return_,
+            .comptime_exhaustiveness_failed,
+            .dbg,
+            .expect_err,
+            .expect,
+            .literal_rejected,
+            => Common.invariant("an expression assembled outside a body had a form constant restoration does not build"),
+        }
+
+        var last_with_statements: ?usize = null;
+        var changes_sequence = false;
+        for (operands.items, 0..) |operand, index| {
+            const data = program.getExpr(operand).data;
+            if (data == .let_) Common.invariant("a sealed operand of an expression assembled outside a body was not given its scope");
+            if (data == .block) last_with_statements = index;
+            if (data == .block or data.transfersControl()) changes_sequence = true;
+        }
+        if (!changes_sequence) return try program.addExpr(expr);
+
+        var statements: std.ArrayList(Ast.StmtId) = .empty;
+        defer statements.deinit(self.allocator);
+        var terminated = false;
+        for (operands.items, 0..) |*operand, index| {
+            var value = operand.*;
+            const source = program.getExpr(value).data;
+            if (source == .block) {
+                for (0..source.block.statements.len) |statement_index| {
+                    try statements.append(self.allocator, GuardedList.at(program.stmtSpan(source.block.statements), statement_index));
+                }
+                value = source.block.final_expr;
+            }
+            const value_expr = program.getExpr(value);
+            // An operand that transfers control ends the sequence there.
+            if (value_expr.data.transfersControl()) {
+                if (value_expr.data != .@"unreachable") try statements.append(self.allocator, try program.addStmt(.{ .expr = value }));
+                terminated = true;
+                break;
+            }
+            // An operand ahead of a later operand's statements is named at
+            // its own position first.
+            if (last_with_statements) |last| {
+                if (index < last and !value_expr.data.isLeaf()) {
+                    const local = try program.addLocal(self.symbols.fresh(), value_expr.ty);
+                    try statements.append(self.allocator, try program.addStmt(.{ .let_ = .{
+                        .pat = try program.addPat(.{ .ty = value_expr.ty, .data = .{ .bind = local } }),
+                        .value = value,
+                    } }));
+                    value = try program.addExpr(.{ .ty = value_expr.ty, .data = .{ .local = local } });
+                }
+            }
+            operand.* = value;
+        }
+
+        const values = operands.items;
+        const sequenced = if (terminated) try program.addExpr(.{ .ty = expr.ty, .data = .@"unreachable" }) else try program.addExpr(.{
+            .ty = expr.ty,
+            .data = switch (expr.data) {
+                .list => .{ .list = try program.addExprSpan(values) },
+                .tuple => .{ .tuple = try program.addExprSpan(values) },
+                .tag => |tag| .{ .tag = .{ .name = tag.name, .payloads = try program.addExprSpan(values) } },
+                .low_level => |call| .{ .low_level = .{ .op = call.op, .args = try program.addExprSpan(values) } },
+                .record => |fields| record: {
+                    const rebuilt = try self.allocator.alloc(Ast.FieldExpr, values.len);
+                    defer self.allocator.free(rebuilt);
+                    for (rebuilt, values, 0..) |*field, value, index| {
+                        field.* = .{ .name = GuardedList.at(program.fieldExprSpan(fields), index).name, .value = value };
+                    }
+                    break :record .{ .record = try program.addFieldExprSpan(rebuilt) };
+                },
+                .nominal => .{ .nominal = values[0] },
+                .call_value => .{ .call_value = .{ .callee = values[0], .args = try program.addExprSpan(values[1..]) } },
+                .unit,
+                .int_lit,
+                .frac_f32_lit,
+                .frac_f64_lit,
+                .dec_lit,
+                .str_lit,
+                .bytes_lit,
+                .crash,
+                .checked_error,
+                .local,
+                .@"unreachable",
+                .static_data_candidate,
+                .comptime_value,
+                .typed_boundary,
+                .row_widen,
+                .record_update,
+                .let_,
+                .lambda,
+                .def_ref,
+                .fn_def,
+                .fn_ref,
+                .call_proc,
+                .field_access,
+                .tuple_access,
+                .structural_eq,
+                .structural_hash,
+                .match_,
+                .if_,
+                .uninitialized,
+                .uninitialized_payload,
+                .if_initialized_payload,
+                .try_sequence,
+                .try_record_sequence,
+                .block,
+                .loop_,
+                .break_,
+                .continue_,
+                .join_point,
+                .jump,
+                .return_,
+                .comptime_exhaustiveness_failed,
+                .dbg,
+                .expect_err,
+                .expect,
+                .literal_rejected,
+                => unreachable, // the operand switch above returned or reported every form without operands gathered here
+            },
+        });
+        if (statements.items.len == 0) return sequenced;
+        return try program.addExpr(.{ .ty = expr.ty, .data = .{ .block = .{
+            .statements = try program.addStmtSpan(statements.items),
+            .final_expr = sequenced,
+        } } });
     }
     const ConstExprSpan = Ast.Span(Ast.ExprId);
     const ConstFieldExpr = Ast.FieldExpr;
@@ -8250,6 +8436,7 @@ const Builder = struct {
             try self.emitDraftDeferredCallsiteIntrinsics(&body_draft, graph, &phase_b_sealer);
             try self.emitDraftDeferredStructuralEqs(&body_draft, graph, &phase_b_sealer);
             try self.emitDraftDeferredInspects(&body_draft, graph, &phase_b_sealer);
+            try self.sequenceDraftBodies(&body_draft, graph);
             try body_draft.finishOwnerRuns();
             var sealer = GraphTypeFinals.init(graph);
             defer sealer.deinit();
@@ -8337,7 +8524,7 @@ const Builder = struct {
             }),
             .callable_eval_template => blk: {
                 const callee = try self.lowerProcedureBindingValue(view, binding, fn_ty, request.root_evidence);
-                break :blk try self.program.addExpr(.{
+                break :blk try self.addProgramExpr(.{
                     .ty = fn_data.ret,
                     .data = .{ .call_value = .{
                         .callee = callee,
@@ -8549,6 +8736,7 @@ const Builder = struct {
             mono_fn_ty,
         );
         body_timing_scope.end();
+        try body_draft.addScopeRoot(lowered);
         const draft_end = draft.end(self);
         const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, &.{}, null, null, null);
         defer sealed.deinit(self.allocator);
@@ -10690,6 +10878,7 @@ const Builder = struct {
         body_ctx.owner_fn_node = root_node;
         body_ctx.current_fn_key = source_fn_key;
         const lowered = try body_ctx.lowerTemplateBodyAtNode(template_ref, template, root_node);
+        try body_draft.addScopeRoot(lowered.body);
         const final_signature_relation = self.active_template_root.?.signature_relation;
         const completed_root = blk: {
             var relations_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
@@ -14425,6 +14614,7 @@ const Builder = struct {
                 Common.invariant("deferred const dependency was not resolved before its consumer");
             }
             body_draft.exprs.items[reservation_index] = restored_expr;
+            try body_draft.noteFilledReservation(reservation, restored);
             body_draft.expr_locs.items[reservation_index] = body_draft.expr_locs.items[restored_index];
             body_draft.expr_regions.items[reservation_index] = body_draft.expr_regions.items[restored_index];
             // The reservation now stands for the restored value, so it reads
@@ -14589,6 +14779,54 @@ const Builder = struct {
         );
     }
 
+    /// Sequence the draft's function bodies before they are sealed: a body is
+    /// the whole of its scope, so the statements it carries become a block
+    /// (design.md "Operand Sequencing"). A reservation filled with an
+    /// expression that changes the sequence around it has every body
+    /// sequenced again first.
+    fn sequenceDraftBodies(
+        self: *Builder,
+        body_draft: *BodyDraftStore,
+        graph: *InstGraph,
+    ) Allocator.Error!void {
+        const origin = body_draft.sequencing_origin orelse return;
+        var ctx = try BodyContext.init(self.allocator, self, origin.view, origin.owner_template, graph, body_draft);
+        defer ctx.deinit();
+        if (body_draft.resequence_filled) {
+            body_draft.resequence_filled = false;
+            var def_index: usize = 0;
+            while (def_index < body_draft.defs.items.len) : (def_index += 1) {
+                switch (body_draft.defs.items[def_index].body) {
+                    .roc => |body| try ctx.resequenceBody(body),
+                    .hosted => {},
+                }
+            }
+            var nested_index: usize = 0;
+            while (nested_index < body_draft.nested_defs.items.len) : (nested_index += 1) {
+                try ctx.resequenceBody(body_draft.nested_defs.items[nested_index].body);
+            }
+            var root_index: usize = 0;
+            while (root_index < body_draft.scope_roots.items.len) : (root_index += 1) {
+                try ctx.resequenceBody(body_draft.scope_roots.items[root_index]);
+            }
+        }
+        var def_index: usize = 0;
+        while (def_index < body_draft.defs.items.len) : (def_index += 1) {
+            switch (body_draft.defs.items[def_index].body) {
+                .roc => |body| try ctx.scopeBodyInPlace(body),
+                .hosted => {},
+            }
+        }
+        var nested_index: usize = 0;
+        while (nested_index < body_draft.nested_defs.items.len) : (nested_index += 1) {
+            try ctx.scopeBodyInPlace(body_draft.nested_defs.items[nested_index].body);
+        }
+        var root_index: usize = 0;
+        while (root_index < body_draft.scope_roots.items.len) : (root_index += 1) {
+            try ctx.scopeBodyInPlace(body_draft.scope_roots.items[root_index]);
+        }
+    }
+
     /// Phase B for deferred equality. The graph is frozen and `sealer` is the
     /// one final materializer shared with all subsequent body sealing.
     fn emitDraftDeferredStructuralEqs(
@@ -14657,6 +14895,7 @@ const Builder = struct {
             }
             lowered_expr.ty = .{ .sealed = callable.ret };
             body_draft.exprs.items[@backingInt(boundary.expr)] = lowered_expr;
+            try body_draft.noteFilledReservation(boundary.expr, lowered);
             try body_draft.copyRootValueReads(lowered, boundary.expr);
             body_draft.expr_impossibility_proofs.set(@backingInt(boundary.expr), body_draft.expr_impossibility_proofs.get(@backingInt(lowered)));
         }
@@ -14727,6 +14966,7 @@ const Builder = struct {
             }
             lowered_expr.ty = .{ .sealed = reserved_ty };
             body_draft.exprs.items[@backingInt(boundary.expr)] = lowered_expr;
+            try body_draft.noteFilledReservation(boundary.expr, lowered);
             try body_draft.copyRootValueReads(lowered, boundary.expr);
             body_draft.expr_impossibility_proofs.set(@backingInt(boundary.expr), body_draft.expr_impossibility_proofs.get(@backingInt(lowered)));
         }
@@ -14787,6 +15027,7 @@ const Builder = struct {
             }
             lowered_expr.ty = .{ .sealed = reserved_ty };
             body_draft.exprs.items[@backingInt(boundary.expr)] = lowered_expr;
+            try body_draft.noteFilledReservation(boundary.expr, lowered);
             try body_draft.copyRootValueReads(lowered, boundary.expr);
             body_draft.expr_impossibility_proofs.set(@backingInt(boundary.expr), body_draft.expr_impossibility_proofs.get(@backingInt(lowered)));
         }
@@ -14845,6 +15086,7 @@ const Builder = struct {
             var lowered_expr = body_draft.exprs.items[@backingInt(lowered)];
             lowered_expr.ty = .{ .sealed = ret_ty };
             body_draft.exprs.items[@backingInt(boundary.expr)] = lowered_expr;
+            try body_draft.noteFilledReservation(boundary.expr, lowered);
             try body_draft.copyRootValueReads(lowered, boundary.expr);
         }
         for (body_draft.deferred_inspects.items) |boundary| {
@@ -14959,6 +15201,7 @@ const Builder = struct {
         }
         lowered_expr.ty = .{ .sealed = ret_ty };
         body_draft.exprs.items[@backingInt(boundary.expr)] = lowered_expr;
+        try body_draft.noteFilledReservation(boundary.expr, lowered);
         try body_draft.copyRootValueReads(lowered, boundary.expr);
     }
 
@@ -15755,6 +15998,7 @@ const Builder = struct {
         try self.emitDraftDeferredCallsiteIntrinsics(body_draft, graph, &phase_b_sealer);
         try self.emitDraftDeferredStructuralEqs(body_draft, graph, &phase_b_sealer);
         try self.emitDraftDeferredInspects(body_draft, graph, &phase_b_sealer);
+        try self.sequenceDraftBodies(body_draft, graph);
         try body_draft.finishOwnerRuns();
 
         // Phase B may seal speculative intermediate nodes while it generates
@@ -15807,6 +16051,7 @@ const Builder = struct {
         try self.emitDraftDeferredCallsiteIntrinsics(body_draft, graph, &sealer);
         try self.emitDraftDeferredStructuralEqs(body_draft, graph, &sealer);
         try self.emitDraftDeferredInspects(body_draft, graph, &sealer);
+        try self.sequenceDraftBodies(body_draft, graph);
         try sealDraftCoordinatorIntents(graph, body_draft, &sealer);
         var committed_types = if (committed_type_relocation) |relocation|
             CommittedGraphTypes.relocated(
@@ -16492,6 +16737,7 @@ const Builder = struct {
                 .captures = try fn_ctx.addFnDefCaptureSpan(capture_values),
             } },
         );
+        try body_draft.addScopeRoot(expr);
         const draft_end = draft.end(self);
         const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, &.{}, null, null, null);
         defer sealed.deinit(self.allocator);
@@ -16701,6 +16947,7 @@ const Builder = struct {
         codec_expr = try fn_ctx.wrapLet(encoding_local, arg_tys.get(0), encoding_value, codec_expr, ty);
         codec_expr = try self.wrapConstSourceCaptureLets(&fn_ctx, source_captures.items, codec_expr, ty);
 
+        try body_draft.addScopeRoot(codec_expr);
         const draft_end = draft.end(self);
         const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, &.{}, null, null, null);
         defer sealed.deinit(self.allocator);
@@ -16758,7 +17005,7 @@ const Builder = struct {
         backing_expr: Ast.ExprId,
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!Ast.ExprId {
-        const expr = try self.program.addExpr(.{ .ty = named, .data = .{ .nominal = backing_expr } });
+        const expr = try self.addProgramExpr(.{ .ty = named, .data = .{ .nominal = backing_expr } });
         if (static_data_const_locator == null) try self.const_expr_cache.put(constExprAddress(store_view, type_view, node, ty), expr);
         return expr;
     }
@@ -16772,7 +17019,7 @@ const Builder = struct {
         data: Ast.ExprData,
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!Ast.ExprId {
-        const expr = try self.program.addExpr(.{ .ty = ty, .data = data });
+        const expr = try self.addProgramExpr(.{ .ty = ty, .data = data });
         if (static_data_const_locator == null) try self.const_expr_cache.put(constExprAddress(store_view, type_view, node, ty), expr);
         return expr;
     }
@@ -19530,6 +19777,21 @@ const BodyDraftStore = struct {
     /// Root values this draft restores or evaluates in place, committed with
     /// the expressions that survive (`Builder.root_value_reads`).
     root_value_reads: std.ArrayList(DraftRootValueRead),
+    /// The statements that run before an expression, in the statement list
+    /// enclosing it: what its strict operands contributed there (design.md
+    /// "Operand Sequencing"). The expression that uses it, or the scope it is
+    /// the whole of, places them.
+    leading: std.AutoHashMapUnmanaged(DraftExprId, DraftSpan(DraftStmtId)) = .empty,
+    /// A reservation was filled with an expression that changes the sequence
+    /// around it, so the bodies are sequenced again before they are sealed.
+    resequence_filled: bool = false,
+    /// Expressions that are each the whole of a scope without being a
+    /// definition's body in this draft: a body whose definition is written
+    /// when the draft is committed, or the value a sealed draft hands back.
+    scope_roots: std.ArrayList(DraftExprId) = .empty,
+    /// A module view and owner of a context that lowered into this draft,
+    /// for the context that sequences its bodies before they are sealed.
+    sequencing_origin: ?struct { view: ModuleView, owner_template: names.ProcTemplate } = null,
     literal_roots: std.ArrayList(DraftLiteralRoot),
     /// These memoized TypeIds belong to this draft's graph, so their lifetime
     /// cannot exceed the body that owns that graph. Type-store entries are
@@ -19823,6 +20085,8 @@ const BodyDraftStore = struct {
     }
 
     fn deinit(self: *BodyDraftStore) void {
+        self.leading.deinit(self.allocator);
+        self.scope_roots.deinit(self.allocator);
         self.codec_contract_instances.deinit(self.allocator);
         self.interface_replay.deinit(self.allocator);
         self.demand_overrides.deinit(self.allocator);
@@ -20066,6 +20330,59 @@ const BodyDraftStore = struct {
         const id = try program.addComptimeValueRoot(descriptor);
         try roots.put(root, id);
         return id;
+    }
+
+    fn addScopeRoot(self: *BodyDraftStore, expr: DraftExprId) Allocator.Error!void {
+        try self.scope_roots.append(self.allocator, expr);
+    }
+
+    fn hasLeading(self: *const BodyDraftStore, expr: DraftExprId) bool {
+        return self.leading.count() != 0 and self.leading.contains(expr);
+    }
+
+    fn leadingOf(self: *const BodyDraftStore, expr: DraftExprId) ?DraftSpan(DraftStmtId) {
+        if (self.leading.count() == 0) return null;
+        return self.leading.get(expr);
+    }
+
+    fn setLeading(self: *BodyDraftStore, expr: DraftExprId, statements: DraftSpan(DraftStmtId)) Allocator.Error!void {
+        try self.leading.put(self.allocator, expr, statements);
+    }
+
+    /// Remove an expression's leading statements: its row is taking another
+    /// form, which carries them itself.
+    fn takeLeading(self: *BodyDraftStore, expr: DraftExprId) ?DraftSpan(DraftStmtId) {
+        if (self.leading.count() == 0) return null;
+        const entry = self.leading.fetchRemove(expr) orelse return null;
+        return entry.value;
+    }
+
+    /// `reservation` became a copy of `source`'s expression after the
+    /// expressions using it were sequenced. The copy keeps the statements
+    /// `source` carried, and a copy that carries statements or transfers
+    /// control changes the sequence of every expression around it.
+    fn noteFilledReservation(self: *BodyDraftStore, reservation: DraftExprId, source: DraftExprId) Allocator.Error!void {
+        if (self.takeLeading(source)) |statements| try self.setLeading(reservation, statements);
+        const data = self.exprs.items[@backingInt(reservation)].data;
+        if (self.hasLeading(reservation) or data == .block or data == .let_ or BodyContext.exprDataTransfersControl(data)) {
+            self.resequence_filled = true;
+        }
+    }
+
+    /// The owner whose run holds an expression.
+    fn exprOwner(self: *const BodyDraftStore, expr: DraftExprId) DraftOwner {
+        const index = @backingInt(expr);
+        const kind = @backingInt(DraftCoreKind.exprs);
+        // Each run starts where the run before it ended, so the first run
+        // ending past the expression holds it.
+        const runs = self.owner_runs.items;
+        var low: usize = 0;
+        var high: usize = runs.len;
+        while (low < high) {
+            const middle = low + (high - low) / 2;
+            if (runs[middle].ends[kind] > index) high = middle else low = middle + 1;
+        }
+        return if (low < runs.len) runs[low].owner else self.current_owner;
     }
 
     fn addExpr(self: *BodyDraftStore, expr: DraftExpr) Allocator.Error!DraftExprId {
@@ -23612,6 +23929,7 @@ const BodyContext = struct {
         draft: *BodyDraftStore,
     ) Allocator.Error!BodyContext {
         builder.countBodyDiagnostic("body_contexts_created");
+        if (draft.sequencing_origin == null) draft.sequencing_origin = .{ .view = view, .owner_template = owner_template };
         return .{
             .allocator = allocator,
             .builder = builder,
@@ -24071,18 +24389,7 @@ const BodyContext = struct {
     }
 
     fn addExpr(self: *BodyContext, expr: BodyExpr) Allocator.Error!DraftExprId {
-        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
-        defer timing_scope.end();
-        const id = try self.draft.addExprWithSource(
-            .{ .ty = try self.draftTypeCell(expr.ty), .data = expr.data },
-            self.builder.current_loc,
-            self.builder.current_region,
-        );
-        self.draft.expr_impossibility_proofs.set(@backingInt(id), try self.exprDataImpossibilityProof(
-            self.draft.exprs.items[@backingInt(id)].ty,
-            expr.data,
-        ));
-        return id;
+        return try self.addExprWithTypeCell(try self.draftTypeCell(expr.ty), expr.data);
     }
 
     fn addFieldAccessExpr(
@@ -24101,7 +24408,16 @@ const BodyContext = struct {
         });
     }
 
+    /// Add an expression in sequenced form: every body expression is added
+    /// here, so no producer can emit an operand whose statements were left
+    /// behind it.
     fn addExprWithTypeCell(self: *BodyContext, ty: DraftTypeCell, data: BodyExprData) Allocator.Error!DraftExprId {
+        if (try self.sequenceExprData(ty, data)) |sequenced| return sequenced;
+        return try self.addRawExpr(ty, data);
+    }
+
+    /// Add an expression exactly as given.
+    fn addRawExpr(self: *BodyContext, ty: DraftTypeCell, data: BodyExprData) Allocator.Error!DraftExprId {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
         defer timing_scope.end();
         const id = try self.draft.addExprWithSource(
@@ -24111,6 +24427,1241 @@ const BodyContext = struct {
         );
         self.draft.expr_impossibility_proofs.set(@backingInt(id), try self.exprDataImpossibilityProof(ty, data));
         return id;
+    }
+
+    /// A statement list being assembled in evaluation order, and whether
+    /// control has left it.
+    const Sequence = struct {
+        list: std.ArrayList(DraftStmtId) = .empty,
+        terminated: bool = false,
+    };
+
+    fn exprData(self: *BodyContext, id: DraftExprId) DraftExprData {
+        return self.draft.exprs.items[@backingInt(id)].data;
+    }
+
+    /// Whether evaluating an expression of this form transfers control
+    /// instead of producing a value.
+    fn exprDataTransfersControl(data: DraftExprData) bool {
+        return switch (data) {
+            .@"unreachable",
+            .return_,
+            .break_,
+            .continue_,
+            .jump,
+            .crash,
+            .checked_error,
+            .expect_err,
+            .literal_rejected,
+            .comptime_exhaustiveness_failed,
+            => true,
+            .local,
+            .unit,
+            .pending_deferred,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bytes_lit,
+            .static_data_candidate,
+            .comptime_value,
+            .list,
+            .tuple,
+            .record,
+            .record_update,
+            .tag,
+            .nominal,
+            .let_,
+            .lambda,
+            .def_ref,
+            .fn_def,
+            .fn_ref,
+            .call_value,
+            .call_proc,
+            .low_level,
+            .field_access,
+            .tuple_access,
+            .structural_eq,
+            .structural_hash,
+            .match_,
+            .if_,
+            .uninitialized,
+            .uninitialized_payload,
+            .if_initialized_payload,
+            .try_sequence,
+            .try_record_sequence,
+            .block,
+            .loop_,
+            .join_point,
+            .row_widen,
+            .dbg,
+            .expect,
+            => false,
+        };
+    }
+
+    /// Whether an expression carries statements that belong to the statement
+    /// list enclosing it: leading statements recorded for it, or the
+    /// statements of a block or `let` not yet placed in a list.
+    fn exprCarriesStatements(self: *BodyContext, id: DraftExprId) bool {
+        if (self.draft.hasLeading(id)) return true;
+        const data = self.exprData(id);
+        return data == .block or data == .let_;
+    }
+
+    /// Whether a strict operand changes the sequence it is evaluated in.
+    fn operandNeedsSequencing(self: *BodyContext, id: DraftExprId) bool {
+        return self.exprCarriesStatements(id) or exprDataTransfersControl(self.exprData(id));
+    }
+
+    fn anyOperandNeedsSequencing(self: *BodyContext, ids: []const DraftExprId) bool {
+        for (ids) |id| {
+            if (self.operandNeedsSequencing(id)) return true;
+        }
+        return false;
+    }
+
+    fn addUnreachableExpr(self: *BodyContext, ty: DraftTypeCell) Allocator.Error!DraftExprId {
+        return try self.addRawExpr(ty, .@"unreachable");
+    }
+
+    /// Add a statement at the source position of `like`.
+    fn addStmtLike(self: *BodyContext, like: DraftStmtId, stmt: DraftStmt) Allocator.Error!DraftStmtId {
+        const index = @backingInt(like);
+        const id = try self.draft.addStmtWithSource(stmt, self.draft.stmt_locs.items[index], self.draft.stmt_regions.items[index]);
+        self.draft.stmt_impossibility_proofs.set(@backingInt(id), try self.stmtDataImpossibilityProof(stmt));
+        return id;
+    }
+
+    /// Add a statement at the source position of the expression `at`.
+    fn addStmtAtExpr(self: *BodyContext, at: DraftExprId, stmt: DraftStmt) Allocator.Error!DraftStmtId {
+        const index = @backingInt(at);
+        const id = try self.draft.addStmtWithSource(stmt, self.draft.expr_locs.items[index], self.draft.expr_regions.items[index]);
+        self.draft.stmt_impossibility_proofs.set(@backingInt(id), try self.stmtDataImpossibilityProof(stmt));
+        return id;
+    }
+
+    /// A block of `statements` ending in `final_expr`, standing where the
+    /// expression `at` did. A block has the type of its final expression.
+    fn addSequencedBlock(
+        self: *BodyContext,
+        at: DraftExprId,
+        statements: []const DraftStmtId,
+        final_expr: DraftExprId,
+    ) Allocator.Error!DraftExprId {
+        const ty = self.exprTypeCell(final_expr);
+        const data: DraftExprData = .{ .block = .{
+            .statements = try self.addStmtSpan(statements),
+            .final_expr = final_expr,
+        } };
+        const index = @backingInt(at);
+        const id = try self.draft.addExprWithSource(
+            .{ .ty = ty, .data = data },
+            self.draft.expr_locs.items[index],
+            self.draft.expr_regions.items[index],
+        );
+        self.draft.expr_impossibility_proofs.set(@backingInt(id), try self.exprDataImpossibilityProof(ty, data));
+        return id;
+    }
+
+    const SequenceFrame = union(enum) {
+        /// A block's final expression, sequenced after its statements.
+        block_final: DraftExprId,
+        /// The expression whose leading statements were just placed.
+        after_leading: DraftExprId,
+        /// Statements still to place, from `index` on.
+        statements: struct { span: DraftSpan(DraftStmtId), index: u32 },
+        /// The statement whose value is being sequenced.
+        statement_value: DraftStmtId,
+        /// The `let` expression whose value is being sequenced.
+        let_value: DraftExprId,
+    };
+
+    /// Move the statements `expr` carries into `sink`, in evaluation order,
+    /// and return the expression they lead to. A block or `let` contributes
+    /// its bindings to the list that encloses it, so a mutable variable
+    /// version it binds is in scope for the expressions that follow it.
+    fn sequenceInto(self: *BodyContext, sink: *Sequence, expr: DraftExprId) Allocator.Error!DraftExprId {
+        if (!self.exprCarriesStatements(expr)) {
+            const data = self.exprData(expr);
+            if (sink.terminated) {
+                return if (data == .@"unreachable") expr else try self.addUnreachableExpr(self.exprTypeCell(expr));
+            }
+            if (data == .@"unreachable") sink.terminated = true;
+            return expr;
+        }
+        return (try self.runSequence(sink, expr, null)).?;
+    }
+
+    /// Place the statements of `span` in `sink`, stopping where control
+    /// leaves the list.
+    fn sequenceStatementsInto(self: *BodyContext, sink: *Sequence, span: DraftSpan(DraftStmtId)) Allocator.Error!void {
+        _ = try self.runSequence(sink, null, span);
+    }
+
+    /// Runs from an explicit frame stack, so nested blocks and `let` chains
+    /// never become native call depth.
+    fn runSequence(
+        self: *BodyContext,
+        sink: *Sequence,
+        start_expr: ?DraftExprId,
+        start_statements: ?DraftSpan(DraftStmtId),
+    ) Allocator.Error!?DraftExprId {
+        var stack: std.ArrayList(SequenceFrame) = .empty;
+        defer stack.deinit(self.allocator);
+        var current = start_expr;
+        if (start_statements) |span| try stack.append(self.allocator, .{ .statements = .{ .span = span, .index = 0 } });
+        var delivered: ?DraftExprId = null;
+        while (true) {
+            if (current) |expr| {
+                current = null;
+                const data = self.exprData(expr);
+                if (sink.terminated) {
+                    delivered = if (data == .@"unreachable") expr else try self.addUnreachableExpr(self.exprTypeCell(expr));
+                } else if (self.draft.leadingOf(expr)) |leading| {
+                    // A statement placed here may itself carry statements
+                    // since it was recorded, so the list is sequenced again.
+                    try stack.append(self.allocator, .{ .after_leading = expr });
+                    try stack.append(self.allocator, .{ .statements = .{ .span = leading, .index = 0 } });
+                } else if (data == .block) {
+                    try stack.append(self.allocator, .{ .block_final = data.block.final_expr });
+                    try stack.append(self.allocator, .{ .statements = .{ .span = data.block.statements, .index = 0 } });
+                } else if (data == .let_) {
+                    try stack.append(self.allocator, .{ .let_value = expr });
+                    current = data.let_.value;
+                    continue;
+                } else {
+                    if (data == .@"unreachable") sink.terminated = true;
+                    delivered = expr;
+                }
+            }
+            const frame = stack.pop() orelse return delivered;
+            switch (frame) {
+                .block_final => |final_expr| current = final_expr,
+                .after_leading => |led| {
+                    if (self.exprData(led) == .@"unreachable") sink.terminated = true;
+                    delivered = if (sink.terminated)
+                        try self.addUnreachableExpr(self.exprTypeCell(led))
+                    else
+                        try self.placedExpr(led);
+                },
+                .let_value => |let_expr| {
+                    const binding = self.exprData(let_expr).let_;
+                    const value = delivered.?;
+                    if (!sink.terminated and exprDataTransfersControl(self.exprData(value))) {
+                        if (self.exprData(value) != .@"unreachable") {
+                            try sink.list.append(self.allocator, try self.addStmtAtExpr(let_expr, .{ .expr = value }));
+                        }
+                        sink.terminated = true;
+                    }
+                    if (sink.terminated) {
+                        delivered = try self.addUnreachableExpr(self.exprTypeCell(let_expr));
+                        continue;
+                    }
+                    try sink.list.append(self.allocator, try self.addStmtAtExpr(let_expr, .{ .let_ = .{
+                        .pat = binding.bind,
+                        .value = value,
+                        .comptime_site = .of(binding.comptime_site),
+                    } }));
+                    current = binding.rest;
+                },
+                .statement_value => |stmt_id| try self.placeStatement(sink, stmt_id, delivered.?),
+                .statements => |progress| {
+                    var index = progress.index;
+                    while (index < progress.span.len and !sink.terminated) {
+                        const stmt_id = self.stmtSpan(progress.span)[index];
+                        index += 1;
+                        const value: DraftExprId = switch (self.draft.stmts.items[@backingInt(stmt_id)]) {
+                            .let_ => |binding| if (binding.recursive) {
+                                // A recursive binding's value keeps its own scope.
+                                const scoped = try self.scopedExpr(binding.value);
+                                try sink.list.append(self.allocator, if (scoped == binding.value) stmt_id else try self.addStmtLike(stmt_id, .{ .let_ = .{
+                                    .pat = binding.pat,
+                                    .value = scoped,
+                                    .recursive = true,
+                                    .comptime_site = binding.comptime_site,
+                                } }));
+                                continue;
+                            } else binding.value,
+                            .expr, .dbg => |value| value,
+                            .return_ => |ret| ret.value,
+                            // An expect's condition keeps its run-or-omit
+                            // execution context.
+                            .expect => |condition| {
+                                const scoped = try self.scopedExpr(condition);
+                                try sink.list.append(self.allocator, if (scoped == condition) stmt_id else try self.addStmtLike(stmt_id, .{ .expect = scoped }));
+                                continue;
+                            },
+                            .uninitialized => {
+                                try sink.list.append(self.allocator, stmt_id);
+                                continue;
+                            },
+                            .crash, .checked_error => {
+                                try sink.list.append(self.allocator, stmt_id);
+                                sink.terminated = true;
+                                continue;
+                            },
+                        };
+                        try stack.append(self.allocator, .{ .statements = .{ .span = progress.span, .index = index } });
+                        try stack.append(self.allocator, .{ .statement_value = stmt_id });
+                        current = value;
+                        break;
+                    }
+                },
+            }
+        }
+    }
+
+    /// The expression a consumer names once the leading statements of `led`
+    /// stand in the consumer's list. It is an expression of its own, so `led`
+    /// keeps its statements for any other consumer that names it.
+    fn placedExpr(self: *BodyContext, led: DraftExprId) Allocator.Error!DraftExprId {
+        const index = @backingInt(led);
+        const placed = try self.draft.addExprWithSource(
+            self.draft.exprs.items[index],
+            self.draft.expr_locs.items[index],
+            self.draft.expr_regions.items[index],
+        );
+        self.draft.expr_impossibility_proofs.set(@backingInt(placed), self.draft.expr_impossibility_proofs.get(index));
+        try self.draft.copyRootValueReads(led, placed);
+        return placed;
+    }
+
+    /// Place a statement whose value has been sequenced into `sink`.
+    fn placeStatement(self: *BodyContext, sink: *Sequence, stmt_id: DraftStmtId, value: DraftExprId) Allocator.Error!void {
+        // The value's own statements transferred control: the statement
+        // never runs.
+        if (sink.terminated) return;
+        const transfers = exprDataTransfersControl(self.exprData(value));
+        switch (self.draft.stmts.items[@backingInt(stmt_id)]) {
+            .let_ => |binding| {
+                if (transfers) {
+                    // No binding is emitted for a value that never exists.
+                    try sink.list.append(self.allocator, try self.addStmtLike(stmt_id, .{ .expr = value }));
+                    sink.terminated = true;
+                    return;
+                }
+                try sink.list.append(self.allocator, if (value == binding.value) stmt_id else try self.addStmtLike(stmt_id, .{ .let_ = .{
+                    .pat = binding.pat,
+                    .value = value,
+                    .comptime_site = binding.comptime_site,
+                } }));
+            },
+            .expr => |source| {
+                try sink.list.append(self.allocator, if (value == source) stmt_id else try self.addStmtLike(stmt_id, .{ .expr = value }));
+                sink.terminated = transfers;
+            },
+            .dbg => |source| try sink.list.append(self.allocator, if (value == source) stmt_id else try self.addStmtLike(stmt_id, .{ .dbg = value })),
+            .return_ => |ret| {
+                try sink.list.append(self.allocator, if (value == ret.value) stmt_id else try self.addStmtLike(stmt_id, .{ .return_ = .{ .value = value, .target = ret.target } }));
+                sink.terminated = true;
+            },
+            .uninitialized, .expect, .crash, .checked_error => unreachable, // runSequence sequences a value only for the statements above
+        }
+    }
+
+    /// Whether a block's statements and final expression are already in the
+    /// order and form `sequenceInto` would give them.
+    fn blockIsSequenced(self: *BodyContext, block: DraftBlockExpr) bool {
+        if (block.statements.len == 0) return false;
+        const statements = self.stmtSpan(block.statements);
+        var terminated = false;
+        for (statements) |stmt_id| {
+            if (terminated) return false;
+            switch (self.draft.stmts.items[@backingInt(stmt_id)]) {
+                .let_ => |binding| {
+                    if (self.exprCarriesStatements(binding.value)) return false;
+                    if (!binding.recursive and exprDataTransfersControl(self.exprData(binding.value))) return false;
+                },
+                .expr => |value| {
+                    if (self.exprCarriesStatements(value)) return false;
+                    terminated = exprDataTransfersControl(self.exprData(value));
+                },
+                .dbg, .expect => |value| if (self.exprCarriesStatements(value) or self.exprData(value) == .@"unreachable") return false,
+                .return_ => |ret| {
+                    if (self.exprCarriesStatements(ret.value) or self.exprData(ret.value) == .@"unreachable") return false;
+                    terminated = true;
+                },
+                .uninitialized => {},
+                .crash, .checked_error => terminated = true,
+            }
+        }
+        if (terminated) return self.exprData(block.final_expr) == .@"unreachable";
+        return !self.exprCarriesStatements(block.final_expr);
+    }
+
+    /// `expr` as the whole of a scope of its own: a branch body, a loop body,
+    /// a function body. The statements it carries become a block there.
+    fn scopedExpr(self: *BodyContext, expr: DraftExprId) Allocator.Error!DraftExprId {
+        if (!self.exprCarriesStatements(expr)) return expr;
+        const data = self.exprData(expr);
+        if (data == .block and !self.draft.hasLeading(expr) and self.blockIsSequenced(data.block)) {
+            self.draft.exprs.items[@backingInt(expr)].ty = self.exprTypeCell(data.block.final_expr);
+            return expr;
+        }
+        var sink: Sequence = .{};
+        defer sink.list.deinit(self.allocator);
+        const value = try self.sequenceInto(&sink, expr);
+        if (sink.list.items.len == 0) return value;
+        if (data == .block and !self.draft.hasLeading(expr) and data.block.final_expr == value and
+            std.mem.eql(DraftStmtId, self.stmtSpan(data.block.statements), sink.list.items))
+        {
+            self.draft.exprs.items[@backingInt(expr)].ty = self.exprTypeCell(value);
+            return expr;
+        }
+        return try self.addSequencedBlock(expr, sink.list.items, value);
+    }
+
+    /// Finish a strict operand. An operand that transfers control ends the
+    /// sequence at its position.
+    fn finishOperand(self: *BodyContext, sink: *Sequence, value: DraftExprId) Allocator.Error!DraftExprId {
+        const data = self.exprData(value);
+        if (!exprDataTransfersControl(data)) return value;
+        if (data != .@"unreachable") try sink.list.append(self.allocator, try self.addStmt(.{ .expr = value }));
+        sink.terminated = true;
+        return try self.addUnreachableExpr(self.exprTypeCell(value));
+    }
+
+    /// A consumer's one strict operand.
+    fn sequenceOperand(self: *BodyContext, sink: *Sequence, operand: DraftExprId) Allocator.Error!DraftExprId {
+        return try self.finishOperand(sink, try self.sequenceInto(sink, operand));
+    }
+
+    /// Sequence a consumer's strict operands as one group, left to right. An
+    /// operand stays in place unless a later operand's statements come before
+    /// the consumer; then it is named at its own position first. This is
+    /// sequencing, not code motion: even a pure opaque call keeps its place
+    /// relative to every later operand's statements.
+    fn sequenceOperands(self: *BodyContext, sink: *Sequence, operands: []DraftExprId) Allocator.Error!void {
+        const sinks = try self.allocator.alloc(Sequence, operands.len);
+        defer {
+            for (sinks) |*operand_sink| operand_sink.list.deinit(self.allocator);
+            self.allocator.free(sinks);
+        }
+        for (sinks) |*operand_sink| operand_sink.* = .{};
+        var sequenced: usize = 0;
+        var last_with_statements: ?usize = null;
+        for (operands, sinks, 0..) |*operand, *operand_sink, index| {
+            if (index != 0 and sinks[index - 1].terminated) break;
+            operand.* = try self.sequenceOperand(operand_sink, operand.*);
+            if (operand_sink.list.items.len != 0) last_with_statements = index;
+            sequenced += 1;
+        }
+        for (operands[0..sequenced], sinks[0..sequenced], 0..) |*operand, *operand_sink, index| {
+            try sink.list.appendSlice(self.allocator, operand_sink.list.items);
+            if (operand_sink.terminated) {
+                sink.terminated = true;
+                break;
+            }
+            if (last_with_statements) |last| {
+                if (index < last) operand.* = try self.nameOperand(sink, operand.*);
+            }
+        }
+    }
+
+    /// Bind a sequenced operand to a new local at the current position.
+    fn nameOperand(self: *BodyContext, sink: *Sequence, value: DraftExprId) Allocator.Error!DraftExprId {
+        switch (self.exprData(value)) {
+            .local,
+            .unit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bytes_lit,
+            .uninitialized,
+            .uninitialized_payload,
+            => return value,
+            .static_data_candidate,
+            .comptime_value,
+            .row_widen,
+            .list,
+            .tuple,
+            .record,
+            .record_update,
+            .tag,
+            .nominal,
+            .lambda,
+            .def_ref,
+            .fn_def,
+            .fn_ref,
+            .call_value,
+            .call_proc,
+            .low_level,
+            .field_access,
+            .tuple_access,
+            .structural_eq,
+            .structural_hash,
+            .match_,
+            .if_,
+            .if_initialized_payload,
+            .try_sequence,
+            .try_record_sequence,
+            .loop_,
+            .join_point,
+            .dbg,
+            .expect,
+            .pending_deferred,
+            => {},
+            .block, .let_ => unreachable, // sequenceInto returns the value a block or `let` leads to, never the block or `let`
+            .@"unreachable",
+            .break_,
+            .continue_,
+            .jump,
+            .return_,
+            .crash,
+            .checked_error,
+            .comptime_exhaustiveness_failed,
+            .expect_err,
+            .literal_rejected,
+            => unreachable, // finishOperand ends the sequence at an operand that transfers control, and sequenceOperands stops there before naming
+        }
+        const ty = self.exprTypeCell(value);
+        const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), ty, null);
+        try sink.list.append(self.allocator, try self.addStmt(.{ .let_ = .{
+            .pat = try self.addPatWithTypeCell(ty, .{ .bind = local }),
+            .value = value,
+        } }));
+        return try self.addRawExpr(ty, .{ .local = local });
+    }
+
+    /// Add the expression a consumer's sequenced form produces: `rebuilt`
+    /// with `sink` as its leading statements, or `unreachable` when an
+    /// operand transferred control. `original` is the form the consumer was
+    /// requested in, which is what decides whether it can ever complete.
+    fn addSequencedExpr(
+        self: *BodyContext,
+        sink: *Sequence,
+        ty: DraftTypeCell,
+        original: DraftExprData,
+        rebuilt: DraftExprData,
+    ) Allocator.Error!DraftExprId {
+        const id = if (sink.terminated)
+            try self.addUnreachableExpr(ty)
+        else blk: {
+            const added = try self.addRawExpr(ty, rebuilt);
+            self.draft.expr_impossibility_proofs.set(@backingInt(added), try self.exprDataImpossibilityProof(ty, original));
+            break :blk added;
+        };
+        if (sink.list.items.len != 0) try self.draft.setLeading(id, try self.addStmtSpan(sink.list.items));
+        return id;
+    }
+
+    fn copyExprIds(self: *BodyContext, parts: []const []const DraftExprId) Allocator.Error![]DraftExprId {
+        var len: usize = 0;
+        for (parts) |part| len += part.len;
+        const ids = try self.allocator.alloc(DraftExprId, len);
+        var offset: usize = 0;
+        for (parts) |part| {
+            @memcpy(ids[offset..][0..part.len], part);
+            offset += part.len;
+        }
+        return ids;
+    }
+
+    fn fieldExprValues(self: *BodyContext, first: ?DraftExprId, fields: DraftSpan(DraftFieldExpr)) Allocator.Error![]DraftExprId {
+        const source = self.fieldExprSpan(fields);
+        const offset: usize = if (first == null) 0 else 1;
+        const ids = try self.allocator.alloc(DraftExprId, source.len + offset);
+        if (first) |value| ids[0] = value;
+        for (source, ids[offset..]) |field, *id| id.* = field.value;
+        return ids;
+    }
+
+    fn fieldExprSpanWithValues(self: *BodyContext, fields: DraftSpan(DraftFieldExpr), values: []const DraftExprId) Allocator.Error!DraftSpan(DraftFieldExpr) {
+        const rebuilt = try self.allocator.alloc(DraftFieldExpr, values.len);
+        defer self.allocator.free(rebuilt);
+        for (rebuilt, self.fieldExprSpan(fields), values) |*field, source, value| field.* = .{ .name = source.name, .value = value };
+        return try self.addFieldExprSpan(rebuilt);
+    }
+
+    /// The sequenced form of an expression about to be added, or null when
+    /// `data` is already sequenced and is added as it is.
+    ///
+    /// Strict operands are evaluated before their consumer, left to right. A
+    /// block or `let` used as an operand contributes its statements to the
+    /// statement list enclosing the consumer, recorded as the consumer's
+    /// leading statements until an enclosing list or scope takes them
+    /// (design.md "Operand Sequencing"). A block or `let` itself is added as
+    /// it is; whichever expression uses it places its statements.
+    fn sequenceExprData(self: *BodyContext, ty: DraftTypeCell, data: DraftExprData) Allocator.Error!?DraftExprId {
+        var sink: Sequence = .{};
+        defer sink.list.deinit(self.allocator);
+        switch (data) {
+            .local,
+            .unit,
+            .pending_deferred,
+            .@"unreachable",
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bytes_lit,
+            .def_ref,
+            .fn_ref,
+            .uninitialized,
+            .uninitialized_payload,
+            .crash,
+            .checked_error,
+            .comptime_exhaustiveness_failed,
+            .block,
+            .let_,
+            => return null,
+            .list, .tuple => |items| {
+                if (!self.anyOperandNeedsSequencing(self.exprSpan(items))) return null;
+                const operands = try self.copyExprIds(&.{self.exprSpan(items)});
+                defer self.allocator.free(operands);
+                try self.sequenceOperands(&sink, operands);
+                const span = try self.addExprSpan(operands);
+                return try self.addSequencedExpr(&sink, ty, data, if (data == .list) .{ .list = span } else .{ .tuple = span });
+            },
+            .tag => |tag| {
+                if (!self.anyOperandNeedsSequencing(self.exprSpan(tag.payloads))) return null;
+                const operands = try self.copyExprIds(&.{self.exprSpan(tag.payloads)});
+                defer self.allocator.free(operands);
+                try self.sequenceOperands(&sink, operands);
+                return try self.addSequencedExpr(&sink, ty, data, .{ .tag = .{ .name = tag.name, .payloads = try self.addExprSpan(operands) } });
+            },
+            .low_level => |call| {
+                if (!self.anyOperandNeedsSequencing(self.exprSpan(call.args))) return null;
+                const operands = try self.copyExprIds(&.{self.exprSpan(call.args)});
+                defer self.allocator.free(operands);
+                try self.sequenceOperands(&sink, operands);
+                return try self.addSequencedExpr(&sink, ty, data, .{ .low_level = .{ .op = call.op, .args = try self.addExprSpan(operands) } });
+            },
+            .continue_ => |transfer| {
+                if (!self.anyOperandNeedsSequencing(self.exprSpan(transfer.values))) return null;
+                const operands = try self.copyExprIds(&.{self.exprSpan(transfer.values)});
+                defer self.allocator.free(operands);
+                try self.sequenceOperands(&sink, operands);
+                return try self.addSequencedExpr(&sink, ty, data, .{ .continue_ = .{ .values = try self.addExprSpan(operands) } });
+            },
+            .jump => |transfer| {
+                const loop_values = self.exprSpan(transfer.loop_values);
+                const args = self.exprSpan(transfer.args);
+                if (!self.anyOperandNeedsSequencing(loop_values) and !self.anyOperandNeedsSequencing(args)) return null;
+                const split = loop_values.len;
+                const operands = try self.copyExprIds(&.{ loop_values, args });
+                defer self.allocator.free(operands);
+                try self.sequenceOperands(&sink, operands);
+                var rebuilt = transfer;
+                rebuilt.loop_values = try self.addExprSpan(operands[0..split]);
+                rebuilt.args = try self.addExprSpan(operands[split..]);
+                return try self.addSequencedExpr(&sink, ty, data, .{ .jump = rebuilt });
+            },
+            .record => |fields| {
+                const operands = try self.fieldExprValues(null, fields);
+                defer self.allocator.free(operands);
+                if (!self.anyOperandNeedsSequencing(operands)) return null;
+                try self.sequenceOperands(&sink, operands);
+                return try self.addSequencedExpr(&sink, ty, data, .{ .record = try self.fieldExprSpanWithValues(fields, operands) });
+            },
+            .record_update => |update| {
+                const operands = try self.fieldExprValues(update.base, update.fields);
+                defer self.allocator.free(operands);
+                if (!self.anyOperandNeedsSequencing(operands)) return null;
+                try self.sequenceOperands(&sink, operands);
+                return try self.addSequencedExpr(&sink, ty, data, .{ .record_update = .{
+                    .base = operands[0],
+                    .fields = try self.fieldExprSpanWithValues(update.fields, operands[1..]),
+                } });
+            },
+            .fn_def => |fn_def| {
+                const captures = self.fnDefCaptureSpan(fn_def.captures);
+                const operands = try self.allocator.alloc(DraftExprId, captures.len);
+                defer self.allocator.free(operands);
+                for (captures, operands) |capture, *operand| operand.* = capture.value;
+                if (!self.anyOperandNeedsSequencing(operands)) return null;
+                try self.sequenceOperands(&sink, operands);
+                const rebuilt = try self.allocator.alloc(DraftFnDefCapture, operands.len);
+                defer self.allocator.free(rebuilt);
+                for (rebuilt, self.fnDefCaptureSpan(fn_def.captures), operands) |*capture, source, value| capture.* = .{ .id = source.id, .value = value };
+                return try self.addSequencedExpr(&sink, ty, data, .{ .fn_def = .{
+                    .fn_id = fn_def.fn_id,
+                    .captures = try self.addFnDefCaptureSpan(rebuilt),
+                } });
+            },
+            .call_value => |call| {
+                const args = self.exprSpan(call.args);
+                if (!self.operandNeedsSequencing(call.callee) and !self.anyOperandNeedsSequencing(args)) return null;
+                const callee = try self.sequenceInto(&sink, call.callee);
+                const callee_data = self.exprData(callee);
+                if (callee_data != .fn_def) {
+                    const operands = try self.copyExprIds(&.{ &.{callee}, args });
+                    defer self.allocator.free(operands);
+                    try self.sequenceOperands(&sink, operands);
+                    return try self.addSequencedExpr(&sink, ty, data, .{ .call_value = .{
+                        .callee = operands[0],
+                        .args = try self.addExprSpan(operands[1..]),
+                    } });
+                }
+                // A call of a function definition written as its callee is
+                // the direct call lifting makes of it: the definition stays
+                // the callee, and its capture values are the call's first
+                // operands.
+                const captures = self.fnDefCaptureSpan(callee_data.fn_def.captures);
+                const operands = try self.allocator.alloc(DraftExprId, captures.len + args.len);
+                defer self.allocator.free(operands);
+                for (captures, operands[0..captures.len]) |capture, *operand| operand.* = capture.value;
+                @memcpy(operands[captures.len..], args);
+                try self.sequenceOperands(&sink, operands);
+                var rebuilt_callee = callee;
+                for (self.fnDefCaptureSpan(callee_data.fn_def.captures), operands[0..captures.len]) |capture, operand| {
+                    if (capture.value == operand) continue;
+                    const rebuilt = try self.allocator.alloc(DraftFnDefCapture, captures.len);
+                    defer self.allocator.free(rebuilt);
+                    for (rebuilt, self.fnDefCaptureSpan(callee_data.fn_def.captures), operands[0..captures.len]) |*slot, source, value| slot.* = .{ .id = source.id, .value = value };
+                    rebuilt_callee = try self.addRawExpr(self.exprTypeCell(callee), .{ .fn_def = .{
+                        .fn_id = callee_data.fn_def.fn_id,
+                        .captures = try self.addFnDefCaptureSpan(rebuilt),
+                    } });
+                    break;
+                }
+                return try self.addSequencedExpr(&sink, ty, data, .{ .call_value = .{
+                    .callee = rebuilt_callee,
+                    .args = try self.addExprSpan(operands[captures.len..]),
+                } });
+            },
+            .call_proc => |call| {
+                // A call of a function value evaluates the value first, as
+                // the value call it is sealed into does.
+                const callee: []const DraftExprId = switch (call.callee) {
+                    .value => |value| &.{value},
+                    .func, .lifted, .declared_root => &.{},
+                };
+                const args = self.exprSpan(call.args);
+                const captures = self.exprSpan(call.captures);
+                if (!self.anyOperandNeedsSequencing(callee) and !self.anyOperandNeedsSequencing(args) and !self.anyOperandNeedsSequencing(captures)) return null;
+                const operands = try self.copyExprIds(&.{ callee, args, captures });
+                defer self.allocator.free(operands);
+                try self.sequenceOperands(&sink, operands);
+                var rebuilt = call;
+                if (callee.len != 0) rebuilt.callee = .{ .value = operands[0] };
+                rebuilt.args = try self.addExprSpan(operands[callee.len..][0..args.len]);
+                rebuilt.captures = try self.addExprSpan(operands[callee.len + args.len ..]);
+                return try self.addSequencedExpr(&sink, ty, data, .{ .call_proc = rebuilt });
+            },
+            .structural_eq => |equal| {
+                var operands = [_]DraftExprId{ equal.lhs, equal.rhs };
+                if (!self.anyOperandNeedsSequencing(&operands)) return null;
+                try self.sequenceOperands(&sink, &operands);
+                return try self.addSequencedExpr(&sink, ty, data, .{ .structural_eq = .{ .lhs = operands[0], .rhs = operands[1], .negated = equal.negated } });
+            },
+            .structural_hash => |hash| {
+                var operands = [_]DraftExprId{ hash.value, hash.hasher };
+                if (!self.anyOperandNeedsSequencing(&operands)) return null;
+                try self.sequenceOperands(&sink, &operands);
+                return try self.addSequencedExpr(&sink, ty, data, .{ .structural_hash = .{ .value = operands[0], .hasher = operands[1] } });
+            },
+            .loop_ => |loop| {
+                const initial_values = self.exprSpan(loop.initial_values);
+                // A loop's body keeps its own scope after its initial values.
+                if (!self.anyOperandNeedsSequencing(initial_values) and !self.exprCarriesStatements(loop.body)) return null;
+                const operands = try self.copyExprIds(&.{initial_values});
+                defer self.allocator.free(operands);
+                try self.sequenceOperands(&sink, operands);
+                var rebuilt = loop;
+                if (!sink.terminated) {
+                    rebuilt.initial_values = try self.addExprSpan(operands);
+                    rebuilt.body = try self.scopedExpr(loop.body);
+                }
+                return try self.addSequencedExpr(&sink, ty, data, .{ .loop_ = rebuilt });
+            },
+            .nominal => |value| {
+                if (!self.operandNeedsSequencing(value)) return null;
+                return try self.addSequencedExpr(&sink, ty, data, .{ .nominal = try self.sequenceOperand(&sink, value) });
+            },
+            .field_access => |access| {
+                if (!self.operandNeedsSequencing(access.receiver)) return null;
+                return try self.addSequencedExpr(&sink, ty, data, .{ .field_access = .{
+                    .receiver = try self.sequenceOperand(&sink, access.receiver),
+                    .segments = access.segments,
+                } });
+            },
+            .tuple_access => |access| {
+                if (!self.operandNeedsSequencing(access.tuple)) return null;
+                return try self.addSequencedExpr(&sink, ty, data, .{ .tuple_access = .{
+                    .tuple = try self.sequenceOperand(&sink, access.tuple),
+                    .elem_index = access.elem_index,
+                } });
+            },
+            .expect_err => |failure| {
+                if (!self.operandNeedsSequencing(failure.msg)) return null;
+                return try self.addSequencedExpr(&sink, ty, data, .{ .expect_err = .{
+                    .msg = try self.sequenceOperand(&sink, failure.msg),
+                    .region = failure.region,
+                } });
+            },
+            .literal_rejected => |failure| {
+                if (!self.operandNeedsSequencing(failure.msg)) return null;
+                return try self.addSequencedExpr(&sink, ty, data, .{ .literal_rejected = .{
+                    .msg = try self.sequenceOperand(&sink, failure.msg),
+                    .site = failure.site,
+                } });
+            },
+            .break_ => |maybe_value| {
+                const value = maybe_value orelse return null;
+                if (!self.operandNeedsSequencing(value)) return null;
+                return try self.addSequencedExpr(&sink, ty, data, .{ .break_ = try self.sequenceOperand(&sink, value) });
+            },
+            // These children join the expression's own sequence without
+            // being operands of it: a child that transfers control stays the
+            // child.
+            .dbg => |value| {
+                if (!self.exprCarriesStatements(value) and self.exprData(value) != .@"unreachable") return null;
+                return try self.addSequencedExpr(&sink, ty, data, .{ .dbg = try self.sequenceInto(&sink, value) });
+            },
+            .row_widen => |widen| {
+                if (!self.exprCarriesStatements(widen.value) and self.exprData(widen.value) != .@"unreachable") return null;
+                return try self.addSequencedExpr(&sink, ty, data, .{ .row_widen = .{ .value = try self.sequenceInto(&sink, widen.value) } });
+            },
+            .return_ => |ret| {
+                if (!self.exprCarriesStatements(ret.value) and self.exprData(ret.value) != .@"unreachable") return null;
+                return try self.addSequencedExpr(&sink, ty, data, .{ .return_ = .{
+                    .value = try self.sequenceInto(&sink, ret.value),
+                    .target = ret.target,
+                } });
+            },
+            // These children provide evidence or conditional execution,
+            // rather than ordinary strict operands at the enclosing position,
+            // so each keeps a scope of its own.
+            .static_data_candidate => |candidate| {
+                const value = candidate.value.subexpression() orelse return null;
+                if (!self.exprCarriesStatements(value)) return null;
+                const scoped = try self.scopedExpr(value);
+                if (scoped == value) return null;
+                var rebuilt = candidate;
+                rebuilt.value = .{ .runtime = scoped };
+                return try self.addRawExpr(ty, .{ .static_data_candidate = rebuilt });
+            },
+            .comptime_value => |candidate| {
+                if (!self.exprCarriesStatements(candidate.initializer)) return null;
+                const scoped = try self.scopedExpr(candidate.initializer);
+                if (scoped == candidate.initializer) return null;
+                return try self.addRawExpr(ty, .{ .comptime_value = .{ .root = candidate.root, .initializer = scoped } });
+            },
+            .expect => |condition| {
+                if (!self.exprCarriesStatements(condition)) return null;
+                const scoped = try self.scopedExpr(condition);
+                if (scoped == condition) return null;
+                return try self.addRawExpr(ty, .{ .expect = scoped });
+            },
+            .lambda => |lambda| {
+                if (!self.exprCarriesStatements(lambda.body)) return null;
+                var rebuilt = lambda;
+                rebuilt.body = try self.scopedExpr(lambda.body);
+                if (rebuilt.body == lambda.body) return null;
+                return try self.addRawExpr(ty, .{ .lambda = rebuilt });
+            },
+            .join_point => |join| {
+                if (!self.exprCarriesStatements(join.body) and !self.exprCarriesStatements(join.remainder)) return null;
+                var rebuilt = join;
+                rebuilt.body = try self.scopedExpr(join.body);
+                rebuilt.remainder = try self.scopedExpr(join.remainder);
+                if (rebuilt.body == join.body and rebuilt.remainder == join.remainder) return null;
+                return try self.addRawExpr(ty, .{ .join_point = rebuilt });
+            },
+            .if_initialized_payload => |conditional| {
+                if (!self.operandNeedsSequencing(conditional.cond) and
+                    !self.exprCarriesStatements(conditional.initialized) and
+                    !self.exprCarriesStatements(conditional.uninitialized)) return null;
+                var rebuilt = conditional;
+                rebuilt.cond = try self.sequenceOperand(&sink, conditional.cond);
+                if (!sink.terminated) {
+                    rebuilt.initialized = try self.scopedExpr(conditional.initialized);
+                    rebuilt.uninitialized = try self.scopedExpr(conditional.uninitialized);
+                }
+                return try self.addSequencedExpr(&sink, ty, data, .{ .if_initialized_payload = rebuilt });
+            },
+            inline .try_sequence, .try_record_sequence => |sequence, tag| {
+                if (!self.operandNeedsSequencing(sequence.try_expr) and !self.exprCarriesStatements(sequence.ok_body)) return null;
+                var rebuilt = sequence;
+                rebuilt.try_expr = try self.sequenceOperand(&sink, sequence.try_expr);
+                if (!sink.terminated) rebuilt.ok_body = try self.scopedExpr(sequence.ok_body);
+                return try self.addSequencedExpr(&sink, ty, data, @unionInit(DraftExprData, @tagName(tag), rebuilt));
+            },
+            .match_ => |match| return try self.sequenceMatch(&sink, ty, data, match),
+            .if_ => |conditional| return try self.sequenceIf(&sink, ty, data, conditional),
+        }
+    }
+
+    /// The scrutinee is the match's strict operand. Each branch's bindings
+    /// are a statement list of their own, which its guard's statements join;
+    /// its body keeps its own scope.
+    fn sequenceMatch(
+        self: *BodyContext,
+        sink: *Sequence,
+        ty: DraftTypeCell,
+        data: DraftExprData,
+        match: DraftMatchExpr,
+    ) Allocator.Error!?DraftExprId {
+        const source = self.branchSpan(match.branches);
+        var needs = self.operandNeedsSequencing(match.scrutinee);
+        for (source) |branch| {
+            if (needs) break;
+            needs = self.exprCarriesStatements(branch.body) or !self.statementsAreSequenced(branch.bindings);
+            if (branch.guard.get()) |guard| needs = needs or self.exprCarriesStatements(guard) or self.exprData(guard) == .@"unreachable";
+        }
+        if (!needs) return null;
+
+        var rebuilt = match;
+        rebuilt.scrutinee = try self.sequenceOperand(sink, match.scrutinee);
+        if (!sink.terminated) {
+            const branches = try self.allocator.dupe(DraftBranch, source);
+            defer self.allocator.free(branches);
+            for (branches) |*branch| {
+                var bindings: Sequence = .{};
+                defer bindings.list.deinit(self.allocator);
+                try self.sequenceStatementsInto(&bindings, branch.bindings);
+                if (branch.guard.get()) |guard| {
+                    const sequenced = try self.sequenceInto(&bindings, guard);
+                    // A guard whose evaluation transfers control ends the
+                    // branch's bindings there, so it produces no value to
+                    // test: reaching the branch runs its bindings up to that
+                    // transfer.
+                    branch.guard = if (bindings.terminated) .none else .some(sequenced);
+                }
+                if (!std.mem.eql(DraftStmtId, self.stmtSpan(branch.bindings), bindings.list.items)) {
+                    branch.bindings = try self.addStmtSpan(bindings.list.items);
+                }
+                branch.body = try self.scopedExpr(branch.body);
+            }
+            rebuilt.branches = try self.addBranchSpan(branches);
+        }
+        return try self.addSequencedExpr(sink, ty, data, .{ .match_ = rebuilt });
+    }
+
+    /// Whether a statement list holds no statement `sequenceStatementsInto`
+    /// would change or drop.
+    fn statementsAreSequenced(self: *BodyContext, span: DraftSpan(DraftStmtId)) bool {
+        var terminated = false;
+        for (self.stmtSpan(span)) |stmt_id| {
+            if (terminated) return false;
+            switch (self.draft.stmts.items[@backingInt(stmt_id)]) {
+                .let_ => |binding| {
+                    if (self.exprCarriesStatements(binding.value)) return false;
+                    if (!binding.recursive and exprDataTransfersControl(self.exprData(binding.value))) return false;
+                },
+                .expr => |value| {
+                    if (self.exprCarriesStatements(value)) return false;
+                    terminated = exprDataTransfersControl(self.exprData(value));
+                },
+                .dbg, .expect => |value| if (self.exprCarriesStatements(value) or self.exprData(value) == .@"unreachable") return false,
+                .return_ => |ret| {
+                    if (self.exprCarriesStatements(ret.value) or self.exprData(ret.value) == .@"unreachable") return false;
+                    terminated = true;
+                },
+                .uninitialized => {},
+                .crash, .checked_error => terminated = true,
+            }
+        }
+        return true;
+    }
+
+    /// The false continuation of an `if` level: `value` after `statements`,
+    /// as one expression of the `if`'s type at the `if`'s position.
+    fn elseContinuation(
+        self: *BodyContext,
+        ty: DraftTypeCell,
+        source: ?DraftExprId,
+        statements: []const DraftStmtId,
+        value: DraftExprId,
+    ) Allocator.Error!DraftExprId {
+        if (statements.len == 0) return value;
+        if (source) |expr| {
+            const data = self.exprData(expr);
+            if (data == .block and !self.draft.hasLeading(expr) and data.block.final_expr == value and
+                std.mem.eql(DraftStmtId, self.stmtSpan(data.block.statements), statements))
+            {
+                const index = @backingInt(expr);
+                self.draft.exprs.items[index].ty = ty;
+                self.draft.expr_locs.items[index] = self.builder.current_loc;
+                self.draft.expr_regions.items[index] = self.builder.current_region;
+                return expr;
+            }
+        }
+        return try self.addRawExpr(ty, .{ .block = .{
+            .statements = try self.addStmtSpan(statements),
+            .final_expr = value,
+        } });
+    }
+
+    /// Later conditions execute only when all earlier conditions are false,
+    /// so each level is an `if` of its own whose false continuation holds the
+    /// next condition's statements: never before the first `if`. Each
+    /// condition is its level's strict operand, and each body keeps its own
+    /// scope.
+    fn sequenceIf(
+        self: *BodyContext,
+        sink: *Sequence,
+        ty: DraftTypeCell,
+        data: DraftExprData,
+        conditional: DraftIfExpr,
+    ) Allocator.Error!?DraftExprId {
+        const source = self.ifBranchSpan(conditional.branches);
+        if (source.len == 1 and
+            !self.operandNeedsSequencing(source[0].cond) and
+            !self.exprCarriesStatements(source[0].body))
+        {
+            const final_else = conditional.final_else;
+            if (!self.exprCarriesStatements(final_else)) return null;
+            const else_data = self.exprData(final_else);
+            if (else_data == .block and !self.draft.hasLeading(final_else) and self.blockIsSequenced(else_data.block)) {
+                _ = try self.elseContinuation(ty, final_else, self.stmtSpan(else_data.block.statements), else_data.block.final_expr);
+                return null;
+            }
+        }
+
+        const levels = try self.allocator.dupe(DraftIfBranch, source);
+        defer self.allocator.free(levels);
+        // Each level's statements: the first level's are the `if`'s own, each
+        // later level's are the preceding false continuation's.
+        const level_sinks = try self.allocator.alloc(Sequence, levels.len + 1);
+        defer {
+            for (level_sinks[1..]) |*level_sink| level_sink.list.deinit(self.allocator);
+            self.allocator.free(level_sinks);
+        }
+        for (level_sinks) |*level_sink| level_sink.* = .{};
+
+        var completed: usize = 0;
+        var condition_transferred = false;
+        for (levels, 0..) |*level, index| {
+            const level_sink = if (index == 0) sink else &level_sinks[index];
+            level.cond = try self.sequenceOperand(level_sink, level.cond);
+            if (level_sink.terminated) {
+                condition_transferred = true;
+                break;
+            }
+            level.body = try self.scopedExpr(level.body);
+            completed += 1;
+        }
+
+        // The innermost continuation: the final else, or `unreachable` where
+        // a condition ended the sequence.
+        var result: DraftExprId = undefined;
+        if (condition_transferred) {
+            result = try self.addUnreachableExpr(ty);
+            if (completed != 0) result = try self.elseContinuation(ty, null, level_sinks[completed].list.items, result);
+        } else {
+            var else_sink: Sequence = .{};
+            defer else_sink.list.deinit(self.allocator);
+            const value = try self.sequenceInto(&else_sink, conditional.final_else);
+            result = try self.elseContinuation(ty, conditional.final_else, else_sink.list.items, value);
+        }
+        var level = completed;
+        while (level > 0) {
+            level -= 1;
+            result = try self.addRawExpr(ty, .{ .if_ = .{
+                .branches = try self.addIfBranchSpan(&.{levels[level]}),
+                .final_else = result,
+            } });
+            if (level != 0) result = try self.elseContinuation(ty, null, level_sinks[level].list.items, result);
+        }
+        if (!sink.terminated) {
+            self.draft.expr_impossibility_proofs.set(@backingInt(result), try self.exprDataImpossibilityProof(ty, data));
+        }
+        if (sink.list.items.len != 0) try self.draft.setLeading(result, try self.addStmtSpan(sink.list.items));
+        return result;
+    }
+
+    /// Every expression directly inside `data`, in evaluation order.
+    fn appendChildExprs(self: *BodyContext, children: *std.ArrayList(DraftExprId), data: DraftExprData) Allocator.Error!void {
+        const allocator = self.allocator;
+        switch (data) {
+            .local,
+            .unit,
+            .pending_deferred,
+            .@"unreachable",
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bytes_lit,
+            .def_ref,
+            .fn_ref,
+            .uninitialized,
+            .uninitialized_payload,
+            .crash,
+            .checked_error,
+            .comptime_exhaustiveness_failed,
+            => {},
+            .static_data_candidate => |candidate| if (candidate.value.subexpression()) |value| try children.append(allocator, value),
+            .comptime_value => |candidate| try children.append(allocator, candidate.initializer),
+            .list, .tuple => |items| try children.appendSlice(allocator, self.exprSpan(items)),
+            .record => |fields| for (self.fieldExprSpan(fields)) |field| try children.append(allocator, field.value),
+            .record_update => |update| {
+                try children.append(allocator, update.base);
+                for (self.fieldExprSpan(update.fields)) |field| try children.append(allocator, field.value);
+            },
+            .tag => |tag| try children.appendSlice(allocator, self.exprSpan(tag.payloads)),
+            .nominal, .dbg, .expect => |value| try children.append(allocator, value),
+            .let_ => |binding| try children.appendSlice(allocator, &.{ binding.value, binding.rest }),
+            .lambda => |lambda| try children.append(allocator, lambda.body),
+            .fn_def => |fn_def| for (self.fnDefCaptureSpan(fn_def.captures)) |capture| try children.append(allocator, capture.value),
+            .call_value => |call| {
+                try children.append(allocator, call.callee);
+                try children.appendSlice(allocator, self.exprSpan(call.args));
+            },
+            .call_proc => |call| {
+                switch (call.callee) {
+                    .value => |value| try children.append(allocator, value),
+                    .func, .lifted, .declared_root => {},
+                }
+                try children.appendSlice(allocator, self.exprSpan(call.args));
+                try children.appendSlice(allocator, self.exprSpan(call.captures));
+            },
+            .low_level => |call| try children.appendSlice(allocator, self.exprSpan(call.args)),
+            .field_access => |access| try children.append(allocator, access.receiver),
+            .tuple_access => |access| try children.append(allocator, access.tuple),
+            .structural_eq => |equal| try children.appendSlice(allocator, &.{ equal.lhs, equal.rhs }),
+            .structural_hash => |hash| try children.appendSlice(allocator, &.{ hash.value, hash.hasher }),
+            .match_ => |match| {
+                try children.append(allocator, match.scrutinee);
+                for (self.branchSpan(match.branches)) |branch| {
+                    try self.appendStatementValues(children, branch.bindings);
+                    if (branch.guard.get()) |guard| try children.append(allocator, guard);
+                    try children.append(allocator, branch.body);
+                }
+            },
+            .if_ => |conditional| {
+                for (self.ifBranchSpan(conditional.branches)) |branch| try children.appendSlice(allocator, &.{ branch.cond, branch.body });
+                try children.append(allocator, conditional.final_else);
+            },
+            .if_initialized_payload => |conditional| try children.appendSlice(allocator, &.{ conditional.cond, conditional.initialized, conditional.uninitialized }),
+            inline .try_sequence, .try_record_sequence => |sequence| try children.appendSlice(allocator, &.{ sequence.try_expr, sequence.ok_body }),
+            .block => |block| {
+                try self.appendStatementValues(children, block.statements);
+                try children.append(allocator, block.final_expr);
+            },
+            .loop_ => |loop| {
+                try children.appendSlice(allocator, self.exprSpan(loop.initial_values));
+                try children.append(allocator, loop.body);
+            },
+            .break_ => |maybe_value| if (maybe_value) |value| try children.append(allocator, value),
+            .continue_ => |transfer| try children.appendSlice(allocator, self.exprSpan(transfer.values)),
+            .join_point => |join| try children.appendSlice(allocator, &.{ join.body, join.remainder }),
+            .jump => |transfer| {
+                try children.appendSlice(allocator, self.exprSpan(transfer.loop_values));
+                try children.appendSlice(allocator, self.exprSpan(transfer.args));
+            },
+            .return_ => |ret| try children.append(allocator, ret.value),
+            .row_widen => |widen| try children.append(allocator, widen.value),
+            inline .expect_err, .literal_rejected => |failure| try children.append(allocator, failure.msg),
+        }
+    }
+
+    fn appendStatementValues(self: *BodyContext, children: *std.ArrayList(DraftExprId), span: DraftSpan(DraftStmtId)) Allocator.Error!void {
+        for (self.stmtSpan(span)) |stmt_id| {
+            switch (self.draft.stmts.items[@backingInt(stmt_id)]) {
+                .let_ => |binding| try children.append(self.allocator, binding.value),
+                .expr, .expect, .dbg => |value| try children.append(self.allocator, value),
+                .return_ => |ret| try children.append(self.allocator, ret.value),
+                .uninitialized, .crash, .checked_error => {},
+            }
+        }
+    }
+
+    /// Sequence a body again after a reservation inside it was filled with
+    /// an expression that carries statements or transfers control. Each
+    /// expression is sequenced after the expressions inside it and keeps its
+    /// id, so nothing that names it changes.
+    fn resequenceBody(self: *BodyContext, root: DraftExprId) Allocator.Error!void {
+        const Visit = struct { expr: DraftExprId, inside_done: bool };
+        var stack: std.ArrayList(Visit) = .empty;
+        defer stack.deinit(self.allocator);
+        var children: std.ArrayList(DraftExprId) = .empty;
+        defer children.deinit(self.allocator);
+        var visited: std.AutoHashMapUnmanaged(DraftExprId, void) = .empty;
+        defer visited.deinit(self.allocator);
+        try stack.append(self.allocator, .{ .expr = root, .inside_done = false });
+        while (stack.pop()) |visit| {
+            if (visit.inside_done) {
+                try self.resequenceExpr(visit.expr);
+                continue;
+            }
+            if ((try visited.getOrPut(self.allocator, visit.expr)).found_existing) continue;
+            try stack.append(self.allocator, .{ .expr = visit.expr, .inside_done = true });
+            children.clearRetainingCapacity();
+            if (self.draft.leadingOf(visit.expr)) |leading| try self.appendStatementValues(&children, leading);
+            try self.appendChildExprs(&children, self.exprData(visit.expr));
+            for (children.items) |child| try stack.append(self.allocator, .{ .expr = child, .inside_done = false });
+        }
+    }
+
+    /// Sequence one existing expression in place, at its own source position
+    /// and under its own owner.
+    fn resequenceExpr(self: *BodyContext, expr: DraftExprId) Allocator.Error!void {
+        const index = @backingInt(expr);
+        const source = self.draft.exprs.items[index];
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
+        self.builder.current_loc = self.draft.expr_locs.items[index];
+        self.builder.current_region = self.draft.expr_regions.items[index];
+        const owner_scope = try self.draft.enterOwner(self.draft.exprOwner(expr));
+        defer owner_scope.leave();
+
+        const sequenced = (try self.sequenceExprData(source.ty, source.data)) orelse return;
+        self.draft.exprs.items[index] = self.draft.exprs.items[@backingInt(sequenced)];
+        self.draft.expr_impossibility_proofs.set(index, self.draft.expr_impossibility_proofs.get(@backingInt(sequenced)));
+        try self.draft.copyRootValueReads(sequenced, expr);
+        const added = self.draft.takeLeading(sequenced) orelse return;
+        // The statements this expression already carried came from the same
+        // operands at their first sequencing, so they stay ahead.
+        if (self.draft.takeLeading(expr)) |carried| {
+            const statements = try self.allocator.alloc(DraftStmtId, carried.len + added.len);
+            defer self.allocator.free(statements);
+            @memcpy(statements[0..carried.len], self.stmtSpan(carried));
+            @memcpy(statements[carried.len..], self.stmtSpan(added));
+            try self.draft.setLeading(expr, try self.addStmtSpan(statements));
+        } else {
+            try self.draft.setLeading(expr, added);
+        }
+    }
+
+    /// Make a function body the whole of its scope without changing its id:
+    /// the statements it carries become a block in its place.
+    fn scopeBodyInPlace(self: *BodyContext, body: DraftExprId) Allocator.Error!void {
+        if (!self.exprCarriesStatements(body)) return;
+        const index = @backingInt(body);
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
+        self.builder.current_loc = self.draft.expr_locs.items[index];
+        self.builder.current_region = self.draft.expr_regions.items[index];
+        const owner_scope = try self.draft.enterOwner(self.draft.exprOwner(body));
+        defer owner_scope.leave();
+
+        const source = self.draft.exprs.items[index];
+        if (source.data == .block and !self.draft.hasLeading(body) and self.blockIsSequenced(source.data.block)) {
+            self.draft.exprs.items[index].ty = self.exprTypeCell(source.data.block.final_expr);
+            return;
+        }
+        var sink: Sequence = .{};
+        defer sink.list.deinit(self.allocator);
+        const value = try self.sequenceInto(&sink, body);
+        // The statements the body led now stand in its block.
+        _ = self.draft.takeLeading(body);
+        if (sink.list.items.len == 0) {
+            const value_index = @backingInt(value);
+            self.draft.exprs.items[index] = self.draft.exprs.items[value_index];
+            self.draft.expr_impossibility_proofs.set(index, self.draft.expr_impossibility_proofs.get(value_index));
+            try self.draft.copyRootValueReads(value, body);
+            return;
+        }
+        const block: DraftExprData = .{ .block = .{
+            .statements = try self.addStmtSpan(sink.list.items),
+            .final_expr = value,
+        } };
+        const ty = self.exprTypeCell(value);
+        self.draft.exprs.items[index] = .{ .ty = ty, .data = block };
+        self.draft.expr_impossibility_proofs.set(index, try self.exprDataImpossibilityProof(ty, block));
     }
 
     /// Add a structural constructor expression (tag, record, or tuple),
@@ -45753,15 +47304,18 @@ const BodyContext = struct {
         if (reserved.data != .pending_deferred) {
             Common.invariant("compiler-generated join reservation was filled more than once");
         }
+        // The body and the remainder each keep a scope of their own.
         const data: BodyExprData = .{ .join_point = .{
             .id = reservation,
             .params = params,
             .retained = retained,
-            .body = body,
-            .remainder = remainder,
+            .body = try self.scopedExpr(body),
+            .remainder = try self.scopedExpr(remainder),
         } };
-        reserved.data = data;
-        self.draft.expr_impossibility_proofs.set(@backingInt(reservation), try self.exprDataImpossibilityProof(reserved.ty, data));
+        // Scoping can add expressions, so the reservation is read again.
+        const filled = &self.draft.exprs.items[@backingInt(reservation)];
+        filled.data = data;
+        self.draft.expr_impossibility_proofs.set(@backingInt(reservation), try self.exprDataImpossibilityProof(filled.ty, data));
     }
 
     fn jumpToGeneratedJoin(
@@ -47182,6 +48736,7 @@ const BodyContext = struct {
         const reservation_index = @backingInt(reservation);
         const source_index = @backingInt(source);
         self.draft.exprs.items[reservation_index] = self.draft.exprs.items[source_index];
+        try self.draft.noteFilledReservation(reservation, source);
         self.draft.expr_locs.items[reservation_index] = self.draft.expr_locs.items[source_index];
         self.draft.expr_regions.items[reservation_index] = self.draft.expr_regions.items[source_index];
         try self.draft.copyRootValueReads(source, reservation);

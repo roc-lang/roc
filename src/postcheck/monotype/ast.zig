@@ -1598,6 +1598,130 @@ pub const ExprData = union(enum(u8)) {
     expect_err: ExpectErrExpr,
     expect: ExprId,
     literal_rejected: LiteralRejected,
+
+    /// Whether evaluating an expression of this form transfers control
+    /// instead of producing a value.
+    pub fn transfersControl(data: ExprData) bool {
+        return switch (data) {
+            .@"unreachable",
+            .return_,
+            .break_,
+            .continue_,
+            .jump,
+            .crash,
+            .checked_error,
+            .expect_err,
+            .literal_rejected,
+            .comptime_exhaustiveness_failed,
+            => true,
+            .local,
+            .unit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bytes_lit,
+            .static_data_candidate,
+            .comptime_value,
+            .typed_boundary,
+            .row_widen,
+            .list,
+            .tuple,
+            .record,
+            .record_update,
+            .tag,
+            .nominal,
+            .let_,
+            .lambda,
+            .def_ref,
+            .fn_def,
+            .fn_ref,
+            .call_value,
+            .call_proc,
+            .low_level,
+            .field_access,
+            .tuple_access,
+            .structural_eq,
+            .structural_hash,
+            .match_,
+            .if_,
+            .uninitialized,
+            .uninitialized_payload,
+            .if_initialized_payload,
+            .try_sequence,
+            .try_record_sequence,
+            .block,
+            .loop_,
+            .join_point,
+            .dbg,
+            .expect,
+            => false,
+        };
+    }
+
+    /// Whether an expression of this form has no expression inside it. Any
+    /// number of consumers may name one such expression; an expression with
+    /// expressions inside it has one parent (design.md "Operand
+    /// Sequencing").
+    pub fn isLeaf(data: ExprData) bool {
+        return switch (data) {
+            .local,
+            .unit,
+            .@"unreachable",
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bytes_lit,
+            .def_ref,
+            .uninitialized,
+            .uninitialized_payload,
+            .crash,
+            .checked_error,
+            .comptime_exhaustiveness_failed,
+            => true,
+            .static_data_candidate,
+            .comptime_value,
+            .typed_boundary,
+            .row_widen,
+            .list,
+            .tuple,
+            .record,
+            .record_update,
+            .tag,
+            .nominal,
+            .let_,
+            .lambda,
+            .fn_def,
+            .fn_ref,
+            .call_value,
+            .call_proc,
+            .low_level,
+            .field_access,
+            .tuple_access,
+            .structural_eq,
+            .structural_hash,
+            .match_,
+            .if_,
+            .if_initialized_payload,
+            .try_sequence,
+            .try_record_sequence,
+            .block,
+            .loop_,
+            .break_,
+            .continue_,
+            .join_point,
+            .jump,
+            .return_,
+            .dbg,
+            .expect_err,
+            .expect,
+            .literal_rejected,
+            => false,
+        };
+    }
 };
 
 /// A literal conversion rejected its literal: the conversion returned `Err`
@@ -2848,6 +2972,18 @@ pub const ProgramBuilder = struct {
 
     pub fn addExprSpan(self: *ProgramBuilder, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
         return try Common.appendSpan(ExprId, &self.expr_ids, self.allocator, ids);
+    }
+
+    pub fn exprSpan(self: *const ProgramBuilder, span_: Span(ExprId)) ProgramSpanBorrow(ExprId, "expr_ids") {
+        return self.expr_ids.borrowSpan(span_.start, span_.len);
+    }
+
+    pub fn addStmtSpan(self: *ProgramBuilder, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
+        return try Common.appendSpan(StmtId, &self.stmt_ids, self.allocator, ids);
+    }
+
+    pub fn stmtSpan(self: *const ProgramBuilder, span_: Span(StmtId)) ProgramSpanBorrow(StmtId, "stmt_ids") {
+        return self.stmt_ids.borrowSpan(span_.start, span_.len);
     }
 
     pub fn addPatSpan(self: *ProgramBuilder, ids: []const PatId) std.mem.Allocator.Error!Span(PatId) {

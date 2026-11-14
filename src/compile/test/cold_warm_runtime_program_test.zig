@@ -558,6 +558,108 @@ test "a runtime program specialized again registers literal roots its evaluation
     try std.testing.expect(literal_roots != 0);
 }
 
+test "constants several functions read lower the same whether evaluated or read from the cache" {
+    // Monotype restores each constant once and names that one expression
+    // from every function that reads it, and each of those functions lifts
+    // to a body of its own; debug builds verify that every lifted
+    // expression with expressions inside it has one parent (design.md
+    // "Operand Sequencing").
+    try expectColdEqualsWarm(.specialized_once,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\Shape := [Circle(U64), Rect({ w : U64, h : U64 })].{
+        \\    area : Shape -> U64
+        \\    area = |shape| match shape {
+        \\        Circle(r) => r * r * 3
+        \\        Rect({ w, h }) => w * h
+        \\    }
+        \\}
+        \\Settings := { shapes : List(Shape), scale : U64 -> U64, label : Str }.{
+        \\    total : Settings -> U64
+        \\    total = |settings| settings.shapes.fold(0, |acc, shape| acc + (settings.scale)(shape.area()))
+        \\}
+        \\make_scale : U64 -> (U64 -> U64)
+        \\make_scale = |k| |v| v * k
+        \\default_shape : Shape
+        \\default_shape = Shape.Rect({ w: 2, h: 3 })
+        \\settings : Settings
+        \\settings = { shapes: [default_shape, Shape.Circle(2), default_shape], scale: make_scale(3), label: "s" }
+        \\both = (settings, settings, default_shape)
+        \\one : U64 -> U64
+        \\one = |x| settings.total() + default_shape.area() + x + both.0.total() + both.2.area()
+        \\two : U64 -> U64
+        \\two = |x| settings.total() + default_shape.area() + one(x) + both.1.total()
+        \\main! = |args| {
+        \\    n = List.len(args) + 1
+        \\    Echo.line!("${one(n).to_str()} ${two(n).to_str()} ${settings.label}")
+        \\    Ok({})
+        \\}
+    );
+}
+
+test "a mutable variable assigned inside an operand lowers the same whether evaluated or read from the cache" {
+    // The assignment's binding stands in the statement list enclosing the
+    // operand's consumer, where the later read of the variable is in its
+    // scope, and an operand ahead of it is named at its own position first;
+    // debug builds verify the sequenced form of every lifted body.
+    try expectColdEqualsWarm(.specialized_once,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\identity : U64 -> U64
+        \\identity = |value| value
+        \\in_call_arg : U64 -> U64
+        \\in_call_arg = |x| {
+        \\    var $count = 0
+        \\    y = identity(
+        \\        {
+        \\            $count = x
+        \\            1
+        \\        },
+        \\    )
+        \\    $count + y
+        \\}
+        \\in_record : U64 -> U64
+        \\in_record = |x| {
+        \\    var $count = 0
+        \\    r = {
+        \\        a: if x > 0 {
+        \\            $count = x
+        \\            1
+        \\        } else {
+        \\            0
+        \\        },
+        \\    }
+        \\    $count + r.a
+        \\}
+        \\ordered : U64 -> U64
+        \\ordered = |x| {
+        \\    var $count = 0
+        \\    values = (
+        \\        identity(x),
+        \\        {
+        \\            $count = identity(x + 1)
+        \\            $count
+        \\        },
+        \\    )
+        \\    values.0 + values.1 + $count
+        \\}
+        \\early : U64 -> U64
+        \\early = |x|
+        \\    (
+        \\        {
+        \\            return x
+        \\        },
+        \\        identity(x),
+        \\    ).0
+        \\answer = in_call_arg(7)
+        \\main! = |args| {
+        \\    x = List.len(args) + 7
+        \\    Echo.line!("${in_call_arg(x).to_str()} ${in_record(x).to_str()} ${ordered(x).to_str()} ${early(x).to_str()} ${answer.to_str()}")
+        \\    Ok({})
+        \\}
+    );
+}
+
 const dev_target: lir.CheckedPipeline.TargetConfig = .{
     .inline_mode = lir.CheckedPipeline.dev_inline_mode,
     .spec_constr_clone_inlining = lir.CheckedPipeline.dev_spec_constr_clone_inlining,
