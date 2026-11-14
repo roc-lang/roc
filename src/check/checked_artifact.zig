@@ -492,7 +492,7 @@ fn hashExplicitRootRequestInput(
 fn hashRootSource(hasher: *base.Sha256, source: RootSource) void {
     hashByteSlice(hasher, @tagName(source));
     switch (source) {
-        inline .def, .expr, .statement => |idx| hashU32(hasher, @backingInt(idx)),
+        inline .def, .expr, .statement, .literal_argument => |idx| hashU32(hasher, @backingInt(idx)),
         .required_binding => |idx| hashU32(hasher, idx),
         .hoisted => |hoisted| {
             hashU32(hasher, hoisted.index);
@@ -1054,6 +1054,10 @@ pub const RootSource = union(enum(u8)) {
     hoisted: HoistedRootSource,
     /// A literal conversion root's literal.
     literal: LiteralNode,
+    /// A literal argument root's edge owner: the expression whose
+    /// instantiation fixes the literal's type. The root converts the literal
+    /// at that edge and evaluates none of this expression.
+    literal_argument: CIR.Expr.Idx,
 };
 
 /// Public `RootRequest` declaration.
@@ -1229,7 +1233,7 @@ pub const RootRequestTable = struct {
                 const matches = switch (request.source) {
                     .def => |def| def == solution.def,
                     .expr => |expr| expr == module.def(solution.def).expr.idx,
-                    .statement, .required_binding, .hoisted, .literal => false,
+                    .statement, .required_binding, .hoisted, .literal, .literal_argument => false,
                 };
                 if (!matches) continue;
                 request.checked_type = checked_types.rootForSourceVar(module, solution.solved_var) orelse
@@ -1917,9 +1921,9 @@ const CompileTimeRequestScheduler = struct {
                     dependent_def,
                     dependency_def,
                 ),
-                .expr, .statement, .required_binding, .hoisted, .literal => true,
+                .expr, .statement, .required_binding, .hoisted, .literal, .literal_argument => true,
             },
-            .expr, .statement, .required_binding, .hoisted, .literal => true,
+            .expr, .statement, .required_binding, .hoisted, .literal, .literal_argument => true,
         };
     }
 
@@ -2261,6 +2265,7 @@ fn rootSourceMatches(a: RootSource, b: RootSource) bool {
         .required_binding => |binding| binding == b.required_binding,
         .hoisted => |hoisted| hoisted.index == b.hoisted.index and hoisted.expr == b.hoisted.expr,
         .literal => |literal| std.meta.eql(literal, b.literal),
+        .literal_argument => |owner| owner == b.literal_argument,
     };
 }
 
@@ -2374,6 +2379,7 @@ fn procedureTemplateForRootSource(
         .required_binding,
         .hoisted,
         .literal,
+        .literal_argument,
         => null,
     };
 }
@@ -2496,6 +2502,7 @@ fn checkedTypeIdForRootSource(
         .statement => |statement_idx| ModuleEnv.varFrom(statement_idx),
         .hoisted => checkedArtifactInvariant("internal hoisted root source reached external root source type lookup", .{}),
         .literal => checkedArtifactInvariant("internal literal conversion root source reached external root source type lookup", .{}),
+        .literal_argument => checkedArtifactInvariant("internal literal argument root source reached external root source type lookup", .{}),
         .required_binding => |binding_idx| blk: {
             const module_env = module.moduleEnvConst();
             if (binding_idx >= module_env.requires_types.items().len) {
@@ -11654,7 +11661,7 @@ const SelectedHoistedCallableTable = struct {
             if (root.kind != .callable_binding) continue;
             switch (root.source) {
                 .hoisted => {},
-                .def, .expr, .statement, .required_binding, .literal => continue,
+                .def, .expr, .statement, .required_binding, .literal, .literal_argument => continue,
             }
 
             const source_pattern = root.source_pattern.get() orelse
@@ -14076,7 +14083,7 @@ const EvidencePass = struct {
         if (root.source_pattern.get()) |source_pattern| return ModuleEnv.varFrom(source_pattern);
         return switch (root.source) {
             .def => |def_idx| ModuleEnv.varFrom(def_idx),
-            .expr, .statement, .required_binding, .hoisted, .literal => null,
+            .expr, .statement, .required_binding, .hoisted, .literal, .literal_argument => null,
         };
     }
 
@@ -16877,7 +16884,7 @@ fn sealConstEvalTemplatesForRoots(
             .constant => blk: {
                 const def_idx = switch (root.source) {
                     .def => |def| def,
-                    .expr, .statement, .required_binding, .hoisted, .literal => checkedArtifactInvariant("constant root source is not a top-level definition", .{}),
+                    .expr, .statement, .required_binding, .hoisted, .literal, .literal_argument => checkedArtifactInvariant("constant root source is not a top-level definition", .{}),
                 };
                 const top_level = top_level_values.lookupByDef(def_idx) orelse {
                     checkedArtifactInvariant("constant root has no top-level value entry", .{});
@@ -21999,9 +22006,9 @@ fn publishLiteralArgumentRoots(
             try CompileTimeRootTable.appendCompileTimeRoot(&root_list, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = .literal_argument,
-                .source = .{ .expr = new_root.owner_expr },
+                .source = .{ .literal_argument = new_root.owner_expr },
                 .pattern = null,
-                .expr = new_root.owner_expr,
+                .expr = null,
                 .checked_type = new_root.ty,
                 .payload = .pending,
                 .literal_argument = .{
@@ -24524,9 +24531,13 @@ pub const CompileTimeRoot = struct {
     /// `hoisted_body` describes for a hoisted pattern root (a crash for a
     /// rejected destructure binder, or a match of its base expression against
     /// its pattern), or a literal conversion root's conversion of its literal
-    /// (`literalNode`).
+    /// (`literalNode`), or a literal argument root's conversion of its literal
+    /// at its edge.
     pub fn evaluatedExpr(self: CompileTimeRoot) ?CIR.Expr.Idx {
-        if (self.literalNode() != null) return null;
+        switch (self.source) {
+            .literal, .literal_argument => return null,
+            .def, .expr, .statement, .required_binding, .hoisted => {},
+        }
         const body = self.hoisted_body orelse return self.rootExpr();
         return switch (body) {
             .expr, .valueless_binding => self.rootExpr(),
@@ -24536,9 +24547,15 @@ pub const CompileTimeRoot = struct {
 
     /// The body nodes the root evaluates: its expression and, for a hoisted
     /// pattern root, the pattern it matches the base expression against; for
-    /// a literal conversion root, the literal it converts.
+    /// a literal conversion root, the literal it converts. A literal argument
+    /// root's body is its conversion at its edge, which contains no node of
+    /// its module's bodies.
     pub fn bodyParts(self: CompileTimeRoot) RootBodyParts {
-        if (self.literalNode()) |literal| return .{ .literal = literal };
+        switch (self.source) {
+            .literal => |literal| return .{ .literal = literal },
+            .literal_argument => return .{},
+            .def, .expr, .statement, .required_binding, .hoisted => {},
+        }
         const body = self.hoisted_body orelse return .{ .expr = self.rootExpr() };
         return switch (body) {
             .expr, .valueless_binding => .{ .expr = self.rootExpr() },
@@ -24553,14 +24570,14 @@ pub const CompileTimeRoot = struct {
     pub fn literalNode(self: CompileTimeRoot) ?LiteralNode {
         return switch (self.source) {
             .literal => |literal| literal,
-            .def, .expr, .statement, .required_binding, .hoisted => null,
+            .def, .expr, .statement, .required_binding, .hoisted, .literal_argument => null,
         };
     }
 
-    /// The expression a root other than a literal conversion root evaluates
-    /// or selects.
+    /// The expression a root other than a literal conversion or literal
+    /// argument root evaluates or selects.
     pub fn rootExpr(self: CompileTimeRoot) CIR.Expr.Idx {
-        return self.expr.get() orelse checkedArtifactInvariant("a literal conversion root was read as an expression root", .{});
+        return self.expr.get() orelse checkedArtifactInvariant("a literal conversion or literal argument root was read as an expression root", .{});
     }
 
     pub fn literalConversionKind(self: CompileTimeRoot) ?CompileTimeLiteralConversionKind {
@@ -24657,7 +24674,7 @@ pub const CompileTimeRootTable = struct {
             if (explicit.kind != .repl_expr) continue;
             const expr_idx = switch (explicit.source) {
                 .expr => |expr| expr,
-                .def, .statement, .required_binding, .hoisted, .literal => checkedArtifactInvariant(
+                .def, .statement, .required_binding, .hoisted, .literal, .literal_argument => checkedArtifactInvariant(
                     "compile-time REPL root did not name its checked expression body",
                     .{},
                 ),
@@ -24932,7 +24949,7 @@ fn publishCompileTimeRootRequestEligibility(
             .callable_binding => true,
             .constant => switch (root.source) {
                 .def => |def_idx| module.def(def_idx).data.annotation != null,
-                .expr, .statement, .hoisted, .required_binding, .literal => false,
+                .expr, .statement, .hoisted, .required_binding, .literal, .literal_argument => false,
             },
             .hoisted_constant,
             .hoisted_validation,
@@ -26603,6 +26620,7 @@ const ExhaustivenessTemplateReachability = struct {
             .statement,
             .hoisted,
             .literal,
+            .literal_argument,
             => {},
         }
         if (request.procedure_template) |template_ref| {
@@ -27152,10 +27170,10 @@ fn compileTimeRootReplacesSourceOccurrence(kind: CompileTimeRootKind) bool {
         .numeral_conversion,
         .quote_conversion,
         .repl_expr,
-        .literal_argument,
         => true,
         .callable_binding,
         .expect,
+        .literal_argument,
         => false,
     };
 }
@@ -27553,6 +27571,7 @@ pub const HoistedConstTable = struct {
                 .statement,
                 .required_binding,
                 .literal,
+                .literal_argument,
                 => checkedArtifactInvariant("hoisted constant root had non-expression source", .{}),
             };
             const source_var = if (root.source_pattern.get()) |pattern|
@@ -31345,7 +31364,8 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(root.module_idx == self.module_identity.module_idx);
             if (root.expr.get()) |expr| std.debug.assert(@backingInt(expr) < self.moduleEnvConst().store.nodes.len());
             if (root.literalNode()) |literal| std.debug.assert(literal.node() < self.moduleEnvConst().store.nodes.len());
-            std.debug.assert((root.expr == .none) == (root.literalNode() != null));
+            std.debug.assert((root.expr == .none) == (root.source == .literal or root.source == .literal_argument));
+            std.debug.assert((root.source == .literal_argument) == (root.kind == .literal_argument));
             if (root.pattern.get()) |pattern| std.debug.assert(@backingInt(pattern) < self.moduleEnvConst().store.nodes.len());
             switch (root.kind) {
                 .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => switch (root.payload) {
@@ -32384,7 +32404,8 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(root.module_idx == self.module_identity.module_idx);
             if (root.expr.get()) |expr| std.debug.assert(@backingInt(expr) < self.moduleEnvConst().store.nodes.len());
             if (root.literalNode()) |literal| std.debug.assert(literal.node() < self.moduleEnvConst().store.nodes.len());
-            std.debug.assert((root.expr == .none) == (root.literalNode() != null));
+            std.debug.assert((root.expr == .none) == (root.source == .literal or root.source == .literal_argument));
+            std.debug.assert((root.source == .literal_argument) == (root.kind == .literal_argument));
             if (root.pattern.get()) |pattern| std.debug.assert(@backingInt(pattern) < self.moduleEnvConst().store.nodes.len());
             if (root.kind == .expect) {
                 switch (root.payload) {
@@ -36999,8 +37020,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x4D, 0x76, 0xC4, 0x96, 0xE2, 0x82, 0xEE, 0xE7, 0xD2, 0x75, 0xF9, 0x06, 0x3B, 0xAD, 0x33, 0x08,
-        0x2B, 0x75, 0x2F, 0x8B, 0x7C, 0xBB, 0x40, 0x59, 0x61, 0x0B, 0x8A, 0x99, 0xE7, 0x56, 0x88, 0xBA,
+        0x59, 0xCA, 0x18, 0x41, 0xAF, 0x46, 0x8B, 0xF7, 0x8F, 0x24, 0x79, 0xB7, 0xD0, 0x3A, 0xC8, 0xDD,
+        0x47, 0x64, 0x17, 0x3E, 0x68, 0xBB, 0xF1, 0x13, 0xD2, 0xF7, 0xE4, 0x23, 0x7E, 0x84, 0x25, 0xDF,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

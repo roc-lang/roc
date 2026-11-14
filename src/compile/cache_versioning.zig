@@ -44,7 +44,7 @@ pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.
 const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.CheckedReports.Serialized, 1);
 
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 40 stores reproducible checking
+/// reflected in layout fingerprints. Version 41 stores reproducible checking
 /// and evaluation reports beside paired callable forwarding and request
 /// completion and cached literal argument roots for both strategies,
 /// body-local type context arguments, generated-codec recurrences,
@@ -56,13 +56,14 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// type stores listing their widening field names once, anonymous structure
 /// that every use shares when nothing visible can lift or widen it, literal
 /// conversion roots published for deferred literals, checked artifacts' type,
-/// scheme, blob and proc-base interning tables, and type tags that record
-/// whether only `match` branch patterns put them in their row, with each
-/// checking problem carrying the source regions its report highlights in
-/// place of a region per type variable. It rejects every earlier format,
-/// including the independent version 19 through 39 formats. Platform-pairing
-/// entries share it.
-const checked_envelope_version: u32 = 40;
+/// scheme, blob and proc-base interning tables, type tags that record
+/// whether only `match` branch patterns put them in their row, and literal
+/// argument roots whose source is their edge owner and which hold no
+/// expression, with each checking problem carrying the source regions its
+/// report highlights in place of a region per type variable. It rejects every
+/// earlier format, including the independent version 19 through 40 formats.
+/// Platform-pairing entries share it.
+const checked_envelope_version: u32 = 41;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment.

@@ -100,6 +100,16 @@ pub const CompileConfig = struct {
     /// internal to the object. A target `llvmPrivateRuntimeTarget` names no
     /// runtime for composes its support elsewhere.
     private_runtime: bool = false,
+    /// When non-null, LLVM times each pass and code generation stage, and its
+    /// report is written here.
+    time_report: ?*TimeReport = null,
+};
+
+/// Receives LLVM's per-pass timing report from `compileBitcodeToObject`.
+pub const TimeReport = struct {
+    /// Allocates `text`, which the caller owns.
+    allocator: Allocator,
+    text: []u8 = "",
 };
 
 fn sanitizerCoverageOptions(enabled: bool) ZigLLVMCoverageOptions {
@@ -941,11 +951,14 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         null;
     defer if (ir_path_z) |p| gpa.free(p);
 
+    // The glue `malloc`s the report and hands ownership to us on success.
+    var llvm_time_report: ?[*:0]u8 = null;
+
     const emit_options = ZigLLVMEmitOptions{
         // App object debug output is controlled by the user's --debug flag.
         .is_debug = config.debug,
         .ir_opt_level = config.optimization.toLLVMIRLevel(),
-        .time_report_out = null,
+        .time_report_out = if (config.time_report != null) &llvm_time_report else null,
         .tsan = false,
         .sancov = config.fuzz,
         .lto = .ZigLLVMThinOrFullLTOPhase_None,
@@ -971,6 +984,13 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         try renderEmitError(gpa, config.output_path, std.mem.span(emit_error_message), config.report_config);
         externs.LLVMDisposeMessage(emit_error_message);
         return false;
+    }
+
+    if (config.time_report) |report| {
+        // The glue leaves the report null on success only when its `malloc` failed.
+        const llvm_text = llvm_time_report orelse return error.OutOfMemory;
+        defer externs.LLVMDisposeMessage(llvm_text);
+        report.text = try report.allocator.dupe(u8, std.mem.span(llvm_text));
     }
 
     std.log.debug("Successfully compiled bitcode to object file: {s}", .{config.output_path});
