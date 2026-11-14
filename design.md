@@ -20201,7 +20201,10 @@ statement that consumes the result, so every path through a value-position join
 arrives by an explicit jump that tag-case fusion can see as a producer. A
 `match`, `if`, initialized-payload switch, or callable dispatch whose continuation
 is that jump delivers through the consumer rather than declaring a join of its
-own. The join a `match` or `if` declares for its own result is a consumer in the
+own. A jump from a join point's remainder that supplies one tag union builds
+it in the parameter itself, as a value join's branches do, rather than in a
+temporary copied into the parameter; the parameters are in scope only in the
+body, so that argument cannot read them. The join a `match` or `if` declares for its own result is a consumer in the
 same sense while its branches are lowered, so a `match` or `if` that ends one
 of those branches jumps to it directly; a branch that is itself a branch never
 adds a join that only forwards the result outward. A loop's `break`s all continue at the statement after the loop, so a join

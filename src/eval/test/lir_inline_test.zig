@@ -12225,6 +12225,94 @@ test "a field take assigned into a join result cell keeps a loop list unique" {
     try std.testing.expectEqual(@as(usize, 0), main_sets.?.checked);
 }
 
+// The `Try` is bound to a name and matched afterwards, so specialization
+// delivers it through a join point. The jump that supplies it must build the
+// tag in the join's parameter, where fusion sees it; otherwise the fallback
+// list stays alive across `List.set` and every set copies.
+test "a Try bound to a name before its match keeps a fallback loop list unique" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    var $list = List.repeat(0.U16, 8)
+        \\    var $i = 0.U64
+        \\    while $i < n {
+        \\        result = List.set($list, $i, 1)
+        \\        $list = match result {
+        \\            Ok(updated) => updated
+        \\            Err(_) => $list
+        \\        }
+        \\        $i = $i + 1
+        \\    }
+        \\    (List.get($list, 3) ?? 0).to_u64()
+        \\}
+    ;
+
+    var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+        .proc_debug_names = true,
+        .tag_reachability = true,
+    });
+    defer lowered.deinit(allocator);
+
+    const store = &lowered.lowered.lir_result.store;
+    var main_sets: ?ListSetCounts = null;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+        const name = store.procDebugName(proc_id) orelse continue;
+        if (!std.mem.eql(u8, name, "main")) continue;
+        if (store.getProcSpecImmediate(proc_id).body == .none) continue;
+        const sets = listSetCounts(store, proc_id);
+        var total = main_sets orelse ListSetCounts{};
+        total.checked += sets.checked;
+        total.check_free += sets.check_free;
+        main_sets = total;
+    }
+    try std.testing.expect(main_sets != null);
+    try std.testing.expect(main_sets.?.check_free >= 1);
+    try std.testing.expectEqual(@as(usize, 0), main_sets.?.checked);
+}
+
+// `mid` never constrains its list parameter, so it is generalized: the call
+// from `outer` is checked at an instance of its type and its recursive call at
+// the type itself. Both name one specialization, whose body declares `leaf`
+// once.
+test "a recursive call in a generalized local function reuses the specialization in progress" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : U64 -> U64
+        \\main = |start| {
+        \\    outer = |list, i| {
+        \\        if i >= 4 {
+        \\            list
+        \\        } else if i > 100 {
+        \\            outer(list, i + 1)
+        \\        } else {
+        \\            step = i + 3
+        \\            mid = |s, cs| {
+        \\                if s >= 8 {
+        \\                    cs
+        \\                } else {
+        \\                    leaf = |c, cp| {
+        \\                        if c >= 8 {
+        \\                            cp
+        \\                        } else {
+        \\                            leaf(c + step, cp)
+        \\                        }
+        \\                    }
+        \\                    mid(s + step, leaf(s, cs))
+        \\                }
+        \\            }
+        \\            outer(mid(i, list), i + 1)
+        \\        }
+        \\    }
+        \\    List.len(outer(List.repeat(0.U8, 8), start))
+        \\}
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
+}
+
 // `put` returns its `Try` from nested branches. Binding that result before
 // matching on it, with the loop list as the `Err` arm's result, must send
 // each branch straight to the arm it selects: a `Try` rebuilt at a join would

@@ -1120,6 +1120,9 @@ const Lowerer = struct {
         join_id: LIR.JoinPointId,
         params: LIR.LocalSpan,
         param_tys: []const Type.TypeId,
+        /// The join's remainder is being lowered. Its parameters are in scope
+        /// only in its body, so no argument of a jump lowered now reads them.
+        in_remainder: bool = false,
     };
 
     /// The join that receives a value-position join's result in `target`.
@@ -9590,6 +9593,9 @@ const Lowerer = struct {
             1 => {
                 task.body_stmt = input.?;
                 frame.cursor = 2;
+                const entered = &self.join_stack.items[self.join_stack.items.len - 1];
+                if (entered.join_id != task.lir_join_id) Common.invariant("a join point's remainder began with another join innermost");
+                entered.in_remainder = true;
                 return .{ .call = try self.joinPointArrivalTask(task, task.join_point.remainder) };
             },
             else => {
@@ -9649,6 +9655,19 @@ const Lowerer = struct {
         const args = self.solved.lifted.exprSpan(jump.args);
         if (self.result.store.getLocalSpan(join_point.params).len != args.len) {
             Common.invariant("jump argument count differed from join-point parameter count during direct LIR lowering");
+        }
+
+        // A jump from the remainder that supplies one tag union builds it in
+        // the parameter itself, the definition form a value join's branches
+        // use, so tag-case fusion sees the edge as a producer of the join.
+        if (args.len == 1 and join_point.in_remainder and jump.loop_params.len == 0) {
+            const param = GuardedList.at(self.result.store.getLocalSpan(join_point.params), 0);
+            const param_layout = self.result.layouts.getLayout(self.result.store.getLocal(param).layout_idx);
+            const arg = GuardedList.at(args, 0);
+            if (param_layout.tag == .tag_union and try self.joinArgNeedsWriteAtType(param, join_point.param_tys[0], arg)) {
+                const direct_jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_point.join_id } }, where.glue());
+                return .{ .tail = exprTask(where, param, arg, join_point.param_tys[0], direct_jump) };
+            }
         }
 
         const locals = try self.lowerExprsToJoinTempsAtTypes(join_point.params, join_point.param_tys, args);
