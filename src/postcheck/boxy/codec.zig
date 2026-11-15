@@ -63,6 +63,10 @@ const Resolved = union(enum) {
     structural: DerivationId,
     /// A call checking rejected.
     checked_error: TypeId,
+    /// A call on a type variable of the definition the contract was derived
+    /// in, whose evidence the use supplies: the family's captured value
+    /// `local`, of the call's callable type `fn_ty`.
+    forwarded: struct { local: u32, fn_ty: TypeId },
 };
 
 const FamilyKey = struct { kind: Kind, digest: [32]u8 };
@@ -70,8 +74,13 @@ const FamilyKey = struct { kind: Kind, digest: [32]u8 };
 /// One renamed record field the constructor computes.
 const NameEntry = struct { record: TypeId, label: NameId };
 
-/// A local procedure the family calls, at the family's type `fn_ty`.
-const LocalCall = struct { node: static_dispatch.EvidenceNodeId, fn_ty: TypeId };
+/// A function value the family captures, at the family's type `fn_ty`: a
+/// local procedure the family calls, or the dictionary a use supplies for a
+/// forwarded call, by the call's position in `forwardedRefs` order.
+const LocalCall = struct {
+    source: union(enum) { local_proc: static_dispatch.EvidenceNodeId, forwarded: u32 },
+    fn_ty: TypeId,
+};
 
 /// The generated codec workers of one derivation at one instantiation.
 pub const Family = struct {
@@ -93,10 +102,13 @@ pub const Family = struct {
     names: std.ArrayList(NameEntry) = .empty,
     /// The first name of each record's fields, by record type.
     record_names: collections.DenseMapUnmanaged(TypeId, u32) = .empty,
-    /// The local procedures the family calls. A use builds their function
-    /// values in its own body, where they are declared, and the constructor
-    /// captures them.
+    /// The function values the family calls: local procedures, whose values
+    /// a use builds in its own body, where they are declared, and the
+    /// dictionaries of forwarded calls, which a use supplies from its own
+    /// evidence. The constructor captures them.
     locals: std.ArrayList(LocalCall) = .empty,
+    /// How many of `locals` are forwarded dictionaries.
+    forwarded_count: u32 = 0,
     /// The tuple of every renamed name, then every local procedure's
     /// function value (the empty record when there are none).
     names_ty: TypeId,
@@ -212,7 +224,7 @@ fn convertIn(program: *Program, env: types.Env, ty: checked.CheckedTypeId) Alloc
 /// no variable of the family either: no generated code can produce a value at
 /// such a row's tail, so a use wider than the sealed row converts at
 /// `constructorAt` (design.md "Sealed Result Rows").
-fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.CheckedTypeId, shape_ty: checked.CheckedTypeId) Allocator.Error!types.Env {
+fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.CheckedTypeId, shape_ty: checked.CheckedTypeId, forwarded_subjects: []const checked.CheckedTypeId) Allocator.Error!types.Env {
     const allocator = program.allocator;
     const store = program.module(module).types();
     var vars: std.ArrayList(checked.CheckedTypeId) = .empty;
@@ -230,7 +242,10 @@ fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.C
         if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
         const start = pending.items.len;
         switch (store.payload(ty)) {
-            .flex, .rigid => if (shape_done and !store.payload(ty).variableSealsToRowDefault()) try vars.append(allocator, ty),
+            // A forwarded call's subject is a variable of the family even
+            // inside the shape: each use supplies its type and its codec.
+            .flex, .rigid => if ((shape_done or std.mem.findScalar(checked.CheckedTypeId, forwarded_subjects, ty) != null) and
+                !store.payload(ty).variableSealsToRowDefault()) try vars.append(allocator, ty),
             .alias => |alias| try pending.append(allocator, alias.backing),
             .record => |record| {
                 for (0..record.fields.len()) |field_index| {
@@ -264,6 +279,13 @@ fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.C
     return .{ .module = module, .vars = try arena.dupe(checked.CheckedTypeId, vars.items), .bound = bound };
 }
 
+fn listElem(program: *Program, list_ty: TypeId) TypeId {
+    return switch (program.store.get(list_ty)) {
+        .list => |elem| elem,
+        .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariant("a generated codec's list operand is not a list"),
+    };
+}
+
 fn functionOf(program: *Program, ty: TypeId) @FieldType(types.Node, "function") {
     return switch (program.store.get(ty)) {
         .function => |function| function,
@@ -292,7 +314,11 @@ pub fn familyFor(program: *Program, module: ModuleIndex, id: DerivationId) Alloc
     const key: FamilyKey = .{ .kind = kind, .digest = derivation.content.bytes };
     if (state.family_ids.get(key)) |existing| return existing;
 
-    const env = try contractEnv(program, module, derivation.constructor_ty, derivation.shape_ty);
+    const forwarded_refs = try forwardedRefs(allocator, table, id);
+    defer allocator.free(forwarded_refs);
+    const forwarded_subjects = try forwardedSubjects(allocator, table, id);
+    defer allocator.free(forwarded_subjects);
+    const env = try contractEnv(program, module, derivation.constructor_ty, derivation.shape_ty, forwarded_subjects);
     const constructor_fn = try convertIn(program, env, derivation.constructor_ty);
     if (fnArgs(program, constructor_fn).len != 1) invariant("a generated codec constructor does not take one encoding");
     const encoding_ty = fnArgs(program, constructor_fn)[0];
@@ -307,7 +333,9 @@ pub fn familyFor(program: *Program, module: ModuleIndex, id: DerivationId) Alloc
     // and the state can hold the family's variables: a format type declared
     // in a function body lists the variables of the function it depends on
     // as hidden arguments, which name the instance's types.
-    if (!try program.converter().representationClosed(shape)) {
+    // Only a forwarded call's subject, a variable of the family, can leave it
+    // open.
+    if (forwarded_subjects.len == 0 and !try program.converter().representationClosed(shape)) {
         invariant("a generated codec's value shape is open");
     }
 
@@ -326,7 +354,7 @@ pub fn familyFor(program: *Program, module: ModuleIndex, id: DerivationId) Alloc
         .try_template = fnRet(program, runtime_fn),
     });
     try state.family_ids.put(allocator, key, index);
-    try collectCalls(program, index);
+    try collectCalls(program, index, forwarded_refs);
     try planNames(program, index);
     return index;
 }
@@ -363,9 +391,63 @@ fn peelable(nominal: types.Nominal) bool {
     return builtin == .try_;
 }
 
+/// The `evidence_refs` entries the forwarded calls of contract `root` and of
+/// the contracts it nests name, in a fixed order: contracts in first-visit
+/// order of a depth-first walk over nested calls, and each contract's calls
+/// in order. Equal contracts list their forwarded calls in the same order,
+/// whichever module recorded them, so a family's forwarded dictionaries are
+/// numbered by it and a use supplies them in it.
+fn forwardedRefs(allocator: Allocator, table: *const static_dispatch.StaticDispatchPlanTable, root: DerivationId) Allocator.Error![]u32 {
+    var refs: std.ArrayList(u32) = .empty;
+    errdefer refs.deinit(allocator);
+    if (!table.generated_codec_derivations.items()[@backingInt(root)].forwarded) return try refs.toOwnedSlice(allocator);
+    var pending: std.ArrayList(DerivationId) = .empty;
+    defer pending.deinit(allocator);
+    var visited: collections.DenseMapUnmanaged(DerivationId, void) = .empty;
+    defer visited.deinit(allocator);
+    try pending.append(allocator, root);
+    try visited.put(allocator, root, {});
+    while (pending.pop()) |id| {
+        const calls = table.generated_codec_derivations.items()[@backingInt(id)].callsSlice(table);
+        for (calls) |call| switch (call.resolution) {
+            .forwarded => |ref| try refs.append(allocator, ref),
+            .callable, .structural, .pending, .checked_error => {},
+        };
+        const nested_start = pending.items.len;
+        for (calls) |call| switch (call.resolution) {
+            .structural => |nested| if (!(try visited.getOrPut(allocator, nested)).found_existing) try pending.append(allocator, nested),
+            .forwarded, .callable, .pending, .checked_error => {},
+        };
+        std.mem.reverse(DerivationId, pending.items[nested_start..]);
+    }
+    return try refs.toOwnedSlice(allocator);
+}
+
+/// The subject types of the forwarded calls of contract `root` and of the
+/// contracts it nests.
+fn forwardedSubjects(allocator: Allocator, table: *const static_dispatch.StaticDispatchPlanTable, root: DerivationId) Allocator.Error![]checked.CheckedTypeId {
+    var subjects: std.ArrayList(checked.CheckedTypeId) = .empty;
+    errdefer subjects.deinit(allocator);
+    if (!table.generated_codec_derivations.items()[@backingInt(root)].forwarded) return try subjects.toOwnedSlice(allocator);
+    var pending: std.ArrayList(DerivationId) = .empty;
+    defer pending.deinit(allocator);
+    var visited: collections.DenseMapUnmanaged(DerivationId, void) = .empty;
+    defer visited.deinit(allocator);
+    try pending.append(allocator, root);
+    try visited.put(allocator, root, {});
+    while (pending.pop()) |id| {
+        for (table.generated_codec_derivations.items()[@backingInt(id)].callsSlice(table)) |call| switch (call.resolution) {
+            .forwarded => try subjects.append(allocator, call.subject_ty.get() orelse invariant("a forwarded generated codec call has no subject")),
+            .structural => |nested| if (!(try visited.getOrPut(allocator, nested)).found_existing) try pending.append(allocator, nested),
+            .callable, .pending, .checked_error => {},
+        };
+    }
+    return try subjects.toOwnedSlice(allocator);
+}
+
 /// Every call of the root derivation's contract and of each nested
 /// structural derivation it reaches, by selection key.
-fn collectCalls(program: *Program, family_index: u32) Allocator.Error!void {
+fn collectCalls(program: *Program, family_index: u32, forwarded_refs: []const u32) Allocator.Error!void {
     const allocator = program.allocator;
     const module = program.codec.families.items[family_index].module;
     const env = program.codec.families.items[family_index].env;
@@ -389,6 +471,10 @@ fn collectCalls(program: *Program, family_index: u32) Allocator.Error!void {
                 .pending => invariant("a generated codec contract retained an unlinked call"),
                 .checked_error => .{ .checked_error = try convertIn(program, env, call.callable_ty) },
                 .callable => |node| .{ .callable = .{ .node = node, .fn_ty = try convertIn(program, env, call.callable_ty), .checked_fn = call.callable_ty } },
+                .forwarded => |ref| .{ .forwarded = .{
+                    .local = @intCast(std.mem.findScalar(u32, forwarded_refs, ref) orelse invariant("a forwarded generated codec call is outside its family's forwarded calls")),
+                    .fn_ty = try convertIn(program, env, call.callable_ty),
+                } },
                 .structural => |nested| blk: {
                     if ((try visited.getOrPut(allocator, nested)).found_existing == false) try pending.append(allocator, nested);
                     break :blk .{ .structural = nested };
@@ -401,7 +487,13 @@ fn collectCalls(program: *Program, family_index: u32) Allocator.Error!void {
                 switch (value) {
                     .callable => |*callable| if (table.evidenceNode(callable.node).target.kind == .local_proc) {
                         callable.local = @intCast(family.locals.items.len);
-                        try family.locals.append(allocator, .{ .node = callable.node, .fn_ty = callable.fn_ty });
+                        try family.locals.append(allocator, .{ .source = .{ .local_proc = callable.node }, .fn_ty = callable.fn_ty });
+                    },
+                    .forwarded => |*forwarded| {
+                        const position = forwarded.local;
+                        forwarded.local = @intCast(family.locals.items.len);
+                        try family.locals.append(allocator, .{ .source = .{ .forwarded = position }, .fn_ty = forwarded.fn_ty });
+                        family.forwarded_count += 1;
                     },
                     .structural, .checked_error => {},
                 }
@@ -520,7 +612,7 @@ fn classify(program: *Program, family_index: u32, ty: TypeId) Allocator.Error!Sh
         if (builtinArgs(program, current, .dict)) |args| return .{ .dict = .{ .key = args[0], .value = args[1] } };
         if (builtinArgs(program, current, .set)) |args| return .{ .set = args[0] };
         if (try findCall(program, family_index, boundary, current)) |resolved| switch (resolved) {
-            .callable, .checked_error => return .{ .custom = resolved },
+            .callable, .checked_error, .forwarded => return .{ .custom = resolved },
             .structural => {},
         };
         if (scalarOf(program, current)) |scalar| return .{ .scalar = scalar };
@@ -755,20 +847,26 @@ fn callbackWorker(program: *Program, family_index: u32, piece: Piece, fn_ty: Typ
 pub fn dictionary(b: *Builder, structural: static_dispatch.StructuralEvidence) Allocator.Error!Body.Word {
     const id = structural.generated_codec_derivation orelse invariant("structural codec evidence names no generated derivation");
     const family = try familyFor(b.program, b.module, id);
-    return try constructorAt(b, family, try b.convert(structural.callable_ty));
+    return try constructorAt(b, family, id, try b.convert(structural.callable_ty));
 }
 
 /// The dictionary of generated derivation `id` of `module_index` at the
 /// method callable type `callable`.
 pub fn dictionaryAt(b: *Builder, module_index: ModuleIndex, id: static_dispatch.GeneratedCodecDerivationId, callable: TypeId) Allocator.Error!Body.Word {
     const family = try familyFor(b.program, module_index, id);
-    return try constructorAt(b, family, callable);
+    if (b.program.codec.families.items[family].forwarded_count != 0 and module_index != b.module) {
+        invariant("a generated codec with forwarded calls is used outside the module whose evidence supplies them");
+    }
+    return try constructorAt(b, family, id, callable);
 }
 
 /// A family's constructor at a use whose constructor type is `actual`:
 /// the immortal callable capturing the family's local procedure values at
-/// the use's types, then its variables' descriptors, adapted to `actual`.
-fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!Body.Word {
+/// the use's types and the dictionaries the use's evidence supplies for its
+/// forwarded calls, then its variables' descriptors, adapted to `actual`.
+/// `use_id` is the derivation the use selected, in the use's module, whose
+/// forwarded calls name the use's evidence.
+fn constructorAt(b: *Builder, family: u32, use_id: DerivationId, actual: TypeId) Allocator.Error!Body.Word {
     const fam_ = b.program.codec.families.items[family];
     const bound = try b.relateVariables(fam_.constructor_fn, actual, fam_.env.vars.len);
     defer b.allocator.free(bound);
@@ -779,13 +877,21 @@ fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!Body.
     const captures = try b.allocator.alloc(Body.Word, fam_.locals.items.len + 1);
     defer b.allocator.free(captures);
     if (fam_.locals.items.len != 0) {
-        if (fam_.module != b.module) invariant("a generated codec calling local procedures is used outside the module declaring them");
         const table = b.view.view.static_dispatch_plans;
+        const use_refs = try forwardedRefs(b.allocator, table, use_id);
+        defer b.allocator.free(use_refs);
         // The constructor is immortal, and so are the function values it
         // holds.
         for (fam_.locals.items, captures[0..fam_.locals.items.len]) |local, *value| {
             const fn_ty = try b.program.substitute(b.allocator, local.fn_ty, bound);
-            value.* = try b.localMethodWord(table.evidenceNode(local.node), fn_ty);
+            value.* = switch (local.source) {
+                .local_proc => |node| local: {
+                    if (fam_.module != b.module) invariant("a generated codec calling local procedures is used outside the module declaring them");
+                    break :local try b.localMethodWord(table.evidenceNode(node), fn_ty);
+                },
+                // The use's own evidence for the call's type variable.
+                .forwarded => |position| try b.dictionaryOfAt(table.evidence_refs.items()[use_refs[position]], fn_ty),
+            };
         }
     }
     // The constructor captures the local procedures' function values, then
@@ -806,7 +912,10 @@ pub fn localValues(b: *Builder, family: u32, bound: []const TypeId, out: []Local
     const fam_ = b.program.codec.families.items[family];
     const table = b.view.view.static_dispatch_plans;
     for (fam_.locals.items, out) |local, *value| {
-        value.* = try b.localMethodValue(table.evidenceNode(local.node), try b.program.substitute(b.allocator, local.fn_ty, bound));
+        value.* = switch (local.source) {
+            .local_proc => |node| try b.localMethodValue(table.evidenceNode(node), try b.program.substitute(b.allocator, local.fn_ty, bound)),
+            .forwarded => invariant("a generated codec with forwarded calls was restored from a stored runtime"),
+        };
     }
 }
 
@@ -817,7 +926,7 @@ pub fn dispatch(b: *Builder, call_plan: static_dispatch.StaticDispatchCallPlan, 
     if (operands.len != 1) invariant("a structural codec dispatch does not take one encoding");
     const family = try familyFor(b.program, b.module, id);
     const fn_ty = try b.convert(call_plan.callable_ty);
-    const constructor = try b.materialize(try constructorAt(b, family, fn_ty));
+    const constructor = try b.materialize(try constructorAt(b, family, id, fn_ty));
     try b.push(.{ .finish_erased_call = .{ .fn_ty = fn_ty, .arg_count = 1, .result = result_ty } });
     try b.pushOperand(operands[0], operand_types[0]);
     try b.pushValue(constructor);
@@ -1098,6 +1207,14 @@ const Gen = struct {
         return self.b.intValue(value, try self.u64Ty());
     }
 
+    /// The length of `list`, of `list_ty`. Its items can hold a forwarded
+    /// call's type variable, whose layout the family's descriptors decide.
+    fn listLen(self: *Gen, list: LocalId, list_ty: TypeId) Allocator.Error!LocalId {
+        const len = try self.b.closedLocal(.u64);
+        try self.b.emitListLowLevel(len, .list_len, &.{list}, listElem(self.program(), list_ty), list_ty);
+        return len;
+    }
+
     fn lowLevelLayout(self: *Gen, op: LIR.LowLevel, args: []const LocalId, result_layout: layout.Idx) Allocator.Error!LocalId {
         const target = try self.b.closedLocal(result_layout);
         try self.b.emitLowLevel(target, op, args);
@@ -1334,6 +1451,13 @@ const Gen = struct {
         const program_ = self.program();
         switch (resolved) {
             .structural => invariant("a generated codec called a nested structural derivation as a procedure"),
+            // The dictionary the use supplied: the value's own codec
+            // constructor.
+            .forwarded => |forwarded| {
+                const value = try self.localValue(forwarded.local);
+                const ret_ty = fnRet(program_, forwarded.fn_ty);
+                return .{ .value = try b.emitErasedCall(value, forwarded.fn_ty, args, ret_ty), .ty = ret_ty };
+            },
             .checked_error => |fn_ty| {
                 const ret_ty = fnRet(program_, fn_ty);
                 const literal = try b.store.insertString("runtime error");
@@ -1644,7 +1768,7 @@ const Gen = struct {
             },
             .dict => {
                 const entries = try self.callFormat("to_list", value_ty, &.{value});
-                const len = try self.lowLevelLayout(.list_len, &.{entries.value}, .u64);
+                const len = try self.listLen(entries.value, entries.ty);
                 return try self.encodeContainer("encode_dict", value_ty, .dict_body, @backingInt(value_ty), 0, &.{entries.value}, &.{entries.ty}, &.{ state, len }, ret_ty);
             },
             .set => {
@@ -1683,7 +1807,7 @@ const Gen = struct {
     }
 
     fn encodeList(self: *Gen, list_ty: TypeId, subject: TypeId, list: LocalId, state: LocalId, ret_ty: TypeId) Allocator.Error!LocalId {
-        const len = try self.lowLevelLayout(.list_len, &.{list}, .u64);
+        const len = try self.listLen(list, list_ty);
         return try self.encodeContainer("encode_list", subject, .list_body, @backingInt(list_ty), 0, &.{list}, &.{list_ty}, &.{ state, len }, ret_ty);
     }
 
@@ -1707,6 +1831,7 @@ const Gen = struct {
             .callable => |callable| callable.fn_ty,
             .checked_error => |fn_ty| fn_ty,
             .structural => invariant("a container encoder method resolved to a structural derivation"),
+            .forwarded => invariant("a generated codec format method was forwarded"),
         };
         const method_args = fnArgs(program_, method_fn);
         const body_ty = method_args[method_args.len - 1];
@@ -1854,7 +1979,7 @@ const Gen = struct {
             .list => |elem| elem,
             .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariant("a generated list encoder's elements are not a list"),
         };
-        const len = try self.lowLevelLayout(.list_len, &.{list}, .u64);
+        const len = try self.listLen(list, list_ty);
         const head = self.b.freshJoin();
         const index = try self.b.closedLocal(.u64);
         const state_ty = self.b.currentWorker().params[0];
@@ -1865,7 +1990,7 @@ const Gen = struct {
         self.b.hole = head_body;
         const more = try self.branchIf(try self.lowLevelLayout(.bool_not, &.{try self.isEq(index, len)}, .bool));
         const elem = try self.local(elem_ty);
-        try self.b.emitLowLevel(elem, .list_get_unsafe, &.{ list, index });
+        try self.b.emitListLowLevel(elem, .list_get_unsafe, &.{ list, index }, elem_ty, list_ty);
         const next_state = switch (kind) {
             .list => try self.writeItem(body, state, &.{}, elem, elem_ty),
             .dict => blk: {
@@ -2066,6 +2191,7 @@ const Gen = struct {
                     .callable => |callable| callable.fn_ty,
                     .checked_error => |fn_ty| fn_ty,
                     .structural => invariant("parse_tag_union resolved to a structural derivation"),
+                    .forwarded => invariant("a generated codec format method was forwarded"),
                 };
                 const worker = try callbackWorker(program_, self.family, .{ .family = self.family, .kind = .tag_spec, .a = @backingInt(union_ty), .b = @backingInt(method_fn) }, try self.specType(method_fn), &.{});
                 const spec = try self.packCallback(worker, &.{}, &.{});
@@ -2150,7 +2276,7 @@ const Gen = struct {
         return switch (container) {
             .list => blk: {
                 const list = try self.local(container_ty);
-                try self.b.emitLowLevel(list, .list_with_capacity, &.{capacity});
+                try self.b.emitListLowLevel(list, .list_with_capacity, &.{capacity}, listElem(self.program(), container_ty), container_ty);
                 break :blk list;
             },
             .dict => (try self.callFormat("with_capacity", container_ty, &.{capacity})).value,
@@ -2217,10 +2343,11 @@ const Gen = struct {
     }
 
     fn append(self: *Gen, list: LocalId, list_ty: TypeId, elem: LocalId) Allocator.Error!LocalId {
+        const elem_ty = listElem(self.program(), list_ty);
         const reserved = try self.local(list_ty);
-        try self.b.emitLowLevel(reserved, .list_reserve_for_append, &.{ list, try self.u64Value(1) });
+        try self.b.emitListLowLevel(reserved, .list_reserve_for_append, &.{ list, try self.u64Value(1) }, elem_ty, list_ty);
         const appended = try self.local(list_ty);
-        try self.b.emitLowLevel(appended, .list_append_unsafe, &.{ reserved, elem });
+        try self.b.emitListLowLevel(appended, .list_append_unsafe, &.{ reserved, elem }, elem_ty, list_ty);
         return appended;
     }
 
@@ -2302,6 +2429,7 @@ const Gen = struct {
             .callable => |callable| callable.fn_ty,
             .checked_error => |fn_ty| fn_ty,
             .structural => invariant("parse_record_field resolved to a structural derivation"),
+            .forwarded => invariant("a generated codec format method was forwarded"),
         };
         const field_set_ty = fnArgs(program_, field_fn)[1];
         const handle_ty = switch (program_.store.get(field_set_ty)) {

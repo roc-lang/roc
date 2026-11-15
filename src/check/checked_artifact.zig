@@ -13525,6 +13525,19 @@ const EvidencePass = struct {
         }
     };
     /// One level of an evidence chain: a schema's params and their index.
+    /// A generated codec call `linkGeneratedCodecCalls` left for the selecting
+    /// site's chain to link.
+    const ForwardedCodecCall = struct {
+        /// Index in `StaticDispatchPlanTable.generated_codec_calls`.
+        call: u32,
+        dispatcher_var: Var,
+        evidence_var: Var,
+
+        fn orderByCall(call: u32, forwarded: ForwardedCodecCall) std.math.Order {
+            return std.math.order(call, forwarded.call);
+        }
+    };
+
     const ChainLevel = struct {
         params: []const EvidenceParam,
         by_dispatcher: DispatcherParams,
@@ -13661,6 +13674,9 @@ const EvidencePass = struct {
     /// a fresh var that settled onto an enclosing where-var forwards as
     /// `constraint(depth, k)`. Index 0 is the innermost generalized callable.
     current_chain: []const ChainLevel = &.{},
+    /// Generated codec calls on a type variable of the definition whose
+    /// dispatch selects their contract, linked by that site's chain.
+    forwarded_codec_calls: std.ArrayListUnmanaged(ForwardedCodecCall) = .empty,
 
     const EvidenceParam = dispatch_evidence.EvidenceParam;
     /// The generated-codec derivation each kind selected for one
@@ -13758,6 +13774,7 @@ const EvidencePass = struct {
         self.value_use_by_node.deinit();
         self.target_by_fn_var.deinit();
         self.generated_codec_by_source.deinit();
+        self.forwarded_codec_calls.deinit(self.allocator);
         self.where_method_use_by_fn_var.deinit();
         self.where_method_use_by_fn_root.deinit();
         self.local_value_scheme_by_var.deinit();
@@ -14010,6 +14027,9 @@ const EvidencePass = struct {
             if (self.iterator_plan_resolved[raw]) continue;
             try self.resolveIteratorPlan(@fromBackingInt(@intCast(raw)), &.{}, .commit);
         }
+
+        self.retireUnreachedForwardedCodecCalls();
+        if (builtin.mode == .debug) try self.debugVerifyGeneratedCodecContracts();
 
         std.mem.sort(static_dispatch.SiteEvidenceEntry, self.site_evidence.items, {}, siteEvidenceLessThan);
 
@@ -14466,7 +14486,25 @@ const EvidencePass = struct {
             if (source_calls.len != artifact_calls.len) {
                 checkedArtifactInvariant("generated codec source and artifact derivation call counts differed", .{});
             }
-            for (artifact_calls, source_calls) |*call, source_call| {
+            for (artifact_calls, source_calls, 0..) |*call, source_call, call_index| {
+                // A call on a type variable of the definition forwards to that
+                // definition's evidence parameter, which only the chain of the
+                // site that selects this contract names.
+                if (self.types.resolveVar(@fromBackingInt(@intCast(source_call.dispatcher_var))).desc.content == .rigid) {
+                    // The contract names its snapshot copy of the variable;
+                    // the enclosing chain names the definition's own.
+                    const copy_root = self.types.resolveVar(@fromBackingInt(@intCast(source_call.dispatcher_var))).var_;
+                    const renamings = module_env.generated_codec_renamings.items()[source_derivation.renamings_start..][0..source_derivation.renamings_len];
+                    const dispatcher_var: Var = for (renamings) |renaming| {
+                        if (self.types.resolveVar(@fromBackingInt(@intCast(renaming.copy_var))).var_ == copy_root) break @fromBackingInt(@intCast(renaming.source_var));
+                    } else copy_root;
+                    try self.forwarded_codec_calls.append(self.allocator, .{
+                        .call = derivation.calls.start + @as(u32, @intCast(call_index)),
+                        .dispatcher_var = dispatcher_var,
+                        .evidence_var = @fromBackingInt(@intCast(source_call.evidence_var)),
+                    });
+                    continue;
+                }
                 const owner = (try self.methodOwnerForSourceContent(@fromBackingInt(@intCast(source_call.dispatcher_var)))) orelse {
                     call.resolution = .checked_error;
                     continue;
@@ -14521,7 +14559,84 @@ const EvidencePass = struct {
                 }
             }
         }
-        if (builtin.mode == .debug) try self.debugVerifyGeneratedCodecContracts();
+    }
+
+    /// Link the forwarded calls of the contract a site selects, and of every
+    /// contract it nests, through the site's evidence `chain`: each names the evidence
+    /// parameter of the enclosing definition whose where clause declares the
+    /// call's method on the call's type variable. A contract one site already
+    /// linked keeps its links. The selected contract is marked as reaching a
+    /// forwarded call, which is what tells lowering to read the site's evidence
+    /// for it.
+    fn linkForwardedCodecCalls(
+        self: *EvidencePass,
+        derivation_id: static_dispatch.GeneratedCodecDerivationId,
+        chain: []const ChainLevel,
+    ) Allocator.Error!void {
+        if (self.forwarded_codec_calls.items.len == 0) return;
+        var pending = std.ArrayListUnmanaged(static_dispatch.GeneratedCodecDerivationId).empty;
+        defer pending.deinit(self.allocator);
+        var visited = collections.DenseMapUnmanaged(static_dispatch.GeneratedCodecDerivationId, void).empty;
+        defer visited.deinit(self.allocator);
+        try pending.append(self.allocator, derivation_id);
+        try visited.put(self.allocator, derivation_id, {});
+        var reaches_forwarded = false;
+        while (pending.pop()) |id| {
+            const derivation = self.plan_table.generated_codec_derivations.items()[@backingInt(id)];
+            const calls = self.plan_table.generated_codec_calls.items()[derivation.calls.start..][0..derivation.calls.len];
+            for (calls) |call| switch (call.resolution) {
+                .structural => |nested| if (!(try visited.getOrPut(self.allocator, nested)).found_existing) try pending.append(self.allocator, nested),
+                .forwarded => reaches_forwarded = true,
+                .pending, .checked_error, .callable => {},
+            };
+            // `forwarded_codec_calls` is in call order, so this contract's
+            // calls are one contiguous run of it.
+            const first = std.sort.lowerBound(ForwardedCodecCall, self.forwarded_codec_calls.items, derivation.calls.start, ForwardedCodecCall.orderByCall);
+            for (self.forwarded_codec_calls.items[first..]) |forwarded| {
+                if (forwarded.call >= derivation.calls.start + derivation.calls.len) break;
+                const call = &self.plan_table.generated_codec_calls.items()[forwarded.call];
+                if (call.resolution != .pending) continue;
+                const step = try self.resolveVarObligation(
+                    self.types.resolveVar(forwarded.dispatcher_var).var_,
+                    call.method,
+                    null,
+                    forwarded.evidence_var,
+                    chain,
+                    .defer_resolution,
+                );
+                const resolution = switch (step) {
+                    .resolved => |resolution| resolution orelse continue,
+                    .node => checkedArtifactInvariant("a forwarded generated codec call resolved to a method target", .{}),
+                };
+                const dependent = switch (resolution) {
+                    .evidence_dependent => |dependent| dependent,
+                    .direct_pending, .direct_closed, .direct_parametric, .structural, .checked_error, .@"unreachable" => checkedArtifactInvariant("a forwarded generated codec call matched no enclosing evidence parameter", .{}),
+                };
+                const ref_index: u32 = @intCast(self.evidence_refs.items.len);
+                try self.evidence_refs.append(self.allocator, .{
+                    .dispatcher_ty = call.dispatcher_ty,
+                    .resolution = .{ .constraint = .{
+                        .scheme_param = dependent.scheme_param,
+                        .index = dependent.index,
+                        .independent_callable = dependent.independent_callable,
+                        .reuse_slot_nested_evidence = dependent.reuse_slot_nested_evidence,
+                        .callable_contract = dependent.callable_contract,
+                    } },
+                });
+                call.resolution = .{ .forwarded = ref_index };
+                reaches_forwarded = true;
+            }
+        }
+        if (reaches_forwarded) self.plan_table.generated_codec_derivations.items()[@backingInt(derivation_id)].forwarded = true;
+    }
+
+    /// A forwarded call no site's chain linked belongs to a contract whose
+    /// dispatch no template reaches; nothing lowers it.
+    fn retireUnreachedForwardedCodecCalls(self: *EvidencePass) void {
+        for (self.forwarded_codec_calls.items) |forwarded| {
+            const call = &self.plan_table.generated_codec_calls.items()[forwarded.call];
+            if (call.resolution == .pending) call.resolution = .checked_error;
+        }
     }
 
     fn debugVerifyGeneratedCodecContracts(self: *EvidencePass) Allocator.Error!void {
@@ -14584,6 +14699,18 @@ const EvidencePass = struct {
                                 "checked generated codec callable evidence had a different callable type",
                                 .{},
                             );
+                        }
+                    },
+                    .forwarded => |ref_index| {
+                        if (ref_index >= self.evidence_refs.items.len) {
+                            checkedArtifactInvariant("checked generated codec contract referenced a missing forwarded evidence entry", .{});
+                        }
+                        switch (self.evidence_refs.items[ref_index].resolution) {
+                            .constraint => {},
+                            .direct, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => checkedArtifactInvariant(
+                                "checked generated codec forwarded call named evidence that is not an enclosing parameter",
+                                .{},
+                            ),
                         }
                     },
                     .structural => |nested_id| {
@@ -15284,7 +15411,8 @@ const EvidencePass = struct {
                 };
                 if (derivation_kind) |expected_kind| {
                     if (constraint_fn_var) |fn_var| {
-                        if (self.generatedCodecDerivationForSourceConstraint(fn_var, expected_kind) != null) {
+                        if (self.generatedCodecDerivationForSourceConstraint(fn_var, expected_kind)) |derivation_id| {
+                            try self.linkForwardedCodecCalls(derivation_id, chain);
                             return .{ .resolved = .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) } };
                         }
                     }
@@ -21516,7 +21644,9 @@ fn publishLiteralArgumentRoots(
                 for (derivation.callsSlice(self.plans)) |call| switch (call.resolution) {
                     .callable => |node| try self.stack.append(self.allocator, node),
                     .structural => |nested| try pending.append(self.allocator, nested),
-                    .pending, .checked_error => {},
+                    // The enclosing definition's evidence supplies the target,
+                    // and that evidence is reached from its own sites.
+                    .pending, .checked_error, .forwarded => {},
                 };
             }
         }
@@ -31814,6 +31944,15 @@ pub const CheckedModuleArtifact = struct {
                             return .{ .kind = .generated_codec_call_evidence_invalid, .index = @intCast(i), .method = call.method };
                         }
                     },
+                    .forwarded => |ref_index| {
+                        if (ref_index >= table.evidence_refs.items().len) {
+                            return .{ .kind = .generated_codec_call_evidence_invalid, .index = @intCast(i), .method = call.method };
+                        }
+                        switch (table.evidence_refs.items()[ref_index].resolution) {
+                            .constraint => {},
+                            .direct, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => return .{ .kind = .generated_codec_call_evidence_invalid, .index = @intCast(i), .method = call.method },
+                        }
+                    },
                     .structural => |nested_id| {
                         const raw_nested = @backingInt(nested_id);
                         if (raw_nested >= table.generated_codec_derivations.items().len or
@@ -36946,8 +37085,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x08, 0x80, 0x82, 0x8E, 0x13, 0xD2, 0x86, 0x2D, 0xAA, 0x78, 0xF2, 0xBE, 0xAE, 0xE3, 0x19, 0x33,
-        0xCB, 0xCF, 0x11, 0xFC, 0xA8, 0x02, 0x06, 0x37, 0x14, 0x4D, 0xAE, 0x1E, 0x43, 0xB1, 0xA7, 0x40,
+        0x92, 0xE5, 0x50, 0xE2, 0x46, 0x57, 0xA7, 0x50, 0x54, 0x95, 0xFF, 0x09, 0x44, 0xE4, 0x31, 0xFA,
+        0xD3, 0xED, 0x51, 0xB2, 0xEA, 0xB0, 0xEF, 0xCD, 0x7B, 0x50, 0xC7, 0x93, 0xF9, 0x36, 0x35, 0x4F,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

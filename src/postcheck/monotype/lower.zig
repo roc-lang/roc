@@ -2249,7 +2249,67 @@ const SpecStructuralEvidence = struct {
     derivation: static_dispatch.StructuralDerivation,
     checked: ?CheckedSpecStructuralEvidence = null,
     callable_contracts: []const SpecEvidence = &.{},
+    /// The evidence of each forwarded call of the checked contract and of the
+    /// contracts it nests, in `forwardedCodecRefs` order, materialized in
+    /// the evidence of the site that selected the contract (design.md
+    /// "Structural Serialization Methods"). Empty for a contract with no
+    /// forwarded call.
+    forwarded: []const SpecEvidence = &.{},
 };
+
+/// The forwarded calls of an instantiated codec contract: the
+/// `evidence_refs` entry each names, and the evidence the selecting site
+/// supplied for it, position by position.
+/// The vector of a contract instantiation with no forwarded call.
+const no_forwarded_codec_calls: ForwardedCodecVector = .{};
+
+const ForwardedCodecVector = struct {
+    refs: []const u32 = &.{},
+    evidence: []const SpecEvidence = &.{},
+
+    fn at(self: ForwardedCodecVector, ref: u32) SpecEvidence {
+        for (self.refs, self.evidence) |candidate, evidence| {
+            if (candidate == ref) return evidence;
+        }
+        Common.invariant("a forwarded generated codec call had no evidence from its selecting site");
+    }
+};
+
+/// The `evidence_refs` entries the forwarded calls of contract `root` and of
+/// the contracts it nests name, in a fixed order: contracts in first-visit
+/// order of a depth-first walk over nested calls, and each contract's calls
+/// in order. Equal contracts list their forwarded calls in the same order,
+/// whichever module recorded them.
+fn forwardedCodecRefs(
+    allocator: Allocator,
+    arena: Allocator,
+    table: *const static_dispatch.StaticDispatchPlanTable,
+    root: static_dispatch.GeneratedCodecDerivationId,
+) Allocator.Error![]const u32 {
+    var refs = std.ArrayList(u32).empty;
+    defer refs.deinit(allocator);
+    var pending = std.ArrayList(static_dispatch.GeneratedCodecDerivationId).empty;
+    defer pending.deinit(allocator);
+    var visited = collections.DenseMap(static_dispatch.GeneratedCodecDerivationId, void).init(allocator);
+    defer visited.deinit();
+    try pending.append(allocator, root);
+    try visited.put(root, {});
+    while (pending.pop()) |id| {
+        const derivation = table.generated_codec_derivations.items()[@backingInt(id)];
+        const calls = derivation.callsSlice(table);
+        for (calls) |call| switch (call.resolution) {
+            .forwarded => |ref| try refs.append(allocator, ref),
+            .callable, .structural, .pending, .checked_error => {},
+        };
+        const nested_start = pending.items.len;
+        for (calls) |call| switch (call.resolution) {
+            .structural => |nested| if (!(try visited.getOrPut(nested)).found_existing) try pending.append(allocator, nested),
+            .forwarded, .callable, .pending, .checked_error => {},
+        };
+        std.mem.reverse(static_dispatch.GeneratedCodecDerivationId, pending.items[nested_start..]);
+    }
+    return try arena.dupe(u32, refs.items);
+}
 
 const SpecEvidenceTarget = struct {
     view: ModuleView,
@@ -2290,7 +2350,16 @@ fn specEvidenceSelectsLocalProc(entry: SpecEvidence) bool {
             }
             return false;
         },
-        .structural, .from_scheme, .unreachable_value, .checked_error => return false,
+        .structural => |structural| {
+            for (structural.forwarded) |forwarded| {
+                if (specEvidenceSelectsLocalProc(forwarded)) return true;
+            }
+            for (structural.callable_contracts) |contract| {
+                if (specEvidenceSelectsLocalProc(contract)) return true;
+            }
+            return false;
+        },
+        .from_scheme, .unreachable_value, .checked_error => return false,
     }
 }
 
@@ -2327,7 +2396,8 @@ fn hashSpecEvidenceShallow(hasher: *std.hash.Wyhash, entry: SpecEvidence) void {
         },
         .from_callable => |use| hasher.update(&.{@intFromBool(use.independent_callable)}),
         .from_scheme => |index| hasher.update(std.mem.asBytes(&index)),
-        .structural, .unreachable_value, .checked_error => {},
+        .structural => |structural| hasher.update(std.mem.asBytes(&@as(u32, @intCast(structural.forwarded.len)))),
+        .unreachable_value, .checked_error => {},
     }
 }
 
@@ -4192,7 +4262,15 @@ fn specEvidenceShallowEql(
             .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => false,
         },
         .structural => |a_structural| switch (b) {
-            .structural => |b_structural| try specStructuralEvidenceEql(a_structural, b_structural),
+            .structural => |b_structural| blk: {
+                if (!try specStructuralEvidenceEql(a_structural, b_structural)) break :blk false;
+                // Equal contracts list their forwarded calls in one order.
+                if (a_structural.forwarded.len != b_structural.forwarded.len) break :blk false;
+                for (a_structural.forwarded, b_structural.forwarded) |a_entry, b_entry| {
+                    try pending.append(allocator, .{ .a = a_entry, .b = b_entry });
+                }
+                break :blk true;
+            },
             .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => false,
         },
         .from_callable => |a_use| switch (b) {
@@ -4268,7 +4346,8 @@ const SpecEvidenceWalk = struct {
                 .resolved => |nested| try walk.pending.append(allocator, nested),
                 .synthesize => {},
             },
-            .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+            .structural => |structural| if (structural.forwarded.len != 0) try walk.pending.append(allocator, structural.forwarded),
+            .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
         }
         return entry;
     }
@@ -8781,8 +8860,17 @@ const Builder = struct {
     const ConstFnEvidenceFrame = struct {
         evidence: []const SpecEvidence,
         next: usize = 0,
-        pending: ?struct { root_index: usize, stage: enum { nested, contracts }, nested_start: usize } = null,
+        pending: ?struct { root_index: usize, stage: enum { nested, contracts, forwarded }, nested_start: usize } = null,
     };
+
+    /// The forwarded evidence a structural entry carries, which follows its
+    /// callable contracts in a stored tree.
+    fn storedForwardedEvidence(entry: SpecEvidence) []const SpecEvidence {
+        return switch (entry) {
+            .structural => |structural| structural.forwarded,
+            .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => &.{},
+        };
+    }
 
     /// Serialize an evidence tree in pre-order: each entry's node, its
     /// nested evidence, then its callable contracts. Nested evidence follows
@@ -8818,7 +8906,16 @@ const Builder = struct {
                             continue;
                         }
                     },
-                    .contracts => nodes.setCallableContracts(pending.root_index, @intCast(finished.evidence.len)),
+                    .contracts => {
+                        nodes.setCallableContracts(pending.root_index, @intCast(finished.evidence.len));
+                        const forwarded = storedForwardedEvidence(entry);
+                        if (forwarded.len != 0) {
+                            parent.pending = .{ .root_index = pending.root_index, .stage = .forwarded, .nested_start = nodes.nodes.items.len };
+                            try frames.append(self.allocator, .{ .evidence = forwarded });
+                            continue;
+                        }
+                    },
+                    .forwarded => {},
                 }
                 parent.next += 1;
                 continue;
@@ -8840,6 +8937,7 @@ const Builder = struct {
                     }
                 },
                 .structural => |structural| try nodes.appendStructural(self.allocator, .{
+                    .forwarded = @intCast(structural.forwarded.len),
                     .derivation = structural.derivation,
                     .checked = if (structural.checked) |checked_structural| .{ .recorded = .{
                         .view = .{ .bytes = checked_structural.view.key.bytes },
@@ -8864,6 +8962,12 @@ const Builder = struct {
             if (contracts.len != 0) {
                 frame.pending = .{ .root_index = root_index, .stage = .contracts, .nested_start = nodes.nodes.items.len };
                 try frames.append(self.allocator, .{ .evidence = contracts });
+                continue;
+            }
+            const forwarded = storedForwardedEvidence(entry);
+            if (forwarded.len != 0) {
+                frame.pending = .{ .root_index = root_index, .stage = .forwarded, .nested_start = nodes.nodes.items.len };
+                try frames.append(self.allocator, .{ .evidence = forwarded });
                 continue;
             }
             frame.next += 1;
@@ -18112,7 +18216,7 @@ const DraftTemplateSpec = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftTemplateSpec) == 744);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftTemplateSpec) == 752);
 }
 
 /// Coordinator intent retained after the request graph is destroyed.
@@ -18151,7 +18255,7 @@ const SealedTemplateSpec = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(SealedTemplateSpec) == 304);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(SealedTemplateSpec) == 312);
 }
 
 /// Seal a draft request's substitution with the graph sealer that seals its
@@ -18479,7 +18583,7 @@ const DraftDeferredStoredCodecRestore = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftDeferredStoredCodecRestore) == 1272);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftDeferredStoredCodecRestore) == 1280);
 }
 
 const DraftCodecLocalProcContext = struct {
@@ -18526,6 +18630,10 @@ const CheckedCodecContractAnchor = struct {
     derivation: static_dispatch.GeneratedCodecDerivationId,
     call_index: u32,
     kind: CodecKind,
+    /// The forwarded evidence the contract was instantiated with. It is
+    /// determined by the contract's boundary shape, whose type each forwarded
+    /// call's subject is part of, so it adds nothing to the anchor's identity.
+    forwarded: *const ForwardedCodecVector = &no_forwarded_codec_calls,
 };
 
 /// Graph-local specialization context for a procedure body reached from a
@@ -18562,6 +18670,8 @@ const InstantiatedGeneratedCodecCall = struct {
     resolution: union(enum) {
         callable: static_dispatch.EvidenceNodeId,
         structural: static_dispatch.GeneratedCodecDerivationId,
+        /// The evidence the selecting site supplied for a forwarded call.
+        forwarded: SpecEvidence,
     },
     debug_consumed: if (@import("builtin").mode == .debug) bool else void = if (@import("builtin").mode == .debug) false else {},
 };
@@ -18584,6 +18694,7 @@ const ActiveCodecContract = struct {
     derivation: static_dispatch.GeneratedCodecDerivationId,
     kind: CodecKind,
     evidence: EvidenceChain,
+    forwarded: *const ForwardedCodecVector,
     calls_start: usize,
     calls_len: usize,
     method_call_slots: []CodecMethodCallSlot,
@@ -18600,6 +18711,7 @@ const RetainedCodecContract = struct {
     derivation: static_dispatch.GeneratedCodecDerivationId,
     kind: CodecKind,
     evidence: EvidenceChain,
+    forwarded: *const ForwardedCodecVector,
     calls: []const InstantiatedGeneratedCodecCall,
     method_call_slots: []const CodecMethodCallSlot,
     grounding_call_index: ?u32,
@@ -19220,7 +19332,7 @@ const DraftNestedSpec = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftNestedSpec) == 496);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftNestedSpec) == 504);
 }
 
 /// Coordinator intent for one fully graph-sealed nested specialization.
@@ -25679,6 +25791,7 @@ const BodyContext = struct {
             .derivation = active.derivation,
             .kind = active.kind,
             .evidence = active.evidence,
+            .forwarded = active.forwarded,
             .calls_start = 0,
             .calls_len = calls.len,
             .method_call_slots = try self.graph.arena().dupe(CodecMethodCallSlot, active.method_call_slots),
@@ -32075,7 +32188,7 @@ const BodyContext = struct {
             const callable_plan = task.callable_plan;
             const plan = callable_plan.plan;
             const plan_args = callable_plan.operands;
-            const resolution = self.evidenceResolution(plan) orelse
+            const resolution = (try self.evidenceResolution(plan)) orelse
                 Common.invariant("runtime method result had no CheckedCallResolution evidence");
             switch (resolution) {
                 .target => |lookup| {
@@ -37189,7 +37302,7 @@ const BodyContext = struct {
             },
             // A resolved method call's remaining operands.
             5, 6 => {
-                const lookup = switch (self.evidenceResolution(plan) orelse
+                const lookup = switch ((try self.evidenceResolution(plan)) orelse
                     Common.invariant("CheckedStaticDispatchCallPlan had no MethodTarget or StructuralDerivation")) {
                     .target => |lookup| lookup,
                     .structural => Common.invariant("resolved dispatch operands reached a structural derivation"),
@@ -37283,7 +37396,7 @@ const BodyContext = struct {
             expected_ret_node,
             .expression_lowering,
         );
-        const resolution = self.evidenceResolution(plan) orelse
+        const resolution = (try self.evidenceResolution(plan)) orelse
             Common.invariant("runtime method call had no CheckedCallResolution evidence");
         switch (resolution) {
             .target => |initial_lookup| {
@@ -37410,7 +37523,7 @@ const BodyContext = struct {
         // reported missing methods); both emit an ordinary Roc runtime crash
         // and never return a dispatch result. A genuinely reachable ownerless
         // dispatch was rejected at check time.
-        switch (self.evidenceResolution(plan) orelse
+        switch ((try self.evidenceResolution(plan)) orelse
             Common.invariant("CheckedStaticDispatchCallPlan had no MethodTarget or StructuralDerivation")) {
             .target => {},
             .structural => |structural| return self.dispatchLowerDone(task, switch (structural.derivation) {
@@ -53850,7 +53963,12 @@ const BodyContext = struct {
             /// The entry's own target, when it is one: the entry holds it
             /// by const pointer.
             contracts: ?*SpecEvidenceTarget,
+            /// The forwarded evidence of the structural entry.
+            forwarded,
         } = null,
+        /// How many forwarded evidence trees follow the current entry's
+        /// callable contracts.
+        forwarded_count: u32 = 0,
     };
 
     /// Restore a pre-order evidence tree: each entry's node, its nested
@@ -53891,7 +54009,18 @@ const BodyContext = struct {
                             continue;
                         }
                     },
-                    .contracts => |target| setSpecEvidenceCallableContracts(&parent.out[parent.next], target, finished.out),
+                    .contracts => |target| {
+                        setSpecEvidenceCallableContracts(&parent.out[parent.next], target, finished.out);
+                        if (parent.forwarded_count != 0) {
+                            parent.pending = .forwarded;
+                            try frames.append(self.allocator, .{ .out = try arena.alloc(SpecEvidence, parent.forwarded_count) });
+                            continue;
+                        }
+                    },
+                    .forwarded => {
+                        parent.out[parent.next].structural.forwarded = finished.out;
+                        parent.forwarded_count = 0;
+                    },
                 }
                 parent.next += 1;
                 continue;
@@ -53954,6 +54083,7 @@ const BodyContext = struct {
                             codec,
                         ),
                     } else null;
+                    frame.forwarded_count = stored_structural.forwarded;
                     break :blk .{ .structural = .{
                         .derivation = stored_structural.derivation,
                         .checked = restored_checked,
@@ -53970,6 +54100,11 @@ const BodyContext = struct {
             if (contract_count != 0) {
                 frame.pending = .{ .contracts = contracts_target };
                 try frames.append(self.allocator, .{ .out = try arena.alloc(SpecEvidence, contract_count) });
+                continue;
+            }
+            if (frame.forwarded_count != 0) {
+                frame.pending = .forwarded;
+                try frames.append(self.allocator, .{ .out = try arena.alloc(SpecEvidence, frame.forwarded_count) });
                 continue;
             }
             frame.next += 1;
@@ -54699,14 +54834,47 @@ const BodyContext = struct {
                     .structural, .from_scheme, .unreachable_value, .checked_error => entry,
                 };
             },
-            .structural => |evidence| .{ .structural = .{
-                .derivation = evidence.derivation,
-                .checked = .{ .view = site_view, .evidence = evidence },
-            } },
+            .structural => |evidence| blk: {
+                const structural = try self.checkedStructuralSpecEvidence(site_view, evidence);
+                // A codec whose forwarded evidence cannot run is that
+                // evidence: the dispatch selecting it crashes before it would
+                // build the codec.
+                for (structural.forwarded) |forwarded| switch (forwarded) {
+                    .checked_error => break :blk .checked_error,
+                    .unreachable_value => break :blk .unreachable_value,
+                    .target, .structural, .from_callable, .from_scheme => {},
+                };
+                break :blk .{ .structural = structural };
+            },
             .unreachable_value => .unreachable_value,
             .checked_error => .checked_error,
             .from_callable, .from_scheme => Common.invariant("symbolic checked evidence escaped a nested procedure construction recipe"),
         };
+    }
+
+    /// Structural evidence the site in `site_view` recorded. A codec contract
+    /// with forwarded calls carries the evidence this site's chain supplies
+    /// for each of them (design.md "Structural Serialization Methods").
+    fn checkedStructuralSpecEvidence(
+        self: *BodyContext,
+        site_view: ModuleView,
+        evidence: static_dispatch.StructuralEvidence,
+    ) Allocator.Error!SpecStructuralEvidence {
+        var structural: SpecStructuralEvidence = .{
+            .derivation = evidence.derivation,
+            .checked = .{ .view = site_view, .evidence = evidence },
+        };
+        const id = evidence.generated_codec_derivation orelse return structural;
+        const table = site_view.static_dispatch_plans;
+        if (!table.generated_codec_derivations.items()[@backingInt(id)].forwarded) return structural;
+        const arena = self.builder.evidence_arena.allocator();
+        const refs = try forwardedCodecRefs(self.allocator, arena, table, id);
+        const forwarded = try arena.alloc(SpecEvidence, refs.len);
+        for (refs, forwarded) |ref, *slot| {
+            slot.* = try self.materializeIndirectCheckedEvidenceRef(site_view, table.evidence_refs.items()[ref]);
+        }
+        structural.forwarded = forwarded;
+        return structural;
     }
 
     /// A checked target whose nested references are materializing. Nested
@@ -56038,7 +56206,7 @@ const BodyContext = struct {
 
     /// The plan's checked or edge-supplied resolution. Null is reserved for
     /// checked-error and explicitly unreachable dispatches.
-    fn evidenceResolution(self: *BodyContext, plan: static_dispatch.StaticDispatchCallPlan) ?EvidenceResolved {
+    fn evidenceResolution(self: *BodyContext, plan: static_dispatch.StaticDispatchCallPlan) Allocator.Error!?EvidenceResolved {
         switch (plan.resolution) {
             .direct_closed, .direct_parametric => |direct| {
                 return .{ .target = self.methodLookupForEvidenceNode(self.view.static_dispatch_plans.evidenceNode(direct.evidence)) };
@@ -56065,22 +56233,16 @@ const BodyContext = struct {
                     .from_callable, .from_scheme, .unreachable_value, .checked_error => null,
                 };
             },
-            .structural => |derivation| return .{ .structural = .{
-                .derivation = derivation,
-                .checked = switch (derivation.kind()) {
-                    .parser, .encoder => .{
-                        .view = self.view,
-                        .evidence = .{
-                            .derivation = derivation,
-                            .dispatcher_ty = plan.dispatcher_ty,
-                            .callable_ty = plan.callable_ty,
-                            .generated_codec_derivation = plan.generated_codec_derivation.get() orelse
-                                Common.invariant("direct structural codec plan had no checked derivation contract"),
-                        },
-                    },
-                    .equality, .hash, .map, .map_effectful => null,
-                },
-            } },
+            .structural => |derivation| return switch (derivation.kind()) {
+                .parser, .encoder => .{ .structural = try self.checkedStructuralSpecEvidence(self.view, .{
+                    .derivation = derivation,
+                    .dispatcher_ty = plan.dispatcher_ty,
+                    .callable_ty = plan.callable_ty,
+                    .generated_codec_derivation = plan.generated_codec_derivation.get() orelse
+                        Common.invariant("direct structural codec plan had no checked derivation contract"),
+                }) },
+                .equality, .hash, .map, .map_effectful => .{ .structural = .{ .derivation = derivation } },
+            },
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
             .checked_error, .@"unreachable" => return null,
         }
@@ -56118,7 +56280,7 @@ const BodyContext = struct {
         callable_node: NodeId,
         shape_node: NodeId,
     ) Allocator.Error!void {
-        const resolution = self.evidenceResolution(plan) orelse
+        const resolution = (try self.evidenceResolution(plan)) orelse
             Common.invariant("generated runtime source plan had no structural evidence");
         const structural = switch (resolution) {
             .structural => |structural| structural,
@@ -60207,6 +60369,19 @@ const BodyContext = struct {
         callable_node: NodeId,
         shape_node: NodeId,
     ) Allocator.Error!ActiveCodecContract {
+        return try self.instantiateCodecContractWith(null, structural, callable_node, shape_node);
+    }
+
+    /// Instantiate `structural`'s contract. A nested contract takes the
+    /// forwarded evidence of the contract that nests it (`inherited`); a
+    /// selected one takes the evidence its structural evidence carries.
+    fn instantiateCodecContractWith(
+        self: *BodyContext,
+        inherited: ?*const ForwardedCodecVector,
+        structural: SpecStructuralEvidence,
+        callable_node: NodeId,
+        shape_node: NodeId,
+    ) Allocator.Error!ActiveCodecContract {
         const checked_structural = structural.checked orelse
             Common.invariant("structural codec reached Monotype without its checked derivation contract");
         const derivation_id = checked_structural.evidence.generated_codec_derivation orelse
@@ -60228,11 +60403,23 @@ const BodyContext = struct {
             Common.invariant("checked structural codec evidence referenced a derivation of the wrong kind");
         }
 
+        const forwarded: *const ForwardedCodecVector = if (inherited) |vector| vector else if (derivation.forwarded) vector: {
+            const vector = try self.graph.arena().create(ForwardedCodecVector);
+            vector.* = .{
+                .refs = try forwardedCodecRefs(self.allocator, self.graph.arena(), checked_structural.view.static_dispatch_plans, derivation_id),
+                .evidence = structural.forwarded,
+            };
+            break :vector vector;
+        } else &no_forwarded_codec_calls;
+        if (forwarded.refs.len != forwarded.evidence.len) {
+            Common.invariant("structural codec evidence did not carry one forwarded entry per forwarded call");
+        }
         return try self.instantiateCheckedCodecContract(
             checked_structural.view,
             derivation_id,
             kind,
             .{ .callable_node = callable_node, .shape_node = shape_node },
+            forwarded,
         );
     }
 
@@ -60254,6 +60441,7 @@ const BodyContext = struct {
             anchor.derivation,
             anchor.kind,
             .{ .callable_node = constructor_node, .shape_node = shape_node },
+            anchor.forwarded,
         );
         active.grounding_call_index = anchor.call_index;
         self.active_codec_contract = active;
@@ -60398,6 +60586,7 @@ const BodyContext = struct {
         derivation_id: static_dispatch.GeneratedCodecDerivationId,
         kind: CodecKind,
         boundary: CodecContractBoundary,
+        forwarded: *const ForwardedCodecVector,
     ) Allocator.Error!ActiveCodecContract {
         if (@backingInt(derivation_id) >= checked_view.static_dispatch_plans.generated_codec_derivations.items().len) {
             Common.invariant("checked codec anchor referenced a missing generated derivation");
@@ -60410,7 +60599,10 @@ const BodyContext = struct {
         if (derivation.kind != checked_kind) {
             Common.invariant("checked codec anchor referenced a derivation of the wrong kind");
         }
-        if (self.reusedCodecContract(checked_view, derivation_id, kind, boundary)) |cached| {
+        // An instantiation with forwarded calls holds the selecting site's
+        // evidence, so only one without them is shared through the cache.
+        const reusable = if (derivation.forwarded) null else self.reusedCodecContract(checked_view, derivation_id, kind, boundary);
+        if (reusable) |cached| {
             const calls_start = self.instantiated_codec_calls.items.len;
             try self.instantiated_codec_calls.ensureUnusedCapacity(self.allocator, cached.calls.len);
             for (cached.calls) |call| {
@@ -60423,6 +60615,7 @@ const BodyContext = struct {
                 .derivation = derivation_id,
                 .kind = kind,
                 .evidence = self.evidence,
+                .forwarded = &no_forwarded_codec_calls,
                 .calls_start = calls_start,
                 .calls_len = cached.calls.len,
                 .method_call_slots = try self.graph.arena().dupe(CodecMethodCallSlot, cached.method_call_slots),
@@ -60466,6 +60659,7 @@ const BodyContext = struct {
                 .resolution = switch (call.resolution) {
                     .callable => |node_id| .{ .callable = node_id },
                     .structural => |nested| .{ .structural = nested },
+                    .forwarded => |ref| .{ .forwarded = forwarded.at(ref) },
                     .pending => Common.invariant("unlinked generated codec call reached Monotype"),
                     .checked_error => Common.invariant("rejected generated codec call reached Monotype"),
                 },
@@ -60478,7 +60672,7 @@ const BodyContext = struct {
         // An instantiation that consulted no enclosing evidence is determined
         // by its boundary classes alone, so later uses of this contract at
         // the same boundary in this graph share it.
-        if (contract_ctx.evidence_bindings_consulted == 0) {
+        if (contract_ctx.evidence_bindings_consulted == 0 and !derivation.forwarded) {
             try self.draft.codec_contract_instances.append(self.allocator, .{
                 .graph = self.graph,
                 .view_key = checked_view.key.bytes,
@@ -60495,6 +60689,7 @@ const BodyContext = struct {
             .derivation = derivation_id,
             .kind = kind,
             .evidence = self.evidence,
+            .forwarded = forwarded,
             .calls_start = calls_start,
             .calls_len = self.instantiated_codec_calls.items.len - calls_start,
             .method_call_slots = method_call_slots,
@@ -60621,6 +60816,16 @@ const BodyContext = struct {
         return false;
     }
 
+    fn activeCodecCallsMut(self: *BodyContext) []InstantiatedGeneratedCodecCall {
+        const active = self.active_codec_contract orelse return &.{};
+        if (active.calls_start > self.instantiated_codec_calls.items.len or
+            active.calls_len > self.instantiated_codec_calls.items.len - active.calls_start)
+        {
+            Common.invariant("active generated codec contract referenced an invalid instantiated-call span");
+        }
+        return self.instantiated_codec_calls.items[active.calls_start..][0..active.calls_len];
+    }
+
     fn activeCodecCalls(self: *const BodyContext) []const InstantiatedGeneratedCodecCall {
         const active = self.active_codec_contract orelse return &.{};
         if (active.calls_start > self.instantiated_codec_calls.items.len or
@@ -60669,6 +60874,7 @@ const BodyContext = struct {
     fn activeCodecContractContainsLocalTarget(self: *const BodyContext) bool {
         for (self.activeCodecCalls()) |call| switch (call.resolution) {
             .structural => {},
+            .forwarded => |evidence| if (specEvidenceSelectsLocalProc(evidence)) return true,
             .callable => |node_id| switch (call.view.static_dispatch_plans.evidenceNode(node_id).target.kind) {
                 .local_proc => return true,
                 .procedure, .structural, .callable_binding => {},
@@ -60688,6 +60894,7 @@ const BodyContext = struct {
                     .derivation = active.derivation,
                     .call_index = grounding_index,
                     .kind = active.kind,
+                    .forwarded = active.forwarded,
                 },
                 .constructor_node = active.constructor_node,
                 .shape_node = active.shape_node,
@@ -60723,6 +60930,7 @@ const BodyContext = struct {
             .derivation = active.derivation,
             .kind = active.kind,
             .evidence = active.evidence,
+            .forwarded = active.forwarded,
             .calls = calls,
             .method_call_slots = method_call_slots,
             .grounding_call_index = active.grounding_call_index,
@@ -60744,6 +60952,7 @@ const BodyContext = struct {
             .derivation = retained.derivation,
             .kind = retained.kind,
             .evidence = retained.evidence,
+            .forwarded = retained.forwarded,
             .calls_start = 0,
             .calls_len = retained.calls.len,
             .method_call_slots = try self.graph.arena().dupe(CodecMethodCallSlot, retained.method_call_slots),
@@ -60770,6 +60979,9 @@ const BodyContext = struct {
         for (active.method_call_slots) |slot| {
             if (!std.mem.eql(u8, active.view.names.methodNameText(slot.method), method_name) or
                 (slot.subject_node != .none) != requested_has_subject) continue;
+            // A forwarded call is selected by its subject's class alone
+            // (`forwardedCodecBoundaryCall`).
+            if (slot.call_index < calls.len and calls[slot.call_index].resolution == .forwarded) continue;
             if (subject_node) |requested_subject| {
                 if (!(try self.sameCodecSubject(slot.subject_node.get().?, requested_subject))) continue;
             }
@@ -60821,8 +61033,9 @@ const BodyContext = struct {
         {
             Common.invariant("generated codec consumption audit received an invalid call span");
         }
-        for (self.instantiated_codec_calls.items[active.calls_start..][0..active.calls_len]) |call| {
-            if (!call.debug_consumed) {
+        const calls = self.instantiated_codec_calls.items[active.calls_start..][0..active.calls_len];
+        for (calls) |call| {
+            if (!call.debug_consumed and !self.forwardedCodecCovers(calls, call)) {
                 base.invariant(
                     "postcheck invariant violated: Monotype did not consume checker-required generated codec call {s} role {} (subject: {s})",
                     .{
@@ -60835,6 +61048,23 @@ const BodyContext = struct {
         }
     }
 
+    /// Whether a forwarded call is the codec of `call`'s subject: the walk
+    /// reads an occurrence of the type a forwarded variable takes through the
+    /// forwarded codec, and Phase B writes and reads every occurrence of one
+    /// type the same way, so such an occurrence needs no call of its own.
+    fn forwardedCodecCovers(self: *BodyContext, calls: []const InstantiatedGeneratedCodecCall, call: InstantiatedGeneratedCodecCall) bool {
+        const subject = call.subject_node orelse return false;
+        for (calls) |candidate| {
+            switch (candidate.resolution) {
+                .forwarded => {},
+                .callable, .structural => continue,
+            }
+            const forwarded_subject = candidate.subject_node orelse continue;
+            if (self.graph.sameClass(forwarded_subject, subject)) return true;
+        }
+        return false;
+    }
+
     fn generatedCodecBoundaryCall(
         self: *BodyContext,
         kind: CodecKind,
@@ -60845,6 +61075,9 @@ const BodyContext = struct {
             .encoder => Ident.ENCODER_FOR_METHOD_NAME,
         };
         const active = self.active_codec_contract orelse return null;
+        if (active.forwarded.refs.len != 0) {
+            if (self.forwardedCodecBoundaryCall(method_name, shape_node)) |forwarded| return forwarded;
+        }
         if ((try self.graph.content(shape_node)) != .named) return null;
         // Repeated occurrences of one nominal subject share the checker's
         // method role, so the role slot selects the boundary call exactly as it
@@ -60863,8 +61096,34 @@ const BodyContext = struct {
             .structural => |nested| if (nested == active.derivation and
                 self.graph.sameClass(active.shape_node, shape_node)) return null,
             .callable => {},
+            .forwarded => unreachable, // generatedCodecCall never selects a forwarded call's slot
         }
         return selected;
+    }
+
+    /// The active contract's forwarded call whose subject is the occurrence
+    /// `shape_node`. A forwarded call's subject is a type variable of the
+    /// definition the contract was derived in, so the occurrence the checker
+    /// related to it is exactly its class, whatever type the specialization
+    /// gives the variable.
+    fn forwardedCodecBoundaryCall(
+        self: *BodyContext,
+        method_name: []const u8,
+        shape_node: NodeId,
+    ) ?InstantiatedGeneratedCodecCall {
+        var found: ?InstantiatedGeneratedCodecCall = null;
+        for (self.activeCodecCallsMut()) |*call| {
+            switch (call.resolution) {
+                .forwarded => {},
+                .callable, .structural => continue,
+            }
+            const subject = call.subject_node orelse continue;
+            if (!self.graph.sameClass(subject, shape_node)) continue;
+            if (!std.mem.eql(u8, call.view.names.methodNameText(call.checked.method), method_name)) continue;
+            if (@import("builtin").mode == .debug) call.debug_consumed = true;
+            if (found == null) found = call.*;
+        }
+        return found;
     }
 
     fn requiredGeneratedCodecTarget(
@@ -60888,6 +61147,7 @@ const BodyContext = struct {
         const lookup = switch (call.resolution) {
             .callable => try self.generatedCodecCallLookup(call),
             .structural => Common.invariant("generated codec format call resolved to a structural derivation"),
+            .forwarded => Common.invariant("generated codec format call was forwarded"),
         };
         return .{
             // The instantiated callable is carried by `callable_node`.
@@ -60913,6 +61173,7 @@ const BodyContext = struct {
                     .derivation = active.derivation,
                     .call_index = call.call_index,
                     .kind = active.kind,
+                    .forwarded = active.forwarded,
                 };
             },
         };
@@ -60929,6 +61190,7 @@ const BodyContext = struct {
         const node_id = switch (call.resolution) {
             .callable => |node_id| node_id,
             .structural => Common.invariant("structural generated codec call had no callable evidence target"),
+            .forwarded => Common.invariant("forwarded generated codec call had no checked evidence target"),
         };
         const node = call.view.static_dispatch_plans.evidenceNode(node_id);
         const previous_view = self.view;
@@ -60970,13 +61232,17 @@ const BodyContext = struct {
         const nested_id = switch (call.resolution) {
             .structural => |nested| nested,
             .callable => Common.invariant("callable generated codec target reached nested structural activation"),
+            .forwarded => Common.invariant("forwarded generated codec target reached nested structural activation"),
         };
-        const derivation: static_dispatch.StructuralDerivation = switch ((self.active_codec_contract orelse
-            Common.invariant("nested codec activation had no parent contract")).kind) {
+        const parent = self.active_codec_contract orelse
+            Common.invariant("nested codec activation had no parent contract");
+        const derivation: static_dispatch.StructuralDerivation = switch (parent.kind) {
             .parser => .parser,
             .encoder => .encoder,
         };
-        return try self.instantiateCodecContract(.{
+        // A nested contract's forwarded calls were linked with its parent's,
+        // through the same selecting site.
+        return try self.instantiateCodecContractWith(parent.forwarded, .{
             .derivation = derivation,
             .checked = .{
                 .view = call.view,
@@ -61001,6 +61267,7 @@ const BodyContext = struct {
         const lookup = switch (checked_call.resolution) {
             .callable => try self.generatedCodecCallLookup(checked_call),
             .structural => Common.invariant("structural generated codec call reached callable preparation"),
+            .forwarded => Common.invariant("forwarded generated codec call reached checked callable preparation"),
         };
         const active = self.active_codec_contract orelse
             Common.invariant("custom codec call had no active checker contract");
@@ -61018,12 +61285,54 @@ const BodyContext = struct {
             checked_call.checked.method_role,
         )) return false;
 
+        const target_node = checked_call.callable_node;
+        try self.relateCustomCodecTarget(kind, shape_node, boundary_callable_node, target_node);
+        const callee = try self.methodTargetCalleeAtNodeForCodec(
+            lookup,
+            target_node,
+            .{
+                .view = checked_call.view,
+                .entries = checked_call.view.static_dispatch_plans.generatedCodecCallEvidence(checked_call.checked),
+            },
+            .{
+                .view = active.view,
+                .derivation = active.derivation,
+                .call_index = checked_call.call_index,
+                .kind = active.kind,
+                .forwarded = active.forwarded,
+            },
+        );
+        try self.draft.prepared_codec_calls.append(self.allocator, .{
+            .boundary_expr = boundary_expr,
+            .kind = kind,
+            .purpose = .custom,
+            .method_name = method_name,
+            .method_role = checked_call.checked.method_role,
+            .subject_bearing = checked_call.subject_node != null,
+            .contract_view = active.view.key.bytes,
+            .contract_derivation = active.derivation,
+            .shape_node = shape_node,
+            .lookup = lookup,
+            .callable_node = target_node,
+            .callee = callee,
+        });
+        return true;
+    }
+
+    /// Relate a custom codec target's callable to the codec boundary it
+    /// encodes or parses `shape_node` within.
+    fn relateCustomCodecTarget(
+        self: *BodyContext,
+        kind: CodecKind,
+        shape_node: NodeId,
+        boundary_callable_node: NodeId,
+        target_node: NodeId,
+    ) Allocator.Error!void {
         const boundary_callable = try self.graph.functionNodes(boundary_callable_node);
         if (boundary_callable.args.len != 1) Common.invariant("structural codec constructor did not have one encoding argument");
         const encoding_node = boundary_callable.args[0];
         const runtime = try self.graph.functionNodes(boundary_callable.ret);
 
-        const target_node = checked_call.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 1) Common.invariant("custom codec target did not have one encoding argument");
         try relateRequestComponent(self.graph, target.args[0], encoding_node);
@@ -61050,19 +61359,50 @@ const BodyContext = struct {
                 try relateRequestComponent(self.graph, target_runtime.ret, runtime.ret);
             },
         }
-        const callee = try self.methodTargetCalleeAtNodeForCodec(
+    }
+
+    /// Prepare a forwarded call whose site supplied a method target: the
+    /// target's specialization, under the nested evidence the site resolved
+    /// for it, is the custom codec of `shape_node`, exactly as a dispatch on
+    /// the type variable in the definition would call it.
+    fn prepareForwardedCodecCall(
+        self: *BodyContext,
+        boundary_expr: DraftExprId,
+        kind: CodecKind,
+        shape_node: NodeId,
+        boundary_callable_node: NodeId,
+        checked_call: InstantiatedGeneratedCodecCall,
+        target: *const SpecEvidenceTarget,
+    ) Allocator.Error!bool {
+        const active = self.active_codec_contract orelse
+            Common.invariant("forwarded codec call had no active checker contract");
+        const method_name = checked_call.view.names.methodNameText(checked_call.checked.method);
+        if (self.preparedCodecCallExists(
+            boundary_expr,
+            kind,
+            .custom,
+            method_name,
+            active.view.key.bytes,
+            active.derivation,
+            checked_call.checked.method_role,
+        )) return false;
+        const lookup = try self.methodLookupForEvidencePurpose(.{
+            .view = target.view,
+            .target = target.target,
+            .instantiation = target.instantiation,
+            .substitution = if (target.substitution) |substitution| .{ .carried = substitution } else null,
+            .local_proc_context = target.local_proc_context,
+        }, .body_lowering);
+        const target_node = checked_call.callable_node;
+        try self.relateCustomCodecTarget(kind, shape_node, boundary_callable_node, target_node);
+        const callee = try self.methodTargetCalleeAtNodeInner(
             lookup,
             target_node,
-            .{
-                .view = checked_call.view,
-                .entries = checked_call.view.static_dispatch_plans.generatedCodecCallEvidence(checked_call.checked),
+            switch (target.nested) {
+                .resolved => |resolved| .{ .materialized_contract = resolved },
+                .synthesize => .derive,
             },
-            .{
-                .view = active.view,
-                .derivation = active.derivation,
-                .call_index = checked_call.call_index,
-                .kind = active.kind,
-            },
+            .independent,
         );
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
@@ -61285,6 +61625,19 @@ const BodyContext = struct {
                             .call_count = self.instantiated_codec_calls.items.len,
                         } });
                         self.active_codec_contract = try self.activateNestedCodecContract(codec_call, node);
+                    },
+                    // A forwarded structural codec is its own contract, read
+                    // like a nested one; any other forwarded codec reads its
+                    // value itself.
+                    .forwarded => |evidence| switch (evidence) {
+                        .structural => |structural| {
+                            try pending.append(self.allocator, .{ .restore_contract = .{
+                                .contract = self.active_codec_contract,
+                                .call_count = self.instantiated_codec_calls.items.len,
+                            } });
+                            self.active_codec_contract = try self.instantiateCodecContract(structural, codec_call.callable_node, node);
+                        },
+                        .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => continue,
                     },
                 }
             }
@@ -62370,6 +62723,36 @@ const BodyContext = struct {
                         shape_node,
                         codec_call.callable_node,
                     );
+                },
+                .forwarded => |evidence| switch (evidence) {
+                    .target => |target| return try self.prepareForwardedCodecCall(
+                        boundary_expr,
+                        kind,
+                        shape_node,
+                        boundary_callable_node,
+                        codec_call,
+                        target,
+                    ),
+                    .structural => |structural| {
+                        const previous_contract = self.active_codec_contract;
+                        const previous_call_count = self.instantiated_codec_calls.items.len;
+                        defer {
+                            self.active_codec_contract = previous_contract;
+                            self.instantiated_codec_calls.shrinkRetainingCapacity(previous_call_count);
+                        }
+                        self.active_codec_contract = try self.instantiateCodecContract(structural, codec_call.callable_node, shape_node);
+                        return try self.prepareStructuralCodecCallsAtNode(
+                            boundary_expr,
+                            kind,
+                            shape_node,
+                            codec_call.callable_node,
+                        );
+                    },
+                    // Selection turns a structural codec whose forwarded
+                    // evidence cannot run into that evidence, so the codec
+                    // is never lowered (`checkedStructuralSpecEvidence`).
+                    .unreachable_value, .checked_error => Common.invariant("a forwarded generated codec call reached lowering with evidence that cannot run"),
+                    .from_callable, .from_scheme => Common.invariant("symbolic evidence reached a forwarded generated codec call"),
                 },
             }
         }

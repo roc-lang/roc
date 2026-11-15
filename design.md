@@ -8834,6 +8834,65 @@ substitution then describes the same types as the call's callable; it never
 names a variable of the defining scheme that the contract's own types do not
 mention.
 
+A derivation can reach a type variable of the definition it is derived in, as
+the field type of `{ value: x }` in
+`in_record : a -> Str where [a.Json.Encodable([])]`. Outside a nominal
+backing such a leaf is supported exactly when the variable's where clause
+declares the codec method the derivation calls (`encoder_for` when encoding,
+`parser_for` when parsing). The derivation relates the leaf's expected method
+callable to that declared requirement through the same per-use instantiation
+of the where-method signature a body dispatch on the variable uses, marks the
+where clause as one the body requires, and records a generated call whose
+dispatcher is the variable; every other occurrence of the variable in the
+receiver is read by that one call. The contract's types are its snapshot copy,
+so publication names the dispatcher by the variable the copy renamed
+(`generated_codec_renamings`), and a private instance of a parked relation
+(`finalCodecRelationInstance`) records the template's variable rather than
+its copy. A leaf whose variable declares no such
+requirement, or one whose declared signature is not this codec's (another
+format's encoding, or `encoder_for` where parsing needs `parser_for`), is
+reported as a missing method on the receiver. Such a call is a forwarded edge
+authored by the checker: publication links it, through the evidence chain of
+the site whose dispatch selects the contract, to the enclosing definition's
+evidence parameter for that requirement (`GeneratedCodecCallResolution.forwarded`
+names an `evidence_refs` entry whose resolution is `.constraint`), and marks
+the selected contract `forwarded`. A forwarded leaf leaves the relation's
+validity independent of the variable's instantiation, so a definition-scope
+codec relation whose only quantified inputs are such variables, or variables
+of their declared signatures, is validated once in the definition and is not
+captured into the scheme for each use to validate again; an inferred
+quantified variable has no declared requirement and keeps the per-use
+relation. A use of the definition then costs what a use of a definition that
+dispatches on the variable directly costs: one supplied evidence entry per
+declared requirement.
+
+Lowering instantiates a forwarded contract per specialization of the enclosing
+definition. Monotype materializes the evidence of every forwarded call of the
+selected contract and of the contracts it nests where the site's structural
+evidence is materialized, against the site's own evidence chain, and carries
+it with that evidence in a fixed order (contracts in first-visit order of a
+depth-first walk over nested calls, each contract's calls in order). Equal
+contracts list their forwarded calls in the same order, so evidence equality
+and stored-function evidence compare and store that vector positionally. A
+forwarded call reads its target from the vector: a method target is the
+codec of the occurrence the call's subject is related to, and a structural
+derivation is walked as a nested contract under its own vector. The walk
+selects a forwarded call by its subject's class alone; Phase B writes and
+reads every occurrence of one type through the codec prepared for it, so a
+concrete occurrence of the type the variable takes is covered by the
+forwarded codec. Such an
+instantiation is never shared through the boundary-class cache, since it holds
+one site's evidence. A forwarded leaf whose evidence is a checked error or an
+unreachable value makes the whole structural evidence that error, so the
+dispatch that selects it crashes before it would build the codec. Boxy's
+generated codec family treats each forwarded subject as one of its type
+variables and captures one dictionary per forwarded call after its local
+procedure values: the use that builds the family's constructor supplies each
+from its own dictionary for the variable's requirement. The family's list
+operations take their item descriptor, since an item can hold such a
+variable. A stored generated runtime records no dictionaries, so restoring one
+applies only to a family without forwarded calls.
+
 A `ParseTagUnionSpec` describes exactly one union. A payload that is itself a
 tag union is parsed with that union's own spec, never with the enclosing
 union's. Inside a payload parser the record field names come from the
@@ -8866,6 +8925,10 @@ construction recipe records those entries as `from_scheme`, separately from
 checked callable paths and captured enclosing evidence. Checked use edges
 supply those parameters before Monotype or Boxy lowers dispatch; neither
 call-edge evidence analysis nor lowering may derive a concrete codec from the declaration's generic shape.
+A composite receiver's leaf on a constrained type variable of the signature is
+the one generic part a derivation reads, and it does so only through the
+forwarded edge the checker authored for it; lowering supplies that edge's
+evidence and derives nothing from the shape.
 
 A forwarded composite requirement carries both its lexical evidence coordinate
 and the absolute index of its owner parameter in the checked module's evidence
