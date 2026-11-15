@@ -2275,6 +2275,9 @@ pub const Coordinator = struct {
     /// Keep compile-time evaluation artifacts so tests can compare them
     /// with the code emitted by a build.
     keep_compile_time_artifacts: bool = false,
+    /// The producer of value-form compile-time roots. Only a test changes
+    /// it, to compare the checked-value writer with the evaluator.
+    value_form_roots: eval.CompileTimeFinalization.Options.ValueFormRoots = .write,
     /// The checked modules whose `expect`s are the developer's own tests, in
     /// the order their test roots join compile-time evaluation. Every command
     /// that checks the program evaluates the same tests' compile-time work.
@@ -3920,6 +3923,7 @@ pub const Coordinator = struct {
         }
         options.cancel_request = self.cancel_request;
         options.keep_artifacts = self.keep_compile_time_artifacts;
+        options.value_form_roots = self.value_form_roots;
         options.cached_debug_modules = cached_debug_modules.items;
         if (self.runtime_lowering) |config| {
             const configured = config.compile_time_discovery_roots;
@@ -7864,6 +7868,7 @@ pub const Coordinator = struct {
         const ctfe_timing = &local_ctfe_timing;
         var ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing);
         ctfe_options.strategy = self.specialization_strategy;
+        ctfe_options.value_form_roots = self.value_form_roots;
         // Import resolution runs inside the type-check task and records its
         // own diagnostics on the env, after the canonicalize task already
         // reported the ones canonicalization recorded.

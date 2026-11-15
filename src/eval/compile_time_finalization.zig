@@ -143,6 +143,19 @@ pub const Options = struct {
     /// it between its phases and between evaluation levels, and fails with
     /// `error.Canceled` once it is set.
     cancel_request: ?*const std.atomic.Value(bool) = null,
+    /// The producer of the roots checking marked for the checked-value
+    /// writer (`CompileTimeRoot.completion`). Only a test hands them to the
+    /// evaluator, to compare the two producers' values (design.md
+    /// "Value-Form Roots").
+    value_form_roots: ValueFormRoots = .write,
+
+    /// Which producer completes value-form roots.
+    pub const ValueFormRoots = enum {
+        /// The checked-value writer (`completeValueFormRoots`).
+        write,
+        /// The evaluator, as if checking had marked no root. Tests only.
+        evaluate,
+    };
 
     fn checkCancelRequest(self: Options) error{Canceled}!void {
         const request = self.cancel_request orelse return;
@@ -1025,6 +1038,7 @@ pub fn finalizeProgram(
     // remain pending after it.
     var function_types: checked_root_graph.FunctionTypeMemo = .{};
     defer function_types.deinit(allocator);
+    try completeValueFormRoots(allocator, modules, lowering_modules, options);
     try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, &function_types, .before_solved);
     var plan = try planRoots(allocator, modules, lowering_modules, program_roots, options.discovery_roots, lss_runtime, options.timing);
     defer plan.deinit(allocator);
@@ -2040,6 +2054,7 @@ fn finalizeProgramBoxy(
     const owned_runtime_roots = try cloneRootRequests(allocator, runtime_roots);
     errdefer deinitRootRequests(allocator, owned_runtime_roots);
 
+    try completeValueFormRoots(allocator, modules, lowering_modules, options);
     // The pending roots of the first artifact of each checked identity;
     // another artifact of the same identity repeats its results.
     var roots = std.ArrayList(checked_root_graph.Root).empty;
@@ -2087,6 +2102,77 @@ fn finalizeProgramBoxy(
         .runtime_prepared = null,
         .runtime_positions = runtime_positions,
     };
+}
+
+/// Complete every pending value-form root of `modules` with the checked-value
+/// writer (design.md "Value-Form Roots"): store its value from its checked
+/// expression by the plan, layout and stored type the `.boxy` evaluator would
+/// store it by (`BoxyValueSchema`). Such a root reads no other value, so it
+/// completes before any root an evaluator runs, and none of them waits for
+/// it. The pending roots are those the strategy's `.boxy` evaluation takes:
+/// every root still needing evaluation under `.boxy`, and under `.lss`, where
+/// that evaluation runs before the Solved program is specialized, every root
+/// still pending. Every artifact of one checked identity owns its own store,
+/// so each completes its own roots.
+fn completeValueFormRoots(
+    allocator: Allocator,
+    modules: []const ProgramModule,
+    lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
+    options: Options,
+) FinalizeError!void {
+    switch (options.value_form_roots) {
+        .write => {},
+        .evaluate => {
+            if (!builtin.is_test) finalizationInvariant("a compilation outside the tests handed value-form roots to the evaluator");
+            return;
+        },
+    }
+    const started = Timing.startStep(options.timing);
+    defer Timing.finishStep(options.timing, started, .value_form_roots);
+    const target_usize = boxyCompileTimeTarget(options).target_usize;
+    var schema: ?lir.CheckedPipeline.BoxyValueSchema = null;
+    defer if (schema) |*owned| owned.deinit();
+    var completed: u64 = 0;
+    for (modules, 0..) |entry, index| {
+        const module = entry.module;
+        var writer: ?ConstStoreWriter.Writer = null;
+        defer if (writer) |*owned| owned.deinit();
+        for (module.root_requests.compile_time_requests.items()) |request| {
+            const root_id = compileTimeRootForRequest(module, request);
+            const root = module.compile_time_roots.root(root_id);
+            if (root.completion != .write_value) continue;
+            const pending = switch (options.strategy) {
+                .boxy => root.needsEvaluation(.boxy),
+                .lss => root.payload == .pending,
+            };
+            if (!pending) continue;
+            if (schema == null) schema = try lir.CheckedPipeline.BoxyValueSchema.init(allocator, lowering_modules, target_usize);
+            if (writer == null) writer = ConstStoreWriter.Writer.initChecked(allocator, module, .{
+                .bodies = module.bodies(),
+                .schema = &schema.?,
+                // A `Str` is three words, one byte of them the length.
+                .inline_str_max = 3 * target_usize.size() - 1,
+            });
+            const root_schema = try schema.?.root(module.key.digest(), request);
+            const payload: checked.CompileTimeRootPayload = .{ .const_node = try writer.?.storeCheckedRoot(root_schema.plan, root_schema.ret_layout, root.rootExpr()) };
+            const root_type = try writer.?.storeType(root_schema.ret_type);
+            module.compile_time_roots.fillPayload(root_id, payload);
+            finishConstRoot(module, root, payload, root_type);
+            completed += 1;
+            if (Timing.detailOf(options.timing)) |timing| timing.roots_by_kind[@backingInt(root.kind)].add(1);
+        }
+        // A module whose every root is now complete can have its object
+        // built; its importers' programs may be waiting for it. The first
+        // artifact of a checked identity speaks for the others.
+        if (writer == null) continue;
+        const source = options.boxy_objects orelse continue;
+        if (module.hasUnevaluatedRequests(.boxy)) continue;
+        const first = for (modules[0..index]) |earlier| {
+            if (earlier.module.key.digest().eql(module.key.digest())) break false;
+        } else true;
+        if (first) try source.completed(source.context, module);
+    }
+    if (options.timing) |timing| timing.roots_completed_directly.add(completed);
 }
 
 /// Evaluate the pending roots `roots` with the `.boxy` evaluator: each
@@ -2195,71 +2281,11 @@ fn evaluateRootsBoxy(
     };
 }
 
-/// Count `roots` by kind, and those whose checked expression is in value
-/// form (`isValueFormExpr`), for detailed timing output.
+/// Count the evaluated `roots` by kind, for detailed timing output.
 fn recordRootKinds(timing: *Timing, artifacts: []const *checked.CheckedModuleArtifact, roots: []const checked_root_graph.Root) void {
     for (roots) |root| {
-        const compile_time_root = artifacts[root.module].compile_time_roots.root(root.root);
-        timing.roots_by_kind[@backingInt(compile_time_root.kind)].add(1);
-        switch (compile_time_root.kind) {
-            .constant, .hoisted_constant => {},
-            .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => continue,
-        }
-        if (compile_time_root.hoisted_body) |body| switch (body) {
-            .expr => {},
-            .pattern_extraction, .pattern_error, .pattern_validation, .valueless_binding => continue,
-        };
-        const expr = compile_time_root.expr.get() orelse continue;
-        if (isValueFormExpr(artifacts[root.module].moduleEnvConst(), expr)) Timing.addCount(timing, .value_form_roots, 1);
+        timing.roots_by_kind[@backingInt(artifacts[root.module].compile_time_roots.root(root.root).kind)].add(1);
     }
-}
-
-/// Whether `root` is a literal whose conversion is builtin, an empty list
-/// or record, a zero-argument tag, or a list, record, tuple, tag, or
-/// nominal construction whose every child is in value form. This only
-/// classifies roots for detailed timing output; no compiler decision reads
-/// it.
-fn isValueFormExpr(env: anytype, root: anytype) bool {
-    const ExprIdx = @TypeOf(root);
-    var stack: [64]ExprIdx = undefined;
-    var len: usize = 1;
-    stack[0] = root;
-    while (len != 0) {
-        len -= 1;
-        const children: []const ExprIdx = switch (env.store.getExpr(stack[len])) {
-            .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_frac_f32, .e_frac_f64, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_str_segment => continue,
-            .e_str => |str| env.store.sliceExpr(str.span),
-            .e_list => |list| env.store.sliceExpr(list.elems),
-            .e_tuple => |tuple| env.store.sliceExpr(tuple.elems),
-            .e_tag => |tag| env.store.sliceExpr(tag.args),
-            .e_nominal => |nominal| {
-                if (len == stack.len) return false;
-                stack[len] = nominal.backing_expr;
-                len += 1;
-                continue;
-            },
-            .e_nominal_external => |nominal| {
-                if (len == stack.len) return false;
-                stack[len] = nominal.backing_expr;
-                len += 1;
-                continue;
-            },
-            .e_record => |record| {
-                if (record.ext != null or record.unsets.span.len != 0) return false;
-                for (env.store.sliceRecordFields(record.fields)) |field_idx| {
-                    if (len == stack.len) return false;
-                    stack[len] = env.store.getRecordField(field_idx).value;
-                    len += 1;
-                }
-                continue;
-            },
-            .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_block, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return false,
-        };
-        if (len + children.len > stack.len) return false;
-        @memcpy(stack[len..][0..children.len], children);
-        len += children.len;
-    }
-    return true;
 }
 
 /// The evaluation of each module with pending roots.
@@ -4003,6 +4029,9 @@ pub const Timing = struct {
     /// evaluated, which it both declares and evaluates.
     roots_declared: TimingCounter = .{},
     roots_evaluated: TimingCounter = .{},
+    /// Roots the checked-value writer completed, which no evaluator ran
+    /// (design.md "Value-Form Roots").
+    roots_completed_directly: TimingCounter = .{},
     /// Process footprint range observed at burst boundaries. Compile-time
     /// evaluation runs as bursts interleaved with checking, so the progress
     /// reporter cannot window-sample it; the brackets that already time each
@@ -4019,6 +4048,8 @@ pub const Timing = struct {
 
     /// A step of compile-time evaluation that detailed timing itemizes.
     pub const Step = enum {
+        /// Writing the value-form roots from their checked expressions.
+        value_form_roots,
         /// `checked_root_graph.build` over the pending roots.
         root_graph,
         /// Whether each pending root's value holds a function.
@@ -4057,9 +4088,6 @@ pub const Timing = struct {
 
     /// A deterministic work count of compile-time evaluation.
     pub const Count = enum {
-        /// Pending roots whose checked expression is a literal, or a list,
-        /// record, tuple, tag, or nominal construction of such values.
-        value_form_roots,
         /// Programs evaluating ordinary roots.
         programs,
         /// Programs evaluating roots whose values hold functions.
@@ -4142,6 +4170,7 @@ pub const Timing = struct {
             .respecialization_passes = self.respecialization_passes.load(),
             .roots_declared = self.roots_declared.load(),
             .roots_evaluated = self.roots_evaluated.load(),
+            .roots_completed_directly = self.roots_completed_directly.load(),
             .mem_min = self.mem_min.load(),
             .mem_max = self.mem_max.load(),
             .native_emission = self.native_emission,
@@ -4177,6 +4206,7 @@ pub const Timing = struct {
         self.respecialization_passes.add(snapshot_value.respecialization_passes);
         self.roots_declared.add(snapshot_value.roots_declared);
         self.roots_evaluated.add(snapshot_value.roots_evaluated);
+        self.roots_completed_directly.add(snapshot_value.roots_completed_directly);
         if (snapshot_value.mem_min != std.math.maxInt(u64)) self.mem_min.min(snapshot_value.mem_min);
         self.mem_max.max(snapshot_value.mem_max);
         for (&self.steps_ns, snapshot_value.steps_ns) |*counter, value| counter.add(value);
@@ -4251,6 +4281,7 @@ pub const TimingSnapshot = struct {
     respecialization_passes: u64 = 0,
     roots_declared: u64 = 0,
     roots_evaluated: u64 = 0,
+    roots_completed_directly: u64 = 0,
     mem_min: u64 = std.math.maxInt(u64),
     mem_max: u64 = 0,
     native_emission: NativeProcCompiler.Metrics = .{},
