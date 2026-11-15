@@ -723,10 +723,10 @@ const Unifier = struct {
             .structure => |flat_type| {
                 switch (flat_type) {
                     .record => |record| {
-                        return Content{ .structure = FlatType{ .record = try self.rowForMerge(.record, vars, record) } };
+                        return Content{ .structure = FlatType{ .record = try self.rowForMerge(.record, .of(vars), record) } };
                     },
                     .tag_union => |tag_union| {
-                        return Content{ .structure = FlatType{ .tag_union = try self.rowForMerge(.tag_union, vars, tag_union) } };
+                        return Content{ .structure = FlatType{ .tag_union = try self.rowForMerge(.tag_union, .of(vars), tag_union) } };
                     },
                     .fn_pure => |func| {
                         // A pure function's effect formula is discharged: every
@@ -753,9 +753,14 @@ const Unifier = struct {
 
     /// Create a new type variable *in this pool*
     fn fresh(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) std.mem.Allocator.Error!Var {
+        return self.freshAtRank(Rank.min(vars.a.desc.rank, vars.b.desc.rank), new_content);
+    }
+
+    /// `fresh` for a pair whose merged rank is `rank`.
+    fn freshAtRank(self: *Self, rank: Rank, new_content: Content) std.mem.Allocator.Error!Var {
         const var_ = try self.types_store.register(.{
             .content = new_content,
-            .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
+            .rank = rank,
         });
         _ = try self.scratch.fresh_vars.append(self.scratch.gpa, var_);
         return var_;
@@ -1517,6 +1522,14 @@ const Unifier = struct {
         defer trace.end();
 
         try self.scheduleGuardedPair(a_var, b_var, .propagate);
+    }
+
+    /// `unifyGuarded` for the last pair a relation schedules, when nothing
+    /// follows it that can fail. That pair's frame would be the next to run,
+    /// so the pair is related now, above the frames already pushed, and gets
+    /// no frame of its own.
+    fn unifyGuardedNext(self: *Self, a_var: Var, b_var: Var) Error!void {
+        try self.processGuardedPair(a_var, b_var);
     }
 
     /// Unify two vars
@@ -2397,12 +2410,12 @@ const Unifier = struct {
         }
     };
 
-    fn rowExtMergeTargets(self: *Self, vars: *const ResolvedVarDescs) RowMergeTargets {
+    fn rowExtMergeTargets(self: *Self, pair: MergePair) RowMergeTargets {
         // Both equivalence classes acquire the merged content, regardless of
         // which descriptor slot survives the union.
         return .{
-            .a = self.types_store.resolveVar(vars.a.var_).desc_idx,
-            .b = self.types_store.resolveVar(vars.b.var_).desc_idx,
+            .a = self.types_store.resolveDescIdx(pair.a),
+            .b = self.types_store.resolveDescIdx(pair.b),
         };
     }
 
@@ -2443,8 +2456,8 @@ const Unifier = struct {
         return kind.row(entries, ext);
     }
 
-    fn rowForMerge(self: *Self, comptime kind: RowKind, vars: *const ResolvedVarDescs, start: kind.Row()) std.mem.Allocator.Error!kind.Row() {
-        const targets = self.rowExtMergeTargets(vars);
+    fn rowForMerge(self: *Self, comptime kind: RowKind, pair: MergePair, start: kind.Row()) std.mem.Allocator.Error!kind.Row() {
+        const targets = self.rowExtMergeTargets(pair);
         if (!self.rowExtReachesDesc(kind, start.ext, targets)) return start;
 
         var range = try self.scratch.copyGatherFromMultiList(
@@ -2464,14 +2477,14 @@ const Unifier = struct {
             if (targets.contains(resolved.desc_idx)) {
                 const spliced = if (resolved.desc_idx == targets.a) &spliced_a else &spliced_b;
                 if (spliced.*) {
-                    return try self.finishRowForMerge(kind, range, try self.fresh(vars, resolved.desc.content));
+                    return try self.finishRowForMerge(kind, range, try self.freshAtRank(pair.rank, resolved.desc.content));
                 }
 
                 spliced.* = true;
                 const target_row = switch (resolved.desc.content) {
                     .structure => |flat_type| kind.rowOf(flat_type),
                     .flex, .rigid, .alias, .field_presence, .err => null,
-                } orelse return try self.finishRowForMerge(kind, range, try self.fresh(vars, resolved.desc.content));
+                } orelse return try self.finishRowForMerge(kind, range, try self.freshAtRank(pair.rank, resolved.desc.content));
                 try self.mergeRowEntriesIntoScratch(kind, &range, kind.entriesOf(target_row));
                 ext_var = target_row.ext;
                 continue;
@@ -2508,7 +2521,7 @@ const Unifier = struct {
             }});
         }
 
-        try self.mergeRowAppendedFrom(.record, &post.vars, range_start, post.mb_a_extended_fields, post.mb_b_extended_fields, post.ext);
+        try self.mergeRowAppendedFrom(.record, post.pair, range_start, post.mb_a_extended_fields, post.mb_b_extended_fields, post.ext);
     }
 
     fn processSharedTagsAfterChildren(self: *Self, post: SharedTagsAfterChildren) Error!void {
@@ -2525,7 +2538,7 @@ const Unifier = struct {
             }});
         }
 
-        try self.mergeRowAppendedFrom(.tag_union, &post.vars, range_start, post.mb_a_extended_tags, post.mb_b_extended_tags, post.ext);
+        try self.mergeRowAppendedFrom(.tag_union, post.pair, range_start, post.mb_a_extended_tags, post.mb_b_extended_tags, post.ext);
     }
 
     /// Append each side's unshared entries after the shared entries already
@@ -2533,7 +2546,7 @@ const Unifier = struct {
     fn mergeRowAppendedFrom(
         self: *Self,
         comptime kind: RowKind,
-        vars: *const ResolvedVarDescs,
+        pair: MergePair,
         range_start: u32,
         mb_a_extended: ?kind.Entry().SafeList.Range,
         mb_b_extended: ?kind.Entry().SafeList.Range,
@@ -2546,7 +2559,11 @@ const Unifier = struct {
             _ = try kind.appendToStore(self.types_store, self.scratch.rowList(kind, "only_in_b_").sliceRange(extended));
         }
 
-        try self.merge(vars, kind.content(kind.row(kind.storeEntries(self.types_store).rangeToEnd(range_start), ext)));
+        const appended = kind.row(kind.storeEntries(self.types_store).rangeToEnd(range_start), ext);
+        try self.types_store.union_(pair.a, pair.b, .{
+            .content = kind.content(try self.rowForMerge(kind, pair, appended)),
+            .rank = pair.rank,
+        });
     }
 
     /// A fresh row holding `entries` over `ext`.
@@ -3556,7 +3573,7 @@ const Unifier = struct {
 
         const did_field_error_flag = try self.newMismatchFlag();
         try self.pushWorkFrame(.{ .shared_fields_after_children = .{
-            .vars = vars.*,
+            .pair = .of(vars),
             .shared_fields_range = shared_fields_range,
             .mb_a_extended_fields = mb_a_extended_fields,
             .mb_b_extended_fields = mb_b_extended_fields,
@@ -3802,7 +3819,7 @@ const Unifier = struct {
                 );
 
                 // Unify exts
-                try self.unifyGuarded(a_gathered_tags.ext, b_gathered_tags.ext);
+                try self.unifyGuardedNext(a_gathered_tags.ext, b_gathered_tags.ext);
             },
             .a_extends_b => {
                 // Create a new variable of a tag_union with only a's uniq tags
@@ -3820,7 +3837,7 @@ const Unifier = struct {
                 );
 
                 // Unify the sub tag_union with b's ext
-                try self.unifyGuarded(only_in_a_var, b_gathered_tags.ext);
+                try self.unifyGuardedNext(only_in_a_var, b_gathered_tags.ext);
             },
             .b_extends_a => {
                 // Create a new variable of a tag_union with only b's uniq tags
@@ -3838,7 +3855,7 @@ const Unifier = struct {
                 );
 
                 // Unify the sub tag_union with a's ext
-                try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
+                try self.unifyGuardedNext(a_gathered_tags.ext, only_in_b_var);
             },
             .both_extend => {
                 // Create a shared extension variable first
@@ -3869,7 +3886,7 @@ const Unifier = struct {
 
                 // Unify the sub tag_unions with exts
                 try self.unifyGuarded(only_in_a_var, b_gathered_tags.ext);
-                try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
+                try self.unifyGuardedNext(a_gathered_tags.ext, only_in_b_var);
             },
         }
     }
@@ -3888,7 +3905,7 @@ const Unifier = struct {
         defer trace.end();
 
         try self.pushWorkFrame(.{ .shared_tags_after_children = .{
-            .vars = vars.*,
+            .pair = .of(vars),
             .shared_tags_range = shared_tags_range,
             .mb_a_extended_tags = mb_a_extended_tags,
             .mb_b_extended_tags = mb_b_extended_tags,
@@ -4530,8 +4547,19 @@ const SameAliasAfterArgs = struct {
     did_arg_error_flag: u32,
 };
 
+/// The two classes a merge relates and the rank it merges them at.
+const MergePair = struct {
+    a: Var,
+    b: Var,
+    rank: Rank,
+
+    fn of(vars: *const ResolvedVarDescs) MergePair {
+        return .{ .a = vars.a.var_, .b = vars.b.var_, .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank) };
+    }
+};
+
 const SharedFieldsAfterChildren = struct {
-    vars: ResolvedVarDescs,
+    pair: MergePair,
     shared_fields_range: TwoRecordFieldsSafeList.Range,
     mb_a_extended_fields: ?RecordFieldSafeList.Range,
     mb_b_extended_fields: ?RecordFieldSafeList.Range,
@@ -4540,7 +4568,7 @@ const SharedFieldsAfterChildren = struct {
 };
 
 const SharedTagsAfterChildren = struct {
-    vars: ResolvedVarDescs,
+    pair: MergePair,
     shared_tags_range: TwoTags.SafeList.Range,
     mb_a_extended_tags: ?Tag.SafeList.Range,
     mb_b_extended_tags: ?Tag.SafeList.Range,
