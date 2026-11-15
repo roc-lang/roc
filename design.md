@@ -17208,6 +17208,64 @@ A literal argument root ("Literal Arguments") is the module's program's
 whatever its value: one whose value holds a function is evaluated for its
 outcome and discarded.
 
+#### Evaluation During Checking
+
+A compilation that links module objects (a cache, `.boxy`, a host that runs
+native code) starts compile-time evaluation while checking continues
+(`CompileTimeFinalization.EarlyEvaluation`, which the coordinator drives).
+Once every module of the build is known (every module parsed, so every import
+registered, and every import of another package naming its module), the
+coordinator hands it each freshly checked module whose evaluation is exactly
+the one the program evaluation would run, the moment every module its
+lowering sees has every compile-time root complete:
+
+- it is not the root module of the root package or of the platform;
+- neither it nor a module its lowering sees has platform requirements;
+- no other module of the build shares its name or the name of a module its
+  lowering sees, and none of those is named like the Builtin module: modules
+  sharing a name can be one checked identity under two packages, whose roots
+  the first artifact evaluates for both, or be named in the link by their
+  content identities, which only the finished link shows
+  (`BoxyObjects.settleNames`);
+- when the build pairs an app with its platform, neither it nor a module its
+  lowering sees is in the platform root's import closure, which the
+  platform-only evaluation completes and commits before the program's.
+
+A module restored from the checked cache is never handed over; a cached
+module with roots left to evaluate is reopened by the program evaluation.
+Taking a module completes its value-form roots and prepares the root graph,
+classification and module evaluation `evaluateRootsBoxy` prepares for it,
+over the module and the modules its lowering sees that this compilation
+commits, whose problem stores its programs can report to. A module whose only
+roots are value-form is complete at once, so its object can build. Every other
+module's program is lowered and compiled as a task of the scheduler's session
+once its imports' objects are known, and the coordinating thread runs it
+between frontend results, waiting at most a millisecond for a result while one
+of these programs is out. Completing a module's roots lets its object build
+and its importers be handed over, so evaluation and unit building follow
+checking up the import graph.
+Importers' checking reads a module's checked interface and never its
+evaluation columns, so a module's importers are checked while its roots are
+evaluated. A coordinator without workers runs no task while checking
+continues, so there the evaluation during checking only completes value-form
+roots and prepares the rest.
+
+When checking completes, every module whose program has started runs to
+completion before any other evaluation uses the scheduler's session; a module
+whose program has not started is left to the program evaluation, which finds
+its value-form roots complete and evaluates the rest exactly as it would have.
+The program evaluation replays and persists the observations made during
+checking with its own (`Options.early_evaluation`), and takes over the report
+destinations the evaluation during checking used for modules no evaluation of
+this compilation completes (cached modules and the Builtin module), so its
+reports are those one evaluation makes. Modules are committed, and their
+checked entries queued for writing, after the program evaluation: the
+evaluation of a module importing another can still report to the imported
+module's problem store (an exhaustiveness failure in its code reached through
+its object), so a module's reports are final only once every importer's roots
+are complete, and an entry is written only with its final reports ("Cache
+Boundary").
+
 #### Compile-Time Evaluation Under `.lss`
 
 A pending root's routing follows its reachable checked references through every
