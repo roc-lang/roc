@@ -6672,13 +6672,20 @@ const Lowerer = struct {
     fn valueJoinFor(self: *Lowerer, next: LIR.CFStmtId, target: LIR.LocalId) ValueJoin {
         const stmt = self.result.store.getCFStmtImmediate(next);
         if (stmt.* == .jump) {
-            var index = self.value_consumers.items.len;
-            while (index > 0) {
-                index -= 1;
-                const consumer = self.value_consumers.items[index];
-                if (consumer.join_id == stmt.jump.target and consumer.target == target) {
-                    return .{ .id = consumer.join_id, .declared = true };
+            // Each consumer's join is minted after every consumer below it was
+            // pushed, so the stack ascends by join id.
+            const wanted = @backingInt(stmt.jump.target);
+            const consumers = self.value_consumers.items;
+            var low: usize = 0;
+            var high: usize = consumers.len;
+            while (low < high) {
+                const mid = low + (high - low) / 2;
+                const found = @backingInt(consumers[mid].join_id);
+                if (found == wanted) {
+                    if (consumers[mid].target != target) break;
+                    return .{ .id = consumers[mid].join_id, .declared = true };
                 }
+                if (found < wanted) low = mid + 1 else high = mid;
             }
         }
         return .{ .id = self.freshJoinPointId(), .declared = false };
@@ -6708,8 +6715,17 @@ const Lowerer = struct {
     /// pushed; a join an enclosing form declared is already on the stack.
     fn enterValueJoin(self: *Lowerer, done: ValueJoin, target: LIR.LocalId) Common.LowerError!bool {
         if (done.declared) return false;
-        try self.value_consumers.append(self.allocator, .{ .join_id = done.id, .target = target });
+        try self.pushValueConsumer(.{ .join_id = done.id, .target = target });
         return true;
+    }
+
+    fn pushValueConsumer(self: *Lowerer, consumer: ValueConsumer) Common.LowerError!void {
+        if (self.value_consumers.getLastOrNull()) |top| {
+            if (@backingInt(top.join_id) >= @backingInt(consumer.join_id)) {
+                Common.invariant("a value consumer's join was minted before the consumer below it");
+            }
+        }
+        try self.value_consumers.append(self.allocator, consumer);
     }
 
     /// Remove a value form's join from the consumer stack. Idempotent.
@@ -9621,7 +9637,7 @@ const Lowerer = struct {
                     const consumer = self.valueJoinFor(task.next, task.target);
                     task.consumer = consumer;
                     if (!consumer.declared) {
-                        try self.value_consumers.append(self.allocator, .{ .join_id = consumer.id, .target = task.target });
+                        try self.pushValueConsumer(.{ .join_id = consumer.id, .target = task.target });
                         task.consumer_pushed = true;
                     }
                 }

@@ -9934,6 +9934,9 @@ const Cloner = struct {
         /// earlier argument's own work is named in the chain at its position
         /// first; left in the argument list it would run after them.
         strict_before: usize = 0,
+        /// The work budget every argument named for `strict_before` starts
+        /// from; allocated by the first one.
+        pin_budget: ?*u32 = null,
     };
 
     /// Cursor states of a direct call clone.
@@ -10071,7 +10074,7 @@ const Cloner = struct {
             task.chain.appendChain(task.analyzed[frame.index].bindings);
             if (frame.index < task.strict_before) {
                 frame.cursor = CallProcCursor.specialized_pinned;
-                return .{ .call = try self.makeReusableTask(task.values[frame.index], task.chain) };
+                return .{ .call = try self.pinCallArgTask(task, frame.index) };
             }
             frame.cursor = CallProcCursor.specialized_arg;
             return .{ .call = .{ .append_exprs_from_value = .{ .shape = pattern.args[frame.index], .value = task.values[frame.index], .out = task.out } } };
@@ -10083,12 +10086,23 @@ const Cloner = struct {
         return .{ .call = .{ .capture_span = .{ .span = task.call.captures } } };
     }
 
+    /// Name the work of the argument at `index` in the call's chain.
+    fn pinCallArgTask(self: *Cloner, task: *CallProcTask, index: usize) Allocator.Error!CloneTask {
+        const budget = task.pin_budget orelse blk: {
+            const created = try self.arena.allocator().create(u32);
+            task.pin_budget = created;
+            break :blk created;
+        };
+        budget.* = make_reusable_work_budget;
+        return .{ .make_reusable = .{ .value = task.values[index], .budget = budget, .bindings = task.chain } };
+    }
+
     fn nextResidualCallArg(self: *Cloner, frame: *CloneFrame, task: *CallProcTask) Common.LowerError!CloneStep {
         if (frame.index < task.values.len) {
             task.chain.appendChain(task.analyzed[frame.index].bindings);
             if (frame.index < task.strict_before) {
                 frame.cursor = CallProcCursor.residual_pinned;
-                return .{ .call = try self.makeReusableTask(task.values[frame.index], task.chain) };
+                return .{ .call = try self.pinCallArgTask(task, frame.index) };
             }
             frame.cursor = CallProcCursor.residual_arg;
             return .{ .call = .{ .materialize = .{ .value = task.values[frame.index] } } };
