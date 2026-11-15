@@ -1520,6 +1520,7 @@ const Gen = struct {
         const b = self.b;
         b.entry_hole = try b.newHole();
         const capture_ptr = try b.closedLocal(.opaque_ptr);
+        _ = try b.beginReuseArg(.none);
         const start: Builder.ErasedStart = .{
             .entry = b.entry_hole,
             .body_start = undefined,
@@ -1559,10 +1560,13 @@ const Gen = struct {
         var proc_args: std.ArrayList(LocalId) = .empty;
         defer proc_args.deinit(b.allocator);
         if (frame.record) |record| try proc_args.append(b.allocator, record);
+        const reuse = b.reuse_arg orelse invariant("an erased codec worker finished without its reuse argument");
         try proc_args.append(b.allocator, frame.start.capture_ptr);
+        try proc_args.append(b.allocator, reuse);
         try b.finishProc(frame.start.entry, frame.body_start, proc_args.items, frame.ret_layout);
         const proc = b.store.getProcSpecPtr(b.currentWorker().proc);
         proc.erased_capture_arg = .of(frame.start.capture_ptr);
+        proc.erased_reuse_arg = .of(reuse);
         proc.abi = .erased_record;
     }
 

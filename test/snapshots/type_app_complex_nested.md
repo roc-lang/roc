@@ -303,7 +303,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 	(defs
 		(patt (type "Try(List(Error), Dict(Str, Error)) -> List(_c)"))
 		(patt (type "Error -> _ret"))
-		(patt (type "_arg -> List(_c)")))
+		(patt (type "_arg -> _ret")))
 	(type_decls
 		(alias (type "Error")
 			(ty-header (name "ComplexType")
@@ -313,5 +313,5 @@ main! = |_| processComplex(Ok([Some(42), None]))
 	(expressions
 		(expr (type "Try(List(Error), Dict(Str, Error)) -> List(_c)"))
 		(expr (type "Error -> _ret"))
-		(expr (type "_arg -> List(_c)"))))
+		(expr (type "_arg -> _ret"))))
 ~~~

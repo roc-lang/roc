@@ -129,8 +129,8 @@ main =
 (inferred-types
 	(defs
 		(patt (type "Error -> Str"))
-		(patt (type "Str")))
+		(patt (type "Error")))
 	(expressions
 		(expr (type "Error -> Str"))
-		(expr (type "Str"))))
+		(expr (type "Error"))))
 ~~~

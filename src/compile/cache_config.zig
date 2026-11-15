@@ -386,6 +386,8 @@ pub const Constants = struct {
     /// 192: literal argument roots record their edge owner as their own root
     ///      source and hold no expression.
     /// 193: combines the two independent 192 entries.
+    /// 193: a `return` in its function's result position canonicalizes to its
+    ///      operand rather than to a return node.
     /// 193: on top of the 192 entry layout, uncommitted record and tag tails
     ///      replace per-use structure, checked variables record uncommitted
     ///      record tails, type stores list no widening field names, quantified
@@ -397,7 +399,8 @@ pub const Constants = struct {
     /// 194: a Boxy lambda's type table refers to its creator's table instead
     ///      of repeating its creator's inputs, in needs lists, stored function
     ///      recipes and compiler-only function metadata.
-    /// 195: combines the two independent 194 entries.
+    /// 194: combines the two independent 193 entries.
+    /// 195: combines the three independent 194 entries.
     pub const CACHE_VERSION = 195;
 };
 

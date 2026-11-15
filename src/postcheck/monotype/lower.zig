@@ -16279,7 +16279,7 @@ const Builder = struct {
             else if (static_data_const_locator) |const_locator|
                 try fn_ctx.restoredStaticDataCandidateNode(store_view, fn_view, capture.value, out_capture.ty, const_locator, checked_type)
             else
-                try runConstRestore(fn_ctx, store_view, fn_view, capture.value, out_capture.ty, null);
+                try fn_ctx.restoreConstValue(store_view, fn_view, capture.value, out_capture.ty, null, false);
             out_index += 1;
         }
 
@@ -16610,9 +16610,9 @@ const Builder = struct {
         const encoding_local = try fn_ctx.addLocal(self.symbols.fresh(), arg_tys.get(0));
         fn_ctx.setLocalCaptureId(encoding_local, encoding_capture_id);
         const encoding_value = if (static_data_const_locator) |const_locator|
-            try runConstRestore(&fn_ctx, store_view, fn_view, stored_encoding.value, arg_tys.get(0), const_locator)
+            try fn_ctx.restoreConstValue(store_view, fn_view, stored_encoding.value, arg_tys.get(0), const_locator, false)
         else
-            try runConstRestore(&fn_ctx, store_view, fn_view, stored_encoding.value, arg_tys.get(0), null);
+            try fn_ctx.restoreConstValue(store_view, fn_view, stored_encoding.value, arg_tys.get(0), null, false);
         const encoding_expr = try fn_ctx.localExpr(encoding_local, arg_tys.get(0));
 
         const str_ty = try self.primitiveType(.str);
@@ -18248,8 +18248,54 @@ const ActiveConstNodeAddress = struct {
 
 const MaterializedConstNodeAddress = struct {
     active: ActiveConstNodeAddress,
-    owner: DraftOwner,
     static_data_const_locator: ?checked.ConstLocator,
+};
+
+/// The innermost enclosing ConstStore node binding a restored expression
+/// reads: a node still under construction that the expression reaches
+/// through a back-edge, directly or through a node it shares. `serial`
+/// tells that binding apart from a later one at the same stack position.
+const ConstNodeFreeRead = struct {
+    index: u32,
+    serial: u32,
+
+    const none: ConstNodeFreeRead = .{ .index = std.math.maxInt(u32), .serial = 0 };
+
+    fn isNone(read: ConstNodeFreeRead) bool {
+        return read.index == std.math.maxInt(u32);
+    }
+};
+
+/// The binding scope of one constant restore: the nodes it has built, and
+/// the lets binding the ones it reached more than once. A restore nested in
+/// another one in the same owner (a capture of a restored function, a stored
+/// codec's encoding) joins the enclosing scope, so a node shared between
+/// them is built once. A static-data candidate's runtime value restores in
+/// a scope of its own, since its initializer can be emitted on its own.
+const ConstRestoreScope = struct {
+    owner: DraftOwner,
+    /// The first `materialized_const_nodes` entry this scope recorded.
+    entries_start: u32,
+    /// `const_restore_lets` before this scope recorded any.
+    lets_start: u32,
+    /// The ConstStore node bindings active when the scope opened. Each one
+    /// encloses the whole restore.
+    binding_base: u32,
+    /// Lets bound around the restore's result, as a list through
+    /// `ConstRestoreLet.next`.
+    lets: collections.OptionalU32 = .none,
+    node_indices: std.AutoHashMapUnmanaged(MaterializedConstNodeAddress, u32) = .empty,
+    candidate_indices: collections.DenseMapUnmanaged(DraftStaticDataId, u32) = .empty,
+};
+
+/// A restored node reached more than once, bound to `local` where every
+/// read of it is in scope. `entry` is the node's completion order.
+const ConstRestoreLet = struct {
+    local: DraftLocalId,
+    value: DraftExprId,
+    cell: DraftTypeCell,
+    entry: u32,
+    next: collections.OptionalU32,
 };
 
 fn activeConstNodeAddress(
@@ -18267,6 +18313,22 @@ fn activeConstNodeAddress(
     };
 }
 
+/// Whether a ConstStore node restores as a literal with no restored
+/// children. A restore builds a leaf afresh at each read rather than binding
+/// it: a string or list literal is static data, so a fresh copy costs
+/// nothing where a shared local would cost a reference count.
+fn constNodeRestoresAsLeaf(value: checked.ConstValue) bool {
+    return switch (value) {
+        .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+        .pending, .zst, .scalar, .str, .crash, .checked_error => true,
+        .list => |list| switch (list.items) {
+            .nodes => false,
+            .empty, .packed_bytes => true,
+        },
+        .box, .tuple, .record, .tag, .nominal, .fn_value => false,
+    };
+}
+
 /// A ConstStore node currently being materialized. ConstStore graphs may
 /// contain exact back-edges through function captures, so descendants reuse
 /// this reserved local instead of recursively expanding the node again.
@@ -18279,20 +18341,31 @@ const ActiveConstNodeBinding = struct {
     cell: DraftTypeCell,
     local: collections.OptionalId(DraftLocalId) = .none,
     used: bool = false,
+    /// Tells this binding apart from a later one at the same stack index.
+    serial: u32,
+    /// The lowest stack index of an active binding the node's expression
+    /// reads, its own included.
+    min_read: u32 = std.math.maxInt(u32),
+    /// Lets of shared nodes that read this node's binding, bound around
+    /// its expression, as a list through `ConstRestoreLet.next`.
+    lets: collections.OptionalU32 = .none,
 };
 
 comptime {
-    std.debug.assert(@sizeOf(ActiveConstNodeBinding) == 72);
+    std.debug.assert(@sizeOf(ActiveConstNodeBinding) == 84);
 }
 
 const MaterializedConstNode = struct {
     representation: ActiveConstNodeRepresentation,
     expr: DraftExprId,
     previous_same_address: collections.OptionalU32,
+    /// The local the node is bound to once it is reached a second time.
+    local: collections.OptionalId(DraftLocalId) = .none,
+    free_read: ConstNodeFreeRead,
 };
 
 comptime {
-    std.debug.assert(@sizeOf(MaterializedConstNode) == 16);
+    std.debug.assert(@sizeOf(MaterializedConstNode) == 28);
 }
 
 /// One deferred structural derivation over an operand whose graph node may
@@ -19350,11 +19423,6 @@ const CheckedStringLiteral = union(enum) {
     quote: u32,
 };
 
-const StaticDataCandidateAddress = struct {
-    static_data: DraftStaticDataId,
-    owner: DraftOwner,
-};
-
 /// The static-data candidate whose runtime expression is being restored,
 /// while its restore walks the candidate's constructor spine: the records,
 /// tuples, tags, and nominals reachable from its root through constructor
@@ -19456,7 +19524,11 @@ const BodyDraftStore = struct {
     active_const_node_bindings: std.ArrayList(ActiveConstNodeBinding),
     active_const_node_binding_indices: std.AutoHashMap(ActiveConstNodeAddress, u32),
     materialized_const_nodes: std.ArrayList(MaterializedConstNode),
-    materialized_const_node_indices: std.AutoHashMap(MaterializedConstNodeAddress, u32),
+    const_restore_scopes: std.ArrayListUnmanaged(ConstRestoreScope) = .empty,
+    const_restore_lets: std.ArrayListUnmanaged(ConstRestoreLet) = .empty,
+    const_node_binding_serial: u32 = 0,
+    /// The free read of the node a restore step delivered last.
+    delivered_const_free_read: ConstNodeFreeRead = .none,
     stored_capture_witnesses: std.ArrayListUnmanaged(StoredCaptureWitness) = .empty,
     stored_capture_witness_indices: std.AutoHashMapUnmanaged(StoredCaptureWitnessKey, u32) = .empty,
     active_const_bindings: std.ArrayList(ActiveConstBinding),
@@ -19524,9 +19596,6 @@ const BodyDraftStore = struct {
     /// Owner scopes currently entered. Each one holds a reserved `owner_runs`
     /// slot so that leaving the scope never allocates.
     pending_owner_leaves: usize = 0,
-    /// Exact static-data requests are shared by child lowering contexts only
-    /// within the body that owns their explicit runtime expression.
-    static_data_candidate_exprs: std.AutoHashMap(StaticDataCandidateAddress, DraftExprId),
     /// Static-data requests are coordinator intents. Keeping them draft-local
     /// prevents graph-owned types and durable StaticDataIds from crossing the
     /// private-body boundary before ordered commit.
@@ -19641,7 +19710,6 @@ const BodyDraftStore = struct {
             .active_const_node_bindings = .empty,
             .active_const_node_binding_indices = std.AutoHashMap(ActiveConstNodeAddress, u32).init(allocator),
             .materialized_const_nodes = .empty,
-            .materialized_const_node_indices = std.AutoHashMap(MaterializedConstNodeAddress, u32).init(allocator),
             .active_const_bindings = .empty,
             .deferred_const_uses = .empty,
             .deferred_structural_eqs = .empty,
@@ -19700,7 +19768,6 @@ const BodyDraftStore = struct {
             .current_owner = .root,
             .owner_starts = @splat(0),
             .owner_runs = .empty,
-            .static_data_candidate_exprs = std.AutoHashMap(StaticDataCandidateAddress, DraftExprId).init(allocator),
             .static_data_requests = .empty,
             .static_data_request_ids = std.AutoHashMap(DraftStaticDataRequestAddress, DraftStaticDataId).init(allocator),
             .comptime_value_roots = .empty,
@@ -19863,7 +19930,6 @@ const BodyDraftStore = struct {
         self.comptime_value_roots.deinit(self.allocator);
         self.root_value_reads.deinit(self.allocator);
         self.literal_roots.deinit(self.allocator);
-        self.static_data_candidate_exprs.deinit();
         self.stmt_regions.deinit(self.allocator);
         self.stmt_locs.deinit(self.allocator);
         self.expr_regions.deinit(self.allocator);
@@ -19893,7 +19959,12 @@ const BodyDraftStore = struct {
         self.active_const_node_bindings.deinit(self.allocator);
         self.active_const_node_binding_indices.deinit();
         self.materialized_const_nodes.deinit(self.allocator);
-        self.materialized_const_node_indices.deinit();
+        for (self.const_restore_scopes.items) |*scope| {
+            scope.node_indices.deinit(self.allocator);
+            scope.candidate_indices.deinit(self.allocator);
+        }
+        self.const_restore_scopes.deinit(self.allocator);
+        self.const_restore_lets.deinit(self.allocator);
         self.stored_capture_witnesses.deinit(self.allocator);
         self.stored_capture_witness_indices.deinit(self.allocator);
         self.active_const_bindings.deinit(self.allocator);
@@ -20634,6 +20705,9 @@ const BodyDraftStore = struct {
         for (self.active_const_node_bindings.items) |*binding| {
             try binding.cell.sealInPlace(graph, sealer);
         }
+        for (self.const_restore_lets.items) |*restore_let| {
+            try restore_let.cell.sealInPlace(graph, sealer);
+        }
 
         // Request IDs key on a graph-qualified type cell and are only used
         // while lowering deduplicates requests. Reset the map rather than
@@ -20644,8 +20718,6 @@ const BodyDraftStore = struct {
         // These caches are only consulted while a graph accepts relations.
         // Their TypeIds belong to that graph store, so retaining them after
         // sealing would make a graph-free draft accidentally graph-dependent.
-        self.static_data_candidate_exprs.deinit();
-        self.static_data_candidate_exprs = std.AutoHashMap(StaticDataCandidateAddress, DraftExprId).init(self.allocator);
         self.parse_result_ok_types.deinit();
         self.parse_result_ok_types = std.AutoHashMap(GeneratedParseResultOkTypeAddress, Type.TypeId).init(self.allocator);
         self.generated_try_types.deinit();
@@ -20685,6 +20757,7 @@ const BodyDraftStore = struct {
         for (self.runtime_schema_requests.items) |request| request.ty.assertSealed();
         for (self.static_data_requests.items) |request| request.ty.assertSealed();
         for (self.active_const_node_bindings.items) |binding| binding.cell.assertSealed();
+        for (self.const_restore_lets.items) |restore_let| restore_let.cell.assertSealed();
     }
 
     /// Drop lowering-only graph identities after their final frozen-graph
@@ -20709,7 +20782,9 @@ const BodyDraftStore = struct {
         self.active_const_node_bindings.clearRetainingCapacity();
         self.active_const_node_binding_indices.clearRetainingCapacity();
         self.materialized_const_nodes.clearRetainingCapacity();
-        self.materialized_const_node_indices.clearRetainingCapacity();
+        if (self.const_restore_scopes.items.len != 0) Common.invariant("draft reset while a constant restore scope was open");
+        self.const_restore_lets.clearRetainingCapacity();
+        self.delivered_const_free_read = .none;
         self.stored_capture_witnesses.clearRetainingCapacity();
         self.stored_capture_witness_indices.clearRetainingCapacity();
         self.active_const_bindings.clearRetainingCapacity();
@@ -39345,6 +39420,7 @@ const BodyContext = struct {
             };
             self.draft.active_const_node_bindings.items[index].used = true;
             self.draft.markRecursiveBindingRead(active.owner);
+            self.deliverConstNodeRead(.{ .index = index, .serial = active.serial });
             return try self.addExprWithTypeCell(request_cell, .{ .local = local });
         }
 
@@ -39361,19 +39437,24 @@ const BodyContext = struct {
     ) Allocator.Error!?DraftExprId {
         const address = MaterializedConstNodeAddress{
             .active = activeConstNodeAddress(store_view, node, representation),
-            .owner = self.draft.current_owner,
             .static_data_const_locator = static_data_const_locator,
         };
-        var cursor = self.draft.materialized_const_node_indices.get(address);
+        var cursor = self.currentConstRestoreScope().node_indices.get(address);
         while (cursor) |index| {
             if (index >= self.draft.materialized_const_nodes.items.len) {
                 Common.invariant("materialized ConstStore node index was outside its entry list");
             }
             const existing = self.draft.materialized_const_nodes.items[index];
-            if (!try self.constNodeRepresentationsEql(existing.representation, representation)) {
+            if (!try self.constNodeRepresentationsEql(existing.representation, representation) or
+                !self.constFreeReadIsLive(existing.free_read))
+            {
                 cursor = existing.previous_same_address.get();
                 continue;
             }
+            const local = (try self.bindMaterializedConstNode(index)) orelse {
+                cursor = existing.previous_same_address.get();
+                continue;
+            };
             // Two SEALED cells need no graph relation: representation
             // equality above already matched the finished monotypes, so
             // relating them is a no-op—and sealed emission (a derived
@@ -39404,9 +39485,149 @@ const BodyContext = struct {
                     try request_cell.toGraphNode(self.graph),
                 );
             }
-            return existing.expr;
+            self.deliverConstNodeRead(existing.free_read);
+            return try self.addExprWithTypeCell(request_cell, .{ .local = local });
         }
         return null;
+    }
+
+    /// The scope of the constant restore running in the current owner.
+    fn currentConstRestoreScope(self: *BodyContext) *ConstRestoreScope {
+        const scopes = self.draft.const_restore_scopes.items;
+        if (scopes.len == 0) Common.invariant("ConstStore node restored outside a constant restore scope");
+        const scope = &scopes[scopes.len - 1];
+        if (!std.meta.eql(scope.owner, self.draft.current_owner)) {
+            Common.invariant("ConstStore node restored in a different owner than its restore scope");
+        }
+        return scope;
+    }
+
+    /// Open the binding scope of a constant restore, or join the enclosing
+    /// restore's scope when it runs in the same owner and `own_scope` is
+    /// false. Returns whether a scope was opened; the caller passes that to
+    /// `leaveConstRestoreScope`.
+    fn enterConstRestoreScope(self: *BodyContext, own_scope: bool) Allocator.Error!bool {
+        const scopes = &self.draft.const_restore_scopes;
+        if (!own_scope and scopes.items.len != 0 and
+            std.meta.eql(scopes.items[scopes.items.len - 1].owner, self.draft.current_owner))
+        {
+            return false;
+        }
+        try scopes.append(self.allocator, .{
+            .owner = self.draft.current_owner,
+            .entries_start = @intCast(self.draft.materialized_const_nodes.items.len),
+            .lets_start = @intCast(self.draft.const_restore_lets.items.len),
+            .binding_base = @intCast(self.draft.active_const_node_bindings.items.len),
+        });
+        return true;
+    }
+
+    /// Close a scope `enterConstRestoreScope` opened, binding its shared
+    /// nodes around the restore's `result`.
+    fn leaveConstRestoreScope(self: *BodyContext, opened: bool, result: DraftExprId) Allocator.Error!DraftExprId {
+        if (!opened) return result;
+        const scope = self.currentConstRestoreScope();
+        if (self.draft.active_const_node_bindings.items.len != scope.binding_base) {
+            Common.invariant("constant restore scope closed while one of its node bindings was active");
+        }
+        const wrapped = try self.wrapConstRestoreLets(scope.lets, result);
+        self.dropConstRestoreScope();
+        return wrapped;
+    }
+
+    /// Discard the innermost constant restore scope.
+    fn dropConstRestoreScope(self: *BodyContext) void {
+        var scope = self.draft.const_restore_scopes.pop().?;
+        scope.node_indices.deinit(self.allocator);
+        scope.candidate_indices.deinit(self.allocator);
+        self.draft.materialized_const_nodes.shrinkRetainingCapacity(scope.entries_start);
+        self.draft.const_restore_lets.shrinkRetainingCapacity(scope.lets_start);
+    }
+
+    /// Bind each let in the list at `head` around `rest`, the earliest
+    /// completed node outermost, so every let follows the lets its value
+    /// reads.
+    fn wrapConstRestoreLets(self: *BodyContext, head: collections.OptionalU32, rest: DraftExprId) Allocator.Error!DraftExprId {
+        var cursor = head.get() orelse return rest;
+        var order: std.ArrayListUnmanaged(u32) = .empty;
+        defer order.deinit(self.allocator);
+        while (true) {
+            try order.append(self.allocator, cursor);
+            cursor = self.draft.const_restore_lets.items[cursor].next.get() orelse break;
+        }
+        std.mem.sort(u32, order.items, self.draft.const_restore_lets.items, struct {
+            fn lessThan(all: []const ConstRestoreLet, left: u32, right: u32) bool {
+                return all[left].entry < all[right].entry;
+            }
+        }.lessThan);
+        const ret_cell = self.exprTypeCell(rest);
+        var result = rest;
+        var index = order.items.len;
+        while (index > 0) {
+            index -= 1;
+            const restore_let = self.draft.const_restore_lets.items[order.items[index]];
+            result = try self.wrapLetAtTypeCell(restore_let.local, restore_let.cell, restore_let.value, result, ret_cell);
+        }
+        return result;
+    }
+
+    /// Record that a restore step delivered an expression reading the node
+    /// binding `read` names, so the node being built around it reads that
+    /// binding too.
+    fn deliverConstNodeRead(self: *BodyContext, read: ConstNodeFreeRead) void {
+        self.draft.delivered_const_free_read = read;
+        if (read.isNone()) return;
+        const bindings = self.draft.active_const_node_bindings.items;
+        if (bindings.len == 0) return;
+        const top = &bindings[bindings.len - 1];
+        top.min_read = @min(top.min_read, read.index);
+    }
+
+    /// Whether a node built while the binding `read` names was active is
+    /// still in that binding's scope. A binding active when the restore
+    /// scope opened encloses the whole restore.
+    fn constFreeReadIsLive(self: *BodyContext, read: ConstNodeFreeRead) bool {
+        if (read.isNone()) return true;
+        if (read.index < self.currentConstRestoreScope().binding_base) return true;
+        const bindings = self.draft.active_const_node_bindings.items;
+        return read.index < bindings.len and bindings[read.index].serial == read.serial;
+    }
+
+    /// The local a materialized node reached again is read through. The
+    /// first time, the node's expression moves to a new row bound to a
+    /// fresh local, and its original row, which its first parent holds,
+    /// becomes a read of that local. The let goes around the restore's
+    /// result, or around the expression of the node binding the node reads,
+    /// where every read of the node is in scope. Null for a node whose
+    /// expression is a reservation another phase fills.
+    fn bindMaterializedConstNode(self: *BodyContext, entry_index: u32) Allocator.Error!?DraftLocalId {
+        const entry = self.draft.materialized_const_nodes.items[entry_index];
+        if (entry.local.get()) |local| return local;
+        const raw = @backingInt(entry.expr);
+        const row = self.draft.exprs.items[raw];
+        if (row.data == .pending_deferred) return null;
+        const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), row.ty, null);
+        const moved = try self.draft.addExprWithSource(row, self.draft.expr_locs.items[raw], self.draft.expr_regions.items[raw]);
+        self.draft.expr_impossibility_proofs.set(@backingInt(moved), self.draft.expr_impossibility_proofs.get(raw));
+        self.draft.exprs.items[raw] = .{ .ty = row.ty, .data = .{ .local = local } };
+
+        const scope = self.currentConstRestoreScope();
+        const read = entry.free_read;
+        const head: *collections.OptionalU32 = if (read.isNone() or read.index < scope.binding_base)
+            &scope.lets
+        else
+            &self.draft.active_const_node_bindings.items[read.index].lets;
+        const let_index: u32 = @intCast(self.draft.const_restore_lets.items.len);
+        try self.draft.const_restore_lets.append(self.allocator, .{
+            .local = local,
+            .value = moved,
+            .cell = row.ty,
+            .entry = entry_index,
+            .next = head.*,
+        });
+        head.* = .some(let_index);
+        self.draft.materialized_const_nodes.items[entry_index].local = .some(local);
+        return local;
     }
 
     /// Whether a constant restored here can only name what it builds.
@@ -39459,7 +39680,9 @@ const BodyContext = struct {
             .previous_same_address = .of(previous_same_address),
             .owner = self.draft.current_owner,
             .cell = cell,
+            .serial = self.draft.const_node_binding_serial,
         });
+        self.draft.const_node_binding_serial += 1;
         try self.draft.active_const_node_binding_indices.put(address, @intCast(index));
     }
 
@@ -39490,15 +39713,23 @@ const BodyContext = struct {
         } else if (!self.draft.active_const_node_binding_indices.remove(address)) {
             Common.invariant("completed ConstStore node address could not be removed");
         }
-        if (!active.used) return lowered;
-
-        const owner_scope = try self.draft.enterOwner(active.owner);
-        defer owner_scope.leave();
-        return try self.wrapRecursiveConstLocalAtTypeCell(
-            active.local.get() orelse Common.invariant("used ConstStore node reservation had no local"),
-            cell,
-            lowered,
-        );
+        const free_read: ConstNodeFreeRead = if (active.min_read < index) .{
+            .index = active.min_read,
+            .serial = self.draft.active_const_node_bindings.items[active.min_read].serial,
+        } else .none;
+        const bound = if (active.lets != .none or active.used) bound: {
+            const owner_scope = try self.draft.enterOwner(active.owner);
+            defer owner_scope.leave();
+            const with_lets = try self.wrapConstRestoreLets(active.lets, lowered);
+            if (!active.used) break :bound with_lets;
+            break :bound try self.wrapRecursiveConstLocalAtTypeCell(
+                active.local.get() orelse Common.invariant("used ConstStore node reservation had no local"),
+                cell,
+                with_lets,
+            );
+        } else lowered;
+        self.deliverConstNodeRead(free_read);
+        return bound;
     }
 
     fn cacheMaterializedConstNode(
@@ -39509,18 +39740,48 @@ const BodyContext = struct {
         expr: DraftExprId,
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!void {
+        // A leaf restores as a literal: each read builds its own copy.
+        if (constNodeRestoresAsLeaf(store_view.const_store.get(node))) return;
         const address = MaterializedConstNodeAddress{
             .active = activeConstNodeAddress(store_view, node, representation),
-            .owner = self.draft.current_owner,
             .static_data_const_locator = static_data_const_locator,
         };
+        const scope = self.currentConstRestoreScope();
         const index = self.draft.materialized_const_nodes.items.len;
+        const slot = try scope.node_indices.getOrPut(self.allocator, address);
+        const previous: collections.OptionalU32 = if (slot.found_existing) .some(slot.value_ptr.*) else .none;
+        slot.value_ptr.* = @intCast(index);
         try self.draft.materialized_const_nodes.append(self.allocator, .{
             .representation = representation,
             .expr = expr,
-            .previous_same_address = .of(self.draft.materialized_const_node_indices.get(address)),
+            .previous_same_address = previous,
+            .free_read = self.draft.delivered_const_free_read,
         });
-        try self.draft.materialized_const_node_indices.put(address, @intCast(index));
+    }
+
+    /// The static-data candidate for `id` this restore already built, read
+    /// through its local.
+    fn materializedStaticDataCandidateExpr(self: *BodyContext, id: DraftStaticDataId, ty: Type.TypeId) Allocator.Error!?DraftExprId {
+        const index = self.currentConstRestoreScope().candidate_indices.get(id) orelse return null;
+        const local = (try self.bindMaterializedConstNode(index)) orelse
+            Common.invariant("static-data candidate expression was a pending reservation");
+        self.deliverConstNodeRead(.none);
+        return try self.addExprWithTypeCell(DraftTypeCell.fromSealed(ty), .{ .local = local });
+    }
+
+    fn cacheStaticDataCandidateExpr(self: *BodyContext, id: DraftStaticDataId, ty: Type.TypeId, expr: DraftExprId) Allocator.Error!void {
+        const scope = self.currentConstRestoreScope();
+        const index = self.draft.materialized_const_nodes.items.len;
+        const slot = try scope.candidate_indices.getOrPut(self.allocator, id);
+        if (slot.found_existing) Common.invariant("static-data candidate was built twice in one restore");
+        slot.value_ptr.* = @intCast(index);
+        try self.draft.materialized_const_nodes.append(self.allocator, .{
+            .representation = .{ .sealed = ty },
+            .expr = expr,
+            .previous_same_address = .none,
+            .free_read = .none,
+        });
+        self.deliverConstNodeRead(.none);
     }
 
     /// A `Str.inspect` of a function value: its rendering, or the task
@@ -41964,7 +42225,7 @@ const BodyContext = struct {
                 Common.invariant("stored " ++ codec_name ++ " runtime function was missing a renamed field capture")).value;
             locals[index] = try self.addLocal(self.builder.symbols.fresh(), str_ty);
             self.setLocalCaptureId(locals[index], capture_id);
-            values[index] = try runConstRestore(self, store_view, fn_view, node, str_ty, null);
+            values[index] = try self.restoreConstValue(store_view, fn_view, node, str_ty, null, false);
             if (lengths) |owned| owned[index] = constStrNodeByteLen(store_view, node);
             if (texts) |owned| owned[index] = constStrNodeBytes(store_view, node);
         }
@@ -48470,11 +48731,9 @@ const BodyContext = struct {
                 type_view.key,
                 DraftTypeCell.fromSealed(ty),
             );
-            const address: StaticDataCandidateAddress = .{
-                .static_data = id,
-                .owner = self.draft.current_owner,
-            };
-            if (self.draft.static_data_candidate_exprs.get(address)) |existing| return existing;
+            const opened = try self.enterConstRestoreScope(false);
+            errdefer if (opened) self.dropConstRestoreScope();
+            if (try self.materializedStaticDataCandidateExpr(id, ty)) |existing| return try self.leaveConstRestoreScope(opened, existing);
 
             const value: DraftStaticDataCandidateValue = if (try self.builder.storedListShape(store_view, node)) |shape|
                 .{ .stored = .{ .item_count = shape.item_count } }
@@ -48482,17 +48741,35 @@ const BodyContext = struct {
                 const previous_part_root = self.static_data_part_root;
                 self.static_data_part_root = staticDataPartRootFor(store_view, node, const_locator, checked_type, type_view.key);
                 defer self.static_data_part_root = previous_part_root;
-                break :runtime .{ .runtime = try runConstRestore(self, store_view, type_view, node, ty, const_locator) };
+                break :runtime .{ .runtime = try self.restoreConstValue(store_view, type_view, node, ty, const_locator, true) };
             };
             const candidate_expr = try self.addExpr(.{ .ty = ty, .data = .{ .static_data_candidate = .{
                 .static_data = id,
                 .storage = constStaticDataStorage(store_view, node),
                 .value = value,
             } } });
-            try self.draft.static_data_candidate_exprs.put(address, candidate_expr);
-            return candidate_expr;
+            try self.cacheStaticDataCandidateExpr(id, ty, candidate_expr);
+            return try self.leaveConstRestoreScope(opened, candidate_expr);
         }
-        return try runConstRestore(self, store_view, type_view, node, ty, const_locator);
+        return try self.restoreConstValue(store_view, type_view, node, ty, const_locator, false);
+    }
+
+    /// Restore a ConstStore value at `ty` in the enclosing restore's scope,
+    /// or in a scope of its own when no restore in the current owner is
+    /// open or `own_scope` is set.
+    fn restoreConstValue(
+        self: *BodyContext,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        node: checked.ConstNodeId,
+        ty: Type.TypeId,
+        static_data_const_locator: ?checked.ConstLocator,
+        own_scope: bool,
+    ) Allocator.Error!DraftExprId {
+        const opened = try self.enterConstRestoreScope(own_scope);
+        errdefer if (opened) self.dropConstRestoreScope();
+        const restored = try runConstRestore(self, store_view, type_view, node, ty, static_data_const_locator);
+        return try self.leaveConstRestoreScope(opened, restored);
     }
 
     fn restoredStaticDataCandidateNodeAtNode(
@@ -48521,12 +48798,13 @@ const BodyContext = struct {
             const previous_part_root = self.static_data_part_root;
             self.static_data_part_root = if (candidate) staticDataPartRootFor(store_view, node, const_locator, checked_type, type_view.key) else null;
             defer self.static_data_part_root = previous_part_root;
-            break :runtime .{ .runtime = try self.restoreConstNodeAtNodeWithStaticRoot(
+            break :runtime .{ .runtime = try self.restoreConstNodeAtNodeInScope(
                 store_view,
                 type_view,
                 node,
                 request_node,
                 const_locator,
+                candidate,
             ) };
         };
         if (candidate) {
@@ -48604,24 +48882,20 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const root = self.static_data_part_root.?;
         const id = try self.draftStaticDataRequest(root.const_locator, node, root.checked_type, root.checked_type_module, DraftTypeCell.fromSealed(ty));
-        const address: StaticDataCandidateAddress = .{
-            .static_data = id,
-            .owner = self.draft.current_owner,
-        };
-        if (self.draft.static_data_candidate_exprs.get(address)) |existing| return existing;
+        if (try self.materializedStaticDataCandidateExpr(id, ty)) |existing| return existing;
 
         self.static_data_part_root = null;
         defer self.static_data_part_root = root;
         const value: DraftStaticDataCandidateValue = if (try self.builder.storedListShape(store_view, node)) |shape|
             .{ .stored = .{ .item_count = shape.item_count } }
         else
-            .{ .runtime = try runConstRestore(self, store_view, type_view, node, ty, root.const_locator) };
+            .{ .runtime = try self.restoreConstValue(store_view, type_view, node, ty, root.const_locator, true) };
         const candidate_expr = try self.addExpr(.{ .ty = ty, .data = .{ .static_data_candidate = .{
             .static_data = id,
             .storage = constStaticDataStorage(store_view, node),
             .value = value,
         } } });
-        try self.draft.static_data_candidate_exprs.put(address, candidate_expr);
+        try self.cacheStaticDataCandidateExpr(id, ty, candidate_expr);
         return candidate_expr;
     }
 
@@ -48639,7 +48913,7 @@ const BodyContext = struct {
             if (try self.builder.storedListShape(store_view, node)) |shape| {
                 break :value .{ .stored = .{ .item_count = shape.item_count } };
             }
-            break :value .{ .runtime = try self.restoreConstNodeAtNodeWithStaticRoot(store_view, store_view, node, request_node, root.const_locator) };
+            break :value .{ .runtime = try self.restoreConstNodeAtNodeInScope(store_view, store_view, node, request_node, root.const_locator, true) };
         };
         const cell = DraftTypeCell.fromGraphNode(request_node);
         const id = try self.draftStaticDataRequest(root.const_locator, node, root.checked_type, root.checked_type_module, cell);
@@ -48703,11 +48977,26 @@ const BodyContext = struct {
     fn restoreConstNodeAtNodeWithStaticRoot(
         self: *BodyContext,
         store_view: ModuleView,
-        _: ModuleView,
+        type_view: ModuleView,
         root: checked.ConstNodeId,
         root_request_node: NodeId,
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
+        return try self.restoreConstNodeAtNodeInScope(store_view, type_view, root, root_request_node, static_data_const_locator, false);
+    }
+
+    /// `restoreConstValue` restoring at a graph node.
+    fn restoreConstNodeAtNodeInScope(
+        self: *BodyContext,
+        store_view: ModuleView,
+        _: ModuleView,
+        root: checked.ConstNodeId,
+        root_request_node: NodeId,
+        static_data_const_locator: ?checked.ConstLocator,
+        own_scope: bool,
+    ) Allocator.Error!DraftExprId {
+        const opened = try self.enterConstRestoreScope(own_scope);
+        errdefer if (opened) self.dropConstRestoreScope();
         var frames: std.ArrayListUnmanaged(ConstAtNodeFrame) = .empty;
         defer {
             for (frames.items) |*frame| frame.deinit(self.allocator);
@@ -48734,7 +49023,7 @@ const BodyContext = struct {
             defer finished.deinit(self.allocator);
             delivered = try self.finishConstAtNode(store_view, &finished, static_data_const_locator);
         }
-        return delivered.?;
+        return try self.leaveConstRestoreScope(opened, delivered.?);
     }
 
     /// Start one node restoring at `request_node`: its expression when it is
@@ -63366,7 +63655,7 @@ const BodyContext = struct {
             },
             .tag_union => |*tag_union| {
                 if (stage == 0) {
-                    tag_union.locals = try D.tagUnionEnter(self, tag_union.ty);
+                    tag_union.locals = try D.tagUnionEnter(self, tag_union.ty, tag_union.tags_span.len, ctx);
                     tag_union.branches = try self.allocator.alloc(DraftBranch, tag_union.tags_span.len);
                 } else {
                     tag_union.state = try D.combine(self, tag_union.state, input.?.expr, ctx);
@@ -63403,7 +63692,7 @@ const BodyContext = struct {
                     tag_union.payloads = GuardedList.at(self.typeStore().tagSpan(tag_union.tags_span), tag_union.index).payloads;
                     tag_union.branch_active = true;
                     tag_union.next = 0;
-                    tag_union.state = try D.tagBranchEnter(self, tag_union.ty, tag_union.payloads, @intCast(tag_union.index), tag_union.operand, &tag_union.branch, ctx);
+                    tag_union.state = try D.tagBranchEnter(self, tag_union.ty, tag_union.locals, tag_union.payloads, @intCast(tag_union.index), tag_union.operand, &tag_union.branch, ctx);
                 }
             },
         }
@@ -70337,7 +70626,7 @@ const EqDeriver = struct {
     /// right-hand side can be re-scrutinised inside every left-hand-side branch.
     const TagUnionLocals = struct { lhs: DraftLocalId, rhs: DraftLocalId };
 
-    fn tagUnionEnter(self: *BodyContext, ty: Type.TypeId) Allocator.Error!TagUnionLocals {
+    fn tagUnionEnter(self: *BodyContext, ty: Type.TypeId, _: usize, _: BodyContext.DerivationCtx) Allocator.Error!TagUnionLocals {
         const lhs_local = try self.addLocal(self.builder.symbols.fresh(), ty);
         const rhs_local = try self.addLocal(self.builder.symbols.fresh(), ty);
         return .{ .lhs = lhs_local, .rhs = rhs_local };
@@ -70361,7 +70650,7 @@ const EqDeriver = struct {
     /// Bind one variant's payloads on both sides. The branch's conjunction of
     /// pairwise payload comparisons starts at true: a variant with no payloads
     /// is equal once both discriminants match.
-    fn tagBranchEnter(self: *BodyContext, _: Type.TypeId, payloads: Type.Span, _: u64, _: Operand, branch: *TagBranchPayloads, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
+    fn tagBranchEnter(self: *BodyContext, _: Type.TypeId, _: TagUnionLocals, payloads: Type.Span, _: u64, _: Operand, branch: *TagBranchPayloads, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
         branch.lhs_pats = try self.allocator.alloc(DraftPatId, payloads.len);
         branch.rhs_pats = try self.allocator.alloc(DraftPatId, payloads.len);
         branch.lhs_exprs = try self.allocator.alloc(DraftExprId, payloads.len);
@@ -70540,11 +70829,16 @@ const HashDeriver = struct {
     // A tag-union hash writes the discriminant index into the hasher, then
     // matches on the value and threads the active variant's payloads through.
 
-    /// The value binds to a local so it is matched exactly once.
-    const TagUnionLocals = struct { value: DraftLocalId };
+    /// The value binds to a local so it is matched exactly once. With two or
+    /// more variants the incoming hasher is read by every branch, so it binds
+    /// to a local too and each branch reads that local: the hasher expression
+    /// (every earlier component's hash) is built once, not once per branch.
+    const TagUnionLocals = struct { value: DraftLocalId, hasher: ?DraftLocalId };
 
-    fn tagUnionEnter(self: *BodyContext, value_ty: Type.TypeId) Allocator.Error!TagUnionLocals {
-        return .{ .value = try self.addLocal(self.builder.symbols.fresh(), value_ty) };
+    fn tagUnionEnter(self: *BodyContext, value_ty: Type.TypeId, variant_count: usize, ctx: BodyContext.DerivationCtx) Allocator.Error!TagUnionLocals {
+        const value = try self.addLocal(self.builder.symbols.fresh(), value_ty);
+        const hasher = if (variant_count >= 2) try self.addLocal(self.builder.symbols.fresh(), ctx.result_ty) else null;
+        return .{ .value = value, .hasher = hasher };
     }
 
     const TagBranchPayloads = struct {
@@ -70560,7 +70854,7 @@ const HashDeriver = struct {
 
     /// Bind one variant's payloads; the branch's hasher starts with the
     /// discriminant index written.
-    fn tagBranchEnter(self: *BodyContext, _: Type.TypeId, payloads: Type.Span, variant_index: u64, operand: Operand, branch: *TagBranchPayloads, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
+    fn tagBranchEnter(self: *BodyContext, _: Type.TypeId, locals: TagUnionLocals, payloads: Type.Span, variant_index: u64, operand: Operand, branch: *TagBranchPayloads, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
         branch.pats = try self.allocator.alloc(DraftPatId, payloads.len);
         branch.exprs = try self.allocator.alloc(DraftExprId, payloads.len);
         for (0..payloads.len) |i| {
@@ -70569,7 +70863,11 @@ const HashDeriver = struct {
             branch.pats[i] = try self.bindPat(payload_local, payload_ty);
             branch.exprs[i] = try self.localExpr(payload_local, payload_ty);
         }
-        return try self.hasherWriteU64(operand.hasher, variant_index, ctx.result_ty);
+        const hasher = if (locals.hasher) |hasher_local|
+            try self.localExpr(hasher_local, ctx.result_ty)
+        else
+            operand.hasher;
+        return try self.hasherWriteU64(hasher, variant_index, ctx.result_ty);
     }
 
     fn tagPayloadOperand(branch: TagBranchPayloads, index: usize, hasher: DraftExprId) Operand {
@@ -70590,10 +70888,18 @@ const HashDeriver = struct {
             .branches = try self.addBranchSpan(branches),
         } } });
 
+        const bind_hasher = if (locals.hasher) |hasher_local|
+            try self.addExpr(.{ .ty = ctx.result_ty, .data = .{ .let_ = .{
+                .bind = try self.bindPat(hasher_local, ctx.result_ty),
+                .value = operand.hasher,
+                .rest = match_expr,
+            } } })
+        else
+            match_expr;
         return try self.addExpr(.{ .ty = ctx.result_ty, .data = .{ .let_ = .{
             .bind = try self.bindPat(locals.value, value_ty),
             .value = operand.value,
-            .rest = match_expr,
+            .rest = bind_hasher,
         } } });
     }
 };

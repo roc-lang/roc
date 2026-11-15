@@ -374,6 +374,92 @@ test "unify - row extensions preserve either merged equivalence class" {
     }
 }
 
+// unification - ranks of created rows //
+
+const old_rank = types_mod.Rank.outermost;
+const young_rank = types_mod.Rank.outermost.next();
+
+fn rankOf(env: *TestEnv, var_: Var) types_mod.Rank {
+    return env.module_env.types.resolveVar(var_).desc.rank;
+}
+
+fn flexAt(env: *TestEnv, rank: types_mod.Rank) std.mem.Allocator.Error!Var {
+    return env.module_env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, rank);
+}
+
+const RowShape = enum { tag_union, record };
+const RowOverlap = enum { young_extends_old, old_extends_young, both_extend };
+
+/// An old row and a young row sharing `Shared`. The young row has an
+/// unshared entry whose payload is the young `payload`, over the young
+/// `young_ext`; under `both_extend` the old row has an unshared entry too.
+fn mkRankedRows(env: *TestEnv, shape: RowShape, overlap: RowOverlap, payload: Var, young_ext: Var) std.mem.Allocator.Error![2]Var {
+    const store = &env.module_env.types;
+    const shared_value = try store.freshFromContentWithRank(.{ .structure = .empty_record }, old_rank);
+    const old_ext = try flexAt(env, old_rank);
+    const old_has_own = overlap != .young_extends_old;
+    const young_has_own = overlap != .old_extends_young;
+    const old_content, const young_content = switch (shape) {
+        .tag_union => blk: {
+            const shared = try env.mkTag("Shared", &.{shared_value});
+            const old_tags: []const Tag = if (old_has_own) &.{ shared, try env.mkTag("Old", &.{}) } else &.{shared};
+            const young_tags: []const Tag = if (young_has_own) &.{ shared, try env.mkTag("Young", &.{payload}) } else &.{shared};
+            break :blk .{ (try env.mkTagUnion(old_tags, old_ext)).content, (try env.mkTagUnion(young_tags, young_ext)).content };
+        },
+        .record => blk: {
+            const shared = try env.mkRecordField("shared", shared_value);
+            const old_fields: []const RecordField = if (old_has_own) &.{ shared, try env.mkRecordField("old", shared_value) } else &.{shared};
+            const young_fields: []const RecordField = if (young_has_own) &.{ shared, try env.mkRecordField("young", payload) } else &.{shared};
+            break :blk .{ (try env.mkRecord(old_fields, old_ext)).content, (try env.mkRecord(young_fields, young_ext)).content };
+        },
+    };
+    return .{
+        try store.freshFromContentWithRank(old_content, old_rank),
+        try store.freshFromContentWithRank(young_content, young_rank),
+    };
+}
+
+test "unify - a row made of the younger operand's unshared entries holds nothing younger than itself" {
+    // Ranks never increase going deeper (design.md "Def Checking Order"): the
+    // row unification makes for the younger operand's unshared entries is
+    // created at the older rank, so the younger payload and extension it
+    // holds are lowered to that rank, in either operand order.
+    for ([_]RowShape{ .tag_union, .record }) |shape| {
+        for ([_]RowOverlap{ .young_extends_old, .both_extend }) |overlap| {
+            for ([_]bool{ false, true }) |young_first| {
+                var env = try TestEnv.init(std.testing.allocator);
+                defer env.deinit();
+                const payload = try flexAt(&env, young_rank);
+                const young_ext = try flexAt(&env, young_rank);
+                const rows = try mkRankedRows(&env, shape, overlap, payload, young_ext);
+                const result = if (young_first) try env.unify(rows[1], rows[0]) else try env.unify(rows[0], rows[1]);
+                try std.testing.expectEqual(.unified, result);
+                try std.testing.expectEqual(old_rank, rankOf(&env, payload));
+                try std.testing.expectEqual(old_rank, rankOf(&env, young_ext));
+                try std.testing.expectEqual(old_rank, rankOf(&env, rows[1]));
+            }
+        }
+    }
+}
+
+test "unify - a nested younger payload under a created row is reached through its lowered parent" {
+    // Only the created row's direct children are lowered: a younger payload
+    // nested inside one keeps its rank, and the generalization that visits
+    // the lowered child lowers it in turn.
+    for ([_]RowShape{ .tag_union, .record }) |shape| {
+        var env = try TestEnv.init(std.testing.allocator);
+        defer env.deinit();
+        const store = &env.module_env.types;
+        const nested = try flexAt(&env, young_rank);
+        const payload = try store.freshFromContentWithRank(try env.mkTuple(&.{nested}), young_rank);
+        const young_ext = try flexAt(&env, young_rank);
+        const rows = try mkRankedRows(&env, shape, .young_extends_old, payload, young_ext);
+        try std.testing.expectEqual(.unified, try env.unify(rows[0], rows[1]));
+        try std.testing.expectEqual(old_rank, rankOf(&env, payload));
+        try std.testing.expectEqual(young_rank, rankOf(&env, nested));
+    }
+}
+
 test "unify - a tag repeated along one row's chain relates its payloads" {
     for ([_]enum { related, conflicting, arity }{ .related, .conflicting, .arity }) |case| {
         var env = try TestEnv.init(std.testing.allocator);
