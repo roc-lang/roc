@@ -1519,6 +1519,11 @@ plain_wait_seen: collections.DenseMapUnmanaged(Var, void) = .empty,
 /// variable keeps it there, so its failure is reported at that use when the
 /// row is later decided.
 open_row_failure_exprs: collections.DenseMapUnmanaged(Var, StaticDispatchConstraint.Provenance.OptExprIdx) = .empty,
+/// The dispatcher of every interpolation whose conversion this module checks,
+/// so the checked boundary can ground the parameters of its literal
+/// conversions that nothing quantifies (Unquantified Literal Type Parameters
+/// Default To `[]`, `groundUnquantifiedLiteralParameters`).
+interpolation_dispatchers: std.ArrayListUnmanaged(Var) = .empty,
 /// Numeral literals interpolated into a still-open interpolation when literal
 /// defaulting began, each with a snapshot of its type at that point. Defaulting
 /// decides each literal independently, so such an interpolation can default to
@@ -2106,6 +2111,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .plain_wait_pending = .scratch,
     .plain_wait_seen = .scratch,
     .open_row_failure_exprs = .keyed,
+    .interpolation_dispatchers = .keyed,
     .interpolation_part_numerals = .keyed,
     .retired_literal_dispatch_plans = .keyed,
     .conflicted_default_literal_vars = .frame_partitioned,
@@ -15062,6 +15068,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.closeTopLevelValueRows(&env);
     try self.commitUncommittedTails(&env);
     try self.decideOpenRowsAtModuleEnd(&env);
+    try self.groundUnquantifiedLiteralParameters(&env);
     if (try self.anyDeferredDispatchReceiverResolved(&env)) {
         try self.checkStaticDispatchConstraints(&env, true);
         try self.checkAllConstraints(&env);
@@ -34810,6 +34817,7 @@ fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationC
 
     if (!did_err) {
         const dispatcher_var = (try self.explicitTypeSuffixVar(expr_idx, expr_region, env)) orelse expr_var;
+        try self.interpolation_dispatchers.append(self.gpa, dispatcher_var);
         const constraint_fn_var = try self.mkInterpolationConstraint(
             dispatcher_var,
             segments_var,
@@ -41051,6 +41059,7 @@ const Probe = struct {
     open_numeral_literals_len: usize,
     instantiated_interpolation_owners_len: usize,
     open_row_holders_len: usize,
+    interpolation_dispatchers_len: usize,
     instantiated_literal_conversion_uses_len: usize,
     pending_tuple_accesses_len: usize,
     scheme_uses_len: usize,
@@ -41115,6 +41124,7 @@ const Probe = struct {
         self.check.open_numeral_literals.shrinkRetainingCapacity(self.open_numeral_literals_len);
         self.check.instantiated_interpolation_owners.shrinkRetainingCapacity(self.instantiated_interpolation_owners_len);
         self.check.open_row_holders.shrinkRetainingCapacity(self.open_row_holders_len);
+        self.check.interpolation_dispatchers.shrinkRetainingCapacity(self.interpolation_dispatchers_len);
         self.check.instantiated_literal_conversion_uses.shrinkRetainingCapacity(self.instantiated_literal_conversion_uses_len);
         self.check.pending_tuple_accesses.shrinkRetainingCapacity(self.pending_tuple_accesses_len);
         // Scheme-use evidence recorded during the probe can reference fresh
@@ -41208,6 +41218,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const open_numeral_literals_len = self.open_numeral_literals.items.len;
     const instantiated_interpolation_owners_len = self.instantiated_interpolation_owners.items.len;
     const open_row_holders_len = self.open_row_holders.items.len;
+    const interpolation_dispatchers_len = self.interpolation_dispatchers.items.len;
     const instantiated_literal_conversion_uses_len = self.instantiated_literal_conversion_uses.items.len;
     const pending_tuple_accesses_len = self.pending_tuple_accesses.items.len;
     const scheme_uses_len = self.cir.scheme_uses.items().len;
@@ -41251,6 +41262,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .open_numeral_literals_len = open_numeral_literals_len,
         .instantiated_interpolation_owners_len = instantiated_interpolation_owners_len,
         .open_row_holders_len = open_row_holders_len,
+        .interpolation_dispatchers_len = interpolation_dispatchers_len,
         .instantiated_literal_conversion_uses_len = instantiated_literal_conversion_uses_len,
         .pending_tuple_accesses_len = pending_tuple_accesses_len,
         .scheme_uses_len = scheme_uses_len,
@@ -46909,6 +46921,104 @@ fn rowDefaultDischargesConstraints(self: *Self, range: StaticDispatchConstraint.
         if (!self.rowDefaultDischargesConstraint(constraint)) return false;
     }
     return true;
+}
+
+/// POLICY: Unquantified Literal Type Parameters Default To `[]` (design.md).
+/// A custom literal's conversion is a dispatch on the literal's own type. A
+/// variable in that type that has no constraints, sits outside every row
+/// extension, and that no binding's type reaches (no scheme quantifies it and
+/// no top-level value exposes it) is fixed by nothing once the module has
+/// solved: every use is checked, and no instantiation copies it. It has
+/// exactly one instantiation, the uninhabited `[]` that sealing gives an
+/// unconstrained variable, so it is unified with `[]` here, where the checked
+/// output records it, and the conversion is closed rather than waiting on an
+/// instance no edge supplies.
+fn groundUnquantifiedLiteralParameters(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    var candidates = std.ArrayList(Var).empty;
+    defer candidates.deinit(self.gpa);
+    var visited = collections.DenseMap(Var, void).init(self.gpa);
+    defer visited.deinit();
+    for (self.cir.store.literalDispatchPlans()) |plan| {
+        // A concrete builtin numeral has no conversion to ground.
+        if (plan.fnVar() == null) continue;
+        try self.collectUnconstrainedLiteralParameters(@fromBackingInt(plan.target_var), &visited, &candidates);
+    }
+    for (self.interpolation_dispatchers.items) |dispatcher| {
+        try self.collectUnconstrainedLiteralParameters(dispatcher, &visited, &candidates);
+    }
+    if (candidates.items.len == 0) return;
+
+    // The variables some binding's type reaches: a scheme's quantified
+    // variables, its where-clause signatures', and a top-level value's.
+    var reached = collections.DenseMap(Var, void).init(self.gpa);
+    defer reached.deinit();
+    var stack = std.ArrayList(Var).empty;
+    defer stack.deinit(self.gpa);
+    for (self.cir.store.sliceDefs(self.cir.all_defs)) |def_idx| {
+        try stack.append(self.gpa, ModuleEnv.varFrom(def_idx));
+    }
+    var raw_node: usize = 0;
+    while (raw_node < self.binding_scheme_nodes.bit_length) : (raw_node += 1) {
+        if (self.binding_scheme_nodes.isSet(raw_node)) try stack.append(self.gpa, @fromBackingInt(@intCast(raw_node)));
+    }
+    var synthetic = self.synthetic_binding_schemes.keyIterator();
+    while (synthetic.next()) |scheme_var| try stack.append(self.gpa, scheme_var.*);
+    while (stack.pop()) |current| {
+        const resolved = self.types.resolveVar(current);
+        if ((try reached.getOrPut(resolved.var_)).found_existing) continue;
+        try self.appendTypeChildren(resolved.desc.content, &stack);
+        const constraints = switch (resolved.desc.content) {
+            .flex => |flex| flex.constraints,
+            .rigid => |rigid| rigid.constraints,
+            .alias, .structure, .err, .field_presence => continue,
+        };
+        for (self.types.sliceStaticDispatchConstraints(constraints)) |constraint| try stack.append(self.gpa, constraint.fn_var);
+    }
+
+    for (candidates.items) |candidate| {
+        const resolved = self.types.resolveVar(candidate);
+        if (reached.contains(resolved.var_)) continue;
+        switch (resolved.desc.content) {
+            .flex => |flex| if (flex.constraints.len() != 0) continue,
+            .rigid, .alias, .structure, .err, .field_presence => continue,
+        }
+        const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, self.getRegionAt(resolved.var_));
+        _ = try self.unify(resolved.var_, empty, env);
+    }
+}
+
+/// The unconstrained flex variables of a literal's type outside every row
+/// extension: the candidates `groundUnquantifiedLiteralParameters` grounds.
+fn collectUnconstrainedLiteralParameters(self: *Self, root: Var, visited: *collections.DenseMap(Var, void), out: *std.ArrayList(Var)) std.mem.Allocator.Error!void {
+    var stack = std.ArrayList(Var).empty;
+    defer stack.deinit(self.gpa);
+    try stack.append(self.gpa, root);
+    while (stack.pop()) |current| {
+        const resolved = self.types.resolveVar(current);
+        if ((try visited.getOrPut(resolved.var_)).found_existing) continue;
+        switch (resolved.desc.content) {
+            // An uncommitted record tail is a row whose commitment decides it
+            // (design.md "Methods On Open Rows").
+            .flex => |flex| if (flex.constraints.len() == 0 and !types_mod.generalize.isUncommittedTail(resolved.desc)) try out.append(self.gpa, resolved.var_),
+            .rigid, .field_presence, .err => {},
+            .alias => |alias| try stack.append(self.gpa, self.types.getAliasBackingVar(alias)),
+            .structure => |flat| switch (flat) {
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try stack.append(self.gpa, func.ret);
+                },
+                .record => |record| for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                    try stack.append(self.gpa, presence.typeVar());
+                },
+                .tag_union => |tag_union| for (self.types.getTagsSlice(tag_union.tags).items(.args)) |args| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(args));
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+        }
+    }
 }
 
 /// Whether closing a row decides `constraint` on its tail rather than

@@ -22023,6 +22023,16 @@ fn publishLiteralArgumentRoots(
         }
         templates.literal_requirements_pool.deinit(allocator);
         templates.literal_requirements_pool = .fromOwnedSlice(try pool.toOwnedSlice(allocator));
+        // A requested root's entry wrapper is called with no arguments, so
+        // nothing could supply a literal argument to it: every literal its
+        // body converts is closed.
+        if (builtin.mode == .debug) {
+            for (wrappers.wrappers.items()) |wrapper| {
+                if (roots.root(wrapper.root).request_eligibility != .eligible) continue;
+                const template = templates.templates.items()[@backingInt(wrapper.template.template)];
+                if (template.literal_requirements.len != 0) checkedArtifactInvariant("a requested compile-time root's entry wrapper has a literal requirement", .{});
+            }
+        }
         if (base.dev_diagnostics.isSet(.trace_boxy_work)) {
             for (templates.templates.items(), 0..) |template, template_index| {
                 for (templates.templateLiteralRequirements(&template), 0..) |obligation, index| {

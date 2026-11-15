@@ -11367,6 +11367,49 @@ pinning a tag-literal operand to a nominal type with `not`. Rejected: `!"hi"`
 is a missing method, `![Foo]`'s operand is a mismatch against `Bool`, and a
 generic `|x| !x` applied to a tag literal is a missing method.
 
+### Unquantified Literal Type Parameters Default To `[]`
+
+A custom literal's conversion is a dispatch on the literal's own type
+(`Sig(ctx)` for `"Save"` passed to `text : Sig(ctx) -> Str`). Once the module
+has solved, a variable of that type that has no constraints, sits outside
+every row extension, is no uncommitted record tail, and that no binding's
+type reaches (no scheme quantifies
+it, directly or through a where-clause signature, and no top-level value's
+type exposes it) is fixed by nothing: every use is checked, and no
+instantiation copies it. Such a variable has exactly one instantiation, the
+uninhabited empty tag union that sealing gives any unconstrained variable, so
+checking unifies it with `[]` at the module's weak-value default commitment
+point (`groundUnquantifiedLiteralParameters`): after the value-row
+commitments, the uncommitted tails' commitment, and the decision of the
+module's open rows (`commitUncommittedTails`, `decideOpenRowsAtModuleEnd`,
+Methods On Open Rows), so no row that a commitment or an open-row requirement
+still decides is a candidate, and before the dispatch work those commitments
+create is drained, which it joins without a round of its own. A variable
+carrying a requirement, a row holder's or a negated tag literal's (Logical
+Negation Of Tag Literals) among them, is never a candidate. The literal's
+conversion is then closed: it gets its own conversion root
+(Literal Arguments), and the definition's entry wrapper is called with no
+literal argument to supply.
+
+This is a policy: it changes checked output for error-free programs. It
+accepts nothing pure unification rejects and changes no judgment a later use
+could observe, because nothing can relate the variable after the module
+solves; a variable a later use could fix is reached by that use's binding
+type and is left alone. The rule reads only explicit data: the literal
+conversions' recorded target types (`literalDispatchPlans`, and each checked
+interpolation's dispatcher), the module's binding-scheme roots and top-level
+definition types, and the variables' own constraints. The candidate walk
+visits only literal conversion types; the reachability walk runs only when a
+candidate exists.
+
+Pinned by `test/echo/literal_unquantified_parameters.roc` and
+`test/echo/issue_13004_phantom_quote_in_constant.roc`. Accepted (grounded):
+a top-level constant converting a phantom-parameter quote, and a function body
+doing the same. Rejected (left alone): a parameter the enclosing binding's
+scheme quantifies, which stays polymorphic across two calls at different
+types; a parameter a numeral constrains, which takes its numeric default; and
+a tag-row parameter, whose extension keeps its row default.
+
 ### Call Arguments Relate In Order
 
 A call checks its arguments left to right, and relates each argument to its
@@ -15368,6 +15411,12 @@ Other solved-graph mutations:
   Introduction (above). Uses the existing `unifyWith` descriptor-introduction
   mechanism for a proved concrete builtin conversion; does not mutate the
   context's type or introduce a redirect rule.
+- `groundUnquantifiedLiteralParameters`—policy: Unquantified Literal Type
+  Parameters Default To `[]` (above). An ordinary `unify` of each
+  unconstrained, unreached variable of a custom literal's type with a fresh
+  empty tag union, at the weak-value default commitment point after
+  `commitUncommittedTails` and `decideOpenRowsAtModuleEnd`; it introduces
+  no redirect rule and writes nothing outside unification.
 - `resolveTagLiteralNegations`—policy: Logical Negation Of Tag Literals
   (above). A probe of whether a held unary `!` relation's operand is a
   structural tag union at its generalization boundary gates an ordinary
