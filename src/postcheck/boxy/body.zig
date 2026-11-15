@@ -1858,7 +1858,8 @@ pub const Builder = struct {
         };
         const table_word: u32 = switch (self.recipes.get(id)) {
             .input => |index| index,
-            .desc, .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => if (try self.readsInputs(id)) blk: {
+            .scope_table => invariant("a descriptor demand named a scope table"),
+            .inherited, .desc, .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => if (try self.readsInputs(id)) blk: {
                 const position = std.mem.findScalar(Tables.RecipeId, self.slots.items, id) orelse invariant("a demanded descriptor recipe has no slot of its worker's table");
                 break :blk self.program.inputCount(self.worker_id) + @as(u32, @intCast(position));
             } else return try self.program.static_descs.demandWord(try self.foldWord(id), op),
