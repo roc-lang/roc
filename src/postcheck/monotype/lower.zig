@@ -57800,7 +57800,9 @@ const BodyContext = struct {
             index: usize = 0,
             written: std.ArrayList(EncodeWrittenItem) = .empty,
         },
-        list: struct { inputs: EncodeInputs, value: EncodeValue, elem_ty: Type.TypeId, loop: EncodeLoop = undefined, body_state_local: DraftLocalId = undefined, writer_local: DraftLocalId = undefined, len_value: DraftExprId = undefined, u64_ty: Type.TypeId = undefined },
+        /// `list_local` binds a list that is not already a local read: the
+        /// length and every item's read in the loop read it.
+        list: struct { inputs: EncodeInputs, value: EncodeValue, elem_ty: Type.TypeId, loop: EncodeLoop = undefined, body_state_local: DraftLocalId = undefined, writer_local: DraftLocalId = undefined, len_value: DraftExprId = undefined, u64_ty: Type.TypeId = undefined, list_ty: Type.TypeId = undefined, list_local: ?DraftLocalId = null },
         dict: struct {
             inputs: EncodeInputs,
             value: EncodeValue,
@@ -58158,13 +58160,17 @@ const BodyContext = struct {
                 if (stage == 0) {
                     task.u64_ty = try self.primitiveType(.u64);
                     const list_ty = try self.exprType(task.value.value_expr);
+                    task.list_ty = list_ty;
+                    if (self.draft.exprs.items[@backingInt(task.value.value_expr)].data != .local) {
+                        task.list_local = try self.addLocal(self.builder.symbols.fresh(), list_ty);
+                    }
                     const method = try self.resolveEncodeContainerMethod("encode_list", .list, list_ty, task.value.state_ty, task.value.ret_ty);
                     task.body_state_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
                     task.writer_local = try self.addLocal(self.builder.symbols.fresh(), method.writer_ty);
                     const len_local = try self.addLocal(self.builder.symbols.fresh(), task.u64_ty);
                     const index_local = try self.addLocal(self.builder.symbols.fresh(), task.u64_ty);
                     const loop_state_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
-                    task.len_value = try self.lowLevelExpr(.list_len, &.{task.value.value_expr}, task.u64_ty);
+                    task.len_value = try self.lowLevelExpr(.list_len, &.{try self.encodeListRead(task.value.value_expr, task.list_local, list_ty)}, task.u64_ty);
                     frame.scope = try self.enterCallableBodyDemandScope(
                         &.{ method.container_state_ty, method.writer_ty },
                         &.{ list_ty, task.inputs.encoding_ty, task.u64_ty },
@@ -58182,7 +58188,7 @@ const BodyContext = struct {
                         .elem_ty = task.elem_ty,
                         .key_ty = undefined,
                         .entry_ty = undefined,
-                        .value_expr = task.value.value_expr,
+                        .value_expr = try self.encodeListRead(task.value.value_expr, task.list_local, list_ty),
                         .loop = task.loop,
                     } } };
                 }
@@ -58202,7 +58208,9 @@ const BodyContext = struct {
                     method,
                     &.{ task.value.state_expr, try self.localExpr(task.loop.len_local, task.u64_ty), body_lambda },
                 );
-                return encodeExpr(try self.wrapLet(task.loop.len_local, task.u64_ty, task.len_value, encode_list, task.value.ret_ty));
+                const with_len = try self.wrapLet(task.loop.len_local, task.u64_ty, task.len_value, encode_list, task.value.ret_ty);
+                const local = task.list_local orelse return encodeExpr(with_len);
+                return encodeExpr(try self.wrapLet(local, task.list_ty, task.value.value_expr, with_len, task.value.ret_ty));
             },
             .dict => |*task| return try self.stepEncodeDict(frame, task, stage, input),
             .loop_body => |*task| {
@@ -58705,6 +58713,13 @@ const BodyContext = struct {
         });
         try self.encoder_defs.put(address, .{ .ready = task.def_id });
         return .{ .done = .{ .def = task.def_id } };
+    }
+
+    /// One read of a list a derived encoder writes: its local when it binds
+    /// to one, else the list's own local read.
+    fn encodeListRead(self: *BodyContext, value: DraftExprId, list_local: ?DraftLocalId, list_ty: Type.TypeId) Allocator.Error!DraftExprId {
+        const local = list_local orelse return value;
+        return try self.localExpr(local, list_ty);
     }
 
     fn stepEncodeDict(
