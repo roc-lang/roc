@@ -638,10 +638,10 @@ main! = |args| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 475)
+								(e-call (constraint-fn-var 471)
 									(e-lookup-local
 										(p-assign (ident "pick")))
-									(e-dispatch-call (method "is_empty") (constraint-fn-var 473)
+									(e-dispatch-call (method "is_empty") (constraint-fn-var 469)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "args"))))
@@ -666,10 +666,10 @@ main! = |args| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 485)
+								(e-call (constraint-fn-var 481)
 									(e-lookup-local
 										(p-assign (ident "pick_annotated")))
-									(e-dispatch-call (method "is_empty") (constraint-fn-var 483)
+									(e-dispatch-call (method "is_empty") (constraint-fn-var 479)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "args"))))
@@ -694,7 +694,7 @@ main! = |args| {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_empty") (constraint-fn-var 490)
+								(e-dispatch-call (method "is_empty") (constraint-fn-var 486)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "args"))))
@@ -736,7 +736,7 @@ main! = |args| {
 								(e-if
 									(if-branches
 										(if-branch
-											(e-dispatch-call (method "is_empty") (constraint-fn-var 505)
+											(e-dispatch-call (method "is_empty") (constraint-fn-var 501)
 												(receiver
 													(e-lookup-local
 														(p-assign (ident "args"))))
@@ -775,12 +775,12 @@ main! = |args| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 531)
+								(e-call (constraint-fn-var 527)
 									(e-lookup-local
 										(p-assign (ident "pick")))
-									(e-dispatch-call (method "is_gt") (constraint-fn-var 529)
+									(e-dispatch-call (method "is_gt") (constraint-fn-var 525)
 										(receiver
-											(e-dispatch-call (method "len") (constraint-fn-var 526)
+											(e-dispatch-call (method "len") (constraint-fn-var 522)
 												(receiver
 													(e-lookup-local
 														(p-assign (ident "args"))))
@@ -805,7 +805,7 @@ main! = |args| {
 										(e-string
 											(e-literal (string "other")))))))))
 				(s-expr
-					(e-call (constraint-fn-var 585)
+					(e-call (constraint-fn-var 581)
 						(e-lookup-local
 							(p-assign (ident "echo!")))
 						(e-block
@@ -831,11 +831,11 @@ main! = |args| {
 									(p-assign (ident "alternatives"))))
 							(s-let
 								(p-assign (ident "#interp_5"))
-								(e-call (constraint-fn-var 548)
+								(e-call (constraint-fn-var 544)
 									(e-lookup-local
 										(p-assign (ident "describe_mode")))
 									(e-empty_record)))
-							(e-interpolation (constraint-fn-var 562) (dispatcher-var 194)
+							(e-interpolation (constraint-fn-var 558) (dispatcher-var 194)
 								(first
 									(e-literal (string "")))
 								(parts

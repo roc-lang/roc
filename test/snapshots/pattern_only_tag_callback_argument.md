@@ -647,7 +647,7 @@ nested = |v|
 		(e-lambda
 			(args
 				(p-assign (ident "f")))
-			(e-call (constraint-fn-var 463)
+			(e-call (constraint-fn-var 457)
 				(e-lookup-local
 					(p-assign (ident "f")))
 				(e-tag (name "A"))))
@@ -662,7 +662,7 @@ nested = |v|
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "from_annotation"))
-		(e-call (constraint-fn-var 476)
+		(e-call (constraint-fn-var 470)
 			(e-lookup-local
 				(p-assign (ident "annotated")))
 			(e-lambda
@@ -691,7 +691,7 @@ nested = |v|
 		(e-lambda
 			(args
 				(p-assign (ident "items")))
-			(e-call (constraint-fn-var 491)
+			(e-call (constraint-fn-var 485)
 				(e-lookup-external
 					(builtin))
 				(e-lookup-local
@@ -729,7 +729,7 @@ nested = |v|
 						(elems
 							(e-tag (name "A"))
 							(e-tag (name "B")))))
-				(e-dispatch-call (method "map") (constraint-fn-var 513)
+				(e-dispatch-call (method "map") (constraint-fn-var 507)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "xs"))))
@@ -760,7 +760,7 @@ nested = |v|
 		(e-lambda
 			(args
 				(p-assign (ident "v")))
-			(e-call (constraint-fn-var 553)
+			(e-call (constraint-fn-var 547)
 				(e-lookup-local
 					(p-assign (ident "apply")))
 				(e-lambda

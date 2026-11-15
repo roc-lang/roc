@@ -167,9 +167,9 @@ y = Dict.empty().insert(k, 99)
 						(ty-lookup (name "Str") (builtin)))))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-dispatch-call (method "insert") (constraint-fn-var 341)
+		(e-dispatch-call (method "insert") (constraint-fn-var 331)
 			(receiver
-				(e-call (constraint-fn-var 337)
+				(e-call (constraint-fn-var 327)
 					(e-lookup-external
 						(builtin))))
 			(args

@@ -12501,6 +12501,20 @@ fn expectedTypeBackup(self: *Self, expected_var: Var, env: *Env) std.mem.Allocat
     return .{ .var_ = copy, .shared = false };
 }
 
+/// The pristine copy of a taken-over annotation that its predeclared scheme
+/// already is (`takeOverRetainedAnnotation`), or null when the scheme is not
+/// one. The scheme was copied from the very generation the body took over,
+/// and no requirement was deduplicated in it, so it is the copy
+/// `expectedTypeBackup` would take now. A scheme that quantifies a variable
+/// is only ever instantiated, so it stays pristine, and like a shared backup
+/// it is copied by the consumer that needs to unify with it. A scheme that
+/// quantifies nothing is shared by its uses, which relate to it directly.
+fn retainedAnnotationBackup(self: *Self, annotation_idx: CIR.Annotation.Idx) ?ExpectedTypeBackup {
+    const scheme_var = self.predeclaredSchemeVarForAnnotation(annotation_idx);
+    if (self.types.resolveVar(scheme_var).desc.rank != .generalized) return null;
+    return .{ .var_ = scheme_var, .shared = true };
+}
+
 /// A structural hash of a ground type, or null when any variable leaf is
 /// reachable. Equal ground types hash equally; `groundTypesIdentical`
 /// decides equality.
@@ -31629,9 +31643,8 @@ fn beginExprCheckFrame(
         }
 
         if (expected.annotation) |annotation_idx| {
-            if (!try self.takeOverRetainedAnnotation(annotation_idx, env)) {
-                try self.generateAnnotationType(annotation_idx, env);
-            }
+            const took_over = try self.takeOverRetainedAnnotation(annotation_idx, env);
+            if (!took_over) try self.generateAnnotationType(annotation_idx, env);
             if (self.bounding_annotation == annotation_idx) {
                 self.bounding_annotation = null;
                 try self.boundAnnotationRows(annotation_idx);
@@ -31639,7 +31652,10 @@ fn beginExprCheckFrame(
             try self.recordPredeclaredBodySlots(annotation_idx);
             frame.annotation = annotation_idx;
             const anno_var = ModuleEnv.varFrom(annotation_idx);
-            const anno_backup = try self.expectedTypeBackup(anno_var, env);
+            const anno_backup = if (took_over)
+                self.retainedAnnotationBackup(annotation_idx) orelse try self.expectedTypeBackup(anno_var, env)
+            else
+                try self.expectedTypeBackup(anno_var, env);
             break :blk .{
                 try self.fresh(env, expr_region),
                 AnnoVars{
@@ -37695,8 +37711,9 @@ fn isStatementNodeTag(tag: CIR.Node.Tag) bool {
 const AnnoVars = struct {
     anno_var: Var,
     anno_var_backup: Var,
-    /// The backup is a cached pristine copy shared with other frames, so a
-    /// consumer must take its own copy before unifying with it.
+    /// The backup is a pristine copy shared with other frames (a cached
+    /// expected-type copy, or a taken-over annotation's predeclared scheme),
+    /// so a consumer must take its own copy before unifying with it.
     backup_shared: bool = false,
     context: problem.Context,
 };

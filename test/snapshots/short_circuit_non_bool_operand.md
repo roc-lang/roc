@@ -183,7 +183,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 300)
+			(e-call (constraint-fn-var 295)
 				(e-lookup-local
 					(p-assign (ident "describe")))
 				(e-lookup-local

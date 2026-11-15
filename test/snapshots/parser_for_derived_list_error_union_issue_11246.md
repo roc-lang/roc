@@ -475,11 +475,11 @@ expect {
 					(ty-rigid-var (name "a")))
 				(s-let
 					(p-assign (ident "parse_"))
-					(e-type-dispatch-call (method "parser_for") (type-dispatch-stmt 149) (constraint-fn-var 572)
+					(e-type-dispatch-call (method "parser_for") (type-dispatch-stmt 149) (constraint-fn-var 533)
 						(args
 							(e-nominal (nominal "Parser")
 								(e-empty_record)))))
-				(e-call (constraint-fn-var 599)
+				(e-call (constraint-fn-var 560)
 					(e-lookup-local
 						(p-assign (ident "parse_")))
 					(e-nominal (nominal "parser_for_derived_list_error_union_issue_11246.Parser.State")
@@ -540,7 +540,7 @@ expect {
 							(e-match
 								(match
 									(cond
-										(e-call (constraint-fn-var 614)
+										(e-call (constraint-fn-var 575)
 											(e-lookup-local
 												(p-assign (ident "parser_for_derived_list_error_union_issue_11246.Rvn.parse")))
 											(e-empty_list)))

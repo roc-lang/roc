@@ -12036,7 +12036,11 @@ expression's own errors can later be related to the type as it was. A ground
 expected type can change only through an explicit write, so one pristine copy
 serves every later expression expecting a structurally identical type
 (`Check.expectedTypeBackup`); a consumer that needs to unify with a shared
-copy takes its own copy first, so the shared one stays pristine. Identity
+copy takes its own copy first, so the shared one stays pristine. A body that
+took over its annotation's predeclared generation (Def Checking Order) already
+has such a copy when the predeclared scheme quantifies a variable: the scheme
+was copied from that generation and is only ever instantiated, so it serves
+as the annotation's pristine copy (`Check.retainedAnnotationBackup`). Identity
 compares only the flags a copy carries (`DescriptorFlags.copied`), so a type
 whose classes record a defaulting decision or a rejection is identical to its
 own copy and shares it like any other.
