@@ -2125,7 +2125,7 @@ fn discoverLiteralRoots(
     var plan = try planRoots(allocator, modules, lowering_modules, program_roots, options.discovery_roots, false, options.timing);
     defer plan.deinit(allocator);
     if (plan.requests.items.len == plan.discovery_start) return;
-    var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, &plan, null, options, debug_events, options.validate_every_comptime_root);
+    var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, &plan, null, options, debug_events, options.validate_every_comptime_root, .none);
     specialized.deinit();
 }
 
