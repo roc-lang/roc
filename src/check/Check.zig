@@ -23658,12 +23658,20 @@ fn enqueueDeferredDispatchConstraint(
     // The relation whose checking queued the obligation owns what its
     // resolution reports.
     if (owned.relation_owner.kind == .none) owned.relation_owner = self.relation_owner;
-    owned.region = self.getRegionAt(owned.var_);
+    owned.region = self.queuedReceiverRegion(owned.var_);
     _ = try env.deferred_static_dispatch_constraints.append(self.gpa, owned);
 }
 
-/// The region of a queued obligation's receiver, as the queue's door stamped
-/// it on the entry.
+/// The region to stamp on a deferred dispatch entry whose receiver is
+/// `receiver`. The receiver has been given its region, so the stamp is the
+/// region the drain would read for it at any later time.
+fn queuedReceiverRegion(self: *const Self, receiver: Var) Region {
+    std.debug.assert(self.var_regions.isCovered(receiver));
+    return self.getRegionAt(receiver);
+}
+
+/// The region of a queued obligation's receiver, as stamped on the entry
+/// where it was queued or given that receiver.
 inline fn deferredEntryRegion(self: *const Self, deferred: DeferredConstraintCheck) Region {
     if (std.debug.runtime_safety) std.debug.assert(deferred.region.eq(self.getRegionAt(deferred.var_)));
     return deferred.region;
@@ -53702,7 +53710,7 @@ inline fn processDeferredDispatchEntryRelations(
         if (self.relationsCallMethodsOn(deferred_constraint.constraints, deferred_constraint.var_)) {
             annotated_row_value = deferred_constraint.var_;
             deferred_constraint.var_ = rigid_row;
-            deferred_constraint.region = self.getRegionAt(rigid_row);
+            deferred_constraint.region = self.queuedReceiverRegion(rigid_row);
         }
     }
     // An alias names the type its backing chain ends in: a nominal type's
@@ -55945,7 +55953,7 @@ fn redispatchOpenRowValueRelations(self: *Self, env: *Env, entry: DeferredConstr
         };
         if (self.open_row_failure_exprs.get(at_value.fn_var)) |failure_expr| redirected.failure_expr = failure_expr;
         redirected.constraints = try self.types.appendStaticDispatchConstraints(&.{at_value});
-        redirected.region = self.getRegionAt(redirected.var_);
+        redirected.region = self.queuedReceiverRegion(redirected.var_);
         _ = try env.deferred_static_dispatch_constraints.append(self.gpa, redirected);
     }
 }
@@ -56102,7 +56110,7 @@ fn decideOpenRowAsPlain(self: *Self, row: Var, env: *Env) Allocator.Error!bool {
             .var_ = value.?,
             .constraints = try self.types.appendStaticDispatchConstraints(&.{at_value}),
             .failure_expr = self.open_row_failure_exprs.get(constraint.fn_var) orelse .none,
-            .region = self.getRegionAt(value.?),
+            .region = self.queuedReceiverRegion(value.?),
         });
     }
     if (!decided) return false;
