@@ -148,6 +148,10 @@ pub const Options = struct {
     /// evaluator, to compare the two producers' values (design.md
     /// "Value-Form Roots").
     value_form_roots: ValueFormRoots = .write,
+    /// The evaluation this compilation ran while checking continued, whose
+    /// observations a `.boxy` program evaluation replays and persists with
+    /// its own.
+    early_evaluation: ?*EarlyEvaluation = null,
 
     /// Which producer completes value-form roots.
     pub const ValueFormRoots = enum {
@@ -229,6 +233,22 @@ const DebugEvents = struct {
         if (fresh) try self.fresh_roots.ensureUnusedCapacity(self.allocator, 1);
         try self.events.append(self.allocator, .{ .module = module, .root = root.id, .sequence = self.events.items.len, .is_repl = root.kind == .repl_expr, .message = owned, .fresh = fresh });
         if (fresh) self.fresh_roots.putAssumeCapacity(.{ .module = module.bytes, .root = root.id }, {});
+    }
+
+    /// Take every observation of `other`, after this one's, in its order.
+    fn adopt(self: *DebugEvents, other: *DebugEvents) Allocator.Error!void {
+        try self.events.ensureUnusedCapacity(self.allocator, other.events.items.len);
+        try self.fresh_roots.ensureUnusedCapacity(self.allocator, other.fresh_roots.count());
+        const base_sequence = self.events.items.len;
+        for (other.events.items) |event| {
+            var moved = event;
+            moved.sequence = base_sequence + event.sequence;
+            self.events.appendAssumeCapacity(moved);
+        }
+        var roots = other.fresh_roots.keyIterator();
+        while (roots.next()) |root| self.fresh_roots.putAssumeCapacity(root.*, {});
+        other.events.clearRetainingCapacity();
+        other.fresh_roots.clearRetainingCapacity();
     }
 
     fn lessThan(_: void, a: Event, b: Event) bool {
@@ -1625,6 +1645,24 @@ pub const BoxyObjectSource = struct {
     target: lir.CheckedPipeline.TargetConfig,
 };
 
+/// Whether a `.boxy` evaluation that links module objects runs a program of
+/// `module`'s roots against its imports' objects, and so asks its object
+/// source for them (`BoxyObjectSource.ready`): the module has a root still to
+/// evaluate under `.boxy` that the checked-value writer does not complete
+/// (`completeValueFormRoots`), and no platform requirements
+/// (`ModuleEvaluation.links`). A module's checked data decides it, so the
+/// objects can be asked for as soon as the module is checked.
+pub fn evaluationLinksImportObjects(module: *const checked.CheckedModuleArtifact, value_form_roots: Options.ValueFormRoots) bool {
+    if (module.platform_type_inputs.requirements.items().len != 0) return false;
+    for (module.root_requests.compile_time_requests.items()) |request| {
+        const root = module.compile_time_roots.root(compileTimeRootForRequest(module, request));
+        if (!root.needsEvaluation(.boxy)) continue;
+        if (value_form_roots == .write and root.completion == .write_value) continue;
+        return true;
+    }
+    return false;
+}
+
 /// The imported objects a `.boxy` evaluation has loaded into this process,
 /// each once, which a module's compile-time program calls by symbol. Each
 /// object's `CodeLocations` say where a failure in its code happened, exactly
@@ -2047,6 +2085,7 @@ fn finalizeProgramBoxy(
     }
     var debug_events = DebugEvents{ .allocator = allocator };
     defer debug_events.deinit();
+    if (options.early_evaluation) |early| try debug_events.adopt(&early.debug_events);
     const owned_imports = try allocator.dupe(checked.ImportedModuleView, lowering_modules.imports);
     errdefer allocator.free(owned_imports);
     const owned_relations = try allocator.dupe(checked.ImportedModuleView, lowering_modules.root.relation_modules);
@@ -2054,6 +2093,12 @@ fn finalizeProgramBoxy(
     const owned_runtime_roots = try cloneRootRequests(allocator, runtime_roots);
     errdefer deinitRootRequests(allocator, owned_runtime_roots);
 
+    // Every module whose program runs against its imports' objects asks for
+    // them first, so the units not yet built build while this thread
+    // completes the value-form roots and prepares the root graph.
+    if (options.boxy_objects) |source| for (modules) |entry| {
+        if (evaluationLinksImportObjects(entry.module, options.value_form_roots)) _ = try source.ready(source.context, entry.module);
+    };
     try completeValueFormRoots(allocator, modules, lowering_modules, options);
     // The pending roots of the first artifact of each checked identity;
     // another artifact of the same identity repeats its results.
@@ -2284,6 +2329,265 @@ fn evaluateRootsBoxy(
         return err;
     };
 }
+
+/// The `.boxy` evaluations a compilation that links module objects starts
+/// while checking continues (design.md "Evaluation During Checking"). The
+/// coordinator hands it each module whose evaluation is the one the program
+/// evaluation would run: a module whose import closure is checked and has
+/// every compile-time root complete, with the modules of that closure still
+/// to be committed, whose report stores its program can reach. Accepting a
+/// module completes its value-form roots and prepares exactly what
+/// `evaluateRootsBoxy` prepares for it; its program then lowers once its
+/// imports' objects are known and runs on the evaluating thread between the
+/// coordinator's other work (`step`). When checking completes, `finish` runs
+/// every module whose program has started to completion; a module whose
+/// program has not started is left to the program evaluation, which finds
+/// its value-form roots complete and evaluates the rest exactly as it would
+/// have. The program evaluation adopts the observations made here
+/// (`Options.early_evaluation`). Heap-allocated, since the options it runs
+/// under point into it.
+pub const EarlyEvaluation = struct {
+    allocator: Allocator,
+    options: Options,
+    debug_events: DebugEvents,
+    progress: DevProgressReporter,
+    images: BoxyLinkedImages,
+    function_images: BoxyLinkedImages,
+    function_types: checked_root_graph.FunctionTypeMemo = .{},
+    /// Every accepted module with roots for the evaluator, in acceptance
+    /// order.
+    modules: std.ArrayList(*Module) = .empty,
+
+    /// One accepted module's evaluation: the data `evaluateRootsBoxy`
+    /// prepares, for the module and the modules of its import closure still
+    /// to be committed.
+    const Module = struct {
+        /// The accepted module first, then the closure's modules.
+        program_modules: []ProgramModule,
+        imports: []const checked.ImportedModuleView,
+        roots: []checked_root_graph.Root,
+        graph: checked_root_graph.Graph,
+        states: []RootCompletionState,
+        specialized: []bool,
+        evaluations: ModuleEvaluations,
+        /// Whether its program, or a stage of it, was submitted.
+        started: bool = false,
+
+        fn evaluation(self: *Module) *ModuleEvaluation {
+            return &self.evaluations.items[0];
+        }
+
+        fn done(self: *const Module) bool {
+            return self.evaluations.remaining == 0;
+        }
+
+        fn shared(self: *Module, early: *EarlyEvaluation) ModuleEvaluation.Shared {
+            return .{
+                .modules = self.program_modules,
+                .lowering_modules = .{ .root = checked.loweringViewWithRelations(self.program_modules[0].module, &.{}), .imports = self.imports },
+                .states = self.states,
+                .roots = self.roots,
+                .graph = &self.graph,
+                .specialized = self.specialized,
+                .options = early.options,
+                .images = &early.images,
+                .function_images = &early.function_images,
+            };
+        }
+
+        fn destroy(self: *Module, allocator: Allocator) void {
+            self.evaluations.deinit();
+            allocator.free(self.specialized);
+            for (self.states) |*state| state.deinit();
+            allocator.free(self.states);
+            self.graph.deinit(allocator);
+            allocator.free(self.roots);
+            allocator.free(self.imports);
+            allocator.free(self.program_modules);
+            allocator.destroy(self);
+        }
+    };
+
+    /// An evaluation under `options`, which name the object source the
+    /// programs link against.
+    pub fn create(allocator: Allocator, options: Options) Allocator.Error!*EarlyEvaluation {
+        if (options.boxy_objects == null) finalizationInvariant("an evaluation during checking was started without module objects");
+        const self = try allocator.create(EarlyEvaluation);
+        self.* = .{
+            .allocator = allocator,
+            .options = options,
+            .debug_events = .{ .allocator = allocator },
+            .progress = undefined,
+            .images = .{ .allocator = allocator },
+            .function_images = .{ .allocator = allocator },
+        };
+        self.options.strategy = .boxy;
+        self.options.debug_events = &self.debug_events;
+        self.options.publish_shared_slots = true;
+        self.options.keep_artifacts = false;
+        self.options.retry = null;
+        self.progress = DevProgressReporter.init(self.options);
+        self.options.dev_progress = &self.progress;
+        return self;
+    }
+
+    pub fn destroy(self: *EarlyEvaluation) void {
+        const allocator = self.allocator;
+        for (self.modules.items) |module| module.destroy(allocator);
+        self.modules.deinit(allocator);
+        self.function_types.deinit(allocator);
+        self.function_images.deinit();
+        self.images.deinit();
+        self.progress.deinit();
+        self.debug_events.deinit();
+        allocator.destroy(self);
+    }
+
+    /// Accept `program_modules[0]`, whose import closure is checked with
+    /// every root complete; `program_modules` continues with the closure's
+    /// modules still to be committed, and `imports` holds the views of the
+    /// modules its lowering sees.
+    pub fn accept(self: *EarlyEvaluation, program_modules: []const ProgramModule, imports: []const checked.ImportedModuleView) FinalizeError!void {
+        const allocator = self.allocator;
+        const options = self.options;
+        const module = program_modules[0].module;
+        const lowering: lir.CheckedPipeline.CheckedModuleSet = .{ .root = checked.loweringViewWithRelations(module, &.{}), .imports = imports };
+        try completeValueFormRoots(allocator, program_modules[0..1], lowering, options);
+        // The closure's modules are complete before anything runs, as in
+        // `ModuleEvaluations.run`.
+        const source = options.boxy_objects.?;
+        for (program_modules[1..]) |program_module| try source.completed(source.context, program_module.module);
+        var roots = std.ArrayList(checked_root_graph.Root).empty;
+        defer roots.deinit(allocator);
+        for (module.root_requests.compile_time_requests.items()) |request| {
+            const root_id = compileTimeRootForRequest(module, request);
+            if (!module.compile_time_roots.root(root_id).needsEvaluation(.boxy)) continue;
+            try roots.append(allocator, .{ .module = 0, .root = root_id, .request = request });
+        }
+        if (roots.items.len == 0) return;
+
+        const artifacts = try allocator.alloc(*checked.CheckedModuleArtifact, program_modules.len);
+        defer allocator.free(artifacts);
+        for (program_modules, artifacts) |program_module, *artifact| artifact.* = program_module.module;
+        const specialized = try allocator.alloc(bool, roots.items.len);
+        errdefer allocator.free(specialized);
+        const classification_started = Timing.startStep(options.timing);
+        for (roots.items, specialized) |root, *flag| {
+            flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind != .literal_argument and
+                try checked_root_graph.rootHoldsFunction(allocator, &self.function_types, artifacts, lowering, root);
+        }
+        Timing.finishStep(options.timing, classification_started, .root_classification);
+        // A host that composes pieces lowers a module's function-value
+        // stages against the program's whole module set
+        // (`ModuleEvaluation.startFunctions`), which only the program
+        // evaluation has.
+        if (boxy_object_code == .pieces) for (specialized) |holds_function| {
+            if (!holds_function) continue;
+            allocator.free(specialized);
+            return;
+        };
+        if (options.timing) |timing| timing.recordBoxyRoots(roots.items.len);
+
+        const entry = try allocator.create(Module);
+        errdefer allocator.destroy(entry);
+        const owned_modules = try allocator.dupe(ProgramModule, program_modules);
+        errdefer allocator.free(owned_modules);
+        const owned_imports = try allocator.dupe(checked.ImportedModuleView, imports);
+        errdefer allocator.free(owned_imports);
+        const owned_roots = try roots.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_roots);
+        const states = try allocator.alloc(RootCompletionState, owned_modules.len);
+        var states_initialized: usize = 0;
+        errdefer {
+            for (states[0..states_initialized]) |*state| state.deinit();
+            allocator.free(states);
+        }
+        for (owned_modules, states) |program_module, *state| {
+            state.* = try RootCompletionState.init(allocator, program_module.module, program_module.module.root_requests.compile_time_requests.items());
+            states_initialized += 1;
+        }
+        if (Timing.detailOf(options.timing)) |timing| recordRootKinds(timing, artifacts, owned_roots);
+        const graph_started = Timing.startStep(options.timing);
+        var graph = try checked_root_graph.build(allocator, artifacts, owned_roots);
+        Timing.finishStep(options.timing, graph_started, .root_graph);
+        errdefer graph.deinit(allocator);
+        var evaluations = try ModuleEvaluations.init(allocator, owned_modules, owned_roots, &graph);
+        errdefer evaluations.deinit();
+        try self.modules.ensureUnusedCapacity(allocator, 1);
+        entry.* = .{
+            .program_modules = owned_modules,
+            .imports = owned_imports,
+            .roots = owned_roots,
+            .graph = graph,
+            .states = states,
+            .specialized = specialized,
+            .evaluations = evaluations,
+        };
+        self.modules.appendAssumeCapacity(entry);
+    }
+
+    /// Start the programs whose imports' objects are known and run the
+    /// programs built, without waiting. Whether anything happened.
+    pub fn step(self: *EarlyEvaluation) FinalizeError!bool {
+        return self.advance(false) catch |err| {
+            const source = self.options.boxy_objects.?;
+            source.abort(source.context, err);
+            return err;
+        };
+    }
+
+    /// Whether a started program is still to finish.
+    pub fn running(self: *const EarlyEvaluation) bool {
+        for (self.modules.items) |module| {
+            if (module.started and !module.done()) return true;
+        }
+        return false;
+    }
+
+    /// Run every module whose program has started to completion. A module
+    /// whose program has not started is left to the program evaluation.
+    pub fn finish(self: *EarlyEvaluation) FinalizeError!void {
+        const source = self.options.boxy_objects.?;
+        while (self.running()) {
+            if (self.advance(true) catch |err| {
+                source.abort(source.context, err);
+                return err;
+            }) continue;
+            const wait_started = Timing.startStep(self.options.timing);
+            const progressed = source.progress(source.context) catch |err| {
+                source.abort(source.context, err);
+                return err;
+            };
+            Timing.finishStep(self.options.timing, wait_started, .scheduler_wait);
+            if (!progressed) finalizationInvariant("a compile-time program started during checking waits for a build no task runs");
+        }
+    }
+
+    fn advance(self: *EarlyEvaluation, only_started: bool) FinalizeError!bool {
+        try self.options.checkCancelRequest();
+        const source = self.options.boxy_objects.?;
+        var progressed = false;
+        for (self.modules.items) |module| {
+            if (module.done() or (only_started and !module.started)) continue;
+            const evaluation = module.evaluation();
+            if (evaluation.state != .waiting) continue;
+            const shared = module.shared(self);
+            if (!try evaluation.canLower(shared)) continue;
+            module.started = true;
+            try evaluation.start(shared, &module.evaluations);
+            progressed = true;
+        }
+        while (try source.takeCompletion(source.context)) |completion| {
+            const build: *ProgramBuild = @ptrFromInt(completion.id);
+            const module = for (self.modules.items) |candidate| {
+                if (candidate.evaluation().build == build) break candidate;
+            } else finalizationInvariant("a compile-time program finished that no evaluation during checking built");
+            try module.evaluation().run(module.shared(self), &module.evaluations);
+            progressed = true;
+        }
+        return progressed;
+    }
+};
 
 /// Count the evaluated `roots` by kind, for detailed timing output.
 fn recordRootKinds(timing: *Timing, artifacts: []const *checked.CheckedModuleArtifact, roots: []const checked_root_graph.Root) void {
