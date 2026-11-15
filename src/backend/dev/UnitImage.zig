@@ -1468,7 +1468,9 @@ pub const Section = struct {
     addralign: u64,
 };
 
+/// How an input object's symbol binds across objects.
 pub const SymbolBind = enum { local, global, weak };
+/// What an input object's symbol names.
 pub const SymbolKind = enum { notype, object, func, section };
 
 /// An input object's symbol, in its symbol table's order so relocations
@@ -1519,6 +1521,7 @@ pub const RelocKind = enum {
     }
 };
 
+/// One relocation of an input object.
 pub const Reloc = struct {
     /// Index of the section the field is in.
     section: u32,
@@ -1679,6 +1682,7 @@ fn parseElf(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildErr
     return .{ .sections = sections, .symbols = symbols, .relocs = relocs.items, .text_section = text_section, .static_data_section = static_data_section, .x86_64 = machine == EM_X86_64 };
 }
 
+/// The relocation kind of an x86_64 ELF relocation type.
 pub fn classifyX86_64Reloc(r_type: u32) BuildError!RelocKind {
     if (r_type == R_X86_64_64) return .abs64;
     if (r_type == R_X86_64_PC32 or r_type == R_X86_64_PLT32) return .pc32;
@@ -2185,6 +2189,7 @@ pub fn sizeByPosition(arena: Allocator, symbols: []ObjectSymbol, sections: []con
     }
 }
 
+/// A COFF relocation's kind and addend, read from its type and field.
 pub const DecodedCoffReloc = struct { kind: RelocKind, addend: i64, section_relative: bool = false };
 
 /// The site kind and addend of a COFF relocation: the addend is the
