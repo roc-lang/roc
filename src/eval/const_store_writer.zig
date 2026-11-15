@@ -37,22 +37,11 @@ pub const Part = union(enum) {
 };
 
 /// What storing parts from checked expressions reads: the module's checked
-/// bodies the expressions belong to, the schema whose plans and layouts the
-/// writer stores them by, and the evaluation target's inline string length.
+/// bodies the expressions belong to, and the schema whose plans and layouts
+/// the writer stores them by.
 pub const CheckedValues = struct {
     bodies: checked.CheckedBodies,
     schema: *const lir.CheckedPipeline.BoxyValueSchema,
-    /// The longest string the evaluation target holds in its descriptor.
-    inline_str_max: usize,
-};
-
-/// A literal an evaluation reads as a view of its content-interned static
-/// backing (`Writer.checkedLiteralKey`): two with the same key are one value.
-const CheckedLiteralKey = struct {
-    plan: u32,
-    layout: u32,
-    bytes: const_store.ConstStr,
-    len: u64,
 };
 
 const RuntimeValueAddress = struct {
@@ -107,9 +96,10 @@ pub const Writer = struct {
     /// Set for a writer that stores value-form roots from their checked
     /// expressions.
     checked: ?CheckedValues = null,
-    checked_literals: std.AutoHashMap(CheckedLiteralKey, checked.ConstNodeId),
     /// Scratch for a checked string's bytes.
     checked_text: std.ArrayList(u8) = .empty,
+    /// Scratch for a checked record's field values in plan order.
+    checked_components: std.ArrayList(CIR.Expr.Idx) = .empty,
     erased_callable_resolver: ErasedCallableResolver,
     boxy_functions: ?BoxyFunctions = null,
     product_plans: std.AutoHashMap(ProductPlanKey, ?lir.PackedData.Plan),
@@ -144,7 +134,6 @@ pub const Writer = struct {
             .names = names,
             .program = program,
             .stored_values = std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId).init(allocator),
-            .checked_literals = std.AutoHashMap(CheckedLiteralKey, checked.ConstNodeId).init(allocator),
             .erased_callable_resolver = .{},
             .product_plans = std.AutoHashMap(ProductPlanKey, ?lir.PackedData.Plan).init(allocator),
             .product_eligibility = collections.DenseMap(LirProgram.ConstPlanId, bool).init(allocator),
@@ -223,7 +212,7 @@ pub const Writer = struct {
         self.product_plans.deinit();
         self.product_eligibility.deinit();
         self.checked_text.deinit(self.allocator);
-        self.checked_literals.deinit();
+        self.checked_components.deinit(self.allocator);
         self.stored_values.deinit();
     }
 
@@ -280,8 +269,8 @@ pub const Writer = struct {
     }
 
     /// Store a value-form root from its checked expression `expr`, by the
-    /// plan and layout of its result (`BoxyValueSchema.root`). The node graph
-    /// is the one the evaluator stores for the root.
+    /// plan and layout of its result (`BoxyValueSchema.root`). Every part of
+    /// the expression is a node of its own.
     pub fn storeCheckedRoot(
         self: *Writer,
         plan: LirProgram.ConstPlanId,
@@ -289,9 +278,6 @@ pub const Writer = struct {
         expr: CIR.Expr.Idx,
     ) Error!checked.ConstNodeId {
         if (self.checked == null) writerInvariant("a writer of evaluated values stored a checked expression");
-        // Like an evaluated root's addresses, a literal's identity is the
-        // root's own: another root's equal literal is another value.
-        self.checked_literals.clearRetainingCapacity();
         return self.storeValue(plan, ret_layout, .{ .checked = expr });
     }
 
@@ -450,8 +436,9 @@ pub const Writer = struct {
 
     /// Reserves the request's node, fills it when the value has no
     /// components, and pushes the frame that stores its components otherwise.
-    /// A part already stored for the root (the same runtime allocation, or
-    /// the same literal backing) is that node.
+    /// An evaluated part already stored for the root (the same runtime
+    /// allocation) is that node; a checked expression's part is always a
+    /// node of its own.
     fn startStore(self: *Writer, request: ValueRequest) Error!checked.ConstNodeId {
         switch (request.value) {
             .runtime => |value| if (self.memoAddress(request.plan, request.layout_idx, value, request.storage)) |address| {
@@ -461,13 +448,7 @@ pub const Writer = struct {
                 try self.beginFresh(node, request);
                 return node;
             },
-            .checked => |expr| if (try self.checkedLiteralKey(request.plan, request.layout_idx, expr)) |key| {
-                if (self.checked_literals.get(key)) |existing| return existing;
-                const node = try self.store.reserve();
-                try self.checked_literals.put(key, node);
-                try self.beginFresh(node, request);
-                return node;
-            },
+            .checked => {},
         }
         const node = try self.store.reserve();
         try self.beginFresh(node, request);
@@ -535,7 +516,7 @@ pub const Writer = struct {
                         try self.appendTagPayloadRequests(children, selected.payloads, payload_layout, tag_base.value);
                         break :name selected.name;
                     },
-                    .checked => |expr| try self.appendCheckedTagRequests(children, variants, layout_idx, expr),
+                    .checked => |expr| try self.appendCheckedTagRequests(children, request.plan, variants, layout_idx, expr),
                 };
                 break :blk .{ .tag = .{ .node = node, .name = name } };
             },
@@ -1030,39 +1011,6 @@ pub const Writer = struct {
         return if (data == .nominal) data.nominal.backing_expr else expr;
     }
 
-    /// The identity of a part the evaluator reads as a view of a literal's
-    /// static backing, which lowering interns by content: a string of one
-    /// non-empty segment too long for the evaluation target to hold inline,
-    /// and a non-empty list at a builtin numeric element type, which
-    /// lowering writes as one packed literal. Two such parts of one plan and
-    /// layout with equal bytes are one value, as two equal literals of one
-    /// evaluation share an address. Every other part is built anew by the
-    /// evaluation, and is a value of its own: null.
-    fn checkedLiteralKey(self: *Writer, plan: LirProgram.ConstPlanId, layout_idx: layout.Idx, expr: CIR.Expr.Idx) Error!?CheckedLiteralKey {
-        const values = self.checkedValues();
-        switch (self.constPlan(plan)) {
-            .str => {
-                var parts: usize = 0;
-                for (checkedStrSegments(values.bodies, expr)) |segment| parts += @intFromBool(!values.bodies.isEmptyStrSegment(segment));
-                if (parts != 1) return null;
-                const text = try self.checkedStrText(expr);
-                if (text.len <= values.inline_str_max) return null;
-                return .{ .plan = @backingInt(plan), .layout = @backingInt(layout_idx), .bytes = try self.storeBytes(text), .len = text.len };
-            },
-            .list => |elem_plan| {
-                if (self.constPlan(elem_plan) != .scalar) return null;
-                const items = self.checkedListItems(expr);
-                if (items.len == 0) return null;
-                const list_layout = self.program.layouts.getLayout(layout_idx);
-                if (list_layout.tag != .list) writerInvariant("packed scalar list had non-list layout");
-                const element = self.packedScalarForLayout(list_layout.getIdx()) orelse
-                    writerInvariant("scalar const plan had a non-packable list element layout");
-                return .{ .plan = @backingInt(plan), .layout = @backingInt(layout_idx), .bytes = try self.checkedPackedBlob(list_layout.getIdx(), element, items), .len = items.len };
-            },
-            .pending, .layout_only, .zst, .scalar, .box, .boxed_sequence, .tuple, .record, .tag_union, .named, .fn_value, .erased_fn, .boxy_fn => return null,
-        }
-    }
-
     /// The packed bytes of value-form numerals `items` at element layout
     /// `elem_layout`, interned.
     fn checkedPackedBlob(self: *Writer, elem_layout: layout.Idx, element: const_store.ConstPackedScalar, items: []const CIR.Expr.Idx) Allocator.Error!const_store.ConstStr {
@@ -1108,10 +1056,12 @@ pub const Writer = struct {
                     if (components.len == 0 or layout_value.tag == .zst) continue;
                     if (layout_value.tag != .struct_) writerInvariant("a product's layout is not a struct");
                     const struct_idx = layout_value.getStruct().idx;
-                    for (components, 0..) |component, component_index| try pending.append(self.allocator, .{
+                    const parts = try self.checkedComponents(leaf.plan, leaf.expr, components.len);
+                    try pending.ensureUnusedCapacity(self.allocator, components.len);
+                    for (components, parts, 0..) |component, part, component_index| pending.appendAssumeCapacity(.{
                         .plan = component,
                         .layout_idx = self.program.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(component_index)),
-                        .expr = self.checkedComponent(leaf.plan, leaf.expr, component_index),
+                        .expr = part,
                         .offset = leaf.offset + self.program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, @intCast(component_index)),
                     });
                 },
@@ -1121,21 +1071,27 @@ pub const Writer = struct {
         return memory;
     }
 
-    /// Component `index` of value-form tuple or record `expr` of plan
-    /// `plan`: a tuple's item, or the record field the plan's component
-    /// `index` stores, found by name.
-    fn checkedComponent(self: *const Writer, plan: LirProgram.ConstPlanId, expr: CIR.Expr.Idx, index: usize) CIR.Expr.Idx {
+    /// The parts of value-form tuple or record `expr` in the order plan
+    /// `plan` stores its components: a tuple's items, or a record's field
+    /// values, each placed at the component the schema gives its label. The
+    /// slice is valid until the next call.
+    fn checkedComponents(self: *Writer, plan: LirProgram.ConstPlanId, expr: CIR.Expr.Idx, count: usize) Allocator.Error![]const CIR.Expr.Idx {
         const values = self.checkedValues();
         const bodies = values.bodies;
         const data = bodies.exprData(expr);
-        if (data == .tuple) return data.tuple[index];
+        if (data == .tuple) {
+            if (data.tuple.len != count) writerInvariant("a value-form tuple does not have its plan's components");
+            return data.tuple;
+        }
         if (data != .record) writerInvariant("a value-form product is not a tuple or record");
-        const name = values.schema.recordFields(plan).name(index);
+        if (data.record.fields.len != count) writerInvariant("a value-form record does not have its plan's components");
+        try self.checked_components.resize(self.allocator, count);
         for (data.record.fields) |field_idx| {
             const field = bodies.recordField(field_idx);
-            if (std.mem.eql(u8, bodies.names.recordFieldLabelText(field.label), name)) return field.value;
+            const component = try values.schema.recordComponent(plan, bodies.names.recordFieldLabelText(field.label));
+            self.checked_components.items[component] = field.value;
         }
-        writerInvariant("a value-form record has no field its type stores");
+        return self.checked_components.items;
     }
 
     /// The component requests of value-form tuple or record `expr`, as
@@ -1152,11 +1108,12 @@ pub const Writer = struct {
         while (layout_value.tag == .box) layout_value = self.program.layouts.getLayout(layout_value.getIdx());
         const zero_sized = layout_value.tag == .zst or layout_value.tag == .box_of_zst;
         if (!zero_sized and layout_value.tag != .struct_) writerInvariant("struct const plan had non-struct layout");
+        const parts = try self.checkedComponents(plan, expr, plans.len);
         try out.ensureUnusedCapacity(self.allocator, plans.len);
-        for (plans, 0..) |component, index| out.appendAssumeCapacity(.{
+        for (plans, parts, 0..) |component, part, index| out.appendAssumeCapacity(.{
             .plan = component,
             .layout_idx = if (zero_sized) .zst else self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, @intCast(index)),
-            .value = .{ .checked = self.checkedComponent(plan, expr, index) },
+            .value = .{ .checked = part },
         });
     }
 
@@ -1166,11 +1123,13 @@ pub const Writer = struct {
     fn appendCheckedTagRequests(
         self: *Writer,
         out: *std.ArrayList(ValueRequest),
+        union_plan: LirProgram.ConstPlanId,
         variants: []const LirProgram.ConstTagVariant,
         layout_idx: layout.Idx,
         expr: CIR.Expr.Idx,
     ) Allocator.Error![]const u8 {
-        const bodies = self.checkedValues().bodies;
+        const values = self.checkedValues();
+        const bodies = values.bodies;
         const data = bodies.exprData(expr);
         const name: []const u8, const args: []const CIR.Expr.Idx = if (data == .tag)
             .{ bodies.names.tagLabelText(bodies.tagLabel(data.tag.name)), data.tag.args }
@@ -1178,9 +1137,8 @@ pub const Writer = struct {
             .{ bodies.names.tagLabelText(bodies.tagLabel(data.zero_argument_tag.name)), &.{} }
         else
             writerInvariant("a value-form tag union value is not a tag");
-        const selected = for (variants) |variant| {
-            if (variant.payloads.len == args.len and std.mem.eql(u8, variant.name, name)) break variant;
-        } else writerInvariant("a value-form tag is not a variant of its type");
+        const selected = variants[try values.schema.tagVariant(union_plan, name)];
+        if (selected.payloads.len != args.len) writerInvariant("a value-form tag does not have its variant's payloads");
         if (args.len == 0) return selected.name;
         const base_layout = self.program.layouts.getLayout(layout_idx);
         const tag_layout: layout.Idx = switch (base_layout.tag) {

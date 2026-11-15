@@ -1,8 +1,8 @@
 //! A compile-time root whose checked expression is in value form is
 //! completed by the checked-value writer, every other root by an evaluator
 //! (design.md "Value-Form Roots"). These tests pin both sides of the rule:
-//! the writer stores exactly the value and stored type the evaluator stores
-//! for every kind of value-form root, and an expression that calls,
+//! the writer stores the value and stored type the evaluator stores for
+//! every kind of value-form root, and an expression that calls,
 //! dispatches, reads a definition, converts through a custom type, or that
 //! checking rejects stays with the evaluator.
 
@@ -54,9 +54,8 @@ const platform_files = [_]SourceFile{
 /// strings short, long and on several lines, booleans, empty and non-empty
 /// lists of numbers, strings, records, tuples, tags and zero-sized values,
 /// records, tuples, single-tag, enum-like and payload unions, `Try`,
-/// nominal tags and records, a recursive nominal, equal long literals that
-/// one evaluation reads at one address, and the hoisted constants of a
-/// function body.
+/// nominal tags and records, a recursive nominal, repeated equal long
+/// literals, and the hoisted constants of a function body.
 const corpus =
     \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
     \\import pf.Echo
@@ -346,23 +345,6 @@ fn storedRootType(artifact: *const Artifact, root: CompileTimeRoot) error{ NoTop
     return state.stored_const.root_type;
 }
 
-const HashContext = struct {
-    pub fn moduleDigest(_: HashContext, module: check.CheckedArtifact.CheckedModuleDigest) [32]u8 {
-        return module.bytes;
-    }
-    pub fn fnValueDigest(_: HashContext, _: ConstStore.ConstFnId) [32]u8 {
-        return @splat(0);
-    }
-};
-
-/// A stored value's structure, sharing included: its graph hashed with
-/// every repeated node named by the order it was first reached in.
-fn graphDigest(store: *const ConstStore.ConstStore, node: ConstStore.ConstNodeId) std.mem.Allocator.Error![32]u8 {
-    var hasher = base.Sha256.init(.{});
-    try store.hashGraph(std.testing.allocator, node, &hasher, HashContext{});
-    return hasher.finalResult();
-}
-
 /// Require the two stored types to be one type: each is cloned into a fresh
 /// table with one shared name store, so equal types clone to equal tables.
 fn expectSameType(left: *const Artifact, left_type: ConstStore.ConstTypeId, right: *const Artifact, right_type: ConstStore.ConstTypeId) (std.mem.Allocator.Error || error{TestExpectedEqual})!void {
@@ -397,7 +379,6 @@ const WriterMatchesEvaluatorError = CheckAppError || error{
     WrongKind,
     RootNotCompleted,
     ValueDiffers,
-    SharingDiffers,
     TooFewHoistedValueFormRoots,
     TooFewRootsCompletedDirectly,
 };
@@ -443,10 +424,6 @@ fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMat
         if (!try left.const_store.graphEql(allocator, left_node, &right.const_store, right_node)) {
             std.debug.print("value-form root {d} ({?s}) stored a different value\n", .{ @backingInt(right_root.id), rootName(right, right_root) });
             return error.ValueDiffers;
-        }
-        if (!std.mem.eql(u8, &try graphDigest(&left.const_store, left_node), &try graphDigest(&right.const_store, right_node))) {
-            std.debug.print("value-form root {d} ({?s}) shares its parts differently\n", .{ @backingInt(right_root.id), rootName(right, right_root) });
-            return error.SharingDiffers;
         }
         const left_type = storedRootType(left, left_root) catch |err| {
             std.debug.print("value-form root {d} ({?s}) has no stored type\n", .{ @backingInt(right_root.id), rootName(right, right_root) });

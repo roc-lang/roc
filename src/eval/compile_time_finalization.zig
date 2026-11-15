@@ -2153,8 +2153,6 @@ fn completeValueFormRoots(
             if (writer == null) writer = ConstStoreWriter.Writer.initChecked(allocator, module, .{
                 .bodies = module.bodies(),
                 .schema = &schema.?,
-                // A `Str` is three words, one byte of them the length.
-                .inline_str_max = 3 * target_usize.size() - 1,
             });
             const root_schema = try schema.?.root(module.key.digest(), request);
             const payload: checked.CompileTimeRootPayload = .{ .const_node = try writer.?.storeCheckedRoot(root_schema.plan, root_schema.ret_layout, root.rootExpr()) };

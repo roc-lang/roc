@@ -69,25 +69,38 @@ pub const ValueSchema = struct {
         return &self.program.result;
     }
 
-    /// The fields of record plan `plan`, whose component `index` stores the
-    /// storage of field `index`.
-    pub fn recordFields(self: *const ValueSchema, plan: LirProgram.ConstPlanId) RecordFields {
+    /// The component of record plan `plan` that stores the field named
+    /// `label`. The name is interned in the schema's program and matched by
+    /// id against the record type's fields, which the plan's components
+    /// follow in order.
+    pub fn recordComponent(self: *const ValueSchema, plan: LirProgram.ConstPlanId, label: []const u8) Allocator.Error!usize {
         const program = self.program;
+        const name = try program.store.internName(label);
         const ty = program.const_schema.plan_types.get(plan) orelse invariant("a record plan has no type");
-        return switch (program.store.get(ty)) {
-            .record => |record| .{ .store = &program.store, .fields = program.store.fieldSpan(record.fields) },
-            .empty_record => .{ .store = &program.store, .fields = &.{} },
-            .primitive, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a record plan's type is not a record"),
+        const fields = switch (program.store.get(ty)) {
+            .record => |record| program.store.fieldSpan(record.fields),
+            .empty_record, .primitive, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a record plan's type is not a record of fields"),
         };
+        for (fields, 0..) |field, index| {
+            if (field.name == name) return index;
+        }
+        invariant("a value-form record has a field its type does not store");
     }
 
-    /// The fields of a record plan, in plan order.
-    pub const RecordFields = struct {
-        store: *const types.Store,
-        fields: []const types.Field,
-
-        pub fn name(self: RecordFields, index: usize) []const u8 {
-            return self.store.nameText(self.fields[index].name);
+    /// The variant of tag-union plan `plan` named `label`. The name is
+    /// interned in the schema's program and matched by id against the union
+    /// type's tags, which the plan's variants follow in order.
+    pub fn tagVariant(self: *const ValueSchema, plan: LirProgram.ConstPlanId, label: []const u8) Allocator.Error!usize {
+        const program = self.program;
+        const name = try program.store.internName(label);
+        const ty = program.const_schema.plan_types.get(plan) orelse invariant("a tag union plan has no type");
+        const tags = switch (program.store.get(ty)) {
+            .tag_union => |tag_union| program.store.tagSpan(tag_union.tags),
+            .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a tag union plan's type is not a tag union"),
+        };
+        for (tags, 0..) |tag, index| {
+            if (tag.name == name) return index;
         }
-    };
+        invariant("a value-form tag is not a variant of its type");
+    }
 };
