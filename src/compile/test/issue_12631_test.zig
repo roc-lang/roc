@@ -9,10 +9,11 @@ const BuildEnv = compile_build.BuildEnv;
 // repro for https://github.com/roc-lang/roc/issues/12631
 //
 // A record of closures passed to an annotated function, where one closure
-// calls a method on a never-resolved type with a top-level constant as the
-// argument, must publish as a checked artifact carrying the missing-method
-// error rather than violating a checked-artifact invariant.
-test "issue 12631: record of closures capturing a top-level constant reports missing method" {
+// calls a method on the result of another closure's method call with a
+// top-level constant as the argument, requires that method of the enclosing
+// definition's own type variable. It must publish as a checked artifact with
+// no report rather than violating a checked-artifact invariant.
+test "issue 12631: record of closures capturing a top-level constant publishes its method requirement" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
 
@@ -48,11 +49,7 @@ test "issue 12631: record of closures capturing a top-level constant reports mis
     const drained = try build_env.drainReports();
     defer build_env.freeDrainedReports(drained);
 
-    var found_missing_method = false;
     for (drained) |mod| {
-        for (mod.reports) |report| {
-            if (std.mem.eql(u8, report.title, "Missing Method")) found_missing_method = true;
-        }
+        try std.testing.expectEqual(@as(usize, 0), mod.reports.len);
     }
-    try std.testing.expect(found_missing_method);
 }
