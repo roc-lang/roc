@@ -1711,9 +1711,16 @@ pub const ConstStore = struct {
         return @as([*]const [32]u8, @ptrCast(recipe[4..].ptr))[0..count];
     }
 
-    /// The bytes of a stored function's recipe after its table of modules.
+    /// The bytes of a stored function's recipe after its table of modules
+    /// and the table of template positions that follows it: what names the
+    /// function, its workers by identity. A template's position only
+    /// locates it in the modules the recipe was stored with, which an edit
+    /// elsewhere in its module moves, so it is no part of what the recipe
+    /// names (`postcheck.Boxy.StoredFn`).
     pub fn recipeBody(recipe: []const u8) []const u8 {
-        return recipe[4 + recipeModuleKeys(recipe).len * 32 ..];
+        const positions_at = 4 + recipeModuleKeys(recipe).len * 32;
+        const position_count = std.mem.readInt(u32, recipe[positions_at..][0..4], .little);
+        return recipe[positions_at + 4 + @as(usize, position_count) * 4 ..];
     }
 
     /// Feed `root`'s value into `hasher`, shared nodes once each. Equal

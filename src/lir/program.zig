@@ -480,6 +480,22 @@ pub fn staticDataNodeSymbolName(allocator: Allocator, owner: u32, index: u32) Al
     return try std.fmt.allocPrint(allocator, "roc__d{d}_{d}", .{ owner, index });
 }
 
+/// What a `.boxy` unit's export record says of a worker beyond the
+/// interface ARC solved for it (design.md "Caching Under `.boxy`").
+pub const BoxyExport = struct {
+    /// For a template's worker, generic or integer list: the template's
+    /// position in its module's checked table, which a needs list naming
+    /// the worker by identity resolves it to in the module's current
+    /// checked module.
+    template: u32 = no_template,
+    /// Whether another unit can read the record: only these records are in
+    /// the module's export digest, which its importers' keys fold in.
+    visible: bool = false,
+
+    /// `template` of a worker that is no template's.
+    pub const no_template = std.math.maxInt(u32);
+};
+
 /// Everything one lowering produced: the procedure store, its layouts, the
 /// root and specialization tables, and the static data the program carries.
 pub const Result = struct {
@@ -494,6 +510,10 @@ pub const Result = struct {
     /// type table, by its procedure's identity: what an importer fills the
     /// worker's tables from (`postcheck.Boxy.Tables`).
     boxy_table_needs: std.AutoHashMapUnmanaged(LIR.ProcIdentity, []const u8) = .empty,
+    /// What an importer resolves each exported `.boxy` worker to and whether
+    /// it is importer-visible, by its procedure's identity
+    /// (design.md "Caching Under `.boxy`").
+    boxy_exports: std.AutoHashMapUnmanaged(LIR.ProcIdentity, BoxyExport) = .empty,
     root_metadata: std.ArrayList(root.RootMetadata) = .empty,
     requested_layouts: std.ArrayList(RequestedLayout) = .empty,
     const_types: const_store.ConstTypeStore,
@@ -554,6 +574,7 @@ pub const Result = struct {
         var needs = self.boxy_table_needs.valueIterator();
         while (needs.next()) |bytes| allocator.free(bytes.*);
         self.boxy_table_needs.deinit(allocator);
+        self.boxy_exports.deinit(allocator);
         self.layouts.deinit();
         self.store.deinit();
     }

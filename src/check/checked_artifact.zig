@@ -33600,7 +33600,81 @@ pub const ImportedModuleView = struct {
     pub fn directImportKeys(self: ImportedModuleView) []const CheckedModuleArtifactKey {
         return self.direct_import_module_keys;
     }
+
+    /// What names the `.boxy` worker of template `id` in every object of a
+    /// link (design.md "Caching Under `.boxy`"): a definition's template and
+    /// a top-level constant's entry wrapper by the definition's name, any
+    /// other template by its position in the module's table.
+    pub fn templateName(self: ImportedModuleView, id: canonical.CheckedProcedureTemplateId) TemplateName {
+        const template = self.checked_procedure_templates.get(id);
+        const position: TemplateName = .{ .position = @backingInt(id) };
+        switch (template.body) {
+            .checked_body, .intrinsic_wrapper, .unimplemented => {
+                const proc_base = self.canonical_names.procBase(template.proc_base);
+                const def_raw = proc_base.source_def_idx.get() orelse return position;
+                const name = proc_base.export_name.get() orelse return position;
+                return .{ .definition = .{
+                    .text = self.canonical_names.exportNameText(name),
+                    .shadow = shadowOrdinal(self.module_env, @fromBackingInt(def_raw)),
+                } };
+            },
+            .entry_wrapper => |wrapper_id| {
+                const root = self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root);
+                switch (root.kind) {
+                    .constant, .callable_binding => {},
+                    .hoisted_constant, .hoisted_validation, .expect, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => return position,
+                }
+                const def = switch (root.source) {
+                    .def => |def| def,
+                    .expr, .statement, .required_binding, .hoisted, .literal, .literal_argument => return position,
+                };
+                const env = self.module_env;
+                const pattern = env.store.getPattern(env.store.getDef(def).pattern);
+                if (pattern != .assign) return position;
+                return .{ .constant = .{ .text = env.getIdent(pattern.assign.ident), .shadow = shadowOrdinal(env, def) } };
+            },
+        }
+    }
 };
+
+/// What names a template's `.boxy` worker (`ImportedModuleView.templateName`).
+pub const TemplateName = union(enum) {
+    /// The template of a named definition.
+    definition: NamedTemplate,
+    /// The entry wrapper of a top-level constant or callable binding.
+    constant: NamedTemplate,
+    /// Any other template, by its position in its module's table.
+    position: u32,
+};
+
+/// A definition's name, and the definition's place among the module-global
+/// definitions sharing it (`shadowOrdinal`).
+pub const NamedTemplate = struct { text: []const u8, shadow: u32 };
+
+/// Zero for a module-global definition canonicalization selected for its
+/// name, which is every definition of a module whose names are all
+/// distinct: canonicalization then makes `top_level_value_defs` the very
+/// span of `global_value_defs`, so such a module does nothing more here. A
+/// definition another of its name shadows (a duplicate definition,
+/// reported as a warning) is one more than the number of module-global
+/// definitions of that name before it.
+fn shadowOrdinal(env: *const ModuleEnv, def: CIR.Def.Idx) u32 {
+    const selected = env.top_level_value_defs.span;
+    const global = env.global_value_defs.span;
+    if (selected.start == global.start and selected.len == global.len) return 0;
+    for (env.store.sliceDefs(env.top_level_value_defs)) |candidate| {
+        if (candidate == def) return 0;
+    }
+    const pattern = env.store.getPattern(env.store.getDef(def).pattern);
+    if (pattern != .assign) checkedArtifactInvariant("a definition canonicalization did not select for its name has no single name", .{});
+    var ordinal: u32 = 1;
+    for (env.store.sliceDefs(env.global_value_defs)) |other| {
+        if (other == def) return ordinal;
+        const other_pattern = env.store.getPattern(env.store.getDef(other).pattern);
+        if (other_pattern == .assign and other_pattern.assign.ident.eql(pattern.assign.ident)) ordinal += 1;
+    }
+    checkedArtifactInvariant("a shadowed definition is no module-global definition", .{});
+}
 
 const no_compile_time_root_reads: CompileTimeRootReadTable = .{};
 

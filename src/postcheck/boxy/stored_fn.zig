@@ -10,13 +10,19 @@
 //! before connecting its edges. No runtime constructor is emitted.
 //!
 //! The recipe is bytes the constant store keeps opaque but for its first
-//! table: the modules it names, by checked key, each once, which the store
-//! reads to name a stored function in an identity by its modules' link names
-//! and to move it to the modules' current versions
-//! (`ConstStore.recipeModuleKeys`). Then come a table of the types the recipe
+//! two tables: the modules it names, by checked key, each once, which the
+//! store reads to name a stored function in an identity by its modules' link
+//! names and to move it to the modules' current versions
+//! (`ConstStore.recipeModuleKeys`), and the position of each template it
+//! names, which the store leaves out of what names the function
+//! (`ConstStore.recipeBody`). Then come a table of the types the recipe
 //! names, generic where the worker's own types are, then the worker, then
 //! the capture graph and its table-input and capture-descriptor roots. Every
-//! module reference is an index into the first table.
+//! module reference is an index into the first table. A worker is named as
+//! its identity names it (`Program.workerIdentity`): a template by its
+//! worker's identity and an index into the positions table, a lambda by its
+//! owner and its place among the owner's nested procedure sites, a default by
+//! its place among its module's defaults.
 
 const std = @import("std");
 const collections = @import("collections");
@@ -35,8 +41,8 @@ const StaticDescs = @import("static_descs.zig").StaticDescs;
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
-const ExprId = check.CheckedBodies.ExprId;
 const LIR = lir_core.LIR;
+const checked_names = check.CheckedNames;
 const LirProgram = lir_core.Program;
 const TypeDesc = boxy_runtime.desc.TypeDesc;
 const TypeId = types.TypeId;
@@ -136,10 +142,10 @@ const CaptureNode = union(enum(u8)) {
 const CaptureOverride = struct { nominal: TypeId, methods: [3]?u32 };
 const CaptureWorker = union(enum) {
     local: WorkerId,
-    encoded: struct { bytes: []const u8, modules: []const [32]u8, types: []const TypeId, link_names: bool },
+    encoded: struct { bytes: []const u8, modules: []const [32]u8, types: []const TypeId, templates: []const u8, link_names: bool },
 
     fn reader(encoded: @FieldType(CaptureWorker, "encoded"), program: *Program) Decoder {
-        return .{ .program = program, .bytes = encoded.bytes, .modules = encoded.modules, .table = @constCast(encoded.types), .link_names = encoded.link_names };
+        return .{ .program = program, .bytes = encoded.bytes, .modules = encoded.modules, .table = @constCast(encoded.types), .templates = encoded.templates, .link_names = encoded.link_names };
     }
 
     fn resolve(self: CaptureWorker, program: *Program) Allocator.Error!WorkerId {
@@ -265,7 +271,7 @@ fn decodeCaptureRefs(input: *Decoder) Allocator.Error![]const u32 {
 
 fn decodeCaptureWorker(input: *Decoder, type_table: []const TypeId) CaptureWorker {
     const len = input.word();
-    return .{ .encoded = .{ .bytes = input.take(len), .modules = input.modules, .types = type_table, .link_names = input.link_names } };
+    return .{ .encoded = .{ .bytes = input.take(len), .modules = input.modules, .types = type_table, .templates = input.templates, .link_names = input.link_names } };
 }
 
 fn decodeCaptureGraph(input: *Decoder) Allocator.Error![]const CaptureNode {
@@ -815,18 +821,34 @@ const MetadataReader = struct {
     }
     fn worker(self: *MetadataReader) error{InvalidMetadata}!void {
         while (true) switch (try self.tag(Tag)) {
-            .template, .default => {
+            .template => {
+                try self.module();
+                _ = try self.take(32);
+                return;
+            },
+            .default => {
                 try self.module();
                 _ = try self.word();
                 return;
             },
             .template_list_int => {
                 try self.module();
-                _ = try self.word();
+                _ = try self.take(32);
                 _ = try self.tag(lower.ListIntItem);
                 return;
             },
             .lambda => {
+                switch (try self.byte()) {
+                    0 => {
+                        try self.module();
+                        _ = try self.take(32);
+                    },
+                    1 => {
+                        try self.module();
+                        _ = try self.word();
+                    },
+                    else => return error.InvalidMetadata,
+                }
                 _ = try self.word();
                 if (try self.word() > 1) return error.InvalidMetadata;
             },
@@ -1112,6 +1134,14 @@ const Encoder = struct {
     table: std.ArrayList(u8) = .empty,
     table_len: u32 = 0,
     table_index: collections.DenseMapUnmanaged(TypeId, u32) = .empty,
+    /// For a recipe: the position of each template it names, which its
+    /// references index (`templateRef`).
+    template_positions: std.ArrayList(u32) = .empty,
+    template_slots: std.AutoHashMapUnmanaged(struct { module: types.ModuleIndex, template: checked_names.CheckedProcedureTemplateId }, u32) = .empty,
+    /// Whether the program's workers still name their own procedures, as
+    /// they do until its lowering finishes: a template's identity is then
+    /// read from its procedure rather than hashed again.
+    proc_identities: bool = false,
     bytes: std.ArrayList(u8) = .empty,
 
     fn deinit(self: *Encoder) void {
@@ -1119,6 +1149,8 @@ const Encoder = struct {
         self.module_index.deinit(self.allocator);
         self.table.deinit(self.allocator);
         self.table_index.deinit(self.allocator);
+        self.template_positions.deinit(self.allocator);
+        self.template_slots.deinit(self.allocator);
         self.bytes.deinit(self.allocator);
     }
 
@@ -1127,6 +1159,10 @@ const Encoder = struct {
         errdefer out.deinit(self.allocator);
         try appendWord(self.allocator, &out, @intCast(self.modules.items.len));
         for (self.modules.items) |key| try out.appendSlice(self.allocator, &key);
+        if (!self.link_names) {
+            try appendWord(self.allocator, &out, @intCast(self.template_positions.items.len));
+            for (self.template_positions.items) |position| try appendWord(self.allocator, &out, position);
+        }
         try appendWord(self.allocator, &out, self.table_len);
         try out.appendSlice(self.allocator, self.table.items);
         try out.appendSlice(self.allocator, self.bytes.items);
@@ -1154,6 +1190,43 @@ const Encoder = struct {
 
     fn module(self: *Encoder, index: types.ModuleIndex) Allocator.Error!void {
         try self.word(try self.moduleEntry(index));
+    }
+
+    /// A template of module `module_index`, by its worker's identity, which
+    /// an edit elsewhere in the module leaves alone. A link's encoding (a
+    /// needs list, function metadata) is read against modules built apart
+    /// from it, so a reader resolves the identity through the worker's
+    /// export record (`ExportInterface.template`). A stored constant's
+    /// recipe is read against the modules it was stored with, so it also
+    /// lists the template's position, once per template, in a table after
+    /// its module table that the recipe's digest leaves out
+    /// (`ConstStore.recipeBody`).
+    fn templateRef(self: *Encoder, module_index: types.ModuleIndex, template: checked_names.CheckedProcedureTemplateId, identity: [32]u8) Allocator.Error!void {
+        try self.module(module_index);
+        try self.bytes.appendSlice(self.allocator, &identity);
+        if (self.link_names) return;
+        const slot = try self.template_slots.getOrPut(self.allocator, .{ .module = module_index, .template = template });
+        if (!slot.found_existing) {
+            slot.value_ptr.* = @intCast(self.template_positions.items.len);
+            try self.template_positions.append(self.allocator, @backingInt(template));
+        }
+        try self.word(slot.value_ptr.*);
+    }
+
+    /// What owns a lambda's site: a template, or a default by its place
+    /// among its module's defaults.
+    fn siteOwner(self: *Encoder, owner: Program.SiteOwner) Allocator.Error!void {
+        switch (owner) {
+            .template => |template| {
+                try self.bytes.append(self.allocator, 0);
+                try self.templateRef(template.module, template.template, self.program.templateIdentity(template.module, template.template, .generic).bytes);
+            },
+            .default => |default| {
+                try self.bytes.append(self.allocator, 1);
+                try self.module(default.module);
+                try self.word(self.program.defaultOrdinal(default.module, default.expr));
+            },
+        }
     }
 
     fn typeOf(self: *Encoder, ty: TypeId) Allocator.Error!void {
@@ -1230,7 +1303,7 @@ const Encoder = struct {
                     try self.table.append(self.allocator, @intFromBool(field.default.get() != null));
                     if (field.default.get()) |default| {
                         try self.tableWord(try self.moduleEntry(default.module));
-                        try self.tableWord(default.expr_node);
+                        try self.tableWord(default.ordinal);
                     }
                 }
                 try self.tableExt(record.ext.get());
@@ -1306,16 +1379,23 @@ const Encoder = struct {
         const kind: Tag = @fromBackingInt(@intCast(input.byte()));
         try self.tag(kind);
         switch (kind) {
-            .template, .default => {
+            .template => {
+                const module_index = input.module();
+                const ref = input.template(module_index, .generic);
+                try self.templateRef(module_index, ref.id, ref.identity);
+            },
+            .default => {
                 try self.module(input.module());
                 try self.word(input.word());
             },
             .template_list_int => {
-                try self.module(input.module());
-                try self.word(input.word());
-                try self.bytes.append(self.allocator, input.byte());
+                const module_index = input.module();
+                const ref = input.listIntTemplate(module_index);
+                try self.templateRef(module_index, ref.id, ref.identity);
+                try self.bytes.append(self.allocator, @backingInt(ref.item));
             },
             .lambda => {
+                try self.siteOwner(try input.siteOwner());
                 try self.word(input.word());
                 try self.word(input.word());
                 try self.importWorker(input);
@@ -1388,8 +1468,10 @@ const Encoder = struct {
                     .generic => .template,
                     .list_int => .template_list_int,
                 });
-                try self.module(key.module);
-                try self.word(@backingInt(key.template));
+                // A finished program's procedures are compacted, so there
+                // the identity comes from the key, not the worker's procedure.
+                const identity = if (self.proc_identities) record.identityBytes(program) else program.templateIdentity(key.module, key.template, key.binding).bytes;
+                try self.templateRef(key.module, key.template, identity);
                 switch (key.binding) {
                     .generic => {},
                     .list_int => |item| try self.bytes.append(self.allocator, @backingInt(item)),
@@ -1397,7 +1479,9 @@ const Encoder = struct {
             },
             .lambda => |key| {
                 try self.tag(.lambda);
-                try self.word(@backingInt(key.expr));
+                const site = try program.lambdaSite(key.module, key.expr);
+                try self.siteOwner(site.owner);
+                try self.word(site.ordinal);
                 try self.word(@intFromBool(key.captured_scheme));
                 try self.worker(key.outer);
             },
@@ -1410,7 +1494,7 @@ const Encoder = struct {
             .default => |key| {
                 try self.tag(.default);
                 try self.module(key.module);
-                try self.word(@backingInt(key.expr));
+                try self.word(program.defaultOrdinal(key.module, key.expr));
             },
             .method_entry => |target| {
                 try self.tag(.method_entry);
@@ -1493,6 +1577,9 @@ const Decoder = struct {
     at: usize = 0,
     modules: []const [32]u8 = &.{},
     table: []TypeId = &.{},
+    /// For a recipe: the position of each template it names, as
+    /// little-endian words (`Encoder.templateRef`).
+    templates: []const u8 = &.{},
 
     fn take(self: *Decoder, len: usize) []const u8 {
         defer self.at += len;
@@ -1519,6 +1606,9 @@ const Decoder = struct {
         const count = self.word();
         const bytes = self.take(count * 32);
         self.modules = @as([*]const [32]u8, @ptrCast(bytes.ptr))[0..count];
+        if (self.link_names) return;
+        const template_count = self.word();
+        self.templates = self.take(template_count * 4);
     }
 
     fn typeOf(self: *Decoder) TypeId {
@@ -1561,7 +1651,7 @@ const Decoder = struct {
                     field.* = .{ .name = field_name, .ty = ty, .kind = kind, .slot_variable = self.word() };
                     if (self.byte() != 0) {
                         const module_index = self.module();
-                        field.default = .some(.{ .module = module_index, .expr_node = self.word() });
+                        field.default = .some(.{ .module = module_index, .ordinal = self.word() });
                     }
                 }
                 const remainder = self.ext();
@@ -1625,24 +1715,97 @@ const Decoder = struct {
         return try self.program.store.internName(self.take(len));
     }
 
+    const TemplateRef = struct { id: checked_names.CheckedProcedureTemplateId, identity: [32]u8 };
+
+    /// The template of module `module_index` an encoding names by its
+    /// worker's identity at `binding` (`Encoder.templateRef`): in a link's
+    /// encoding, at the position its export record gives it in the module's
+    /// current checked module; in a recipe, at the position the recipe
+    /// lists.
+    fn template(self: *Decoder, module_index: types.ModuleIndex, binding: lower.TemplateBinding) TemplateRef {
+        const identity = self.take(32)[0..32].*;
+        const template_id: checked_names.CheckedProcedureTemplateId = if (self.link_names) blk: {
+            const unit = self.program.moduleUnit() orelse invariant("a link's encoding of a worker was read outside a module unit");
+            const interface = unit.imports.get(.{ .bytes = identity }) orelse
+                invariant("a link's encoding names a template worker its module's object exports no record of");
+            if (interface.template == LirProgram.BoxyExport.no_template) invariant("a link's encoding names a template worker whose record locates no template");
+            break :blk @fromBackingInt(interface.template);
+        } else blk: {
+            const slot = self.word();
+            if (slot >= self.templates.len / 4) invariant("a recipe names a template its table does not list");
+            break :blk @fromBackingInt(std.mem.readInt(u32, self.templates[slot * 4 ..][0..4], .little));
+        };
+        if (std.debug.runtime_safety) {
+            const named = self.program.templateIdentity(module_index, template_id, binding);
+            if (!std.mem.eql(u8, &named.bytes, &identity)) invariant("an encoding's template resolved to a template of another identity");
+        }
+        return .{ .id = template_id, .identity = identity };
+    }
+
+    /// An integer list worker's template and item type.
+    fn listIntTemplate(self: *Decoder, module_index: types.ModuleIndex) struct { id: checked_names.CheckedProcedureTemplateId, identity: [32]u8, item: lower.ListIntItem } {
+        // The item follows the template's reference, whose identity is of
+        // the item's worker.
+        const at = self.at;
+        self.at += 32;
+        if (!self.link_names) self.at += 4;
+        const item: lower.ListIntItem = @fromBackingInt(self.byte());
+        self.at = at;
+        const ref = self.template(module_index, .{ .list_int = item });
+        _ = self.byte();
+        return .{ .id = ref.id, .identity = ref.identity, .item = item };
+    }
+
+    /// What owns a lambda's site (`Encoder.siteOwner`).
+    fn siteOwner(self: *Decoder) Allocator.Error!Program.SiteOwner {
+        return switch (self.byte()) {
+            0 => blk: {
+                const module_index = self.module();
+                break :blk .{ .template = .{ .module = module_index, .template = self.template(module_index, .generic).id } };
+            },
+            1 => blk: {
+                const module_index = self.module();
+                break :blk .{ .default = .{ .module = module_index, .expr = try self.program.defaultAt(module_index, self.word()) } };
+            },
+            else => invariant("a lambda's site owner is neither a template nor a default"),
+        };
+    }
+
     fn worker(self: *Decoder) Allocator.Error!WorkerId {
+        return try self.workerAs(.value);
+    }
+
+    /// How a decoded worker is used: as the value the encoding stands for,
+    /// or as the scope of another worker it names (a lambda's outer worker,
+    /// an entry's or a thunk's target, an adapter's outer worker), which
+    /// nothing here calls directly, so an imported one binds no interface.
+    const Role = enum { value, scope };
+
+    fn workerAs(self: *Decoder, role: Role) Allocator.Error!WorkerId {
         const program = self.program;
         const tag: Tag = @fromBackingInt(@intCast(self.byte()));
         switch (tag) {
             .template => {
                 const module_index = self.module();
-                return try program.templateWorker(module_index, @fromBackingInt(self.word()));
+                const template_id = self.template(module_index, .generic).id;
+                return switch (role) {
+                    .value => try program.templateWorker(module_index, template_id),
+                    .scope => try program.templateScopeWorker(module_index, template_id),
+                };
             },
             .template_list_int => {
                 const module_index = self.module();
-                const template = self.word();
-                const item: lower.ListIntItem = @fromBackingInt(self.byte());
-                return try program.listIntTemplateWorker(module_index, @fromBackingInt(template), item);
+                const ref = self.listIntTemplate(module_index);
+                return switch (role) {
+                    .value => try program.listIntTemplateWorker(module_index, ref.id, ref.item),
+                    .scope => try program.listIntTemplateScopeWorker(module_index, ref.id, ref.item),
+                };
             },
             .lambda => {
-                const expr: ExprId = @fromBackingInt(self.word());
+                const owner = try self.siteOwner();
+                const expr = try program.lambdaAt(owner, self.word());
                 const captured_scheme = self.word() != 0;
-                const outer = try self.worker();
+                const outer = try self.workerAs(.scope);
                 var builder = try body.Builder.init(program, outer);
                 defer builder.deinit();
                 return try builder.storedLambdaWorker(outer, expr, captured_scheme);
@@ -1650,13 +1813,13 @@ const Decoder = struct {
             .adapter => {
                 const from = self.typeOf();
                 const to = self.typeOf();
-                return try program.adapterWorker(try self.worker(), from, to);
+                return try program.adapterWorker(try self.workerAs(.scope), from, to);
             },
             .default => {
                 const module_index = self.module();
-                return try program.defaultWorker(module_index, @fromBackingInt(self.word()));
+                return try program.defaultWorker(module_index, try program.defaultAt(module_index, self.word()));
             },
-            .method_entry => return try program.methodEntryWorker(try self.worker()),
+            .method_entry => return try program.methodEntryWorker(try self.workerAs(.scope)),
             .literal_thunk => {
                 const bound_ty = self.typeOf();
                 const requirement = self.word();
@@ -1664,7 +1827,7 @@ const Decoder = struct {
                     .tuple => |items| program.store.span(items),
                     .primitive, .empty_record, .record, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a stored literal thunk's types are not a tuple"),
                 };
-                return try program.literalThunkWorker(try self.worker(), try program.arena.allocator().dupe(TypeId, bound), requirement);
+                return try program.literalThunkWorker(try self.workerAs(.scope), try program.arena.allocator().dupe(TypeId, bound), requirement);
             },
             // The compile-time program read the root's slot; its value is
             // stored now, and the root's wrapper restores it.
@@ -1674,7 +1837,7 @@ const Decoder = struct {
                 _ = self.typeOf();
                 const wrapper = program.wrapper_by_root.get(.{ .module = module_index, .root = root }) orelse
                     invariant("a literal argument root has no entry wrapper");
-                return try program.methodEntryWorker(try program.templateRefWorker(wrapper));
+                return try program.methodEntryWorker(try program.templateRefScopeWorker(wrapper));
             },
             .structural => {
                 const module_index = self.module();
@@ -1694,8 +1857,8 @@ const Decoder = struct {
             .callable_eval_entry => {
                 const module_index = self.module();
                 const binding_module = self.module();
-                const template: checked.CallableEvalTemplateId = @fromBackingInt(self.word());
-                return try program.callableEvalEntryWorker(module_index, .{ .module = binding_module, .template = template });
+                const binding_template: checked.CallableEvalTemplateId = @fromBackingInt(self.word());
+                return try program.callableEvalEntryWorker(module_index, .{ .module = binding_module, .template = binding_template });
             },
             .codec => {
                 const module_index = self.module();
@@ -1809,7 +1972,7 @@ test "stored type metadata preserves field defaults across module reindexing" {
     const number = try source.store.primitive(.u8);
     var fields = [_]types.Field{.{ .name = name, .ty = number, .kind = .inline_slot }};
     const required = try source.store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
-    fields[0].default = .some(.{ .module = source_modules[0], .expr_node = 10 });
+    fields[0].default = .some(.{ .module = source_modules[0], .ordinal = 10 });
     const defaulted = try source.store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
     const root = try source.store.intern(.{ .tuple = &.{ required, defaulted } });
     var encoder: Encoder = .{ .allocator = allocator, .program = &source };
@@ -1845,18 +2008,19 @@ test "stored type metadata preserves field defaults across module reindexing" {
     try std.testing.expectEqual(@as(?types.FieldDefault, null), destination.store.fieldSpan(destination.store.get(restored[0]).record.fields)[0].default.get());
     const restored_default = destination.store.fieldSpan(destination.store.get(restored[1]).record.fields)[0].default.get().?;
     try std.testing.expectEqual(destination_modules[1], restored_default.module);
-    try std.testing.expectEqual(@as(u32, 10), restored_default.expr_node);
+    try std.testing.expectEqual(@as(u32, 10), restored_default.ordinal);
 }
 
 test "function unit metadata validates the integer list template tag, its single module reference, and its item type" {
     try std.testing.expectEqual(@as(u8, 11), @backingInt(Tag.callable_eval_entry));
     try std.testing.expectEqual(@as(u8, 12), @backingInt(Tag.template_list_int));
-    // An integer list template recipe has one module, a template ordinal,
-    // and an item type byte. Unlike the callable-entry recipe, it has no
-    // second module reference.
-    var bytes = [_]u8{ 12, 0, 0, 0, 0, 23, 0, 0, 0, @backingInt(lower.ListIntItem.u32) };
+    // An integer list template recipe has one module, the worker's
+    // identity, and an item type byte. Unlike the callable-entry recipe, it
+    // has no second module reference.
+    var bytes = [_]u8{ 12, 0, 0, 0, 0 } ++ @as([32]u8, @splat(23)) ++ [_]u8{@backingInt(lower.ListIntItem.u32)};
+    const item_at = bytes.len - 1;
     for (std.enums.values(lower.ListIntItem)) |item| {
-        bytes[9] = @backingInt(item);
+        bytes[item_at] = @backingInt(item);
         var reader = MetadataReader{ .bytes = &bytes, .modules = 1 };
         try reader.worker();
         try std.testing.expectEqual(@as(usize, 0), reader.remaining());
@@ -1865,10 +2029,10 @@ test "function unit metadata validates the integer list template tag, its single
         var truncated = MetadataReader{ .bytes = bytes[0..len], .modules = 1 };
         try std.testing.expectError(error.InvalidMetadata, truncated.worker());
     }
-    bytes[9] = @intCast(@typeInfo(lower.ListIntItem).@"enum".field_values.len);
+    bytes[item_at] = @intCast(@typeInfo(lower.ListIntItem).@"enum".field_values.len);
     var invalid_item = MetadataReader{ .bytes = &bytes, .modules = 1 };
     try std.testing.expectError(error.InvalidMetadata, invalid_item.worker());
-    bytes[9] = @backingInt(lower.ListIntItem.u32);
+    bytes[item_at] = @backingInt(lower.ListIntItem.u32);
     bytes[1] = 1;
     var invalid = MetadataReader{ .bytes = &bytes, .modules = 1 };
     try std.testing.expectError(error.InvalidMetadata, invalid.worker());
@@ -2053,7 +2217,7 @@ test "function unit metadata rejects truncated records and invalid type and modu
 /// by module link identities, never by this lowering's ids or a checked
 /// snapshot that can change while the native object stays reusable. Caller frees.
 pub fn encodeNeeds(allocator: Allocator, program: *Program, needs: Tables.Needs) Allocator.Error![]const u8 {
-    var encoder = Encoder{ .allocator = allocator, .program = program, .link_names = true };
+    var encoder = Encoder{ .allocator = allocator, .program = program, .link_names = true, .proc_identities = true };
     defer encoder.deinit();
     try encoder.word(needs.input_count);
     try encoder.word(@intCast(needs.recipes.len));
@@ -2237,7 +2401,7 @@ fn selectedCaptureMetadataForTest(allocator: Allocator, retained: *Retained) (Al
     try std.testing.expectEqual(@as(?u32, 1), selected.nodes.items[0].desc.scoped[0].methods[0]);
     try std.testing.expectEqualSlices(u32, &.{2}, selected.nodes.items[1].callable.captures);
     try std.testing.expectEqualSlices(u32, &.{ 0, 2 }, selected.nodes.items[2].table.inputs);
-    var encoder = Encoder{ .allocator = allocator, .program = retained.program };
+    var encoder = Encoder{ .allocator = allocator, .program = retained.program, .link_names = true };
     defer encoder.deinit();
     try encodeCaptureGraph(&encoder, selected.nodes.items);
     try encoder.word(1);
