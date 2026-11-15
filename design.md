@@ -22041,7 +22041,50 @@ list the weakest test: a test that implies another is dropped in its favor,
 and of tests that imply each other the first stands (a literal base, then
 locals and lengths by local).
 
-Tests for one loop are conjoined: the copy runs only when every one holds.
+A checked addition asks for a test of its own kind. `a + b` on a loop's
+cycle crashes on overflow, or reports it, on every pass when nothing bounds
+the sum. It asks when:
+
+- it is an unsigned addition of at most 64 bits, in its crashing or
+  overflow-reporting form, that the fixpoint leaves unproven;
+- the path's orderings put one operand at most a literal `ceiling` below the
+  type's highest value, through a value whose own range ends below that
+  highest value: a literal, a list's length (below `2^63`), a masked or
+  narrower value. A counter kept below a local that may itself be the
+  type's highest value has no ceiling: all that bounds it is that it is
+  not the highest value, and the test that follows from that passes for
+  almost no step;
+- the other operand is at most `value + c`, where `value` is an integer
+  local or a list's length that holds one value from the loop's entry to
+  its exit and that the guard can read under the rules above.
+
+The test is the limit test `value <= max - ceiling - c`, a comparison of a
+loop-invariant value against a literal. It bounds the sum by `max` on every
+pass, and it is the weakest test of that value that does. Where several
+values bound the operand, the addition asks for the weakest of their tests,
+as a comparison does. A limit the value's own range already exceeds is not
+asked.
+
+Like a length test, a limit test changes no behavior and removes nothing by
+itself. The guard branches on it. When it holds no pass can overflow, and
+the copy runs; the rounds that follow prove the copy's addition exact from
+the test's edge and the loop's own bound, and only then is it rewritten to
+the proven form. When it fails the loop as written runs, with its checked
+addition. An execution in which the addition overflows fails the test
+(holding it would bound the sum), so it runs the loop as written and
+crashes at the same pass and the same statement, after the same effects,
+with the same message.
+
+Subtraction and multiplication do not ask. A subtraction is exact when its
+right operand is at most its left, which is an ordering between two
+values and not a limit; a multiplication's bound is a product. Two
+loop-invariant operands with no literal bound on either (a counter below a
+local limit stepped by a local step) would need a test of a sum, which the
+guard does not emit.
+
+Tests for one loop are conjoined: the copy runs only when every one holds,
+whether they are length tests or limit tests, so a loop still has at most
+one copy.
 Comparisons that ask for the same base against the same list ask for the
 tightest of their tests, which decides all of them. A base that is a
 narrower unsigned integer is widened for the comparison; a nonzero offset is
@@ -22053,8 +22096,9 @@ decide. The prover's walks and persisted lists are bounded, so in a large
 procedure an ordering the rule counted on can fail to reach the comparison.
 A hoisted test's failing edge states nothing to the prover, so the loop
 itself is proved exactly as it was before the guard; at the next fixpoint
-its copy therefore holds fewer ordering comparisons exactly when the test
-decided one. A guard whose copy holds as many as its loop is withdrawn: the
+its copy therefore holds fewer checks (ordering comparisons, and arithmetic
+that crashes on or reports overflow) exactly when a test decided one. A
+guard whose copy holds as many as its loop is withdrawn: the
 loop's entries return to the loop, the guard and the copy become
 unreachable, and the loop is not guarded again. Every rewrite outside the
 copy was proved from orderings that hold on the path through the loop as
@@ -22063,6 +22107,14 @@ written, so it stands without the guard.
 Which loops are guarded depends only on the procedure: the demands are
 collected in the fixpoint round, sorted by loop, list and base, and applied
 in that order.
+
+Looking for a test costs fact-graph walks, and only the fixpoint round's
+demands are used. The fixpoint is a round that rewrites nothing, defers
+nothing and seeds no assumption, so a check reached after the round has
+done any of those does not look. A comparison reached before the round has
+a length term for any list does not look either. `ROC_RANGE_GUARD_STATS` prints, per
+procedure, the proof rounds, the guards made and withdrawn, the proofs
+started over, and the walks spent looking.
 
 ### Shared loop exits
 

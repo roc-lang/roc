@@ -70,7 +70,9 @@
 //! branch, and the rounds that follow prove the copy's checks from that
 //! branch's edge exactly as they prove any other, so the failure mode of a
 //! guard that proves nothing is a copy with its checks intact, never
-//! unsoundness. A loop is guarded only when the facts at its undecided
+//! unsoundness. A checked addition on a loop's cycle asks the same way for
+//! one test of a loop-invariant operand against a literal limit, and the
+//! copy's addition is then proved exact. A loop is guarded only when the facts at its undecided
 //! comparison compose with the test into a proof, only when it encloses no
 //! other loop, and at most once, so the pass copies a statement at most
 //! once and only where the copy loses a check.
@@ -100,7 +102,8 @@
 //! and the comparison's facts flow there without any merge in between.
 
 const std = @import("std");
-const invariant = @import("base").invariant;
+const base_mod = @import("base");
+const invariant = base_mod.invariant;
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const collections = @import("collections");
@@ -1374,12 +1377,24 @@ const HoistBase = union(enum) {
 const HoistDemand = struct {
     join: JoinPointId,
     /// The local whose list the test measures where the loop is entered.
-    list: LocalId,
+    /// Without one the test is a limit test, `base <= c`: it compares the
+    /// base against the literal `c`.
+    list: ?LocalId,
     /// The list is a parameter the loop rebinds, so the test holds on every
     /// pass only when no back edge passes a shorter list.
     carried: bool,
     base: HoistBase,
     c: i128,
+};
+
+/// One procedure's proof rounds and what its loop guards cost.
+const GuardStats = struct {
+    rounds: u32 = 0,
+    guards: u32 = 0,
+    withdrawn: u32 = 0,
+    restarts: u32 = 0,
+    /// Fact-graph walks made to find a test for an undecided check.
+    demand_walks: u32 = 0,
 };
 
 /// A guard the proof rounds have yet to confirm: see "Hoisted length tests".
@@ -1879,6 +1894,8 @@ const Pass = struct {
     guard_switches: collections.DenseMap(CFStmtId, void),
     /// Guards made at the last fixpoint, to be confirmed at the next.
     guard_trials: std.ArrayList(GuardTrial) = .empty,
+    /// What the procedure's guards cost, for `range_guard_stats`.
+    guard_stats: GuardStats = .{},
     /// Innermost join whose body lexically contains each statement. A jump to
     /// a loop head from a region inside that loop's body is a back edge even
     /// when a nested join's region lies between; only jumps from outside the
@@ -5658,7 +5675,13 @@ const Pass = struct {
         // is revived once per epoch, which only those steps open.
         var persisted_size: usize = 0;
         var first = true;
+        self.guard_stats = .{};
+        defer if (base_mod.dev_diagnostics.isSet(.range_guard_stats)) {
+            const stats = self.guard_stats;
+            std.debug.print("range guards: proc={d} rounds={d} guards={d} withdrawn={d} restarts={d} demand_walks={d}\n", .{ @backingInt(proc_id), stats.rounds, stats.guards, stats.withdrawn, stats.restarts, stats.demand_walks });
+        };
         while (true) {
+            self.guard_stats.rounds += 1;
             self.resetRound();
             try self.prescanProc(proc);
             if (first) try self.reserveMergeStorage();
@@ -5679,6 +5702,7 @@ const Pass = struct {
                 const withdrew = try self.settleGuards();
                 const guarded = try self.hoistLengthTests(proc.body.get().?);
                 if (!withdrew and !guarded) break;
+                self.guard_stats.restarts += 1;
                 self.freePersisted();
                 self.loop_bounds.clearRetainingCapacity();
                 self.loop_facts.clearRetainingCapacity();
@@ -5767,6 +5791,21 @@ const Pass = struct {
     // first list that has one: a test that implies another passes for
     // fewer lists than the one it implies, and conjoining alternatives
     // would make the guard pass only when all of them do.
+    //
+    // A checked addition asks too. `a + b` crashes, or reports overflow,
+    // on every pass because nothing bounds the sum. Where the path's facts
+    // put one operand at most a literal `ceiling` (the loop's own test of
+    // its counter against a literal or a length, say; a bound by a value
+    // that may itself be the type's highest is no ceiling) and the other
+    // at most `value + c` for a value held
+    // from the loop's entry to its exit, the limit test
+    // `value <= max - ceiling - c` bounds the sum by the type's highest
+    // value. The guard only branches on it: the copy runs when no pass can
+    // overflow, where the next rounds prove the addition exact from the
+    // test's edge, and the loop as written, with its checked addition,
+    // runs otherwise. An execution that overflows therefore fails the
+    // test and crashes in the loop as written, at the pass and statement
+    // it always did.
     //
     // Tests for one loop are conjoined: the copy runs only when all hold.
     // Two comparisons asking for the same base against the same list ask
@@ -5971,9 +6010,115 @@ const Pass = struct {
         return null;
     }
 
+    /// Whether this round can still be the one whose demands are used.
+    /// Demands are read only at the fixpoint, which is a round that
+    /// rewrites nothing, defers nothing and seeds no assumption, so a round
+    /// that has already done one of those need not look for tests.
+    fn roundMayBeFixpoint(self: *const Pass) bool {
+        return self.rewrites == 0 and !self.deferred_rewrites and !self.live_pending;
+    }
+
+    /// A checked addition no fact proves exact: ask for the limit test that
+    /// would. `a + b` fits its type when `a` is at most a literal `ceiling`
+    /// and `b` at most `max - ceiling`, so with a literal bound on one
+    /// operand from the path's facts, the test bounds a loop-invariant
+    /// value at or above the other.
+    fn noteOverflowDemand(self: *Pass, stmt: CFStmtId, lhs: NodeId, rhs: NodeId, max: i128) ResourceError!void {
+        if (!self.roundMayBeFixpoint()) return;
+        const join_id = self.hoistLoopOf(stmt) orelse return;
+        const used = self.query_used;
+        defer self.query_used = used;
+        if (try self.noteSumDemand(join_id, lhs, rhs, max)) return;
+        _ = try self.noteSumDemand(join_id, rhs, lhs, max);
+    }
+
+    fn noteSumDemand(self: *Pass, join_id: JoinPointId, bounded_id: NodeId, other_id: NodeId, max: i128) ResourceError!bool {
+        const bounded = self.nodes.items[bounded_id];
+        self.guard_stats.demand_walks += 1;
+        try self.relaxFresh(bounded.root, .forward);
+        // The ceiling comes from a value whose own range ends below the
+        // type's highest value: a literal, a length, a masked or narrower
+        // value. A bound by a value that can itself be the highest value
+        // says only that the operand is not, which leaves a limit almost
+        // no step passes.
+        var ceiling: i128 = max;
+        {
+            var it = self.query_best.iterator();
+            while (it.next()) |entry| {
+                const hi = self.nodes.items[entry.key_ptr.*].hi;
+                if (hi >= max) continue;
+                ceiling = @min(ceiling, clampSlack(hi + entry.value_ptr.c + bounded.off_hi));
+            }
+        }
+        if (ceiling < 0 or ceiling >= max) return false;
+
+        // Loop-invariant values at or above the other operand:
+        // `other <= value(root) + c`.
+        const other = self.nodes.items[other_id];
+        var values: [hoist_term_cap]HoistValue = undefined;
+        var values_len: usize = 0;
+        self.guard_stats.demand_walks += 1;
+        try self.relaxFresh(other.root, .forward);
+        {
+            var it = self.query_best.iterator();
+            while (it.next()) |entry| {
+                const root = self.nodes.items[entry.key_ptr.*];
+                if (root.lo == root.hi) continue;
+                const value_base: HoistBase = value_base: {
+                    if (try self.hoistValueOf(join_id, entry.key_ptr.*)) |local| break :value_base .{ .local = local };
+                    const term = (try self.hoistLengthOf(join_id, entry.key_ptr.*)) orelse continue;
+                    if (term.carried) continue;
+                    break :value_base .{ .length = term.list };
+                };
+                const found: HoistValue = .{ .base = value_base, .root = entry.key_ptr.*, .c = entry.value_ptr.c + other.off_hi };
+                for (values[0..values_len]) |*have| {
+                    if (std.meta.eql(have.base, found.base)) {
+                        if (found.c < have.c) have.* = found;
+                        break;
+                    }
+                } else if (values_len < hoist_term_cap) {
+                    values[values_len] = found;
+                    values_len += 1;
+                }
+            }
+        }
+        std.mem.sortUnstable(HoistValue, values[0..values_len], {}, hoistValueBefore);
+        // A value's test is `value + c <= max - ceiling`. One test implies
+        // another when the other's value and slack are at most its own;
+        // the operation asks for the weakest, the first of those that
+        // imply each other.
+        for (values[0..values_len], 0..) |candidate, index| {
+            var weakest = true;
+            for (values[0..values_len], 0..) |alternative, alternative_index| {
+                if (alternative_index == index) continue;
+                if (!try self.proveLeQuery(alternative.root, candidate.root, candidate.c - alternative.c)) continue;
+                if (alternative_index < index or !try self.proveLeQuery(candidate.root, alternative.root, alternative.c - candidate.c)) {
+                    weakest = false;
+                    break;
+                }
+            }
+            if (!weakest) continue;
+            const limit = max - ceiling - candidate.c;
+            // A limit the value's own range already exceeds admits no
+            // entry.
+            if (self.nodes.items[candidate.root].lo > limit) continue;
+            if (try self.addHoistDemand(.{
+                .join = join_id,
+                .list = null,
+                .carried = false,
+                .base = candidate.base,
+                .c = limit,
+            })) return true;
+        }
+        return false;
+    }
+
     /// An ordering comparison no fact decides: collect the length tests
     /// that would decide it either way.
     fn noteHoistDemands(self: *Pass, stmt: CFStmtId, op: PredOp, a: NodeId, b: NodeId) ResourceError!void {
+        // A comparison's test compares against a length, and a procedure
+        // that has measured none has none to compare against.
+        if (!self.roundMayBeFixpoint() or self.len_terms.count() == 0) return;
         const join_id = self.hoistLoopOf(stmt) orelse return;
         // The claim that makes the comparison hold, then the one that makes
         // it fail, each as `x <= y + m`.
@@ -5997,6 +6142,7 @@ const Pass = struct {
     fn noteClaimDemand(self: *Pass, join_id: JoinPointId, x_id: NodeId, y_id: NodeId, m: i128) ResourceError!bool {
         // Lengths at or below `y`: `root <= y.root + c` puts the length at
         // most `c - y.off_lo` above `y`.
+        self.guard_stats.demand_walks += 1;
         const y = self.nodes.items[y_id];
         var lengths: [hoist_term_cap]HoistLength = undefined;
         var lengths_len: usize = 0;
@@ -6025,6 +6171,7 @@ const Pass = struct {
         const x = self.nodes.items[x_id];
         var values: [hoist_term_cap]HoistValue = undefined;
         var values_len: usize = 0;
+        self.guard_stats.demand_walks += 1;
         try self.relaxFresh(x.root, .forward);
         {
             var it = self.query_best.iterator();
@@ -6110,7 +6257,20 @@ const Pass = struct {
     /// Record a test a comparison asks for. Returns whether the test is one
     /// a guard can make.
     fn addHoistDemand(self: *Pass, demand: HoistDemand) ResourceError!bool {
-        switch (demand.base) {
+        if (demand.list == null) {
+            // A limit below zero admits nothing, and the base is compared
+            // as a `U64`.
+            if (demand.c < 0 or demand.c > std.math.maxInt(u64)) return false;
+            switch (demand.base) {
+                .constant => return false,
+                .local => |local| switch (self.localLayout(local)) {
+                    .u8, .u16, .u32, .u64 => {},
+                    .bool, .str, .i8, .i16, .i32, .i64, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return false,
+                    _ => return false,
+                },
+                .length => {},
+            }
+        } else switch (demand.base) {
             // A length of zero or less is no test, and no list is `2^63`
             // long.
             .constant => if (demand.c >= 0 or -demand.c > std.math.maxInt(i64)) return false,
@@ -6125,7 +6285,7 @@ const Pass = struct {
             .length => if (demand.c > hoist_offset_cap or -demand.c > hoist_offset_cap) return false,
         }
         for (self.hoist_demands.items) |*have| {
-            if (have.join == demand.join and have.list == demand.list and have.carried == demand.carried and std.meta.eql(have.base, demand.base)) {
+            if (have.join == demand.join and std.meta.eql(have.list, demand.list) and have.carried == demand.carried and std.meta.eql(have.base, demand.base)) {
                 have.c = @min(have.c, demand.c);
                 return true;
             }
@@ -6145,7 +6305,9 @@ const Pass = struct {
 
     fn hoistDemandBefore(_: void, a: HoistDemand, b: HoistDemand) bool {
         if (a.join != b.join) return @backingInt(a.join) < @backingInt(b.join);
-        if (a.list != b.list) return @backingInt(a.list) < @backingInt(b.list);
+        const a_list: u64 = if (a.list) |list| @as(u64, @backingInt(list)) + 1 else 0;
+        const b_list: u64 = if (b.list) |list| @as(u64, @backingInt(list)) + 1 else 0;
+        if (a_list != b_list) return a_list < b_list;
         return hoistBaseOrder(a.base) < hoistBaseOrder(b.base);
     }
 
@@ -6155,7 +6317,9 @@ const Pass = struct {
         // A carried list some back edge may shorten keeps no bound.
         var kept: usize = 0;
         for (self.hoist_demands.items) |demand| {
-            if (demand.carried and self.shrinking_params.contains(demand.join, @backingInt(demand.list))) continue;
+            if (demand.list) |list| {
+                if (demand.carried and self.shrinking_params.contains(demand.join, @backingInt(list))) continue;
+            }
             self.hoist_demands.items[kept] = demand;
             kept += 1;
         }
@@ -6201,26 +6365,46 @@ const Pass = struct {
         return test_switch;
     }
 
-    /// The statements of one length test: continue at `holds` when
-    /// `base <= len(list) + c` and enter the loop itself otherwise.
-    fn emitLengthTest(self: *Pass, test_demand: HoistDemand, holds: CFStmtId, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
-        const len = try self.hoistLocal(.u64);
-        const fits = try self.hoistLocal(.bool);
-        var head = try self.hoistSwitch(fits, holds, test_demand.join, origin);
-        // The base as a `U64` local, and the statement that makes it one.
-        const Wide = struct { local: LocalId, op: ?LIR.LowLevel, source: LocalId };
-        const wide: ?Wide = switch (test_demand.base) {
+    /// A test's base as a `U64` local, and the statement that makes it one;
+    /// null for a literal base.
+    const HoistWide = struct { local: LocalId, op: ?LIR.LowLevel, source: LocalId };
+
+    fn hoistWide(self: *Pass, base: HoistBase) ResourceError!?HoistWide {
+        return switch (base) {
             .constant => null,
-            .local => |base| switch (self.localLayout(base)) {
-                .u8 => .{ .local = try self.hoistLocal(.u64), .op = .u8_to_u64, .source = base },
-                .u16 => .{ .local = try self.hoistLocal(.u64), .op = .u16_to_u64, .source = base },
-                .u32 => .{ .local = try self.hoistLocal(.u64), .op = .u32_to_u64, .source = base },
-                .u64 => .{ .local = base, .op = null, .source = base },
+            .local => |local| switch (self.localLayout(local)) {
+                .u8 => .{ .local = try self.hoistLocal(.u64), .op = .u8_to_u64, .source = local },
+                .u16 => .{ .local = try self.hoistLocal(.u64), .op = .u16_to_u64, .source = local },
+                .u32 => .{ .local = try self.hoistLocal(.u64), .op = .u32_to_u64, .source = local },
+                .u64 => .{ .local = local, .op = null, .source = local },
                 .bool, .str, .i8, .i16, .i32, .i64, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => unreachable, // addHoistDemand admits only unsigned bases up to 64 bits
                 _ => unreachable, // addHoistDemand admits only unsigned bases up to 64 bits
             },
             .length => |list| .{ .local = try self.hoistLocal(.u64), .op = .list_len, .source = list },
         };
+    }
+
+    /// The statements of one limit test: continue at `holds` when
+    /// `base <= c` and enter the loop itself otherwise.
+    fn emitLimitTest(self: *Pass, test_demand: HoistDemand, holds: CFStmtId, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
+        const fits = try self.hoistLocal(.bool);
+        const limit = try self.hoistLocal(.u64);
+        const wide = (try self.hoistWide(test_demand.base)) orelse unreachable; // addHoistDemand admits no literal base for a limit test
+        var head = try self.hoistSwitch(fits, holds, test_demand.join, origin);
+        head = try self.store.addLowLevelStmt(fits, .num_is_lte, &.{ wide.local, limit }, head, origin);
+        head = try self.hoistLiteral(limit, test_demand.c, head, origin);
+        if (wide.op) |op| head = try self.store.addLowLevelStmt(wide.local, op, &.{wide.source}, head, origin);
+        return head;
+    }
+
+    /// The statements of one length test: continue at `holds` when
+    /// `base <= len(list) + c` and enter the loop itself otherwise.
+    fn emitLengthTest(self: *Pass, test_demand: HoistDemand, holds: CFStmtId, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
+        const list = test_demand.list orelse return self.emitLimitTest(test_demand, holds, origin);
+        const len = try self.hoistLocal(.u64);
+        const fits = try self.hoistLocal(.bool);
+        var head = try self.hoistSwitch(fits, holds, test_demand.join, origin);
+        const wide = try self.hoistWide(test_demand.base);
         if (wide) |base| {
             if (test_demand.c == 0) {
                 head = try self.store.addLowLevelStmt(fits, .num_is_lte, &.{ base.local, len }, head, origin);
@@ -6250,7 +6434,7 @@ const Pass = struct {
             head = try self.store.addLowLevelStmt(fits, .num_is_lte, &.{ least, len }, head, origin);
             head = try self.hoistLiteral(least, -test_demand.c, head, origin);
         }
-        return try self.store.addLowLevelStmt(len, .list_len, &.{test_demand.list}, head, origin);
+        return try self.store.addLowLevelStmt(len, .list_len, &.{list}, head, origin);
     }
 
     /// Guard one loop with `tests`, all of which name it: see "Hoisted
@@ -6315,6 +6499,7 @@ const Pass = struct {
                 .remainder = inner,
             } }, origin);
         }
+        self.guard_stats.guards += 1;
         try self.hoisted_joins.put(loop_id, {});
         try self.hoisted_joins.put(copy_id, {});
         try self.guard_trials.append(self.allocator, .{
@@ -6326,8 +6511,10 @@ const Pass = struct {
         });
     }
 
-    /// The ordering comparisons left in a loop body.
-    fn orderingComparisons(self: *Pass, body: CFStmtId) ResourceError!usize {
+    /// The checks left in a loop body: its ordering comparisons, and the
+    /// additions, subtractions and multiplications that crash on overflow
+    /// or ask whether they overflow.
+    fn remainingChecks(self: *Pass, body: CFStmtId) ResourceError!usize {
         var count: usize = 0;
         var walk = try BodyClone.ReachableStmts.initWithScratch(self.store, body, self.analysis);
         defer walk.deinit();
@@ -6335,7 +6522,12 @@ const Pass = struct {
             const cf = self.store.getCFStmtImmediate(stmt);
             if (cf.* != .assign_low_level) continue;
             const op = cf.assign_low_level.op;
-            if (op == .num_is_lt or op == .num_is_lte or op == .num_is_gt or op == .num_is_gte) count += 1;
+            if (op == .num_is_lt or op == .num_is_lte or op == .num_is_gt or op == .num_is_gte) {
+                count += 1;
+            } else if (CheckedArithmetic.classify(op)) |entry| switch (entry.mode) {
+                .crash_on_overflow, .overflows => count += 1,
+                .wrap, .proven_cannot_overflow => {},
+            };
         }
         return count;
     }
@@ -6352,7 +6544,7 @@ const Pass = struct {
         for (self.guard_trials.items) |trial| {
             const loop_body = self.store.getCFStmtImmediate(trial.loop_stmt).join.body;
             const copy_body = self.store.getCFStmtImmediate(trial.copy_stmt).join.body;
-            if (try self.orderingComparisons(copy_body) < try self.orderingComparisons(loop_body)) continue;
+            if (try self.remainingChecks(copy_body) < try self.remainingChecks(loop_body)) continue;
             self.scratch.clearRetainingCapacity();
             {
                 var walk = try BodyClone.ReachableStmts.initWithScratch(self.store, trial.remainder, self.analysis);
@@ -6365,6 +6557,7 @@ const Pass = struct {
             for (self.scratch.items) |stmt| self.store.getCFStmtPtr(stmt).jump.target = trial.loop_id;
             self.scratch.clearRetainingCapacity();
             self.store.getCFStmtPtr(trial.loop_stmt).join.remainder = trial.remainder;
+            self.guard_stats.withdrawn += 1;
             withdrew = true;
         }
         self.guard_trials.clearRetainingCapacity();
@@ -7613,6 +7806,13 @@ const Pass = struct {
             }
         }
         const always_overflows = self.familyAlwaysOverflows(entry.operation, lhs, rhs, max.?);
+        if (!proof.proven and !always_overflows) switch (entry.operation) {
+            .add => switch (entry.mode) {
+                .crash_on_overflow, .overflows => try self.noteOverflowDemand(stmt, lhs, rhs, max.?),
+                .wrap, .proven_cannot_overflow => {},
+            },
+            .sub, .mul => {},
+        };
 
         if (entry.mode == .crash_on_overflow and always_overflows) {
             try self.rewriteAsArithmeticCrash(stmt, entry.operation);
