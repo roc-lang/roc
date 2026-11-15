@@ -238,7 +238,7 @@ main! = |args| {
 	tagged = Has(plain)
 	plains : List(Plain)
 	plains = [plain, plain, plain]
-	echo!("${Str.inspect(closed_param(plain))} ${Str.inspect(read_each([plain, plain]))} ${Str.inspect(list_param(plains))} ${Str.inspect(tag_param(tagged))} ${Str.inspect(tuple_param((plain, 7)))} ${Str.inspect(plain.both(plain))}\n")
+	echo!("${Str.inspect(closed_param(plain))} ${Str.inspect(read_each([plain, plain]))} ${Str.inspect(list_param(plains))} ${Str.inspect(tag_param(tagged))} ${Str.inspect(tuple_param((plain, 7.U8)))} ${Str.inspect(plain.both(plain))}\n")
 
 	read_value : Plain -> U32
 	read_value = read_z
