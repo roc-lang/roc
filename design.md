@@ -17511,6 +17511,49 @@ size, or runtime performance are allowed.
 
 ## Shared Post-Check Model
 
+### Ordered Runs
+
+Native dev code generation, ARC and the procedure-local LIR passes run their
+per-procedure work as ordered runs on the post-check executor
+(`post_check_task_executor.runOrdered`). A run's owner splits its items into
+chunks of consecutive items by a scheduling weight, a procedure's frame size:
+each chunk carries at least a minimum weight, and a run has about sixteen
+chunks per worker, so many short procedures share one claim and a heavy
+procedure late in the run leaves the other lanes little to wait for. The
+owner submits drain tasks, at most one per worker. A drain task claims chunks
+from one shared counter, never more than a window of four chunks per worker
+past the oldest uncommitted chunk, and runs every item of each chunk it
+claims, so a lane goes from one chunk to the next without returning to the
+executor and the results waiting for their commit are bounded by the window.
+
+The owner commits items in index order, each as soon as it and every item
+before it have run, while lanes keep running later chunks. It waits only by
+receiving a completion of its session: the lane that finishes the chunk the
+owner is waiting for ends its drain task, and that completion wakes the owner,
+so no thread polls or sleeps. A drain task the owner runs itself while it waits
+ends after one chunk, so the owner gets back to committing. Commit order is
+item order for every worker count, chunking and completion order, and the
+weights decide only which lane runs an item and when, so a run's output depends
+only on its items. The first error, from an item or a commit, stops every
+further claim; items already claimed finish, nothing further commits, and the
+owner returns the error once it has received every task. Without an executor,
+the items run and commit in order on one sequential lane through the same
+callbacks.
+
+Each lane lends every item it runs one scratch arena, registered in the lane's
+state and reset after each item to a single retained chunk of at most
+`lane_scratch_retain_limit` (4 MiB), so a lane's steady-state items allocate
+nothing from the backing allocator and idle scratch is bounded per lane.
+
+A commit runs while lanes run later items, so it may change nothing an item
+reads. Native code generation commits in the run: lanes read only the frozen
+program and their own generators, and the owner appends each fragment to the
+destination. ARC and the LIR passes commit after their runs, since their
+commits append to the store every item reads: ARC appends a wave's shards in
+owner order after the wave ("ARC Borrow Inference"), and a segment of LIR pass
+phases commits in procedure order after its run ("Procedure-Local LIR
+Rewrites").
+
 ### Value Rules
 
 `Str.inspect` rendering, structural equality, structural hashing, and the

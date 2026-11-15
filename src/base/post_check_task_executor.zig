@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const invariant = @import("invariant.zig").invariant;
+const SingleThreadArena = @import("collections").SingleThreadArena;
 
 /// Type-erased state retained by one exclusive executor lane.
 ///
@@ -216,6 +217,380 @@ pub const TimedTasks = struct {
     }
 };
 
+/// The scratch capacity a lane keeps between the items of ordered runs. A
+/// lane's item scratch returns to one retained chunk of at most this many
+/// bytes after every item, so steady-state items allocate nothing from the
+/// backing allocator, and idle capacity is bounded by this times the lanes
+/// that ran items.
+pub const lane_scratch_retain_limit: usize = 4 << 20;
+
+/// The scratch arena a lane lends every item it runs, registered in the
+/// lane's `LaneState`.
+const LaneArena = struct {
+    arena: SingleThreadArena,
+
+    var key: u8 = 0;
+
+    fn of(lane: *LaneState) std.mem.Allocator.Error!*SingleThreadArena {
+        if (lane.get(&key)) |state| return &@as(*LaneArena, @ptrCast(@alignCast(state))).arena;
+        const box = try lane.allocator.create(LaneArena);
+        box.* = .{ .arena = SingleThreadArena.init(lane.allocator) };
+        errdefer lane.allocator.destroy(box);
+        try lane.put(&key, box, destroy);
+        return &box.arena;
+    }
+
+    fn destroy(opaque_box: *anyopaque) void {
+        const box: *LaneArena = @ptrCast(@alignCast(opaque_box));
+        const allocator = box.arena.child_allocator;
+        box.arena.deinit();
+        allocator.destroy(box);
+    }
+};
+
+/// Durations and counts of one ordered run, recorded only when a caller asks
+/// for timing. Item time is summed per lane in slots no two lanes share; the
+/// owner folds the slots after the last completion.
+pub const OrderedTiming = struct {
+    std_io: std.Io,
+    /// Elapsed time from the first submission to the last commit.
+    elapsed_ns: u64 = 0,
+    /// Item callbacks' own time, summed over lanes.
+    worker_ns: u64 = 0,
+    /// The workers' capacity over the run: its elapsed time times the
+    /// executor's worker count, or its elapsed time when it ran inline.
+    capacity_ns: u64 = 0,
+    /// The owner's commits.
+    commit_ns: u64 = 0,
+    items: u64 = 0,
+    chunks: u64 = 0,
+    /// Executor tasks submitted; every task drains chunks until none is
+    /// claimable.
+    tasks: u64 = 0,
+    lanes: []Lane = &.{},
+
+    const Lane = struct {
+        ns: u64 = 0,
+        _padding: [std.atomic.cache_line]u8 = undefined,
+    };
+
+    fn now(self: *const OrderedTiming) i96 {
+        return std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
+    }
+
+    fn since(self: *const OrderedTiming, started: i96) u64 {
+        return @intCast(@max(0, self.now() - started));
+    }
+
+    /// Idle worker capacity: the capacity the item callbacks did not use.
+    pub fn idleNs(self: *const OrderedTiming) u64 {
+        return self.capacity_ns -| self.worker_ns;
+    }
+
+    /// Add another run's totals to these.
+    pub fn add(self: *OrderedTiming, other: *const OrderedTiming) void {
+        self.elapsed_ns +|= other.elapsed_ns;
+        self.worker_ns +|= other.worker_ns;
+        self.capacity_ns +|= other.capacity_ns;
+        self.commit_ns +|= other.commit_ns;
+        self.items +|= other.items;
+        self.chunks +|= other.chunks;
+        self.tasks +|= other.tasks;
+    }
+};
+
+/// How an ordered run divides and bounds its work. Neither field affects
+/// what the run commits or in which order: they decide only which lane runs
+/// an item and how far ahead of the oldest uncommitted item lanes may run.
+pub const OrderedOptions = struct {
+    /// The smallest summed weight a chunk is given before it is closed, so
+    /// many light items share one claim.
+    min_chunk_weight: u64 = 1,
+    timing: ?*OrderedTiming = null,
+    /// Receives the most items the owner saw claimed and not yet committed,
+    /// a bound on the results held at once.
+    peak_claimed: ?*usize = null,
+};
+
+/// The ordered run a thread is the owner of while it waits in that run's
+/// session: a drain task the owner runs inline returns after one chunk so the
+/// owner gets back to committing.
+threadlocal var waiting_owner: ?*const anyopaque = null;
+
+/// Run `ctx.runItem(i, worker)` for every `i` in `0..count` on the executor's
+/// lanes, and `ctx.commitItem(i)` on the calling thread in increasing `i`,
+/// each as soon as every item before it has committed and item `i` has run.
+///
+/// `Ctx` declares `const Error`, an error set containing `OutOfMemory`;
+/// `fn weight(*const Ctx, usize) u64`, a scheduling estimate of an item's
+/// cost; `fn runItem(*Ctx, usize, Worker) Error!void`; and
+/// `fn commitItem(*Ctx, usize) Error!void`.
+///
+/// Lanes claim consecutive items in chunks from one shared counter, never
+/// more than a bounded window of chunks past the oldest uncommitted one, so
+/// results waiting for their commit are bounded too. Each lane keeps its
+/// item scratch between items (`lane_scratch_retain_limit`); an item's
+/// `Worker.scratch` dies when its `runItem` returns. Commits run while lanes
+/// keep running later items, so `commitItem` must not change anything a
+/// `runItem` reads. Commit order is item order for every worker count and
+/// chunking, so output depends only on `ctx`.
+///
+/// The first error, from an item or a commit, stops lanes claiming further
+/// chunks; every item already claimed finishes, no further item commits, and
+/// the error is returned. Without an executor, items run and commit in order
+/// on `sequential_lane`.
+pub fn runOrdered(
+    comptime Ctx: type,
+    allocator: std.mem.Allocator,
+    ctx: *Ctx,
+    count: usize,
+    executor: ?Executor,
+    sequential_lane: *LaneState,
+    options: OrderedOptions,
+) Ctx.Error!void {
+    if (count == 0) return;
+    const timing = options.timing;
+    const started: i96 = if (timing) |active| active.now() else 0;
+    if (timing) |active| active.items +|= count;
+    const exec = executor orelse {
+        if (options.peak_claimed) |peak| peak.* = @max(peak.*, 1);
+        const arena = try LaneArena.of(sequential_lane);
+        for (0..count) |index| {
+            const worker: Worker = .{ .id = 0, .allocator = allocator, .scratch = arena.allocator(), .lane_state = sequential_lane };
+            const item_started: i96 = if (timing) |active| active.now() else 0;
+            const item_result = ctx.runItem(index, worker);
+            _ = arena.reset(.{ .retain_with_limit = lane_scratch_retain_limit });
+            const commit_started: i96 = if (timing) |active| active.now() else 0;
+            if (timing) |active| active.worker_ns +|= @intCast(@max(0, commit_started - item_started));
+            try item_result;
+            try ctx.commitItem(index);
+            if (timing) |active| active.commit_ns +|= active.since(commit_started);
+        }
+        if (timing) |active| {
+            const elapsed = active.since(started);
+            active.elapsed_ns +|= elapsed;
+            active.capacity_ns +|= elapsed;
+            active.chunks +|= count;
+        }
+        return;
+    };
+    var run = try OrderedRun(Ctx).init(allocator, ctx, count, exec, options);
+    defer run.deinit(allocator);
+    if (timing) |active| active.chunks +|= run.chunks.len;
+    const result = run.drive();
+    if (options.peak_claimed) |peak| peak.* = @max(peak.*, run.peak_claimed, 1);
+    if (timing) |active| {
+        const elapsed = active.since(started);
+        active.elapsed_ns +|= elapsed;
+        active.capacity_ns +|= elapsed *| @as(u64, exec.worker_count);
+        active.commit_ns +|= run.commit_ns;
+        active.tasks +|= run.tasks;
+        for (run.lane_ns) |lane| active.worker_ns +|= lane.ns;
+    }
+    return result;
+}
+
+/// The state one `runOrdered` call shares between its owner and the drain
+/// tasks it submits.
+fn OrderedRun(comptime Ctx: type) type {
+    return struct {
+        const Self = @This();
+
+        const ChunkState = enum(u8) { pending, done, failed };
+
+        const Chunk = struct {
+            start: usize,
+            end: usize,
+            state: std.atomic.Value(ChunkState) = .init(.pending),
+            /// The item error, written by the lane that ran the chunk before
+            /// it publishes `failed`.
+            err: Ctx.Error = undefined,
+        };
+
+        const none: usize = std.math.maxInt(usize);
+
+        ctx: *Ctx,
+        executor: Executor,
+        timing: ?*OrderedTiming,
+        chunks: []Chunk,
+        window: usize,
+        /// The next chunk a lane may claim.
+        next_claim: std.atomic.Value(usize) = .init(0),
+        /// Chunks committed so far; lanes claim only below this plus `window`.
+        committed: std.atomic.Value(usize) = .init(0),
+        /// The chunk whose completion the owner is blocked on, or `none`. The
+        /// lane finishing it returns from its drain task, so its completion
+        /// wakes the owner.
+        awaited: std.atomic.Value(usize) = .init(none),
+        stop: std.atomic.Value(bool) = .init(false),
+        lane_ns: []OrderedTiming.Lane = &.{},
+        commit_ns: u64 = 0,
+        tasks: u64 = 0,
+        peak_claimed: usize = 0,
+
+        fn init(allocator: std.mem.Allocator, ctx: *Ctx, count: usize, executor: Executor, options: OrderedOptions) std.mem.Allocator.Error!Self {
+            var total: u64 = 0;
+            for (0..count) |index| total +|= ctx.weight(index);
+            // Enough chunks per worker that a heavy chunk late in the run
+            // leaves the others little to wait for.
+            const chunks_per_worker = 16;
+            const target = @max(options.min_chunk_weight, total / @as(u64, @intCast(executor.worker_count * chunks_per_worker)), 1);
+            var chunk_count: usize = 0;
+            {
+                var weight: u64 = 0;
+                for (0..count) |index| {
+                    weight +|= ctx.weight(index);
+                    if (weight >= target or index + 1 == count) {
+                        chunk_count += 1;
+                        weight = 0;
+                    }
+                }
+            }
+            const chunks = try allocator.alloc(Chunk, chunk_count);
+            errdefer allocator.free(chunks);
+            {
+                var weight: u64 = 0;
+                var start: usize = 0;
+                var next: usize = 0;
+                for (0..count) |index| {
+                    weight +|= ctx.weight(index);
+                    if (weight >= target or index + 1 == count) {
+                        chunks[next] = .{ .start = start, .end = index + 1 };
+                        next += 1;
+                        start = index + 1;
+                        weight = 0;
+                    }
+                }
+                std.debug.assert(next == chunk_count);
+            }
+            const lane_ns: []OrderedTiming.Lane = if (options.timing != null) try allocator.alloc(OrderedTiming.Lane, executor.lane_count) else &.{};
+            for (lane_ns) |*lane| lane.* = .{};
+            return .{
+                .ctx = ctx,
+                .executor = executor,
+                .timing = options.timing,
+                .chunks = chunks,
+                .window = @max(4 * executor.worker_count, 8),
+                .lane_ns = lane_ns,
+            };
+        }
+
+        fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            allocator.free(self.chunks);
+            if (self.lane_ns.len != 0) allocator.free(self.lane_ns);
+        }
+
+        /// The next claimable chunk, or null once every chunk is claimed, the
+        /// window is full, or the run is stopping.
+        fn claim(self: *Self) ?usize {
+            var next = self.next_claim.load(.monotonic);
+            while (true) {
+                if (self.stop.load(.monotonic)) return null;
+                if (next >= self.chunks.len or next >= self.committed.load(.acquire) + self.window) return null;
+                next = self.next_claim.cmpxchgWeak(next, next + 1, .monotonic, .monotonic) orelse return next;
+            }
+        }
+
+        fn drainTask(context: *anyopaque, worker: Worker) ?*anyopaque {
+            const self: *Self = @ptrCast(@alignCast(context));
+            const inline_owner = if (waiting_owner) |owner| owner == @as(*const anyopaque, self) else false;
+            const arena = LaneArena.of(worker.lane_state) catch {
+                // Claim one chunk only to report the failure in order.
+                if (self.claim()) |index| self.finish(index, error.OutOfMemory);
+                return self;
+            };
+            while (self.claim()) |index| {
+                const chunk = &self.chunks[index];
+                var failure: ?Ctx.Error = null;
+                for (chunk.start..chunk.end) |item| {
+                    const item_started: i96 = if (self.timing) |active| active.now() else 0;
+                    const item_result = self.ctx.runItem(item, .{
+                        .id = worker.id,
+                        .allocator = worker.allocator,
+                        .scratch = arena.allocator(),
+                        .lane_state = worker.lane_state,
+                    });
+                    _ = arena.reset(.{ .retain_with_limit = lane_scratch_retain_limit });
+                    if (self.timing) |active| self.lane_ns[worker.id].ns +|= active.since(item_started);
+                    item_result catch |err| {
+                        failure = err;
+                        break;
+                    };
+                }
+                self.finish(index, failure);
+                if (inline_owner or self.awaited.load(.seq_cst) == index) break;
+            }
+            return self;
+        }
+
+        fn finish(self: *Self, index: usize, failure: ?Ctx.Error) void {
+            const chunk = &self.chunks[index];
+            if (failure) |err| {
+                chunk.err = err;
+                self.stop.store(true, .monotonic);
+                chunk.state.store(.failed, .seq_cst);
+            } else {
+                chunk.state.store(.done, .seq_cst);
+            }
+        }
+
+        /// Commit, top up and wait until every chunk is committed or the run
+        /// stops, then receive every outstanding task.
+        fn drive(self: *Self) Ctx.Error!void {
+            var session = try self.executor.begin();
+            const failure = self.loop(&session);
+            self.stop.store(true, .monotonic);
+            while (session.outstanding != 0) _ = self.receive(&session);
+            session.end();
+            if (failure) |err| return err;
+        }
+
+        fn receive(self: *Self, session: *Session) Completion {
+            const previous = waiting_owner;
+            waiting_owner = self;
+            defer waiting_owner = previous;
+            return session.receive();
+        }
+
+        fn loop(self: *Self, session: *Session) ?Ctx.Error {
+            var committed: usize = 0;
+            while (true) {
+                while (committed < self.chunks.len) {
+                    const chunk = &self.chunks[committed];
+                    switch (chunk.state.load(.acquire)) {
+                        .pending => break,
+                        .failed => return chunk.err,
+                        .done => {},
+                    }
+                    const commit_started: i96 = if (self.timing) |active| active.now() else 0;
+                    for (chunk.start..chunk.end) |item| self.ctx.commitItem(item) catch |err| return err;
+                    if (self.timing) |active| self.commit_ns +|= active.since(commit_started);
+                    committed += 1;
+                    self.committed.store(committed, .release);
+                }
+                if (committed == self.chunks.len) return null;
+                const claimed = self.next_claim.load(.monotonic);
+                if (claimed > committed) self.peak_claimed = @max(self.peak_claimed, self.chunks[claimed - 1].end - self.chunks[committed].start);
+                while (session.tryReceive()) |_| {}
+                const claimable = @min(self.chunks.len, committed + self.window) -| self.next_claim.load(.monotonic);
+                while (session.outstanding < claimable and session.canSubmit()) {
+                    session.submit(.{ .id = 0, .context = self, .run = drainTask }) catch |err| return err;
+                    self.tasks += 1;
+                }
+                self.awaited.store(committed, .seq_cst);
+                if (self.chunks[committed].state.load(.seq_cst) == .pending) {
+                    // The awaited chunk is claimed by a running task, which
+                    // returns once it finishes the chunk, or is claimable by
+                    // a queued or running one, so a completion arrives.
+                    std.debug.assert(session.outstanding != 0);
+                    _ = self.receive(session);
+                }
+                self.awaited.store(none, .monotonic);
+            }
+        }
+    };
+}
+
 /// Single-owner handle for incrementally feeding one bounded execution window.
 ///
 /// Sessions are neither thread-safe nor copyable after `begin`. Every accepted
@@ -429,4 +804,281 @@ test "post-check executor never admits more tasks than worker capacity" {
     try std.testing.expectEqual(@as(usize, 0), harness.active);
     try std.testing.expectEqual(tasks.len, harness.received);
     for (contexts) |context| try std.testing.expect(context.ran);
+}
+
+/// An executor over real threads for tests, with the coordinator's
+/// contract: a session's owner runs its queued tasks itself while it waits,
+/// and every thread has its own lane. Only test code may reference it.
+pub const ThreadedTestExecutor = struct {
+    const Mutex = std.Io.Mutex;
+    const Condition = std.Io.Condition;
+    const io = std.testing.io;
+
+    mutex: Mutex = .init,
+    task_ready: Condition = .init,
+    completion_ready: Condition = .init,
+    tasks: std.ArrayList(Task) = .empty,
+    completions: std.ArrayList(Completion) = .empty,
+    threads: []std.Thread = &.{},
+    lanes: []LaneState = &.{},
+    closing: bool = false,
+    /// Submissions accepted before every further one fails.
+    submit_limit: usize = std.math.maxInt(usize),
+    submitted: usize = 0,
+
+    pub fn start(self: *ThreadedTestExecutor, thread_count: usize) !void {
+        self.lanes = try std.testing.allocator.alloc(LaneState, thread_count + 1);
+        for (self.lanes) |*lane| lane.* = LaneState.init(std.testing.allocator);
+        self.threads = try std.testing.allocator.alloc(std.Thread, thread_count);
+        for (self.threads, 0..) |*thread, index| thread.* = try std.Thread.spawn(.{}, workerMain, .{ self, index });
+    }
+
+    pub fn stop(self: *ThreadedTestExecutor) void {
+        self.mutex.lockUncancelable(io);
+        self.closing = true;
+        self.task_ready.broadcast(io);
+        self.mutex.unlock(io);
+        for (self.threads) |thread| thread.join();
+        std.testing.allocator.free(self.threads);
+        for (self.lanes) |*lane| lane.deinit();
+        std.testing.allocator.free(self.lanes);
+        self.tasks.deinit(std.testing.allocator);
+        self.completions.deinit(std.testing.allocator);
+    }
+
+    pub fn executor(self: *ThreadedTestExecutor) Executor {
+        return .{
+            .context = self,
+            .worker_count = @max(self.threads.len, 1),
+            .lane_count = self.lanes.len,
+            .beginFn = begin,
+            .submitFn = submit,
+            .receiveFn = receive,
+            .tryReceiveFn = tryReceive,
+            .endFn = end,
+        };
+    }
+
+    fn runTask(self: *ThreadedTestExecutor, task: Task, lane: usize) void {
+        const value = task.run(task.context, .{
+            .id = lane,
+            .allocator = std.testing.allocator,
+            .scratch = std.testing.allocator,
+            .lane_state = &self.lanes[lane],
+        });
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        self.completions.append(std.testing.allocator, .{ .id = task.id, .worker_id = lane, .value = value }) catch @panic("test executor completion list");
+        self.completion_ready.broadcast(io);
+    }
+
+    fn workerMain(self: *ThreadedTestExecutor, lane: usize) void {
+        while (true) {
+            self.mutex.lockUncancelable(io);
+            while (self.tasks.items.len == 0 and !self.closing) self.task_ready.waitUncancelable(io, &self.mutex);
+            if (self.tasks.items.len == 0) {
+                self.mutex.unlock(io);
+                return;
+            }
+            const task = self.tasks.orderedRemove(0);
+            self.mutex.unlock(io);
+            self.runTask(task, lane);
+        }
+    }
+
+    fn begin(context: *anyopaque) std.mem.Allocator.Error!*anyopaque {
+        return context;
+    }
+
+    fn submit(context: *anyopaque, _: *anyopaque, task: Task) std.mem.Allocator.Error!void {
+        const self: *ThreadedTestExecutor = @ptrCast(@alignCast(context));
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        if (self.submitted == self.submit_limit) return error.OutOfMemory;
+        self.submitted += 1;
+        try self.tasks.append(std.testing.allocator, task);
+        self.task_ready.signal(io);
+    }
+
+    fn receive(context: *anyopaque, _: *anyopaque) Completion {
+        const self: *ThreadedTestExecutor = @ptrCast(@alignCast(context));
+        while (true) {
+            self.mutex.lockUncancelable(io);
+            if (self.completions.items.len != 0) {
+                defer self.mutex.unlock(io);
+                return self.completions.orderedRemove(0);
+            }
+            if (self.tasks.items.len != 0) {
+                const task = self.tasks.orderedRemove(0);
+                self.mutex.unlock(io);
+                self.runTask(task, self.threads.len);
+                continue;
+            }
+            while (self.completions.items.len == 0) self.completion_ready.waitUncancelable(io, &self.mutex);
+            self.mutex.unlock(io);
+        }
+    }
+
+    fn tryReceive(context: *anyopaque, _: *anyopaque) ?Completion {
+        const self: *ThreadedTestExecutor = @ptrCast(@alignCast(context));
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        if (self.completions.items.len == 0) return null;
+        return self.completions.orderedRemove(0);
+    }
+
+    fn end(context: *anyopaque, _: *anyopaque) void {
+        const self: *ThreadedTestExecutor = @ptrCast(@alignCast(context));
+        std.debug.assert(self.tasks.items.len == 0 and self.completions.items.len == 0);
+    }
+};
+
+/// Items whose weights and work vary with their index, recording how often
+/// each ran and the order of commits.
+const OrderedTestItems = struct {
+    pub const Error = error{ OutOfMemory, Canceled };
+
+    runs: []std.atomic.Value(u32),
+    commits: std.ArrayList(usize) = .empty,
+    running: std.atomic.Value(usize) = .init(0),
+    fail_item: ?usize = null,
+    cancel_commit: ?usize = null,
+    lanes_seen: std.atomic.Value(u64) = .init(0),
+
+    fn init(count: usize) !OrderedTestItems {
+        const runs = try std.testing.allocator.alloc(std.atomic.Value(u32), count);
+        for (runs) |*run| run.* = .init(0);
+        return .{ .runs = runs };
+    }
+
+    fn deinit(self: *OrderedTestItems) void {
+        std.testing.allocator.free(self.runs);
+        self.commits.deinit(std.testing.allocator);
+    }
+
+    pub fn weight(_: *const OrderedTestItems, index: usize) u64 {
+        return 1 + (index * 7919) % 13;
+    }
+
+    pub fn runItem(self: *OrderedTestItems, index: usize, worker: Worker) Error!void {
+        _ = self.running.fetchAdd(1, .seq_cst);
+        defer _ = self.running.fetchSub(1, .seq_cst);
+        _ = self.lanes_seen.fetchOr(@as(u64, 1) << @intCast(worker.id % 64), .monotonic);
+        // Scratch dies with the item; use it so a lane's retained arena is
+        // exercised.
+        const bytes = try worker.scratch.alloc(u8, 64 + (index % 5) * 1024);
+        @memset(bytes, @truncate(index));
+        var spin: u64 = 0;
+        for (0..(index % 17) * 200) |step| spin +%= step *% bytes[step % bytes.len];
+        std.mem.doNotOptimizeAway(spin);
+        _ = self.runs[index].fetchAdd(1, .seq_cst);
+        if (self.fail_item == index) return error.OutOfMemory;
+    }
+
+    pub fn commitItem(self: *OrderedTestItems, index: usize) Error!void {
+        if (self.runs[index].load(.seq_cst) != 1) return error.Canceled;
+        if (self.cancel_commit == index) return error.Canceled;
+        try self.commits.append(std.testing.allocator, index);
+    }
+};
+
+test "ordered run runs every item once and commits in order at every worker count" {
+    var sequential = LaneState.init(std.testing.allocator);
+    defer sequential.deinit();
+    for ([_]usize{ 0, 1, 2, 3, 4, 8 }) |threads| {
+        for ([_]usize{ 1, 2, 31, 500 }) |count| {
+            var pool = ThreadedTestExecutor{};
+            try pool.start(threads);
+            defer pool.stop();
+            var items = try OrderedTestItems.init(count);
+            defer items.deinit();
+            var timing = OrderedTiming{ .std_io = std.testing.io };
+            try runOrdered(OrderedTestItems, std.testing.allocator, &items, count, pool.executor(), &sequential, .{ .timing = &timing });
+            try std.testing.expectEqual(count, items.commits.items.len);
+            for (items.commits.items, 0..) |committed, index| try std.testing.expectEqual(index, committed);
+            for (items.runs) |run| try std.testing.expectEqual(@as(u32, 1), run.load(.seq_cst));
+            try std.testing.expectEqual(@as(u64, count), timing.items);
+            try std.testing.expect(timing.tasks >= 1);
+        }
+    }
+}
+
+test "ordered run without an executor runs and commits in order on the sequential lane" {
+    var sequential = LaneState.init(std.testing.allocator);
+    defer sequential.deinit();
+    var items = try OrderedTestItems.init(40);
+    defer items.deinit();
+    try runOrdered(OrderedTestItems, std.testing.allocator, &items, 40, null, &sequential, .{});
+    for (items.commits.items, 0..) |committed, index| try std.testing.expectEqual(index, committed);
+    try std.testing.expectEqual(@as(usize, 40), items.commits.items.len);
+}
+
+test "ordered run stops at a failing item and drains every claimed item" {
+    var sequential = LaneState.init(std.testing.allocator);
+    defer sequential.deinit();
+    for ([_]?usize{ null, 0, 1, 2, 4 }) |maybe_threads| {
+        for ([_]usize{ 0, 7, 199 }) |fail_item| {
+            var pool = ThreadedTestExecutor{};
+            if (maybe_threads) |threads| try pool.start(threads);
+            defer if (maybe_threads != null) pool.stop();
+            var items = try OrderedTestItems.init(200);
+            defer items.deinit();
+            items.fail_item = fail_item;
+            const executor: ?Executor = if (maybe_threads != null) pool.executor() else null;
+            try std.testing.expectError(error.OutOfMemory, runOrdered(OrderedTestItems, std.testing.allocator, &items, 200, executor, &sequential, .{}));
+            try std.testing.expectEqual(@as(usize, 0), items.running.load(.seq_cst));
+            try std.testing.expect(items.commits.items.len <= fail_item);
+            for (items.commits.items, 0..) |committed, index| try std.testing.expectEqual(index, committed);
+            for (items.runs) |run| try std.testing.expect(run.load(.seq_cst) <= 1);
+        }
+    }
+}
+
+test "ordered run stops at a failing commit and commits nothing after it" {
+    var sequential = LaneState.init(std.testing.allocator);
+    defer sequential.deinit();
+    for ([_]?usize{ null, 0, 1, 3, 8 }) |maybe_threads| {
+        var pool = ThreadedTestExecutor{};
+        if (maybe_threads) |threads| try pool.start(threads);
+        defer if (maybe_threads != null) pool.stop();
+        var items = try OrderedTestItems.init(300);
+        defer items.deinit();
+        items.cancel_commit = 120;
+        const executor: ?Executor = if (maybe_threads != null) pool.executor() else null;
+        try std.testing.expectError(error.Canceled, runOrdered(OrderedTestItems, std.testing.allocator, &items, 300, executor, &sequential, .{}));
+        try std.testing.expectEqual(@as(usize, 0), items.running.load(.seq_cst));
+        try std.testing.expectEqual(@as(usize, 120), items.commits.items.len);
+        for (items.commits.items, 0..) |committed, index| try std.testing.expectEqual(index, committed);
+    }
+}
+
+test "ordered run reports a refused submission after draining accepted tasks" {
+    var sequential = LaneState.init(std.testing.allocator);
+    defer sequential.deinit();
+    for ([_]usize{ 0, 1, 2 }) |accepted| {
+        var pool = ThreadedTestExecutor{ .submit_limit = accepted };
+        try pool.start(4);
+        defer pool.stop();
+        var items = try OrderedTestItems.init(400);
+        defer items.deinit();
+        try std.testing.expectError(error.OutOfMemory, runOrdered(OrderedTestItems, std.testing.allocator, &items, 400, pool.executor(), &sequential, .{}));
+        try std.testing.expectEqual(@as(usize, 0), items.running.load(.seq_cst));
+        for (items.commits.items, 0..) |committed, index| try std.testing.expectEqual(index, committed);
+    }
+}
+
+test "ordered run lane scratch keeps its capacity between items" {
+    var meter = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var lane = LaneState.init(meter.allocator());
+    defer lane.deinit();
+    // Item 4 asks for the most scratch, so every later item fits in what the
+    // lane kept.
+    var warmup = try OrderedTestItems.init(5);
+    defer warmup.deinit();
+    try runOrdered(OrderedTestItems, std.testing.allocator, &warmup, 5, null, &lane, .{});
+    const warmed = meter.allocations;
+    var items = try OrderedTestItems.init(64);
+    defer items.deinit();
+    try runOrdered(OrderedTestItems, std.testing.allocator, &items, 64, null, &lane, .{});
+    try std.testing.expectEqual(warmed, meter.allocations);
 }
