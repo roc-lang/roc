@@ -20937,6 +20937,21 @@ reaches the box. After
 solving, debug builds walk every one of those boundaries again and assert that
 each function value reached has an erased callable slot.
 
+The boundaries a binding group's own types carry are applied when the group
+finishes, before any later group is solved: the signatures of its hosted
+functions, and every `Box` and forced-dynamic iterator among the types
+created since the previous group finished. Platform and hosted roots, layout
+requests and runtime schema requests are requests about the whole program
+rather than properties of any binding group, so they are applied once every
+group is solved, and closing unfilled callable slots needs every group's
+flow. In a monomorphic solve a later group can still bring new callables
+under a boundary already applied: a row join adds tags to a row the boundary
+reaches, and a merge adds members to an erased callable. So once every group
+is solved, every boundary is walked again and each erased callable's
+`source_fn_ty` digest is recomputed from its function type at the solved
+rows. Erasure only grows, so the result is exactly what a single walk after
+solving produces.
+
 Monotype lowering carries boundary requirements as typed annotations into
 Lambda Solved IR. Lambda solving also consumes the explicit iterator
 representation tier and marks a completed forced-dynamic backing callable as

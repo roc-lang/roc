@@ -29,9 +29,12 @@
 //!   boundary by its type alone: every function a box holds is erased
 //!   (`eraseCallablesHeldByBoxes`), whether or not the program boxes a value
 //!   of that type, so a closed specialization key determines the solved types
-//!   of its procedure in every program. Debug builds re-walk every boundary
-//!   after solving (`verifyErasedBoundaries`) and require each callable it
-//!   reaches to be erased.
+//!   of its procedure in every program. A binding group's hosted signatures,
+//!   boxes and forced-dynamic iterators are erased when the group finishes
+//!   (`finishBindingGroup`), and every boundary is walked again once all
+//!   groups are solved. Debug builds re-walk every boundary after solving
+//!   (`verifyErasedBoundaries`) and require each callable it reaches to be
+//!   erased.
 //!
 //! Definitions are output in `FnId` order. No consumer reads them in
 //! dependency order: Lambda Mono and LIR lowering reach functions only through
@@ -463,6 +466,10 @@ const Solver = struct {
     /// uses can read one clone; giving each use its own would make every
     /// meeting of two uses unify the whole type again.
     shared_leaf_context: ?u32,
+    /// The first type the next finished binding group scans for boxes and
+    /// forced-dynamic iterators: every type before it was scanned when an
+    /// earlier group finished.
+    group_erasure_scan_start: usize = 0,
     /// The one type every read of a declared compile-time root shares at a
     /// Monotype type other than the root's own, so each such type unifies
     /// with the root's return once however many reads name it.
@@ -704,12 +711,44 @@ const Solver = struct {
         const groups = self.program.binding_groups;
         if (groups.fns.len != self.lifted.fns.len) Common.invariant("Lambda Solved binding groups did not cover every lifted function");
         for (0..groups.count()) |group_index| {
-            for (groups.group(group_index)) |fn_id| try self.solveFn(fn_id, self.lifted.fns[@backingInt(fn_id)]);
+            const group = groups.group(group_index);
+            for (group) |fn_id| try self.solveFn(fn_id, self.lifted.fns[@backingInt(fn_id)]);
+            // The row-join analysis (`findRowJoinedTypes`) relates bodies
+            // only; erasure joins no rows.
+            if (self.join_sides == null) try self.finishBindingGroup(group);
         }
+    }
+
+    /// Apply the erasure requirements a binding group's own types carry once
+    /// its bodies are solved: the signatures of its hosted functions, every
+    /// callable a `Box` holds, and every forced-dynamic iterator's callables,
+    /// for the types created since the previous group finished (for the
+    /// first group, registration's types too).
+    ///
+    /// A later group can still bring new callables under one of these
+    /// boundaries: a row join adds tags (and their payloads) to a row the
+    /// boundary reaches, and a merge adds members (and their captures) to an
+    /// erased callable. `finishSolve` therefore walks every boundary again
+    /// once all groups are solved, and gives each erased callable the digest
+    /// of its function type at the solved rows (`refreshErasedSourceDigests`).
+    /// Erasure only grows, so those walks erase exactly what a single walk
+    /// after solving would.
+    fn finishBindingGroup(self: *Solver, group: []const Lifted.FnId) Allocator.Error!void {
+        for (group) |fn_id| {
+            if (self.lifted.fns[@backingInt(fn_id)].body == .hosted) {
+                try self.markErasedCallablesAtFunctionBoundary(self.program.fn_tys.items[@backingInt(fn_id)]);
+            }
+        }
+        try self.eraseCallablesHeldByBoxesFrom(self.group_erasure_scan_start);
+        try self.markForcedDynamicIteratorCallablesFrom(self.group_erasure_scan_start);
+        self.group_erasure_scan_start = self.program.types.varCount();
     }
 
     /// Seed erasure boundaries, then output and finalize every solved type.
     fn finishSolve(self: *Solver) Allocator.Error!void {
+        // Every group is solved, so the rows a digest reads are final; every
+        // callable erased below digests its function type at those rows too.
+        try self.refreshErasedSourceDigests();
         try self.markAbiBoundaryCallables();
 
         try self.program.layout_requests.ensureTotalCapacity(self.allocator, self.lifted.layout_requests.len);
@@ -737,7 +776,7 @@ const Solver = struct {
             });
         }
 
-        try self.markForcedDynamicIteratorCallables();
+        try self.markForcedDynamicIteratorCallablesFrom(0);
 
         try self.program.expr_tys.ensureTotalCapacity(self.allocator, self.expr_tys.len);
         for (self.expr_tys, 0..) |maybe_ty, index| {
@@ -764,12 +803,30 @@ const Solver = struct {
         }
 
         try self.finalizeMonoLeaves();
-        try self.eraseCallablesHeldByBoxes();
+        try self.eraseCallablesHeldByBoxesFrom(0);
         // After finalization so the materialized clones' callable slots close
         // exactly as their eager counterparts always did.
         try self.closeUnfilledCallableSlots();
         try self.canonicalizeCallableMemberOrder();
         if (@import("builtin").mode == .debug) try self.verifyErasedBoundaries();
+    }
+
+    /// Give every erased callable that records the function type it was
+    /// erased from the digest of that type as solving left it. A binding
+    /// group's boundaries are erased when the group finishes, and a later
+    /// group's row joins can still widen that function type's rows.
+    fn refreshErasedSourceDigests(self: *Solver) Allocator.Error!void {
+        for (0..self.program.types.varCount()) |index| {
+            const ty: Type.TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+            const content = self.program.types.get(ty);
+            if (content != .erased) continue;
+            const abi_fn = content.erased.abi_fn orelse continue;
+            const digest = try self.solvedTypeDigest(abi_fn);
+            if (std.mem.eql(u8, &digest.bytes, &content.erased.source_fn_ty.bytes)) continue;
+            var refreshed = content.erased;
+            refreshed.source_fn_ty = digest;
+            try self.program.types.set(ty, .{ .erased = refreshed });
+        }
     }
 
     /// Lambda sets key their members by lambda symbol, so two lifted
@@ -1002,9 +1059,12 @@ const Solver = struct {
     }
 
     /// Host-facing function schemas use the erased callable representation for
-    /// every callable value reachable from an argument or result. Seed that
-    /// explicit boundary requirement after ordinary body constraints have
-    /// unified, but before unresolved callable slots are closed as finite.
+    /// every callable value reachable from an argument or result. A hosted
+    /// function's signature is first marked when its binding group finishes
+    /// (`finishBindingGroup`); this walk runs after every body has unified,
+    /// before unresolved callable slots are closed as finite. A root's ABI is
+    /// a property of the request naming the function, not of any binding
+    /// group, so platform and hosted roots are marked only here.
     fn markAbiBoundaryCallables(self: *Solver) Allocator.Error!void {
         for (self.lifted.fns, 0..) |fn_, index| {
             if (fn_.body != .hosted) continue;
@@ -1870,11 +1930,12 @@ const Solver = struct {
         return context.solved_ret;
     }
 
-    fn markForcedDynamicIteratorCallables(self: *Solver) Allocator.Error!void {
-        self.program.types.compressAllRoots();
+    /// Mark the callables of every forced-dynamic iterator among the types
+    /// from `start` on, materializing the leaves that can hold one.
+    fn markForcedDynamicIteratorCallablesFrom(self: *Solver, start: usize) Allocator.Error!void {
         // Expanding a leaf appends fresh child vars, so the bound is re-read
         // every iteration and an expanded var is revisited in place.
-        var index: usize = 0;
+        var index: usize = start;
         while (index < self.program.types.varCount()) : (index += 1) {
             const ty: Type.TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             if (self.program.types.rootCompressed(ty) != ty) continue;
@@ -1941,18 +2002,19 @@ const Solver = struct {
         }
     }
 
-    /// Erase every function any box holds, including a box whose type no
-    /// operation of this program touches and whose callable slots would
-    /// otherwise close as empty lambda sets. A specialization request whose
+    /// Erase every function held by a box among the types from `start` on,
+    /// including a box whose type no operation of this program touches and
+    /// whose callable slots would otherwise close as empty lambda sets. A
+    /// specialization request whose
     /// function types all sit inside a `Box` is closed, so its key must name
     /// the same solved types in every program. One traversal covers every box:
     /// marking a root twice changes nothing, and a callable-free leaf ends
     /// the walk where it stands. Expanding a leaf appends fresh vars, so the
     /// bound is re-read every iteration.
-    fn eraseCallablesHeldByBoxes(self: *Solver) Allocator.Error!void {
+    fn eraseCallablesHeldByBoxesFrom(self: *Solver, start: usize) Allocator.Error!void {
         var visited = self.solved_set_pool.acquire();
         defer self.solved_set_pool.release(&visited);
-        var index: usize = 0;
+        var index: usize = start;
         while (index < self.program.types.varCount()) : (index += 1) {
             const ty: Type.TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             const content = self.program.types.get(ty);
