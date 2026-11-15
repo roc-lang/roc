@@ -22030,6 +22030,17 @@ A loop is guarded when all of the following hold.
 - The loop's join has no retained locals and no maybe-uninitialized
   parameters, which a second declaration of the join would have to restate.
 
+A comparison asks for one test. Several pairings of a base with a list can
+each decide the same comparison (an index below a literal is also below
+that literal plus any other value the path knows is not negative), and a
+guard that conjoined them would pass only for lists that satisfy all of
+them. The comparison asks for the outcome that holds before the one that
+fails, for the first list that has a test worth asking (a local the loop
+leaves alone before a parameter it carries, then by local), and for that
+list the weakest test: a test that implies another is dropped in its favor,
+and of tests that imply each other the first stands (a literal base, then
+locals and lengths by local).
+
 Tests for one loop are conjoined: the copy runs only when every one holds.
 Comparisons that ask for the same base against the same list ask for the
 tightest of their tests, which decides all of them. A base that is a
@@ -22049,13 +22060,91 @@ unreachable, and the loop is not guarded again. Every rewrite outside the
 copy was proved from orderings that hold on the path through the loop as
 written, so it stands without the guard.
 
-The copy is the loop join's whole body. Where a loop's exit runs on inside
-that body (a `while` in the middle of a procedure, whose join body continues
-into the statements after the loop), the copy holds those statements too.
-
 Which loops are guarded depends only on the procedure: the demands are
 collected in the fixpoint round, sorted by loop, list and base, and applied
 in that order.
+
+### Shared loop exits
+
+A loop join's body holds more than the loop. A `while` in the middle of a
+procedure lowers to a join whose body, on the arm that leaves the loop, runs
+on into the statements after it, so copying the body would copy the rest of
+the procedure with it. Every pass that emits a second version of a loop (the
+guard above, and loop append promotion's ownership and slack versioning)
+therefore first moves what follows the loop out of the body, with
+`body_clone.shareLoopExits`, and copies only what is left.
+
+A statement in the body is on the loop's cycle when a jump back to the
+loop's join is reachable from it, following straight-line successors, every
+arm of a branch, a join's remainder, and a jump to a join the body declares
+into that join's body. Every other statement of the body runs only after the
+pass that reaches it has decided to leave: nothing it does leads back to the
+head. An exit begins at such a statement that a cycle statement leads to
+directly (as a successor, a branch arm, a branch's continuation, or the body
+or remainder of a join on the cycle) and consists of every statement
+reachable from there. A loop has as many exits as it has such statements: a
+loop that leaves by its head and by a `return` in its body has two.
+
+An exit is shared when all of the following hold.
+
+- It has more than three statements. Sharing an exit adds the join that
+  declares it and a jump to it from each of the loop's two versions, and
+  copying it adds its statements once more, so a shorter exit (a lone
+  `ret`, or a result alias and a `ret`) is no smaller shared than copied
+  and stays in the body.
+- The loop enters it only at its first statement. No other exit begins
+  inside it, and no branch on the cycle has its continuation inside it. A
+  branch's arms reach its continuation without crossing a join, so where
+  arms run on into a continuation that is off the cycle, the exit that is
+  shared begins at the continuation and the arms' own statements stay in
+  the loop.
+- Every jump inside it targets a join it declares itself or a join in scope
+  where the loop is declared.
+- It holds no statement of an exit already shared.
+- No local it reads from the loop is also defined inside it, so each such
+  local has one value to carry out.
+
+Each shared exit gets a fresh join. What the exit carries out of the loop is
+explicit: every local it reads that the loop's parameters or the rest of the
+body define becomes a parameter of the join, and the join's body is a copy
+of the exit that reads those parameters in place of the locals. Every edge
+from the statements left in the body into the exit's first statement, a
+branch's continuation edge included, becomes one sequence that writes the
+parameters and jumps to the join; the arms of a branch whose continuation
+was shared thus still reach one shared suffix, which is that sequence. The
+joins are declared around every version of the loop
+(`body_clone.declareLoopExits`): at the top of the head's body for loop
+append promotion, whose copy is nested in that body, and around the loop
+and its guard for a hoisted length test. An exit that does not qualify
+stays in the body and is copied with it.
+
+Sharing an exit preserves the procedure's behavior. The exit runs the same
+statements on the same values, entered by a jump instead of by falling into
+them. Every jump still targets an enclosing join: the loop's versions lie
+inside the exit joins' remainders, and the exit's own jumps target joins
+that enclose the loop, which enclose the exit joins too. LIR initializes a
+local on every path to a read, and the exit reads each carried local without
+defining it, so each is initialized wherever the loop enters the exit and
+the parameter writes read nothing uninitialized. Ownership follows the
+ordinary join protocol: a carried value passes to the exit's join at the
+`initialize_join_param` write, inside whatever frame binds it, and the exit
+never reads a local that only a join inside the loop binds (reading such a
+local from outside that join is what ARC rejects). The copy of the loop
+writes the same parameters as the loop does, because they are read outside
+the body that is copied (`body_clone.keepExitParams`); every other local
+the exit read from the loop is now read only inside the loop and may be the
+copy's own.
+
+For loop append promotion the shared exit is the body as promoted: a set in
+it dispatches on its owned flag and an append in it tests its limit,
+whichever version of the loop ran. Both versions pass it the flags and
+limits it reads, and a limit carried through unchecked appends still bounds
+the spare capacity from below. The slack dispatch still counts
+the appends an exit performs, which only makes it ask for more spare
+capacity than the copy needs.
+
+Statements after the loop are proved once, from what both versions agree on
+at the exit join, like any other merge.
 
 ### Saturating results and the other integer operations in the prover
 

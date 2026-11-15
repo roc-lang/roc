@@ -622,8 +622,9 @@ test "the lazy matchfinder's search proves every chain read against its entry gu
     // The chain walk makes a four-byte read whose bounds test nothing
     // before the loop decides. A test of the current position against the
     // input's length where the walk is entered decides it, which guards a
-    // copy of the walk, so the walk's two chain reads appear in both
-    // versions.
+    // copy of the walk. The walk's exit reassigns variables the walk also
+    // assigns, so it has no one value to carry out of each and stays in
+    // the body: the walk's two chain reads appear in both versions.
     try std.testing.expectEqual(@as(usize, 6), search_shape.get_unsafe);
     // Only the two entry guards and the two loop conditions compare with
     // `<`; every chain read's bounds test is proven away.
@@ -1024,7 +1025,8 @@ test "the deflate fastloop proves every refill guard" {
     // validation, which tests decoded data and must stay. Every refill
     // bounds test proved against the 24-byte margin. The fastloop's table
     // reads are tested once where it is entered, which guards a copy of
-    // it, so the validation appears in both versions.
+    // it. The validation runs on every pass through the fastloop, so it
+    // is part of the loop and appears in both versions.
     try std.testing.expectEqual(@as(usize, 2), counted.is_gt);
 }
 
@@ -1573,10 +1575,10 @@ test "a length invariant survives an inner loop that never touches the table" {
     );
     try std.testing.expect(marked_shape.found);
     // The inner loop stops at a literal, so a test of `lens` against it
-    // guards a copy of that loop that reads `lens` unchecked. The inner
-    // join's body runs on into the rest of the outer pass, so the copy
-    // holds the table's read as well: each read appears twice.
-    try std.testing.expectEqual(@as(usize, 4), marked_shape.get_unsafe);
+    // guards a copy of that loop that reads `lens` unchecked. The rest of
+    // the outer pass runs after the inner loop has exited, so both
+    // versions share it: `lens` is read twice and the table once.
+    try std.testing.expectEqual(@as(usize, 3), marked_shape.get_unsafe);
     // Four `<` tests remain: the entry guard, the inner loop's head in
     // both versions, and the `lens` read's bounds test in the loop as
     // written. The read one back from the end of the table proved.
@@ -2440,4 +2442,163 @@ test "a loop that encloses another is not copied and the inner one is" {
     try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
     // The outer read once, the inner read in the inner loop and its copy.
     try std.testing.expectEqual(@as(usize, 3), shape.get_unsafe);
+}
+
+const ExitShape = struct {
+    found: bool = false,
+    one_bits: usize = 0,
+    leading_zeros: usize = 0,
+    is_lte: usize = 0,
+    get_unsafe: usize = 0,
+    unsafe_appends: usize = 0,
+};
+
+var exit_shape: ExitShape = .{};
+var exit_marker: []const u8 = "";
+
+/// Count, in the one proc that contains `exit_marker`, the operations the
+/// programs below run after their loops and the ones that show a loop was
+/// emitted twice.
+fn countExitShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    exit_shape = .{};
+    const gpa = std.testing.allocator;
+    const buf = try gpa.alloc(u8, 1 << 22);
+    defer gpa.free(buf);
+    for (0..store.getProcSpecs().len) |index| {
+        var writer = std.Io.Writer.fixed(buf);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
+        const text = writer.buffered();
+        if (std.mem.count(u8, text, exit_marker) == 0) continue;
+        if (std.c.getenv("RANGE_PROVE_DUMP") != null) std.debug.print("\n===== exit proc =====\n{s}\n", .{text});
+        exit_shape = .{
+            .found = true,
+            .one_bits = std.mem.count(u8, text, "num_count_one_bits("),
+            .leading_zeros = std.mem.count(u8, text, "num_count_leading_zero_bits("),
+            .is_lte = std.mem.count(u8, text, "num_is_lte("),
+            .get_unsafe = std.mem.count(u8, text, "list_get_unsafe("),
+            .unsafe_appends = std.mem.count(u8, text, "list_append_unsafe("),
+        };
+        return;
+    }
+}
+
+fn exitShape(comptime walk: []const u8, comptime call: []const u8, marker: []const u8, options: harness.LirLoweringOptions) (harness.LowerToLirHarnessError || error{TestExpectedTrue})!ExitShape {
+    exit_marker = marker;
+    try harness.expectLirInspectionWithOptions(
+        walk ++
+            "\nmain! : List(Str) => Try({}, [Exit(I8), ..])\n" ++
+            "main! = |args| {\n" ++
+            "    bytes = Str.to_utf8(Str.join_with(args, \",\"))\n" ++
+            "    n = List.len(args)\n" ++
+            "    echo!(Str.inspect((" ++ call ++ ", " ++ call ++ ")))\n" ++
+            "    Ok({})\n" ++
+            "}\n",
+        options,
+        countExitShape,
+    );
+    try std.testing.expect(exit_shape.found);
+    return exit_shape;
+}
+
+// The loop is guarded and copied, and the statement after it is reached
+// only once the loop has exited, so both versions continue into the one
+// copy of it.
+test "the statements after a guarded loop are emitted once" {
+    const shape = try exitShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $acc = 0.U8
+        \\    while $i < limit {
+        \\        $acc = $acc.bitwise_xor(List.get(list, $i) ?? 7)
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    bits = $acc.count_one_bits()
+        \\    bits.plus_wrap(bits.shr_zf_wrap(1)).bitwise_and(15)
+        \\}
+        \\
+    , "walk(bytes, n)", "num_bitwise_xor(", .{ .inline_mode = .wrappers, .prove_ranges = true });
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 2), shape.get_unsafe);
+    try std.testing.expectEqual(@as(usize, 1), shape.one_bits);
+}
+
+// The loop leaves by an early return and by its head. Each exit's
+// statements are emitted once and entered from both versions of the loop.
+test "each exit of a guarded loop with two exits is emitted once" {
+    const shape = try exitShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $acc = 0.U8
+        \\    while $i < limit {
+        \\        byte = List.get(list, $i) ?? 7
+        \\        if byte == 0 {
+        \\            bits = $acc.count_one_bits()
+        \\            return bits.plus_wrap(bits.shr_zf_wrap(1)).bitwise_and(15)
+        \\        } else {
+        \\        }
+        \\        $acc = $acc.bitwise_xor(byte)
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    zeros = $acc.count_leading_zero_bits()
+        \\    zeros.plus_wrap(zeros.shr_zf_wrap(1)).bitwise_and(15)
+        \\}
+        \\
+    , "walk(bytes, n)", "num_bitwise_xor(", .{ .inline_mode = .wrappers, .prove_ranges = true });
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 2), shape.get_unsafe);
+    try std.testing.expectEqual(@as(usize, 1), shape.one_bits);
+    try std.testing.expectEqual(@as(usize, 1), shape.leading_zeros);
+}
+
+// Loop append promotion runs this loop in two versions, one for a list it
+// owns. The statement after the loop is not part of either.
+test "the statements after an ownership-versioned loop are emitted once" {
+    const shape = try exitShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, start| {
+        \\    var $i = start
+        \\    var $out = list
+        \\    while $i < 16 {
+        \\        $out = match List.get($out, $i) {
+        \\            Ok(old) => List.set($out, $i, old.bitwise_xor(1)) ?? $out
+        \\            Err(_) => $out
+        \\        }
+        \\        $i = $i.plus_wrap(3)
+        \\    }
+        \\    bits = List.len($out).to_u8_wrap().count_one_bits()
+        \\    bits.plus_wrap(bits.shr_zf_wrap(1)).bitwise_and(15)
+        \\}
+        \\
+    , "walk(bytes, n)", "num_bitwise_xor(", .{ .inline_mode = .wrappers });
+    // One read per version of the loop.
+    try std.testing.expectEqual(@as(usize, 2), shape.get_unsafe);
+    try std.testing.expectEqual(@as(usize, 1), shape.one_bits);
+}
+
+// The counted fill is versioned on its spare capacity. The statement after
+// it is not part of either version.
+test "the statements after a slack-versioned loop are emitted once" {
+    const shape = try exitShape(
+        \\fill : U64, U8 -> U8
+        \\fill = |count, x| {
+        \\    var $out = List.with_capacity(count)
+        \\    var $i = 0
+        \\    while $i < count {
+        \\        $out = List.append($out, x)
+        \\        $i = $i + 1
+        \\    }
+        \\    bits = List.len($out).to_u8_wrap().count_one_bits()
+        \\    bits.plus_wrap(bits.shr_zf_wrap(1)).bitwise_and(15)
+        \\}
+        \\
+        \\tail : List(U8), U8 -> U64
+        \\tail = |xs, x| List.len(List.append(xs, x))
+        \\
+    , "fill(n, 3).to_u64() + tail(bytes, 4)", "list_with_capacity", .{ .inline_mode = .wrappers });
+    // The checked append of the loop as promoted and the unchecked one of
+    // its copy.
+    try std.testing.expectEqual(@as(usize, 2), shape.unsafe_appends);
+    try std.testing.expectEqual(@as(usize, 1), shape.one_bits);
 }
