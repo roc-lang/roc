@@ -1088,6 +1088,15 @@ const Unifier = struct {
                 .not_through_alias => {},
             }
             if (try self.relateSameNominalApplications(a_var, b_var, a, b)) return;
+            switch (try self.relateSameTagRows(a_var, b_var, a, b)) {
+                .related => return,
+                .relate_exts => |exts| {
+                    a_var = exts.a;
+                    b_var = exts.b;
+                    continue;
+                },
+                .not_same_rows => {},
+            }
 
             try self.enterGuardedPair(a_var, b_var);
             try self.pushWorkFrame(.{ .unify_vars = .{
@@ -1230,6 +1239,82 @@ const Unifier = struct {
         } });
         try self.scheduleNominalArgs(a_type, b_type, decl_idx);
         return true;
+    }
+
+    /// What relating two tag unions comes to when their stored rows hold the
+    /// same tags.
+    const SameTagRows = union(enum) {
+        /// The pair is related.
+        related,
+        /// The pair is in flight with its tags scheduled, and what is left
+        /// is relating these two extensions.
+        relate_exts: struct { a: Var, b: Var },
+        /// The pair needs `unifyVars`.
+        not_same_rows,
+    };
+
+    /// Relate the pair `a_var`, `b_var`, resolved as `a` and `b` and not in
+    /// flight, when they are two tag unions whose stored rows are each a
+    /// whole row, with no further row or alias as extension, and hold the
+    /// same names in the same order, already ordered by name, each with as
+    /// many payloads on both sides. That is `unifyTwoTagUnions` when
+    /// gathering finds each row as it is stored and partitioning finds every
+    /// tag shared: the payloads relate pairwise, then the extensions, and the
+    /// pair merges into a row of the shared tags over `a`'s extension. The
+    /// shared tags are read from the two stored rows, and a pair whose
+    /// payloads and extensions are already the same classes merges at once.
+    fn relateSameTagRows(self: *Self, a_var: Var, b_var: Var, a: ResolvedVarWord, b: ResolvedVarWord) Error!SameTagRows {
+        if (a.word.kind != .tag_union or b.word.kind != .tag_union) return .not_same_rows;
+        const store = self.types_store;
+        const a_row = store.tagUnionAt(a.desc_idx);
+        const b_row = store.tagUnionAt(b.desc_idx);
+        if (a_row.tags.count != b_row.tags.count) return .not_same_rows;
+        if (!self.endsTagRow(a_row.ext) or !self.endsTagRow(b_row.ext)) return .not_same_rows;
+
+        const in_both = &self.scratch.in_both_tags;
+        const both_start: u32 = @intCast(in_both.len());
+        var children_related = store.resolveDescIdx(a_row.ext) == store.resolveDescIdx(b_row.ext);
+        {
+            const a_tags = store.tags.sliceRange(a_row.tags);
+            const b_tags = store.tags.sliceRange(b_row.tags);
+            const a_names = a_tags.items(.name);
+            for (a_names, b_tags.items(.name), a_tags.items(.args), b_tags.items(.args), 0..) |a_name, b_name, a_args, b_args, index| {
+                if (!a_name.eql(b_name) or a_args.count != b_args.count) return .not_same_rows;
+                if (index != 0 and Ident.textOrder(self.ident_store.getText(a_names[index - 1]), self.ident_store.getText(a_name)) == .gt) {
+                    return .not_same_rows;
+                }
+                children_related = children_related and self.sameClasses(a_args, b_args);
+            }
+            try in_both.ensureUnusedCapacity(self.scratch.gpa, a_tags.len);
+            for (0..a_tags.len) |index| {
+                _ = in_both.appendAssumeCapacity(.{ .a = a_tags.get(index), .b = b_tags.get(index) });
+            }
+        }
+        const shared = in_both.rangeToEnd(both_start);
+        const pair: MergePair = .{ .a = a.var_, .b = b.var_, .rank = Rank.min(a.word.rank, b.word.rank) };
+
+        if (children_related) {
+            try self.processSharedTagsAfterChildren(.{
+                .pair = pair,
+                .shared_tags_range = shared,
+                .mb_a_extended_tags = null,
+                .mb_b_extended_tags = null,
+                .ext = a_row.ext,
+            });
+            return .related;
+        }
+        try self.enterGuardedPair(a_var, b_var);
+        try self.unifySharedTags(pair, shared, null, null, a_row.ext);
+        return .{ .relate_exts = .{ .a = a_row.ext, .b = b_row.ext } };
+    }
+
+    /// Whether gathering a tag row stops at `ext`: its class is neither an
+    /// alias, which gathering looks through, nor a further tag row.
+    fn endsTagRow(self: *const Self, ext: Var) bool {
+        return switch (self.types_store.kindOf(ext)) {
+            .alias, .tag_union => false,
+            .flex, .rigid, .field_presence, .err, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => true,
+        };
     }
 
     /// Whether a class of this kind relates to an alias as it relates to the
@@ -3811,7 +3896,7 @@ const Unifier = struct {
                 // Unify shared tags
                 // This copies tags from scratch into type_store
                 try self.unifySharedTags(
-                    vars,
+                    .of(vars),
                     partitioned.in_both,
                     null,
                     null,
@@ -3829,7 +3914,7 @@ const Unifier = struct {
                 // Unify shared tags
                 // This copies tags from scratch into type_store
                 try self.unifySharedTags(
-                    vars,
+                    .of(vars),
                     partitioned.in_both,
                     null,
                     null,
@@ -3847,7 +3932,7 @@ const Unifier = struct {
                 // Unify shared tags
                 // This copies tags from scratch into type_store
                 try self.unifySharedTags(
-                    vars,
+                    .of(vars),
                     partitioned.in_both,
                     null,
                     null,
@@ -3877,7 +3962,7 @@ const Unifier = struct {
                 // callers see, and the extension chain via only_in_a_var/only_in_b_var
                 // is for proper type equality, not for visibility
                 try self.unifySharedTags(
-                    vars,
+                    .of(vars),
                     partitioned.in_both,
                     partitioned.only_in_a,
                     partitioned.only_in_b,
@@ -3895,7 +3980,7 @@ const Unifier = struct {
     /// Then merge a new tag_union with both shared+extended tags
     fn unifySharedTags(
         self: *Self,
-        vars: *const ResolvedVarDescs,
+        pair: MergePair,
         shared_tags_range: TwoTags.SafeList.Range, // Into scratch.in_both_tags
         mb_a_extended_tags: ?Tag.SafeList.Range, // Into scratch.only_in_a_tags
         mb_b_extended_tags: ?Tag.SafeList.Range, // Into scratch.only_in_b_tags
@@ -3905,7 +3990,7 @@ const Unifier = struct {
         defer trace.end();
 
         try self.pushWorkFrame(.{ .shared_tags_after_children = .{
-            .pair = .of(vars),
+            .pair = pair,
             .shared_tags_range = shared_tags_range,
             .mb_a_extended_tags = mb_a_extended_tags,
             .mb_b_extended_tags = mb_b_extended_tags,

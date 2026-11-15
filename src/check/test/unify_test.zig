@@ -2418,6 +2418,78 @@ test "unify - open tag extends closed (fail)" {
     try std.testing.expectEqual(Content.err, (try env.getDescForRootVar(b)).content);
 }
 
+test "unify - tag unions with the same tags relate their payloads and merge" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const a_payload = try types.fresh();
+    const a_row = try env.mkTagUnionClosed(&[_]Tag{ try env.mkTag("A", &[_]Var{a_payload}), try env.mkTag("B", &[_]Var{}) });
+    const a = try types.freshFromContent(a_row.content);
+    const b_payload = try types.freshFromContent(Content{ .structure = .empty_record });
+    const b_row = try env.mkTagUnionClosed(&[_]Tag{ try env.mkTag("A", &[_]Var{b_payload}), try env.mkTag("B", &[_]Var{}) });
+    const b = try types.freshFromContent(b_row.content);
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expectEqual(b, types.resolveVar(a).var_);
+    try std.testing.expectEqual(b_payload, types.resolveVar(a_payload).var_);
+    try std.testing.expectEqual(types.resolveVar(b_row.tag_union.ext).var_, types.resolveVar(a_row.tag_union.ext).var_);
+    const merged = types.resolveVar(b).desc.content.structure.tag_union;
+    try std.testing.expectEqual(@as(u32, 2), merged.tags.count);
+    try std.testing.expectEqualStrings("A", env.module_env.getIdentStore().getText(types.getTagAt(merged.tags, 0).name));
+    try std.testing.expectEqualStrings("B", env.module_env.getIdentStore().getText(types.getTagAt(merged.tags, 1).name));
+    try std.testing.expectEqual(b_payload, types.resolveVar(types.getVarAt(types.getTagAt(merged.tags, 0).args, 0)).var_);
+}
+
+test "unify - tag unions with the same tags over the same payloads and extension merge" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const payload = try types.freshFromContent(Content{ .structure = .empty_record });
+    const ext = try types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const a_row = try env.mkTagUnion(&[_]Tag{ try env.mkTag("A", &[_]Var{payload}), try env.mkTag("B", &[_]Var{}) }, ext);
+    const a = try types.freshFromContent(a_row.content);
+    const b_row = try env.mkTagUnion(&[_]Tag{ try env.mkTag("A", &[_]Var{payload}), try env.mkTag("B", &[_]Var{}) }, ext);
+    const b = try types.freshFromContent(b_row.content);
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expectEqual(b, types.resolveVar(a).var_);
+    const merged = types.resolveVar(b).desc.content.structure.tag_union;
+    try std.testing.expectEqual(ext, merged.ext);
+    try std.testing.expectEqual(@as(u32, 2), merged.tags.count);
+    try std.testing.expectEqualStrings("A", env.module_env.getIdentStore().getText(types.getTagAt(merged.tags, 0).name));
+    try std.testing.expectEqualStrings("B", env.module_env.getIdentStore().getText(types.getTagAt(merged.tags, 1).name));
+    try std.testing.expectEqual(payload, types.getVarAt(types.getTagAt(merged.tags, 0).args, 0));
+}
+
+test "unify - tag unions that store the same tags out of name order merge into an ordered row" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const a_row = try env.mkTagUnionClosed(&[_]Tag{ try env.mkTag("B", &[_]Var{}), try env.mkTag("A", &[_]Var{}) });
+    const a = try types.freshFromContent(a_row.content);
+    const b_row = try env.mkTagUnionClosed(&[_]Tag{ try env.mkTag("B", &[_]Var{}), try env.mkTag("A", &[_]Var{}) });
+    const b = try types.freshFromContent(b_row.content);
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expectEqual(b, types.resolveVar(a).var_);
+    const merged = types.resolveVar(b).desc.content.structure.tag_union;
+    try std.testing.expectEqual(@as(u32, 2), merged.tags.count);
+    try std.testing.expectEqualStrings("A", env.module_env.getIdentStore().getText(types.getTagAt(merged.tags, 0).name));
+    try std.testing.expectEqualStrings("B", env.module_env.getIdentStore().getText(types.getTagAt(merged.tags, 1).name));
+}
+
 test "unify - closed tag union extends open" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
