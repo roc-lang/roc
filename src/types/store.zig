@@ -1442,6 +1442,12 @@ pub const Store = struct {
         return Desc.decodeTagUnion(self.descs.getRow(desc_idx));
     }
 
+    /// The stored row of descriptor `desc_idx`: its word and its content's
+    /// payload, undecoded.
+    pub inline fn rowAt(self: *const Self, desc_idx: DescStore.Idx) Desc.Row {
+        return self.descs.getRow(desc_idx);
+    }
+
     /// The identity row a nominal descriptor names: two descriptors naming
     /// the same row have the same identity.
     pub inline fn nominalIdentityRowAt(self: *const Self, desc_idx: DescStore.Idx) u32 {
@@ -3103,21 +3109,55 @@ pub const Store = struct {
         self.debugAssertUnsealed();
         const a_data = self.findStorageRoot(a_var);
         const b_data = self.findStorageRoot(b_var);
-        const a_word = self.descs.getWord(a_data.desc_idx);
-        const b_word = self.descs.getWord(b_data.desc_idx);
-        var merged_row = self.descs.getRow(switch (kept) {
+        const content = self.descs.getRow(switch (kept) {
             .a => a_data.desc_idx,
             .b => b_data.desc_idx,
         });
+        return self.unionRootsStoringContent(a_data, b_data, content, rank);
+    }
+
+    /// `union_` for a merge whose content is content a class of this store
+    /// held, as it was stored (`rowAt`): the merged class holds `content`'s
+    /// kind and payload, at `rank`, with the flags `union_` gives a merge
+    /// whose descriptor states none. `content`'s own flags and rank are not
+    /// read, and nothing is decoded or encoded.
+    pub fn unionStoringContent(self: *Self, a_var: Var, b_var: Var, content: Desc.Row, rank: Rank) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        return self.unionRootsStoringContent(self.findStorageRoot(a_var), self.findStorageRoot(b_var), content, rank);
+    }
+
+    fn unionRootsStoringContent(self: *Self, a_data: StorageRoot, b_data: StorageRoot, content: Desc.Row, rank: Rank) Allocator.Error!void {
+        const a_word = self.descs.getWord(a_data.desc_idx);
+        const b_word = self.descs.getWord(b_data.desc_idx);
         if (a_word.flags.frozen or b_word.flags.frozen) {
-            return self.unionWithFrozen(a_data, a_word, b_data, b_word, merged_row.word.kind == .err);
+            return self.unionWithFrozen(a_data, a_word, b_data, b_word, content.word.kind == .err);
         }
 
-        // No generalization pass is running, so the kept word is unmarked.
-        std.debug.assert(!merged_row.word.marked());
-        merged_row.word.flags = mergedFlags(.{}, merged_row.word.kind, a_word, b_word);
+        self.debugAssertStoredEncoding(content);
+        // No generalization pass is running, so the stored word is unmarked.
+        std.debug.assert(!content.word.marked());
+        var merged_row = content;
+        merged_row.word.flags = mergedFlags(.{}, content.word.kind, a_word, b_word);
         merged_row.word.rank = rank;
         return self.unionRows(a_data, a_word, b_data, b_word, merged_row);
+    }
+
+    /// A stored row is its content's encoding: the row `union_` would encode
+    /// from the decoded content, naming the one row that holds its identity.
+    fn debugAssertStoredEncoding(self: *const Self, row: Desc.Row) void {
+        if (!std.debug.runtime_safety) return;
+        const desc = Desc.decode(row, self);
+        const identity: u32 = switch (desc.content) {
+            .alias => |alias| self.alias_identity_index.get(.of(alias)) orelse row.payload[0],
+            .structure => |flat| switch (flat) {
+                .nominal_type => |nominal| self.nominal_identity_index.get(.of(nominal)) orelse row.payload[0],
+                .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => 0,
+            },
+            .flex, .rigid, .field_presence, .err => 0,
+        };
+        if (!DescStore.sameContent(desc.encode(identity, self), row)) {
+            base.invariant("a stored descriptor row is not the encoding of its content", .{});
+        }
     }
 
     /// The flags of the class two classes merge into, given the flags the

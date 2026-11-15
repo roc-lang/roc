@@ -914,6 +914,31 @@ const Unifier = struct {
         } });
     }
 
+    /// Schedule the merge of `vars` into the content `kept`'s class stores,
+    /// for content `contentForMerge` returns as it is. `vars` was just
+    /// resolved, so the row stored for that class is still the encoding of
+    /// the content `vars` holds for it, and the frame carries the row in
+    /// place of the two decoded descriptors.
+    fn scheduleStoredMerge(self: *Self, vars: *const ResolvedVarDescs, kept: MergeSide) std.mem.Allocator.Error!void {
+        const kept_resolved = switch (kept) {
+            .a => vars.a,
+            .b => vars.b,
+        };
+        try self.pushWorkFrame(.{ .merge_stored = self.storedMerge(vars, kept_resolved) });
+    }
+
+    /// The merge of `vars` into the content `kept`, one of the two, holds.
+    fn storedMerge(self: *const Self, vars: *const ResolvedVarDescs, kept: ResolvedVarDesc) StoredMerge {
+        const content = self.types_store.rowAt(kept.desc_idx);
+        std.debug.assert(std.meta.eql(types_mod.Descriptor.decode(content, self.types_store).content, kept.desc.content));
+        return .{
+            .a = vars.a.var_,
+            .b = vars.b.var_,
+            .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
+            .content = content,
+        };
+    }
+
     fn newMismatchFlag(self: *Self) std.mem.Allocator.Error!u32 {
         const flag_idx: u32 = @intCast(self.scratch.mismatch_flags.items().len);
         _ = try self.scratch.mismatch_flags.append(self.scratch.gpa, false);
@@ -964,7 +989,7 @@ const Unifier = struct {
             .guarded_pair => |pair| .{ .expected = pair.a, .actual = pair.b },
             .unify_vars => |pair| .{ .expected = pair.a, .actual = pair.b },
             .merge => |merge_frame| .{ .expected = merge_frame.vars.a.var_, .actual = merge_frame.vars.b.var_ },
-            .merge_to_nominal => |merge_frame| .{ .expected = merge_frame.vars.a.var_, .actual = merge_frame.vars.b.var_ },
+            .merge_stored => |merge_frame| .{ .expected = merge_frame.a, .actual = merge_frame.b },
             .mismatch_handler,
             .guard_handler,
             .restore_enclosing_records,
@@ -991,7 +1016,7 @@ const Unifier = struct {
                 .b = self.types_store.resolvedAtRoot(pair.b, pair.b_desc),
             }),
             .merge => |merge_frame| try self.merge(&merge_frame.vars, merge_frame.content),
-            .merge_to_nominal => |merge_frame| try self.mergeToNominal(&merge_frame.vars, merge_frame.direction),
+            .merge_stored => |merge_frame| try self.types_store.unionStoringContent(merge_frame.a, merge_frame.b, merge_frame.content, merge_frame.rank),
             .same_alias_after_args => |post| try self.processSameAliasAfterArgs(post),
             .shared_fields_after_children => |post| try self.processSharedFieldsAfterChildren(post),
             .shared_tags_after_children => |post| try self.processSharedTagsAfterChildren(post),
@@ -1555,7 +1580,7 @@ const Unifier = struct {
         const a_backing_var = self.types_store.getAliasBackingVar(a_alias);
         const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
         try self.pushWorkFrame(.{ .same_alias_after_args = .{
-            .vars = vars.*,
+            .merge = self.storedMerge(vars, vars.b),
             .a_backing_var = a_backing_var,
             .b_backing_var = b_backing_var,
             .did_arg_error_flag = did_arg_error_flag,
@@ -1887,7 +1912,7 @@ const Unifier = struct {
         }
 
         // Unify element types first (recursion guard in unifyGuarded prevents infinite loops)
-        try self.scheduleMerge(vars.*, vars.b.desc.content);
+        try self.scheduleStoredMerge(vars, .b);
         var i: u32 = a_tuple.elems.len();
         while (i > 0) {
             i -= 1;
@@ -1924,7 +1949,7 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        try self.scheduleMerge(vars.*, vars.b.desc.content);
+        try self.scheduleStoredMerge(vars, .b);
         // A body-local declaration's trailing context arguments (design.md
         // "Body-Local Type Context") name the instantiation of the enclosing
         // functions its values belong to.
@@ -2142,6 +2167,15 @@ const Unifier = struct {
         }
     }
 
+    /// Schedule `mergeToNominal` for when the children scheduled after it
+    /// have been related.
+    fn scheduleMergeToNominal(self: *Self, vars: *const ResolvedVarDescs, direction: NominalDirection) std.mem.Allocator.Error!void {
+        try self.scheduleStoredMerge(vars, switch (direction) {
+            .a_is_nominal => .a,
+            .b_is_nominal => .b,
+        });
+    }
+
     /// A nominal value never lifts into structure written in an opened nominal
     /// backing (design.md "Declared Backing Structure").
     fn anonIsNominalBackingStructure(vars: *const ResolvedVarDescs, direction: NominalDirection) bool {
@@ -2156,7 +2190,7 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        try self.scheduleMerge(post.vars, post.vars.b.desc.content);
+        try self.pushWorkFrame(.{ .merge_stored = post.merge });
         try self.scheduleGuardedPair(post.a_backing_var, post.b_backing_var, .ignore);
     }
 
@@ -2370,10 +2404,7 @@ const Unifier = struct {
             // The anon_tag_union should also be empty for unification to succeed
             if (anon_tag_union.tags.len() == 0) {
                 // Both are empty - unify the extension variables
-                try self.pushWorkFrame(.{ .merge_to_nominal = .{
-                    .vars = vars.*,
-                    .direction = direction,
-                } });
+                try self.scheduleMergeToNominal(vars, direction);
                 switch (direction) {
                     .a_is_nominal => try self.unifyGuarded(nominal_backing_var, anon_tag_union.ext),
                     .b_is_nominal => try self.unifyGuarded(anon_tag_union.ext, nominal_backing_var),
@@ -2423,10 +2454,7 @@ const Unifier = struct {
         }
 
         // Unification succeeded—the nominal type wins.
-        try self.pushWorkFrame(.{ .merge_to_nominal = .{
-            .vars = vars.*,
-            .direction = direction,
-        } });
+        try self.scheduleMergeToNominal(vars, direction);
 
         // Now safe to proceed with full unification, each side keeping the
         // role it has in `vars`.
@@ -2498,10 +2526,7 @@ const Unifier = struct {
         const nominal_backing_record = nominal_backing_flat.record;
 
         // Unification succeeded—the nominal type wins.
-        try self.pushWorkFrame(.{ .merge_to_nominal = .{
-            .vars = vars.*,
-            .direction = direction,
-        } });
+        try self.scheduleMergeToNominal(vars, direction);
 
         // Unify the record fields
         try self.retainOuterRecordMismatch(vars, opened_backing, direction);
@@ -2723,10 +2748,7 @@ const Unifier = struct {
     ) Error!void {
         if (fields.len() == 0) {
             if (nominal_direction) |direction| {
-                try self.pushWorkFrame(.{ .merge_to_nominal = .{
-                    .vars = vars.*,
-                    .direction = direction,
-                } });
+                try self.scheduleMergeToNominal(vars, direction);
                 const empty_var = try self.fresh(vars, .{ .structure = .empty_record });
                 try self.unifyGuarded(ext, empty_var);
             } else {
@@ -2741,10 +2763,7 @@ const Unifier = struct {
 
         const empty_var = try self.fresh(vars, .{ .structure = .empty_record });
         if (nominal_direction) |direction| {
-            try self.pushWorkFrame(.{ .merge_to_nominal = .{
-                .vars = vars.*,
-                .direction = direction,
-            } });
+            try self.scheduleMergeToNominal(vars, direction);
         } else {
             try self.merge(vars, Content{ .structure = .{ .record = .{
                 .fields = fields,
@@ -4270,8 +4289,18 @@ const MismatchHandling = union(enum) {
     record_local_context: types_mod.NominalDecl.Idx,
 };
 
+/// The merge of two classes into content one of them stored when the merge
+/// was scheduled: `content`'s kind and payload, at `rank`.
+const StoredMerge = struct {
+    a: Var,
+    b: Var,
+    rank: Rank,
+    content: types_mod.Descriptor.Row,
+};
+
 const SameAliasAfterArgs = struct {
-    vars: ResolvedVarDescs,
+    /// The merge into `b`'s alias, which runs once the backings are related.
+    merge: StoredMerge,
     a_backing_var: Var,
     b_backing_var: Var,
     did_arg_error_flag: u32,
@@ -4327,10 +4356,7 @@ const WorkFrame = union(enum) {
         vars: ResolvedVarDescs,
         content: Content,
     },
-    merge_to_nominal: struct {
-        vars: ResolvedVarDescs,
-        direction: NominalDirection,
-    },
+    merge_stored: StoredMerge,
     same_alias_after_args: SameAliasAfterArgs,
     shared_fields_after_children: SharedFieldsAfterChildren,
     shared_tags_after_children: SharedTagsAfterChildren,
