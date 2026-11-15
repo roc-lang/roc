@@ -16769,8 +16769,10 @@ and Per-Module Output is the invariant that makes it possible:
   module it imports, that module's interface and export digests, never its
   implementation. A module's interface digest covers what its checked module
   tells an importer's lowering (its checking interface, the names and hidden
-  inputs of the workers its exposed definitions, bindings, registered
-  methods and constants name, its defaults' count, the names of its nominal
+  inputs of the workers its exposed definitions, bindings and constants
+  name, its registered methods (each by its owner's name and position among
+  declarations of that name, its method name and its target, in an order no
+  checked id decides), its defaults' count, the names of its nominal
   declarations with the number of declarations of each, which is all their
   runtime names depend on, and the stored values an importer restores); its export digest covers the
   importer-visible export records its object solved (FILE, below). Each folds
