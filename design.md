@@ -7451,8 +7451,10 @@ A block-local function binding whose body refers to nothing bound inside its
 enclosing function—no outer local, no outer rigid type variable, no local type
 declaration that names one—is a promoted local procedure. Checking decides
 promotion while it already walks the body: each `s_decl` of a lambda or
-closure is a candidate, every local lookup, rigid-variable use, and reference
-to a local type declaration records the candidate depths it crosses, and the
+closure is a candidate, every local lookup, rigid-variable use (a
+type-rooted call or associated lookup through a type variable alias such as
+`Outer : a` among them, wherever the alias is declared), and reference to a
+local type declaration records the candidate depths it crosses, and the
 greatest fixpoint over references between candidates removes every candidate
 that reaches a contextual one. A reference to a local type declaration makes
 the candidates it crosses contextual, from the shallowest of the variables,
