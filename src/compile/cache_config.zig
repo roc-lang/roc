@@ -415,7 +415,10 @@ pub const Constants = struct {
     /// 195: combines the two independent 194 entries.
     /// 197: combines the 196 entry with the 195 entry above, and a stored
     ///      descriptor's word packs its flags by kind.
-    pub const CACHE_VERSION = 197;
+    /// 195: unary `!` canonicalizes to its own node and checks as a dispatch
+    ///      of the operand's `not` method.
+    /// 198: combines the 197 entry with the 195 entry above.
+    pub const CACHE_VERSION = 198;
 };
 
 /// Configuration for the Roc cache system.

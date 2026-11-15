@@ -4467,13 +4467,13 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         // root as a procedure producing the value.
         if (request.abi == .compile_time and input.compile_time) {
             const ret = program.worker(worker_id).ret;
-            // A literal argument root whose value holds a function is
-            // validated and discarded: nothing stores its value (design.md
-            // "Literal Arguments").
-            const validate_only = if (request.compile_time_root.get()) |root_id| blk: {
-                const root = program.module(source_module).view.compile_time_roots.root(root_id);
-                break :blk if (root.literal_argument) |argument| argument.validate_only else false;
-            } else false;
+            // A validate-only root is evaluated for its outcome and
+            // discarded: nothing stores its value (design.md "Literal
+            // Arguments").
+            const validate_only = if (request.compile_time_root.get()) |root_id|
+                program.module(source_module).view.compile_time_roots.root(root_id).validateOnly()
+            else
+                false;
             const stored_ty = if (validate_only) try program.store.emptyRecord() else ret;
             try program.result.const_roots.append(allocator, .{
                 .root_order = @intCast(index),
@@ -4649,8 +4649,11 @@ fn templateRejected(program: *Program, view: *const types.ModuleView, template: 
 
 /// Whether a module unit emits `template` (design.md "Per-Module Output"):
 /// every template another object may call or compose, which leaves out the
-/// wrappers of `expect` and REPL roots. Nothing reaches those but a test
-/// plan's or a REPL's own roots, and each of those lowers as one program.
+/// wrappers of `expect` and REPL roots and of interpolation conversion roots.
+/// Nothing reaches the first two but a test plan's or a REPL's own roots, and
+/// each of those lowers as one program; nothing calls an interpolation
+/// conversion root's wrapper at all, since every use converts its literal in
+/// place (design.md "Literal Arguments").
 /// Exact procedure aliases forward to their targets without evaluator wrappers.
 fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedProcedureTemplate, forwarded_roots: []const bool) bool {
     return switch (template.body) {
@@ -4659,7 +4662,7 @@ fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedPro
             const root_id = view.view.entry_wrappers.get(wrapper_id).root;
             if (forwarded_roots[@backingInt(root_id)]) break :blk false;
             break :blk switch (view.view.compile_time_roots.root(root_id).kind) {
-                .expect, .repl_expr => false,
+                .expect, .repl_expr, .interpolation_conversion => false,
                 .callable_binding, .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => true,
             };
         },

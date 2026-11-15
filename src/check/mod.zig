@@ -206,6 +206,8 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_12489_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12553_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12586_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_13007_test.zig"));
+    std.testing.refAllDecls(@import("test/generic_derived_codec_forwarding_test.zig"));
     std.testing.refAllDecls(@import("test/derived_codec_signature_test.zig"));
     std.testing.refAllDecls(@import("test/where_clause_erroneous_type_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12587_test.zig"));

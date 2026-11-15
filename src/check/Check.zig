@@ -1591,6 +1591,11 @@ plain_wait_seen: collections.DenseMapUnmanaged(Var, void) = .empty,
 /// variable keeps it there, so its failure is reported at that use when the
 /// row is later decided.
 open_row_failure_exprs: collections.DenseMapUnmanaged(Var, StaticDispatchConstraint.Provenance.OptExprIdx) = .empty,
+/// The dispatcher of every interpolation whose conversion this module checks,
+/// so the checked boundary can ground the parameters of its literal
+/// conversions that nothing quantifies (Unquantified Literal Type Parameters
+/// Default To `[]`, `groundUnquantifiedLiteralParameters`).
+interpolation_dispatchers: std.ArrayListUnmanaged(Var) = .empty,
 /// Numeral literals interpolated into a still-open interpolation when literal
 /// defaulting began, each with a snapshot of its type at that point. Defaulting
 /// decides each literal independently, so such an interpolation can default to
@@ -2187,6 +2192,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .plain_wait_pending = .scratch,
     .plain_wait_seen = .scratch,
     .open_row_failure_exprs = .keyed,
+    .interpolation_dispatchers = .keyed,
     .interpolation_part_numerals = .keyed,
     .retired_literal_dispatch_plans = .keyed,
     .default_decided_records = .keyed,
@@ -4259,6 +4265,7 @@ const HoistSelectionTransaction = struct {
             .e_nominal_external => |nominal| try self.pushStageExpr(run, nominal.backing_expr),
             .e_binop => |binop| try self.pushStageExprs(run, &.{ binop.lhs, binop.rhs }),
             .e_unary_minus => |unary| try self.pushStageExpr(run, unary.expr),
+            .e_unary_not => |unary| try self.pushStageExpr(run, unary.expr),
             .e_field_access => |field| try self.pushStageExpr(run, field.receiver),
             .e_interpolation => |interpolation| {
                 try self.pushStageExprs(run, store.sliceExpr(interpolation.parts));
@@ -5646,6 +5653,7 @@ fn walkLocalTypeContextItem(
                 .e_lambda,
                 .e_binop,
                 .e_unary_minus,
+                .e_unary_not,
                 .e_field_access,
                 .e_method_call,
                 .e_dispatch_call,
@@ -7831,6 +7839,7 @@ fn visitExprChildren(self: *const Self, expr: CIR.Expr.Idx, visitor: anytype) Al
             try visitor.expr(binop.rhs);
         },
         .e_unary_minus => |unary| try visitor.expr(unary.expr),
+        .e_unary_not => |unary| try visitor.expr(unary.expr),
         .e_field_access => |field| try visitor.expr(field.receiver),
         inline .e_method_call, .e_dispatch_call => |call| {
             try visitor.expr(call.receiver);
@@ -8064,6 +8073,7 @@ fn firstHoistSelectionTestExpr(checker: *Self) error{ExpectedHoistSelectionTestE
             .e_nominal_external,
             .e_binop,
             .e_unary_minus,
+            .e_unary_not,
             .e_field_access,
             .e_interpolation,
             .e_structural_eq,
@@ -8448,6 +8458,7 @@ fn exprHoistRoles(self: *Self, expr: CIR.Expr.Idx, want_binding_root: bool) Hois
         .e_nominal_external,
         .e_binop,
         .e_unary_minus,
+        .e_unary_not,
         .e_field_access,
         .e_interpolation,
         .e_structural_eq,
@@ -9202,6 +9213,7 @@ fn contextShowsValueAsStr(context: problem.Context) bool {
         .fn_call_non_function,
         .fn_call_args_conflict,
         .if_condition,
+        .logical_negation_operand,
         .if_branch,
         .match_pattern,
         .match_alt_binder,
@@ -12027,6 +12039,77 @@ fn recordWhereMethodUse(
     );
     self.where_method_use_record_by_fn_var.putAssumeCapacityNoClobber(constraint.fn_var, record_index);
     self.scratch_evidence_pairs.clearRetainingCapacity();
+}
+
+/// The callable one use of a rigid variable's where-method relates to that
+/// method's declared signature through. Each use instantiates the signature (design.md "Polarity"): its
+/// output rows are fresh for this use, everything else is shared. A scheme's
+/// own where-clause requirement meeting itself (the relation IS the signature,
+/// re-checked at a boundary) is not a use: it stays the identity relation it
+/// always was, or every pass would mint a fresh copy and the drain would never
+/// settle. A whole-method hole (`a.render : _`) has no signature structure to
+/// copy, nor does any other leaf—a signature written as a bare type variable
+/// resolves to a `.rigid`, an erroneous annotation to `.err`. The predicate
+/// mirrors `Instantiator`'s own share-leaf test exactly, polarity marker and
+/// all: the instantiator shares such a root instead of copying it, so
+/// `instantiateWhereMethodForUse` leaves `var_map` empty and
+/// `recordWhereMethodUse` has no callable copy to record. A `#polarity` marker
+/// root is the one leaf the instantiator does copy, so it stays on the
+/// instantiate path.
+fn whereMethodUseCallable(
+    self: *Self,
+    signature_var: Var,
+    use: StaticDispatchConstraint,
+    env: *Env,
+) Allocator.Error!Var {
+    const signature_resolved = self.types.resolveVar(signature_var);
+    const same_root = signature_resolved.var_ == self.types.resolveVar(use.fn_var).var_;
+    const signature_is_polarity_marker = switch (signature_resolved.desc.content) {
+        .rigid => |sig_rigid| sig_rigid.name.eql(self.cir.idents.polarity_var),
+        .flex, .alias, .field_presence, .structure, .err => false,
+    };
+    const signature_is_shared_leaf = !signature_is_polarity_marker and
+        switch (signature_resolved.desc.content) {
+            .alias, .structure => false,
+            .flex, .rigid, .field_presence, .err => true,
+        };
+    const use_fn_var = if (same_root or signature_is_shared_leaf)
+        signature_var
+    else blk: {
+        if (self.existingWhereMethodUse(signature_var, use.fn_var)) |existing| {
+            break :blk existing;
+        }
+        const instantiated = try self.instantiateWhereMethodForUse(
+            signature_var,
+            env,
+            self.getRegionAt(use.fn_var),
+        );
+        try self.recordWhereMethodUse(signature_var, use);
+        break :blk instantiated;
+    };
+    return use_fn_var;
+}
+
+/// The body provably forces this where-clause method: a body use matched it
+/// and unified successfully. Mark the rigid scheme's matching where-clause
+/// `body_required` so a later unpinnable instantiation of this scheme is
+/// reported as ambiguous rather than silently lowering to an ownerless
+/// dispatch, and stamp its provenance with the use that forced it, so
+/// instantiated copies point at a concrete dispatch use. An existing
+/// introducing expression is kept. The backing slice is fetched here: the
+/// relation may have appended to (and reallocated) the constraint store, but it
+/// only grows it, so the rigid range indices stay valid.
+fn markWhereClauseBodyRequired(self: *Self, rigid: types_mod.Rigid, use: StaticDispatchConstraint) void {
+    const rc_start: usize = @backingInt(rigid.constraints.start);
+    const backing = self.types.static_dispatch_constraints.items();
+    for (rc_start..rc_start + rigid.constraints.len()) |i| {
+        if (backing[i].origin == .where_clause and backing[i].fn_name.eql(use.fn_name)) {
+            backing[i].origin.where_clause.body_required = true;
+            if (backing[i].provenance.intro_expr == .none) {
+                backing[i].provenance.intro_expr = use.provenance.intro_expr;
+            }
+        }
+    }
 }
 
 /// Return the already-minted copy for a body dispatch revisited by the
@@ -15588,6 +15671,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.closeTopLevelValueRows(&env);
     try self.commitUncommittedTails(&env);
     try self.decideOpenRowsAtModuleEnd(&env);
+    try self.groundUnquantifiedLiteralParameters(&env);
     if (try self.anyDeferredDispatchReceiverResolved(&env)) {
         try self.checkStaticDispatchConstraints(&env, true);
         try self.checkAllConstraints(&env);
@@ -15755,7 +15839,7 @@ fn exprIsErroneous(self: *Self, errors: *ErroneousTypeMemo, expr_idx: CIR.Expr.I
         inline .e_dispatch_call, .e_method_eq, .e_type_dispatch_call => |dispatch| {
             if (self.types.varStaticDispatchRejected(dispatch.constraint_fn_var)) return true;
         },
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_structural_eq, .e_structural_hash, .e_type_method_call, .e_tuple_access, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => {},
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_field_access, .e_method_call, .e_structural_eq, .e_structural_hash, .e_type_method_call, .e_tuple_access, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => {},
     }
     if (self.cir.rowCoercedResultWideVar(ModuleEnv.nodeIdxFrom(expr_idx))) |wide_var| {
         if (try errors.contains(wide_var)) return true;
@@ -16977,6 +17061,7 @@ fn hoistedRootExprStep(
         .e_nominal_external => |nominal| try pushHoistedKeptExpr(gpa, pending, nominal.backing_expr),
         .e_binop => |binop| try pushHoistedKeptExprPair(gpa, pending, binop.lhs, binop.rhs),
         .e_unary_minus => |unary| try pushHoistedKeptExpr(gpa, pending, unary.expr),
+        .e_unary_not => |unary| try pushHoistedKeptExpr(gpa, pending, unary.expr),
         .e_field_access => |field| try pushHoistedKeptExpr(gpa, pending, field.receiver),
         .e_interpolation => |interpolation| blk: {
             if (interpolation.constraint_fn_var) |fn_var| {
@@ -17390,6 +17475,7 @@ const StoredConstScan = struct {
                 try addExpr(items, module, binop.rhs);
             },
             .e_unary_minus => |unary| try addExpr(items, module, unary.expr),
+            .e_unary_not => |unary| try addExpr(items, module, unary.expr),
             .e_field_access => |field| try addExpr(items, module, field.receiver),
             .e_interpolation => |interpolation| {
                 try addExpr(items, module, interpolation.first);
@@ -17525,6 +17611,7 @@ fn hoistedCallableDefForExpr(
         .e_lambda,
         .e_binop,
         .e_unary_minus,
+        .e_unary_not,
         .e_field_access,
         .e_method_call,
         .e_dispatch_call,
@@ -18966,6 +19053,7 @@ fn replaceRejectedOperationWithRuntimeError(
         .e_type_dispatch_call,
         .e_binop,
         .e_unary_minus,
+        .e_unary_not,
         .e_structural_eq,
         .e_method_eq,
         .e_structural_hash,
@@ -20508,6 +20596,7 @@ fn localProcedureTargetPattern(self: *Self, env: *const ModuleEnv, binding: Modu
             .e_zero_argument_tag,
             .e_binop,
             .e_unary_minus,
+            .e_unary_not,
             .e_field_access,
             .e_method_call,
             .e_dispatch_call,
@@ -31736,6 +31825,7 @@ const ExprTaskState = union(enum) {
     match: MatchCheck,
     binop: OperandsCheck,
     unary_minus: SingleChildCheck,
+    unary_not: SingleChildCheck,
     field_access: SingleChildCheck,
     interpolation: InterpolationCheck,
     method_call: MethodCallCheck,
@@ -31909,6 +31999,7 @@ fn exprTaskState(expr: CIR.Expr) ?ExprTaskState {
         .e_match => .{ .match = .{} },
         .e_binop => .{ .binop = .{} },
         .e_unary_minus => .{ .unary_minus = .{} },
+        .e_unary_not => .{ .unary_not = .{} },
         .e_field_access => .{ .field_access = .{} },
         .e_interpolation => .{ .interpolation = .{} },
         .e_method_call => .{ .method_call = .{} },
@@ -31976,6 +32067,7 @@ fn resumeExprTask(self: *Self, task: *ExprTask, env: *Env, child_does_fx: ?bool)
             .call,
             .binop,
             .unary_minus,
+            .unary_not,
             .field_access,
             .interpolation,
             .method_call,
@@ -32007,6 +32099,7 @@ fn resumeExprTask(self: *Self, task: *ExprTask, env: *Env, child_does_fx: ?bool)
         .match => |*state| self.resumeMatchCheck(task, state, env, child_does_fx),
         .binop => |*state| self.resumeBinopCheck(task, state, env),
         .unary_minus => |*state| self.resumeUnaryMinusCheck(task, state, env),
+        .unary_not => |*state| self.resumeUnaryNotCheck(task, state, env),
         .field_access => |*state| self.resumeFieldAccessCheck(task, state, env),
         .interpolation => |*state| self.resumeInterpolationCheck(task, state, env),
         .method_call => |*state| self.resumeMethodCallCheck(task, state, env, child_does_fx != null),
@@ -32045,6 +32138,7 @@ fn abortExprTask(self: *Self, task: *ExprTask, env: *Env) void {
         .call,
         .binop,
         .unary_minus,
+        .unary_not,
         .field_access,
         .interpolation,
         .dispatch_call,
@@ -32725,6 +32819,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
         .e_match,
         .e_binop,
         .e_unary_minus,
+        .e_unary_not,
         .e_field_access,
         .e_interpolation,
         .e_method_call,
@@ -35145,13 +35240,13 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
     switch (state.phase) {
         .start => {
             switch (call.called_via) {
-                .apply, .record_builder, .unary_op => {},
+                .apply, .record_builder => {},
                 .binop, .string_interpolation => {
-                    // The canonicalizer produces apply, record_builder, or
-                    // unary_op for e_call expressions. Other call types
-                    // (binop, string_interpolation) are represented as
-                    // different expression types. If we hit this, there's a
-                    // compiler bug.
+                    // The canonicalizer produces apply or record_builder for
+                    // e_call expressions. Other call types (binop,
+                    // string_interpolation) are represented as different
+                    // expression types. If we hit this, there's a compiler
+                    // bug.
                     std.debug.assert(false);
                     try self.markErroneous(expr_var);
                     return .done;
@@ -35447,6 +35542,17 @@ fn resumeUnaryMinusCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck,
     return .done;
 }
 
+fn resumeUnaryNotCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
+    const frame = &task.frame;
+    const unary = frame.expr.e_unary_not;
+    if (!state.started) {
+        state.started = true;
+        return .{ .child = .{ .expr = unary.expr, .expected = frame.nested_expected.forStatement() } };
+    }
+    try self.finishUnaryNotExpr(frame.expr_idx, frame.expr_var, frame.expr_region, env, unary);
+    return .done;
+}
+
 fn resumeFieldAccessCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
@@ -35638,6 +35744,7 @@ fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationC
 
     if (!did_err) {
         const dispatcher_var = (try self.explicitTypeSuffixVar(expr_idx, expr_region, env)) orelse expr_var;
+        try self.interpolation_dispatchers.append(self.gpa, dispatcher_var);
         const constraint_fn_var = try self.mkInterpolationConstraint(
             dispatcher_var,
             segments_var,
@@ -37159,6 +37266,7 @@ fn appendEvaluationOperands(self: *Self, expr_idx: CIR.Expr.Idx, pool: *std.Arra
         },
         .e_binop => |binop| try pool.appendSlice(self.gpa, &.{ binop.lhs, binop.rhs }),
         .e_unary_minus => |unary| try pool.append(self.gpa, unary.expr),
+        .e_unary_not => |unary| try pool.append(self.gpa, unary.expr),
         .e_structural_eq => |eq| try pool.appendSlice(self.gpa, &.{ eq.lhs, eq.rhs }),
         .e_method_eq => |eq| try pool.appendSlice(self.gpa, &.{ eq.lhs, eq.rhs }),
         .e_structural_hash => |hash| try pool.appendSlice(self.gpa, &.{ hash.value, hash.hasher }),
@@ -38426,7 +38534,7 @@ fn unchangedTryErrorReturn(module: *const ModuleEnv, match: CIR.Expr.Match) ?CIR
     const backing = switch (result) {
         .e_nominal => |nominal| nominal.backing_expr,
         .e_nominal_external => |nominal| nominal.backing_expr,
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
     };
     const tag = module.store.getExpr(backing);
     if (tag != .e_tag) return null;
@@ -38530,7 +38638,7 @@ fn traceHostedErrorOrigin(self: *Self, condition: CIR.Expr.Idx, called: bool, me
                 defer self.gpa.free(name);
                 break :walk try self.cir.insertIdent(Ident.for_text(name));
             },
-            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_record, .e_empty_record, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_break, .e_for, .e_run_low_level => break :walk null,
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_record, .e_empty_record, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_binop, .e_unary_minus, .e_unary_not, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_break, .e_for, .e_run_low_level => break :walk null,
         }
     };
     if (memo) |cache| {
@@ -38565,6 +38673,68 @@ fn finishUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var, expr
 
     // The result type is the operand type (the desugaring is `a -> a`).
     _ = try self.unify(expr_var, not_ret_var, env);
+}
+
+// unary not //
+
+/// Finish a unary not once its operand is checked.
+/// Desugars `!a` to `a.not() : a -> a`. A structural tag-union operand
+/// resolves at Bool (design.md "Logical Negation Of Tag Literals").
+fn finishUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var, expr_region: Region, env: *Env, unary: CIR.Expr.UnaryNot) Allocator.Error!void {
+    if (try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, &.{unary.expr})) return;
+
+    const operand_var = @as(Var, ModuleEnv.varFrom(unary.expr));
+    try self.mkUnaryOp(operand_var, operand_var, self.cir.idents.not, env, expr_region, expr_idx);
+
+    // The result type is the operand type (the desugaring is `a -> a`).
+    _ = try self.unify(expr_var, operand_var, env);
+}
+
+/// The operand of the unary `!` whose `not` relation `deferred` carries, when
+/// that operand is a structural tag union: design.md "Logical Negation Of Tag
+/// Literals" resolves it at Bool at its generalization boundary.
+fn tagLiteralNegationOperand(self: *Self, deferred: DeferredConstraintCheck) ?CIR.Expr.Idx {
+    const content = self.types.resolveThroughAliases(deferred.var_).desc.content;
+    if (content != .structure) return null;
+    if (content.structure != .tag_union and content.structure != .empty_tag_union) return null;
+    for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |constraint| {
+        if (constraint.origin != .desugared_unaryop or !constraint.fn_name.eql(self.cir.idents.not)) continue;
+        const intro_expr = constraintIntroExpr(constraint) orelse continue;
+        const intro = self.cir.store.getExpr(intro_expr);
+        if (intro != .e_dispatch_call or intro.e_dispatch_call.surface_origin != .unary_not) continue;
+        // The `!` site's own relation, not a copy a scheme's instantiation
+        // made of it: a `where` clause requirement never takes this rule.
+        if (intro.e_dispatch_call.constraint_fn_var != constraint.fn_var) continue;
+        return intro.e_dispatch_call.receiver;
+    }
+    return null;
+}
+
+fn deferredEntryAwaitsTagLiteralNegation(self: *Self, deferred: DeferredConstraintCheck) bool {
+    return self.tagLiteralNegationOperand(deferred) != null;
+}
+
+/// design.md "Logical Negation Of Tag Literals": a unary `!` whose operand is
+/// still a structural tag union when its generalization boundary is reached
+/// relates that operand to Bool by ordinary unification, so its `not`
+/// dispatches to `Bool.not`. Nothing after the boundary can pin the operand
+/// to another nominal type. With `boundary_rank` null (type finalization),
+/// every remaining such operand resolves.
+fn resolveTagLiteralNegations(self: *Self, env: *Env, boundary_rank: ?Rank) Allocator.Error!void {
+    var resolved_any = false;
+    var index: usize = 0;
+    while (index < env.deferred_static_dispatch_constraints.items().len) : (index += 1) {
+        const deferred = env.deferred_static_dispatch_constraints.items()[index];
+        const operand = self.tagLiteralNegationOperand(deferred) orelse continue;
+        if (boundary_rank) |rank| {
+            if (@backingInt(self.types.resolveVar(deferred.var_).desc.rank) < @backingInt(rank)) continue;
+        }
+        const bool_var = try self.freshBool(env, self.cir.store.getExprRegion(operand));
+        const result = try self.unifyOwnedRelation(bool_var, ModuleEnv.varFrom(operand), env, .logical_negation_operand, .construction);
+        if (result.isProblem()) try self.markErroneous(deferred.var_);
+        resolved_any = true;
+    }
+    if (resolved_any) try self.checkStaticDispatchConstraints(env, false);
 }
 
 // binop //
@@ -39496,6 +39666,8 @@ fn publishUnaryDispatchExpr(
     const expr = self.cir.store.getExpr(expr_idx);
     const receiver: CIR.Expr.Idx, const surface_origin: CIR.Expr.SurfaceOrigin = if (expr == .e_unary_minus)
         .{ expr.e_unary_minus.expr, .unary_minus }
+    else if (expr == .e_unary_not)
+        .{ expr.e_unary_not.expr, .unary_not }
     else
         return;
     try self.cir.store.replaceExprWithDispatchCall(
@@ -40128,6 +40300,7 @@ fn rewriteDerivedMethodCallAsStructural(
         .e_closure,
         .e_lambda,
         .e_unary_minus,
+        .e_unary_not,
         .e_field_access,
         .e_interpolation,
         .e_tuple_access,
@@ -40945,7 +41118,7 @@ fn ownedExprConstructorTag(self: *Self, expr_idx: CIR.Expr.Idx) ?ConstructorTag 
     return switch (self.cir.store.getExpr(expr_idx)) {
         .e_tag => |tag| .{ .name = tag.name, .arity = self.cir.store.sliceExpr(tag.args).len },
         .e_zero_argument_tag => |tag| .{ .name = tag.name, .arity = 0 },
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_nominal, .e_nominal_external, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => null,
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_nominal, .e_nominal_external, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => null,
     };
 }
 
@@ -41497,6 +41670,7 @@ fn exprStepRelation(expr_idx: CIR.Expr.Idx, expr: CIR.Expr) problem.RelationOwne
         .e_type_dispatch_call,
         .e_binop,
         .e_unary_minus,
+        .e_unary_not,
         .e_structural_eq,
         .e_method_eq,
         .e_structural_hash,
@@ -41582,6 +41756,7 @@ fn recordRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) A
         .e_type_dispatch_call,
         .e_binop,
         .e_unary_minus,
+        .e_unary_not,
         .e_method_eq,
         .e_interpolation,
         .e_for,
@@ -41660,6 +41835,7 @@ fn recordRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) A
         .e_type_dispatch_call,
         .e_binop,
         .e_unary_minus,
+        .e_unary_not,
         .e_method_eq,
         .e_interpolation,
         .e_for,
@@ -42185,6 +42361,7 @@ const Probe = struct {
     open_numeral_literals_len: usize,
     instantiated_interpolation_owners_len: usize,
     open_row_holders_len: usize,
+    interpolation_dispatchers_len: usize,
     instantiated_literal_conversion_uses_len: usize,
     pending_tuple_accesses_len: usize,
     scheme_uses_len: usize,
@@ -42250,6 +42427,7 @@ const Probe = struct {
         self.check.open_numeral_literals.shrinkRetainingCapacity(self.open_numeral_literals_len);
         self.check.instantiated_interpolation_owners.shrinkRetainingCapacity(self.instantiated_interpolation_owners_len);
         self.check.open_row_holders.shrinkRetainingCapacity(self.open_row_holders_len);
+        self.check.interpolation_dispatchers.shrinkRetainingCapacity(self.interpolation_dispatchers_len);
         self.check.instantiated_literal_conversion_uses.shrinkRetainingCapacity(self.instantiated_literal_conversion_uses_len);
         self.check.pending_tuple_accesses.shrinkRetainingCapacity(self.pending_tuple_accesses_len);
         // Scheme-use evidence recorded during the probe can reference fresh
@@ -42344,6 +42522,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const open_numeral_literals_len = self.open_numeral_literals.items.len;
     const instantiated_interpolation_owners_len = self.instantiated_interpolation_owners.items.len;
     const open_row_holders_len = self.open_row_holders.items.len;
+    const interpolation_dispatchers_len = self.interpolation_dispatchers.items.len;
     const instantiated_literal_conversion_uses_len = self.instantiated_literal_conversion_uses.items.len;
     const pending_tuple_accesses_len = self.pending_tuple_accesses.items.len;
     const scheme_uses_len = self.cir.scheme_uses.items().len;
@@ -42388,6 +42567,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .open_numeral_literals_len = open_numeral_literals_len,
         .instantiated_interpolation_owners_len = instantiated_interpolation_owners_len,
         .open_row_holders_len = open_row_holders_len,
+        .interpolation_dispatchers_len = interpolation_dispatchers_len,
         .instantiated_literal_conversion_uses_len = instantiated_literal_conversion_uses_len,
         .pending_tuple_accesses_len = pending_tuple_accesses_len,
         .scheme_uses_len = scheme_uses_len,
@@ -43701,6 +43881,7 @@ fn defaultMaterializationIsRecursive(
                 .e_zero_argument_tag,
                 .e_binop,
                 .e_unary_minus,
+                .e_unary_not,
                 .e_field_access,
                 .e_method_call,
                 .e_dispatch_call,
@@ -43826,6 +44007,7 @@ fn defaultMaterializationIsRecursive(
                 }
             },
             .e_unary_minus => |unary| try expr_work.append(self.gpa, unary.expr),
+            .e_unary_not => |unary| try expr_work.append(self.gpa, unary.expr),
             .e_str => |str| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(str.span)),
             .e_list => |list| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(list.elems)),
             .e_tuple => |tuple| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(tuple.elems)),
@@ -44110,6 +44292,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     try self.checkAllConstraints(env);
     try self.resolvePendingTupleAccesses(env, false);
     try self.checkAllConstraints(env);
+    try self.resolveTagLiteralNegations(env, null);
 
     try self.resolveNumericLiteralsFromContext(env);
     const run_defaults = switch (scope) {
@@ -46660,12 +46843,40 @@ fn laterUseCanRefine(self: *Self, var_: Var) bool {
     };
 }
 
-fn refinableVarsIntersect(self: *Self, a: *const collections.DenseMap(Var, void), b: *const collections.DenseMap(Var, void)) bool {
-    const small = if (a.count() <= b.count()) a else b;
-    const large = if (a.count() <= b.count()) b else a;
-    var iter = small.constKeyIterator();
+/// Whether a use can still refine an input of a generated codec relation
+/// that escapes through the definition's interface (`laterUseCanRefine`). A type variable
+/// of the signature whose where clause declares the relation's codec method
+/// is a leaf the derivation reads through that declared requirement
+/// (`validateDerivedCodecVariable`), and each specialization supplies its
+/// evidence, so a use substituting it leaves the derivation as it is. Nor can
+/// a use refine the requirement's own declared signature, which each use
+/// instantiates and checks against the where clause.
+fn codecRelationVarsIntersect(
+    self: *Self,
+    relation: *const collections.DenseMap(Var, void),
+    interface: *const collections.DenseMap(Var, void),
+    method: Ident.Idx,
+) Allocator.Error!bool {
+    var declared = collections.DenseMap(Var, void).init(self.gpa);
+    defer declared.deinit();
+    var keys = relation.constKeyIterator();
+    while (keys.next()) |var_| {
+        switch (self.types.resolveVar(var_).desc.content) {
+            .rigid => |rigid| if (self.rigidCodecRequirement(rigid, method)) |requirement| {
+                try self.collectReachableVars(requirement.fn_var, &declared);
+            },
+            .flex, .alias, .structure, .field_presence, .err => {},
+        }
+    }
+    var iter = relation.constKeyIterator();
     while (iter.next()) |var_| {
-        if (large.contains(var_) and self.laterUseCanRefine(var_)) return true;
+        if (!interface.contains(var_) or !self.laterUseCanRefine(var_)) continue;
+        switch (self.types.resolveVar(var_).desc.content) {
+            .rigid => |rigid| if (self.rigidCodecRequirement(rigid, method) != null) continue,
+            .flex, .alias, .structure, .field_presence, .err => {},
+        }
+        if (declared.contains(var_)) continue;
+        return true;
     }
     return false;
 }
@@ -46702,7 +46913,11 @@ fn codecInputsAreSettledAtBoundary(
     while (iter.next()) |var_| {
         const resolved = self.types.resolveVar(var_.*);
         switch (resolved.desc.content) {
-            .flex, .rigid, .err => return false,
+            .flex, .err => return false,
+            // A signature variable whose where clause declares this codec
+            // method is read through that requirement, which settles it
+            // (`validateDerivedCodecVariable`).
+            .rigid => |rigid| if (self.rigidCodecRequirement(rigid, constraint.fn_name) == null) return false,
             .structure => |flat| switch (flat) {
                 // Even a closed anonymous value can acquire nominal identity
                 // through an enclosing scope, including an empty record.
@@ -46803,13 +47018,13 @@ fn captureSchemeDispatchRequirements(
                         // A use can still refine an input that escapes through
                         // the interface, so such a relation also belongs to the
                         // scheme, for each use to validate at its own types.
-                        if (!self.refinableVarsIntersect(&codec_relation_vars, &interface_vars)) break :blk false;
+                        if (!try self.codecRelationVarsIntersect(&codec_relation_vars, &interface_vars, candidate.constraint.fn_name)) break :blk false;
                     }
                 }
                 // Unsettled codec inputs need the complete relation, including
                 // an escaping error row after the success shape was erased.
                 try self.collectReachableVars(candidate.constraint.fn_var, &codec_relation_vars);
-                if (self.refinableVarsIntersect(&codec_relation_vars, &interface_vars)) break :blk true;
+                if (try self.codecRelationVarsIntersect(&codec_relation_vars, &interface_vars, candidate.constraint.fn_name)) break :blk true;
                 // A refinable input owned by an enclosing scope is refined by
                 // that scope's uses rather than this boundary's, so the
                 // relation escapes exactly as an outer-rank ordinary receiver
@@ -47247,6 +47462,7 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
     defer boundary_codecs.deinit(self.gpa);
 
     try self.settlePendingLiterals(env, .boundary);
+    try self.resolveTagLiteralNegations(env, rank);
     try self.settleBoundaryLocalDerivedCodecRecords(roots, env);
 
     // Generalization publishes a complete scheme: its root type plus every
@@ -47527,6 +47743,7 @@ fn anyDeferredDispatchReceiverResolved(self: *Self, env: *Env) Allocator.Error!b
     for (env.deferred_static_dispatch_constraints.items()) |deferred| {
         if (self.types.resolveVar(deferred.var_).desc.content == .flex) continue;
         if (deferred.waiting_on_target_def or deferred.waiting_on_repeated_state) continue;
+        if (self.deferredEntryAwaitsTagLiteralNegation(deferred)) continue;
         if (deferred.waiting_on_plain_decision and try self.waitsForPlainDecision(deferred.constraints, deferred.var_)) continue;
         if (try self.deferredConstraintWaitsOnDerivedCodec(.parse, deferred)) continue;
         if (try self.deferredConstraintWaitsOnDerivedCodec(.encode, deferred)) continue;
@@ -48174,6 +48391,104 @@ fn rowDefaultDischargesConstraints(self: *Self, range: StaticDispatchConstraint.
         if (!self.rowDefaultDischargesConstraint(constraint)) return false;
     }
     return true;
+}
+
+/// POLICY: Unquantified Literal Type Parameters Default To `[]` (design.md).
+/// A custom literal's conversion is a dispatch on the literal's own type. A
+/// variable in that type that has no constraints, sits outside every row
+/// extension, and that no binding's type reaches (no scheme quantifies it and
+/// no top-level value exposes it) is fixed by nothing once the module has
+/// solved: every use is checked, and no instantiation copies it. It has
+/// exactly one instantiation, the uninhabited `[]` that sealing gives an
+/// unconstrained variable, so it is unified with `[]` here, where the checked
+/// output records it, and the conversion is closed rather than waiting on an
+/// instance no edge supplies.
+fn groundUnquantifiedLiteralParameters(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    var candidates = std.ArrayList(Var).empty;
+    defer candidates.deinit(self.gpa);
+    var visited = collections.DenseMap(Var, void).init(self.gpa);
+    defer visited.deinit();
+    for (self.cir.store.literalDispatchPlans()) |plan| {
+        // A concrete builtin numeral has no conversion to ground.
+        if (plan.fnVar() == null) continue;
+        try self.collectUnconstrainedLiteralParameters(@fromBackingInt(plan.target_var), &visited, &candidates);
+    }
+    for (self.interpolation_dispatchers.items) |dispatcher| {
+        try self.collectUnconstrainedLiteralParameters(dispatcher, &visited, &candidates);
+    }
+    if (candidates.items.len == 0) return;
+
+    // The variables some binding's type reaches: a scheme's quantified
+    // variables, its where-clause signatures', and a top-level value's.
+    var reached = collections.DenseMap(Var, void).init(self.gpa);
+    defer reached.deinit();
+    var stack = std.ArrayList(Var).empty;
+    defer stack.deinit(self.gpa);
+    for (self.cir.store.sliceDefs(self.cir.all_defs)) |def_idx| {
+        try stack.append(self.gpa, ModuleEnv.varFrom(def_idx));
+    }
+    var raw_node: usize = 0;
+    while (raw_node < self.binding_scheme_nodes.bit_length) : (raw_node += 1) {
+        if (self.binding_scheme_nodes.isSet(raw_node)) try stack.append(self.gpa, @fromBackingInt(@intCast(raw_node)));
+    }
+    var synthetic = self.synthetic_binding_schemes.keyIterator();
+    while (synthetic.next()) |scheme_var| try stack.append(self.gpa, scheme_var.*);
+    while (stack.pop()) |current| {
+        const resolved = self.types.resolveVar(current);
+        if ((try reached.getOrPut(resolved.var_)).found_existing) continue;
+        try self.appendTypeChildren(resolved.desc.content, &stack);
+        const constraints = switch (resolved.desc.content) {
+            .flex => |flex| flex.constraints,
+            .rigid => |rigid| rigid.constraints,
+            .alias, .structure, .err, .field_presence => continue,
+        };
+        for (self.types.sliceStaticDispatchConstraints(constraints)) |constraint| try stack.append(self.gpa, constraint.fn_var);
+    }
+
+    for (candidates.items) |candidate| {
+        const resolved = self.types.resolveVar(candidate);
+        if (reached.contains(resolved.var_)) continue;
+        switch (resolved.desc.content) {
+            .flex => |flex| if (flex.constraints.len() != 0) continue,
+            .rigid, .alias, .structure, .err, .field_presence => continue,
+        }
+        const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, self.getRegionAt(resolved.var_));
+        _ = try self.unify(resolved.var_, empty, env);
+    }
+}
+
+/// The unconstrained flex variables of a literal's type outside every row
+/// extension: the candidates `groundUnquantifiedLiteralParameters` grounds.
+fn collectUnconstrainedLiteralParameters(self: *Self, root: Var, visited: *collections.DenseMap(Var, void), out: *std.ArrayList(Var)) std.mem.Allocator.Error!void {
+    var stack = std.ArrayList(Var).empty;
+    defer stack.deinit(self.gpa);
+    try stack.append(self.gpa, root);
+    while (stack.pop()) |current| {
+        const resolved = self.types.resolveVar(current);
+        if ((try visited.getOrPut(resolved.var_)).found_existing) continue;
+        switch (resolved.desc.content) {
+            // An uncommitted record tail is a row whose commitment decides it
+            // (design.md "Methods On Open Rows").
+            .flex => |flex| if (flex.constraints.len() == 0 and !types_mod.generalize.isUncommittedTail(resolved.desc)) try out.append(self.gpa, resolved.var_),
+            .rigid, .field_presence, .err => {},
+            .alias => |alias| try stack.append(self.gpa, self.types.getAliasBackingVar(alias)),
+            .structure => |flat| switch (flat) {
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try stack.append(self.gpa, func.ret);
+                },
+                .record => |record| for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                    try stack.append(self.gpa, presence.typeVar());
+                },
+                .tag_union => |tag_union| for (self.types.getTagsSlice(tag_union.tags).items(.args)) |args| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(args));
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+        }
+    }
 }
 
 /// Whether closing a row decides `constraint` on its tail rather than
@@ -48844,6 +49159,7 @@ fn tailTrySuffixStep(self: *const Self, expr_idx: CIR.Expr.Idx, pending: *std.Ar
         .e_lambda,
         .e_binop,
         .e_unary_minus,
+        .e_unary_not,
         .e_field_access,
         .e_method_call,
         .e_dispatch_call,
@@ -51430,7 +51746,7 @@ fn localValueMethodBinding(self: *Self, method_lookup: StaticDispatchMethodBindi
                 const def_types: *const types_mod.Store = if (def.module == self.cir) self.types else &def.module.types;
                 return def_types.resolveThroughAliases(ModuleEnv.varFrom(def_pattern)).desc.content.unwrapFunc() == null;
             },
-            .e_lookup_associated_local, .e_lookup_associated, .e_lookup_required, .e_deferred_import_ref, .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_call, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_return, .e_break, .e_for, .e_run_low_level => return true,
+            .e_lookup_associated_local, .e_lookup_associated, .e_lookup_required, .e_deferred_import_ref, .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_call, .e_binop, .e_unary_minus, .e_unary_not, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_return, .e_break, .e_for, .e_run_low_level => return true,
         }
     }
     return true;
@@ -54785,62 +55101,7 @@ inline fn processDeferredDispatchEntryRelations(
                 else
                     self.ident_to_var_map.get(constraint.fn_name);
                 if (matched_rigid_var) |rigid_var| {
-                    // Each USE instantiates the where-method signature
-                    // (design.md "Polarity"): its output rows are fresh
-                    // for this use, everything else is shared. A scheme's
-                    // own where-clause requirement meeting itself here
-                    // (the deferred relation IS the signature, re-checked
-                    // at a boundary) is not a use: it stays the identity
-                    // relation it always was, or every pass would mint a
-                    // fresh copy and the drain would never settle.
-                    const signature_resolved = self.types.resolveVar(rigid_var);
-                    const same_root = signature_resolved.var_ == self.types.resolveVar(constraint.fn_var).var_;
-                    // A whole-method hole (`a.render : _`) has no
-                    // signature structure to copy: its shape is inferred
-                    // from the body's uses and shared by all of them. Nor
-                    // does any other LEAF—a signature written as a bare
-                    // type variable resolves to a `.rigid`, an erroneous
-                    // annotation to `.err`. The predicate must mirror
-                    // `Instantiator`'s own share-leaf test
-                    // (`types/instantiate.zig:733-740`) exactly, polarity
-                    // marker and all: the instantiator SHARES such a root
-                    // instead of copying it, so `instantiateWhereMethodForUse`
-                    // leaves `var_map` empty and `recordWhereMethodUse`
-                    // has no callable copy to record (it panics). A
-                    // `#polarity` marker root is the one leaf the
-                    // instantiator does copy, so it must stay on the
-                    // instantiate path—sharing it would silently drop
-                    // the per-use deferral it stands for.
-                    const signature_is_polarity_marker = switch (signature_resolved.desc.content) {
-                        .rigid => |sig_rigid| sig_rigid.name.eql(self.cir.idents.polarity_var),
-                        .flex, .alias, .field_presence, .structure, .err => false,
-                    };
-                    const signature_is_shared_leaf = !signature_is_polarity_marker and
-                        switch (signature_resolved.desc.content) {
-                            .alias, .structure => false,
-                            .flex, .rigid, .field_presence, .err => true,
-                        };
-                    const use_fn_var = if (same_root or signature_is_shared_leaf)
-                        rigid_var
-                    else blk: {
-                        if (self.existingWhereMethodUse(rigid_var, constraint.fn_var)) |existing| {
-                            break :blk existing;
-                        }
-                        const instantiated = try self.instantiateWhereMethodForUse(
-                            rigid_var,
-                            env,
-                            self.getRegionAt(constraint.fn_var),
-                        );
-                        try self.recordWhereMethodUse(rigid_var, constraint);
-                        break :blk instantiated;
-                    };
-
-                    // Unify the actual function var against the inferred var
-                    //
-                    // TODO: For better error messages, we should check if these
-                    // types are functions, unify each arg, etc. This should look
-                    // similar to e_call
-                    const result = try self.unify(use_fn_var, constraint.fn_var, env);
+                    const result = try self.unify(try self.whereMethodUseCallable(rigid_var, constraint, env), constraint.fn_var, env);
                     if (result.isEstablished()) {
                         // The where-clause signature has decided the item
                         // type, so each part is now checked against it.
@@ -54849,31 +55110,7 @@ inline fn processDeferredDispatchEntryRelations(
                         }
                         try self.recordSuccessfulStaticDispatch(constraint);
 
-                        // The body provably forces this where-clause method: a
-                        // body dispatch matched it and unified successfully. Mark
-                        // the rigid scheme's matching where-clause `body_required`
-                        // so a later unpinnable instantiation of this scheme is
-                        // reported as ambiguous rather than silently lowering to an
-                        // ownerless dispatch. Re-fetch the backing slice: the unify
-                        // above may have appended to (and reallocated) the
-                        // constraint store, but it only grows it, so the rigid
-                        // range indices stay valid.
-                        const rc_start: usize = @backingInt(rigid.constraints.start);
-                        const rc_len: usize = rigid.constraints.len();
-                        const backing = self.types.static_dispatch_constraints.items();
-                        for (rc_start..rc_start + rc_len) |i| {
-                            if (backing[i].origin == .where_clause and backing[i].fn_name.eql(constraint.fn_name)) {
-                                backing[i].origin.where_clause.body_required = true;
-                                // Stamp the where-clause constraint's provenance with the
-                                // body dispatch that forced it, so instantiated copies point
-                                // at a concrete dispatch use (what the old side table's
-                                // cross-unification linking supplied). Only adopt a real
-                                // introducing expression; never clobber an existing one.
-                                if (backing[i].provenance.intro_expr == .none) {
-                                    backing[i].provenance.intro_expr = constraint.provenance.intro_expr;
-                                }
-                            }
-                        }
+                        self.markWhereClauseBodyRequired(rigid, constraint);
                     } else {
                         if (result.isProblem()) {
                             try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
@@ -55189,6 +55426,12 @@ inline fn processDeferredDispatchEntryRelations(
                     },
                 }
             }
+            break :dispatch_resolution;
+        } else if (self.deferredEntryAwaitsTagLiteralNegation(deferred_constraint)) {
+            // design.md "Logical Negation Of Tag Literals": the receiver
+            // resolves at Bool at its generalization boundary, once nothing
+            // else can pin it to a nominal type.
+            try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
             break :dispatch_resolution;
         } else if (dispatcher_content == .structure and
             (dispatcher_content.structure == .record or
@@ -56709,7 +56952,8 @@ fn expandDerivedParseQuery(
             .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
             .err => .supported,
             .flex => .unresolved,
-            .rigid, .field_presence => .unsupported,
+            .rigid => |rigid| if (self.rigidCodecRequirement(rigid, self.cir.idents.parser_for) != null) .supported else .unsupported,
+            .field_presence => .unsupported,
         },
         .field => |var_| return switch (self.types.resolveThroughAliases(var_).desc.content) {
             .structure => |structure| switch (structure) {
@@ -56722,7 +56966,8 @@ fn expandDerivedParseQuery(
             .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
             .err => .supported,
             .flex => .unresolved,
-            .rigid, .field_presence => .unsupported,
+            .rigid => |rigid| if (self.rigidCodecRequirement(rigid, self.cir.idents.parser_for) != null) .supported else .unsupported,
+            .field_presence => .unsupported,
         },
         // A row still open on a flex var can gain fields, and the parser
         // derivation needs the exact field set, so report it unresolved and
@@ -57536,6 +57781,17 @@ const DerivedSupport = enum {
     unresolved,
 };
 
+/// The requirement for codec method `method` a type variable of the
+/// enclosing definition declares in its where clause. A derived codec writes or
+/// reads such a variable's values through that requirement, whose evidence
+/// each specialization of the definition supplies.
+fn rigidCodecRequirement(self: *const Self, rigid: types_mod.Rigid, method: Ident.Idx) ?StaticDispatchConstraint {
+    for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+        if (constraint.origin == .where_clause and constraint.fn_name.eql(method)) return constraint;
+    }
+    return null;
+}
+
 fn derivedSupportFromBool(value: bool) DerivedSupport {
     return if (value) .supported else .unsupported;
 }
@@ -57615,7 +57871,8 @@ fn expandDerivedEncodeQuery(
             .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
             .err => .supported,
             .flex => .unresolved,
-            .rigid, .field_presence => .unsupported,
+            .rigid => |rigid| if (self.rigidCodecRequirement(rigid, self.cir.idents.encoder_for) != null) .supported else .unsupported,
+            .field_presence => .unsupported,
         },
         .record_field => |var_| {
             const written = if (try self.missingTryInfoForVar(var_)) |info| info.ok_var else var_;
@@ -63178,7 +63435,20 @@ fn stepDerivedParse(
                 // on it belongs to that application and is discharged where the
                 // application is concrete. Anywhere else the shape gate has already
                 // decided such a variable, so reaching one here is unsupported.
-                .flex, .rigid => .{ .done = if (walk.nominal_backing_depth > 0) .ok else .unsupported },
+                .flex => .{ .done = if (walk.nominal_backing_depth > 0) .ok else .unsupported },
+                // Outside a backing, a type variable the enclosing definition
+                // constrains is read through its declared `parser_for`.
+                .rigid => .{
+                    .done = if (walk.nominal_backing_depth > 0) .ok else blk: {
+                        // Every occurrence of the variable is read by the one
+                        // validated call on it.
+                        if ((try walk.visited.getOrPut(resolved.var_)).found_existing) break :blk .ok;
+                        const expected_ret = try self.freshParseResultTryVar(task.var_, inputs.state_var, inputs.err_var, inputs.env, inputs.region);
+                        const expected_runtime_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{inputs.state_var}, expected_ret), inputs.env, inputs.region);
+                        const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{inputs.encoding_var}, expected_runtime_fn), inputs.env, inputs.region);
+                        break :blk try self.validateDerivedCodecVariable(task.var_, self.cir.idents.parser_for, expected_fn, inputs.constraint, inputs.env, inputs.failure_expr);
+                    },
+                },
                 .field_presence => .{ .done = .unsupported },
             };
         },
@@ -63606,6 +63876,57 @@ fn stepDerivedParseNominal(
     return try self.finishDerivedParseNominal(&frame.nominal, nominal_var);
 }
 
+/// A type variable of the enclosing definition that a derived codec reaches
+/// outside any nominal backing. Its values are written or read through the
+/// requirement for `method` its where clause declares: the leaf's expected
+/// callable relates to that declared signature exactly as a body dispatch on
+/// the variable does, and the generated call names the variable, so
+/// publication forwards it to the enclosing definition's evidence parameter.
+/// A variable that declares no such requirement cannot be derived, and one
+/// whose declared signature is not this codec's is reported as missing the
+/// method.
+fn validateDerivedCodecVariable(
+    self: *Self,
+    var_: Var,
+    method: Ident.Idx,
+    expected_fn: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    failure_expr: ?CIR.Expr.Idx,
+) Allocator.Error!DerivedParseValidation {
+    const rigid = self.types.resolveVar(var_).desc.content.rigid;
+    const declared = self.rigidCodecRequirement(rigid, method) orelse return .unsupported;
+    var use = constraint;
+    use.fn_name = method;
+    use.fn_var = expected_fn;
+    const use_callable = try self.whereMethodUseCallable(declared.fn_var, use, env);
+    switch (try self.runUnify(use_callable, expected_fn, env, .{ .on_mismatch = .write_no_report })) {
+        .unified => {},
+        .suppressed_by_error => return .reported_error,
+        .mismatch => return try self.reportDerivedParseMissingMethodAt(var_, method, constraint, env, failure_expr),
+        .problem => unreachable, // a `.write_no_report` relation records no problem of its own
+    }
+    // A private instance of a parked relation validates a copy of the
+    // definition's variable; the call forwards to the definition's own one,
+    // whose where clause the enclosing evidence chain answers for.
+    const source = self.codecInstanceSource(var_);
+    self.markWhereClauseBodyRequired(self.types.resolveVar(source).desc.content.rigid, use);
+    try self.recordGeneratedCodecCall(method, source, expected_fn, expected_fn, var_);
+    return .ok;
+}
+
+/// The template variable a private codec instance's copy `var_` stands for
+/// (`finalCodecRelationInstance`), or `var_` outside such an instance.
+fn codecInstanceSource(self: *Self, var_: Var) Var {
+    const frame = self.active_codec_derivation_frame orelse return var_;
+    const copies = self.codec_derivation_frames.items[frame].instance_copies;
+    const root = self.types.resolveVar(var_).var_;
+    for (self.final_codec_instance_copy_pairs.items[copies.start..][0..copies.len]) |pair| {
+        if (self.types.resolveVar(pair.copy).var_ == root) return pair.source;
+    }
+    return var_;
+}
+
 fn finishDerivedParseNominal(
     self: *Self,
     nominal: *const NominalCodecFrame,
@@ -63938,7 +64259,18 @@ fn stepDerivedEncode(
                 // See `stepDerivedParse`: a variable inside a derived codec's
                 // backing shape is a formal whose obligation belongs to the
                 // application that substitutes for it.
-                .flex, .rigid => .{ .done = if (walk.nominal_backing_depth > 0) .ok else .unsupported },
+                .flex => .{ .done = if (walk.nominal_backing_depth > 0) .ok else .unsupported },
+                .rigid => .{
+                    .done = if (walk.nominal_backing_depth > 0) .ok else blk: {
+                        // Every occurrence of the variable is written by the one
+                        // validated call on it.
+                        if ((try walk.visited.getOrPut(resolved.var_)).found_existing) break :blk .ok;
+                        const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
+                        const expected_runtime_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ var_, state_var }, expected_ret), env, region);
+                        const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{encoding_var}, expected_runtime_fn), env, region);
+                        break :blk try self.validateDerivedCodecVariable(var_, self.cir.idents.encoder_for, expected_fn, constraint, env, null);
+                    },
+                },
                 .field_presence => .{ .done = .unsupported },
             };
         },

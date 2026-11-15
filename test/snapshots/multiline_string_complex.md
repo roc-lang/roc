@@ -55,8 +55,8 @@ x = {
 ~~~
 # EXPECTED
 EXPECTED PACKAGE PATH - multiline_string_complex.md:4:6:4:17
-TYPE MISMATCH - multiline_string_complex.md:40:6:40:8
-TYPE MISMATCH - multiline_string_complex.md:37:7:37:9
+MISSING METHOD - multiline_string_complex.md:40:6:40:8
+MISSING METHOD - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
 ~~~clojure
 (reports
@@ -88,32 +88,61 @@ TYPE MISMATCH - multiline_string_complex.md:37:7:37:9
 			(source-region (file "multiline_string_complex.md") (start 4 6) (end 4 17) (annotation error) (line-text "\t\tx: \\\\Multiline"))))
 	(report
 		(severity runtime_error)
-		(title "Type Mismatch")
+		(title "Missing Method")
 		(region (start 40 6) (end 40 8))
 		(headline
-			(reflow "This string literal is being used where a non-string type is needed."))
+			(reflow "This string's type never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "not")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "multiline_string_complex.md") (start 40 6) (end 40 8) (annotation error) (line-text "\te: !\\\\"))
 			(line-break)
-			(reflow "The type was determined to be:")
+			(reflow "Its type needs all of these:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "Bool")
-			(annotation-end)))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 37 7) (end 37 9))
-		(headline
-			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
-		(document
-			(source-region (file "multiline_string_complex.md") (start 37 7) (end 37 9) (annotation error) (line-text "\t\t0 - \\\\"))
+			(text "f where [f.not : f -> f]")
+			(annotation-end)
+			(line-break)
 			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
+			(reflow "None of the built-in string types")
+			(reflow " ")
+			(reflow "have a method named")
+			(reflow " ")
+			(annotated code "not")
+			(reflow ".")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 37 3) (end 37 4))
+		(headline
+			(reflow "This number's type never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "minus")
+			(reflow " ")
+			(reflow "method for")
+			(reflow " ")
+			(annotated code "-")
+			(reflow " ")
+			(reflow "to call."))
+		(document
+			(source-region (file "multiline_string_complex.md") (start 37 3) (end 37 4) (annotation error) (line-text "\t\t0 - \\\\"))
+			(line-break)
+			(reflow "Its type needs all of these:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "f where [f.minus : f, g -> f]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Giving the number a suffix, using it somewhere that requires a specific type, or annotating it will give it one."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -290,7 +319,7 @@ x = {
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "value1"))))
-			(e-interpolation (constraint-fn-var 277) (dispatcher-var 15)
+			(e-interpolation (constraint-fn-var 294) (dispatcher-var 15)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -306,7 +335,7 @@ With multiple lines
 				(p-assign (ident "#interp_1"))
 				(e-lookup-local
 					(p-assign (ident "value2"))))
-			(e-interpolation (constraint-fn-var 313) (dispatcher-var 25)
+			(e-interpolation (constraint-fn-var 332) (dispatcher-var 25)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -335,15 +364,12 @@ With multiple lines
 							(e-string
 								(e-literal (string "multiline"))))))
 				(field (name "d")
-					(e-dispatch-call (method "minus") (constraint-fn-var 331)
-						(receiver
-							(e-runtime-error (tag "erroneous_value_expr")))
-						(args
-							(e-runtime-error (tag "erroneous_value_expr")))))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-num (value "0"))
+						(e-string)))
 				(field (name "e")
-					(e-call (constraint-fn-var 346)
-						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18876") (target-def "18876"))
-						(e-runtime-error (tag "erroneous_value_expr")))))))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-string))))))
 	(d-let
 		(p-assign (ident "x"))
 		(e-block
@@ -359,13 +385,13 @@ With multiple lines
 		(patt (type "Str"))
 		(patt (type "Str"))
 		(patt (type "Str"))
-		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Dec, e: Bool }"))
+		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Dec, e: Str }"))
 		(patt (type "Str")))
 	(expressions
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
-		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Dec, e: Bool }"))
+		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Dec, e: Str }"))
 		(expr (type "Str"))))
 ~~~

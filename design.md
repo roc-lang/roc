@@ -2661,21 +2661,26 @@ that specializations register. Under `.lss`, the `.boxy` evaluator has
 completed every compile-time root that reads no function value before the
 Solved program is specialized ("Compile-Time Evaluation Under `.lss`").
 Checking already gave every literal whose
-conversion is closed a compile-time root of its own, and every literal whose
-conversion depends on its instance a `literal_argument` root at each closed
-type a checked instantiation fixes it to ("Literal Arguments"), which every
-compilation evaluates and stores in its module. A runtime body therefore
-matters to compile-time evaluation only where specializing it registers a
-literal root: a conversion that depends on its instance at an instantiation
-checking records no edge for (a program root's, a platform's call of the
-app's procedure, a method dispatch selects by type, a stored function value,
-a target derived from a function's type), a custom interpolation, or a
-conversion root no evaluation requests. A specialization that converts a
-literal at the closed type of a stored `literal_argument` root restores that
-root's value instead of registering a literal root, and one that converts a
-literal at the closed type of a validate-only `literal_argument` root (every
-interpolation's among them) converts it in place, since that root's
-evaluation already reports its outcome. Specializing the rest of
+conversion is closed a compile-time root of its own (an interpolation's
+included, which is validate-only), and every literal whose conversion depends
+on its instance a `literal_argument` root at each closed type a checked
+instantiation fixes it to ("Literal Arguments"), which every compilation
+evaluates in its module. A runtime body therefore matters to compile-time
+evaluation only where specializing it registers a literal root: a conversion
+that depends on its instance at an instantiation checking records no edge for
+(a program root's, a platform's call of the app's procedure, a method
+dispatch selects by type, a stored function value, a target derived from a
+function's type), or a conversion root no evaluation requests. A
+specialization that converts a literal at the closed type of a stored
+`literal_argument` root restores that root's value instead of registering a
+literal root, and one that converts a literal at the closed type of a
+validate-only `literal_argument` root (an interpolation's among them)
+converts it in place, since that root's evaluation already reports its
+outcome. A custom interpolation whose conversion is closed has its own
+validate-only conversion root instead, and its assembler is a function that
+no root stores, so a specialization that needs it still registers a literal
+root for it; that root's evaluation cannot add a report, because the checked
+root validating the literal at that type already ran (below). Specializing the rest of
 the runtime program, or lowering any of it for execution, is runtime work,
 and compile-time evaluation without an LSS runtime consumer to continue its
 program does none of it. Its program roots are *discovery roots*,
@@ -2694,10 +2699,10 @@ a generalized local function's), and contributes nothing through the
 references and plans that instantiate that scheme: those are the
 instantiations checking records, each of which converts it in a
 `literal_argument` root or forwards it to the instantiating scheme's literal
-requirements. A template's own flags are *strict* when its body has a custom
-interpolation that is not such a requirement, or a literal whose conversion
-root no evaluation of this compilation requests and whose payload is not
-stored; *dependent numeral* (*quote*) when its body has a numeral (quote)
+requirements. A template's own flags are *strict* when its body has a
+literal whose conversion root no evaluation of this compilation requests and
+whose payload is neither stored nor discarded, or a custom interpolation that
+is neither such a requirement nor covered by a conversion root of its own; *dependent numeral* (*quote*) when its body has a numeral (quote)
 whose conversion depends on its instance and that is not such a
 requirement. An instantiation checking records no edge for contributes the
 dependent kinds of the instantiated template's literal requirements (an
@@ -2943,6 +2948,9 @@ those a cache entry left unevaluated.
 
 Root eligibility consumes the checked producer's types and fixed-callable
 result. It does not mutate solved types or invent evidence from a use site.
+A validate-only root (Literal Arguments) asks only the concreteness question:
+no reader takes its value from a slot, so no callable representation of it
+needs fixing.
 An ineligible callable root remains an instantiation template: its pending
 payload is not a promise of a stored value. Boxy instantiates its declared
 wrapper at each use's type arguments, including open result rows. An eligible
@@ -4006,11 +4014,15 @@ compiler-owned builtin scope before source declarations are introduced. If that
 proof stops being local and obvious, the initialization path must use the same
 type-binding API.
 
-Logical negation `!expr` desugars in `Can` to an ordinary call to the
-compiler-owned `Bool.not`, with type `Bool -> Bool`. It does not introduce a
-static-dispatch constraint on the operand. Source declarations shadowing `Bool`
-do not change this target; within Builtin.roc the call refers to its local
-`Bool.not` definition. Checking and later stages consume the ordinary call.
+Logical negation `!expr` canonicalizes to `e_unary_not`, as `-expr`
+canonicalizes to `e_unary_minus`. Checking relates it like `expr.not()` with
+type `a -> a`: a `not` static-dispatch constraint on the operand, published as
+an `e_dispatch_call` whose surface origin is `unary_not`. A structural
+tag-union operand resolves at the builtin `Bool` (Solver-Mutating Rewrites,
+Logical Negation Of Tag Literals); no other operand is related to `Bool`.
+Later stages consume the checked dispatch plan. On `Bool` it selects
+`Bool.not`, whose provided low-level is `bool_not`, so Monotype lowers it to
+that low-level directly.
 
 Result suffix desugaring has a separate owner inside `Can`. The suffix forms
 `expr?`, `expr ? handler`, and `expr ?? default` all lower to a match over the
@@ -8384,7 +8396,11 @@ Every live literal-origin record leaves checking with one explicit resolution:
   literal's type with each decided variable replaced by its one
   instantiation ("Decided Variables"), so a literal at `Sql(v)` with `v`
   decided has a root at `Sql([])`, which names no variable and is requested
-  like any other closed literal's. Root wrappers follow this decision,
+  like any other closed literal's. A custom interpolation whose
+  conversion is `direct_closed` likewise gets exactly one
+  `interpolation_conversion` root (Literal Arguments: its value, the
+  assembler, is validate-only), so its rejection is reported whether or not
+  any program reaches the function holding it. Root wrappers follow this decision,
   with their single conversion reference recorded directly; evidence resolution
   and source-body collection are not repeated. A dependent conversion keeps no
   standalone root and follows the specialization-owned hoisting path below,
@@ -9237,6 +9253,65 @@ substitution then describes the same types as the call's callable; it never
 names a variable of the defining scheme that the contract's own types do not
 mention.
 
+A derivation can reach a type variable of the definition it is derived in, as
+the field type of `{ value: x }` in
+`in_record : a -> Str where [a.Json.Encodable([])]`. Outside a nominal
+backing such a leaf is supported exactly when the variable's where clause
+declares the codec method the derivation calls (`encoder_for` when encoding,
+`parser_for` when parsing). The derivation relates the leaf's expected method
+callable to that declared requirement through the same per-use instantiation
+of the where-method signature a body dispatch on the variable uses, marks the
+where clause as one the body requires, and records a generated call whose
+dispatcher is the variable; every other occurrence of the variable in the
+receiver is read by that one call. The contract's types are its snapshot copy,
+so publication names the dispatcher by the variable the copy renamed
+(`generated_codec_renamings`), and a private instance of a parked relation
+(`finalCodecRelationInstance`) records the template's variable rather than
+its copy. A leaf whose variable declares no such
+requirement, or one whose declared signature is not this codec's (another
+format's encoding, or `encoder_for` where parsing needs `parser_for`), is
+reported as a missing method on the receiver. Such a call is a forwarded edge
+authored by the checker: publication links it, through the evidence chain of
+the site whose dispatch selects the contract, to the enclosing definition's
+evidence parameter for that requirement (`GeneratedCodecCallResolution.forwarded`
+names an `evidence_refs` entry whose resolution is `.constraint`), and marks
+the selected contract `forwarded`. A forwarded leaf leaves the relation's
+validity independent of the variable's instantiation, so a definition-scope
+codec relation whose only quantified inputs are such variables, or variables
+of their declared signatures, is validated once in the definition and is not
+captured into the scheme for each use to validate again; an inferred
+quantified variable has no declared requirement and keeps the per-use
+relation. A use of the definition then costs what a use of a definition that
+dispatches on the variable directly costs: one supplied evidence entry per
+declared requirement.
+
+Lowering instantiates a forwarded contract per specialization of the enclosing
+definition. Monotype materializes the evidence of every forwarded call of the
+selected contract and of the contracts it nests where the site's structural
+evidence is materialized, against the site's own evidence chain, and carries
+it with that evidence in a fixed order (contracts in first-visit order of a
+depth-first walk over nested calls, each contract's calls in order). Equal
+contracts list their forwarded calls in the same order, so evidence equality
+and stored-function evidence compare and store that vector positionally. A
+forwarded call reads its target from the vector: a method target is the
+codec of the occurrence the call's subject is related to, and a structural
+derivation is walked as a nested contract under its own vector. The walk
+selects a forwarded call by its subject's class alone; Phase B writes and
+reads every occurrence of one type through the codec prepared for it, so a
+concrete occurrence of the type the variable takes is covered by the
+forwarded codec. Such an
+instantiation is never shared through the boundary-class cache, since it holds
+one site's evidence. A forwarded leaf whose evidence is a checked error or an
+unreachable value makes the whole structural evidence that error, so the
+dispatch that selects it crashes before it would build the codec. Boxy's
+generated codec family treats each forwarded subject as one of its type
+variables and captures one dictionary per forwarded call after its local
+procedure values: the use that builds the family's constructor supplies each
+from its own dictionary for the variable's requirement. The family's list
+operations take their item descriptor, since an item can hold such a
+variable. A stored generated runtime records no dictionaries, so restoring one
+applies only to a family without forwarded calls.
+
 A `ParseTagUnionSpec` describes exactly one union. A payload that is itself a
 tag union is parsed with that union's own spec, never with the enclosing
 union's. Inside a payload parser the record field names come from the
@@ -9269,6 +9344,10 @@ construction recipe records those entries as `from_scheme`, separately from
 checked callable paths and captured enclosing evidence. Checked use edges
 supply those parameters before Monotype or Boxy lowers dispatch; neither
 call-edge evidence analysis nor lowering may derive a concrete codec from the declaration's generic shape.
+A composite receiver's leaf on a constrained type variable of the signature is
+the one generic part a derivation reads, and it does so only through the
+forwarded edge the checker authored for it; lowering supplies that edge's
+evidence and derives nothing from the shape.
 
 A forwarded composite requirement carries both its lexical evidence coordinate
 and the absolute index of its owner parameter in the checked module's evidence
@@ -10896,9 +10975,9 @@ consumes it, and a list in it is copied each iteration. The rewrite is exact:
   consists of local aliases, discriminant reads, field reads, literals,
   descriptor-free struct builds,
   `bool_not` of a known two-variant tag (which selects the other variant; `!`
-  is `Bool.not`, which is the `bool_not` low-level, so `while !$done` tests
-  this), join declarations, and writes of the next join's parameters before
-  its jump, until one body reaches a switch whose condition is a known discriminant of
+  on a `Bool` dispatches to `Bool.not`, which is the `bool_not` low-level, so
+  `while !$done` tests this), join declarations, and writes of the next join's
+  parameters before its jump, until one body reaches a switch whose condition is a known discriminant of
   a tag built on the edge (directly or through a tag bound once), and whose
   selected arm is a bare jump to a parameterless join or code that runs in
   place (which the rewrite moves into the body of a fresh parameterless join
@@ -11897,6 +11976,94 @@ agreeing with the named annotated function. Rejected: a lambda with no
 expected context still needs two incompatible `read` methods on one
 parameter, and an arity mismatch against the expected function type is the
 ordinary mismatch.
+
+### Logical Negation Of Tag Literals
+
+`!x` is sugar for `x.not()` (`a -> a`), so its operand needs a `not` method.
+A tag literal such as `True` has a structural tag-union type, and structural
+types have no methods. Without a rule, `done = False` followed by `!done` would
+be rejected unless something else related `done` to `Bool`. The rule: a unary
+`!`'s `not` relation whose operand is still a structural tag union when the
+operand's generalization boundary is reached relates that operand to the
+builtin `Bool` by ordinary unification (`resolveTagLiteralNegations`), and
+its `not` then dispatches to `Bool.not`.
+
+Until then the relation is held, like a relation on a flex receiver
+(`tagLiteralNegationOperand` in the deferred-dispatch drain), so anything that
+relates the operand to a type before its boundary decides it: an `if` or
+`while` condition, an `and`/`or` operand, an annotation, or a call argument.
+The outcome therefore does not depend on the order in which checking relates
+those. The boundary is the last point at which the operand's type can still
+change: generalization cannot publish a structural receiver with an unmet
+`not` requirement, so the rule decides it there, before the boundary relates
+or captures the definition's other pending requirements (Methods On Open
+Rows), so a negated tag literal never becomes a requirement on its row
+variable. Type finalization applies the rule to every operand no boundary
+reached (for example a REPL expression).
+
+The rule reads only explicit data: the constraint's origin
+(`desugared_unaryop`), its method name (`not`), and the `unary_not` surface
+origin of the dispatch its introducing expression published, whose
+constraint function variable is the relation's own. A copy that
+instantiating a scheme makes of that relation, a `not` requirement from a
+`where` clause, and a written `x.not()` call never take this path. A function
+inferred from `|x| !x` therefore has the type `a -> a where [a.not : a -> a]`,
+exactly as if that type were written, and calling it on a tag literal is the
+ordinary missing-method report. The other outcomes are the ordinary ones: a
+nominal operand dispatches to its own `not` (a type without one is a missing
+method), and a tag union with tags `Bool` lacks is a mismatch against `Bool`,
+reported for the operand (`logical_negation_operand` context).
+
+Pinned by the `check type - unary not` tests in
+`src/check/test/type_checking_integration.zig`. Accepted: a nominal type's own
+`not`; `!True == False`; `!` on an unannotated binding, on a `var`, inside
+`.map`, nested `!!x`, and on a method result of type `Bool`; an annotation
+pinning a tag-literal operand to a nominal type with `not`. Rejected: `!"hi"`
+is a missing method, `![Foo]`'s operand is a mismatch against `Bool`, and a
+generic `|x| !x` applied to a tag literal is a missing method.
+
+### Unquantified Literal Type Parameters Default To `[]`
+
+A custom literal's conversion is a dispatch on the literal's own type
+(`Sig(ctx)` for `"Save"` passed to `text : Sig(ctx) -> Str`). Once the module
+has solved, a variable of that type that has no constraints, sits outside
+every row extension, is no uncommitted record tail, and that no binding's
+type reaches (no scheme quantifies
+it, directly or through a where-clause signature, and no top-level value's
+type exposes it) is fixed by nothing: every use is checked, and no
+instantiation copies it. Such a variable has exactly one instantiation, the
+uninhabited empty tag union that sealing gives any unconstrained variable, so
+checking unifies it with `[]` at the module's weak-value default commitment
+point (`groundUnquantifiedLiteralParameters`): after the value-row
+commitments, the uncommitted tails' commitment, and the decision of the
+module's open rows (`commitUncommittedTails`, `decideOpenRowsAtModuleEnd`,
+Methods On Open Rows), so no row that a commitment or an open-row requirement
+still decides is a candidate, and before the dispatch work those commitments
+create is drained, which it joins without a round of its own. A variable
+carrying a requirement, a row holder's or a negated tag literal's (Logical
+Negation Of Tag Literals) among them, is never a candidate. The literal's
+conversion is then closed: it gets its own conversion root
+(Literal Arguments), and the definition's entry wrapper is called with no
+literal argument to supply.
+
+This is a policy: it changes checked output for error-free programs. It
+accepts nothing pure unification rejects and changes no judgment a later use
+could observe, because nothing can relate the variable after the module
+solves; a variable a later use could fix is reached by that use's binding
+type and is left alone. The rule reads only explicit data: the literal
+conversions' recorded target types (`literalDispatchPlans`, and each checked
+interpolation's dispatcher), the module's binding-scheme roots and top-level
+definition types, and the variables' own constraints. The candidate walk
+visits only literal conversion types; the reachability walk runs only when a
+candidate exists.
+
+Pinned by `test/echo/literal_unquantified_parameters.roc` and
+`test/echo/issue_13004_phantom_quote_in_constant.roc`. Accepted (grounded):
+a top-level constant converting a phantom-parameter quote, and a function body
+doing the same. Rejected (left alone): a parameter the enclosing binding's
+scheme quantifies, which stays polymorphic across two calls at different
+types; a parameter a numeral constrains, which takes its numeric default; and
+a tag-row parameter, whose extension keeps its row default.
 
 ### Call Arguments Relate In Order
 
@@ -16030,6 +16197,17 @@ Other solved-graph mutations:
   Introduction (above). Uses the existing `unifyWith` descriptor-introduction
   mechanism for a proved concrete builtin conversion; does not mutate the
   context's type or introduce a redirect rule.
+- `groundUnquantifiedLiteralParameters`—policy: Unquantified Literal Type
+  Parameters Default To `[]` (above). An ordinary `unify` of each
+  unconstrained, unreached variable of a custom literal's type with a fresh
+  empty tag union, at the weak-value default commitment point after
+  `commitUncommittedTails` and `decideOpenRowsAtModuleEnd`; it introduces
+  no redirect rule and writes nothing outside unification.
+- `resolveTagLiteralNegations`—policy: Logical Negation Of Tag Literals
+  (above). A probe of whether a held unary `!` relation's operand is a
+  structural tag union at its generalization boundary gates an ordinary
+  unification of that operand with the builtin `Bool`. It writes nothing
+  outside unification and introduces no redirect rule.
 - `seedLambdaParamsFromContext`—policy: Lambda Parameters Seeded From
   Context (above). A probe of whether the expected context names a type
   constructor gates an ordinary unification of a skeleton over an
@@ -17641,7 +17819,19 @@ strategy).
   (`validate_only`, every interpolation among them) is evaluated and its
   value discarded: compile-time evaluation reports its failure like any
   other root's, and a runtime program converts the literal where the value
-  is needed. This keeps a `.boxy` program's literal rejections identical to
+  is needed. A closed custom interpolation, whose conversion depends on no
+  instance, is validated the same way by an `interpolation_conversion` root
+  of its own module (`CompileTimeRoot.validateOnly`), so every custom
+  interpolation is validated at compile time, called or not, generic or
+  not. A validate-only root's request needs no producer-fixed callable
+  representation (Compile-Time Root Eligibility Proofs), it completes as
+  `discarded` or as its failure, and, like a literal argument root, it is
+  the `.boxy` evaluator's under either strategy, so it never becomes a
+  Solved program's requested root. A specialization converting a custom
+  interpolation at a type whose validating root failed lowers the
+  conversion as reached checked-error code (`rejectedInterpolationMessage`):
+  the failure is already reported, and the program crashes there exactly as
+  the conversion would. This keeps a `.boxy` program's literal rejections identical to
   a specialized program's: every conversion a program reaches is run at
   compile time, at the type it is reached at. A rejection is reported in the
   module of the root whose evaluation rejected the literal: at the literal

@@ -1215,7 +1215,7 @@ pub const RootRequestTable = struct {
             try appendRoot(&requests, allocator, .{
                 .module_idx = root.module_idx,
                 .kind = switch (root.kind) {
-                    .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => .compile_time_constant,
+                    .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .interpolation_conversion, .literal_argument => .compile_time_constant,
                     .callable_binding => .compile_time_callable,
                     .expect => .test_expect,
                     .repl_expr => .repl_expr,
@@ -1225,7 +1225,7 @@ pub const RootRequestTable = struct {
                 .checked_type = entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
                 .abi = switch (root.kind) {
                     .expect => .test_expect,
-                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => .compile_time,
+                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => .compile_time,
                 },
                 .exposure = .private,
                 .procedure_template = templateForEntryWrapperRoot(entry_wrappers, root.id),
@@ -2251,7 +2251,7 @@ fn compileTimeRootKindMatchesRequest(
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
         .repl_expr => request_kind == .repl_expr,
-        .numeral_conversion, .quote_conversion, .literal_argument => request_kind == .compile_time_constant,
+        .numeral_conversion, .quote_conversion, .interpolation_conversion, .literal_argument => request_kind == .compile_time_constant,
     };
 }
 
@@ -12433,6 +12433,7 @@ fn categorizeValueRef(
         .e_lambda,
         .e_binop,
         .e_unary_minus,
+        .e_unary_not,
         .e_field_access,
         .e_method_call,
         .e_dispatch_call,
@@ -13693,6 +13694,19 @@ const EvidencePass = struct {
         }
     };
     /// One level of an evidence chain: a schema's params and their index.
+    /// A generated codec call `linkGeneratedCodecCalls` left for the selecting
+    /// site's chain to link.
+    const ForwardedCodecCall = struct {
+        /// Index in `StaticDispatchPlanTable.generated_codec_calls`.
+        call: u32,
+        dispatcher_var: Var,
+        evidence_var: Var,
+
+        fn orderByCall(call: u32, forwarded: ForwardedCodecCall) std.math.Order {
+            return std.math.order(call, forwarded.call);
+        }
+    };
+
     const ChainLevel = struct {
         params: []const EvidenceParam,
         by_dispatcher: DispatcherParams,
@@ -13830,6 +13844,9 @@ const EvidencePass = struct {
     /// a fresh var that settled onto an enclosing where-var forwards as
     /// `constraint(depth, k)`. Index 0 is the innermost generalized callable.
     current_chain: []const ChainLevel = &.{},
+    /// Generated codec calls on a type variable of the definition whose
+    /// dispatch selects their contract, linked by that site's chain.
+    forwarded_codec_calls: std.ArrayListUnmanaged(ForwardedCodecCall) = .empty,
 
     const EvidenceParam = dispatch_evidence.EvidenceParam;
     /// The generated-codec derivation each kind selected for one
@@ -13929,6 +13946,7 @@ const EvidencePass = struct {
         self.value_use_by_node.deinit();
         self.target_by_fn_var.deinit();
         self.generated_codec_by_source.deinit();
+        self.forwarded_codec_calls.deinit(self.allocator);
         self.where_method_use_by_fn_var.deinit();
         self.where_method_use_by_fn_root.deinit();
         self.local_value_scheme_by_var.deinit();
@@ -14186,6 +14204,9 @@ const EvidencePass = struct {
             if (self.iterator_plan_resolved[raw]) continue;
             try self.resolveIteratorPlan(@fromBackingInt(@intCast(raw)), &.{}, .commit);
         }
+
+        self.retireUnreachedForwardedCodecCalls();
+        if (builtin.mode == .debug) try self.debugVerifyGeneratedCodecContracts();
 
         std.mem.sort(static_dispatch.SiteEvidenceEntry, self.site_evidence.items, {}, siteEvidenceLessThan);
 
@@ -14653,7 +14674,25 @@ const EvidencePass = struct {
             if (source_calls.len != artifact_calls.len) {
                 checkedArtifactInvariant("generated codec source and artifact derivation call counts differed", .{});
             }
-            for (artifact_calls, source_calls) |*call, source_call| {
+            for (artifact_calls, source_calls, 0..) |*call, source_call, call_index| {
+                // A call on a type variable of the definition forwards to that
+                // definition's evidence parameter, which only the chain of the
+                // site that selects this contract names.
+                if (self.types.resolveVar(@fromBackingInt(@intCast(source_call.dispatcher_var))).desc.content == .rigid) {
+                    // The contract names its snapshot copy of the variable;
+                    // the enclosing chain names the definition's own.
+                    const copy_root = self.types.resolveVar(@fromBackingInt(@intCast(source_call.dispatcher_var))).var_;
+                    const renamings = module_env.generated_codec_renamings.items()[source_derivation.renamings_start..][0..source_derivation.renamings_len];
+                    const dispatcher_var: Var = for (renamings) |renaming| {
+                        if (self.types.resolveVar(@fromBackingInt(@intCast(renaming.copy_var))).var_ == copy_root) break @fromBackingInt(@intCast(renaming.source_var));
+                    } else copy_root;
+                    try self.forwarded_codec_calls.append(self.allocator, .{
+                        .call = derivation.calls.start + @as(u32, @intCast(call_index)),
+                        .dispatcher_var = dispatcher_var,
+                        .evidence_var = @fromBackingInt(@intCast(source_call.evidence_var)),
+                    });
+                    continue;
+                }
                 const owner = (try self.methodOwnerForSourceContent(@fromBackingInt(@intCast(source_call.dispatcher_var)))) orelse {
                     call.resolution = .checked_error;
                     continue;
@@ -14708,7 +14747,84 @@ const EvidencePass = struct {
                 }
             }
         }
-        if (builtin.mode == .debug) try self.debugVerifyGeneratedCodecContracts();
+    }
+
+    /// Link the forwarded calls of the contract a site selects, and of every
+    /// contract it nests, through the site's evidence `chain`: each names the evidence
+    /// parameter of the enclosing definition whose where clause declares the
+    /// call's method on the call's type variable. A contract one site already
+    /// linked keeps its links. The selected contract is marked as reaching a
+    /// forwarded call, which is what tells lowering to read the site's evidence
+    /// for it.
+    fn linkForwardedCodecCalls(
+        self: *EvidencePass,
+        derivation_id: static_dispatch.GeneratedCodecDerivationId,
+        chain: []const ChainLevel,
+    ) Allocator.Error!void {
+        if (self.forwarded_codec_calls.items.len == 0) return;
+        var pending = std.ArrayListUnmanaged(static_dispatch.GeneratedCodecDerivationId).empty;
+        defer pending.deinit(self.allocator);
+        var visited = collections.DenseMapUnmanaged(static_dispatch.GeneratedCodecDerivationId, void).empty;
+        defer visited.deinit(self.allocator);
+        try pending.append(self.allocator, derivation_id);
+        try visited.put(self.allocator, derivation_id, {});
+        var reaches_forwarded = false;
+        while (pending.pop()) |id| {
+            const derivation = self.plan_table.generated_codec_derivations.items()[@backingInt(id)];
+            const calls = self.plan_table.generated_codec_calls.items()[derivation.calls.start..][0..derivation.calls.len];
+            for (calls) |call| switch (call.resolution) {
+                .structural => |nested| if (!(try visited.getOrPut(self.allocator, nested)).found_existing) try pending.append(self.allocator, nested),
+                .forwarded => reaches_forwarded = true,
+                .pending, .checked_error, .callable => {},
+            };
+            // `forwarded_codec_calls` is in call order, so this contract's
+            // calls are one contiguous run of it.
+            const first = std.sort.lowerBound(ForwardedCodecCall, self.forwarded_codec_calls.items, derivation.calls.start, ForwardedCodecCall.orderByCall);
+            for (self.forwarded_codec_calls.items[first..]) |forwarded| {
+                if (forwarded.call >= derivation.calls.start + derivation.calls.len) break;
+                const call = &self.plan_table.generated_codec_calls.items()[forwarded.call];
+                if (call.resolution != .pending) continue;
+                const step = try self.resolveVarObligation(
+                    self.types.resolveVar(forwarded.dispatcher_var).var_,
+                    call.method,
+                    null,
+                    forwarded.evidence_var,
+                    chain,
+                    .defer_resolution,
+                );
+                const resolution = switch (step) {
+                    .resolved => |resolution| resolution orelse continue,
+                    .node => checkedArtifactInvariant("a forwarded generated codec call resolved to a method target", .{}),
+                };
+                const dependent = switch (resolution) {
+                    .evidence_dependent => |dependent| dependent,
+                    .direct_pending, .direct_closed, .direct_parametric, .structural, .checked_error, .@"unreachable" => checkedArtifactInvariant("a forwarded generated codec call matched no enclosing evidence parameter", .{}),
+                };
+                const ref_index: u32 = @intCast(self.evidence_refs.items.len);
+                try self.evidence_refs.append(self.allocator, .{
+                    .dispatcher_ty = call.dispatcher_ty,
+                    .resolution = .{ .constraint = .{
+                        .scheme_param = dependent.scheme_param,
+                        .index = dependent.index,
+                        .independent_callable = dependent.independent_callable,
+                        .reuse_slot_nested_evidence = dependent.reuse_slot_nested_evidence,
+                        .callable_contract = dependent.callable_contract,
+                    } },
+                });
+                call.resolution = .{ .forwarded = ref_index };
+                reaches_forwarded = true;
+            }
+        }
+        if (reaches_forwarded) self.plan_table.generated_codec_derivations.items()[@backingInt(derivation_id)].forwarded = true;
+    }
+
+    /// A forwarded call no site's chain linked belongs to a contract whose
+    /// dispatch no template reaches; nothing lowers it.
+    fn retireUnreachedForwardedCodecCalls(self: *EvidencePass) void {
+        for (self.forwarded_codec_calls.items) |forwarded| {
+            const call = &self.plan_table.generated_codec_calls.items()[forwarded.call];
+            if (call.resolution == .pending) call.resolution = .checked_error;
+        }
     }
 
     fn debugVerifyGeneratedCodecContracts(self: *EvidencePass) Allocator.Error!void {
@@ -14771,6 +14887,18 @@ const EvidencePass = struct {
                                 "checked generated codec callable evidence had a different callable type",
                                 .{},
                             );
+                        }
+                    },
+                    .forwarded => |ref_index| {
+                        if (ref_index >= self.evidence_refs.items.len) {
+                            checkedArtifactInvariant("checked generated codec contract referenced a missing forwarded evidence entry", .{});
+                        }
+                        switch (self.evidence_refs.items[ref_index].resolution) {
+                            .constraint => {},
+                            .direct, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => checkedArtifactInvariant(
+                                "checked generated codec forwarded call named evidence that is not an enclosing parameter",
+                                .{},
+                            ),
                         }
                     },
                     .structural => |nested_id| {
@@ -15472,7 +15600,8 @@ const EvidencePass = struct {
                 };
                 if (derivation_kind) |expected_kind| {
                     if (constraint_fn_var) |fn_var| {
-                        if (self.generatedCodecDerivationForSourceConstraint(fn_var, expected_kind) != null) {
+                        if (self.generatedCodecDerivationForSourceConstraint(fn_var, expected_kind)) |derivation_id| {
+                            try self.linkForwardedCodecCalls(derivation_id, chain);
                             return .{ .resolved = .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) } };
                         }
                     }
@@ -17163,6 +17292,7 @@ fn sealConstEvalTemplatesForRoots(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .interpolation_conversion,
             .repl_expr,
             .literal_argument,
             => checkedArtifactInvariant("non-constant root reached const eval template sealing", .{}),
@@ -18514,7 +18644,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 .nested_proc_sites = .{},
                 .target = switch (root.kind) {
                     .expect => .entry,
-                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => .comptime_only,
+                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => .comptime_only,
                 },
             });
         }
@@ -21245,6 +21375,40 @@ fn publishLiteralConversionRoots(
             .payload = .pending,
         });
     }
+    // A custom interpolation whose conversion is closed gets a validate-only
+    // root of its own: its value is the assembler, a function, which no
+    // reader takes from a slot, so the root only runs the conversion on the
+    // literal's segments and reports a rejection (design.md "Literal
+    // Arguments").
+    for (plans.plans.items()) |plan| {
+        if (!planConvertsInterpolationSegments(plans, plan)) continue;
+        switch (plan.resolution) {
+            .direct_closed => {},
+            .direct_parametric, .evidence_dependent, .checked_error, .@"unreachable" => continue,
+            .direct_pending, .structural => checkedArtifactInvariant("interpolation conversion had no finalized callable dispatch", .{}),
+        }
+        const node = plan.node;
+        switch (bodies.index().nodeKind(node)) {
+            .expr => {},
+            .pattern, .statement, .unreached => continue,
+        }
+        const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(node));
+        if (bodies.exprData(expr) != .interpolation) continue;
+        // The builtin `Str` concatenates its parts and rejects no segments.
+        if (bodies.interpolationIsBuiltinStr(expr)) continue;
+        if (roots.literalConversionRootForNode(node) != null) checkedArtifactInvariant("interpolation received a second conversion root", .{});
+        const root_id: ComptimeRootId = @fromBackingInt(@intCast(@as(u32, @intCast(first_root + root_list.items.len))));
+        try conversions.append(allocator, .{ .node = node, .root = root_id });
+        try CompileTimeRootTable.appendCompileTimeRoot(&root_list, allocator, .{
+            .module_idx = module.moduleIndex(),
+            .kind = .interpolation_conversion,
+            .source = .{ .literal = .{ .expr = expr } },
+            .pattern = null,
+            .expr = null,
+            .checked_type = bodies.interpolationAssemblerType(expr),
+            .payload = .pending,
+        });
+    }
     try roots.addLiteralConversions(allocator, conversions.items);
     if (root_list.items.len == 0) return;
     try roots.roots.resize(allocator, first_root + root_list.items.len);
@@ -21272,6 +21436,7 @@ fn publishLiteralConversionRoots(
         const plan_id = switch (root.literalConversionKind().?) {
             .numeral => plans.numeralPlanForNode(node),
             .quote => plans.quotePlanForNode(node),
+            .interpolation => plans.lookupByNode(node),
         } orelse checkedArtifactInvariant("a literal conversion root had no conversion plan", .{});
         const ref_index = first_ref + i;
         plans.template_refs.items()[ref_index] = plan_id;
@@ -21289,6 +21454,16 @@ fn publishLiteralConversionRoots(
         template.specialization_interface_relations = .{ .start = @intCast(first_relation + i), .len = 1 };
         root_evidence[first_template + i] = .{};
     }
+}
+
+/// Whether a dispatch plan is a custom interpolation's conversion: its
+/// generated operand is the literal's segments.
+fn planConvertsInterpolationSegments(plans: *const static_dispatch.StaticDispatchPlanTable, plan: static_dispatch.StaticDispatchCallPlan) bool {
+    for (plan.argsSlice(plans)) |operand| switch (operand) {
+        .generated_interpolation_segments => return true,
+        .generated_numeral, .generated_quote, .checked_expr, .literal_pattern_value, .literal_pattern_conversion => {},
+    };
+    return false;
 }
 
 /// What makes two literal requirements of one literal the same: the type's
@@ -21923,7 +22098,9 @@ fn publishLiteralArgumentRoots(
                 for (derivation.callsSlice(self.plans)) |call| switch (call.resolution) {
                     .callable => |node| try self.stack.append(self.allocator, node),
                     .structural => |nested| try pending.append(self.allocator, nested),
-                    .pending, .checked_error => {},
+                    // The enclosing definition's evidence supplies the target,
+                    // and that evidence is reached from its own sites.
+                    .pending, .checked_error, .forwarded => {},
                 };
             }
         }
@@ -22365,6 +22542,16 @@ fn publishLiteralArgumentRoots(
         }
         templates.literal_requirements_pool.deinit(allocator);
         templates.literal_requirements_pool = .fromOwnedSlice(try pool.toOwnedSlice(allocator));
+        // A requested root's entry wrapper is called with no arguments, so
+        // nothing could supply a literal argument to it: every literal its
+        // body converts is closed.
+        if (builtin.mode == .debug) {
+            for (wrappers.wrappers.items()) |wrapper| {
+                if (roots.root(wrapper.root).request_eligibility != .eligible) continue;
+                const template = templates.templates.items()[@backingInt(wrapper.template.template)];
+                if (template.literal_requirements.len != 0) checkedArtifactInvariant("a requested compile-time root's entry wrapper has a literal requirement", .{});
+            }
+        }
         if (base.dev_diagnostics.isSet(.trace_boxy_work)) {
             for (templates.templates.items(), 0..) |template, template_index| {
                 for (templates.templateLiteralRequirements(&template), 0..) |obligation, index| {
@@ -24719,6 +24906,14 @@ pub const CompileTimeRootKind = enum {
     /// non-builtin nominal type; works exactly like `numeral_conversion` with
     /// `Err(BadQuotedBytes(..))` reported as the checking problem.
     quote_conversion,
+    /// A `from_interpolation` conversion of a custom interpolation whose
+    /// conversion is independent of specialization. The root's body runs the
+    /// conversion on the literal's segments; `Err(InvalidInterpolation(..))`
+    /// is the literal's rejection, reported as a checking problem. Its value,
+    /// the assembler, holds a function, so the root is validate-only: it
+    /// stores nothing, and every use converts the literal where it needs the
+    /// assembler (design.md "Literal Arguments").
+    interpolation_conversion,
     /// One explicitly requested REPL expression body whose inspected `Str`
     /// result is evaluated during checking finalization but is not installed
     /// as a source-visible top-level constant.
@@ -24840,13 +25035,14 @@ pub const LiteralArgumentRoot = struct {
     sealed: bool,
 };
 
-/// The two literal-conversion root kinds, as a payload-free classification
+/// The literal-conversion root kinds, as a payload-free classification
 /// (design.md "Defaulted Fields": a defaulted field's conversion literal
 /// gets an ordinary conversion root in its declaring module; there is no
 /// separate field-default root kind).
 pub const CompileTimeLiteralConversionKind = enum(u8) {
     numeral,
     quote,
+    interpolation,
 };
 
 /// Public `CompileTimeRootPayload` declaration.
@@ -24934,7 +25130,7 @@ pub const CompileTimeRoot = struct {
 
     /// Whether this strategy still needs the root's producer to run.
     pub fn needsEvaluation(self: CompileTimeRoot, strategy: base.SpecializationStrategy) bool {
-        if (strategy == .lss and self.kind == .literal_argument) return false;
+        if (strategy == .lss and self.isBoxyEvaluated()) return false;
         return switch (self.payloadFor(strategy)) {
             .pending, .unevaluated => true,
             .const_node, .fn_value, .discarded, .expect, .runtime => false,
@@ -24999,7 +25195,29 @@ pub const CompileTimeRoot = struct {
         return switch (self.kind) {
             .numeral_conversion => .numeral,
             .quote_conversion => .quote,
+            .interpolation_conversion => .interpolation,
             .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect, .repl_expr, .literal_argument => null,
+        };
+    }
+
+    /// Whether the root is evaluated for its outcome alone and stores no
+    /// value: an interpolation conversion root, or a literal argument root
+    /// whose value holds a function (design.md "Literal Arguments"). Its
+    /// value is never read from its slot, so its request needs no fixed
+    /// callable representation, and a success completes it as `discarded`.
+    pub fn validateOnly(self: CompileTimeRoot) bool {
+        if (self.literal_argument) |argument| return argument.validate_only;
+        return self.kind == .interpolation_conversion;
+    }
+
+    /// Whether the `.boxy` evaluator owns the root under either strategy: a
+    /// literal argument root, and an interpolation conversion root, which
+    /// stores nothing a Solved program could read (design.md "Literal
+    /// Arguments").
+    pub fn isBoxyEvaluated(self: CompileTimeRoot) bool {
+        return switch (self.kind) {
+            .literal_argument, .interpolation_conversion => true,
+            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr => false,
         };
     }
 };
@@ -25564,12 +25782,15 @@ fn publishCompileTimeRootRequestEligibility(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .interpolation_conversion,
             .repl_expr,
             .literal_argument,
             => false,
         };
+        // A validate-only root's value is never read from its slot, so no
+        // reader needs its callable representation fixed by its producer.
         const context_free = !try concrete.visit(.{ .walk = .value_graph, .id = root.checked_type }) and
-            (producer_callable_type_is_fixed or !try callable.visit(root.checked_type));
+            (producer_callable_type_is_fixed or root.validateOnly() or !try callable.visit(root.checked_type));
         root.request_eligibility = if (context_free) .eligible else .ineligible;
     }
 }
@@ -27137,11 +27358,18 @@ fn verifyCompileTimeRootPayloadMatchesKind(root: CompileTimeRoot, payload: Compi
             .const_node, .unevaluated => true,
             .pending, .fn_value, .discarded, .expect, .runtime => false,
         },
-        // A literal argument holding a function value (an interpolation's
-        // assembler) is stored as one; a validate-only one stores nothing.
+        // A validate-only literal argument stores nothing when it succeeds;
+        // any other holding a function value is stored as one.
         .literal_argument => switch (payload) {
-            .const_node, .fn_value, .discarded, .unevaluated => true,
+            .const_node, .fn_value, .unevaluated => true,
+            .discarded => root.validateOnly(),
             .pending, .expect, .runtime => false,
+        },
+        // A validate-only conversion stores nothing when it succeeds, and
+        // its failure as a crash node.
+        .interpolation_conversion => switch (payload) {
+            .const_node, .discarded, .unevaluated => true,
+            .pending, .fn_value, .expect, .runtime => false,
         },
     };
     if (matches) return;
@@ -27151,7 +27379,7 @@ fn verifyCompileTimeRootPayloadMatchesKind(root: CompileTimeRoot, payload: Compi
 fn compileTimeRootHasConstBody(kind: CompileTimeRootKind) bool {
     return switch (kind) {
         .constant, .hoisted_constant => true,
-        .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => false,
+        .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => false,
     };
 }
 
@@ -27964,6 +28192,7 @@ fn compileTimeRootSourceReplacement(kind: CompileTimeRootKind) SourceReplacement
         .hoisted_validation,
         .numeral_conversion,
         .quote_conversion,
+        .interpolation_conversion,
         .repl_expr,
         => .whole_expression,
         .callable_binding => .outside_function_bodies,
@@ -32164,7 +32393,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert((root.source == .literal_argument) == (root.kind == .literal_argument));
             if (root.pattern.get()) |pattern| std.debug.assert(@backingInt(pattern) < self.moduleEnvConst().store.nodes.len());
             switch (root.kind) {
-                .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => switch (root.payload) {
+                .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => switch (root.payload) {
                     .pending => {},
                     .unevaluated,
                     .const_node,
@@ -32488,6 +32717,7 @@ pub const CheckedModuleArtifact = struct {
                 const plan_id = switch (root.literalConversionKind() orelse break :blk false) {
                     .numeral => table.numeralPlanForNode(conversion.node),
                     .quote => table.quotePlanForNode(conversion.node),
+                    .interpolation => table.lookupByNode(conversion.node),
                 } orelse break :blk false;
                 const literal = root.literalNode() orelse break :blk false;
                 break :blk literal.node() == conversion.node and
@@ -32641,6 +32871,15 @@ pub const CheckedModuleArtifact = struct {
                             !std.meta.eql(try type_view.rootKey(node_callable), try type_view.rootKey(call.callable_ty)))
                         {
                             return .{ .kind = .generated_codec_call_evidence_invalid, .index = @intCast(i), .method = call.method };
+                        }
+                    },
+                    .forwarded => |ref_index| {
+                        if (ref_index >= table.evidence_refs.items().len) {
+                            return .{ .kind = .generated_codec_call_evidence_invalid, .index = @intCast(i), .method = call.method };
+                        }
+                        switch (table.evidence_refs.items()[ref_index].resolution) {
+                            .constraint => {},
+                            .direct, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => return .{ .kind = .generated_codec_call_evidence_invalid, .index = @intCast(i), .method = call.method },
                         }
                     },
                     .structural => |nested_id| {
@@ -34634,6 +34873,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
                     .e_lambda,
                     .e_binop,
                     .e_unary_minus,
+                    .e_unary_not,
                     .e_interpolation,
                     .e_structural_eq,
                     .e_structural_hash,
@@ -34780,6 +35020,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .expr_record_update,
             .expr_bin_op,
             .expr_unary_minus,
+            .expr_unary_not,
             .expr_suffix_single_question,
             .expr_if_then_else,
             .expr_match,

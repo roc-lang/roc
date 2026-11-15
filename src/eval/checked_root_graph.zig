@@ -369,7 +369,9 @@ const Walker = struct {
                 for (derivation.callsSlice(plans)) |call| switch (call.resolution) {
                     .callable => |node| try self.nodes.append(self.allocator, node),
                     .structural => |nested| try self.derivations.append(self.allocator, nested),
-                    .pending, .checked_error => {},
+                    // The enclosing definition's evidence supplies the target,
+                    // and that evidence is reached from its own sites.
+                    .pending, .checked_error, .forwarded => {},
                 };
                 continue;
             }
