@@ -83,6 +83,14 @@ pub const ResolvedFieldKind = union(enum) {
             .required, .optional => null,
         };
     }
+
+    /// Whether the field's runtime slot is its source value itself.
+    pub fn isInline(self: ResolvedFieldKind) bool {
+        return switch (self) {
+            .required, .defaulted => true,
+            .optional => false,
+        };
+    }
 };
 
 const FieldKindNode = struct {
@@ -97,8 +105,9 @@ comptime {
 }
 
 /// The exact cells whose representation is selected by one generalized field
-/// kind. Producers register these when they instantiate the field; relation
-/// freeze consumes them if no earlier specialization evidence selected a kind.
+/// kind. Producers register these when they instantiate the field. When the
+/// kind's class first resolves to an inline kind (required or defaulted), or
+/// relation freeze defaults it to required, the slot is related to the value.
 const FieldKindCells = struct {
     slot: NodeId,
     value: NodeId,
@@ -1354,14 +1363,14 @@ pub const InterfaceConstraints = struct {
                         const source = self.graph.field_kinds.items[@backingInt(root_kind)];
                         var refs: std.ArrayList(CaptureItem) = .empty;
                         defer refs.deinit(allocator);
-                        try collectCaptureRefs(allocator, Kind, .{ .resolved = source.resolved, .cells = source.cells.get() }, &refs);
+                        try collectCaptureRefs(allocator, Kind, .{ .resolved = source.resolved, .cells = self.graph.fieldKindClassCells(root_kind) }, &refs);
                         try refs.append(allocator, .{ .finish_kind = .{ .id = id, .root = root_kind } });
                         try top.items.insertSlice(allocator, top.next, refs.items);
                     },
                     .finish_kind => |finish| {
                         const source = self.graph.field_kinds.items[@backingInt(finish.root)];
                         var lookup = CaptureLookup{ .capture = self, .allocator = self.allocator };
-                        self.kinds.items[@backingInt(finish.id)] = try mapValue(&lookup, Kind, .{ .resolved = source.resolved, .cells = source.cells.get() });
+                        self.kinds.items[@backingInt(finish.id)] = try mapValue(&lookup, Kind, .{ .resolved = source.resolved, .cells = self.graph.fieldKindClassCells(finish.root) });
                     },
                     .source => |source| if (try self.beginNode(source)) |open| try self.pushCaptureFrame(frames, open),
                 }
@@ -2458,6 +2467,11 @@ pub const InstGraph = struct {
     /// hop reads one id rather than a whole node.
     parents: std.ArrayList(NodeId),
     field_kinds: std.ArrayList(FieldKindNode),
+    /// Circular member list of each field-kind union-find class: every field
+    /// kind names the next member of its class, so a union splices two
+    /// circles in constant time and resolution visits each member's
+    /// registered cells exactly once.
+    field_kind_next: std.ArrayList(FieldKindId),
     versions: std.ArrayList(u32),
     /// Analysis observes content writes and order-sensitive row normalization.
     analysis_changes: @import("../proofs.zig").Changes(NodeId) = .{},
@@ -2689,6 +2703,7 @@ pub const InstGraph = struct {
             .nodes = .empty,
             .parents = .empty,
             .field_kinds = .empty,
+            .field_kind_next = .empty,
             .versions = .empty,
             .class_member_next = .empty,
             .class_member_head = .empty,
@@ -2748,6 +2763,7 @@ pub const InstGraph = struct {
         self.nodes.clearRetainingCapacity();
         self.parents.clearRetainingCapacity();
         self.field_kinds.clearRetainingCapacity();
+        self.field_kind_next.clearRetainingCapacity();
         self.versions.clearRetainingCapacity();
         self.analysis_changes.clearRetainingCapacity();
         self.class_member_next.clearRetainingCapacity();
@@ -2924,6 +2940,7 @@ pub const InstGraph = struct {
         self.parents.deinit(allocator);
         self.nodes.deinit(allocator);
         self.field_kinds.deinit(allocator);
+        self.field_kind_next.deinit(allocator);
         self.arena_impl.deinit();
         allocator.destroy(self);
     }
@@ -2948,10 +2965,15 @@ pub const InstGraph = struct {
 
     pub fn newUndeterminedFieldKind(self: *InstGraph) Allocator.Error!FieldKindId {
         const id: FieldKindId = @fromBackingInt(@intCast(self.field_kinds.items.len));
+        try self.field_kind_next.ensureUnusedCapacity(self.allocator, 1);
         try self.field_kinds.append(self.allocator, .{ .parent = id });
+        self.field_kind_next.appendAssumeCapacity(id);
         return id;
     }
 
+    /// Record the slot and value cells of the field that introduced `raw`.
+    /// Each field kind registers its own cells once, before any relation has
+    /// selected an inline kind for its class, so the selection relates them.
     pub fn registerUndeterminedFieldKindCells(
         self: *InstGraph,
         raw: FieldKindId,
@@ -2959,10 +2981,12 @@ pub const InstGraph = struct {
         value: NodeId,
     ) void {
         self.requireRelationProduction();
-        const root = self.findFieldKind(raw);
-        const node = &self.field_kinds.items[@backingInt(root)];
+        const node = &self.field_kinds.items[@backingInt(raw)];
         if (node.cells.get() != null) {
             Common.invariant("instantiation field kind registered its representation cells more than once");
+        }
+        if (self.field_kinds.items[@backingInt(self.findFieldKind(raw))].resolved) |resolved| {
+            if (resolved.isInline()) Common.invariant("field kind registered cells after its class selected an inline kind");
         }
         node.cells = .some(.{ .slot = slot, .value = value });
     }
@@ -3003,16 +3027,70 @@ pub const InstGraph = struct {
         };
     }
 
-    fn constrainUndeterminedFieldKind(self: *InstGraph, raw: FieldKindId, resolved: ResolvedFieldKind) void {
+    /// Constrain the class of `raw` with `resolved`. When this first selects
+    /// an inline kind for the class, every member's slot is the same cell as
+    /// its value, so the slot/value pair of each member's registered cells is
+    /// queued on `commits` for the caller's unification to relate.
+    fn constrainUndeterminedFieldKind(
+        self: *InstGraph,
+        raw: FieldKindId,
+        resolved: ResolvedFieldKind,
+        commits: *std.ArrayList(NodePair),
+    ) Allocator.Error!void {
         const root = self.findFieldKind(raw);
         const node = &self.field_kinds.items[@backingInt(root)];
-        node.resolved = if (node.resolved) |existing|
-            mergeResolvedFieldKinds(existing, resolved)
-        else
-            resolved;
+        const previous = node.resolved;
+        const merged = if (previous) |existing| mergeResolvedFieldKinds(existing, resolved) else resolved;
+        node.resolved = merged;
+        if (merged.isInline() and !resolvedIsInline(previous)) {
+            try self.queueFieldKindClassCommits(root, commits);
+        }
     }
 
-    fn unionUndeterminedFieldKinds(self: *InstGraph, left_raw: FieldKindId, right_raw: FieldKindId) FieldKindId {
+    /// Constrain one field kind outside any unification and relate the
+    /// slot/value cells the selection commits.
+    pub fn selectUndeterminedFieldKind(self: *InstGraph, raw: FieldKindId, resolved: ResolvedFieldKind) Allocator.Error!void {
+        self.requireRelationProduction();
+        var scratch = self.acquireUnifyScratch();
+        defer self.releaseUnifyScratch(&scratch);
+        try self.constrainUndeterminedFieldKind(raw, resolved, &scratch.pending);
+        try self.drainUnifyScratch(&scratch, false, .relate);
+    }
+
+    fn resolvedIsInline(resolved: ?ResolvedFieldKind) bool {
+        return if (resolved) |kind| kind.isInline() else false;
+    }
+
+    /// Queue the slot/value pair of every member of the class rooted at
+    /// `root` that registered cells.
+    fn queueFieldKindClassCommits(self: *InstGraph, root: FieldKindId, commits: *std.ArrayList(NodePair)) Allocator.Error!void {
+        var member = root;
+        while (true) {
+            if (self.field_kinds.items[@backingInt(member)].cells.get()) |cells| {
+                try pushPair(commits, self.allocator, cells.slot, cells.value, .exact);
+            }
+            member = self.field_kind_next.items[@backingInt(member)];
+            if (member == root) return;
+        }
+    }
+
+    /// The registered cells of one member of the class rooted at `root`: the
+    /// first member in the class's circle that registered cells.
+    fn fieldKindClassCells(self: *InstGraph, root: FieldKindId) ?FieldKindCells {
+        var member = root;
+        while (true) {
+            if (self.field_kinds.items[@backingInt(member)].cells.get()) |cells| return cells;
+            member = self.field_kind_next.items[@backingInt(member)];
+            if (member == root) return null;
+        }
+    }
+
+    fn unionUndeterminedFieldKinds(
+        self: *InstGraph,
+        left_raw: FieldKindId,
+        right_raw: FieldKindId,
+        commits: *std.ArrayList(NodePair),
+    ) Allocator.Error!FieldKindId {
         var left = self.findFieldKind(left_raw);
         var right = self.findFieldKind(right_raw);
         if (left == right) return left;
@@ -3021,17 +3099,28 @@ pub const InstGraph = struct {
             left = right;
             right = temp;
         }
+        const left_state = self.field_kinds.items[@backingInt(left)].resolved;
         const right_state = self.field_kinds.items[@backingInt(right)].resolved;
-        const right_cells = self.field_kinds.items[@backingInt(right)].cells;
+        const merged: ?ResolvedFieldKind = if (left_state) |left_kind|
+            (if (right_state) |right_kind| mergeResolvedFieldKinds(left_kind, right_kind) else left_kind)
+        else
+            right_state;
+        // A side whose kind was not yet inline has uncommitted members; the
+        // other side's members were committed when it selected its kind.
+        if (resolvedIsInline(merged)) {
+            if (!resolvedIsInline(left_state)) try self.queueFieldKindClassCommits(left, commits);
+            if (!resolvedIsInline(right_state)) try self.queueFieldKindClassCommits(right, commits);
+        }
         self.field_kinds.items[@backingInt(right)].parent = left;
         if (self.field_kinds.items[@backingInt(left)].rank == self.field_kinds.items[@backingInt(right)].rank) {
             self.field_kinds.items[@backingInt(left)].rank += 1;
         }
-        if (self.field_kinds.items[@backingInt(left)].cells.get() == null) {
-            self.field_kinds.items[@backingInt(left)].cells = right_cells;
-        }
-        if (right_state) |resolved| self.constrainUndeterminedFieldKind(left, resolved);
-        return self.findFieldKind(left);
+        self.field_kinds.items[@backingInt(left)].resolved = merged;
+        // Splice the two member circles.
+        const left_next = self.field_kind_next.items[@backingInt(left)];
+        self.field_kind_next.items[@backingInt(left)] = self.field_kind_next.items[@backingInt(right)];
+        self.field_kind_next.items[@backingInt(right)] = left_next;
+        return left;
     }
 
     pub fn resolvedFieldKind(self: *InstGraph, kind: InstFieldKind) ?ResolvedFieldKind {
@@ -3075,53 +3164,72 @@ pub const InstGraph = struct {
         };
     }
 
+    /// The kind a sealed field's explicit metadata records: a default
+    /// identity is defaulted, a separate source value is optional, and an
+    /// inline source value is required.
+    fn sealedFieldKind(value_ty: MaybeNodeId, default: ?Type.FieldDefault) ResolvedFieldKind {
+        if (default) |identity| return .{ .defaulted = identity };
+        if (value_ty != .none) return .optional;
+        return .required;
+    }
+
+    /// Relate two matched fields' kinds. A field kind selected here commits
+    /// its class's slot/value cells onto `commits`.
     fn unifyFieldKinds(
         self: *InstGraph,
-        left: InstFieldKind,
-        left_default: ?Type.FieldDefault,
-        right: InstFieldKind,
-        right_default: ?Type.FieldDefault,
-    ) InstFieldKind {
-        if (left == .sealed and right == .sealed) {
+        left: InstField,
+        right: InstField,
+        commits: *std.ArrayList(NodePair),
+    ) Allocator.Error!InstFieldKind {
+        const left_default = left.default.get();
+        const right_default = right.default.get();
+        if (left.kind == .sealed and right.kind == .sealed) {
             if (!instFieldDefaultEql(left_default, right_default)) {
                 Common.invariant("instantiation unified sealed record fields with different defaults");
             }
             return .sealed;
         }
 
-        const left_resolved = self.resolvedFieldKind(left) orelse if (left_default) |default|
+        const left_resolved = self.resolvedFieldKind(left.kind) orelse if (left.kind == .sealed)
+            sealedFieldKind(left.value_ty, left_default)
+        else if (left_default) |default|
             ResolvedFieldKind{ .defaulted = default }
         else
             null;
-        const right_resolved = self.resolvedFieldKind(right) orelse if (right_default) |default|
+        const right_resolved = self.resolvedFieldKind(right.kind) orelse if (right.kind == .sealed)
+            sealedFieldKind(right.value_ty, right_default)
+        else if (right_default) |default|
             ResolvedFieldKind{ .defaulted = default }
         else
             null;
 
-        switch (left) {
-            .undetermined => |left_id| switch (right) {
+        switch (left.kind) {
+            .undetermined => |left_id| switch (right.kind) {
                 .undetermined => |right_id| {
-                    const root = self.unionUndeterminedFieldKinds(left_id, right_id);
-                    if (left_resolved) |resolved| self.constrainUndeterminedFieldKind(root, resolved);
-                    if (right_resolved) |resolved| self.constrainUndeterminedFieldKind(root, resolved);
+                    const root = try self.unionUndeterminedFieldKinds(left_id, right_id, commits);
+                    if (left_resolved) |resolved| try self.constrainUndeterminedFieldKind(root, resolved, commits);
+                    if (right_resolved) |resolved| try self.constrainUndeterminedFieldKind(root, resolved, commits);
                     return .{ .undetermined = root };
                 },
-                .sealed => {
-                    if (right_resolved) |resolved| self.constrainUndeterminedFieldKind(left_id, resolved);
-                    return left;
-                },
-                .required, .optional, .defaulted => {
-                    self.constrainUndeterminedFieldKind(left_id, right_resolved.?);
-                    return left;
+                .sealed, .required, .optional, .defaulted => {
+                    try self.constrainUndeterminedFieldKind(left_id, right_resolved.?, commits);
+                    return left.kind;
                 },
             },
-            .sealed => return right,
-            .required, .optional, .defaulted => switch (right) {
+            .sealed => switch (right.kind) {
                 .undetermined => |right_id| {
-                    self.constrainUndeterminedFieldKind(right_id, left_resolved.?);
-                    return right;
+                    try self.constrainUndeterminedFieldKind(right_id, left_resolved.?, commits);
+                    return right.kind;
                 },
-                .sealed => return left,
+                .sealed => unreachable, // both sealed returned above
+                .required, .optional, .defaulted => return right.kind,
+            },
+            .required, .optional, .defaulted => switch (right.kind) {
+                .undetermined => |right_id| {
+                    try self.constrainUndeterminedFieldKind(right_id, left_resolved.?, commits);
+                    return right.kind;
+                },
+                .sealed => return left.kind,
                 .required, .optional, .defaulted => return switch (mergeResolvedFieldKinds(left_resolved.?, right_resolved.?)) {
                     .required => .required,
                     .optional => .optional,
@@ -3139,9 +3247,12 @@ pub const InstGraph = struct {
         self: *InstGraph,
         left: InstField,
         right: InstField,
-    ) void {
+    ) Allocator.Error!void {
         self.requireRelationProduction();
-        _ = self.unifyFieldKinds(left.kind, left.default.get(), right.kind, right.default.get());
+        var scratch = self.acquireUnifyScratch();
+        defer self.releaseUnifyScratch(&scratch);
+        _ = try self.unifyFieldKinds(left, right, &scratch.pending);
+        try self.drainUnifyScratch(&scratch, false, .relate);
     }
 
     pub fn registerRequestSourceInterface(
@@ -3339,22 +3450,24 @@ pub const InstGraph = struct {
     }
 
     /// Commit every generalized field kind that received no concrete
-    /// specialization evidence. The field-kind producer recorded the exact
+    /// specialization evidence. Each field-kind producer recorded the exact
     /// runtime-slot/source-value pair, so required defaulting relates those
     /// cells directly without inspecting or reconstructing a row shape.
     fn finalizeUndeterminedFieldKinds(self: *InstGraph) Allocator.Error!void {
         self.requireRelationProduction();
+        var scratch = self.acquireUnifyScratch();
+        defer self.releaseUnifyScratch(&scratch);
         for (0..self.field_kinds.items.len) |raw_index| {
             const id: FieldKindId = @fromBackingInt(@intCast(raw_index));
             const root = self.findFieldKind(id);
             if (root != id) continue;
-            const node = &self.field_kinds.items[raw_index];
-            if (node.resolved != null) continue;
-            const cells = node.cells.get() orelse
+            if (self.field_kinds.items[raw_index].resolved != null) continue;
+            if (self.fieldKindClassCells(root) == null) {
                 Common.invariant("unresolved instantiation field kind had no registered representation cells");
-            node.resolved = .required;
-            try self.unify(cells.slot, cells.value);
+            }
+            try self.constrainUndeterminedFieldKind(root, .required, &scratch.pending);
         }
+        try self.drainUnifyScratch(&scratch, false, .relate);
     }
 
     /// Complete pending specialization defaults and prevent any later
@@ -5872,6 +5985,10 @@ pub const InstGraph = struct {
                         if (try self.resolvePublicVariableToImportedGeneratedIterator(public_node, public_var, private_node, private_named)) {
                             return;
                         }
+                        if (private_named.generated_iterator == null and private_named.def.iterator_representation == .none) {
+                            try self.resolvePublicVariableToGeneratedRepresentation(public_node, public_var, private_node);
+                            return;
+                        }
                     }
                     try self.relateGeneratedOpaquePair(public_content, private_named, pair.row_width, pending);
                     return;
@@ -5879,6 +5996,18 @@ pub const InstGraph = struct {
             }
         } else if (private_content == .unresolved) {
             try self.unifyAtRowWidth(public_node, private_node, pair.row_width);
+            return;
+        }
+        if (private_content == .named and contentLiftsIntoNamed(public_content)) {
+            try self.relateLiftedPublicStructure(
+                public_node,
+                public_content,
+                private_node,
+                private_content.named,
+                private_contains_generated,
+                pair.row_width,
+                pending,
+            );
             return;
         }
 
@@ -5977,6 +6106,53 @@ pub const InstGraph = struct {
         }
     }
 
+    /// Whether checked structure of this content can be lifted into a named
+    /// type through that type's backing, as `unifyThroughBacking` does.
+    fn contentLiftsIntoNamed(node_content: InstNode) bool {
+        return switch (node_content) {
+            .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => true,
+            .redirect, .leaf, .unresolved, .named, .hole => false,
+        };
+    }
+
+    /// A use that relates an anonymous structure to a nominal lifts the
+    /// structure into the nominal (design.md "Anonymous Structure Is Copied
+    /// Per Use"), so a template's checked root can hold a structure where the
+    /// request derived from the same use holds the nominal. Ordinary
+    /// instantiation replays that lift through `unifyThroughBacking`. When the
+    /// request's nominal carries generated-private evidence, the lift relates
+    /// the public structure to the nominal's backing through this opaque
+    /// relation, so no generated-private node merges with its public
+    /// counterpart, and the public class becomes the request's nominal.
+    fn relateLiftedPublicStructure(
+        self: *InstGraph,
+        public_node: NodeId,
+        public_content: InstNode,
+        private_node: NodeId,
+        private_named: *const InstNamed,
+        private_contains_generated: bool,
+        row_width: RowWidthRelation,
+        pending: *std.ArrayList(NodePair),
+    ) Allocator.Error!void {
+        if (!private_contains_generated) {
+            try self.unifyAtRowWidth(public_node, private_node, row_width);
+            return;
+        }
+        const declared = private_named.backing.get() orelse
+            Common.invariant("opaque interface relation lifted structure into a named type without backing");
+        const backing = try self.structuralBackingNode(declared.node, private_named);
+        if (backing.recursive) {
+            Common.invariant("opaque interface relation lifted structure into a named type whose backing is itself");
+        }
+        if (private_named.kind == .alias) {
+            try self.relateOpaqueChild(public_node, backing.node, row_width, pending);
+            return;
+        }
+        const moved = try self.newNode(public_content);
+        try self.union_(private_node, public_node);
+        try self.relateOpaqueChild(moved, backing.node, row_width, pending);
+    }
+
     /// Relate row-polymorphic structure of `kind` without merging a row that
     /// carries generated-private evidence into its checked-public counterpart.
     /// Labels present on only one side are ordinary checker-produced row
@@ -6032,12 +6208,9 @@ pub const InstGraph = struct {
                     }
                 },
                 .record => {
-                    _ = self.unifyFieldKinds(
-                        public_entry.kind,
-                        public_entry.default.get(),
-                        private_entry.kind,
-                        private_entry.default.get(),
-                    );
+                    // The kind relation commits each side's selected inline
+                    // slot to that side's own value before the slots relate.
+                    try self.relateRecordFieldKind(public_entry, private_entry);
                     try self.relateOpaqueChild(
                         public_entry.value_ty.get() orelse public_entry.ty,
                         private_entry.value_ty.get() orelse private_entry.ty,
@@ -6185,6 +6358,29 @@ pub const InstGraph = struct {
         } else if (private_named.backing.get() != null) {
             Common.invariant("opaque interface relation received different named backing presence");
         }
+    }
+
+    /// A checked type variable states no public structure of its own: the
+    /// checker solved it at this use to the type the request supplies, such
+    /// as a codec method's unannotated parameter whose only constraint is a
+    /// method the request's type provides. Related to a generated-private
+    /// named representation (other than an iterator, whose public interface
+    /// relation is defined above), the variable therefore denotes that
+    /// representation itself, exactly as it would denote an imported
+    /// generated iterator.
+    fn resolvePublicVariableToGeneratedRepresentation(
+        self: *InstGraph,
+        public_node: NodeId,
+        public_var: InstVariable,
+        private_node: NodeId,
+    ) Allocator.Error!void {
+        if (public_var.origin != .checked_variable) {
+            Common.invariant("generated-private representation relation received a non-checked public variable");
+        }
+        if (public_var.numeric_default_phase != null or public_var.row_default != null) {
+            Common.invariant("generated-private representation relation received a defaultable public variable");
+        }
+        try self.union_(private_node, public_node);
     }
 
     fn resolvePublicVariableToImportedGeneratedIterator(
@@ -6746,11 +6942,14 @@ pub const InstGraph = struct {
                 .required, .defaulted => {},
                 .optional => Common.invariant("required access resolved an optional record field kind"),
             } else {
-                self.constrainUndeterminedFieldKind(id, .required);
+                try self.selectUndeterminedFieldKind(id, .required);
             },
         }
-        const value = field.value_ty.get() orelse field.ty;
-        try self.unify(field.ty, value);
+        if (std.debug.runtime_safety) {
+            if (!self.sameClass(field.ty, field.value_ty.get() orelse field.ty)) {
+                Common.invariant("required record field slot was not its value after its kind was selected");
+            }
+        }
         return self.find(field.ty);
     }
 
@@ -6766,7 +6965,13 @@ pub const InstGraph = struct {
     /// read through any named backing its receiver specializes to.
     pub fn optionalRecordFieldNodes(self: *InstGraph, raw_record: NodeId, name: names.RecordFieldNameId) Allocator.Error!OptionalFieldAccessNodes {
         const field = try self.recordFieldWithAccess(raw_record, name, .runtime_layout, "optional record field access");
-        _ = self.unifyFieldKinds(field.kind, field.default.get(), .optional, null);
+        try self.relateRecordFieldKind(field, .{
+            .name = field.name,
+            .ty = field.ty,
+            .value_ty = field.value_ty,
+            .kind = .optional,
+            .default = .none,
+        });
         return .{
             .slot = self.find(field.ty),
             .value = self.find(field.value_ty.get() orelse
@@ -6794,15 +6999,16 @@ pub const InstGraph = struct {
                 // Optional/defaulted caller evidence, when present, has
                 // already constrained this same identity; otherwise the
                 // construction itself is the explicit required evidence.
-                // Required means the runtime slot is exactly the source
-                // value cell, so commit that relation together with the
-                // kind instead of leaving an unrelated placeholder slot.
-                self.constrainUndeterminedFieldKind(id, .required);
-                try self.unify(
-                    field.ty,
-                    field.value_ty.get() orelse
-                        Common.invariant("undetermined constructor field carried no source value type"),
-                );
+                // Selecting required commits the runtime slot to the source
+                // value cell.
+                try self.selectUndeterminedFieldKind(id, .required);
+                if (std.debug.runtime_safety) {
+                    const value = field.value_ty.get() orelse
+                        Common.invariant("undetermined constructor field carried no source value type");
+                    if (!self.sameClass(field.ty, value)) {
+                        Common.invariant("constructed required field slot was not its value after its kind was selected");
+                    }
+                }
                 return .required;
             },
             .sealed, .required, .optional, .defaulted => Common.invariant("record constructor field kind carried no specialization evidence"),
@@ -7289,23 +7495,43 @@ pub const InstGraph = struct {
         comptime join: UnifyJoin,
     ) Allocator.Error!void {
         self.countDiagnostic("unify_requests");
-        var scratch = self.unify_scratch_pool.pop() orelse UnifyScratch{ .related = NodePairSet.init(self.allocator) };
-        defer {
-            // Pooled scratch keeps only the capacity an ordinary call needs:
-            // clearing touches a map's whole capacity.
-            if (scratch.pending.capacity > UnifyScratch.retained_capacity) {
-                scratch.pending.clearAndFree(self.allocator);
-            } else {
-                scratch.pending.clearRetainingCapacity();
-            }
-            if (scratch.related.capacity() > UnifyScratch.retained_capacity) {
-                scratch.related.clearAndFree();
-            } else {
-                scratch.related.clearRetainingCapacity();
-            }
-            self.unify_scratch_pool.append(self.allocator, scratch) catch scratch.deinit(self.allocator);
-        }
+        var scratch = self.acquireUnifyScratch();
+        defer self.releaseUnifyScratch(&scratch);
         try pushPair(&scratch.pending, self.allocator, a, b, row_width);
+        try self.drainUnifyScratch(&scratch, allow_private_selection, join);
+    }
+
+    fn acquireUnifyScratch(self: *InstGraph) UnifyScratch {
+        return self.unify_scratch_pool.pop() orelse UnifyScratch{ .related = NodePairSet.init(self.allocator) };
+    }
+
+    fn releaseUnifyScratch(self: *InstGraph, scratch: *UnifyScratch) void {
+        // Pooled scratch keeps only the capacity an ordinary call needs:
+        // clearing touches a map's whole capacity.
+        if (scratch.pending.capacity > UnifyScratch.retained_capacity) {
+            scratch.pending.clearAndFree(self.allocator);
+        } else {
+            scratch.pending.clearRetainingCapacity();
+        }
+        if (scratch.related.capacity() > UnifyScratch.retained_capacity) {
+            scratch.related.clearAndFree();
+        } else if (scratch.related.count() != 0) {
+            // An empty set's metadata is already clear; a field-kind decision
+            // that queued no pairs leaves it so.
+            scratch.related.clearRetainingCapacity();
+        }
+        self.unify_scratch_pool.append(self.allocator, scratch.*) catch scratch.deinit(self.allocator);
+    }
+
+    /// Unify every pair queued on `scratch`, including the pairs that
+    /// unifying them queues.
+    fn drainUnifyScratch(
+        self: *InstGraph,
+        scratch: *UnifyScratch,
+        allow_private_selection: bool,
+        comptime join: UnifyJoin,
+    ) Allocator.Error!void {
+        if (scratch.pending.items.len == 0) return;
         {
             self.unify_depth += 1;
             defer self.unify_depth -= 1;
@@ -8502,12 +8728,7 @@ pub const InstGraph = struct {
             const left_slot = @backingInt(left_field.name);
             if (self.row_label_right.get(left_slot)) |right_index| {
                 const right_field = flat_right.fields[right_index];
-                const merged_kind = self.unifyFieldKinds(
-                    left_field.kind,
-                    left_field.default.get(),
-                    right_field.kind,
-                    right_field.default.get(),
-                );
+                const merged_kind = try self.unifyFieldKinds(left_field, right_field, pending);
                 try pushPair(pending, self.allocator, left_field.value_ty.get() orelse left_field.ty, right_field.value_ty.get() orelse right_field.ty, row_width);
                 try pushPair(pending, self.allocator, left_field.ty, right_field.ty, row_width);
                 const resolved_default = if (self.resolvedFieldKind(merged_kind)) |resolved|
@@ -15138,7 +15359,7 @@ test "interface constraints preserve recursive and field-presence topology" {
     const second_field = (try graph.content(second)).record.fields[0];
     try std.testing.expectEqual(first, (try graph.content(first_field.value_ty.get().?)).list);
     try std.testing.expect(first_field.kind.undetermined != second_field.kind.undetermined);
-    graph.constrainUndeterminedFieldKind(first_field.kind.undetermined, .optional);
+    try graph.selectUndeterminedFieldKind(first_field.kind.undetermined, .optional);
     try std.testing.expect(graph.resolvedFieldKind(second_field.kind) == null);
     const cells = graph.field_kinds.items[@backingInt(second_field.kind.undetermined)].cells.get().?;
     try std.testing.expectEqual(second_field.ty, cells.slot);
@@ -15244,7 +15465,7 @@ test "interface constraints distinguish variable sharing defaults and field-kind
     const kind = try graph.newUndeterminedFieldKind();
     const str = try graph.newNode(.{ .primitive = .str });
     graph.registerUndeterminedFieldKindCells(kind, str, str);
-    graph.constrainUndeterminedFieldKind(kind, .required);
+    try graph.selectUndeterminedFieldKind(kind, .required);
     const row = try graph.newNode(.{ .record = .{
         .fields = try graph.arena().dupe(InstField, &.{.{ .name = field, .ty = str, .value_ty = .of(str), .kind = .{ .undetermined = kind }, .default = .none }}),
         .ext = try graph.newNode(.empty_record),

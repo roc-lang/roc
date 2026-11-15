@@ -10063,7 +10063,13 @@ closed type; Polymorphic Recursion rejects the rest) remains a fresh
 specialization. Every draft function and globally reserved root records
 the owner that created it, forming an explicit active ownership tree, and the
 reference names the in-progress specialization of the same procedure, with the
-same evidence, on that chain. Every other request—a non-recursive scheme
+same evidence, on that chain. The procedure is named by its declaration (a
+template, or a nested site with its owner and context function digest), not by
+the checked root the reference reads: inside a generalized procedure, a
+recursive reference reads the declaration at its monomorphic in-body type while
+the request that began the active specialization read an instantiation. A
+nested specialization's draft function records the specialization it lowers, so
+the reference finds it by walking its own ownership chain. Every other request—a non-recursive scheme
 instantiation, a dispatch plan, a generated codec's component call, or a
 compiler-generated component edge—is a fresh instantiation; it identifies with
 an existing specialization only through an exact interface and otherwise
@@ -10255,6 +10261,22 @@ relations; it never fully unifies the two function graphs. Expected private
 results remain request-owned nodes while their checked result cells stay fresh
 public interfaces. This keeps an adapter's input and output identities distinct
 even when the source signature uses one public `Iter` type variable for both.
+
+An opaque interface relation replays the checker's per-use lift (Anonymous
+Structure Is Copied Per Use) just as ordinary instantiation does through the
+named type's backing. A template whose checked root holds an anonymous record
+or tag union, such as an unannotated method built from `Ok(...)` and
+`Err(...)` literals, can meet a request whose same position holds the nominal
+the use lifted it into. When that nominal carries generated-private evidence,
+the public structure relates to the nominal's structural backing through the
+opaque relation, so every generated-private node stays distinct from its
+public counterpart, and the public class then takes the request's nominal.
+A checked type variable carries no public structure of its own, so one related
+to a generated-private named representation other than an iterator (such as a
+codec method's unannotated `FieldNames` parameter, constrained only by the
+methods it calls) denotes that representation itself, as a checked variable
+related to an imported generated iterator does. A generated iterator's
+variable takes the iterator's public interface instead.
 
 Match lowering likewise relates each checked pattern interface to the exact
 scrutinee node without merging a generated-private root into that public
@@ -14358,14 +14380,28 @@ deferred at lowering; the checked module and lowering are both complete):
   start, where one cell is both slot and value. A field slot that has joined
   any other variable takes that variable's origin and its rules.
   Construction consumes the resolved graph kind, never the
-  generalized scheme or a reconstructed slot shape; when the construction
-  itself is the first required-kind evidence, it explicitly relates that
-  field's runtime-slot cell to its source-value cell at the same time.
+  generalized scheme or a reconstructed slot shape.
   Every field-kind cell also records that exact source-value/runtime-slot
-  pair when it is instantiated. After all interface and body relations for
+  pair when it is instantiated. A field-kind class keeps every member's
+  cells: each field kind keeps its own pair, and the class's members form a
+  circular list, so joining two classes splices their circles in constant
+  time. The moment a class first selects an inline kind (`required` or
+  `defaulted`), whether from row unification, a required access, a
+  construction, or relation freeze, every member's runtime-slot cell is
+  related to its own source-value cell on the same unification worklist, so
+  each pair is committed exactly once and an inline field's slot is its value
+  from then on. A sealed (finished Monotype) field is explicit kind evidence
+  when it meets an undetermined one: a default identity is `defaulted`, a
+  separate source value is `optional`, and an inline source value is
+  `required`. Relations that keep their two sides' cells distinct, such as the
+  opaque interface relation between a checked public interface and a
+  generated-private request, therefore relate an inline field's slot only
+  after its kind relation has made the slot the field's value. After all
+  interface and body relations for
   one Monotype specialization have been produced, relation freeze commits
-  each still-undetermined field-kind class to `required` and unifies its
-  recorded runtime-slot cell with its recorded source-value cell. This is the
+  each still-undetermined field-kind class to `required` through the same
+  selection, relating every member's recorded runtime-slot cell to its
+  recorded source-value cell. This is the
   specialization-time defaulting rule for a generalized scheme with no
   optional/defaulted evidence in that specialization; it is not recovery from
   a slot shape, and no unresolved kind or placeholder slot can cross the
