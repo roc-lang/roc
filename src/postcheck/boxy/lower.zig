@@ -4364,7 +4364,9 @@ fn registerModules(program: *Program) Allocator.Error!void {
     const input = program.input;
     _ = try program.modules.add(checked.importedView(input.modules.root.module));
     for (input.modules.imports) |view| _ = try program.modules.add(view);
-    for (input.modules.root.relation_modules) |view| _ = try program.modules.add(view);
+    for (input.modules.root.relation_modules) |view| {
+        try program.modules.relations.append(allocator, try program.modules.add(view));
+    }
     program.body_indexed = try allocator.alloc(bool, program.modules.views.items.len);
     @memset(program.body_indexed, false);
     for (program.modules.views.items) |view| {

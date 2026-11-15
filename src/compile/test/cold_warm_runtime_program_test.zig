@@ -777,6 +777,158 @@ test "a stored encoder means the same to every Solved policy when its optimized 
     );
 }
 
+test "a constant whose type names another module's tag-union alias lowers the same whether evaluated or read from the cache" {
+    // The alias's rows are implicitly open where `Scene` names them, and
+    // nothing widens them, so the constant's type holds variables that carry
+    // only a row default. The use of the constant selects its one type by
+    // reading them as that default (design.md "Field Kinds").
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(io, "cache");
+    try tmp_dir.dir.createDirPath(io, "app/.roc_echo_platform");
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "app/main.roc", .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\import Scene
+        \\main! = |args| {
+        \\    document = Scene.drawing({})
+        \\    count = Scene.Drawing.command_count(document) + List.len(args)
+        \\    Echo.line!(count.to_str())
+        \\    Ok({})
+        \\}
+    });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "app/Color.roc", .data =
+        \\Color :: [].{
+        \\    Channels : [Gray(U16), Rgb({ blue : U16, green : U16, red : U16 })]
+        \\
+        \\    SourceValue : [Srgb(Channels)]
+        \\
+        \\    gray16 : U16 -> SourceValue
+        \\    gray16 = |level| Srgb(Gray(level))
+        \\}
+    });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "app/Scene.roc", .data =
+        \\import Color
+        \\
+        \\Scene :: [].{
+        \\    Style : { fill : [NoFill, SolidFill(Color.SourceValue)] }
+        \\
+        \\    Drawing :: { commands : List(Style) }.{
+        \\        empty : Drawing
+        \\        empty = Drawing.({ commands: [] })
+        \\
+        \\        fill : Drawing, Color.SourceValue -> Drawing
+        \\        fill = |Drawing.(state), color| Drawing.({ commands: state.commands.append({ fill: SolidFill(color) }) })
+        \\
+        \\        command_count : Drawing -> U64
+        \\        command_count = |Drawing.(state)| state.commands.len()
+        \\    }
+        \\
+        \\    drawing : {} -> Drawing
+        \\    drawing = |_| Drawing.empty
+        \\}
+    });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "app/.roc_echo_platform/main.roc", .data = platform_main });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "app/.roc_echo_platform/Echo.roc", .data = platform_echo });
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(io, "cache", gpa);
+    defer gpa.free(cache_dir);
+    const app_path = try tmp_dir.dir.realPathFileAlloc(io, "app/main.roc", gpa);
+    defer gpa.free(app_path);
+
+    const cold = try buildWithCache(gpa, cache_dir, app_path);
+    defer gpa.free(cold.program);
+    const warm = try buildWithCache(gpa, cache_dir, app_path);
+    defer gpa.free(warm.program);
+    try std.testing.expect(warm.cache_hits > 0);
+    try std.testing.expect(!warm.respecialized);
+    try std.testing.expectEqualStrings(cold.program, warm.program);
+}
+
+test "a provided data export holding a stored encoder lowers the same whether evaluated or read from the cache" {
+    // The export is a static-data request, whose initializer restores the
+    // stored constant in a function body of its own (design.md "Operand
+    // Sequencing"). The platform's constant holds the app's value, so the
+    // encoder's contract is one the app recorded and the platform reaches
+    // only through its relation to the app (design.md "Structural
+    // Serialization Methods").
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(io, "cache");
+    try tmp_dir.dir.createDirPath(io, "app/.roc_echo_platform");
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "app/main.roc", .data =
+        \\app [main!, stored_encoder] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\Format := [Default].{
+        \\    rename_field : Format, Str -> Str
+        \\    rename_field = |_, name| name
+        \\    encode_record : U64, U64, (U64, (U64, Str, (U64 -> Try(U64, err)) -> Try(U64, err)) -> Try(U64, err)) -> Try(U64, err)
+        \\    encode_record = |state, _, write_fields| write_fields(state, |field_state, _, write_value| write_value(field_state))
+        \\    encode_u64 : U64, U64 -> Try(U64, [Zero])
+        \\    encode_u64 = |value, state| if value == 0 { Err(Zero) } else { Ok(state + value) }
+        \\}
+        \\encoder_of : shape -> (shape, U64 -> Try(U64, err))
+        \\    where [shape.encoder_for : Format -> (shape, U64 -> Try(U64, err))]
+        \\encoder_of = |_| {
+        \\    Shape : shape
+        \\    Shape.encoder_for(Format.Default)
+        \\}
+        \\stored_encoder : Box(({ n : U64 }, U64 -> Try(U64, [Zero])))
+        \\stored_encoder = Box.box(encoder_of({ n: 0 }))
+        \\main! = |_args| {
+        \\    Echo.line!("ok")
+        \\    Ok({})
+        \\}
+    });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "app/.roc_echo_platform/main.roc", .data =
+        \\platform ""
+        \\    requires {} {
+        \\        main! : List(Str) => Try({}, [Exit(I8), ..]),
+        \\        stored_encoder : Box(({ n : U64 }, U64 -> Try(U64, [Zero]))),
+        \\    }
+        \\    exposes [Echo]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host!, "roc_stored_encoder": stored_encoder_for_host }
+        \\    hosted { "roc_echo_line": Echo.line! }
+        \\import Echo
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |args|
+        \\    match main!(args) {
+        \\        Ok({}) => 0
+        \\        Err(Exit(code)) => code
+        \\        Err(_) => 1
+        \\    }
+        \\stored_encoder_for_host : Box(({ n : U64 }, U64 -> Try(U64, [Zero])))
+        \\stored_encoder_for_host = stored_encoder
+    });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "app/.roc_echo_platform/Echo.roc", .data = platform_echo });
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(io, "cache", gpa);
+    defer gpa.free(cache_dir);
+    const app_path = try tmp_dir.dir.realPathFileAlloc(io, "app/main.roc", gpa);
+    defer gpa.free(app_path);
+
+    const cold = try buildWithCacheAndTests(gpa, cache_dir, app_path, .{}, true);
+    defer gpa.free(cold.program);
+    const warm = try buildWithCacheAndTests(gpa, cache_dir, app_path, .{}, true);
+    defer gpa.free(warm.program);
+    try std.testing.expect(warm.cache_hits > 0);
+    try std.testing.expectEqual(@as(usize, 0), cold.invalid_static_parts);
+    try std.testing.expectEqual(@as(usize, 0), warm.invalid_static_parts);
+    try std.testing.expectEqualStrings(cold.program, warm.program);
+
+    // `.boxy` reads the same stored value through the same relation.
+    var boxy_target: lir.CheckedPipeline.TargetConfig = .{};
+    boxy_target.specialization_strategy = .boxy;
+    const boxy = try buildWithCacheAndTests(gpa, cache_dir, app_path, boxy_target, true);
+    defer gpa.free(boxy.program);
+    try std.testing.expectEqual(@as(usize, 0), boxy.invalid_static_parts);
+}
+
 /// Build an app, edit it, and build it again against one cache. The second
 /// build restores the imported module's stored functions while evaluating the
 /// app's constants, and stores them again in the app's own module.
