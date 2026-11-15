@@ -7855,18 +7855,38 @@ pub const Builder = struct {
 
     /// Dictionary parameter `param` of the frame at `position` of
     /// `alias_scopes`. A literal chain frame's is composed at its first read,
-    /// in the scope that holds the frame's edge. A frame whose edge passes on
-    /// a dictionary of a frame below it (`forwardedFrameParam`) holds that
-    /// frame's dictionary, so a chain of such frames, one per scheme a literal
-    /// is forwarded through, is followed down to the frame that composes it.
+    /// in the scope that holds the frame's edge. Composing one reads the
+    /// dictionaries of the frames below it its evidence names, one frame per
+    /// scheme a literal is forwarded through, so those are composed first,
+    /// lowest first (`frameReads`): each composition then reads only
+    /// dictionaries already composed.
     fn frameDictionary(self: *Builder, position: usize, param: u32) Allocator.Error!Word {
+        var demands = std.ArrayList(FrameParam).empty;
+        defer demands.deinit(self.allocator);
+        try demands.append(self.allocator, .{ .position = position, .param = param });
+        while (true) {
+            const demand = demands.items[demands.items.len - 1];
+            const dictionary = (try self.frameDictionaryAfterReads(demand, &demands)) orelse continue;
+            _ = demands.pop();
+            if (demands.items.len == 0) return dictionary;
+        }
+    }
+
+    /// A dictionary parameter of the frame at `position` of `alias_scopes`.
+    const FrameParam = struct { position: usize, param: u32 };
+
+    /// The dictionary `demand` names, or null after appending to `demands`
+    /// the uncomposed frame dictionaries composing it reads. A frame whose
+    /// edge passes on a dictionary of a frame below it (`forwardedFrameParam`)
+    /// holds that frame's dictionary, so a chain of such frames is followed
+    /// down to the frame that composes it.
+    fn frameDictionaryAfterReads(self: *Builder, demand: FrameParam, demands: *std.ArrayList(FrameParam)) Allocator.Error!?Word {
         var forwarding = std.ArrayList(*?Word).empty;
         defer forwarding.deinit(self.allocator);
-        var at = position;
-        var at_param = param;
+        var at = demand;
         const dictionary = while (true) {
-            const scope = self.alias_scopes.items[at];
-            const slot = std.mem.findScalar(u32, scope.params, at_param) orelse invariant("evidence named a dictionary parameter its alias scope does not have");
+            const scope = self.alias_scopes.items[at.position];
+            const slot = std.mem.findScalar(u32, scope.params, at.param) orelse invariant("evidence named a dictionary parameter its alias scope does not have");
             if (scope.declaration) |declaration| if (declaration.dicts[slot] == null) {
                 // Only a requirement naming a type the callee's body declares
                 // (a captured codec requirement whose format is a local type)
@@ -7881,13 +7901,61 @@ pub const Builder = struct {
             };
             const deferred = scope.deferred_dicts orelse break scope.dicts[slot];
             if (deferred.composed[slot]) |composed| break composed;
-            const below = forwardedFrameParam(deferred, at_param) orelse break try self.composeFrameDictionary(at, at_param, slot);
-            try forwarding.append(self.allocator, &deferred.composed[slot]);
-            at = below.position;
-            at_param = below.param;
+            if (forwardedFrameParam(deferred, at.param)) |below| {
+                try forwarding.append(self.allocator, &deferred.composed[slot]);
+                at = below;
+                continue;
+            }
+            const unread = demands.items.len;
+            try self.frameReads(deferred, at.param, demands);
+            if (demands.items.len != unread) return null;
+            break try self.composeFrameDictionary(at.position, at.param, slot);
         };
         for (forwarding.items) |composed| composed.* = dictionary;
         return dictionary;
+    }
+
+    /// Append to `demands` each uncomposed literal chain frame dictionary
+    /// that composing parameter `param` of a frame whose dictionaries are
+    /// `deferred` reads through its evidence: a scope of the chain that a
+    /// leaf of the evidence names, through the resolved evidence of each
+    /// procedure dictionary's hidden dictionaries (`callInstanceFrom`).
+    fn frameReads(self: *Builder, deferred: DeferredDictionaries, param: u32, demands: *std.ArrayList(FrameParam)) Allocator.Error!void {
+        if (param >= deferred.evidence.len) return;
+        const table = deferred.view.view.static_dispatch_plans;
+        var pending = std.ArrayList(static_dispatch.CheckedEvidence).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, deferred.evidence[param]);
+        while (pending.pop()) |evidence| switch (evidence.resolution) {
+            .constraint => |constraint| {
+                const read = forwardedConstraint(deferred, constraint.index) orelse continue;
+                const scope = self.alias_scopes.items[read.position];
+                const below = scope.deferred_dicts orelse continue;
+                const slot = std.mem.findScalar(u32, scope.params, read.param) orelse invariant("evidence named a dictionary parameter its alias scope does not have");
+                if (below.composed[slot] == null) try demands.append(self.allocator, read);
+            },
+            .direct => |node_id| {
+                const node = table.evidenceNode(node_id);
+                switch (node.target.kind) {
+                    .procedure => {},
+                    .local_proc, .callable_binding, .structural => continue,
+                }
+                switch (node.instantiation) {
+                    .monomorphic, .callable => {},
+                    .alias, .derived_from_callable => continue,
+                }
+                const nested = switch (node.nested) {
+                    .resolved => table.nestedEvidence(node),
+                    .from_callable, .through_alias => continue,
+                };
+                const target = self.program.worker(try self.methodTargetWorker(node.target)).*;
+                for (target.dictionary_params) |param_index| {
+                    if (param_index >= nested.len) invariant("a call's evidence does not cover its target's dictionaries");
+                    try pending.append(self.allocator, nested[param_index]);
+                }
+            },
+            .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
+        };
     }
 
     /// The frame and parameter a literal chain frame's dictionary parameter
@@ -7895,12 +7963,18 @@ pub const Builder = struct {
     /// below the edge unchanged: evidence naming a scope of the chain. Null
     /// for any other evidence, and for a scope of the worker's own, which no
     /// frame holds.
-    fn forwardedFrameParam(deferred: DeferredDictionaries, param: u32) ?struct { position: usize, param: u32 } {
+    fn forwardedFrameParam(deferred: DeferredDictionaries, param: u32) ?FrameParam {
         if (param >= deferred.evidence.len) return null;
-        const index = switch (deferred.evidence[param].resolution) {
-            .constraint => |constraint| constraint.index,
-            .direct, .structural, .from_scheme, .from_callable, .checked_error, .unreachable_value => return null,
+        return switch (deferred.evidence[param].resolution) {
+            .constraint => |constraint| forwardedConstraint(deferred, constraint.index),
+            .direct, .structural, .from_scheme, .from_callable, .checked_error, .unreachable_value => null,
         };
+    }
+
+    /// The frame dictionary that evidence `index`, read in the scope holding
+    /// the edge of a frame whose dictionaries are `deferred`, names: a frame
+    /// below the edge, or null for a scope of the worker's own.
+    fn forwardedConstraint(deferred: DeferredDictionaries, index: static_dispatch.EvidenceChainIndex) ?FrameParam {
         if (deferred.foreign_scopes) |first| {
             if (index.depth >= deferred.frames - first) invariant("a literal chain read evidence of a scope it never entered");
         } else if (index.depth >= deferred.frames) return null;
