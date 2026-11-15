@@ -622,10 +622,10 @@ test "the lazy matchfinder's search proves every chain read against its entry gu
     // The chain walk makes a four-byte read whose bounds test nothing
     // before the loop decides. A test of the current position against the
     // input's length where the walk is entered decides it, which guards a
-    // copy of the walk. The walk's exit reassigns variables the walk also
-    // assigns, so it has no one value to carry out of each and stays in
-    // the body: the walk's two chain reads appear in both versions.
-    try std.testing.expectEqual(@as(usize, 6), search_shape.get_unsafe);
+    // copy of the walk. The chain read the walk makes on every pass
+    // appears in both versions; the read made once the walk has exited is
+    // shared.
+    try std.testing.expectEqual(@as(usize, 5), search_shape.get_unsafe);
     // Only the two entry guards and the two loop conditions compare with
     // `<`; every chain read's bounds test is proven away.
     try std.testing.expectEqual(@as(usize, 4), search_shape.is_lt);
@@ -2804,4 +2804,140 @@ test "a length test and a limit test guard one copy of a loop" {
     try std.testing.expectEqual(@as(usize, 2), shape.is_lte);
     try std.testing.expectEqual(@as(usize, 1), shape.add_crash);
     try std.testing.expectEqual(@as(usize, 1), shape.add_proven);
+}
+
+// The loop leaves by a `break` that assigns the variable it accumulates
+// into and by its head. Both exits run on into the same code after the
+// loop, which assigns the variable again. That code is one exit that both
+// lead to; it is emitted once and takes the variable's value from
+// whichever version of the loop ran.
+test "code after a guarded loop that two exits run into and that reassigns a variable is emitted once" {
+    const shape = try exitShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, limit| {
+        \\    var $acc = 0.U8
+        \\    var $i = 0.U64
+        \\    while $i < limit {
+        \\        byte = List.get(list, $i) ?? 7
+        \\        if byte == 9 {
+        \\            $acc = $acc.plus_wrap(1)
+        \\            break
+        \\        } else {
+        \\        }
+        \\        $acc = $acc.bitwise_xor(byte)
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    if $acc > 100 {
+        \\        $acc = $acc.count_one_bits()
+        \\    } else {
+        \\        $acc = $acc.plus_wrap(3)
+        \\    }
+        \\    $acc = $acc.plus_wrap($acc.shr_zf_wrap(1)).bitwise_and(15)
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, n)", "num_bitwise_xor(", .{ .inline_mode = .wrappers, .prove_ranges = true });
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 2), shape.get_unsafe);
+    try std.testing.expectEqual(@as(usize, 1), shape.one_bits);
+}
+
+// The same shape under loop append promotion's ownership versioning.
+test "code after an ownership-versioned loop that two exits run into and that reassigns a variable is emitted once" {
+    const shape = try exitShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, start| {
+        \\    var $i = start
+        \\    var $out = list
+        \\    var $acc = 0.U8
+        \\    while $i < 16 {
+        \\        old = List.get($out, $i) ?? 7
+        \\        if old == 9 {
+        \\            $acc = $acc.plus_wrap(1)
+        \\            break
+        \\        } else {
+        \\        }
+        \\        $out = List.set($out, $i, old.bitwise_xor(1)) ?? $out
+        \\        $acc = $acc.plus_wrap(old)
+        \\        $i = $i.plus_wrap(3)
+        \\    }
+        \\    if $acc > 100 {
+        \\        $acc = $acc.count_one_bits()
+        \\    } else {
+        \\        $acc = $acc.plus_wrap(List.len($out).to_u8_wrap())
+        \\    }
+        \\    $acc = $acc.plus_wrap($acc.shr_zf_wrap(1)).bitwise_and(15)
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, n)", "num_bitwise_xor(", .{ .inline_mode = .wrappers });
+    try std.testing.expectEqual(@as(usize, 1), shape.one_bits);
+}
+
+// And under its slack versioning, whose loop has the one exit.
+test "code after a slack-versioned loop that reassigns a variable the loop assigns is emitted once" {
+    const shape = try exitShape(
+        \\fill : U64, U8 -> U8
+        \\fill = |count, x| {
+        \\    var $out = List.with_capacity(count)
+        \\    var $i = 0
+        \\    var $acc = x
+        \\    while $i < count {
+        \\        $out = List.append($out, $acc)
+        \\        $acc = $acc.plus_wrap(3)
+        \\        $i = $i + 1
+        \\    }
+        \\    if $acc > 100 {
+        \\        $acc = $acc.count_one_bits()
+        \\    } else {
+        \\        $acc = $acc.plus_wrap(List.len($out).to_u8_wrap())
+        \\    }
+        \\    $acc = $acc.plus_wrap($acc.shr_zf_wrap(1)).bitwise_and(15)
+        \\    $acc
+        \\}
+        \\
+        \\tail : List(U8), U8 -> U64
+        \\tail = |xs, x| List.len(List.append(xs, x))
+        \\
+    , "fill(n, 3).to_u64() + tail(bytes, 4)", "list_with_capacity", .{ .inline_mode = .wrappers });
+    try std.testing.expectEqual(@as(usize, 2), shape.unsafe_appends);
+    try std.testing.expectEqual(@as(usize, 1), shape.one_bits);
+}
+
+// The code after the inner loop assigns a variable the outer loop reads on
+// its next pass. It hands the outer loop the value in the outer loop's own
+// parameter, so what it leaves in the local it was handed is dead and the
+// code is still one shared exit.
+test "code after an inner loop that reassigns a variable the outer loop reads is emitted once" {
+    const shape = try exitShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, limit| {
+        \\    var $pass = 0.U64
+        \\    var $acc = 0.U8
+        \\    while $pass < 3 {
+        \\        var $i = 0.U64
+        \\        while $i < limit {
+        \\            byte = List.get(list, $i) ?? 7
+        \\            if byte == 9 {
+        \\                $acc = $acc.plus_wrap(1)
+        \\                break
+        \\            } else {
+        \\            }
+        \\            $acc = $acc.bitwise_xor(byte)
+        \\            $i = $i.plus_wrap(1)
+        \\        }
+        \\        if $acc > 100 {
+        \\            $acc = $acc.count_one_bits()
+        \\        } else {
+        \\            $acc = $acc.plus_wrap(3)
+        \\        }
+        \\        $acc = $acc.plus_wrap($acc.shr_zf_wrap(1)).bitwise_and(15)
+        \\        $pass = $pass.plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, n)", "num_bitwise_xor(", .{ .inline_mode = .wrappers, .prove_ranges = true });
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.one_bits);
 }
