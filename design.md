@@ -7640,7 +7640,9 @@ local procedure target of an imported module like any other target
 (`lookupCheckedMethodTarget`); the target names its declaring module
 (`MethodTarget.module_idx`), and both backends build the procedure in that
 module, from the declaration context of the call instance of the declaring
-function whose dictionaries the caller is building, while reading the
+function whose dictionaries the caller is building, or of the instance a
+scheme handing the requirement on instantiates it at (Sealed Result Rows),
+while reading the
 dispatch's evidence and substitution in the caller's view. Monotype resolves
 the target's view by that module index (`moduleForModuleIdx`); Boxy lowers
 the procedure's value with its declaring module's view and switches back to
@@ -8957,8 +8959,11 @@ the descriptors, dictionaries, and literal arguments of one instance of it.
 A caller building the dictionaries of a call instance (a direct call, a
 literal chain frame, or a platform requirement's root evidence) builds them
 in that instance's declaration context, since a caller-supplied codec
-requirement of the callee's scheme calls the callee's local procedures. The
-procedure's worker is then a lambda of the callee's procedure worker,
+requirement of the callee's scheme calls the callee's local procedures. A
+callee whose body hands such a requirement on from a procedure it calls has
+that procedure's instance reached through the recorded edge (Sealed Result
+Rows). The procedure's worker is then a lambda of the declaring procedure's
+worker,
 capturing the instance's words; a procedure with its own scheme resolves its
 own dictionaries in the callee's scope. A method captures no value of its
 body other than the body's local procedures it refers to (a sibling method
@@ -9257,6 +9262,13 @@ A forwarded composite requirement carries both its lexical evidence coordinate
 and the absolute index of its owner parameter in the checked module's evidence
 pool. Monotype uses the lexical coordinate; Boxy uses the owner index to bind
 and capture a dictionary without recovering ownership from a receiver type.
+The owner parameter records the first edge at its scheme's own scope that
+hands it on, with the parameter of the instantiated scheme that edge fills
+(`EvidenceParamRecord.forwarded`), so a caller building the requirement's
+codec reaches the instance of the procedure that declares the codec's local
+procedures (Sealed Result Rows). Every such edge instantiates its callee at
+the types the requirement's relation names and fills the callee's other
+requirements from the same scope, so the edges agree.
 These source identities transport checked evidence and do not add specialization
 key components. Call-edge evidence analysis keys the complete schema by its
 checker-authored owner; aliases and local scopes share the same evidence and quantified-variable
@@ -16543,14 +16555,15 @@ of a recursion's levels are one table.
 The rule holds for every scope whose requirement discharges another's, not
 only for a worker's own. A scope the lowering enters while it lowers a body
 (a scheme alias's or an exact procedure alias's scope at one of its uses, a
-literal chain's frame) holds each dictionary at the interface its own
-requirement names, at the types the scope was entered with
+literal chain's frame, a declaration context) holds each dictionary at the
+interface its own requirement names, at the types the scope was entered with
 (`AliasScope.requirements`): the edge that entered the scope built the
 dictionary for exactly that parameter. Evidence read inside the scope that
 hands the dictionary on (an alias's forwarded lookup, a frame's edge into the
-next frame, the requirements of a literal conversion's target) adapts it from
-that interface to the consumer's, and a dispatch through it calls it at that
-interface (`Builder.scopeInterface`).
+next frame, the requirements of a literal conversion's target, a local
+procedure's own scheme, an edge handing a captured codec requirement on)
+adapts it from that interface to the consumer's, and a dispatch through it
+calls it at that interface (`Builder.scopeInterface`).
 An alias can state its requirement at a narrower row than the procedure it
 forwards to requires (`narrow : b -> [Ok(Str), Err(Str), Extra] where
 [b.status : b -> [Ok(Str), Err(Str)]]` bound to a procedure whose requirement
@@ -16578,29 +16591,31 @@ requirement on `b` names `[Ok(Str), Err(Str)]`.
 `test/cli/WidenClosedImplOverrideScope.roc` runs an override's requirement
 and the requirement of a target an override's requirement selects.
 
-A declaration context (design.md "Structural Serialization Methods") is the
-one entered scope that hands no dictionary on. Its dictionaries are the
-hidden words of the local procedures built from it, which hand them on inside
-their own bodies, from their workers' own scopes. No evidence read while its
-frame is entered names one, by what checking publishes. A type declared in a
-function body leaves that body only in a captured codec requirement of the
-function's scheme, so a local procedure is built from a declaration context
-only for a generated codec contract's call, or for evidence nested under one.
-Checked-module output publishes every contract call's evidence node, nested
-evidence included, before it walks any template
-(`EvidencePass.linkGeneratedCodecCalls`), so with no evidence chain in scope:
-each nested requirement is resolved totally to a target, a derivation, or an
-unreachable value, and never to an enclosing scope's evidence parameter. A
-contract's variables are unquantified copies besides, so a requirement of a
-local procedure's own scheme that lands on one is a missing method in
-checking, not a requirement the callee's dictionary fills: a format method
-stating `where [s.status : s -> [Ok(Str), Err(Str), Extra]]` checks only
-where the contract fixes `s` to a closed type, whose own method fills the
-requirement, adapted to that interface as any other target's dictionary is.
-`Builder.frameDictionary` asserts that no evidence names a declaration
-context's dictionary. `test/cli/WidenClosedImplDeclarationContext.roc` runs
-local procedures built from a declaration context whose own requirements and
-bodies call a method at a wider row.
+A declaration context (design.md "Structural Serialization Methods") hands
+its dictionaries on when a local procedure is built from an instance its
+callee's body instantiates. A function declaring a type whose methods a
+generated codec calls builds the codec from a captured codec requirement of
+its scheme; a generic caller whose call of it names the caller's own type
+variable in that requirement's relation hands the requirement on to its own
+scheme, so the codec is built by the caller's caller, which builds the
+caller's dictionaries and has no instance of the declaring function. The
+instance is the one the caller's call of the declaring function
+instantiates, which checking records as the edge handing the requirement on
+(`EvidenceParamRecord.forwarded`). Boxy enters that edge from the slot being
+built (`Builder.forwardedDeclaration`): it reads the edge in the caller's
+scope at the caller's instance's types, a frame whose dictionaries are the
+caller's declaration context's, and composes the declaring function's
+instance there, whose slot for the requirement reads the slot being built as
+its reserved recipe. A dictionary the edge hands on from the caller's scope
+is adapted to the requirement the declaring function states, so a declaring
+function requiring `a.status : a -> [Ok(Str), Err(Str), Extra]` called by
+one requiring `b.status : b -> [Ok(Str), Err(Str)]` reads `Ok` back as `Ok`
+in a format method that dispatches through the declaring function's scope.
+A requirement handed on through several schemes is followed edge by edge.
+`test/cli/WidenClosedImplDeclarationContext.roc` runs that case and local
+procedures built from a declaration context whose own requirements and
+bodies call a method at a wider row; `test/cli/ForwardedLocalCodecRequirement.roc`
+runs requirements handed on once and twice.
 
 A conversion between two CLOSED types is a static row conversion: a worker
 of the converting module (`WorkerKey.convert`, keyed by the source and
