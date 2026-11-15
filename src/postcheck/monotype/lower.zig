@@ -35151,16 +35151,15 @@ const BodyContext = struct {
             .step_expr => {
                 task.step_expr = input.?.exprValue();
                 try self.constrainCheckedInterfaceToCell(task.plan.forLoopSite().step_ty, self.exprTypeCell(task.step_expr));
-                task.done_body = if (task.carries.len == 0)
-                    try self.addExprWithTypeCell(task.loop_cell, .{ .break_ = null })
-                else
-                    try self.addExprWithTypeCell(task.loop_cell, .{ .break_ = try self.loopStateExpr(task.loop_cell, task.carries) });
+                task.done_body = try self.iteratorLoopDoneBody(task);
                 task.branches[0] = .{
                     .pat = try self.iteratorDonePattern(task.step),
                     .body = task.done_body,
                 };
                 if (try self.nodeIsProvenUninhabited(task.step.one_item.node)) {
-                    task.branches[1] = try self.uninhabitedIteratorOneBranch(task.step, task.done_body);
+                    // The branch's own break, built afresh like the done
+                    // branch's: no break is shared between two branches.
+                    task.branches[1] = try self.uninhabitedIteratorOneBranch(task.step, try self.iteratorLoopDoneBody(task));
                     return self.finishIteratorLoop(task);
                 }
                 return self.beginIteratorOneBranch(task);
@@ -66669,6 +66668,15 @@ const BodyContext = struct {
             .name = try tagName(self.nameStoreMut(), self.view, step.done_tag),
             .payloads = .empty(),
         } });
+    }
+
+    /// A `for` loop's exit when its iterator is done: a break carrying the
+    /// loop's state.
+    fn iteratorLoopDoneBody(self: *BodyContext, task: anytype) Allocator.Error!DraftExprId {
+        return if (task.carries.len == 0)
+            try self.addExprWithTypeCell(task.loop_cell, .{ .break_ = null })
+        else
+            try self.addExprWithTypeCell(task.loop_cell, .{ .break_ = try self.loopStateExpr(task.loop_cell, task.carries) });
     }
 
     fn uninhabitedIteratorOneBranch(
