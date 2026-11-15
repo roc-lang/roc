@@ -2146,12 +2146,18 @@ fn completeValueFormRoots(
                 .lss => root.payload == .pending,
             };
             if (!pending) continue;
-            if (schema == null) schema = try lir.CheckedPipeline.BoxyValueSchema.init(allocator, lowering_modules, target_usize);
+            if (schema == null) {
+                const schema_started = Timing.startStep(options.timing);
+                schema = try lir.CheckedPipeline.BoxyValueSchema.init(allocator, lowering_modules, target_usize);
+                Timing.finishStep(options.timing, schema_started, .value_form_schema);
+            }
             if (writer == null) writer = ConstStoreWriter.Writer.initChecked(allocator, module, .{
                 .bodies = module.bodies(),
                 .schema = &schema.?,
             });
+            const root_schema_started = Timing.startStep(options.timing);
             const root_schema = try schema.?.root(module.key.digest(), request);
+            Timing.finishStep(options.timing, root_schema_started, .value_form_root_schemas);
             const payload: checked.CompileTimeRootPayload = .{ .const_node = try writer.?.storeCheckedRoot(root_schema.plan, root_schema.ret_layout, root.rootExpr()) };
             const root_type = try writer.?.storeType(root_schema.ret_type);
             module.compile_time_roots.fillPayload(root_id, payload);
@@ -4048,6 +4054,11 @@ pub const Timing = struct {
     pub const Step = enum {
         /// Writing the value-form roots from their checked expressions.
         value_form_roots,
+        /// Within `value_form_roots`: creating the schema program.
+        value_form_schema,
+        /// Within `value_form_roots`: each root's plan, layout and stored
+        /// type from its result type, summed.
+        value_form_root_schemas,
         /// `checked_root_graph.build` over the pending roots.
         root_graph,
         /// Whether each pending root's value holds a function.

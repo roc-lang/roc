@@ -23364,9 +23364,9 @@ procedure. A Debug compiler walks anyway and asserts that it finds no deferred
 call and no procedure that may leave one.
 
 A statement hands its pending call up only when its result is returned as it
-is: nothing but reference-count statements, ARC's residual-release
-projections, and jumps into a join body separates the call from the `ret` of
-its target (`returnOf`). Those statements read no value the pending call
+is: nothing but reference-count statements, the field reads ARC emits to
+release a partly consumed aggregate, and jumps into a join body separates the
+call from the `ret` of its target (`returnOf`). Those statements read no value the pending call
 needs, since a pending call owns its closure and every argument, so the
 procedure runs them and returns with its result slot holding no value. A call
 whose result anything else reads, a conversion to another representation
@@ -29080,7 +29080,8 @@ per-procedure and per-statement paths test a pointer that is null. Detailed
 timing never changes what the compiler emits, takes part in no cache key,
 and orders nothing.
 
-Compile-time evaluation reports its steps (writing value-form roots, root
+Compile-time evaluation reports its steps (writing value-form roots, and
+within that creating the schema program and reading each root's schema, root
 graph, root classification, waiting for builds, program builds, lowering,
 procedure code generation, entry wrappers, import image selection, host
 splice, static data placement, program runs, root job setup, unit keys, the

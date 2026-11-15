@@ -2930,6 +2930,7 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, _: []const u8) CliMa
         .debug = false,
         .verbose = false,
         .no_cache = args.no_cache,
+        .timings = args.timings,
         .max_threads = args.max_threads,
         .wasm_memory = null,
         .wasm_stack_size = null,
@@ -19960,6 +19961,8 @@ fn finishFrontEndPhaseExcluding(gpa: Allocator, config: reporting.ReportingConfi
 fn compileTimeStepLabel(step: eval.CompileTimeFinalization.Timing.Step) []const u8 {
     return switch (step) {
         .value_form_roots => "Value-Form Roots",
+        .value_form_schema => "Value-Form Schema Program",
+        .value_form_root_schemas => "Value-Form Root Schemas",
         .root_graph => "Root Graph",
         .root_classification => "Root Classification",
         .scheduler_wait => "Waiting for Builds",
