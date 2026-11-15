@@ -8910,8 +8910,12 @@ variables and captures one dictionary per forwarded call after its local
 procedure values: the use that builds the family's constructor supplies each
 from its own dictionary for the variable's requirement. The family's list
 operations take their item descriptor, since an item can hold such a
-variable. A stored generated runtime records no dictionaries, so restoring one
-applies only to a family without forwarded calls.
+variable. A compile-time constant holding such a codec's runtime stores it in
+each strategy's own form (Stored Function Values): `.boxy` stores the runtime
+worker's recipe, whose captures include the forwarded dictionaries the
+constructor captured, and `.lss` stores the generated runtime with the evidence
+of the procedure that built it, which Monotype restores it against. Neither strategy restores the other's function values, so Boxy never
+rebuilds a family's forwarded dictionaries from an `.lss` stored runtime.
 
 A `ParseTagUnionSpec` describes exactly one union. A payload that is itself a
 tag union is parsed with that union's own spec, never with the enclosing

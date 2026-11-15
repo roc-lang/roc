@@ -851,11 +851,15 @@ pub fn dictionary(b: *Builder, structural: static_dispatch.StructuralEvidence) A
 }
 
 /// The dictionary of generated derivation `id` of `module_index` at the
-/// method callable type `callable`.
+/// method callable type `callable`, for structural evidence an `.lss` stored
+/// function value recorded. A family with forwarded calls takes its
+/// dictionaries from the evidence of the use building it, which only a live
+/// use or a `.boxy` recipe's captures supply: Boxy never restores an `.lss`
+/// function value (design.md "Stored Function Values").
 pub fn dictionaryAt(b: *Builder, module_index: ModuleIndex, id: static_dispatch.GeneratedCodecDerivationId, callable: TypeId) Allocator.Error!Body.Word {
     const family = try familyFor(b.program, module_index, id);
-    if (b.program.codec.families.items[family].forwarded_count != 0 and module_index != b.module) {
-        invariant("a generated codec with forwarded calls is used outside the module whose evidence supplies them");
+    if (b.program.codec.families.items[family].forwarded_count != 0) {
+        invariant("Boxy restored a generated codec with forwarded calls from an .lss stored function value");
     }
     return try constructorAt(b, family, id, callable);
 }
@@ -907,14 +911,18 @@ fn constructorAt(b: *Builder, family: u32, use_id: DerivationId, actual: TypeId)
     return try b.adaptDictionary(composed, try b.program.substitute(b.allocator, fam_.constructor_fn, bound), actual);
 }
 
-/// The function values of a family's local procedures in the active declaration.
+/// The function values of a family's local procedures in the active
+/// declaration, for restoring an `.lss` stored generated runtime. A family's
+/// forwarded dictionaries come from the evidence of the use building it,
+/// which only a live use or a `.boxy` recipe's captures supply: Boxy never
+/// restores an `.lss` function value (design.md "Stored Function Values").
 pub fn localValues(b: *Builder, family: u32, bound: []const TypeId, out: []LocalId) Allocator.Error!void {
     const fam_ = b.program.codec.families.items[family];
     const table = b.view.view.static_dispatch_plans;
     for (fam_.locals.items, out) |local, *value| {
         value.* = switch (local.source) {
             .local_proc => |node| try b.localMethodValue(table.evidenceNode(node), try b.program.substitute(b.allocator, local.fn_ty, bound)),
-            .forwarded => invariant("a generated codec with forwarded calls was restored from a stored runtime"),
+            .forwarded => invariant("Boxy restored a generated codec with forwarded calls from an .lss stored runtime"),
         };
     }
 }
