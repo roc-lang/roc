@@ -296,10 +296,10 @@ fn checkApp(allocator: std.mem.Allocator, source: []const u8, strategy: base.Spe
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(allocator, allocator, io),
+        strategy,
     );
     errdefer coord.deinit();
     coord.enable_hosted_transform = true;
-    coord.specialization_strategy = strategy;
     coord.value_form_roots = value_form_roots;
     var arena = base.SingleThreadArena.init(allocator);
     errdefer arena.deinit();

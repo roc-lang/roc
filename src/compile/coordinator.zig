@@ -2262,7 +2262,7 @@ pub const Coordinator = struct {
     /// compile-time roots: `.boxy` under `--specialize=no`, `.lss`
     /// otherwise (design.md "Caching Under `.boxy`"). It is part of each
     /// checked module's cache identity.
-    specialization_strategy: base.SpecializationStrategy = .lss,
+    specialization_strategy: base.SpecializationStrategy,
     /// The lowering of the module objects a `.boxy` compile-time evaluation
     /// links against, and the host target they are compiled for.
     boxy_object_lowering: ?BoxyObjectLowering = null,
@@ -2420,6 +2420,7 @@ pub const Coordinator = struct {
         compiler_version: []const u8,
         cache_manager: ?*CacheManager,
         roc_ctx: CoreCtx,
+        specialization_strategy: base.SpecializationStrategy,
     ) Allocator.Error!Coordinator {
         // Both channels use smp_allocator in multi-threaded mode because their
         // buffers may be grown (task_channel) or accessed from worker threads.
@@ -2450,6 +2451,7 @@ pub const Coordinator = struct {
             .all_session_boxes = try Channel(*SessionBox).init(channel_allocator, 64, roc_ctx.std_io),
             .free_session_boxes = try Channel(*SessionBox).init(channel_allocator, 64, roc_ctx.std_io),
             .frontend_complete = false,
+            .specialization_strategy = specialization_strategy,
             .total_remaining = 0,
             .app_package_name = null,
             .root_package_name = null,
@@ -8145,6 +8147,7 @@ fn compileAppWithCheckedModuleCache(
         build_options.compiler_compatibility_id,
         &cache_manager,
         roc_ctx,
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -8285,6 +8288,7 @@ fn compileAppFactsWithWorkers(
         build_options.compiler_compatibility_id,
         if (cache_dir == null) null else &cache_manager,
         roc_ctx,
+        .lss,
     );
     defer coord.deinit();
     coord.source_pin_version = source_pin_version;
@@ -8520,6 +8524,7 @@ fn compileAppRootIdentityExpecting(
         build_options.compiler_compatibility_id,
         &cache_manager,
         roc_ctx,
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -8837,6 +8842,7 @@ test "prepared checked imports finalize after frontend and release abandoned dia
             build_options.compiler_compatibility_id,
             null,
             CoreCtx.os(allocator, allocator, std.testing.io),
+            .lss,
         );
         defer coord.deinit();
         coord.enable_hosted_transform = true;
@@ -9106,10 +9112,10 @@ fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_
         build_options.compiler_compatibility_id,
         &cache_manager,
         roc_ctx,
+        strategy,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
-    coord.specialization_strategy = strategy;
     var arena_impl = base.SingleThreadArena.init(allocator);
     defer arena_impl.deinit();
     try coord.start();
@@ -9484,6 +9490,7 @@ test "app artifact records platform requirement solutions from checking" {
         build_options.compiler_compatibility_id,
         null,
         roc_ctx,
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -9574,6 +9581,7 @@ fn checkNominalIdentityFixture(
         build_options.compiler_compatibility_id,
         null,
         roc_ctx,
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -9716,6 +9724,7 @@ test "erroneous function requirement publishes an explicit checked-error outcome
         build_options.compiler_compatibility_id,
         null,
         roc_ctx,
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -9792,6 +9801,7 @@ test "platform requirement relation specializes identity reached through app ali
         build_options.compiler_compatibility_id,
         null,
         roc_ctx,
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -9850,6 +9860,7 @@ test "diagnostic-only mode publishes the platform root during checking" {
         build_options.compiler_compatibility_id,
         null,
         roc_ctx,
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -9914,6 +9925,7 @@ test "deferred platform publication retains compile-time diagnostics" {
         build_options.compiler_compatibility_id,
         null,
         roc_ctx,
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -9981,6 +9993,7 @@ test "requires signature naming a for-clause alias resolves to the app declarati
         build_options.compiler_compatibility_id,
         null,
         roc_ctx,
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -10110,6 +10123,7 @@ test "hosted distinctness: identical hosted declarations bound to different plat
         build_options.compiler_compatibility_id,
         &cache_manager,
         roc_ctx,
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -11516,6 +11530,7 @@ fn expectModulesQualifiedByOwningPackage(
         build_options.compiler_compatibility_id,
         &cache_manager,
         roc_ctx,
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -12002,6 +12017,7 @@ test "Coordinator basic initialization" {
         "test",
         null, // cache_manager
         CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
 
@@ -12023,6 +12039,7 @@ test "Coordinator package creation" {
         "test",
         null, // cache_manager
         CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
 
@@ -12062,6 +12079,7 @@ test "Coordinator source read digests the normalized source and, for watch mode,
         "test",
         null,
         CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.setWatchInputTracking(true);
@@ -12102,6 +12120,7 @@ test "Coordinator module creation" {
         "test",
         null, // cache_manager
         CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
 
@@ -12131,6 +12150,7 @@ test "Coordinator task queue" {
         "test",
         null, // cache_manager
         CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
 
@@ -12175,6 +12195,7 @@ test "Coordinator isComplete logic" {
         "test",
         null, // cache_manager
         CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
 
@@ -12228,6 +12249,7 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline execution
         "test",
         null, // cache_manager
         CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
 
@@ -12271,6 +12293,7 @@ test "Coordinator shutdown does not drain buffered tasks" {
         "test",
         null, // cache_manager
         CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
 
@@ -12326,6 +12349,7 @@ test "Coordinator shutdown stops spawned workers promptly" {
         "test",
         null, // cache_manager
         CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
 
@@ -12375,6 +12399,7 @@ test "Coordinator post-check executor supports incremental sessions and repeated
         "test",
         null,
         CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     try coord.start();
@@ -12520,6 +12545,7 @@ test "Coordinator inline post-check executor supports repeated session tasks" {
         "test",
         null,
         CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     try coord.start();
@@ -12589,6 +12615,7 @@ test "Coordinator enqueueParseTask flow" {
         "test",
         null, // cache_manager
         CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
 
@@ -12628,6 +12655,7 @@ test "platform root candidate comes from registration, not name probing" {
         "test",
         null, // cache_manager
         CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
 
@@ -12690,6 +12718,7 @@ fn observeImportPhases(
         build_options.compiler_compatibility_id,
         null, // cache_manager
         roc_ctx,
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -12808,6 +12837,7 @@ test "Coordinator CI failure scenario - app with platform cross-package imports"
         "test",
         null, // cache_manager
         CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
 
@@ -12927,6 +12957,7 @@ test "Coordinator operational failure aborts without completing dependents" {
         "test",
         null,
         CoreCtx.os(allocator, allocator, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     const pkg = try coord.ensurePackage(package_identity.synthetic_app_identity, "/test/app");
@@ -12981,6 +13012,7 @@ test "Coordinator read errors abort single and multi-worker loops" {
                 "test",
                 null,
                 ctx,
+                .lss,
             );
             defer coord.deinit();
             coord.setWatchInputTracking(true);
@@ -13025,6 +13057,7 @@ test "Coordinator shutdown releases unconsumed stage results and tasks" {
                 "test",
                 null,
                 source.io(),
+                .lss,
             );
             defer coord.deinit();
             coord.markNoAppPackage();
@@ -13070,6 +13103,7 @@ test "Coordinator shutdown releases unconsumed stage results and tasks" {
             "test",
             null,
             source.io(),
+            .lss,
         );
         defer coord.deinit();
         coord.markNoAppPackage();
@@ -13103,6 +13137,7 @@ test "Coordinator type-check operational errors remain operation errors" {
         "test",
         null,
         CoreCtx.os(allocator, allocator, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     const pkg = try coord.ensurePackage(package_identity.synthetic_app_identity, "/test/app");
@@ -13199,6 +13234,7 @@ test "shared CTFE and runtime requests specialize once per evaluation across wor
                 build_options.compiler_compatibility_id,
                 null,
                 CoreCtx.os(allocator, allocator, std.testing.io),
+                .lss,
             );
             defer coord.deinit();
             coord.enable_hosted_transform = true;
@@ -13341,7 +13377,7 @@ test "successful compile-time dbg replays from warm checked cache without evalua
         ctx.vtable.writeStderr = Capture.write;
         var cache_manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = cache_dir }, ctx);
         defer cache_manager.deinit();
-        var coord = try Coordinator.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_compatibility_id, &cache_manager, ctx);
+        var coord = try Coordinator.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_compatibility_id, &cache_manager, ctx, .lss);
         defer coord.deinit();
         coord.enable_hosted_transform = true;
         var arena_impl = base.SingleThreadArena.init(allocator);
@@ -13436,7 +13472,7 @@ test "app discovery rejects a repeated package shorthand before registering pack
     defer gpa.free(app_path);
     var cache_manager = CacheManager.init(gpa, .{ .enabled = false }, ctx);
     defer cache_manager.deinit();
-    var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_compatibility_id, &cache_manager, ctx);
+    var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_compatibility_id, &cache_manager, ctx, .lss);
     defer coord.deinit();
     var arena = base.SingleThreadArena.init(gpa);
     defer arena.deinit();
@@ -13465,7 +13501,7 @@ test "app discovery retains tokenizer rejection reports before platform resoluti
         defer gpa.free(app_path);
         var cache_manager = CacheManager.init(gpa, .{ .enabled = false }, ctx);
         defer cache_manager.deinit();
-        var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_compatibility_id, &cache_manager, ctx);
+        var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_compatibility_id, &cache_manager, ctx, .lss);
         defer coord.deinit();
         var arena = base.SingleThreadArena.init(gpa);
         defer arena.deinit();
@@ -13550,7 +13586,7 @@ test "application builds keep test bodies in discovery rather than runtime deman
     });
     const app_path = try tmp.dir.realPathFileAlloc(std.testing.io, "build_discovery/app/main.roc", allocator);
     defer allocator.free(app_path);
-    var coord = try Coordinator.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, null, CoreCtx.os(allocator, allocator, std.testing.io));
+    var coord = try Coordinator.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, null, CoreCtx.os(allocator, allocator, std.testing.io), .lss);
     defer coord.deinit();
     coord.enable_hosted_transform = true;
     var arena = base.SingleThreadArena.init(allocator);
@@ -13615,7 +13651,7 @@ test "test discovery after edits never hides invalid literals or observations" {
             context.vtable.writeStderr = StderrCapture.write;
             var manager = CacheManager.init(gpa, .{ .enabled = true, .cache_dir = directory }, context);
             defer manager.deinit();
-            var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, context);
+            var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, context, .lss);
             defer coord.deinit();
             coord.enable_hosted_transform = true;
             var arena = base.SingleThreadArena.init(gpa);
@@ -13690,7 +13726,7 @@ test "initializer evaluation after edits preserves errors observations and test 
             context.vtable.writeStderr = StderrCapture.write;
             var manager = CacheManager.init(gpa, .{ .enabled = true, .cache_dir = directory }, context);
             defer manager.deinit();
-            var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, context);
+            var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, context, .lss);
             defer coord.deinit();
             coord.enable_hosted_transform = true;
             var arena = base.SingleThreadArena.init(gpa);
@@ -13859,10 +13895,9 @@ test "Boxy checked constants share across checkouts and survive unrelated applic
             const core = CoreCtx.os(allocator, allocator, std.testing.io);
             var manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = directory }, core);
             defer manager.deinit();
-            var coord = try Coordinator.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, core);
+            var coord = try Coordinator.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, core, .boxy);
             defer coord.deinit();
             coord.enable_hosted_transform = true;
-            coord.specialization_strategy = .boxy;
             var arena = base.SingleThreadArena.init(allocator);
             defer arena.deinit();
             try coord.start();
@@ -14047,6 +14082,7 @@ fn testPostCheckPublicationOOM(comptime stores: bool, before_first: bool) (Coord
         "test",
         null,
         CoreCtx.os(allocator, allocator, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     const wake_queue = try Channel(WorkerTask).init(failing.allocator(), 1, std.testing.io);

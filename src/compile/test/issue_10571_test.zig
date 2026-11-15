@@ -73,6 +73,7 @@ test "issue 10571: repeated failed dispatch on the same receiver reports type mi
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;

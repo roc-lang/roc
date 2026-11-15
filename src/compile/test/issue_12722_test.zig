@@ -29,7 +29,7 @@ test "issue 12722: top-level constant stores split_on pieces of a compile-time h
     const path = try tmp.dir.realPathFileAlloc(io, "main.roc", gpa);
     defer gpa.free(path);
 
-    var build = try compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build = try compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build.deinit();
     try build.build(path);
     const coord = build.coordinator.?;

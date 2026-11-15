@@ -40,7 +40,7 @@ test "issue 12631: record of closures capturing a top-level constant reports mis
     const main_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", gpa);
     defer gpa.free(main_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
 
     try build_env.build(main_path);
