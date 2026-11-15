@@ -1847,7 +1847,7 @@ pub const Builder = struct {
                 if (root.boxy_value) |stored| {
                     try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = stored.node, .ty = self.currentWorker().ret } });
                 } else switch (root.kind) {
-                    .expect, .repl_expr, .callable_binding, .constant, .hoisted_constant, .numeral_conversion, .quote_conversion, .hoisted_validation => switch (root.payloadFor(.boxy)) {
+                    .expect, .repl_expr, .callable_binding, .constant, .hoisted_constant, .numeral_conversion, .quote_conversion, .interpolation_conversion, .hoisted_validation => switch (root.payloadFor(.boxy)) {
                         // In a module's object, an evaluated root's wrapper
                         // produces the stored value: the object defines it
                         // for the other objects of a link that read the
@@ -4323,6 +4323,13 @@ pub const Builder = struct {
     /// pattern does not match (`rootPatternMatch`).
     fn lowerRootBody(self: *Builder, root_id: checked.ComptimeRootId) Allocator.Error!void {
         const root = self.view.view.compile_time_roots.root(root_id);
+        // An interpolation conversion root runs the conversion on the
+        // literal's segments alone: its values are runtime data.
+        if (root.kind == .interpolation_conversion) {
+            const node = (root.literalNode() orelse invariant("an interpolation conversion root has no literal")).node();
+            const plan = self.bodies().dispatchPlan(node) orelse invariant("an interpolation conversion root's literal has no conversion plan");
+            return try self.lowerLiteralConversion(node, .interpolation, plan, self.currentWorker().ret);
+        }
         if (root.literalNode()) |literal| return switch (literal) {
             .expr => |expr| try self.push(.{ .own_expr = expr }),
             .pattern => |pattern| try self.push(.{ .literal_pattern_conversion = pattern }),

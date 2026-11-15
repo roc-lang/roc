@@ -1142,7 +1142,7 @@ fn evaluateBoxyRoots(
             const root_id = compileTimeRootForRequest(entry.module, request);
             const root = entry.module.compile_time_roots.root(root_id);
             if (root.payload != .pending) continue;
-            if (root.kind == .literal_argument) any_literal = true;
+            if (root.isBoxyEvaluated()) any_literal = true;
             try pending.append(allocator, .{ .module = @intCast(index), .root = root_id, .request = request });
         }
     }
@@ -1165,7 +1165,7 @@ fn evaluateBoxyRoots(
         // or through other roots.
         .before_solved => {
             for (pending.items, chosen, graph.unavailable_boxy_reads) |root, *flag, unavailable| {
-                flag.* = !unavailable and (artifacts[root.module].compile_time_roots.root(root.root).kind == .literal_argument or
+                flag.* = !unavailable and (artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated() or
                     !try checked_root_graph.rootHoldsFunction(allocator, artifacts, lowering_modules, root));
             }
             var changed = true;
@@ -1185,7 +1185,7 @@ fn evaluateBoxyRoots(
             var work = std.ArrayList(u32).empty;
             defer work.deinit(allocator);
             for (pending.items, chosen, 0..) |root, *flag, ordinal| {
-                flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind == .literal_argument;
+                flag.* = artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated();
                 if (flag.*) try work.append(allocator, @intCast(ordinal));
             }
             while (work.pop()) |ordinal| for (graph.deps[ordinal]) |dep| {
@@ -1305,10 +1305,10 @@ fn planRoots(
             // evaluated are read from its store like any other module's.
             const root_id = compileTimeRootForRequest(entry.module, request);
             if (!entry.module.compile_time_roots.root(root_id).needsEvaluation(.lss)) continue;
-            // A literal argument root is the `.boxy` evaluator's, which
-            // evaluates it beside this program (design.md "Literal
-            // Arguments").
-            if (entry.module.compile_time_roots.root(root_id).kind == .literal_argument) continue;
+            // A literal argument root and an interpolation conversion root
+            // are the `.boxy` evaluator's, which evaluates them beside this
+            // program (design.md "Literal Arguments").
+            if (entry.module.compile_time_roots.root(root_id).isBoxyEvaluated()) continue;
             try plan.requests.append(allocator, request);
             try plan.source_modules.append(allocator, entry.module.key.digest());
         }
@@ -2119,12 +2119,12 @@ fn evaluateRootsBoxy(
             std.debug.print("boxy-work: pending root {d} {s} {s} #{d}: {s} (deps {any})\n", .{ ordinal, artifact.moduleEnvConst().module_name, @tagName(compile_time_root.kind), @backingInt(root.root), label.snippet, graph.deps[ordinal] });
         }
     }
-    // A literal argument root is the `.boxy` evaluator's whatever its
-    // value: one holding a function is validated and discarded
-    // (design.md "Literal Arguments").
+    // A literal argument root and an interpolation conversion root are the
+    // `.boxy` evaluator's whatever their value: one holding a function is
+    // validated and discarded (design.md "Literal Arguments").
     const classification_started = if (base.dev_diagnostics.isSet(.trace_boxy_work)) (if (options.timing) |timing| nowNs(timing.std_io) else 0) else 0;
     for (roots, specialized) |root, *flag| {
-        flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind != .literal_argument and
+        flag.* = !artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated() and
             try checked_root_graph.rootHoldsFunction(allocator, artifacts, lowering_modules, root);
     }
     if (base.dev_diagnostics.isSet(.trace_boxy_work)) if (options.timing) |timing| {
@@ -2398,9 +2398,10 @@ const ModuleEvaluation = struct {
                     if (!shared.states[roots[dep].module].isDone(roots[dep].root)) finalizationInvariant("a compile-time root reads a value of a module evaluated after its own");
                     continue;
                 }
-                // A literal argument root is the `.boxy` evaluator's whatever
-                // reads it (design.md "Literal Arguments").
-                if (chosen[dep] or shared.modules[roots[dep].module].module.compile_time_roots.root(roots[dep].root).kind == .literal_argument) continue;
+                // A literal argument root and an interpolation conversion root
+                // are the `.boxy` evaluator's whatever reads them (design.md
+                // "Literal Arguments").
+                if (chosen[dep] or shared.modules[roots[dep].module].module.compile_time_roots.root(roots[dep].root).isBoxyEvaluated()) continue;
                 chosen[dep] = true;
                 try work.append(allocator, dep);
             }
@@ -3059,7 +3060,7 @@ fn isLiteralArgumentRequest(
     const owner = if (set.source_modules.len == 0) root_key else set.source_modules[index];
     for (modules) |entry| {
         if (!entry.module.key.digest().eql(owner)) continue;
-        return entry.module.compile_time_roots.root(root_id).kind == .literal_argument;
+        return entry.module.compile_time_roots.root(root_id).isBoxyEvaluated();
     }
     return false;
 }
@@ -4549,7 +4550,7 @@ fn lowerEvalAndFinishRoots(
     var boxy_root_ids = std.ArrayList(checked.ComptimeRootId).empty;
     defer boxy_root_ids.deinit(allocator);
     for (requests, root_ids) |request, root_id| {
-        const boxy = module.compile_time_roots.root(root_id).kind == .literal_argument or
+        const boxy = module.compile_time_roots.root(root_id).isBoxyEvaluated() or
             (options.strategy == .boxy and !try checked_root_graph.rootHoldsFunction(allocator, &.{module}, .{ .root = checked.loweringViewWithRelations(module, relation_modules), .imports = lowering_imports }, .{ .module = 0, .root = root_id, .request = request }));
         if (boxy) {
             try boxy_requests.append(allocator, request);
@@ -7441,6 +7442,7 @@ fn failedRootPayload(
         .callable_binding,
         .numeral_conversion,
         .quote_conversion,
+        .interpolation_conversion,
         .repl_expr,
         .literal_argument,
         => .{ .const_node = try appendFailureConst(module, message, failure) },
@@ -7641,7 +7643,7 @@ fn compileTimeRootForRequest(
     }
     const root = module.compile_time_roots.roots.items()[raw];
     const kind_matches = switch (request.kind) {
-        .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .hoisted_validation or root.kind == .numeral_conversion or root.kind == .quote_conversion or root.kind == .literal_argument,
+        .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .hoisted_validation or root.kind == .numeral_conversion or root.kind == .quote_conversion or root.kind == .interpolation_conversion or root.kind == .literal_argument,
         .compile_time_callable => root.kind == .callable_binding,
         .repl_expr => root.kind == .repl_expr,
         .runtime_entrypoint,
@@ -7660,8 +7662,7 @@ fn compileTimeRootForRequest(
 }
 
 /// Store an evaluated root's value; a hoisted validation keeps no value,
-/// nor does a literal argument root whose value holds a function (design.md
-/// "Literal Arguments").
+/// nor does a validate-only root (design.md "Literal Arguments").
 fn storeRootValue(
     writer: *ConstStoreWriter.Writer,
     root: LirProgram.ConstRootPlan,
@@ -7669,7 +7670,7 @@ fn storeRootValue(
     value: @import("value.zig").Value,
 ) ConstStoreWriter.Error!checked.CompileTimeRootPayload {
     if (compile_time_root.kind == .hoisted_validation) return .discarded;
-    if (compile_time_root.literal_argument) |argument| if (argument.validate_only) return .discarded;
+    if (compile_time_root.validateOnly()) return .discarded;
     return writer.storeRoot(root, value);
 }
 
@@ -7700,6 +7701,7 @@ fn completeRoot(
         .expect,
         .numeral_conversion,
         .quote_conversion,
+        .interpolation_conversion,
         .repl_expr,
         .literal_argument,
         => null,
@@ -7767,6 +7769,7 @@ pub fn finishConstRoot(
         .expect,
         .numeral_conversion,
         .quote_conversion,
+        .interpolation_conversion,
         .repl_expr,
         .literal_argument,
         => unreachable, // finishConstRoot returned above for every kind other than constant and hoisted_constant

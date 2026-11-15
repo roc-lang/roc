@@ -2520,18 +2520,22 @@ that specializations register. Under `.lss`, the `.boxy` evaluator has
 completed every compile-time root that reads no function value before the
 Solved program is specialized ("Compile-Time Evaluation Under `.lss`").
 Checking already gave every literal whose
-conversion is closed a compile-time root of its own, and every literal whose
-conversion depends on its instance a `literal_argument` root at each closed
-type a checked instantiation fixes it to ("Literal Arguments"), which every
-compilation evaluates and stores in its module. A runtime body therefore
-matters to compile-time evaluation only where specializing it registers a
-literal root: a conversion that depends on its instance at an instantiation
-checking records no edge for (a program root's, a platform's call of the
-app's procedure, a method dispatch selects by type, a stored function value,
-a target derived from a function's type), a custom interpolation, or a
-conversion root no evaluation requests. A specialization that converts a
-literal at the closed type of a stored `literal_argument` root restores that
-root's value instead of registering a literal root. Specializing the rest of
+conversion is closed a compile-time root of its own (an interpolation's
+included, which is validate-only), and every literal whose conversion depends
+on its instance a `literal_argument` root at each closed type a checked
+instantiation fixes it to ("Literal Arguments"), which every compilation
+evaluates in its module. A runtime body therefore matters to compile-time
+evaluation only where specializing it registers a literal root: a conversion
+that depends on its instance at an instantiation checking records no edge for
+(a program root's, a platform's call of the app's procedure, a method
+dispatch selects by type, a stored function value, a target derived from a
+function's type), or a conversion root no evaluation requests. A
+specialization that converts a literal at the closed type of a stored
+`literal_argument` root restores that root's value instead of registering a
+literal root. A custom interpolation's assembler is a function that no root
+stores, so a specialization that needs it still registers a literal root for
+it; that root's evaluation cannot add a report, because the checked root
+validating the literal at that type already ran (below). Specializing the rest of
 the runtime program, or lowering any of it for execution, is runtime work,
 and compile-time evaluation without an LSS runtime consumer to continue its
 program does none of it. Its program roots are *discovery roots*,
@@ -2550,10 +2554,10 @@ a generalized local function's), and contributes nothing through the
 references and plans that instantiate that scheme: those are the
 instantiations checking records, each of which converts it in a
 `literal_argument` root or forwards it to the instantiating scheme's literal
-requirements. A template's own flags are *strict* when its body has a custom
-interpolation that is not such a requirement, or a literal whose conversion
-root no evaluation of this compilation requests and whose payload is not
-stored; *dependent numeral* (*quote*) when its body has a numeral (quote)
+requirements. A template's own flags are *strict* when its body has a
+literal whose conversion root no evaluation of this compilation requests and
+whose payload is neither stored nor discarded, or a custom interpolation that
+is neither such a requirement nor covered by a conversion root of its own; *dependent numeral* (*quote*) when its body has a numeral (quote)
 whose conversion depends on its instance and that is not such a
 requirement. An instantiation checking records no edge for contributes the
 dependent kinds of the instantiated template's literal requirements (an
@@ -2799,6 +2803,9 @@ those a cache entry left unevaluated.
 
 Root eligibility consumes the checked producer's types and fixed-callable
 result. It does not mutate solved types or invent evidence from a use site.
+A validate-only root (Literal Arguments) asks only the concreteness question:
+no reader takes its value from a slot, so no callable representation of it
+needs fixing.
 An ineligible callable root remains an instantiation template: its pending
 payload is not a promise of a stored value. Boxy instantiates its declared
 wrapper at each use's type arguments, including open result rows. An eligible
@@ -7999,7 +8006,11 @@ Every live literal-origin record leaves checking with one explicit resolution:
   owning definition's call-edge evidence analysis resolves dispatch evidence
   once, and its `direct_closed` classification gives independent conversions
   exactly one `numeral_conversion`/`quote_conversion` root, linked from the
-  checked literal data (`conversion_root`). Root wrappers follow this decision,
+  checked literal data (`conversion_root`). A custom interpolation whose
+  conversion is `direct_closed` likewise gets exactly one
+  `interpolation_conversion` root (Literal Arguments: its value, the
+  assembler, is validate-only), so its rejection is reported whether or not
+  any program reaches the function holding it. Root wrappers follow this decision,
   with their single conversion reference recorded directly; evidence resolution
   and source-body collection are not repeated. A dependent conversion keeps no
   standalone root and follows the specialization-owned hoisting path below,
@@ -16838,7 +16849,19 @@ strategy).
   (`validate_only`, every interpolation among them) is evaluated and its
   value discarded: compile-time evaluation reports its failure like any
   other root's, and a runtime program converts the literal where the value
-  is needed. This keeps a `.boxy` program's literal rejections identical to
+  is needed. A closed custom interpolation, whose conversion depends on no
+  instance, is validated the same way by an `interpolation_conversion` root
+  of its own module (`CompileTimeRoot.validateOnly`), so every custom
+  interpolation is validated at compile time, called or not, generic or
+  not. A validate-only root's request needs no producer-fixed callable
+  representation (Compile-Time Root Eligibility Proofs), it completes as
+  `discarded` or as its failure, and, like a literal argument root, it is
+  the `.boxy` evaluator's under either strategy, so it never becomes a
+  Solved program's requested root. A specialization converting a custom
+  interpolation at a type whose validating root failed lowers the
+  conversion as reached checked-error code (`rejectedInterpolationMessage`):
+  the failure is already reported, and the program crashes there exactly as
+  the conversion would. This keeps a `.boxy` program's literal rejections identical to
   a specialized program's: every conversion a program reaches is run at
   compile time, at the type it is reached at. A rejection is reported in the
   module of the root whose evaluation rejected the literal: at the literal

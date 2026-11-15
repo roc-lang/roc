@@ -1211,7 +1211,7 @@ pub const RootRequestTable = struct {
             try appendRoot(&requests, allocator, .{
                 .module_idx = root.module_idx,
                 .kind = switch (root.kind) {
-                    .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => .compile_time_constant,
+                    .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .interpolation_conversion, .literal_argument => .compile_time_constant,
                     .callable_binding => .compile_time_callable,
                     .expect => .test_expect,
                     .repl_expr => .repl_expr,
@@ -1221,7 +1221,7 @@ pub const RootRequestTable = struct {
                 .checked_type = entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
                 .abi = switch (root.kind) {
                     .expect => .test_expect,
-                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => .compile_time,
+                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => .compile_time,
                 },
                 .exposure = .private,
                 .procedure_template = templateForEntryWrapperRoot(entry_wrappers, root.id),
@@ -2216,7 +2216,7 @@ fn compileTimeRootKindMatchesRequest(
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
         .repl_expr => request_kind == .repl_expr,
-        .numeral_conversion, .quote_conversion, .literal_argument => request_kind == .compile_time_constant,
+        .numeral_conversion, .quote_conversion, .interpolation_conversion, .literal_argument => request_kind == .compile_time_constant,
     };
 }
 
@@ -17074,6 +17074,7 @@ fn sealConstEvalTemplatesForRoots(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .interpolation_conversion,
             .repl_expr,
             .literal_argument,
             => checkedArtifactInvariant("non-constant root reached const eval template sealing", .{}),
@@ -18425,7 +18426,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 .nested_proc_sites = .{},
                 .target = switch (root.kind) {
                     .expect => .entry,
-                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => .comptime_only,
+                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => .comptime_only,
                 },
             });
         }
@@ -21135,6 +21136,40 @@ fn publishLiteralConversionRoots(
             .payload = .pending,
         });
     }
+    // A custom interpolation whose conversion is closed gets a validate-only
+    // root of its own: its value is the assembler, a function, which no
+    // reader takes from a slot, so the root only runs the conversion on the
+    // literal's segments and reports a rejection (design.md "Literal
+    // Arguments").
+    for (plans.plans.items()) |plan| {
+        if (!planConvertsInterpolationSegments(plans, plan)) continue;
+        switch (plan.resolution) {
+            .direct_closed => {},
+            .direct_parametric, .evidence_dependent, .checked_error, .@"unreachable" => continue,
+            .direct_pending, .structural => checkedArtifactInvariant("interpolation conversion had no finalized callable dispatch", .{}),
+        }
+        const node = plan.node;
+        switch (bodies.index().nodeKind(node)) {
+            .expr => {},
+            .pattern, .statement, .unreached => continue,
+        }
+        const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(node));
+        if (bodies.exprData(expr) != .interpolation) continue;
+        // The builtin `Str` concatenates its parts and rejects no segments.
+        if (bodies.interpolationIsBuiltinStr(expr)) continue;
+        if (roots.literalConversionRootForNode(node) != null) checkedArtifactInvariant("interpolation received a second conversion root", .{});
+        const root_id: ComptimeRootId = @fromBackingInt(@intCast(@as(u32, @intCast(first_root + root_list.items.len))));
+        try conversions.append(allocator, .{ .node = node, .root = root_id });
+        try CompileTimeRootTable.appendCompileTimeRoot(&root_list, allocator, .{
+            .module_idx = module.moduleIndex(),
+            .kind = .interpolation_conversion,
+            .source = .{ .literal = .{ .expr = expr } },
+            .pattern = null,
+            .expr = null,
+            .checked_type = bodies.interpolationAssemblerType(expr),
+            .payload = .pending,
+        });
+    }
     try roots.addLiteralConversions(allocator, conversions.items);
     if (root_list.items.len == 0) return;
     try roots.roots.resize(allocator, first_root + root_list.items.len);
@@ -21162,6 +21197,7 @@ fn publishLiteralConversionRoots(
         const plan_id = switch (root.literalConversionKind().?) {
             .numeral => plans.numeralPlanForNode(node),
             .quote => plans.quotePlanForNode(node),
+            .interpolation => plans.lookupByNode(node),
         } orelse checkedArtifactInvariant("a literal conversion root had no conversion plan", .{});
         const ref_index = first_ref + i;
         plans.template_refs.items()[ref_index] = plan_id;
@@ -21179,6 +21215,16 @@ fn publishLiteralConversionRoots(
         template.specialization_interface_relations = .{ .start = @intCast(first_relation + i), .len = 1 };
         root_evidence[first_template + i] = .{};
     }
+}
+
+/// Whether a dispatch plan is a custom interpolation's conversion: its
+/// generated operand is the literal's segments.
+fn planConvertsInterpolationSegments(plans: *const static_dispatch.StaticDispatchPlanTable, plan: static_dispatch.StaticDispatchCallPlan) bool {
+    for (plan.argsSlice(plans)) |operand| switch (operand) {
+        .generated_interpolation_segments => return true,
+        .generated_numeral, .generated_quote, .checked_expr, .literal_pattern_value, .literal_pattern_conversion => {},
+    };
+    return false;
 }
 
 /// What makes two literal requirements of one literal the same: the type's
@@ -24326,6 +24372,14 @@ pub const CompileTimeRootKind = enum {
     /// non-builtin nominal type; works exactly like `numeral_conversion` with
     /// `Err(BadQuotedBytes(..))` reported as the checking problem.
     quote_conversion,
+    /// A `from_interpolation` conversion of a custom interpolation whose
+    /// conversion is independent of specialization. The root's body runs the
+    /// conversion on the literal's segments; `Err(InvalidInterpolation(..))`
+    /// is the literal's rejection, reported as a checking problem. Its value,
+    /// the assembler, holds a function, so the root is validate-only: it
+    /// stores nothing, and every use converts the literal where it needs the
+    /// assembler (design.md "Literal Arguments").
+    interpolation_conversion,
     /// One explicitly requested REPL expression body whose inspected `Str`
     /// result is evaluated during checking finalization but is not installed
     /// as a source-visible top-level constant.
@@ -24437,13 +24491,14 @@ pub const LiteralArgumentRoot = struct {
     validate_only: bool,
 };
 
-/// The two literal-conversion root kinds, as a payload-free classification
+/// The literal-conversion root kinds, as a payload-free classification
 /// (design.md "Defaulted Fields": a defaulted field's conversion literal
 /// gets an ordinary conversion root in its declaring module; there is no
 /// separate field-default root kind).
 pub const CompileTimeLiteralConversionKind = enum(u8) {
     numeral,
     quote,
+    interpolation,
 };
 
 /// Public `CompileTimeRootPayload` declaration.
@@ -24518,7 +24573,7 @@ pub const CompileTimeRoot = struct {
 
     /// Whether this strategy still needs the root's producer to run.
     pub fn needsEvaluation(self: CompileTimeRoot, strategy: base.SpecializationStrategy) bool {
-        if (strategy == .lss and self.kind == .literal_argument) return false;
+        if (strategy == .lss and self.isBoxyEvaluated()) return false;
         return switch (self.payloadFor(strategy)) {
             .pending, .unevaluated => true,
             .const_node, .fn_value, .discarded, .expect, .runtime => false,
@@ -24583,7 +24638,29 @@ pub const CompileTimeRoot = struct {
         return switch (self.kind) {
             .numeral_conversion => .numeral,
             .quote_conversion => .quote,
+            .interpolation_conversion => .interpolation,
             .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect, .repl_expr, .literal_argument => null,
+        };
+    }
+
+    /// Whether the root is evaluated for its outcome alone and stores no
+    /// value: an interpolation conversion root, or a literal argument root
+    /// whose value holds a function (design.md "Literal Arguments"). Its
+    /// value is never read from its slot, so its request needs no fixed
+    /// callable representation, and a success completes it as `discarded`.
+    pub fn validateOnly(self: CompileTimeRoot) bool {
+        if (self.literal_argument) |argument| return argument.validate_only;
+        return self.kind == .interpolation_conversion;
+    }
+
+    /// Whether the `.boxy` evaluator owns the root under either strategy: a
+    /// literal argument root, and an interpolation conversion root, which
+    /// stores nothing a Solved program could read (design.md "Literal
+    /// Arguments").
+    pub fn isBoxyEvaluated(self: CompileTimeRoot) bool {
+        return switch (self.kind) {
+            .literal_argument, .interpolation_conversion => true,
+            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr => false,
         };
     }
 };
@@ -24955,12 +25032,15 @@ fn publishCompileTimeRootRequestEligibility(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .interpolation_conversion,
             .repl_expr,
             .literal_argument,
             => false,
         };
+        // A validate-only root's value is never read from its slot, so no
+        // reader needs its callable representation fixed by its producer.
         const context_free = !try concrete.visit(.{ .walk = .value_graph, .id = root.checked_type }) and
-            (producer_callable_type_is_fixed or !try callable.visit(root.checked_type));
+            (producer_callable_type_is_fixed or root.validateOnly() or !try callable.visit(root.checked_type));
         root.request_eligibility = if (context_free) .eligible else .ineligible;
     }
 }
@@ -26528,11 +26608,18 @@ fn verifyCompileTimeRootPayloadMatchesKind(root: CompileTimeRoot, payload: Compi
             .const_node, .unevaluated => true,
             .pending, .fn_value, .discarded, .expect, .runtime => false,
         },
-        // A literal argument holding a function value (an interpolation's
-        // assembler) is stored as one.
+        // A validate-only literal argument stores nothing when it succeeds;
+        // any other holding a function value is stored as one.
         .literal_argument => switch (payload) {
             .const_node, .fn_value, .unevaluated => true,
-            .pending, .discarded, .expect, .runtime => false,
+            .discarded => root.validateOnly(),
+            .pending, .expect, .runtime => false,
+        },
+        // A validate-only conversion stores nothing when it succeeds, and
+        // its failure as a crash node.
+        .interpolation_conversion => switch (payload) {
+            .const_node, .discarded, .unevaluated => true,
+            .pending, .fn_value, .expect, .runtime => false,
         },
     };
     if (matches) return;
@@ -26542,7 +26629,7 @@ fn verifyCompileTimeRootPayloadMatchesKind(root: CompileTimeRoot, payload: Compi
 fn compileTimeRootHasConstBody(kind: CompileTimeRootKind) bool {
     return switch (kind) {
         .constant, .hoisted_constant => true,
-        .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => false,
+        .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => false,
     };
 }
 
@@ -27266,6 +27353,7 @@ fn compileTimeRootSourceReplacement(kind: CompileTimeRootKind) SourceReplacement
         .hoisted_validation,
         .numeral_conversion,
         .quote_conversion,
+        .interpolation_conversion,
         .repl_expr,
         => .whole_expression,
         .callable_binding => .outside_function_bodies,
@@ -31466,7 +31554,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert((root.source == .literal_argument) == (root.kind == .literal_argument));
             if (root.pattern.get()) |pattern| std.debug.assert(@backingInt(pattern) < self.moduleEnvConst().store.nodes.len());
             switch (root.kind) {
-                .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => switch (root.payload) {
+                .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => switch (root.payload) {
                     .pending => {},
                     .unevaluated,
                     .const_node,
@@ -31790,6 +31878,7 @@ pub const CheckedModuleArtifact = struct {
                 const plan_id = switch (root.literalConversionKind() orelse break :blk false) {
                     .numeral => table.numeralPlanForNode(conversion.node),
                     .quote => table.quotePlanForNode(conversion.node),
+                    .interpolation => table.lookupByNode(conversion.node),
                 } orelse break :blk false;
                 const literal = root.literalNode() orelse break :blk false;
                 break :blk literal.node() == conversion.node and

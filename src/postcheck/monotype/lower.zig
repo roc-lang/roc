@@ -1941,7 +1941,7 @@ fn resolvedRecord(view: ModuleView, resolved: ResolvedUse) ResolvedRecord {
                     .const_use = .{ .const_ref = (view.hoisted_constants.lookupByPattern(result_pattern) orelse
                         Common.invariant("hoisted extraction root had no hoisted constant")).const_ref },
                 } },
-                .constant, .hoisted_validation, .expect, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => Common.invariant("hoisted extraction root was neither a constant nor a callable binding"),
+                .constant, .hoisted_validation, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => Common.invariant("hoisted extraction root was neither a constant nor a callable binding"),
             };
             return .{
                 .expr = null,
@@ -2127,6 +2127,15 @@ fn patternIntroducesBinder(view: ModuleView, pattern: CIR.Pattern.Idx) bool {
     return switch (view.module_env.store.getPattern(pattern)) {
         .assign, .var_assign, .as => true,
         .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .num_from_numeral_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .str_interpolation, .underscore, .runtime_error, .deferred_import_ref => false,
+    };
+}
+
+/// The message a validate-only root's failure stored: such a root stores a
+/// node only when its conversion failed.
+fn failedRootMessage(view: anytype, node: checked.ConstNodeId) []const u8 {
+    return switch (view.const_store.get(node)) {
+        .crash, .checked_error => |message| view.const_store.strBytes(message),
+        .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value, .boxy_fn => Common.invariant("a validate-only root stored a value"),
     };
 }
 
@@ -7516,20 +7525,20 @@ const Builder = struct {
         if (unfiltered_source_modules.len != 0 and unfiltered_source_modules.len != unfiltered_requests.len) {
             Common.invariant("root source module count differs from explicit request count");
         }
-        // A literal argument root is the `.boxy` evaluator's: a Solved
-        // program neither declares nor lowers it (design.md "Literal
-        // Arguments").
+        // A literal argument root and an interpolation conversion root are
+        // the `.boxy` evaluator's: a Solved program neither declares nor
+        // lowers them (design.md "Literal Arguments").
         var solved_requests = std.ArrayList(checked.RootRequest).empty;
         defer solved_requests.deinit(self.allocator);
         var solved_source_modules = std.ArrayList(checked.ModuleId).empty;
         defer solved_source_modules.deinit(self.allocator);
         var discovery_start = unfiltered_discovery_start;
         for (unfiltered_requests, 0..) |request, i| {
-            const literal_argument = if (request.compile_time_root.get()) |root_id|
-                self.moduleForId(self.rootSourceModule(unfiltered_source_modules, i)).compile_time_roots.root(root_id).kind == .literal_argument
+            const boxy_root = if (request.compile_time_root.get()) |root_id|
+                self.moduleForId(self.rootSourceModule(unfiltered_source_modules, i)).compile_time_roots.root(root_id).isBoxyEvaluated()
             else
                 false;
-            if (literal_argument) {
+            if (boxy_root) {
                 if (unfiltered_discovery_start) |start| if (i < start) {
                     discovery_start.? -= 1;
                 };
@@ -29584,10 +29593,14 @@ const BodyContext = struct {
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .interpolation_conversion,
             .repl_expr,
             .literal_argument,
             => saved_source_region_override,
         };
+        // An interpolation conversion root is the `.boxy` evaluator's, so it
+        // is never a Solved program's root (design.md "Literal Arguments").
+        if (root.kind == .interpolation_conversion) Common.invariant("an interpolation conversion root reached Monotype");
         const body = if (root.literalNode()) |literal|
             try self.lowerLiteralConversionRootBody(ExprSite.conversionLiteral(self.view, literal), ret_cell)
         else switch (root.kind) {
@@ -29611,6 +29624,7 @@ const BodyContext = struct {
             },
             .numeral_conversion,
             .quote_conversion,
+            .interpolation_conversion,
             => Common.invariant("literal-conversion root bypassed literal-conversion lowering"),
         };
         const declared_ret_node = try ret_cell.toGraphNode(self.graph);
@@ -33343,6 +33357,9 @@ const BodyContext = struct {
         lets: std.ArrayList(InterpolationLet) = .empty,
         /// The iterator built so far.
         iterator: DraftTypedLocal = undefined,
+        /// The assembler's request: the iterator the chain built in, the
+        /// interpolation's value out.
+        request_fn: NodeId = undefined,
         index: usize = 0,
     };
 
@@ -36346,42 +36363,12 @@ const BodyContext = struct {
             .conversion => {
                 self.draft.evaluation_depth -= 1;
                 const site = self.literalRejectionSite(task.expr);
-                // The assembler is called with the iterator the chain built,
-                // so its request names that iterator's representation, as a
-                // call's argument evidence does (`stepInstantiateCall`).
-                const assembler_fn = try self.graph.functionNodes(task.assembler_node);
-                const iterator_node = try task.iterator.ty.toGraphNode(self.graph);
-                if (try self.graph.containsGeneratedPrivate(iterator_node)) {
-                    const public_node = try self.freshInstNode(self.checkedFunctionType(self.view.bodies.interpolationAssemblerType(interpolation.node)).args[0]);
-                    try self.graph.relateOpaqueInterface(public_node, iterator_node);
-                    try relateRequestComponent(self.graph, assembler_fn.args[0], public_node);
-                } else {
-                    try self.graph.unify(assembler_fn.args[0], iterator_node);
-                }
-                const request_fn = try functionRequestNode(self.graph, task.assembler_node, &.{iterator_node}, assembler_fn.ret);
-                const assembler = try self.unwrapLiteralConversionAtNode(input.?.exprValue(), task.try_node, request_fn, site);
+                const assembler = try self.unwrapLiteralConversionAtNode(input.?.exprValue(), task.try_node, task.request_fn, site);
                 const callee = if (self.builder.literal_roots)
-                    try self.literalRootRead(task.expr, site, assembler, request_fn)
+                    try self.literalRootRead(task.expr, site, assembler, task.request_fn)
                 else
                     assembler;
-                const value_cell = DraftTypeCell.fromGraphNode(task.value_node);
-                const iterator_expr = try self.addExprWithTypeCell(task.iterator.ty, .{ .local = task.iterator.local });
-                var expr = try self.addExprWithTypeCell(value_cell, .{ .call_value = .{
-                    .callee = callee,
-                    .args = try self.addExprSpan(&.{iterator_expr}),
-                } });
-                var index = task.lets.items.len;
-                while (index > 0) {
-                    index -= 1;
-                    const let_ = task.lets.items[index];
-                    expr = try self.addExprWithTypeCell(value_cell, .{ .let_ = .{
-                        .bind = let_.pat,
-                        .value = let_.value,
-                        .rest = expr,
-                    } });
-                }
-                self.releaseInterpolationTask(task);
-                return loweredExprStep(expr);
+                return loweredExprStep(try self.callInterpolationAssembler(task, callee));
             },
             .str_conversion => {
                 self.draft.evaluation_depth -= 1;
@@ -36427,7 +36414,82 @@ const BodyContext = struct {
             });
         }
         task.stage = .conversion;
+        // The assembler is called with the iterator the chain built, so its
+        // request names that iterator's representation, as a call's argument
+        // evidence does (`stepInstantiateCall`).
+        const assembler_fn = try self.graph.functionNodes(task.assembler_node);
+        const iterator_node = try task.iterator.ty.toGraphNode(self.graph);
+        if (try self.graph.containsGeneratedPrivate(iterator_node)) {
+            const public_node = try self.freshInstNode(self.checkedFunctionType(self.view.bodies.interpolationAssemblerType(interpolation.node)).args[0]);
+            try self.graph.relateOpaqueInterface(public_node, iterator_node);
+            try relateRequestComponent(self.graph, assembler_fn.args[0], public_node);
+        } else {
+            try self.graph.unify(assembler_fn.args[0], iterator_node);
+        }
+        task.request_fn = try functionRequestNode(self.graph, task.assembler_node, &.{iterator_node}, assembler_fn.ret);
+        // A checked root that rejected this literal at this type reported
+        // the rejection in its module; reaching the literal here is reaching
+        // a failure already reported, as reaching code checking rejected is.
+        if (try self.rejectedInterpolationMessage(task)) |message| {
+            const callee = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(task.request_fn), .{ .checked_error = try self.addStringLiteral(message) });
+            return loweredExprStep(try self.callInterpolationAssembler(task, callee));
+        }
         return self.interpolationConversionStep(task);
+    }
+
+    /// The interpolation's value: the assembler `callee` called with the
+    /// iterator over its values, inside the bindings the chain built.
+    fn callInterpolationAssembler(self: *BodyContext, task: *InterpolationLowerTask, callee: DraftExprId) Allocator.Error!DraftExprId {
+        const value_cell = DraftTypeCell.fromGraphNode(task.value_node);
+        const iterator_expr = try self.addExprWithTypeCell(task.iterator.ty, .{ .local = task.iterator.local });
+        var expr = try self.addExprWithTypeCell(value_cell, .{ .call_value = .{
+            .callee = callee,
+            .args = try self.addExprSpan(&.{iterator_expr}),
+        } });
+        var index = task.lets.items.len;
+        while (index > 0) {
+            index -= 1;
+            const let_ = task.lets.items[index];
+            expr = try self.addExprWithTypeCell(value_cell, .{ .let_ = .{
+                .bind = let_.pat,
+                .value = let_.value,
+                .rest = expr,
+            } });
+        }
+        self.releaseInterpolationTask(task);
+        return expr;
+    }
+
+    /// The message of the checked root that rejected this custom
+    /// interpolation at the type it converts at here: its own conversion
+    /// root when its conversion is closed, or the `literal_argument` root of
+    /// that type (design.md "Literal Arguments"). Null when no root rejected
+    /// it, or none has completed in this compilation.
+    fn rejectedInterpolationMessage(self: *BodyContext, task: *const InterpolationLowerTask) Allocator.Error!?[]const u8 {
+        const node = task.expr.rawNode() orelse Common.invariant("an interpolation had no CIR node");
+        if (self.view.bodies.literalConversionRoot(node)) |root_id| {
+            return switch (self.view.compile_time_roots.root(root_id).payload) {
+                .const_node => |stored| failedRootMessage(self.view, stored),
+                .pending, .unevaluated, .discarded => null,
+                .fn_value, .expect, .runtime => Common.invariant("an interpolation conversion root stored a value"),
+            };
+        }
+        const candidates = self.builder.literalArgumentRootIndex().rootsOf(.{ .module = self.view.key.bytes, .node = node, .kind = .interpolation });
+        if (candidates.len == 0) return null;
+        if (!try self.graph.typeIsResolved(task.request_fn)) return null;
+        const ty = try self.activeTypeFromNode(task.request_fn);
+        for (candidates) |candidate| {
+            const view = &self.builder.moduleViews()[candidate.view];
+            const root = view.compile_time_roots.root(candidate.root);
+            const argument = root.literal_argument orelse Common.invariant("a literal argument root index entry named a root that converts no literal");
+            const root_ty = try self.closedCheckedMonoOf(view, argument.ty);
+            if (root_ty != ty and !try self.typeStore().typeEql(self.nameStore(), root_ty, ty)) continue;
+            return switch (root.payload) {
+                .const_node => |stored| failedRootMessage(view, stored),
+                .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => Common.invariant("a literal argument root index entry named a root with no stored value"),
+            };
+        }
+        return null;
     }
 
     /// Lower the interpolation's literal conversion. It runs during
@@ -52986,6 +53048,7 @@ const BodyContext = struct {
         const expected_kind: Common.LiteralRejectionKind = switch (kind) {
             .numeral => .numeral,
             .quote => .quote,
+            .interpolation => Common.invariant("an interpolation conversion root was read as a numeral or quote value"),
         };
         if (site.kind != expected_kind) Common.invariant("literal conversion root kind differed from its literal");
         const value = try self.unwrapLiteralConversionAtNode(try_value, try_node, request_node, site);

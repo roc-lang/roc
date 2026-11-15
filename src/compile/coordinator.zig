@@ -10179,6 +10179,7 @@ fn hashPatternExtractionRegionsForView(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .interpolation_conversion,
             .literal_argument,
             .repl_expr,
             => false,
@@ -10214,6 +10215,7 @@ fn hashPatternExtractionRegionsForView(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .interpolation_conversion,
             .literal_argument,
             .repl_expr,
             => unreachable, // is_selected_root skipped every root of these kinds
