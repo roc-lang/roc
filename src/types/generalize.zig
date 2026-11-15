@@ -252,8 +252,7 @@ pub const Generalizer = struct {
     /// ## Parameters
     /// - `var_pool`: The main variable pool tracking all vars by rank
     /// - `rank_to_generalize`: The rank level to generalize (must be var_pool.current_rank)
-    pub fn generalize(self: *Self, gpa: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
-        _ = gpa;
+    pub fn generalize(self: *Self, _: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
         try self.adjustMarked(var_pool, rank_to_generalize);
         try self.quantify(var_pool, rank_to_generalize, false);
     }
