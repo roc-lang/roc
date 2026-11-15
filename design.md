@@ -13186,8 +13186,13 @@ parked relations before its settled default-materialization fixpoint
 (`checkInstantiatedStaticDispatchConstraints(.settled)`), and a default that
 fixpoint materializes can ground a receiver whose derived codec relation then
 parks. That fixpoint therefore validates whatever is parked before it judges
-another round, and propagates a validated relation's error-row growth to the
-widened uses of the value that holds the row, as the drain before it does.
+another round. Such a late validation needs no further value-row propagation:
+a widened use re-opens only a value row that is closed or bounded when the use
+reads it, and neither kind gains a tag afterwards (a closed row has no tail,
+and the unifier refuses a tag into a bounded extension), so the validation
+cannot add a tag a widened use lacks. A debug assertion
+(`Check.debugAssertWidenedUseRowsComplete`) pins this after each such
+validation.
 
 The instance's copy of each of the template's variables is that variable
 throughout the instance's derivation (`Check.final_codec_instance_copies`). A
