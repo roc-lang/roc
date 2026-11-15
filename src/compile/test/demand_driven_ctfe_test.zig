@@ -435,6 +435,41 @@ fn sqlInMainResultApp(comptime literal: []const u8) []const u8 {
     ;
 }
 
+/// As `sqlInMainResultApp`, with `main!` an exact alias of the procedure.
+fn sqlInAliasedMainApp(comptime literal: []const u8) []const u8 {
+    return app_header ++ "\n" ++ sql_type ++ "\n" ++
+        \\run! = |args| {
+        \\    if args.len() > 5 {
+        \\        return Err(Bad(wrap("
+    ++ literal ++
+        \\")))
+        \\    }
+        \\    Echo.line!("ran")
+        \\    Ok({})
+        \\}
+        \\main! = run!
+    ;
+}
+
+/// As `sqlInAliasedMainApp`, with `main!` a computed value.
+fn sqlInComputedMainApp(comptime literal: []const u8) []const u8 {
+    return app_header ++ "\n" ++ sql_type ++ "\n" ++
+        \\run! = |args| {
+        \\    if args.len() > 5 {
+        \\        return Err(Bad(wrap("
+    ++ literal ++
+        \\")))
+        \\    }
+        \\    Echo.line!("ran")
+        \\    Ok({})
+        \\}
+        \\main! = {
+        \\    f = run!
+        \\    f
+        \\}
+    ;
+}
+
 /// The literal is a requirement of `helper`'s scheme, and the use's copy of
 /// the variable is related to nothing else in the program.
 fn sqlInHelperApp(comptime literal: []const u8) []const u8 {
@@ -507,6 +542,14 @@ fn expectLiteralOutcomeUnderBothStrategies(comptime app: fn (comptime []const u8
 
 test "issue 13054: a conversion at a variable the platform's requirement does not fix is checked under both strategies" {
     try expectLiteralOutcomeUnderBothStrategies(sqlInMainResultApp);
+}
+
+test "issue 13054: a conversion in a procedure the platform invokes through an alias is checked under both strategies" {
+    try expectLiteralOutcomeUnderBothStrategies(sqlInAliasedMainApp);
+}
+
+test "issue 13054: a conversion in a procedure the platform invokes through a computed value is checked under both strategies" {
+    try expectLiteralOutcomeUnderBothStrategies(sqlInComputedMainApp);
 }
 
 test "issue 13054: a conversion at a use's variable nothing fixes is checked under both strategies" {

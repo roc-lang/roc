@@ -17774,7 +17774,9 @@ strategy).
   solution's `root_subst`: the app's check instantiated the binding for the
   platform, so the app module owns the roots of that instantiation and the
   platform's call of `main!` whose error type mentions `Sql(a)` validates
-  its literals there), a
+  its literals there; when the binding is a value such as `main! = run!`,
+  the edge instantiates the binding's entry wrapper, and
+  `PlatformRequirementEdge.invokes` says which), a
   generalized local function's use or construction), recording the type after the edge's
   substitution, the edge, and the callee's literal requirement index. Literal requirements are
   computed to a fixpoint over the module's schemes and deduplicated by

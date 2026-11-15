@@ -22292,15 +22292,24 @@ fn publishLiteralArgumentRoots(
             .procedure_binding => |binding| binding,
             .const_ref => continue,
         };
-        const template = switch (top_level_procedure_bindings.get(binding).body) {
+        const body = top_level_procedure_bindings.get(binding).body;
+        const template = switch (body) {
             .direct_template => |direct| switch (direct.template) {
                 .checked => |template| template,
                 .lifted, .synthetic => continue,
             },
-            .callable_eval_template, .checked_error => continue,
+            // A binding that is not itself a procedure (`main! = run!`) is
+            // invoked through its entry wrapper, whose scheme is the
+            // binding's.
+            .callable_eval_template => |id| (wrappers.lookupByRoot(callable_eval_templates.get(id).root) orelse continue).template,
+            .checked_error => continue,
         };
         try collector.add(.{
-            .key = .{ .requirement = .{ .requires_idx = solution.requires_idx, .template = template.template } },
+            .key = .{ .requirement = .{
+                .requires_idx = solution.requires_idx,
+                .template = template.template,
+                .invokes = if (body == .callable_eval_template) .entry_wrapper else .procedure,
+            } },
             .callee = .{ .template = template },
             .subst = plans.site_substitutions.items()[subst.start..][0..subst.len],
             .scope = null,
@@ -24980,6 +24989,16 @@ pub const LiteralEdge = union(enum(u8)) {
 pub const PlatformRequirementEdge = struct {
     requires_idx: u32,
     template: canonical.CheckedProcedureTemplateId,
+    invokes: Invoked,
+
+    /// What `template` is to the binding that satisfies the requirement.
+    pub const Invoked = enum(u32) {
+        /// The binding is the procedure.
+        procedure,
+        /// The binding is a value (`main! = run!`) and `template` is its
+        /// entry wrapper, which takes no arguments and returns the value.
+        entry_wrapper,
+    };
 };
 
 /// One literal a scheme's instantiation must convert: a literal of the

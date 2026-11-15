@@ -3386,9 +3386,13 @@ pub const Builder = struct {
                         if (callee_worker.params.len != 0 or callee_worker.dictionary_params.len != 0) invariant("a callable-eval entry wrapper takes arguments");
                         const bound = try self.relateWorkerVariables(callee, callee_worker.ret, eval.ty);
                         defer self.allocator.free(bound);
-                        const hidden = try self.allocator.alloc(Word, bound.len);
+                        const hidden = try self.allocator.alloc(Word, bound.len + callee_worker.literal_params);
                         defer self.allocator.free(hidden);
-                        for (bound, hidden) |ty, *desc| desc.* = try self.descWord(ty);
+                        for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
+                        // A read of the binding's value has no edge of its
+                        // own, so the wrapper's literal arguments derive
+                        // from this use's types.
+                        try self.derivedLiteralArgs(callee, bound, hidden[bound.len..]);
                         try self.finishCall(callee, hidden, bound, &.{}, try self.program.signatureAt(callee, callee_worker.ret, bound), eval.ty);
                     },
                     .discarded, .expect => invariant("a callable-eval binding's root holds a value, which no expect or discarded root does"),
@@ -4787,7 +4791,12 @@ pub const Builder = struct {
                     invariant("a requirement edge names no solution of its module");
                 const callee = try self.program.templateRefWorker(self.view.view.checked_procedure_templates.templateRef(self.view.key, requirement.template));
                 const subst = self.view.view.static_dispatch_plans.site_substitutions.items()[solution.root_subst.start..][0..solution.root_subst.len];
-                const owned = try self.boundTypesAt(callee, subst, try self.convert(solution.solved_root));
+                const invoked = try self.convert(solution.solved_root);
+                const call_fn = switch (requirement.invokes) {
+                    .procedure => invoked,
+                    .entry_wrapper => try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = invoked, .effectful = false } }),
+                };
+                const owned = try self.boundTypesAt(callee, subst, call_fn);
                 defer self.allocator.free(owned);
                 const bound = try self.program.arena.allocator().dupe(TypeId, owned);
                 try self.enterDerivedFrame(callee, bound);
