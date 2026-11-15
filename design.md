@@ -69,6 +69,38 @@ second stored expression, pattern, and statement tree. In `.boxy`, checked CIR
 is consumed directly by that lowerer, which derives every layout from checked
 types and the descriptors in scope.
 
+## UTF-8 validation
+
+`Str.from_utf8` and `Str.from_utf8_lossy` share one Zig builtin validator,
+`validateUtf8` in `src/builtins/str.zig`. It accepts exactly the well-formed
+sequences of Unicode Table 3-7 and, for ill-formed input, returns the zero-based
+start index of the first ill-formed sequence and its problem. The problem is
+decided in a fixed order: a byte that is neither ASCII nor C0-F7 is
+`InvalidStartByte`; the lead byte announces the length (C0-DF: 2, E0-EF: 3,
+F0-F7: 4), and a sequence running past the end of the input is
+`UnexpectedEndOfSequence` whatever its available bytes are; a following byte
+outside 80-BF is `ExpectedContinuation`; otherwise the lead and second byte
+decide `OverlongEncoding`, `EncodesSurrogateHalf`, or `CodepointTooLarge`.
+
+Validation never decodes code points. While no sequence is in progress, ASCII
+is skipped in 32- and 16-byte blocks; a tail shorter than 16 bytes is checked
+with loads that may overlap already-validated bytes. Other bytes go through a
+shift-based DFA over the nine states of Table 3-7: a 256-entry table of packed
+`u64` rows, one table load and one shift per byte, 16 bytes per unrolled chunk.
+Only a rejection reruns the DFA, out of line, from the start of the sequence in
+progress to find where the ill-formed sequence begins. The blocks use generic
+`@Vector(16, u8)` operations, so the pointer-width builtin bitcode stays
+target-independent (see "Backend Builtins"); targets without SIMD, such as
+`wasm32v1`, lower them to scalar instructions.
+
+`Str.from_utf8` makes one validation pass and shares the input allocation on
+success. `Str.from_utf8_lossy` shares it for valid input too; for invalid input
+it copies the valid prefix and each later valid run unchanged and replaces each
+ill-formed sequence with one U+FFFD. Such a sequence consumes its lead byte and
+the continuation bytes after it, up to its announced length, stopping early at a
+non-continuation byte or the end of the input; a byte in 80-BF or F8-FF consumes
+itself and every directly following byte in those ranges.
+
 ## UTF-16 and UTF-32 decoding primitives
 
 `Str.from_utf16_le`, `Str.from_utf16_be`, `Str.from_utf16_bom`, and their
@@ -590,6 +622,13 @@ within an explicit code-growth limit; a larger value keeps its named binding.
 A compile-time value read is not a substitutable read: its value guard crashes
 where the program evaluates the read when that value's evaluation failed, so
 substitution may neither drop a discarded read nor move one to a later use.
+LIR passes that run before the guards are inserted observe the same rule: the
+slots `comptime_value_guards.guardedSlots` names are the reads the guards will
+guard, and join-parameter pruning never deletes a read of one as a dead pure
+definition, even one of a zero-sized value whose only consumer is a call of a
+callable with no variants. Pinned by "a hoisted call of a function field read
+from a value checking rejected reports nothing more" in
+`src/compile/test/hoisted_constants_test.zig`.
 Making a value reusable is decided by substitutability alone, never by that
 limit: a substitutable value of any size is already reusable and is kept whole,
 so reuse never walks or copies its structure. A long interpolation binds one
@@ -1373,9 +1412,19 @@ checker recovery. The recovery rules:
   undeclared type) declares no type, and nothing may be related to it. Checking
   records this on the annotation itself (`CIR.Annotation.erroneous`) as soon as
   it generates the annotation's type, before any body or use is related to it,
-  so the record is available in every module that can see the definition. The
-  definition's right-hand side becomes the runtime error, a method included,
-  and a static dispatch that selects a method with such an annotation is
+  so the record is available in every module that can see the definition. A
+  where clause's method signature or where alias application is part of the
+  type the annotation generates, so one that names an undeclared type, or a
+  builtin type internal to its module (`Encoding.JsonEncoding`), makes the
+  annotation erroneous too. The
+  definition's right-hand side becomes the runtime error, a method included.
+  Every use of the definition, in its own module or an importing one, by name
+  or as an associated item, is erroneous at the use (`defReference` classifies
+  it `.erroneous_annotation`; see the use rule below), so a call of it is
+  retired before it relates any argument: in `taken : List(Time) -> List(Time)`
+  called as `taken(w0)` with `w0 = []`, `w0` keeps its own `List(_)` type
+  rather than taking on the annotation's erroneous one. A static dispatch that
+  selects a method with such an annotation is
   rejected exactly as one selecting an annotation-only declaration is: its
   constraint callable is never related to the erroneous type, which would
   otherwise reach the instantiation that the dispatch belongs to while every
@@ -1550,8 +1599,9 @@ checker recovery. The recovery rules:
   variable the binding cannot quantify is checked without the annotation, and
   its right-hand side is erroneous (Value Bindings Generalize By Expression).
 - A use of a declaration that already reported its own rejection (a value
-  binding whose annotation is rejected, or a hosted declaration that is not an
-  effectful function), or of an erroneous name (one a rejected pattern or a
+  binding whose annotation is rejected, a definition whose annotation is
+  erroneous, or a hosted declaration that is not an effectful function), or of
+  an erroneous name (one a rejected pattern or a
   pattern matched against an erroneous value introduces), is erroneous at the
   use (`Check.markErroneousNameUse`): the use never relates to the
   declaration's type, so uses cannot disagree with one another, and the error
@@ -1625,12 +1675,36 @@ checker recovery. The recovery rules:
   `instantiated_literal_conversion_uses` for literal conversions (numeral,
   quote, and interpolation), each keyed by the copy's own callable var. A
   failure of the copy makes that use a runtime error and leaves the scheme's
-  body, which stays valid for every other use, intact.
+  body, which stays valid for every other use, intact. An ambiguity verdict on
+  a copied where-clause requirement whose receiver no relation determines is
+  such a failure too, even when a dispatch in the scheme's body uses the
+  requirement: the report and the runtime error go to the instantiating use
+  (`applyInstantiationAmbiguityVerdict`), never to that body dispatch, so in
+  `apply : p -> Str where [p.to_str : p -> Str]` a use `apply(crash "boom")`
+  that leaves `p` undetermined is the crash while `apply(5.U8)` elsewhere
+  still runs `apply`'s body.
 - Rejecting a static-dispatch constraint never writes `.err` into the
   receiver's solved class. A concrete receiver's class is shared with every
   expression and definition that mentions its type, so the rejection marks the
   constraint rejected and retires its owner, and the receiver keeps its type.
   An interpolation whose `Str` part demand fails keeps its `Str` result.
+- A call that is a runtime error never applies its callee, so the call relates
+  neither its arguments nor its result to the callee's instantiation. A
+  receiver of that instantiation's copied requirements can therefore be left
+  undetermined only by the call's own rejection, which already owns its
+  report: in `shown = apply(nope)` with
+  `apply : p -> Str where [p.to_str : p -> Str]`, nothing pins `p`. The
+  erroneous-value sweep records the callee of each call it replaces
+  (`runtime_error_call_callees`), and an ambiguity verdict whose every active
+  requirement was copied by such a callee's value use (`use_instance_by_fn_var`
+  names each copy's use, whose scheme-use record names its node) rejects
+  those requirements without a report and rewrites nothing
+  (`rejectRequirementsOfUnappliedCallees`). The callee itself is still
+  evaluated as a function value (Erroneous Call Operand Retirement). The sweep
+  runs before the verdicts and covers every call replaced while checking or
+  later, so the verdict sees one settled set; a call retired after it was
+  checked related its operands when it was checked, so its receivers are not
+  left undetermined by the retirement.
 
 A module that fails before checking, such as a dependent of a module whose
 source was rejected, has no CheckedModule. Checked-program finalization produces a
@@ -1929,6 +2003,16 @@ checked as one. Alias traversal has no source-text reconstruction or fixed hop
 limit; invalid and cyclic aliases must already resolve to the checker error
 type.
 
+Every other method lookup on a type follows the same rule. An alias
+declaration owns no methods (an alias cannot have an associated block), so a
+static-dispatch receiver, the format type whose methods a generated codec
+calls (`encode_record`, `parse_record_start`, ...), and a codec receiver
+classified for scheme ownership are each resolved through their aliases to the
+terminal type first: a nominal type's declaration owns the methods, and a
+structural backing derives them. The format method is still instantiated
+against the type as written, so the alias stays the presented type (Type
+Alias Invariant).
+
 A resolved lookup's module identity is local to the module owning its expression.
 Consumers visiting imported bodies resolve that identity through the expression
 owner's identity table, then use the target module's definition store. An
@@ -1974,12 +2058,43 @@ rewrite above, this replacement resolves a reference; it mutates no solved
 type and stamps no dispatch plan, so it adds no Rewrite Inventory entry
 (Solver-Mutating Rewrites). Omitted defaulted fields of a construction through
 an alias are found by checking, as for any construction whose nominal type
-canonicalization does not know (Defaulted Fields). The default-cycle pass is
-the one place canonicalization looks through an alias, and only along names it
-resolved itself: an alias whose annotation is a reference to a local type
-declaration names that declaration, so a construction through it contributes
-the same omission edges as one written through the nominal type's own name
-(Defaulted Fields).
+canonicalization does not know (Defaulted Fields). Canonicalization looks
+through an alias in exactly two places, and only along names it resolved
+itself. The default-cycle pass is one: an alias whose annotation is a
+reference to a local type declaration names that declaration, so a
+construction through it contributes the same omission edges as one written
+through the nominal type's own name (Defaulted Fields). The exposed type
+surface check is the other (Exposed Type Surfaces).
+
+### Exposed Type Surfaces
+
+A module warns when an exposed, non-opaque nominal type's backing mentions a
+type that other modules cannot name: `private_type_in_exposed_field` for a
+mention inside a record field, `private_type_in_exposed_type` otherwise.
+Canonicalization runs this check (`Can.checkExposedTypeSurfaces`) over the
+annotations of the module's public type declarations: the exposed types, the
+type module's main type, and every exposed type declared under them. Local
+alias annotations are walked through, so a mention through a private alias is
+judged at the type the alias names. Imported types are other modules' surfaces
+and are not walked; opaque types expose no backing and are skipped.
+
+A private local nominal type is publicly named when a public alias renames it,
+by the same rule documentation and `roc bump` apply to solved types (Builtin
+Types Named Through Aliases): the alias's annotation, with parentheses
+stripped and private local aliases followed, applies the nominal type to
+exactly the alias's own parameters, in order. Following an alias composes the
+parameter positions its arguments carry, so `A(x, y) : B(y, x)` with
+`B(p, q) : N(q, p)` renames `N`, while a partial application, a repeated
+parameter, the parameters in another order, a concrete argument where the
+nominal type takes a parameter, or any type built around the nominal does
+not. A chain that reaches a public alias leaves the renaming to that alias.
+When several public aliases rename one nominal type, the one declared first
+in the source names it. A renamed nominal type is not warned about, and
+unless it is opaque its own backing is checked as a public surface, with
+warnings naming the renaming alias. Renaming publishes the nominal type's own
+name only: a type path does not resolve through an alias into the block of
+the type it names, so a mention of a type nested in a renamed type's block
+still warns, and an alias nested there renames nothing.
 
 ### Builtin Types Named Through Aliases
 
@@ -2016,7 +2131,10 @@ behaves in any module.
   entry of its own, and every reference to it renders as a reference to the
   alias. The nominal type may be declared in the alias's module or in a
   module the package does not expose, and a renamed type can rename further
-  types through aliases nested in it.
+  types through aliases nested in it. The exposed type surface check
+  applies the same renaming rule within one module to its annotations
+  (Exposed Type Surfaces), so a field typed through such an alias draws no
+  private-type warning.
 
 ### Compile-Time Evaluation And Static Storage
 
@@ -2164,9 +2282,12 @@ initializer is an explicit zero-argument proof call to the one declared root
 function, whose return owns the concrete Monotype representation and lambda
 sets. Lambda solving unifies reads with that return without letting a read
 change it. Each use of an imported constant is checked at its own copy of the
-constant's type, and a copy may lift an anonymous record or tag union into a
-nominal the declaring module never names, so a read's type can differ from its
-root's by such lifts. A lifted pair, and every pair containing one, unifies its
+constant's type. The constant's own anonymous structure is committed when its
+module finishes checking (Uncommitted Record Tails), so a copy differs only
+where the constant's scheme quantifies an uncommitted tail: a read of a
+callable root may lift the record or tag union such a tail ends into a
+nominal the declaring module never names, so a read's type can differ from
+its root's by such lifts. A lifted pair, and every pair containing one, unifies its
 components without joining the two types: the callable slots beneath are
 shared, every type with no lift beneath it is joined as usual, and the root's
 return stays the type its own module declared. Every read is unified with its
@@ -2362,6 +2483,18 @@ program sees the same memory while the binary carries none of the bytes; a
 zeroed work table is free in the file however large. A relocation would
 write a non-zero address into such bytes at link time, so anything relocated
 stays byte-backed, as does every root, whose slot addresses it.
+
+A wasm object gives every static-data node its own segment
+(`WasmModule.addStaticDataExports`), named `.rodata.<symbol>` for byte-backed
+nodes and `.bss.<symbol>` for zero-fill ones. Static data is immutable, so
+every byte-backed node is read-only data. The names do two jobs. A distinct name per node
+keeps each node its own input segment through the relocatable composition
+link, which joins input segments that share a name, so the final link's
+`--gc-sections` still drops each node nothing references. The standard
+prefix lets the final `wasm-ld` merge the surviving nodes into its one
+`.rodata` (and `.bss`) output segment, so the module carries a few active
+segments rather than one per constant, each of which would cost a segment
+header and a separate copy at instantiation.
 
 The guard pass also marks each guard's crash statement as the failure path of a
 read of its slot's value (`CrashExtra.failed_value`), naming the producer. Failed
@@ -3176,11 +3309,14 @@ or return, grouping parentheses preserve it, and an `if` with an `else` or
 a `match` propagates it to its branch bodies. A return's operand also occupies
 that position. Bindings, operands of other expressions, conditions, guards,
 loops and `if` without `else` do not propagate it. Nested lambdas start their own independent result positions.
-Canonicalization consumes this inventory to warn on redundant returns, and
-formatting consumes the same inventory to remove their keywords while preserving
-comments and adding parentheses where a bare identifier would otherwise parse
-as a punned record. Explicit early returns retain their control-flow meaning in
-CIR.
+Canonicalization consumes this inventory to warn on redundant returns and to
+canonicalize each one to its operand, so a redundant `return` produces the same
+CIR, types and generated code as the program written without it; no later stage
+sees a return node for it. Returns inside `expect` and returns outside any
+function are not redundant and keep their diagnostics. Formatting consumes the
+same inventory to remove their keywords while preserving comments and adding
+parentheses where a bare identifier would otherwise parse as a punned record.
+Explicit early returns retain their control-flow meaning in CIR as return nodes.
 
 ### Bidirectional source controls
 
@@ -4318,7 +4454,10 @@ equivalence class: merges keep it if either side had it, scheme
 instantiation copies it, and import copying carries it across modules. The
 nominal-versus-anonymous unification entry points reject a lift whose
 anonymous side carries the mark, so the verdict does not depend on which
-relation reached the structure first. The rejected side is pinned in
+relation reached the structure first. A closed record or tag union written in
+a backing is committed in any case and never lifts (Uncommitted Record
+Tails); the mark is what keeps a nominal value out of backing structure whose
+row is still a variable, such as a row the declaration leaves open. The rejected side is pinned in
 `src/check/test/type_checking_integration.zig` for a tag payload, a record
 field, a generalized constructor helper, an annotated structural parameter
 that feeds a backing, and an imported backing; the accepted controls keep a
@@ -5346,6 +5485,48 @@ already-reported error, so it is a mechanism (Solver-Mutating Rewrites). The lim
 any walk's storage (Stack Safety): no stage's call depth or storage depends on
 it.
 
+Rank adjustment reaches a younger variable only through a variable its own
+generalization visits, so a node unification creates holds no child younger
+than itself. Unification creates nodes at the lower of its two operands'
+ranks: a row holding one operand's unshared tags or fields, or a copy of a
+merge destination's content. Such a node can hold the younger operand's
+variables, so unification lowers each direct child of a node it creates to
+the node's rank (`Unifier.freshParent`); a younger variable nested deeper is
+reached through that child when the child's own generalization visits it at
+its lowered rank. Otherwise a younger variable beneath an older value's row,
+such as the tail of a top-level value's tag row widened by a generalized
+function's use, would be quantified by that function while the value still
+shares it. Pinned by `src/check/test/issue_13011_test.zig`, the rank tests
+in `src/check/test/unify_test.zig`, and `test/cli/Issue13011StoreWrites.roc`.
+
+### Descriptor Words
+
+A type store keeps each descriptor as a 16-byte row: a 32-bit word and a
+three-word payload laid out by kind (`Descriptor.Row`). A reader that needs
+only the content's kind, flags or rank decodes the word alone. The word is,
+from its low bit:
+
+| Bits  | Field |
+|-------|-------|
+| 0-3   | content kind (`ContentKind`) |
+| 4-10  | the flags every kind can hold: `frozen`, `static_dispatch_rejected`, `default_decided`, `nominal_backing_structure`, `bounded_row_ext`, `deferred_callable`, `annotation_tag_ext` |
+| 11-15 | on a flex: `uncommitted_record_tail`, `uncommitted_copy`, `record_pattern_tail`, and the 2-bit literal marker (`Flex.Literal`); on every other kind: `empty_tag_union_is_default`, `host_fixed_row`, `compared_plain`, `annotation_tag_union`, `uncommitted_tag_tail` |
+| 16-17 | generalization's two scratch marks (`generalizing`, `rank_adjusted`) |
+| 18-31 | the 14-bit rank |
+
+Bits 11-15 are shared by kind (`Descriptor.FlagBits`). Exclusivity is a
+compiler invariant: an uncommitted record tail's marks and a literal marker
+describe a row variable, so only a flex holds them; the empty-tag-union,
+host-row, compared-plain and annotated-union marks describe structure, so a
+flex never holds them. Packing a word asserts it in debug builds. A write that
+replaces a class's content keeps only the flags its new kind holds
+(`DescriptorFlags.forKind`): a flex-only flag means nothing once the class is
+structure, and a structure-only flag nothing once it is a flex. A merge keeps
+the flex-only marks only while the merged class is a flex, the uncommitted tag
+tail only on an empty tag union, and the other structure-only marks only on
+structure, since a merged flex is one whose two sides were both flexes. The
+layout's 32-bit fit is checked at compile time.
+
 Roc generalization is exclusively rank-1. Quantification belongs to a value
 binding; an arbitrary expression does not acquire a scheme, and the result of
 calling a polymorphic function is a monotype even when that result contains a
@@ -5423,9 +5604,7 @@ test/snapshots/repro_issue_12968_record_update_list_field.md.
 The checker records scheme-ness as explicit binding metadata at each
 generalization boundary. After rank adjustment, it walks the binding's type
 interface once and classifies the binding as a scheme exactly when a reachable
-variable was promoted to generalized rank. The same walk records a binding
-that is no scheme but whose type reaches anonymous structure copied per use
-(Anonymous Structure Is Copied Per Use, below). This producer-side classification
+variable was promoted to generalized rank. This producer-side classification
 is necessary because generalization is per variable: a partially generalized
 scheme can have a monomorphic structural root and quantified descendants. Root
 rank is therefore not a valid proxy for whether a binding is a scheme. The walk
@@ -5644,130 +5823,354 @@ definitions take no part: a module's uses of an imported scheme give its
 variables types over the module's own variables, never the reverse, so no
 cycle passes through another module.
 
-### Anonymous Structure Is Copied Per Use
+### Uncommitted Record Tails
 
-A use of a binding can lift anonymous structure in the binding's type into a
-nominal type whose backing matches: given `make : U64 -> { count : U64 }` and
-`Counter := { count : U64 }`, the use `lifted : Counter = make(1)` relates
-the call's record to `Counter`, and unification rewrites the record's class
-to `Counter`. That rewrite belongs to the use. If the use shared the record
-with the binding's type, the lift would change `make` itself and every other
-use with it, and `plain = make(2)` would gain `Counter`'s methods. So each
-use owns its own copy of every anonymous record and tag union (empty ones
-included) that the binding's scope made, even when no variable in it is
-quantified, exactly as it owns copies of the quantified variables.
+Two relations can change anonymous structure after it is built: a lift
+rewrites an anonymous record or tag union into a nominal type whose backing
+matches (`Counter := { count : U64 }` takes in `{ count: 1 }`), and width
+absorption gives a record an optional or defaulted field it omits (Field
+Kinds). Each rewrites the class it reaches, so whatever shares that class
+changes with it. Whether structure can still change this way is therefore
+explicit data of its row: an ordinary type variable for a record, and an
+uncommitted empty tag union for a tag union closed by inference (Uncommitted
+Tag Tails, below). A use of a binding changes only its own instantiation of
+the binding's type, by the one rule instantiation follows everywhere: it
+copies what reaches a quantified variable and shares everything else.
 
-The rule is carried as explicit descriptor data, not by rank: such a class is
-monomorphic, so marking it generalized would make every body-local record of
-the scope look polymorphic to post-check stages. Instead, when a
-generalization boundary leaves a class it made ungeneralized and some use can
-change the class (`UseAbsorbers.copiedPerUse`), it marks the class
-`DescriptorFlags.per_use_structure`, and the rank stays what rank adjustment
-computed. Only a record, tag union, empty record, or empty tag union not
-written in an opened nominal backing (`Descriptor.liftsIntoNominal`) can be
-changed by a use, and only in these ways:
+A record that can still be lifted or widened ends in an *uncommitted tail*:
+a flex variable carrying `DescriptorFlags.uncommitted_record_tail`. Every
+record construction mints a fresh one as its row's extension: a record
+literal, `{}` included (a record of no fields over its own uncommitted
+tail); the skeleton a construction relates to its expected shape (Expected
+Shape Context); and a record pattern without `..`, which is a construction's
+shape seen from the consuming side (`area = |{ top_left, bottom_right }| ...`
+under `area : Rectangle -> F64` takes in the `Rectangle` its caller passes,
+and so does `{ x, y } = point`). Every other record row is committed. A
+record type written in an annotation or in a declaration's backing is closed
+as written, and `..` keeps its meaning there; the closed records the checker
+builds itself (the `{}` of a statement, a loop, `dbg`, or `expect`, an
+iterator step) are committed too.
 
-- A use lifts an anonymous tag union into a nominal type only when the
-  declaration's backing is a tag union whose row is open or lists every tag
-  the anonymous union itself lists, which is exactly what relating the two
-  checks before it lifts.
-- A use lifts an anonymous record into a nominal type only when the
-  declaration's backing is a record whose row is open or lists every field
-  of the anonymous record it cannot absorb. A backing absorbs only an
-  optional or defaulted field, and a field whose kind is still unsettled
-  becomes one only by relating to a widening field of its name.
-- A use widens a record with an optional or defaulted field the record does
-  not hold. That field's name was written in some module, as a `?:` or
-  defaulted field of an annotation, a `.?` access, or an unset.
-- A declaration that is one of its own type variables, or that is invalid
-  (relating to which poisons the structure), can take in anything.
+An uncommitted tail is not an open row. It never stands for a field of
+`required` or undetermined kind and never relates to a rigid row variable,
+so `{ x: 1 }` where `{ x : I64, y : Str }` is expected is a type mismatch,
+exactly as it is for a closed record. With `U` an uncommitted tail:
 
-So a structure is marked only when something the module's checking can see
-could change it. A tag union is marked when some visible declaration could
-take it in: an open tag-union backing row, a closed one listing all of the
-union's own tags, or, for an empty union, any tag-union backing. A record is
-marked when some visible declaration could take it in by the same rule over
-the fields it cannot absorb, or when some visible widening field name is
-not among its own fields. A structure nothing visible could change keeps the
-same type under every relation, so every use shares it. Only a class's own
-tags or fields are counted; a tag or field further along its row only rules
-out a lift or a widening, so leaving it out can only mark more.
+| `U` meets | Result |
+| --- | --- |
+| the empty record | `U` commits: the class is the empty record |
+| another uncommitted tail, or a flex row variable | one flex class, still uncommitted; static-dispatch constraints merge as for any two flex variables |
+| a record row in a construction relation whose fields are all `optional`, or `defaulted` where Defaulted Fields admits the omission, when `U` is not a use's copy (below) | `U` absorbs the row: the class becomes that row, and the row's own tail relates to a fresh uncommitted tail, which can absorb again later or commit |
+| a record row in an exact-width relation, a row with a `required` or undetermined field, or any record row with a field when `U` is a use's copy | type mismatch |
+| a rigid row variable | type mismatch |
+| an alias | `U` relates to the alias's backing |
+| an erroneous type | the error |
+| anything else | type mismatch |
 
-What a module's checking can see is collected before any binding generalizes
-(`Check.use_absorbers`). From each module the check copies types from
-(Builtin, its imports, the owners of what it imports, and a platform's
-requirement surface) it is every declaration in that module's type store,
-less the opaque ones, into which another module cannot lift, and the name of
-every optional or defaulted field of a record in that store: a field name
-written in one module reaches another only through the type stores it copies
-types from. Sealing a checked store lists those names
-(`Store.widening_names`), so a module reads each source's list rather than
-walking its records. From the module itself it is read from its syntax, since checking
-registers a declaration or an optional field only as it reaches it: every
-nominal declaration's backing, and every field name written as optional or
-defaulted in an annotation, accessed with `.?`, or unset. A backing written
-as a tag union or record is the only one of the module's own that can take
-in anonymous structure: an application or a lookup is checked as the alias or
-nominal type it names, and relating structure to a nominal type whose
-backing is not the same kind of structure never lifts. Names are compared by
-a hash of their text, as they come from several modules; a collision can
-only mark a structure that did not need it. Debug builds assert that every
-module a check copies types from was collected, that every declaration the
-module registered admits no lift its syntax did not record, and that every
-optional or defaulted field of a record in the module's store is a collected
-widening field. A class an enclosing scope made keeps its sharing:
-a weak binding's one type is still shared by every use, and a function
-returning it returns that same class. A merge keeps the mark only when both
-sides had it, so a class that joins an enclosing scope's class is shared like
-that class.
+A committed record never changes once it is committed. The empty record relates
+to a row only when that row holds no field, so a closed row absorbs no field
+a relation offers it, and relating it to a nominal type is a type mismatch.
+A nominal type over a record or tag union that meets a committed plain row of
+its own kind (one an annotation wrote, or one committed after it was built),
+in either direction and at any depth, is a type mismatch whose refusal
+records the facts its report states (`RecordTailRefusal.plain_record`,
+`plain_tag_union`): the nominal type, which side of the relation was the
+plain row, whether the nominal declares anonymous fields, and whether this
+module may build or take apart its values. The report says that a nominal type
+is never the same as a plain record or tag union, names the anonymous fields
+where the nominal has them, and suggests only fixes that hold: writing the
+nominal in the annotation that says the value is plain; for a record of a
+nominal the module may build and take apart, converting between the two with
+the nominal's record syntax; and for a nominal with anonymous fields, building
+it from the plain record's fields, which only the side holding the plain
+record can do. A nominal of another kind (`U64` meeting a record) is an
+ordinary mismatch.
 
-Binding classification records a binding whose type reaches a marked class
-(`Check.typeCopiedPerUse`). A binding that also reaches a quantified variable
-is a scheme; one that does not stays monomorphic, in
-`Check.per_use_copy_bindings`. Instantiation copies each marked class and
-every monomorphic node from which one is reachable, by the same reachability
-walk that reaches quantified variables, and gives the copy no mark; the copy
-is a new class at its use's rank. A scheme with a marked class therefore
-always walks its reachability. A monomorphic binding's copy quantifies
-nothing, so its uses record no scheme-use evidence, it carries no codec
-requirement, and post-check stages give it no dispatch scope of its own: a
-local function such as `g = |{}| Json.to_str(W.(r))` inside `|r| ...` reads
-the enclosing function's evidence for `r` exactly as if each use shared its
-type. Imported checked types are
-generalized templates whose nodes every use copies, so the mark needs no
-cross-module form; an exporting module's own lifts stay out of its exported
-types by the same rule.
+A record lifts into a nominal type only while the final extension of its
+row, followed through record segments and aliases, is an unbound flex
+variable: an uncommitted tail, or the row of a record known only from field
+uses (`get = |r| r.count` called with a `Counter`), or the empty record an
+opening of a nominal declaration's backing minted
+(`DescriptorFlags.nominal_backing_structure`), which a row reaches only by
+inference through an earlier relation to that declaration and which fixes
+only the declaration's own row. A tag union lifts only
+when no part of its row was written by an annotation or a type alias
+(`DescriptorFlags.annotation_tag_union`, which copies carry and which a
+merge keeps if either side had it) and its row ends in a flex variable that
+no annotation bounds (`DescriptorFlags.bounded_row_ext`) or in an
+uncommitted tag tail. A row ending in a committed empty record or empty tag
+union, or in a rigid, is committed, and relating it to a nominal type is a
+type mismatch. A permitted lift relates the anonymous row to the
+declaration's backing, so the tail commits or absorbs there, and an
+uncommitted tail of a record lifted into a nominal whose backing is `{}`
+commits to the empty record.
 
-A use's copy can then differ from the binding's own structure in more than
-a lift. A closed record relates to a record that lists more fields when every
-extra field is optional and omitted, which widens the closed row, so two uses
-of `make = |value| { a: value }` can relate its result to
-`{ a ?: U8, b ?: U8 }` and to `{ a ?: U8, b ?: Str }`. Monotype specializes
-`make` at each use's type. Boxy lowers one worker for the template, whose
-result record holds no slot for `b`, so it treats two closed records of one
-value with different field counts like records stored in different orders
-(`Builder.storageDifference`) and rebuilds the call's result at the use's
-type by descriptors.
+Annotations therefore mean exactly what they say: annotated plain records
+and tag unions are never used as named types. Given `Counter := { count :
+U64 }` and `Light := [Red, Green]`:
 
-Annotation instances follow the same rule. An annotation's instance of a
-type declaration is shared by later references at the same position only
-when it is ground and free of structure a use can change, by the same test;
-only such subtrees of a non-ground instance are shared with the next
-instance. Otherwise one
-definition's body, lifting its annotated result into a nominal type, would
-change every other annotation naming the same alias.
+- `make : U64 -> { count : U64 }` followed by `c : Counter = make(1)` is a
+  type mismatch: the result row is closed as written.
+- `make : U8 -> { a : U8 }` followed by `record : { a : U8, b ?: U8 } =
+  make(11)` is a type mismatch: the closed result absorbs nothing.
+- `lift : U64 -> { count : U64 }` whose body returns a `Counter` is a type
+  mismatch at the body's result.
+- `pick : U64 -> [Red, Green]` followed by `l : Light = pick(1)` is a type
+  mismatch, and so is `signals : U64 -> List([Red, Green])` used as
+  `List(Light)`, or a local `e : [Red, Green] = Red` used as a `Light`. The
+  row Polarity opens for each call still widens there
+  (`c : [Red, Green, Blue] = pick(1)`); it never lifts.
 
-The cost is one copy per use of a binding's anonymous records and of the tag
-unions a visible declaration could take in, with their field and tag runs,
-and of the nodes above them.
-The accepted and rejected sides are pinned by
-`test/cli/LiftedUseLeavesOtherUses.roc`,
-`test/cli/LiftedUseLeavesOtherUsesRejected.roc`,
-`test/cli/OptionalFieldsPerUse.roc`,
-`test/cli/issue_12482_encoder_for_in_nested_function.roc`,
-`test/cli/lifted_use_leaves_other_uses/`, and
-`src/check/test/per_use_structure_test.zig`, which pins which tag unions and
-records are copied and which are shared.
+A record nobody wrote a type for stays open after its function finishes. An
+uncommitted tail is an ordinary variable for rank, generalization, and
+instantiation: a generalization boundary quantifies every uncommitted record
+tail it owns, wherever the record sits in the binding's type (its result,
+its arguments, a callback's arguments or result, data, a nominal type's
+arguments, a function stored in data, or the type of a static-dispatch
+constraint), exactly as it quantifies any other variable it owns. These
+tails commit instead, to the empty record by ordinary unification, after
+rank adjustment and before quantifying (`Check.generalizeRank`,
+`Check.commitUncommittedTail`):
+
+- every tail of a definition a `provides` entry names, whose host compiled
+  against its closed rows (Host Symbol ABI);
+- a tail whose own constraints the empty record does not discharge;
+- a tail no binding's type reaches, through its components and the function
+  types of the constraints they carry (`Check.collectReachedVars`): a record
+  local to the body, such as a literal a weak local binding destructures,
+  which no use could close or lift, so it stays the ground record it is and
+  a constant built from it can be hoisted;
+- a tail a derived structural codec reaches, which commits before its
+  boundary generalizes (below);
+- a tail whose record the binding compared or hashed: deriving `is_eq` or
+  `to_hash` for it commits it at once (Methods On Open Rows), since the
+  binding decided those methods against the plain record. A use that then
+  makes the record a nominal type is a type mismatch whose report says the
+  function compared or hashed it as a plain record, with the fix that needs
+  no annotation first (`Tagged.{ ... }` where the record is built) and then
+  the type annotation.
+
+Rank adjustment then runs again, so structure that held only a committed
+tail is not quantified.
+
+Each use of the binding instantiates the tail into a copy
+(`DescriptorFlags.uncommitted_copy`, which later copies keep and a merge
+keeps while the class is still a flex variable), and a use may do exactly
+two things with its copy's record:
+
+1. close it: the copy commits, and the record is the plain record with
+   exactly the fields its binding built or took apart;
+2. make it a nominal type whose record has exactly those fields and is
+   stored the same way: a declaration whose backing has no unnamed field
+   (Nominal Record Field Order), so its values are laid out like the record.
+
+A use may not give the record any field, optional or defaulted, and may not
+make it a padded nominal type, one declared with unnamed fields, whose stored
+layout differs from the record's. Both are type mismatches at the use, in
+every position the record has: a result, a callback's argument, a parameter
+the binding takes apart, a record inside a method's type, a list item, or
+across a module boundary. The unifier refuses them where they arise
+(`Unifier.unifyRecordWithNominal` for a nominal, through
+`NominalDecl.Flags.padded` and the backing's optional or defaulted fields
+the record lacks; `Unifier.unifyUncommittedWithStructure` for a written-out
+structural type), records the refusal (`Scratch.record_tail_refusal`,
+`TypeMismatch.record_tail_refusal`), and the report explains it
+(`ReportBuilder.appendRecordTailRefusal`). Its hint offers the fix that
+needs no type annotation first, then the annotation: building the record
+as `Row.{ ... }` where it is built, or adding the field there; taking it
+apart with `Row.{ ... }` in the function's pattern, with a trailing `..`
+(`Wide.{ a, .. }`) when the nominal has optional or defaulted fields the
+pattern does not name, or ending a structural pattern with `..`; and the
+type annotation on the function that builds or takes the record. A required field the record lacks
+stays the ordinary mismatch it is for any record.
+
+Nothing is ever converted at a call. The value a use receives is the value
+its binding built, and the value a binding takes apart is the one the use
+passed, at the same layout, so no use rebuilds a record on its way out of a
+binding or on its way in. Rejecting the padded case is deliberate: wanting
+to make a function's open record a padded nominal type is an extremely rare
+edge case whose only benefit is slightly more concise code (`Row.{ ... }`
+in the function builds the padded value directly), and it is more globally
+beneficial for the compiler to run faster by not doing the extra work every
+such use would need. Not adding fields at a use follows the same intent: a
+use cannot change what a function it does not own built, and keeping that
+true keeps the rule identical within a module and across modules.
+
+The rule keeps a function from needing an annotation merely because its
+record is later used as a same-fields named type: deleting a type annotation
+does not change whether or how a program compiles, except where deleting it
+creates a static dispatch ambiguity. A record checked directly against a
+known type in the same function is not a use's copy: a literal annotated as
+a nominal (`row : Row = { columns: 3, values: 4 }`), or passed straight to a
+function annotated to take one, is built at that type, padded or not, with
+its optional and defaulted fields filled. `Row.{ ... }` construction is the
+same. A record literal used directly as a method receiver
+(`{ name: s }.greet()`) has no nominal type to dispatch on and is a missing
+method, as for any structural value.
+
+Given `Counter := { count : U64 }`, `Row := { columns : U64, _ : U32,
+values : U64 }`, and `Wide := { a : U8, note ?: Str }`:
+
+- `make = |n| { count: n }`: `c : Counter = make(1)` lifts its own copy,
+  `p = make(2)` keeps a plain record with no methods, and
+  `o : Other = make(3)` lifts a third copy into another same-fields nominal.
+- `apply = |f| f({ count: 1 })`: `apply(Counter.describe)` lifts the record
+  it passes; `mk = |n| |m| { a: n, b: m }` lets `reader : U64 -> T = mk(1)`
+  lift what the returned function builds; `build = |xs| xs.map(|x| { key:
+  x })` lifts the records its unknown receiver's callback builds.
+- `f = |{ x }| x` takes a `Point := { x : U8 }` or a plain record;
+  `keep = |r| if c r else { count: 0 }` returns a `Counter` for a `Counter`.
+- `r : Row = make_row(1, 2)` and `product(row)` with
+  `product = |{ columns, values }| columns * values` are type mismatches:
+  `Row` stores its values with padding the record does not have.
+- `w : Wide = make_a(1)` with `make_a = |n| { a: n }`, and
+  `x : { a : U8, note ?: Str } = make_a(1)`, are type mismatches: the record
+  was built without `note`. `Wide.{ a: n }` in `make_a`, or an annotation
+  on `make_a` whose record has `note`, builds it with that field.
+
+A use's copy that meets a literal's own tail in the same function
+(`if c make(1) else { a: 2 }`) is one class carrying the copy's restriction:
+the literal joins a record its binding did not build, so neither gains a
+field there.
+
+A value binding does not generalize (Value Bindings Generalize By
+Expression), so its uses share its one tail, as they share its tag rows
+(Value Rows: Uses Share One Row): `p = { x: 1, y: 2 }` followed by
+`q : Point = p` makes `p` a `Point` at every use, and a second use that
+needs a different nominal type is a type mismatch at that use.
+
+When a module finishes checking, and when a REPL expression does, every
+uncommitted record or tag tail that no scheme quantifies commits
+(`Check.commitUncommittedTails`, beside `Check.closeTopLevelValueRows`):
+the module's own uses have lifted its value bindings as far as they will,
+nothing outside the module can, and importers and compile-time evaluation
+read closed structure.
+
+A quantified uncommitted record tail stays in its scheme. Checked output
+records it as a flex record tail whose row default is the empty record, with
+`CheckedTypeVariable.uncommitted_record_tail` set, and copies it across
+modules with its flags, so an importer's use closes or lifts its own copy
+exactly as the defining module's uses do, and a nominal declaration's
+padding (`NominalDecl.Flags.padded`) travels with the declaration.
+`TypeWriter` renders an uncommitted record tail as a closed row: it stands
+for no field a program can read, and `make = |n| { count: n }` reads
+`a -> { count : a }`.
+
+Field reads see no difference from a closed record. A `.field` access, a
+`.?field` access, a destructure probe, and a record update relate the record
+to a row whose field is `required` or undetermined, which an uncommitted
+tail refuses, so a field the record lacks is the same mismatch it is for a
+closed row. A derived structural codec over a record with an uncommitted
+tail commits the tail closed before its boundary generalizes, wherever the
+record sits (Derived Structural Codec Record-Row Closure): the codec is a
+requirement, and a requirement never holds a quantified record tail.
+
+Post-check stages see a quantified uncommitted record tail as a scheme
+variable every instantiation of which stores its record exactly as the
+closed record does. `.lss` specializes each use at its committed row, so uses
+that commit the tail share one specialization. `.boxy` seals the tail to the
+empty record in the worker (Sealed Result Rows), and the worker's
+representation does not depend on the use. The record itself is a row node
+of the worker's signature (Methods On Open Rows): one hidden descriptor of the
+whole value as each use has it, so printing it renders the nominal type a use
+lifted it into in both lowering modes. Neither a commitment nor a lift
+changes a layout, so neither costs anything at run time.
+
+### Uncommitted Tag Tails
+
+A tag row the checker closes by inference, rather than an annotation
+closing it, ends in an *uncommitted tag tail*: an empty tag union carrying
+`DescriptorFlags.uncommitted_tag_tail`. An exhaustive match closes the
+inferred rows its patterns cover this way (`Check.closeExhaustiveVars`), a
+tag pattern with a closed row (an irrefutable destructure, an unannotated
+lambda's parameter) ends in one. A row a lift or a producer-owned single-tag
+construction closes against an opening of a nominal declaration's backing
+ends in the empty tag union that opening minted
+(`DescriptorFlags.nominal_backing_structure`), and lifts like an uncommitted
+one: the declaration fixes its own row, not the anonymous one. Derivation closings
+(`closeTagRowsForDerivation`, derived codecs and `map`) decide a derived
+plan against the exact closed row and commit it.
+
+The tail is an empty tag union, so it is closed for every purpose:
+exhaustiveness, widening, row joins, and rendering all read `[]`, and no
+relation adds a tag to it. Unification treats it as the empty tag union, and
+a merge keeps the mark unless the other side is a committed empty tag union
+(one an annotation wrote, or one committed after inference closed it); a
+flex row variable that meets it becomes it, so the restrictive side wins.
+What the mark adds is that a union ending in it may still lift into a
+nominal type whose backing fits, which a committed closed union never does,
+and that it generalizes: rank adjustment settles it at its group's rank, as
+it settles a flex variable, so a binding whose type holds it is a scheme,
+and each use's instantiation copies the union and its tail. Instantiation
+and import copying carry the mark.
+
+Unlike a record tail, a tag tail is quantified wherever instantiating the
+binding reaches it, in arguments, results, nested function types, and
+constraints alike. The common case is an argument
+(`is_ok = |r| match r { Ok(_) => Bool.True, Err(_) => Bool.False }` called
+with a `Try`), and no instantiation of a tag tail changes a layout: it can
+only commit or let its union lift, and an anonymous closed tag union and a
+nominal type over the same backing have one representation (`.boxy`'s
+`Program.storageDifference` reads a nominal through its backing, and a
+lowered nominal shares its backing's layout). A generalization boundary
+therefore quantifies every uncommitted tag tail it owns, without asking what
+reaches it: a tail in a dispatch requirement the scheme captures after it
+quantifies must be copied by each use, and quantifying one nothing reaches
+costs nothing. One that no scheme quantifies commits when the module
+finishes checking. Committing only clears the mark; the empty tag union
+stays.
+
+Post-check stages read an uncommitted tag tail as the empty tag union it
+is (`CheckedTypeStoreView.payload`); the checked read form exposes the mark
+separately (`CheckedTypeStoreView.uncommittedTagTail`), and type keys ignore
+it, so `.lss` specializes nothing for it. It is no identity variable of a
+scheme, so a worker takes no descriptor for the tail under `.boxy`; each tag
+union of its signature with a tag whose row ends in one is a row node instead
+(Methods On Open Rows), described by one hidden descriptor of the whole value
+as each use has it, so printing it renders the nominal type a use lifted it
+into in both lowering modes.
+
+The accepted and rejected sides of both tails are pinned by
+`src/check/test/uncommitted_record_tail_test.zig` (literal, `{}`, and
+pattern tails; lifts of results, callback arguments, returned functions'
+results, pattern parameters, both-sides tails, a record a static-dispatch
+constraint holds, a function stored in a list, and a nominal type's
+argument; two uses lifting into two nominal types; refusals of optional and
+defaulted fields at a result, through a nominal, and into a record a
+function takes apart; refusals of padded nominal types in both directions;
+an ordinary mismatch for a missing required field; shared value bindings;
+annotated tag unions that widen but never lift; a match-closed union
+lifting at a call and gaining no tag), `src/compile/test/sealed_slots_test.zig`
+(every record tail sealed, wherever it sits), `test/cli/OpenRecordsAtUses.roc`
+(closing and lifting through results, callbacks, `List`, `Box`, `Try`,
+tuples, returned and stored functions, a user nominal's arguments, a second
+unannotated function, unknown receivers, two nominal types and a plain
+record from one function, and a nominal whose defaulted field the record
+supplies), `test/cli/open_records_imported/` (the same across a module
+boundary, accepted and rejected), `test/cli/OpenRecordsPaddedRejected.roc`
+and `test/cli/OpenRecordsAddedFieldRejected.roc` (each refusal in every
+position, with its report), `test/cli/OpenRecordsHintFixes.roc` (every fix
+the refusal hints suggest, compiled and run),
+`test/cli/NominalPlainRowRejected.roc` and
+`test/cli/NominalPlainRowHintFixes.roc` (a nominal type meeting a committed
+plain record or tag union in each position and direction, with its report,
+and every fix its hint suggests), `test/cli/OptionalFieldsPerUse.roc` (two uses
+refused fields of different types), `test/cli/LiftedUseLeavesOtherUses.roc`
+and `test/cli/lifted_use_leaves_other_uses/` (uses that lift and keep their
+results, in one module and across modules),
+`test/cli/LiftedUseLeavesOtherUsesRejected.roc` (annotated results that do
+not lift, and a method of the lifted nominal called on another use), and
+`test/cli/UncommittedTagTailLocals.roc` (a generalized local matching a tag
+parameter and reading enclosing evidence, returned and called at an
+anonymous union and a nominal), `test/cli/printing_follows_use/` and
+`test/echo/printing_follows_use_dbg.roc` (records and match-closed tag unions
+printed with `Str.inspect`, `dbg`, and `?` inside `expect` as each use has
+them: directly, through a generic helper, inside a `List`, taken apart with
+`as`, from another module, at a use that does not lift, through a function
+whose only hidden input is a row node called directly, as a function value
+and in a compile-time constant, with a capture-free lambda inside, and with a
+nominal that has no inspect override). The CLI tests run under both lowering
+strategies and both backends.
 
 ### Scheme Relations Through Unrooted Variables
 
@@ -5836,6 +6239,12 @@ field or list item holding such a conditional stores the lambdas without a
 construction edge. Evidence for such a lambda's requirements on a variable
 checking left unquantified comes from its callable-derived dispatch scope
 (Static Dispatch In Monotype), not from a scheme.
+
+A lambda stored at a construction edge whose slot expects a function type has
+its parameters seeded from that type before its body is checked (Lambda
+Parameters Seeded From Context), as a call operand's are. Its parameters are
+then the slot's, so its scheme quantifies only what the slot leaves free; the
+construction edge still instantiates whatever it quantifies.
 
 An annotation cannot make a weak binding polymorphic. An annotation on a weak
 binding that introduces a type variable, named (`a`, `_a`) or an anonymous
@@ -6860,6 +7269,23 @@ No candidate is recorded inside an ordinary top-level constant, because that
 enclosing root already evaluates and owns the destructure site. Validation uses
 the checked pattern compiler and compile-time evaluator; it never reinterprets
 source patterns separately.
+
+Only a requested root is evaluated, so only a requested root replaces its source
+occurrence. A root that receives no request (its checked type is not concrete,
+for example) replaces nothing, and an exhaustiveness site it would have
+validated is classified as if no root had been recorded. A site that runtime
+code can reach is decided statically even when it was classified for empirical
+validation, because runtime code can arrive there with any value of its type.
+Empirical validation decides only the sites that compile-time evaluation alone
+reaches.
+
+A requested callable binding root replaces its source occurrence too: runtime
+code reads the root's completed callable instead of computing it, so the
+destructure it extracts from, and every site its expression evaluates, runs
+only during the root's evaluation. The exception is a site inside a function
+body within that expression. The callable can hold that function, and runtime
+code that calls it reaches the site with any argument, so such a site stays
+classified by its enclosing procedure template.
 
 Local binding dependencies likewise remain candidates until their enclosing
 expression is either selected or rejected. A selected maximal parent owns the
@@ -8227,6 +8653,11 @@ crashes at the rejected dispatch rather than restoring a compile-time failure
 that only a later read would surface. Nested function
 site collection walks a runtime error's `evaluated` operands like any other
 children, so a closure among them is a nested function like any other.
+Checked-artifact template reference collection
+(`CheckedTemplateRefCollector`) walks them the same way, so every value
+reference, dispatch plan, and nested-function construction among them gets
+its site evidence: a retired call's callee is evaluated, and Boxy builds a
+procedure value's dictionaries from that evidence when it lowers it.
 
 Retirement is atomic with dispatch introduction. A retired expression emits no
 constraint and no live plan; a required iterator recovery plan carries rejected
@@ -8753,7 +9184,12 @@ encoding and state types for exactly the methods needed by that shape:
 
 Selecting a derived method relates its public signature to the call before
 deciding whether the shape is supported, exactly as selecting an ordinary
-method relates that method's signature. A call on a type name such as
+method relates that method's signature. That relation belongs to the dispatch:
+a requirement whose runtime function is not the derived method's (`r.encoder_for
+: Str -> {}`, or `p.parser_for : {} -> p`) leaves both solved types as they
+are, is reported as a missing method on the receiver (as an undetermined type
+when a default decided the receiver), and retires the dispatch that owns it,
+so no erroneous type reaches lowering. A call on a type name such as
 `List.parser_for(format)` names the receiver with fresh type arguments, so the
 parser's `value` or the encoder's value argument is what determines them.
 Derivation needs every part of the receiver: a receiver that is still
@@ -10280,7 +10716,11 @@ substituted checked wrappers of `.wrappers` mode produce exactly this shape at
 every call site (a `Try` built on each arm and matched at once by the caller),
 as does the iterator-fusion clone of `.none`. A producer edge may release
 values it has finished with between building the tag and jumping; those
-releases are carried onto the redirected edge. An arm may release the union
+releases are carried onto the redirected edge. The join's body may begin with
+straight-line definitions that do not read the union, ahead of its match: an
+inlined call computes its other arguments there. They run whichever variant
+arrives, so each variant's continuation begins with its own copy of them,
+defining the same locals; nothing moves across a producer or an arm. An arm may release the union
 itself; the fused arm releases that variant's payload instead, or nothing when
 the variant owns nothing. A fused arm copies exactly the statements its
 variant rewrite changes, together with what copying them forces: their
@@ -10412,6 +10852,38 @@ body would carry the same scalar state the residual call does; a loop that
 uses its state whole keeps the aggregate in the copy too. The walk follows the record's fields through the loop variable, so a
 known tag or callable in a field still counts where a `match` or call inside
 the loop reads it.
+
+An admitted copy carries only the part of the body the known value improves.
+A gainable slot is a parameter or capture whose type holds a tag union or a
+function. A stretch of a source body is a maximal run of its top-level
+statements none of which reads a gainable slot (directly or through a local
+bound by a statement that does), binds or reads a top-level local whose type
+holds a tag union or function, or is fixed in place: a `return`, loop control
+or join jump that leaves the statement, a recursive or uninitialized binding,
+a payload-initialization construct, a crash, or a call into the function's
+own cycle of the call graph. Each stretch divides into runs, each the longest
+segment from where the previous one ended that binds exactly one local a
+later position reads (SpecConstr creates no types, so a run's function
+returns that local's type); a statement that starts no such segment stays,
+as does a run of a single wrapper-shaped statement (`wrapper_body.zig`),
+which costs less than a call. Optional productive inlines and call-pattern
+workers count as copies of their callee (iterator-protocol, wrapper and
+foreign-capture inlines do not, and functions that call or produce iterators
+are never split). The copy that leaves two copies of a body in the program
+(a second copy, or a first copy of a function the source names at two or
+more places or that is a root) splits it at that serial point: each run moves
+into a prefix function, reserved then and written like a worker in the
+source function's root context, and the source body becomes the same
+statements with a binding of the run's live-out to a call on its live-ins in
+place of each run. The run therefore runs at the same point, once, with the
+same effects in the same order, and ARC sees an ordinary call. Every later
+clone reads the split source, a prefix function is never inlined, and a
+worker or the function's own body already written from the old source is
+written again, so the program holds one copy of each run. The first copy of
+a body that only one place names is not split, since the body's own function
+is then unused; if a later copy appears after all, the split leaves the
+first copy's run as the only second copy. The split applies wherever
+SpecConstr runs with `.all_calls` clone inlining.
 
 A known argument is one the clone holds as a constructor, callable, or known
 local at the consumed path, or a nested direct call whose callee constructs
@@ -11250,6 +11722,55 @@ The accepted and rejected sides are pinned in `issue_11229_test.zig`: let-bound
 arithmetic remains polymorphic, and mixed-type user methods stay callable by name;
 nominal and extended rows still guide nested defaulted/optional construction;
 inconsistent shared type variables and unsupported real dispatches still fail.
+
+### Lambda Parameters Seeded From Context
+
+A lambda with no annotation of its own is checked knowing the parameter types
+its position expects, whenever that position supplies an expected function
+type: a call argument (the callee's formal parameter slot), a stored value in
+an aggregate (a record field, tuple or list item, or tag payload, through
+the enclosing construction's projected cell), or a record update field (the
+base row's field of that name). Before the body is checked, a skeleton function
+over the lambda's own parameter variables is related to that expected type
+(`seedLambdaParamsFromContext`). Dispatch on a parameter therefore resolves
+inside the body against the parameter's known type, and a generic method of
+that type can be called at several types, exactly as in the same lambda
+written as an annotated definition:
+
+```roc
+in_record : { seen : Store -> (List(U64), List(Str)) }
+in_record = { seen: |s| (s.read(count_cell), s.read(title_cell)) }
+```
+
+checks with `s : Store`, where checking the body first would leave `s` a
+variable that needs two `read` methods of different types.
+
+This is a policy: it accepts programs that checking the body first rejects.
+It changes no typing judgment of a well-typed program, because the expected
+type is the one the owning relation relates the lambda to anyway: a call's
+argument relation, or the aggregate's relation of the lambda's instantiated
+use to its slot. An expression-position lambda is instantiated exactly once,
+at its construction edge, so the parameters linked to the slot lose no
+polymorphism a program could use. The rule reads only explicit context:
+
+- Only a context whose type already names a type constructor (through
+  aliases) seeds anything; an unknown slot leaves the lambda as it was.
+- A projected cell is already the construction's own fresh shape copy and is
+  related directly. A record update's borrowed field is copied
+  (`copyExpectedShape`) inside the seed's commit-probe, so the base's own
+  type is never constrained by the seed.
+- The relation runs in one commit-probe. An expectation the lambda does not
+  fit (a different arity, or erroneous context) is rolled back with its copy,
+  and the owning relation reports the mismatch exactly as without the seed.
+- An annotated lambda is checked against its annotation and is not seeded.
+
+Pinned by `src/check/test/issue_13006_test.zig`. Accepted: a lambda in an
+annotated record field, tuple item, list item, tag payload, and record
+update calling a generic method at two types, and the record field form
+agreeing with the named annotated function. Rejected: a lambda with no
+expected context still needs two incompatible `read` methods on one
+parameter, and an arity mismatch against the expected function type is the
+ordinary mismatch.
 
 ### Call Arguments Relate In Order
 
@@ -12117,6 +12638,11 @@ one rule whether the value is local or top-level:
   whose tail a scheme quantified, or that carries a constraint the empty row
   does not discharge, is left alone.
 
+A value's record follows the same rule through its uncommitted tail
+(Uncommitted Record Tails): every use shares it, a use that lifts the record
+into a nominal type does so for every use, and the tail commits to the empty record when the module finishes
+checking.
+
 A use of a top-level value is therefore never a widening of the value: no
 row coercion and no `ModuleEnv` record exist for value uses. Where a
 value with a closed row flows into an annotated function's RESULT, Row
@@ -12924,6 +13450,13 @@ merely because it called a function whose type only requires a method. No
 type variable, and the record's unknown part is a row. The program
 destructures the record, which closes it, or annotates it.
 
+An uncommitted record tail (Uncommitted Record Tails) is not such a row:
+its record's fields are known, and a use can only close its own copy or make
+the record a nominal type with exactly those fields. A boundary that owns an uncommitted tail in a codec's value
+shape commits it to the empty record before generalizing, whether or not an
+interface reaches it, since a requirement never holds a quantified record
+tail.
+
 Both sides are pinned by tests: accepted—
 test/cli/JsonParseInferredRecord.roc (a parser record inferred from field uses
 closes at quiescence), the issue #10824 tests in
@@ -13048,6 +13581,16 @@ the later finalization boundary is not their creator.
 This validates in a private copy and rewrites no solved variable the program can
 reach, so it adds no Rewrite Inventory entry (Solver-Mutating Rewrites).
 
+Every parked relation is validated or rejected before the module freezes its
+codec contracts, which a debug assertion in
+`Check.freezeBoundaryCodecDerivations` pins. Module finalization drains the
+parked relations before its settled default-materialization fixpoint
+(`checkInstantiatedStaticDispatchConstraints(.settled)`), and a default that
+fixpoint materializes can ground a receiver whose derived codec relation then
+parks. That fixpoint therefore validates whatever is parked before it judges
+another round, and propagates a validated relation's error-row growth to the
+widened uses of the value that holds the row, as the drain before it does.
+
 The instance's copy of each of the template's variables is that variable
 throughout the instance's derivation (`Check.final_codec_instance_copies`). A
 format method of a type declared in the definition's body can name the
@@ -13081,72 +13624,192 @@ rows in one body, through a forwarding definition and a local alias, in stored
 records, at two state types, through an import, and as bindings nothing uses, on
 every backend under both strategies.
 
-### Derived Equality And Hashing Over Open Rows
+### Methods On Open Rows
 
-Deferred dispatch relations record both their creating binding group and their
-creating scheme root, including an explicit absence outside a scheme. A derived
-equality or hashing component inherits both identities from its parent relation.
-The checker records its scheme requirement under that root and queues its
-unification children with the same owner; draining the relation inside another
-function does not transfer ownership to that function. Registry-only
-instantiations and parked codec relations retain these identities when queued
-later. The independent parser/function expect rows in
-`src/check/test/repros_test.zig` are covered by the checker regression named
-`codec row equality - independent expect parser and function error rows`.
+A record whose row ends in a row variable (`{ id : U64, ..r }`, written in an
+annotation or inferred from field use, as in `|l| l.id`) or a tag union whose
+row ends in one (`[Red, ..t]`) is some type that has these fields or tags: the
+caller supplies the actual type, which may be a plain record or tag union or a
+nominal type over one. A method call on such a value, whether an operator's
+desugared `is_eq` or `to_hash` or any method a program names (`l.foo(r)`), is a
+requirement answered at each call by the type the caller supplied, exactly as
+for a type variable:
 
-Deriving `is_eq` or `to_hash` for a record or tag union covers every field or
-tag the type can hold, including those its extension row supplies. A concrete
-extension is checked like the declared fields and tags, so a function anywhere
-in the row rejects the derivation. An open extension is a component like any
-other generic one: the derivation gives the row variable its own `is_eq` or
-`to_hash` constraint, which generalizes into a `where` requirement. So
-`|a, b| if a == Nope { False } else { a == b }` infers
-`[Nope, ..c], [Nope, ..c] -> Bool where [c.is_eq : c, c -> Bool]`, a call that
-instantiates `c` with a function-carrying row is rejected at that call, and an
-annotation that compares an open row declares the requirement
-(`[Nope, ..a] -> Bool where [a.is_eq : a, a -> Bool]`). The constraint is what
-keeps a tail instantiated after checking inside the derivation; without it,
-lowering would meet whatever the instantiation supplies, functions included.
-The same holds for a concrete extension a value's type hides behind a
-compared literal: `b : [Nope, Yep(Box(U64))]` makes `b == Nope` compare the
-`Box` payload too, and `Box` has no `is_eq`.
+- the caller supplies a nominal type: that type's method runs; if it has no
+  such method, the call is a missing-method error;
+- the caller supplies a plain record or tag union: it has `is_eq` and
+  `to_hash` when every field or payload, the ones the row variable stands for
+  included, supports them (a function field is an error at the call), and no
+  other method, so any other method is a missing-method error at the call.
 
-Closing a row discharges these constraints, since the empty row derives both
-methods. A tail that carries only them therefore still seals to its row
-default (the checked variable records this with
-`row_default_discharges_constraints`), and it does not make a value
-polymorphic. A top-level value is computed once, at one type, so once the
-module solves, each open row in its data whose tail carries only these
-constraints is grounded to the empty row by unifying the tail with it
-(`Check.closeValueRowTailsCarryingDerivations`), as every row of a top-level
-value closes when its module finishes checking (Value Rows: Uses Share One
-Row). The module commits its permitted weak-value row defaults after the
-late annotation audit, then drains the dispatch work they create before
-freezing codec derivations or rejecting unresolved scheme requirements.
-A non-generalized tail shared through a function stored in a weak value
-must receive its default before a borrowing scheme is judged unresolved.
-These are the existing value-row commitments, not another whole-module
-finalization pass. A function's generalized tail is left open: it
-generalizes, and each instantiation supplies its row. An instantiation whose
-copy of the tail nothing pins leaves that copy to its row default too, so the
-ambiguity judgment never reports it: `make : U64 -> Set([X, Y])` built with
-`insert` gives its implicitly opened tail a `to_hash` requirement, and
-`make(0).len()` closes the call's copy rather than reporting a hash with no
-owner. The instantiator records each copy it places in a row's extension
-position (`Instantiator.constrained_row_tail_copies`), the derivation records
-the extension it constrains, and the judgment acquits a candidate in that
-position (`AmbiguityCandidate.Position`) whose constraints the empty row
-discharges. A payload in the same row has no default, so an undetermined
-payload is still reported. Displayed in an output position, such a tail is implicit openness
-like an unconstrained one.
+An operator and a named method behave identically; a plain record or tag
+union differs from a nominal type only in having `is_eq` and `to_hash` and no
+other method. Builtins may be lowered specially for speed, never with
+different observable behavior.
 
-The row variable's evidence parameter is an `erased_row_remainder`: Monotype
-flattens the row, so the remainder has no path of its own from the callable.
-Each use resolves it from the checked use record, never as callable-derived
-evidence.
+The requirement is written and displayed on the row variable, in the syntax
+every requirement uses, but it is about the whole value: in
+`same : { id : U64, ..r }, { id : U64, ..r } -> Bool where [r.is_eq : r, r ->
+Bool]` and `read_foo : { id : U64, ..r }, { id : U64, ..r } -> Bool where
+[r.foo : r, r -> Bool]`, the `r` the method's signature names is the record
+that ends in `..r`, not the fields `r` stands for. A result or argument that
+mentions the whole value names it the same way (`r.bump : r -> r`,
+`r.merge : r, List(r) -> r`). A requirement can be placed on a record or tag
+union only through its row variable: a record or tag union with no row
+variable has no way to carry one.
 
-Both sides are pinned by the `derived_eq_open_row_*` snapshots in
-`test/snapshots/is_eq/` and by `test/echo/boxy_open_union_methods.roc`.
+One row variable can end two record types that differ in a field's type:
+`both : { a : U64, ..r }, { a : Str, ..r } -> (Bool, Bool) where [r.is_eq :
+r, r -> Bool]`. A use can make each of them a different type (the first a
+`Num`, the second a `Text`), so a requirement on `r` holds for every record
+type that ends in `r` in the binding's type: each is instantiated separately
+at a use and must have the method, with `r` in the method's signature
+standing for that record type. The binding holds one requirement, and
+publishes one evidence parameter, per method and per record type ending in
+the variable, and a body's method call is related to the one stated on the
+value it is called on.
+A requirement on `ρ` therefore never depends on which of those records the
+body called the method on.
+
+A requirement is decided once, when the receiver's type is known, never
+twice and never field by field at the call site of the method:
+
+- within the binding, the receiver may become a specific type: when it is
+  related to a nominal type (passed to a function taking `Tagged`, say), the
+  requirement is that nominal's method or a missing-method error; when its row
+  closes (related to a written `{ id : U64 }`), it is the plain record's
+  derived method or a missing-method error. The order of the method call and
+  the relation in the body does not matter: the relation stays pending until
+  the receiver's type is known (`Check` deferred dispatch, which parks a
+  relation whose receiver is a record or tag union ending in a row variable).
+- when the binding generalizes with the row variable still open, the
+  requirement becomes a requirement of its scheme (Pending Dispatch
+  Requirements In Type Schemes): every use copies it onto its own instance and
+  decides it there by the same rules, and a use whose own instance is still
+  open passes it on to its own scheme.
+- a row variable an annotation names (`..r`, a rigid) carries exactly the
+  requirements its `where` clause states, as every annotated type variable
+  does: a method call needing one the annotation lacks is reported against the
+  annotation. The clause is restated, when the annotation is generated, as a
+  requirement on each record or tag union ending in `r` (Rewrite Inventory),
+  so a use reads it as it reads an inferred one.
+
+A value binding's open row closes when its module finishes checking (Value
+Rows: Uses Share One Row), which decides the requirements still pending on
+it against the plain type. An open row holding requirements that no use can
+supply a type for is decided against the plain type too: at a definition's
+generalization boundary, an open row of the definition's rank that no binding
+of the boundary reaches (the row of an argument a body passes,
+`is_red(Fn(|x| x + 1))` inside `check`), and when the module finishes, an open
+row no scheme quantified (in an `expect`). Such a row is bounded rather than
+closed (Polarity's bounded row): nothing extends it or makes its value a
+nominal type, its requirements leave it as they are decided, and it stays a
+variable that later stages close as they close every unreached row, so its
+values' types are no more concrete to checking than an unconstrained row's. A
+requirement keeps the expression it was first held with as the place its
+failure is reported: for one a use copied from a scheme, that use.
+
+An operator and an explicit method call differ in one way that comes from
+the operator, not from the method: `==` relates both operands to one type, so
+in `Leaf("a") == e` the literal takes `e`'s named type, while
+`Leaf("a").is_eq(e)` and `Leaf("a").foo(e)` relate nothing to the receiver,
+whose literal row is then decided as the plain union and rejects the named
+argument (and likewise `{ id: 1 }.is_eq(one)`).
+
+A requirement a row variable holds is a method call on the value: its
+method takes the value as its first argument. A derived `map`, `map!`, parser
+or encoder is not held: its derivation decides the row it is derived over
+exactly, closing what it reads (`closeTagRowsForDerivation`), so it is decided
+where it is; a requirement such a derivation leaves on a row variable, about
+the fields or tags the row stands for rather than the whole value, is
+published as a pathless `row_remainder` evidence parameter dispatching on the
+row variable itself. A literal's conversion
+(`from_quote : Str -> a`) is not one, and a record or tag union never
+converts from a literal, so such a relation is decided against the plain
+type at once. A row's composition can leave the value and its row variable
+the same variable (a `?` error row); its requirement is then the variable's
+own and is published as such.
+
+A derivation of `is_eq` or `to_hash` for a value whose type contains such a
+record or tag union as a component (a `List` of them, a field, a payload) asks
+that component for its own requirement in the same way, so a closed record
+holding an open one compares that component by what each call supplies.
+
+A record or tag union with no row variable is a plain record or tag union for
+method purposes: a literal a function builds, a record pattern without `..`,
+a tag union an exhaustive match or a closed tag pattern closes, and a row an
+annotation writes without `..` (its implicit Polarity opening included).
+A row variable that joins such a record makes it no less plain: in
+`keep = |l| { _ = l.id; if c l else { id: 1 } }` the parameter's field-use row
+meets the literal's uncommitted tail, the merged class is that uncommitted
+tail, and `keep`'s type has no row variable to carry a requirement, so a
+method call on it is decided at the definition and comparing or hashing it
+commits the tail. A method call on it is decided at the boundary of the definition that built
+it (before the boundary's literals take their defaults, and again once the
+boundary's own work has queued all it will, before anything generalizes),
+against the plain type, once everything in that definition, its annotation
+included, has said what the value is (a function annotated to
+return `Tagged` makes the record it builds and compares a `Tagged` first):
+`is_eq` and `to_hash` are derived, and any other method is the
+missing-method error it is for any structural value. A requirement a generic
+callee's scheme carries (`generic_foo(r, r)` with `generic_foo = |x, y|
+x.foo(y)`) is decided the same way when it lands on such a value. Deriving
+`is_eq` or `to_hash` for a record or tag union that ends in an uncommitted
+tail commits the tail (Uncommitted Record Tails, Uncommitted Tag Tails): the
+binding compared or hashed it as a plain record, so a use can no longer make
+it a nominal type, and a use that tries is a type mismatch whose report says
+so.
+
+Lowering consumes these decisions. A body's method call on an open
+receiver is an evidence-dependent dispatch: Monotype specializes it at each
+instantiation from the use's evidence, and `.boxy` passes one dictionary per
+requirement, filled with the nominal's method or the compiler-derived
+structural implementation, as for a type variable's requirement. Under
+`.boxy` each record or tag union of a worker's signature whose row ends in a
+row variable, each record whose row ends in a quantified uncommitted record
+tail, and each tag union with a tag whose row ends in a quantified
+uncommitted tag tail (Uncommitted Record Tails, Uncommitted Tag Tails) is a
+row node (`Worker.row_nodes`), described by one hidden descriptor of the
+whole value as the use has it: the nominal type a caller supplied, or the
+plain record or tag union. The last two are closed rows, so they are row nodes
+whatever the body does with them: a worker's hidden inputs stay a function of
+its checked signature alone, which importing and defining units read alike,
+and no analysis of a body decides them. A closed row node stores its values
+exactly as the plain record or tag union does: its scheme position holds the
+checked record or tag union itself, which the worker's scope converts to its
+closed type marked with the position (`Store.tailNode`, a distinct type only
+for descriptors), and an instantiation's scope converts to the use's whole
+value. A call fills it with the type at that position of
+its actual function type (Bool, primitive or builtin nominal, as
+`[False, True]` for a tag union, whose tags the body builds by position). A
+use through an exact procedure alias has one too: an alias has the type of
+its forwarded lookup, so the alias's type at the use is the procedure's
+there, whether the use is a call, a value, or a dispatch edge whose
+instantiation went through the alias (see "Procedure Aliases"). Only a use
+with no actual type there fills it with the node over the use's other
+bindings, the plain value: a dispatch edge checking instantiated no callable
+for (`EvidenceTargetInstantiation.monomorphic`), whose use is the target's
+own checked type, and a root, which its wrapper calls at the root's own
+type.
+Every descriptor the body takes of a type containing such a node reads that
+input, so the position of a field or tag (`field_index`, `tag_index`) comes
+from the whole value's closed type through its nominal wrapper, and `dyn_eq`,
+`dyn_hash` and `dyn_inspect` read the whole value's descriptor: printing a
+value of such a type (`Str.inspect`, `dbg`, `?` inside `expect`, a derived
+`to_inspect`) renders what each call supplied, a nominal's inspect override
+included, identically in both lowering modes. A closed row node's field and
+tag positions are those of its closed type, which a nominal it lifts into
+shares, so they stay immediates. The body's own types keep an open node's
+written fields and row variable, whose descriptor stays an input for types
+the body writes over the row variable alone. The nodes' scheme positions are
+hidden inputs after the worker's variables, the closed ones first; lambdas
+and generalized local functions of the worker share them. A worker whose only
+hidden inputs are closed row nodes takes a type table like any other: a root
+reaches it through its root wrapper, which supplies the plain values' static
+descriptors.
+
+Both sides are pinned by tests that do every case through an operator and
+through a method named `foo` (`test/cli/MethodsOnOpenRows*.roc`).
 
 ### Builtin Str Interpolation Part Compatibility
 
@@ -13940,15 +14603,20 @@ The kind rules:
   record annotated with a required field cannot flow where an optional
   field is expected (or vice versa)—reconstruct the record instead. Only
   an undetermined kind can become either.
-- Width absorption is OPT-IN and POLARITY-RESTRICTED. The checker marks each
-  unification relation as construction/inference or exact-width. Construction
-  relations may survive meeting a closed empty tail only when every surviving
-  field already has resolved kind `optional` or `defaulted`; omitted optional
+- Width absorption is OPT-IN and POLARITY-RESTRICTED. Only an uncommitted
+  tail absorbs (Uncommitted Record Tails): a record construction's row can
+  take in fields it omits, and a committed row, such as a record type an
+  annotation wrote, never does. The checker marks each unification relation
+  as construction/inference or exact-width. A construction relation may
+  absorb a row into an uncommitted tail that is not a use's copy only when
+  every absorbed field already has resolved kind `optional` or `defaulted`; omitted optional
   fields become missing tagged slots and omitted defaulted fields materialize
   their defaults. Calls with committed arguments, nominal construction from an
   existing value, and platform requirements use exact-width relations, so a
-  wider value cannot widen a closed parameter, nominal backing, or host ABI
-  type during instantiation. An undetermined or `required` field does NOT
+  value that is not itself a fresh construction does not widen during
+  instantiation, even while its tail is uncommitted, and a wider value meets
+  a closed parameter, nominal backing, or host ABI type only as a type
+  mismatch. An undetermined or `required` field does NOT
   absorb; accepting either would silently merge typo'd extra fields or
   arbitrary record literals. Consequence: a definition may supply an
   optional/defaulted field on one control-flow branch and omit it on another
@@ -14305,11 +14973,15 @@ field-kind axis (see Field Kinds above):
   `required`; `.?a` on a defaulted field is rejected at finalize by the same
   always-present judgment as on a required field.
 - Construction may omit the field, exactly as `optional`—via the same
-  OPT-IN width absorption: a literal row lacking the field absorbs it only
-  when the field's kind RESOLVED `defaulted` (an annotation declared it),
-  and lowering materializes the DEFAULT VALUE into the inline slot (where an
-  optional field would materialize the missing tag). Undetermined kinds
-  still never absorb.
+  OPT-IN width absorption: a construction's uncommitted tail lacking the
+  field absorbs it only when the field's kind RESOLVED `defaulted` (an
+  annotation declared it), and lowering materializes the DEFAULT VALUE into
+  the inline slot (where an optional field would materialize the missing
+  tag). Undetermined kinds still never absorb, and neither does a class
+  holding a use's copy of an uncommitted tail
+  (`DescriptorFlags.uncommitted_copy`), which absorbs no field of any kind:
+  no construction of the using scope built the values such a copy describes
+  (Uncommitted Record Tails).
 
 Kind unification treats `optional` as layout-incompatible with the two inline
 kinds and treats a default identity as construction-only information:
@@ -15103,6 +15775,12 @@ Other solved-graph mutations:
   Introduction (above). Uses the existing `unifyWith` descriptor-introduction
   mechanism for a proved concrete builtin conversion; does not mutate the
   context's type or introduce a redirect rule.
+- `seedLambdaParamsFromContext`—policy: Lambda Parameters Seeded From
+  Context (above). A probe of whether the expected context names a type
+  constructor gates an ordinary unification of a skeleton over an
+  unannotated lambda's parameters with that context, committed only when it
+  succeeds. It writes nothing outside unification and introduces no redirect
+  rule.
 
 - `rowForMerge` (record and tag-union rows)—mechanism: row-extension
   preservation during ordinary unification. Both operand equivalence classes
@@ -15120,21 +15798,62 @@ Other solved-graph mutations:
   before returning. The write is to the class itself, a frozen class included,
   since the view is of the whole class and the rollback restores it. No solved
   type, dispatch decision, or plan metadata observes it.
+- `stateRowVariableRequirementsOnTheirValues`—policy: Methods On Open Rows
+  (above). After an annotation's type is generated and before anything is
+  related to it, each `where` requirement on a row variable the annotation
+  writes as an extension is replaced, on that rigid, by one requirement per
+  record or tag union ending in it, whose signature is a copy with that value
+  where the variable was (`Store.setVarContent` on the annotation's own
+  rigid). Tests pin the accepted side (a call on the annotated value checks
+  against the clause, and each use decides it) and the rejected side (a body
+  method call the clause lacks is reported against the annotation).
+- `decideOpenRowAsPlain`—policy: Methods On Open Rows (above). At a
+  generalization boundary and when the module finishes, an open row whose
+  requirements no use can answer has them removed from its class
+  (`Store.setVarContent`) and queued on the value they are about, and the row
+  is bounded (`Store.markBoundedRowExt`), so they are decided against the plain
+  type. Tests pin the plain decision (a function payload reported at the call
+  inside a function body) and the refusal to make the value nominal.
+- `commitComparedRowTail` / `Store.markComparedPlain`—policy: Methods On Open
+  Rows (above). Comparing or hashing a record or tag union that ends in an
+  uncommitted tail, at its definition's boundary, commits the tail by
+  ordinary unification and marks the empty row it commits to, and
+  unification reads the mark only to report a later lift to a nominal type
+  with the reason. Tests pin the comparison's plain result and the reported
+  lift.
 - `markNominalBackingStructure`—mechanism: provenance on vars an opening
   of a nominal declaration backing has just minted below its root, written before any
   relation reads them. Unification consults the mark under the declared
   rule in Declared Backing Structure (above); the write itself never changes
   content or links classes.
-- `markPerUseStructure`—policy: Anonymous Structure Is Copied Per Use
-  (above). A generalization boundary marks each class it made and left
-  ungeneralized that a use can change (a record or tag union something
-  visible could lift or widen), after rank adjustment and before anything
-  instantiates the binding. The write never changes content, rank, or links classes; scheme
-  classification and scheme instantiation consult it, so each use copies the
-  class instead of sharing it. The accepted side (every use keeps its own
-  type, and a lifting use still lifts) and the rejected side (a method of the
-  lifted nominal called on another use) are pinned by the tests that section
-  names.
+- `generalizeRank` / `commitUncommittedTail`—policy: Uncommitted Record
+  Tails and Uncommitted Tag Tails (above). After rank adjustment and before
+  quantifying, a generalization boundary commits, by ordinary unification
+  with the empty record, every uncommitted record tail it owns of a
+  definition a `provides` entry names, and every one whose own constraints
+  the empty record does not discharge, and every one no root reaches
+  (`Generalizer.owned_tails`, `Check.collectReachedVars`). Finalization
+  commits a tag tail by clearing its mark (`Store.commitUncommittedTagTail`),
+  which keeps its content. The accepted side (record tails quantified
+  wherever they sit, each use closing or lifting its own copy, and a matched
+  parameter's tag tail) and the rejected side (a use's copy refusing fields
+  and padded nominal types) are pinned by the tests those sections name.
+- `commitUncommittedTails`—policy: Uncommitted Record Tails (above). When a
+  module or REPL expression finishes checking, every uncommitted record or
+  tag tail no scheme quantifies commits, beside `closeTopLevelValueRows`.
+  Pinned by the same tests, including an importer that cannot lift or widen
+  a value binding's record.
+- `closeExhaustiveVars` and closed tag patterns
+  (`markUncommittedTagTail`)—policy: Uncommitted Tag Tails (above). A row an
+  exhaustive match or a closed tag pattern closes is closed with an
+  uncommitted tag tail rather than a committed empty tag union. The accepted side (a match-closed union lifts at
+  a call) and the rejected side (it gains no tag) are pinned by the tests
+  that section names.
+- `markAnnotationTagUnion`—mechanism: provenance on a tag union an
+  annotation or type alias generated, written before any relation reads it.
+  Unification consults it under the rule in Uncommitted Record Tails (an
+  annotated tag union never lifts); the write never changes content or links
+  classes.
 - `unifyWithFresh` (`dangerousSetVarDesc`)—mechanism: fast path writing
   exactly the descriptor that unifying a root flex placeholder with fresh
   content would produce.
@@ -15168,6 +15887,18 @@ Other solved-graph mutations:
   rejection reads the explicit `CIR.Annotation.erroneous` record, which only an
   annotation that already produced a diagnostic carries, so no error-free
   program's typechecking or checked-module output changes.
+- `markErroneousNameUse` for a use of a definition whose annotation is
+  erroneous (`defReference`'s `.erroneous_annotation`; `markErroneous`)—
+  mechanism: diagnostic recovery after an already-reported error. It reads the
+  same explicit `CIR.Annotation.erroneous` record, so no error-free program's
+  typechecking or checked-module output changes.
+- `rejectRequirementsOfUnappliedCallees` (`markStaticDispatchFnRejected`)—
+  mechanism: diagnostic recovery after an already-reported error (Every
+  Rejection Is Explicit Recovery, above). It applies only to an ambiguity
+  verdict whose requirements were all copied by the callee of a call the
+  erroneous-value sweep replaced (`runtime_error_call_callees`), which an
+  error-free program never has, so no error-free program's typechecking or
+  checked-module output changes.
 - `checkMatchExpr`'s branch-pattern target—mechanism: diagnostic recovery after
   an already-reported error. An erroneous scrutinee cannot relate the branch
   patterns to each other, so they unify against a shared fresh variable instead
@@ -15655,7 +16386,9 @@ A worker's hidden inputs are, in order:
 
 - one descriptor per quantified variable of its scheme, in the scheme's
   checked `scheme_vars` order (a field kind variable's describes the field's
-  slot, Field Kinds);
+  slot, Field Kinds), then one per row node of its signature (Methods On
+  Open Rows), the closed ones first, each describing the whole value of a
+  record or tag union as the use has it;
 - one dictionary per evidence parameter of its scheme, in the checked
   `evidence_params` order the checker records;
 - one literal argument per literal requirement of its scheme, in the checked
@@ -15666,8 +16399,9 @@ input takes as one hidden argument after its explicit checked parameters
 ("Type Tables"). A generalized local function (a dispatch scope with its own
 `scheme_vars` and `evidence_params`) is a worker with its own hidden inputs in
 the same way. A nested lambda that is not generalized has no scheme of its own: the
-descriptors and dictionaries its body mentions belong to the enclosing worker
-and reach it as captures (see Function Values).
+descriptors and dictionaries its body mentions belong to the enclosing worker,
+and it reads them through the enclosing worker's table, which its own table
+refers to (see Type Tables and Function Values).
 
 Checking can give a local function a dispatch scope that quantifies nothing
 and takes no hidden argument: no variable, dictionary, or literal argument
@@ -15741,6 +16475,18 @@ A bounded flex that unification
 tied to a rigid or a closed row is not a flex, so genuine row polymorphism
 (`[A, ..r] -> [A, B, ..r]`) and every other quantified variable keep their
 hidden descriptors.
+
+An uncommitted record tail a scheme quantifies
+(`CheckedTypeVariable.uncommitted_record_tail`, Uncommitted Record Tails) is
+the record counterpart, and seals to the empty record whenever its row
+default is the empty record and closing the row discharges its constraints
+(`SealedSchemeSlots.sealRecordTails`). No other condition applies: a use may
+only close the tail or make its record a nominal type stored exactly like
+the record, so every instantiation stores whatever holds the tail as the
+sealed worker does, wherever the tail sits in the worker's interface, and no
+use converts a value crossing the worker's boundary. Sealing the tail leaves
+its record a row node of the worker's signature (Methods On Open Rows): the
+record's descriptor, not the tail's, is the hidden input.
 
 Checked-module output computes all of a template's sealed slots together. It first
 collects the bounded candidates, then traverses its current immutable checked
@@ -16130,9 +16876,22 @@ address of its type table, immutable static data. A template takes it after
 its explicit parameters. An erased worker's capture record holds it after the
 captured values, except for a generalized local procedure whose calls pass
 its own scheme's instantiation: its argument record leads with the table, and
-its function value captures none. A worker without inputs takes no table.
+its function value captures none. A worker without inputs takes no table;
+a row node is an input, so a worker whose signature has one takes a table.
 Importing and defining units derive this ABI from the worker's signature
 alone.
+
+A worker's *scope* is the descriptors of its variables, its dictionaries,
+then its literal arguments. A lambda worker's scope extends the scope of the
+worker that creates it (`WorkerKey.lambda.outer`): its variables follow its
+creator's, and the dictionaries and literal arguments of its own generalized
+scope, if it has one, lead its creator's. Its table does not repeat its
+creator's scope. Its inputs are its creator's table, when the creator has
+one, followed by only the inputs its own scope adds (`Tables.InputLayout`);
+every other worker's inputs are its scope. A lambda nested in a lambda thus
+refers to a chain of tables, each holding only what its own scope adds and
+the words its own body reads, so the tables of a nest of lambdas are linear
+in its depth however many variables the outermost scheme has.
 
 A table's words are the worker's inputs, then one word per recipe its body
 reads that the inputs determine (`postcheck/boxy/tables.zig`): the descriptor
@@ -16142,7 +16901,11 @@ literal thunk, an immortal callable capturing its entry's table; an argument
 record's descriptor; the table of each worker the body calls or packs; the
 discriminant of a tag or the label-order index of a field under a descriptor
 (`tag_index`, `field_index`), an integer word read into a `u32` local; and a
-record update's or a coercion's plan (`update_plan`, `adapt_plan`). A
+record update's or a coercion's plan (`update_plan`, `adapt_plan`); an input
+of the creator's scope (`inherited`); and the table of the worker itself or
+of a worker up its chain of creators (`scope_table`), which a function value
+of a lambda it creates, or of a local procedure an enclosing body declares,
+captures. A
 position or plan whose descriptor reads no input is static: a position is an
 immediate operand, a plan static data the body reads directly.
 The worker's needs list says what each word is, as a recipe over its inputs.
@@ -16157,9 +16920,15 @@ evaluated where the body reads it, into static data. A table is reserved,
 keyed by its worker and its input words, when a word naming it is evaluated,
 and filled once its worker's needs list exists: lowering alternates between
 lowering queued workers and filling reserved tables until neither has work.
-Evaluating a descriptor recipe substitutes the types its descriptor inputs
-describe into its type, in the override scope of those inputs and its own
-overrides. Recipes that lead back to one another (a dictionary whose
+Evaluating a descriptor recipe substitutes, for each variable its type
+mentions, the type that variable's descriptor describes, in the override
+scope of those descriptors and its own overrides. An `inherited` word is read
+from the creator's table, and from that table's creator's in turn until a
+table holds it; a table whose worker's scope is its creator's scope unchanged
+is passed over in one step, so the read costs one step per scope that adds
+inputs, not one per lambda. Evaluation is at compile time: a body never
+follows the chain at runtime, since every word it reads is a word of its own
+table. Recipes that lead back to one another (a dictionary whose
 requirements capture it, a descriptor whose override captures that
 descriptor) are evaluated together, their callables reserved before any is
 filled. Such a group is interned by its content, so the same group is the
@@ -16635,11 +17404,13 @@ and holds the capture bytes after the fixed capture offset. This is the host
 ABI representation of `Box(function)` and is unchanged by strategy.
 
 The captures of a compiler-created callable are the captured binders' values,
-followed by its worker's type table, whose inputs are the hidden descriptors
-and dictionaries of the enclosing worker ("Type Tables"). A closure created in
-a generic body thus carries the type knowledge of its creation site, and its
-worker takes no hidden argument of its own: it reads its inputs from the
-table it captured. When any capture is of variable type, the capture record
+followed by its worker's type table, whose first input is the type table of
+the enclosing worker ("Type Tables"). A closure created in a generic body
+thus carries the type knowledge of its creation site, and its worker takes
+no hidden argument of its own: it reads its inputs from the table it
+captured. A stored function value records its table's inputs as a capture
+graph, its creator's table among them, so restoring it rebuilds the chain
+(`StoredFn.ScopeLevel`). When any capture is of variable type, the capture record
 is a dynamic record whose descriptor is a word of the creating worker's type
 table (`Tables.Recipe.args_desc` over the captures' types), its first word is the capture record's
 descriptor, its second word the capture capacity of the allocation holding it
@@ -16789,6 +17560,10 @@ host allocation and free operations.
   function value uses, and codec derivations. Each worker is lowered once.
 - Every memo is a hash map keyed by checked identity (type, expression,
   template, derivation). Linear scans over program-sized tables are forbidden.
+- A worker's body converts its checked types in one environment per scope
+  (`Program.scopeEnv`), whose variables are indexed: a lambda whose scope adds
+  no variable shares its creator's, and conversions in it are remembered per
+  checked type and environment, so a nest of lambdas converts each type once.
 - Lowering is iterative under the Stack Safety rules: explicit frames and work
   stacks, no recursion over source structure.
 - The lowerer emits no conversions between representations of one type, no
@@ -19899,7 +20674,18 @@ literal chain's edge, a platform requirement the app binds to an alias, and a
 root (`Body.aliasChainInstance`; a dispatch edge's scope comes from
 `through_alias`). A platform requirement and a root record no instantiation, so
 the use's function type relates the alias's variables and the requirement's or
-root's evidence fills its scope.
+root's evidence fills its scope. Each alias of a chain has the type of its
+forwarded lookup, so the chain is walked at one function type, which is the
+final procedure's at the use: the use's own type, or for a dispatch edge the
+callable checking instantiated the alias's scheme at
+(`EvidenceTargetInstantiation.alias`). That type fills the procedure's row
+nodes (see "Methods On Open Rows"), so a function reached through an alias
+prints what each use supplies, as it does called directly. A use of a
+generalized local alias lowers the alias's forwarded lookup in the alias's
+scope as the use instantiates it, and the procedure the lookup names (or the
+next alias) is used at the alias's type at that use. A local alias whose
+binding is not generalized is bound once where it is declared, at its one
+checked type, which its uses fix.
 
 A method bound to an exact alias dispatches to the procedure the alias chain
 reaches, and the method target records the alias binding it was reached
@@ -21074,7 +21860,10 @@ statement that consumes the result, so every path through a value-position join
 arrives by an explicit jump that tag-case fusion can see as a producer. A
 `match`, `if`, initialized-payload switch, or callable dispatch whose continuation
 is that jump delivers through the consumer rather than declaring a join of its
-own. A loop's `break`s all continue at the statement after the loop, so a join
+own. The join a `match` or `if` declares for its own result is a consumer in the
+same sense while its branches are lowered, so a `match` or `if` that ends one
+of those branches jumps to it directly; a branch that is itself a branch never
+adds a join that only forwards the result outward. A loop's `break`s all continue at the statement after the loop, so a join
 declared for one `break`'s value and another `break` may enter one LIR
 statement: LIR consumers treat such a statement as a merge of every edge into
 it, not as a body entered only through one join's jumps. These forms express
@@ -22099,14 +22888,17 @@ builds its operand at this type rather than at the operand's record row. A
 padded record of no named fields is still such a record: it has storage, where
 the empty record has none.
 
-A structural record can lift into a padded nominal, and a padded nominal can
-reach a parameter written as its record row, open or closed, because a generic
-function has one body, which reads the record by the structural rule. The two
-types are one value in two memory orders, so where a value crosses between them
-it is rebuilt by the plan-driven `adapt` (Coercion Plans), whose plan moves
-each field by offset at any depth: `StorageDifference.record_order` on a
-result or a read, and the check of each explicit argument at a direct call. A
-function value converts by an adapter around it, like one a row widening reaches.
+A record literal checked at a padded nominal is built at it. A record a
+function built or takes apart with an uncommitted tail never becomes a
+padded nominal at a use (Uncommitted Record Tails), so no function's open
+record crosses between the two layouts. A padded nominal can still reach a
+parameter whose row is open, from field uses or a `..` pattern; a generic
+function has one body, but that body describes such a record as the whole
+value each call supplies (Methods On Open Rows, `Worker.row_nodes`), so it
+reads the padded nominal at the nominal's own layout through its descriptor,
+and the call's argument, result and function value all have that type. No
+value is stored in two record orders within data: `StorageDifference` holds
+that as an invariant.
 
 A specialized program specializes each use at its own types, so a call that hands
 a padded nominal to a row parameter gets an instance at that nominal, and the row
@@ -22185,7 +22977,12 @@ sharing must go through typed lifted join points or LIR join points, never
 through re-lowering a Monotype id twice. Direct lowering preserves lifted
 `join_point`/`jump` as LIR `join`/`jump`. PR 9707 removed the one known violator,
 the list-pattern desugarer, after measuring ~(items+1)^branches statement
-blowup. The match
+blowup. Producers that use a value at several positions bind it to a local
+once and read the local at each position. A structural `to_hash` of a tag union
+with two or more variants binds the incoming hasher, which holds every earlier
+component's hash, so its branches do not each carry a copy. Constant
+restoration binds a `ConstStore` node it reaches twice ("Stored Function Capture
+Contract"). The match
 compiler holds the invariant by construction: rows (branches) are never
 duplicated during specialization—a row that does not test the selected
 occurrence ends the test group instead of being copied into every arm, and the
@@ -22983,6 +23780,23 @@ from runtime descriptors. A dynamic field occupies one ownership slot;
 a concrete struct field expands into its concrete slots. An open row or an
 unknown type has no enumerated product shape and remains opaque.
 
+A dynamic tag union's payload read (`dyn.tag_payload_addr`) of a tag with
+exactly one payload, into a local whose layout can hold refcounted data, is
+marked `whole` by Boxy lowering, which knows the tag's payload count from its
+checked type. On every path that reads it, that
+payload's refcounted contents are exactly the union's, so the read is an
+ownership alias of the union, as a `copy` is: it carries the union's one
+unit, ownership demands flow through it to the union, and a dying union's
+payload moves into a consumer without a retain. A `Dict`, `Set` or other
+single-tag nominal handed to a call that mutates its payload is therefore
+moved, not shared. A payload of a tag with several payloads is a component
+borrowed from the union. The union's unit has no enumerated shape, so field
+takes and complete projections never address it through a whole payload:
+a read of a whole payload's field is a borrow (dismantling needs a container
+whose unit has the shape its reads address), and the certifier, which binds
+the payload to the union's value, describes that value by the payload's
+shape on the path that read it.
+
 An erased argument product's recorded slot boundaries are authoritative for
 both the start and width of each field read. Its non-owning prefix and scalar
 fields may occupy zero slots; their standalone layouts cannot supply widths in
@@ -23107,8 +23921,14 @@ generates constraints per statement:
   constrains the result's lifetime to the join of the lifetimes of the
   arguments it may borrow from; an owned return is a fresh owned resource.
 - `assign_call_erased`: the erased-callable ABI is a pinned all-owned
-  `RcSig`: refcounted args owned, captures owned by the callee, result owned.
-  Inference does not flow modes through erased callable values.
+  `RcSig` for refcounted args and the result. Inference does not flow modes
+  through erased callable values. The closure is borrowed by the call unless
+  its unit dies there: then emission moves that unit into the callee through
+  the ABI's reuse channel (`reuse_closure`), and the callee reads its
+  captures out of the transferred allocation (see `erased_capture_load`
+  below). A call whose result holds exactly one erased-callable slot
+  (`result_reuse`) is solved as demanding the closure's unit, because the
+  callee can repack a transferred allocation as its result.
 - dictionary calls are erased calls and follow the erased-call rule above.
   A type table argument and the descriptors and dictionaries read from it are
   pointer-sized opaque values that own nothing. Method selection is already encoded in the dictionary;
@@ -23171,6 +23991,24 @@ generates constraints per statement:
   interpreter's value model explicitly selects the borrowing variant because
   it does not model transfer of an outer allocation independently from erased
   recursive payload ownership.
+  `erased_capture_load` is the same dead-lender read
+  (`LowLevel.deadLenderArg`). An erased procedure reads its capture record
+  from the capture pointer once, at entry, and names its reuse argument as
+  the load's owner: the allocation holding the capture bytes whenever the
+  caller transferred it. The neutral load consumes the owner, emission
+  selects `erased_capture_load_borrowed` while the owner stays live (a
+  repack of the allocation as the procedure's result), and an owned
+  selection is normalized into the borrowing copy, a capture-record `incref`
+  and a reuse-argument `decref`. A transferred unique closure therefore hands
+  its captures to the body with their counts unchanged; a borrowed call
+  passes a null reuse argument, whose `decref` does nothing, and the
+  `incref` gives the captures the body's own unit. Either way the record is
+  an owned container that the body reads, takes fields out of, and hands to
+  restituting calls exactly like a finite procedure's capture parameter, so
+  a captured list the body updates is updated in place even when the body
+  reads it again on a failure path. The owner operand keeps the allocation
+  live across the read of its capture bytes, so no release of the reuse
+  argument can precede it. Post-ARC LIR contains only the borrowing load.
 - `join` / `jump`: each join parameter's resources get modes and lifetime
   relations like an intra-proc signature. `set_local` with
   `initialize_join_param` followed by `jump` is a flow edge from the
@@ -23545,9 +24383,9 @@ procedure. A Debug compiler walks anyway and asserts that it finds no deferred
 call and no procedure that may leave one.
 
 A statement hands its pending call up only when its result is returned as it
-is: nothing but reference-count statements, ARC's residual-release
-projections, and jumps into a join body separates the call from the `ret` of
-its target (`returnOf`). Those statements read no value the pending call
+is: nothing but reference-count statements, the field reads ARC emits to
+release a partly consumed aggregate, and jumps into a join body separates the
+call from the `ret` of its target (`returnOf`). Those statements read no value the pending call
 needs, since a pending call owns its closure and every argument, so the
 procedure runs them and returns with its result slot holding no value. A call
 whose result anything else reads, a conversion to another representation
@@ -24265,6 +25103,10 @@ work and must be added to the equations, not patched in emission.
 Dead `Box` lenders are the explicit exception already modeled by the
 consuming/borrowing `Box.unbox` operation pair; they do not extend a borrow
 through the mutation merely because control flow separates unbox and re-box.
+Dead closures are the same exception for captured values: an erased call
+moves a dying closure's unit into the callee, and the callee's capture load
+is the consuming/borrowing `erased_capture_load` pair, so a closure called
+once and dropped hands its captures to the body unshared.
 
 ### Field Takes From Dying Aggregates
 
@@ -25337,7 +26179,9 @@ successors read other locals leaves the value unique. A transfer edge (alias
 or join) carries the unit through to its target only when no use of the
 source's ownership place at all, read or consume, can execute after it;
 otherwise the target holds a second reference and has no unique birth of its
-own. The place is the source's liveness group, the leader and every borrowed
+own, and the source (the root of its view chain) holds the first one, so the
+source's uniqueness is destroyed as well: a later read through the place, such
+as a field take, must not hand on a unit that the target shares. The place is the source's liveness group, the leader and every borrowed
 local anchored on it, which is the place emission keeps alive: a borrowed
 view of the source read after the edge needs the source's allocation, so
 emission retains the transferred value. A store into an aggregate and a
@@ -25744,8 +26588,20 @@ place only when uniqueness permits) or decrefs it. This remains true for a
 runtime tag variant that does not contain a callable. A shared allocation takes
 the fresh allocation path and decrefs the transferred reference; uniqueness
 affects only whether allocation can be avoided, never the ownership contract.
-Capture bytes needed to construct the result are snapshotted before an in-place
-overwrite.
+The procedure's one read of the capture bytes is an `erased_capture_load` at
+entry that names the reuse argument as its owner ("Constraints Per Statement
+Form"), so a repack or release of the transferred allocation follows it.
+
+ARC, not lowering, decides each call's transfer: an erased call transfers its
+closure's unit exactly when that unit dies at the call (the callee consumes
+it: the dying closure's captures reach the body unshared, and a single-slot
+result can repack the allocation), and otherwise borrows the closure and
+passes null, with no refcount statement. Lowering records the call's
+ownership source on every erased call and marks a call whose result holds
+exactly one erased-callable slot (`result_reuse`), which ARC solves as
+demanding the closure's unit. A deferred `.lss` call keeps a retained
+closure reference for whoever drives it and never transfers; a deferred
+`.boxy` call transfers when the closure dies there.
 
 The packed arguments are one fixed-arity struct whose fields remain in source
 parameter order and use each runtime representation's natural alignment. The
@@ -25770,8 +26626,8 @@ preserve and remap the marker. Debug LIR certification verifies that every
 erased-callable proc's hidden capture and reuse arguments, the reuse argument's
 layout, and the ownership marker remain structurally consistent.
 
-An owned erased call records both the callable local used to load the function
-and capture pointers and the local whose ownership unit is transferred. Those
+Every erased call records both the callable local used to load the function
+and capture pointers and the local whose ownership unit a transfer moves. Those
 locals must denote the same erased-callable allocation. The ownership local may
 be an outer nominal or zero-discriminant tag wrapper only when the emitted
 `assign_ref` chain proves exact pointer representation at every edge. Debug LIR
@@ -25786,16 +26642,17 @@ LIR lowerer records each emitted `assign_ref` target's provenance from it, and
 the resolution in `lir/erased_owner.zig` follows it. A LIR transform that
 rewrites the definitions on such a chain, as join scalarization does when it
 turns field reads into aliases, re-resolves the reuse sources of the procedures
-it changes with that resolution. Boxy lowering marks an erased call owned
-(`DynOp.call_erased.reuse_closure`, with the closure as its reuse source,
-resolved to the allocation's root after lowering) when the call's result type
-holds exactly one erased-callable slot (`types.Converter.erasedResultSlots`:
-a function type is a slot, a record's or tuple's slots add up, a tag union's
-are its largest variant's, a list of callables holds any number, a box holds
-its payload's, a nominal its backing's, and a type variable holds none). ARC
-moves the closure's unit into the call when the closure dies there and
-retains one for it otherwise; a deferred owned call's pending record carries
-the unit to the driver (Deferred Erased Calls).
+it changes with that resolution. Both lowerings record the closure as every
+erased call's reuse source, resolved to the allocation's root after lowering,
+and mark `result_reuse` when the call's result type holds exactly one
+erased-callable slot (`.boxy`: `types.Converter.erasedResultSlots`: a function
+type is a slot, a record's or tuple's slots add up, a tag union's are its
+largest variant's, a list of callables holds any number, a box holds its
+payload's, a nominal its backing's, and a type variable holds none). ARC sets
+`reuse_closure` when the closure dies at the call; a deferred `.boxy`
+transferring call's pending record carries the unit to the driver (Deferred
+Erased Calls). Every erased-ABI procedure, codec workers included, declares
+its reuse argument, so every transferred unit is consumed.
 
 A `.boxy` dynamic closure's capture record carries its allocation's capture
 capacity (Function Values), so the same-size class rule above widens for
@@ -26327,6 +27184,52 @@ accepted callback drains before any owner state is touched, as for native
 procedure code. Without an executor every body is generated inline on a
 persistent sequential lane through the same callback, so `--jobs=1` and a
 multi-worker build emit the same bytes.
+
+### Wasm Inline List And String Lowerings
+
+The Wasm backend emits some list and string low-levels as inline code instead
+of a builtin call. Every inline lowering has exactly the outcomes of the
+builtin that every other backend calls, case by case: the same result value,
+the same allocations, and the same reference count and item releases. An
+inline lowering is a faster spelling of the builtin, never a different
+operation.
+
+Every value an inline lowering produces keeps the list representation the
+builtins rely on. A list that is not a seamless slice owns an allocation
+exactly when its capacity is nonzero, and the empty list with no capacity is
+`{null, 0, 0}`. A zero-length result that owns nothing is therefore that empty
+list, never a pointer to a refcount word with no item storage: a
+capacity-zero list is one the builtins' `RocList.decref` never frees, so such
+an allocation would leak the first time a builtin consumed it.
+
+`str_to_utf8` is inline, with `strToBytes`'s outcomes: an empty string, small
+or heap, gives the empty list; a non-empty small string's bytes are copied
+into an allocation of exactly their length; a non-empty heap string's bytes
+are shared, the list retaining the string's allocation and taking its
+capacity word.
+
+`list_sublist_borrowed` is inline, with `listSublistBorrowed`'s outcomes: an
+empty window gives the empty list, and any other window is a seamless slice
+that records the source's item count for teardown while the source is
+exclusive. `list_sublist` is inline when its items are not refcounted, with
+`listSublist`'s outcomes. The list is reusable when it is not a seamless
+slice and is exclusive: its argument is proven unique (`unique_args`), it has
+no allocation, or its refcount is one. An empty window keeps a reusable
+list's allocation and capacity at length zero and otherwise releases the list
+and gives the empty list; a window from index zero of a reusable list shrinks
+it in place; any other window is a seamless slice that takes over the list's
+reference. With refcounted items, `list_sublist` calls `listSublist`, which
+also releases the items a reusable list drops; the call is cheap next to the
+per-item releases it may make. The split is by whether the list layout marks
+its items refcounted, never by anything the lowering guesses. Zero-sized
+items have no bytes to slice, so their sublist is the window length alone.
+`list_take_first` and `list_take_last`, which a list rest pattern lowers to,
+are `list_sublist` over the first `count` items and over the items from
+`len -| count`, as every backend computes those windows for `listSublist`,
+and the Wasm backend lowers them exactly as it lowers `list_sublist`.
+`list_release_excess_capacity` is not inline: it calls
+`listReleaseExcessCapacity`, since the allocation and copy it may make cost
+far more than the call.
 
 ## Wasm Function Limits
 
@@ -27329,10 +28232,45 @@ into the program kind it was not built for.
 Materialization records an active `(module, ConstNodeId, representation)` before
 descending into that node. The first exact graph back-edge reserves and uses a
 local; once the node is complete, Monotype lowering emits the ordinary
-recursive binding that owns it. Acyclic nodes allocate no such local. Completed
-nodes are memoized in the materialization context. This is graph
-materialization, not recovery of a discarded source binding: the checked module
-data already contains every value edge needed by the operation.
+recursive binding that owns it. Acyclic nodes allocate no such local. This is
+graph materialization, not recovery of a discarded source binding: the checked
+module data already contains every value edge needed by the operation.
+
+A `ConstStore` value is a DAG, and its restore keeps it one without breaking
+the Monotype sharing invariant. Each restore owns a binding scope that
+memoizes the nodes it completed, keyed by `(module, ConstNodeId,
+representation, static-data constant)`. A restore nested in another one in the
+same owner joins the enclosing scope: a restored function's captures and a
+stored codec's encoding are lexically inside the value restoring them, so a
+node they share is built once. A static-data candidate's runtime value restores
+in a scope of its own, since its initializer can be emitted as a procedure of
+its own. A restore in another owner opens its own scope, so no restored
+expression is read outside its owner.
+
+- The first read of a completed node uses its expression in place. Nothing is
+  bound, so a tree-shaped constant restores with no extra locals or lets.
+- A second read of a composite node (a tag with payloads, record, tuple, list of
+  nodes, box, nominal, or function value) promotes it. Its expression moves to
+  a new row bound to a fresh local, and the original row, which its first
+  parent holds, becomes a read of that local. Each later read is a fresh read
+  of the local. Static-data candidates and parts reached again in one restore
+  are promoted the same way.
+- A leaf (scalar, string, empty or packed list, zero-sized value, crash) is
+  never bound. Each read restores its own literal, which costs nothing where
+  a shared local would cost a reference count.
+- The let of a promoted node goes around the restore's result, outermost first
+  in node completion order, so each let follows the lets its value reads. A
+  node that reads the recursive binding of an enclosing node still under
+  construction (directly, or through a node it shares) is let-bound around
+  that enclosing node's expression instead, inside its recursive binding. Its
+  memo entry is dropped when that node completes, so it is never read outside
+  that binding's scope.
+- A node reached at a different representation (sealed or graph, or an unequal
+  sealed type) is restored again.
+
+A restored value has no control flow and its constructors and captures are
+strict, so binding a shared node at the restore's root evaluates nothing the
+value would not already build.
 
 Materializing a cached const does not synthesize a wrapper that calls an
 already-packed runtime function value. It builds an ordinary Monotype callable
@@ -29284,7 +30222,8 @@ per-procedure and per-statement paths test a pointer that is null. Detailed
 timing never changes what the compiler emits, takes part in no cache key,
 and orders nothing.
 
-Compile-time evaluation reports its steps (writing value-form roots, root
+Compile-time evaluation reports its steps (writing value-form roots, and
+within that creating the schema program and reading each root's schema, root
 graph, root classification, waiting for builds, program builds, lowering,
 procedure code generation, entry wrappers, import image selection, host
 splice, static data placement, program runs, root job setup, unit keys, the

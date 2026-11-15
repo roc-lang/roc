@@ -9898,7 +9898,7 @@ fn boxyListOp(op: base.LowLevel) ?BoxyListOp {
         .list_take_first => .take_first,
         .list_take_last => .take_last,
         .list_reverse => .reverse,
-        .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_append, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetched, .list_prefetch, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_map_prepare_reuse, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .box_unbox_borrowed, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => null,
+        .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_append, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetched, .list_prefetch, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_map_prepare_reuse, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .box_unbox_borrowed, .box_prepare_update, .erased_capture_load, .erased_capture_load_borrowed, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => null,
     };
 }
 
@@ -9947,7 +9947,7 @@ fn generateDynElemLowLevel(self: *Self, assign: anytype) Allocator.Error!void {
             try self.emitMemCopy(to, 0, source, roc_list_size);
             return self.finishTarget(dst, t);
         },
-        .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_append, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_capacity, .list_get_unsafe, .list_prefetched, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_move_out_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .box_unbox_borrowed, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
+        .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_append, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_capacity, .list_get_unsafe, .list_prefetched, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_move_out_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .box_unbox_borrowed, .box_prepare_update, .erased_capture_load, .erased_capture_load_borrowed, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
     }
     const list_op = boxyListOp(assign.op) orelse wasmInvariantFmt(
         "WASM/codegen invariant violated: low-level {s} has no element-descriptor form",
@@ -11232,12 +11232,6 @@ fn emitListLenLocal(self: *Self, list_local: u32) Allocator.Error!u32 {
     return len_local;
 }
 
-/// Push `@min(a, b)` for the unsigned i32 locals `a` and `b`.
-fn emitU32Min(self: *Self, a: u32, b: u32) Allocator.Error!void {
-    try self.emitLocalGets(.{ a, b, a, b });
-    try self.emitOps(.{ Op.i32_lt_u, Op.select });
-}
-
 fn generateList(self: *Self, l: anytype) Allocator.Error!void {
     const ls = self.getLayoutStore();
     const elems = self.store.getLocalSpan(l.elems);
@@ -12077,103 +12071,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.generateLLListSwap(args, ll.ret_layout, ll.unique_args);
         },
 
-        .list_take_first => {
-            // list_take_first(list, count) -> list
-            // Same as list but with length = min(count, len)
+        // The first or last `count` items, with `listSublist`'s outcomes
+        // over that window (`generateListSublist`).
+        .list_take_first, .list_take_last => {
             const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-
-            try self.emitProcLocalAsI32(GuardedList.at(args, 1));
-            const count_local = try self.emitSetNewLocal(.i32);
-
-            // Zero-width elements have no bytes to keep, so taking a prefix
-            // only shortens the length of an unallocated list.
-            {
-                const take_abi = self.builtinInternalListAbi("wasm.list_take_first.builtin_list_abi", ll.ret_layout);
-                if (take_abi.elem_size == 0) {
-                    const len_local = try self.emitListLenLocal(list_local);
-                    try self.emitU32Min(count_local, len_local);
-                    try self.emitZstListFromStackLen();
-                    return;
-                }
-            }
-
-            const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
-            const result_local = try self.emitFpOffsetToNewLocal(result_offset);
-
-            // Same elements_ptr
-            try self.emitLocalGet(result_local);
-            try self.emitLoadAt(list_local, .i32, list_bytes_offset);
-            try self.emitStoreOp(.i32, list_bytes_offset);
-
-            // new_len = min(count, old_len) using select
-            // Stack: count, old_len, count <= old_len
-            try self.emitLocalGets(.{ result_local, count_local });
-            try self.emitLoadAt(list_local, .i32, list_len_offset);
-            try self.emitLocalGet(count_local);
-            try self.emitLoadAt(list_local, .i32, list_len_offset);
-            try self.emitOps(.{ Op.i32_le_u, Op.select });
-            try self.emitStoreOp(.i32, list_len_offset);
-
-            // Same capacity
-            try self.emitLocalGet(result_local);
-            try self.emitLoadAt(list_local, .i32, list_capacity_offset);
-            try self.emitStoreOp(.i32, list_capacity_offset);
-
-            try self.emitLocalGet(result_local);
-        },
-        .list_take_last => {
-            // list_take_last(list, count) -> list
-            // elements_ptr += (len - min(count, len)) * elem_size
-            // length = min(count, len)
-            const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-
-            try self.emitProcLocalAsI32(GuardedList.at(args, 1));
-            const count_local = try self.emitSetNewLocal(.i32);
-
-            // Load length
-            try self.emitLoadAt(list_local, .i32, list_len_offset);
-            const len_local = try self.emitSetNewLocal(.i32);
-
-            // actual_count = min(count, len)
-            try self.emitLocalGets(.{ count_local, len_local, count_local, len_local });
-            try self.emitOps(.{ Op.i32_le_u, Op.select });
-            const actual_count = try self.emitSetNewLocal(.i32);
-
-            const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
-            const result_local = try self.emitFpOffsetToNewLocal(result_offset);
-
-            const list_abi = self.builtinInternalListAbi("wasm.list_take_last.builtin_list_abi", ll.ret_layout);
-            const elem_size = list_abi.elem_size;
-
-            // Zero-width elements have no bytes to keep, so taking a suffix
-            // only shortens the length of an unallocated list.
-            if (elem_size == 0) {
-                try self.emitU32Min(count_local, len_local);
-                try self.emitZstListFromStackLen();
-                return;
-            }
-
-            // new_ptr = old_ptr + (len - actual_count) * elem_size
-            try self.emitLocalGet(result_local);
-            try self.emitLoadAt(list_local, .i32, list_bytes_offset);
-            try self.emitLocalGets(.{ len_local, actual_count });
-            self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-            try self.emitI32Const(@intCast(elem_size));
-            try self.emitOps(.{ Op.i32_mul, Op.i32_add });
-            try self.emitStoreOp(.i32, list_bytes_offset);
-
-            // new_len = actual_count
-            try self.emitLocalGets(.{ result_local, actual_count });
-            try self.emitStoreOp(.i32, list_len_offset);
-
-            // Encode seamless-slice cap from the source allocation pointer.
-            const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitPrepareListSliceMetadata(list_local, list_abi.elements_refcounted, encoded_cap);
-
-            try self.emitLocalGets(.{ result_local, encoded_cap });
-            try self.emitStoreOp(.i32, list_capacity_offset);
-
-            try self.emitLocalGet(result_local);
+            const count = try self.emitU64ArgToNewLocal(GuardedList.at(args, 1));
+            const window: ListSublistWindow = if (ll.op == .list_take_first) .{ .first = count } else .{ .last = count };
+            try self.generateListSublist(.{ .owned = .{ .unique_args = ll.unique_args } }, list_local, window, ll.ret_layout);
         },
 
         .list_append_unsafe => {
@@ -12249,7 +12153,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // list_release_excess_capacity(list) -> list with capacity = length
         .list_release_excess_capacity => {
-            try self.generateLLListReleaseExcessCapacity(args, ll.ret_layout);
+            try self.generateLLListReleaseExcessCapacity(args, ll.ret_layout, ll.unique_args);
         },
         // list_sublist(list, {len: U64, start: U64}) -> list
         .list_sublist, .list_sublist_borrowed => {
@@ -12288,13 +12192,16 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 }
             }
 
-            // Generate list arg (pointer to {data_ptr, len, capacity})
             const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-
-            // Generate record arg (pointer to the config record)
             const rec_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
-
-            try self.generateListSublistLocals(list_local, rec_local, len_field_off, start_field_off, ll.ret_layout);
+            const window: ListSublistWindow = .{ .record = .{ .rec_local = rec_local, .len_field_off = len_field_off, .start_field_off = start_field_off } };
+            if (ll.op == .list_sublist) {
+                try self.generateListSublist(.{ .owned = .{ .unique_args = ll.unique_args } }, list_local, window, ll.ret_layout);
+            } else {
+                // The enclosing prong admits only the two sublist ops.
+                std.debug.assert(ll.op == .list_sublist_borrowed);
+                try self.generateListSublist(.borrowed, list_local, window, ll.ret_layout);
+            }
         },
         // list_clear(list) -> the zero-length sublist from index zero, the
         // list emptied in place when uniquely owned.
@@ -12310,31 +12217,19 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitZstListKeeping(list_local, zero_len);
                 return;
             }
-            if (self.external_calls == .builtin_relocs and clear_abi.elem_size != 0) {
-                const fields = try self.loadRocListFields(list_local);
-                const callbacks = try self.listElementCallbacks(clear_abi);
-                const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
-                try self.emitFpOffset(result_offset);
-                try self.emitRocListFields(fields);
-                try self.emitI32Const(@intCast(clear_abi.elem_align));
-                try self.emitI32Const(@intCast(clear_abi.elem_size));
-                try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
-                try self.emitI32Const(updateModeImmForArg(ll.unique_args, 0));
-                try self.emitBuiltinCall(.list_clear);
-                try self.emitFpOffset(result_offset);
-                return;
-            }
-            // A { start, len } record of two zero words on the stack.
-            const rec_off = try self.allocStackMemory(16, 8);
-            try self.emitFpOffset(rec_off);
-            try self.emitI64Const(0);
-            try self.emitStoreOp(.i64, 0);
-            try self.emitFpOffset(rec_off);
-            try self.emitI64Const(0);
-            try self.emitStoreOp(.i64, 8);
-            const rec_local = try self.emitFpOffsetToNewLocal(rec_off);
-            try self.generateListSublistLocals(list_local, rec_local, 0, 8, ll.ret_layout);
+            self.requireBuiltinCalls("list_clear");
+            const fields = try self.loadRocListFields(list_local);
+            const callbacks = try self.listElementCallbacks(clear_abi);
+            const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
+            try self.emitFpOffset(result_offset);
+            try self.emitRocListFields(fields);
+            try self.emitI32Const(@intCast(clear_abi.elem_align));
+            try self.emitI32Const(@intCast(clear_abi.elem_size));
+            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
+            try self.emitI32Const(updateModeImmForArg(ll.unique_args, 0));
+            try self.emitBuiltinCall(.list_clear);
+            try self.emitFpOffset(result_offset);
         },
 
         .str_count_utf8_bytes => {
@@ -12966,7 +12861,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 }
             }
         },
-        .erased_capture_load => {
+        .erased_capture_load => unreachable, // ARC normalizes a consuming capture load into the borrowed load plus explicit RC statements
+        .erased_capture_load_borrowed => {
             const capture_ptr_expr = GuardedList.at(args, 0);
             const result_size = try self.layoutStorageByteSize(ll.ret_layout);
             const result_vt = try self.resolveValType(ll.ret_layout);
@@ -14801,92 +14697,84 @@ fn emitStrSubstringUnsafe(self: *Self, args: anytype) Allocator.Error!void {
     try self.emitLocalGet(result_ptr);
 }
 
-/// Generate str_to_utf8: convert RocStr to RocList(U8).
-/// SSO strings have their bytes copied to heap memory.
-/// Non-SSO strings are converted field-by-field because RocStr stores encoded
-/// capacity before length, while RocList stores length before encoded capacity.
+/// Generate str_to_utf8: convert RocStr to RocList(U8), with the outcomes of
+/// the `strToBytes` builtin. An empty string, small or heap, converts to the
+/// empty list `{null, 0, 0}`, which owns no allocation. A non-empty small
+/// string's bytes are copied into a fresh allocation of exactly its length. A
+/// non-empty heap string's bytes are shared: the list retains the string's
+/// allocation and takes its capacity word, which encodes a seamless slice the
+/// same way for both types. The fields are copied one by one because RocStr
+/// stores its encoded capacity before its length and RocList stores them the
+/// other way around.
 fn emitStrToUtf8(self: *Self, str_arg: ProcLocalId) Allocator.Error!void {
-    // Generate the string expression (produces i32 pointer to a RocStr)
     const str_ptr = try self.emitProcLocalToNewLocal(str_arg, .i32);
 
-    // Allocate result memory for the RocList(U8)
     const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     const result_ptr = try self.emitFpOffsetToNewLocal(result_offset);
+    try self.emitZeroInit(result_ptr, roc_list_size);
 
-    // Read the flag byte to check SSO flag
     try self.emitLocalGet(str_ptr);
     try self.emitMemOp(Op.i32_load8_u, 0, str_flag_byte_offset);
     const last_byte = try self.emitSetNewLocal(.i32);
 
-    // Check SSO flag: last_byte & small-string flag
     try self.emitLocalGet(last_byte);
     try self.emitI32Const(small_str_flag);
     self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+    const is_small = try self.emitSetNewLocal(.i32);
 
-    // if (is_sso)
+    // len = is_small ? last_byte & length mask : the length field.
+    try self.emitLocalGet(last_byte);
+    try self.emitI32Const(small_str_len_mask);
+    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+    try self.emitLoadAt(str_ptr, .i32, str_len_offset);
+    try self.emitLocalGet(is_small);
+    self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
+    const len = try self.emitSetNewLocal(.i32);
+
+    // An empty string leaves the zeroed empty list in place.
+    try self.emitLocalGet(len);
     try self.emitVoidIf();
     {
-        // SSO case: extract len = last_byte & length mask
-        try self.emitLocalGet(last_byte);
-        try self.emitI32Const(small_str_len_mask);
-        self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-        const sso_len = try self.emitSetNewLocal(.i32);
+        try self.emitLocalGet(is_small);
+        try self.emitVoidIf();
+        {
+            try self.emitHeapAllocWithRefcount(len, 1, false);
+            const heap_ptr = try self.emitSetNewLocal(.i32);
 
-        // Allocate sso_len bytes on heap via roc_alloc
-        try self.emitHeapAllocWithRefcount(sso_len, 1, false);
-        const heap_ptr = try self.emitSetNewLocal(.i32);
+            const zero = try self.emitI32ConstToNewLocal(0);
+            try self.emitMemCopyLoop(heap_ptr, zero, str_ptr, len);
 
-        // Copy SSO bytes from str_ptr to heap: memcpy(heap_ptr+0, str_ptr, sso_len)
-        const zero = try self.emitI32ConstToNewLocal(0);
-        try self.emitMemCopyLoop(heap_ptr, zero, str_ptr, sso_len);
+            try self.emitLocalGets(.{ result_ptr, heap_ptr });
+            try self.emitStoreOp(.i32, list_bytes_offset);
+            try self.emitLocalGets(.{ result_ptr, len });
+            try self.emitStoreOp(.i32, list_len_offset);
+            try self.emitLocalGets(.{ result_ptr, len });
+            try self.emitI32Const(capacity_shift);
+            self.currentCode().append(self.allocator, Op.i32_shl) catch return error.OutOfMemory;
+            try self.emitStoreOp(.i32, list_capacity_offset);
+        }
+        self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+        {
+            // A seamless string slice's data pointer points inside its
+            // allocation, so the allocation pointer is decoded before the
+            // shared backing is retained.
+            const alloc_ptr, const decoded_small = try self.allocAnonymousLocals(.i32, 2);
+            try self.emitDecodeStrAllocPtr(str_ptr, alloc_ptr, decoded_small);
+            try self.emitDataPtrIncref(alloc_ptr, 1);
 
-        // Write RocList {heap_ptr, sso_len, sso_len << capacity_shift} to result_ptr
-        // ptr
-        try self.emitLocalGets(.{ result_ptr, heap_ptr });
-        try self.emitStoreOp(.i32, list_bytes_offset);
-        // len
-        try self.emitLocalGets(.{ result_ptr, sso_len });
-        try self.emitStoreOp(.i32, list_len_offset);
-        // cap
-        try self.emitLocalGets(.{ result_ptr, sso_len });
-        try self.emitI32Const(capacity_shift);
-        self.currentCode().append(self.allocator, Op.i32_shl) catch return error.OutOfMemory;
-        try self.emitStoreOp(.i32, list_capacity_offset);
+            try self.emitLocalGet(result_ptr);
+            try self.emitLoadAt(str_ptr, .i32, str_bytes_offset);
+            try self.emitStoreOp(.i32, list_bytes_offset);
+            try self.emitLocalGets(.{ result_ptr, len });
+            try self.emitStoreOp(.i32, list_len_offset);
+            try self.emitLocalGet(result_ptr);
+            try self.emitLoadAt(str_ptr, .i32, str_capacity_offset);
+            try self.emitStoreOp(.i32, list_capacity_offset);
+        }
+        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     }
-    // else (non-SSO)
-    self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-    {
-        const str_data, const str_len, const str_cap = try self.allocAnonymousLocals(.i32, 3);
-
-        try self.emitLoadAt(str_ptr, .i32, str_bytes_offset);
-        try self.emitLocalSet(str_data);
-
-        try self.emitLoadAt(str_ptr, .i32, str_len_offset);
-        try self.emitLocalSet(str_len);
-
-        try self.emitLoadAt(str_ptr, .i32, str_capacity_offset);
-        try self.emitLocalSet(str_cap);
-
-        // Non-SSO Str.to_utf8 returns a List(U8) that aliases the string bytes.
-        // A seamless string slice's data pointer points inside its allocation,
-        // so decode the allocation pointer before retaining the shared backing.
-        const alloc_ptr, const is_small = try self.allocAnonymousLocals(.i32, 2);
-        try self.emitDecodeStrAllocPtr(str_ptr, alloc_ptr, is_small);
-        try self.emitDataPtrIncref(alloc_ptr, 1);
-
-        try self.emitLocalGets(.{ result_ptr, str_data });
-        try self.emitStoreOp(.i32, list_bytes_offset);
-
-        try self.emitLocalGets(.{ result_ptr, str_len });
-        try self.emitStoreOp(.i32, list_len_offset);
-
-        try self.emitLocalGets(.{ result_ptr, str_cap });
-        try self.emitStoreOp(.i32, list_capacity_offset);
-    }
-    // end if
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 
-    // Leave result pointer on stack
     try self.emitLocalGet(result_ptr);
 }
 
@@ -18207,105 +18095,253 @@ fn emitU64ClampedToU32Bound(self: *Self, value: u32, bound: u32) Allocator.Error
     return self.emitSetNewLocal(.i32);
 }
 
-/// Compute the same bounded window for allocated and zero-width lists.
-fn emitListSublistWindow(self: *Self, list_local: u32, rec_local: u32, len_field_off: u32, start_field_off: u32) Allocator.Error!struct { start: u32, len: u32 } {
+/// Compute the same bounded window for allocated and zero-width lists from
+/// the requested U64 start and length in i64 locals, as the builtins bound
+/// it: the start at most the list's length, the length at most what follows.
+fn emitListSublistWindow(self: *Self, list_local: u32, requested: ListSublistRequest) Allocator.Error!struct { start: u32, len: u32 } {
     const size = try self.emitListLenLocal(list_local);
-    const requested_start = try self.emitLoadAtToNewLocal(rec_local, .i64, start_field_off);
-    const start = try self.emitU64ClampedToU32Bound(requested_start, size);
+    const start = try self.emitU64ClampedToU32Bound(requested.start, size);
     try self.emitLocalGets(.{ size, start });
     try self.emitOps(.{Op.i32_sub});
     const remaining = try self.emitSetNewLocal(.i32);
-    const requested_len = try self.emitLoadAtToNewLocal(rec_local, .i64, len_field_off);
-    const len = try self.emitU64ClampedToU32Bound(requested_len, remaining);
+    const len = try self.emitU64ClampedToU32Bound(requested.len, remaining);
     return .{ .start = start, .len = len };
 }
 
-/// Emit a sublist of the list in wasm local `list_local` over the `{ start,
-/// len }` record at the address in `rec_local`, whose fields sit at the given
-/// offsets.
-fn generateListSublistLocals(self: *Self, list_local: u32, rec_local: u32, len_field_off: u32, start_field_off: u32, ret_layout: layout.Idx) Allocator.Error!void {
-    const list_abi = self.builtinInternalListAbi("wasm.list_sublist.builtin_list_abi", ret_layout);
+/// Where a sublist's window comes from.
+const ListSublistWindow = union(enum) {
+    /// A `{ len, start }` record (`list_sublist`, `list_sublist_borrowed`):
+    /// its address in a wasm local and the offsets of its two U64 fields.
+    record: struct { rec_local: u32, len_field_off: u32, start_field_off: u32 },
+    /// The first `count` items (`list_take_first`), the U64 count in an i64
+    /// local.
+    first: u32,
+    /// The last `count` items (`list_take_last`), the U64 count in an i64
+    /// local: the window from `len -| count`.
+    last: u32,
+};
 
-    // Zero-width elements have no bytes to slice, so the result is the
-    // window length alone: min(len, size -| start).
+/// A sublist's requested U64 start and length, in i64 locals, before they
+/// are bounded by the list's length; the `listSublist` builtin takes them so.
+const ListSublistRequest = struct { start: u32, len: u32 };
+
+fn emitListSublistRequest(self: *Self, list_local: u32, window: ListSublistWindow) Allocator.Error!ListSublistRequest {
+    switch (window) {
+        .record => |record| return .{
+            .start = try self.emitLoadAtToNewLocal(record.rec_local, .i64, record.start_field_off),
+            .len = try self.emitLoadAtToNewLocal(record.rec_local, .i64, record.len_field_off),
+        },
+        .first => |count| {
+            try self.emitI64Const(0);
+            return .{ .start = try self.emitSetNewLocal(.i64), .len = count };
+        },
+        .last => |count| {
+            // start = size >= count ? size - count : 0
+            try self.emitLoadAt(list_local, .i32, list_len_offset);
+            self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+            const size = try self.emitSetNewLocal(.i64);
+            try self.emitLocalGets(.{ size, count });
+            try self.emitOps(.{Op.i64_sub});
+            try self.emitI64Const(0);
+            try self.emitLocalGets(.{ size, count });
+            try self.emitOps(.{ Op.i64_ge_u, Op.select });
+            return .{ .start = try self.emitSetNewLocal(.i64), .len = count };
+        },
+    }
+}
+
+/// Which sublist low-level is being lowered. An owned sublist consumes its
+/// list (`list_sublist`), and `unique_args` is the statement's proven-unique
+/// argument mask; a borrowed sublist is a view of a list that stays live
+/// (`list_sublist_borrowed`).
+const ListSublistMode = union(enum) {
+    owned: struct { unique_args: u64 },
+    borrowed,
+};
+
+/// Emit a sublist of the list in wasm local `list_local` over the window
+/// `window_source` names, with exactly the outcomes of the `listSublist` builtin (owned) or
+/// the `listSublistBorrowed` builtin (borrowed), and push the result's
+/// address.
+///
+/// Zero-width elements have no bytes to slice, so the result is the window
+/// length alone. An owned sublist of refcounted elements calls `listSublist`,
+/// which releases the elements it drops. Every other sublist is inline:
+///
+/// - borrowed: an empty window gives the empty list; any other window is a
+///   seamless slice of the source, which records the source's element count
+///   for teardown while the source is exclusive (`emitPrepareListSliceMetadata`);
+/// - owned: the list is reusable when it is not a slice and is exclusive (its
+///   argument is proven unique, it has no allocation, or its refcount is
+///   one). An empty window keeps a reusable list's allocation and capacity at
+///   length zero, and otherwise releases the list and gives the empty list.
+///   A window from index zero of a reusable list shrinks it in place. Any
+///   other window is a seamless slice that takes over the list's reference.
+fn generateListSublist(self: *Self, mode: ListSublistMode, list_local: u32, window_source: ListSublistWindow, ret_layout: layout.Idx) Allocator.Error!void {
+    const list_abi = self.builtinInternalListAbi("wasm.list_sublist.builtin_list_abi", ret_layout);
+    const requested = try self.emitListSublistRequest(list_local, window_source);
+
     if (list_abi.elem_size == 0) {
-        const window = try self.emitListSublistWindow(list_local, rec_local, len_field_off, start_field_off);
+        const window = try self.emitListSublistWindow(list_local, requested);
         try self.emitLocalGet(window.len);
         try self.emitZstListFromStackLen();
         return;
     }
 
-    const window = try self.emitListSublistWindow(list_local, rec_local, len_field_off, start_field_off);
-    const actual_start = window.start;
-    const actual_len = window.len;
+    if (mode == .owned and list_abi.elements_refcounted) {
+        self.requireBuiltinCalls("list_sublist");
+        const fields = try self.loadRocListFields(list_local);
+        const callbacks = try self.listElementCallbacks(list_abi);
+        const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
+        try self.emitFpOffset(result_offset);
+        try self.emitRocListFields(fields);
+        try self.emitI32Const(@intCast(list_abi.elem_align));
+        try self.emitI32Const(@intCast(list_abi.elem_size));
+        try self.emitLocalGets(.{ requested.start, requested.len });
+        try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+        try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
+        try self.emitI32Const(updateModeImmForArg(mode.owned.unique_args, 0));
+        try self.emitBuiltinCall(.list_sublist);
+        try self.emitFpOffset(result_offset);
+        return;
+    }
 
-    // Allocate result RocList
+    const window = try self.emitListSublistWindow(list_local, requested);
+
     const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     const result_local = try self.emitFpOffsetToNewLocal(result_offset);
+    try self.emitZeroInit(result_local, roc_list_size);
 
-    const elem_size = list_abi.elem_size;
+    switch (mode) {
+        .borrowed => {
+            // An empty window leaves the zeroed empty list in place.
+            try self.emitLocalGet(window.len);
+            try self.emitVoidIf();
+            try self.emitListSliceInto(result_local, list_local, window.start, window.len, list_abi);
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+        },
+        .owned => |owned| {
+            const alloc_ptr, const is_slice = try self.allocAnonymousLocals(.i32, 2);
+            try self.emitDecodeListAllocPtr(list_local, alloc_ptr, is_slice);
 
-    // new_ptr = old_ptr + actual_start * elem_size
-    try self.emitLocalGet(result_local);
-    try self.emitLoadAt(list_local, .i32, list_bytes_offset);
-    try self.emitLocalGet(actual_start);
-    try self.emitI32Const(@intCast(elem_size));
-    try self.emitOps(.{ Op.i32_mul, Op.i32_add });
-    try self.emitStoreOp(.i32, list_bytes_offset);
+            // reuse = !is_slice and (proven unique or no allocation or refcount one)
+            const reuse = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitSetI32Local(reuse, 0);
+            try self.emitLocalGet(is_slice);
+            self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+            try self.emitVoidIf();
+            if ((owned.unique_args & 1) != 0) {
+                try self.emitSetI32Local(reuse, 1);
+            } else {
+                try self.emitLocalGet(alloc_ptr);
+                self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, @backingInt(ValType.i32)) catch return error.OutOfMemory;
+                try self.emitI32Const(1);
+                self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+                try self.emitPtrWithOffset(alloc_ptr, refcount_offset);
+                try self.emitLoadOp(.i32, 0);
+                try self.emitI32Const(1);
+                self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+                try self.emitLocalSet(reuse);
+            }
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 
-    // new_len = actual_len
-    try self.emitLocalGets(.{ result_local, actual_len });
-    try self.emitStoreOp(.i32, list_len_offset);
+            try self.emitLocalGet(window.len);
+            self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+            try self.emitVoidIf();
+            {
+                try self.emitLocalGet(reuse);
+                try self.emitVoidIf();
+                try self.emitListKeptPrefixInto(result_local, list_local, window.len);
+                self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+                // The released list's result is the zeroed empty list.
+                try self.emitDataPtrDecref(alloc_ptr, list_abi.elem_align, false);
+                self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+            }
+            self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+            {
+                // start == 0 and reuse
+                try self.emitLocalGet(window.start);
+                self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+                try self.emitLocalGet(reuse);
+                self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+                try self.emitVoidIf();
+                try self.emitListKeptPrefixInto(result_local, list_local, window.len);
+                self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+                try self.emitListSliceInto(result_local, list_local, window.start, window.len, list_abi);
+                self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+            }
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+        },
+    }
 
-    // Encode seamless-slice cap from the source allocation pointer.
-    const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitPrepareListSliceMetadata(list_local, list_abi.elements_refcounted, encoded_cap);
-
-    try self.emitLocalGets(.{ result_local, encoded_cap });
-    try self.emitStoreOp(.i32, list_capacity_offset);
-
-    // Push result pointer
     try self.emitLocalGet(result_local);
 }
 
-/// Generate list_release_excess_capacity: shrink list to exact length
-fn generateLLListReleaseExcessCapacity(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+/// Store into `result_local` the list in `list_local` cut to its first
+/// `len_local` items, keeping its allocation and capacity word.
+fn emitListKeptPrefixInto(self: *Self, result_local: u32, list_local: u32, len_local: u32) Allocator.Error!void {
+    try self.emitLocalGet(result_local);
+    try self.emitLoadAt(list_local, .i32, list_bytes_offset);
+    try self.emitStoreOp(.i32, list_bytes_offset);
+    try self.emitLocalGets(.{ result_local, len_local });
+    try self.emitStoreOp(.i32, list_len_offset);
+    try self.emitLocalGet(result_local);
+    try self.emitLoadAt(list_local, .i32, list_capacity_offset);
+    try self.emitStoreOp(.i32, list_capacity_offset);
+}
+
+/// Store into `result_local` the seamless slice of the list in `list_local`
+/// holding `len_local` items from index `start_local`, which takes over the
+/// list's reference.
+fn emitListSliceInto(self: *Self, result_local: u32, list_local: u32, start_local: u32, len_local: u32, list_abi: BuiltinListAbi) Allocator.Error!void {
+    try self.emitLocalGet(result_local);
+    try self.emitLoadAt(list_local, .i32, list_bytes_offset);
+    try self.emitLocalGet(start_local);
+    try self.emitI32Const(@intCast(list_abi.elem_size));
+    try self.emitOps(.{ Op.i32_mul, Op.i32_add });
+    try self.emitStoreOp(.i32, list_bytes_offset);
+
+    try self.emitLocalGets(.{ result_local, len_local });
+    try self.emitStoreOp(.i32, list_len_offset);
+
+    const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitPrepareListSliceMetadata(list_local, list_abi.elements_refcounted, encoded_cap);
+    try self.emitLocalGets(.{ result_local, encoded_cap });
+    try self.emitStoreOp(.i32, list_capacity_offset);
+}
+
+/// Generate list_release_excess_capacity, which consumes the list: the
+/// `listReleaseExcessCapacity` builtin keeps a unique list whose capacity is
+/// its length, gives the empty list for an empty one, and otherwise copies
+/// the items into an allocation of exactly their count and releases the
+/// list.
+fn generateLLListReleaseExcessCapacity(self: *Self, args: anytype, ret_layout: layout.Idx, unique_args: u64) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListReleaseExcessCapacity.builtin_list_abi", ret_layout);
-    const elem_size = list_abi.elem_size;
 
     // A zero-width list holds no allocation, so releasing its excess only
     // brings its capacity down to its length.
-    if (elem_size == 0) {
+    if (list_abi.elem_size == 0) {
         const zst_list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
         try self.emitZstListWithLen(try self.emitListLenLocal(zst_list_ptr));
         return;
     }
 
-    const elem_align = list_abi.elem_align;
-
-    // Generate list arg
     const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-
-    // Load list fields
-    const old_data = try self.emitLoadAtToNewLocal(list_ptr, .i32, list_bytes_offset);
-
-    const old_len = try self.emitLoadAtToNewLocal(list_ptr, .i32, list_len_offset);
-
-    // Allocate new_len * elem_size bytes
-    const total_size = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(old_len);
-    try self.emitI32Const(@intCast(elem_size));
-    self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-    try self.emitLocalSet(total_size);
-
-    try self.emitHeapAllocWithRefcount(total_size, elem_align, list_abi.elements_refcounted);
-    const new_data = try self.emitSetNewLocal(.i32);
-
-    // Copy old data
-    const zero5 = try self.emitI32ConstToNewLocal(0);
-    try self.emitMemCopyLoop(new_data, zero5, old_data, total_size);
-
-    try self.buildRocListWithCap(new_data, old_len, old_len);
+    self.requireBuiltinCalls("list_release_excess_capacity");
+    const fields = try self.loadRocListFields(list_ptr);
+    const callbacks = try self.listElementCallbacks(list_abi);
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
+    try self.emitFpOffset(result_offset);
+    try self.emitRocListFields(fields);
+    try self.emitI32Const(@intCast(list_abi.elem_align));
+    try self.emitI32Const(@intCast(list_abi.elem_size));
+    try self.emitListElementCallbackArgs(callbacks);
+    try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+    try self.emitBuiltinCall(.list_release_excess_capacity);
+    try self.emitFpOffset(result_offset);
 }
 
 const ListElementPairLayout = struct {
@@ -19452,6 +19488,261 @@ test "issue 12198: wasm list windows preserve unsigned U64 extremes" {
     try expectListWindowLength(.zst, std.math.maxInt(u64), 0, 3, .drop_at);
 }
 
+/// The source list of an inline sublist fixture: a four-item list that is
+/// exclusive, shared by a second reference, an exclusive seamless slice of
+/// its last three items, or the empty list.
+const SublistSource = enum { unique, shared, unique_slice, empty };
+
+/// What a sublist did, in terms both a native builtin call and a wasm
+/// fixture can report: the result's shape, where its items start in the
+/// source allocation, its length, whether it keeps the source's capacity
+/// word, and the source allocation's refcount and recorded element count
+/// afterwards (null once the allocation is freed).
+const SublistOutcome = struct {
+    kind: enum { empty_list, same_list, slice },
+    offset: usize,
+    len: usize,
+    keeps_capacity: bool,
+    refcount: ?i64,
+    element_count: ?usize,
+};
+
+const SublistCase = struct {
+    source: SublistSource,
+    start: u64,
+    len: u64,
+    borrowed: bool,
+    proven_unique: bool = false,
+    /// `list_take_first` / `list_take_last` of `len` items, which ignore
+    /// `start`, rather than a `list_sublist` over `{ len, start }`.
+    take: enum { none, first, last } = .none,
+};
+
+const sublist_source_len = 4;
+
+/// The outcome of the `listSublist` / `listSublistBorrowed` builtin on a
+/// native list built the way `case` describes.
+fn nativeSublistOutcome(case: SublistCase, element_width: usize, elements_refcounted: bool) SublistOutcome {
+    const list_mod = builtins.list;
+    var env = builtins.utils.TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const ops = env.getOps();
+    const alignment: u32 = 4;
+    const whole = list_mod.RocList.list_allocate(alignment, sublist_source_len, element_width, elements_refcounted, ops);
+    const alloc = whole.bytes.?;
+    const words: [*]isize = @ptrCast(@alignCast(alloc));
+    if (elements_refcounted) (words - 2)[0] = 0;
+    const source: list_mod.RocList = switch (case.source) {
+        .unique => whole,
+        .shared => blk: {
+            (words - 1)[0] = 2;
+            break :blk whole;
+        },
+        .unique_slice => .{
+            .bytes = alloc + element_width,
+            .length = sublist_source_len - 1,
+            .capacity_or_alloc_ptr = list_mod.RocList.encodeSliceAllocationPtr(alloc),
+        },
+        .empty => list_mod.RocList.empty(),
+    };
+    const mode: builtins.utils.UpdateMode = if (case.proven_unique) .InPlace else .Immutable;
+    // The take ops are `listSublist` over the window every backend computes.
+    const size: u64 = source.len();
+    const start: u64 = switch (case.take) {
+        .none => case.start,
+        .first => 0,
+        .last => if (size >= case.len) size - case.len else 0,
+    };
+    const result = if (case.borrowed)
+        list_mod.listSublistBorrowed(source, element_width, start, case.len, elements_refcounted, ops)
+    else
+        list_mod.listSublist(source, alignment, element_width, elements_refcounted, start, case.len, null, &list_mod.rcNone, mode, ops);
+
+    const freed = env.getAllocationCount() == 0;
+    const kind: @FieldType(SublistOutcome, "kind") = if (result.bytes == null and result.length == 0 and result.capacity_or_alloc_ptr == 0)
+        .empty_list
+    else if (result.isSeamlessSlice())
+        .slice
+    else
+        .same_list;
+    return .{
+        .kind = kind,
+        .offset = if (kind == .empty_list) 0 else (@intFromPtr(result.bytes.?) - @intFromPtr(alloc)) / element_width,
+        .len = result.length,
+        .keeps_capacity = kind == .same_list and result.capacity_or_alloc_ptr == whole.capacity_or_alloc_ptr,
+        .refcount = if (freed or case.source == .empty) null else (words - 1)[0],
+        .element_count = if (freed or case.source == .empty or !elements_refcounted) null else @intCast((words - 2)[0]),
+    };
+}
+
+const SublistHost = struct {
+    deallocs: u32 = 0,
+
+    fn dealloc(ctx: ?*anyopaque, _: *@import("bytebox").ModuleInstance, _: [*]const @import("bytebox").Val, _: [*]@import("bytebox").Val) error{}!void {
+        const self: *SublistHost = @ptrCast(@alignCast(ctx));
+        self.deallocs += 1;
+    }
+
+    fn unexpected(_: ?*anyopaque, _: *@import("bytebox").ModuleInstance, _: [*]const @import("bytebox").Val, _: [*]@import("bytebox").Val) error{}!void {
+        @panic("an inline sublist called a runtime function other than roc_dealloc");
+    }
+};
+
+/// The outcome of the inline wasm sublist on the same source, for a list of
+/// `element` items.
+fn wasmSublistOutcome(case: SublistCase, element: layout.Idx) (ListWindowLengthError || HostedSymbolError)!SublistOutcome {
+    const bytebox = @import("bytebox");
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+    const list_layout = try layouts.insertList(element);
+    const list_arg = try store.addLocal(.{ .layout_idx = list_layout });
+
+    var codegen = Self.init(allocator, &store, &layouts, .default);
+    defer codegen.deinit();
+    try codegen.registerHostedSymbolTargets(&.{});
+    const abi = codegen.builtinInternalListAbi("test.sublist", list_layout);
+    const signature = try codegen.module.addFuncType(&.{ .i32, .i32 }, &.{.i32});
+    const function = try codegen.module.addDefinedFunction(signature);
+    try codegen.beginFunction(function.local);
+    const scope = codegen.storage.beginScope();
+    defer codegen.storage.endScope(scope);
+    const list_local = try codegen.storage.allocLocal(list_arg, .i32);
+    const record_local = try codegen.storage.allocAnonymousLocal(.i32);
+    codegen.fp_local = try codegen.storage.allocAnonymousLocal(.i32);
+    try codegen.emitI32Const(4096);
+    try codegen.emitLocalSet(codegen.fp_local);
+    const window: ListSublistWindow = switch (case.take) {
+        .none => .{ .record = .{ .rec_local = record_local, .len_field_off = 0, .start_field_off = 8 } },
+        .first => .{ .first = try codegen.emitLoadAtToNewLocal(record_local, .i64, 0) },
+        .last => .{ .last = try codegen.emitLoadAtToNewLocal(record_local, .i64, 0) },
+    };
+    const mode: ListSublistMode = if (case.borrowed) .borrowed else .{ .owned = .{ .unique_args = @intFromBool(case.proven_unique) } };
+    try codegen.generateListSublist(mode, list_local, window, list_layout);
+    try codegen.emitOps(.{Op.end});
+    try codegen.encodeLocalsDecl(&codegen.currentBody().preamble, 2);
+    codegen.endFunction();
+    try codegen.flushPendingBodies();
+    try codegen.module.addExport("sublist", .func, function.function.raw());
+    try codegen.module.finalizeMemoryAndTableWithConfig(.{ .stack_bytes = 65536, .export_memory = true });
+    try codegen.module.materializeFuncBodies();
+    const bytes = try codegen.module.encode(allocator);
+    defer allocator.free(bytes);
+
+    var host: SublistHost = .{};
+    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    defer arena_impl.deinit();
+    var definition = try bytebox.createModuleDefinition(arena_impl.allocator(), .{});
+    defer definition.destroy();
+    try definition.decode(bytes);
+    var instance = try bytebox.createModuleInstance(.Stack, definition, allocator);
+    defer instance.destroy();
+    var env_imports = try bytebox.ModuleImportPackage.init("env", null, &host, allocator);
+    defer env_imports.deinit();
+    const two_i32 = [_]bytebox.ValType{ .I32, .I32 };
+    try env_imports.addHostFunction(builtins.shim_symbols.roc_alloc, &two_i32, &[_]bytebox.ValType{.I32}, SublistHost.unexpected, &host);
+    try env_imports.addHostFunction(builtins.shim_symbols.roc_dealloc, &two_i32, &[_]bytebox.ValType{}, SublistHost.dealloc, &host);
+    try env_imports.addHostFunction(builtins.shim_symbols.roc_dbg, &two_i32, &[_]bytebox.ValType{}, SublistHost.unexpected, &host);
+    try env_imports.addHostFunction(builtins.shim_symbols.roc_expect_failed, &two_i32, &[_]bytebox.ValType{}, SublistHost.unexpected, &host);
+    try env_imports.addHostFunction(builtins.shim_symbols.roc_crashed, &two_i32, &[_]bytebox.ValType{}, SublistHost.unexpected, &host);
+    const imports = [_]bytebox.ModuleImportPackage{env_imports};
+    try instance.instantiate(.{ .stack_size = 65536, .imports = &imports });
+
+    const memory = instance.store.getMemory(0).buffer();
+    const width: u32 = abi.elem_size;
+    const alloc: u32 = 1024;
+    const rc_at: u32 = @intCast(@as(i64, alloc) + refcount_offset);
+    const count_at: u32 = @intCast(@as(i64, alloc) + alloc_elem_count_offset);
+    const whole_cap: u32 = @as(u32, sublist_source_len) << capacity_shift;
+    std.mem.writeInt(i32, memory[rc_at..][0..4], if (case.source == .shared) 2 else 1, .little);
+    std.mem.writeInt(u32, memory[count_at..][0..4], 0, .little);
+    const list_at: u32 = 256;
+    const fields: [3]u32 = switch (case.source) {
+        .unique, .shared => .{ alloc, sublist_source_len, whole_cap },
+        .unique_slice => .{ alloc + width, sublist_source_len - 1, alloc | @as(u32, @intCast(seamless_slice_tag)) },
+        .empty => .{ 0, 0, 0 },
+    };
+    std.mem.writeInt(u32, memory[list_at + list_bytes_offset ..][0..4], fields[0], .little);
+    std.mem.writeInt(u32, memory[list_at + list_len_offset ..][0..4], fields[1], .little);
+    std.mem.writeInt(u32, memory[list_at + list_capacity_offset ..][0..4], fields[2], .little);
+    std.mem.writeInt(u64, memory[512..520], case.len, .little);
+    std.mem.writeInt(u64, memory[520..528], case.start, .little);
+
+    const handle = try instance.getFunctionHandle("sublist");
+    var params = [_]bytebox.Val{ .{ .I32 = list_at }, .{ .I32 = 512 } };
+    var returns = [_]bytebox.Val{.{ .I32 = 0 }};
+    try instance.invoke(handle, &params, &returns, .{});
+
+    const result_at: u32 = @bitCast(returns[0].I32);
+    const result_bytes = std.mem.readInt(u32, memory[result_at + list_bytes_offset ..][0..4], .little);
+    const result_len = std.mem.readInt(u32, memory[result_at + list_len_offset ..][0..4], .little);
+    const result_cap = std.mem.readInt(u32, memory[result_at + list_capacity_offset ..][0..4], .little);
+    const freed = host.deallocs != 0;
+    const kind: @FieldType(SublistOutcome, "kind") = if (result_bytes == 0 and result_len == 0 and result_cap == 0)
+        .empty_list
+    else if (result_cap & @as(u32, @intCast(seamless_slice_tag)) != 0)
+        .slice
+    else
+        .same_list;
+    return .{
+        .kind = kind,
+        .offset = if (kind == .empty_list) 0 else (result_bytes - alloc) / width,
+        .len = result_len,
+        .keeps_capacity = kind == .same_list and result_cap == whole_cap,
+        .refcount = if (freed or case.source == .empty) null else std.mem.readInt(i32, memory[rc_at..][0..4], .little),
+        .element_count = if (freed or case.source == .empty or !abi.elements_refcounted) null else std.mem.readInt(u32, memory[count_at..][0..4], .little),
+    };
+}
+
+fn expectSublistMatchesBuiltin(case: SublistCase, element: layout.Idx, native_width: usize, elements_refcounted: bool) (ListWindowLengthError || HostedSymbolError || error{TestExpectedEqual})!void {
+    const expected = nativeSublistOutcome(case, native_width, elements_refcounted);
+    const actual = try wasmSublistOutcome(case, element);
+    std.testing.expectEqualDeep(expected, actual) catch |err| {
+        std.debug.print("sublist case {any}\n", .{case});
+        return err;
+    };
+}
+
+// Regression for https://github.com/roc-lang/roc/issues/13020: every inline
+// sublist has the builtin's outcome, including releasing a list it empties
+// and shrinking an exclusive list in place.
+test "issue 13020: inline wasm sublists of non-refcounted items match the builtins" {
+    for ([_]SublistSource{ .unique, .shared, .unique_slice, .empty }) |source| {
+        for ([_]bool{ false, true }) |borrowed| {
+            // empty window, window from zero, window from inside, window past the end
+            for ([_][2]u64{ .{ 0, 0 }, .{ 2, 0 }, .{ 0, 2 }, .{ 0, 9 }, .{ 1, 2 }, .{ 9, 1 } }) |window| {
+                try expectSublistMatchesBuiltin(.{ .source = source, .start = window[0], .len = window[1], .borrowed = borrowed }, .u8, 1, false);
+            }
+        }
+    }
+    // A proven-unique argument skips the refcount check.
+    for ([_]SublistSource{ .unique, .unique_slice, .empty }) |source| {
+        for ([_][2]u64{ .{ 0, 0 }, .{ 0, 2 }, .{ 1, 2 } }) |window| {
+            try expectSublistMatchesBuiltin(.{ .source = source, .start = window[0], .len = window[1], .borrowed = false, .proven_unique = true }, .u8, 1, false);
+        }
+    }
+}
+
+test "issue 13020: inline wasm take_first and take_last of non-refcounted items match the builtin" {
+    for ([_]SublistSource{ .unique, .shared, .unique_slice, .empty }) |source| {
+        for ([_]u64{ 0, 1, 2, 4, 9, 1 << 40 }) |count| {
+            for ([_]@FieldType(SublistCase, "take"){ .first, .last }) |take| {
+                try expectSublistMatchesBuiltin(.{ .source = source, .start = 0, .len = count, .borrowed = false, .take = take }, .u8, 1, false);
+            }
+        }
+    }
+}
+
+test "issue 13020: inline wasm borrowed sublists of refcounted items match the builtin" {
+    for ([_]SublistSource{ .unique, .shared, .unique_slice, .empty }) |source| {
+        for ([_][2]u64{ .{ 0, 0 }, .{ 0, 2 }, .{ 1, 2 }, .{ 9, 1 } }) |window| {
+            try expectSublistMatchesBuiltin(.{ .source = source, .start = window[0], .len = window[1], .borrowed = true }, .str, 12, true);
+        }
+    }
+}
+
 /// Every way building, running and checking a list window fixture can fail.
 const ListWindowLengthError = Allocator.Error ||
     WasmModule.EncodeError ||
@@ -19493,7 +19784,9 @@ fn expectListWindowLength(element: layout.Idx, start: u64, len: u64, expected: i
     try codegen.emitI32Const(4096);
     try codegen.emitLocalSet(codegen.fp_local);
     switch (operation) {
-        .sublist => try codegen.generateListSublistLocals(list_local, record_local, 0, 8, list_layout),
+        // The window is the same for both sublist modes; the borrowed one needs
+        // no runtime functions.
+        .sublist => try codegen.generateListSublist(.borrowed, list_local, .{ .record = .{ .rec_local = record_local, .len_field_off = 0, .start_field_off = 8 } }, list_layout),
         .drop_at => {
             const index_arg = try store.addLocal(.{ .layout_idx = .u64 });
             const index_local = try codegen.storage.allocLocal(index_arg, .i64);

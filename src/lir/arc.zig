@@ -1757,6 +1757,8 @@ const ArcPlanStep = struct {
     transfer_mask: u64 = 0,
     transfer_positions: PlanSpan = .{},
     transfer_single: bool = false,
+    /// An erased call moves its closure's unit into the callee.
+    transfer_closure: bool = false,
     reuse_unique: bool = false,
     skip_result_retain: bool = false,
     unique_args: u64 = 0,
@@ -1793,6 +1795,7 @@ const ArcPlanStep = struct {
         self.transfer_mask = 0;
         self.transfer_positions.len = 0;
         self.transfer_single = false;
+        self.transfer_closure = false;
         self.reuse_unique = false;
         self.skip_result_retain = false;
         self.unique_args = 0;
@@ -2499,9 +2502,6 @@ const Inserter = struct {
             .assign_call_erased => |assign_stmt| blk_assign: {
                 const assign = self.store.stmtRow(assign_stmt.data);
                 break :blk_assign blk: {
-                    if (!step.replaces_frame and !assign.reuse_closure) {
-                        next = try self.releaseLocalIfRc(assign.closure, .{ .stmt = at, .reason = .closure_after_call }, next);
-                    }
                     if (step.replaces_frame) self.deferred_erased_call = true;
                     break :blk try self.store.addCFStmt(.{ .assign_call_erased = .{
                         .target = assign_stmt.target,
@@ -2509,8 +2509,9 @@ const Inserter = struct {
                             .closure = assign.closure,
                             .args = assign.args,
                             .arg_plan = assign.arg_plan,
-                            .reuse_closure = assign.reuse_closure,
+                            .reuse_closure = step.transfer_closure,
                             .reuse_source = assign.reuse_source,
+                            .result_reuse = assign.result_reuse,
                             .deferred = step.replaces_frame,
                         }),
                         .next = next,
@@ -2549,16 +2550,17 @@ const Inserter = struct {
                     next = try self.retainMaskedArgs(assign.args, rc_effect.retain_args & ~step.transfer_mask, .{ .stmt = at, .reason = .low_level_arg_effect }, next);
                 }
                 if (rc_effect.retain_result and !step.skip_result_retain) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .low_level_result_effect }, next);
-                if (op == .box_unbox) {
+                if (op.deadLenderArg()) |lender_position| {
                     // Normalize ownership transfer into operations whose RC
-                    // meaning is already explicit in LIR. The payload retain
-                    // and outer release cancel on a unique box; on a shared
-                    // box they create the result's independent child units.
+                    // meaning is already explicit in LIR. The result retain
+                    // and lender release cancel on a unique lender; on a
+                    // shared lender they create the result's independent
+                    // child units.
                     const args = self.store.getLocalSpan(assign.args);
-                    const boxed = GuardedList.at(args, 0);
-                    next = try self.releaseLocalIfRc(boxed, .{ .stmt = at, .reason = .consumed_box }, next);
-                    next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .box_unbox_normalize }, next);
-                    op = .box_unbox_borrowed;
+                    const lender = GuardedList.at(args, lender_position);
+                    next = try self.releaseLocalIfRc(lender, .{ .stmt = at, .reason = .consumed_lender }, next);
+                    next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .dead_lender_normalize }, next);
+                    op = op.arcBorrowedResultVariant().?;
                     rc_effect = op.rcEffect();
                     rc_effect_row = null;
                 }
@@ -2596,13 +2598,14 @@ const Inserter = struct {
             },
             .dyn => |dyn_stmt| blk: {
                 const op = self.store.stmtRow(dyn_stmt.data);
-                if (step.replaces_frame) {
-                    self.deferred_erased_call = true;
-                    var deferred = op;
-                    deferred.call_erased.deferred = true;
+                if (op == .call_erased) {
+                    if (step.replaces_frame) self.deferred_erased_call = true;
+                    var call = op;
+                    call.call_erased.reuse_closure = step.transfer_closure;
+                    call.call_erased.deferred = step.replaces_frame;
                     break :blk try self.store.addCFStmt(.{ .dyn = .{
                         .target = dyn_stmt.target,
-                        .data = try self.store.addStmtRow(LIR.DynOp, deferred),
+                        .data = try self.store.addStmtRow(LIR.DynOp, call),
                         .next = next,
                     } }, origin);
                 }
@@ -2951,30 +2954,30 @@ const Inserter = struct {
                 .assign_call_erased => |assign_stmt| {
                     const assign = self.store.stmtRow(assign_stmt.data);
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    if (assign.closure == assign_stmt.target) arcInvariant("erased call rebinds its own closure local");
                     const transfer = try self.transferForCall(&segment.owned, null, null, null, arc_sig.RcSig.all_owned, false, assign.args, assign_stmt.next, assign_stmt.target, assign.closure);
-                    var preserve_reuse_source = false;
-                    if (assign.reuse_closure) {
-                        if (assign.closure == assign_stmt.target) arcInvariant("owned erased call cannot consume and rebind the same local");
-                        const reuse_source = assign.reuse_source orelse arcInvariant("owned erased call lacked its explicit reuse ownership source");
-                        preserve_reuse_source = try self.groupUsedInPath(assign_stmt.next, reuse_source);
-                        if (!preserve_reuse_source) _ = try self.takeUnit(&segment.owned, reuse_source);
-                    }
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign_stmt.target) else null;
                     for (transfer.args.retain_args) |arg| try self.appendStepRetain(step, .{ .local = arg, .reason = .owned_param_demand });
-                    if (!assign.reuse_closure) try self.appendStepRetain(step, .{ .local = assign.closure, .reason = .closure_call_capture });
-                    if (preserve_reuse_source) try self.appendStepRetain(step, .{ .local = assign.reuse_source.?, .reason = .reuse_source_preserved });
                     self.death_scratch.clearRetainingCapacity();
                     if (self.erasedCallIsDeferred(assign_stmt)) {
                         // The call is left pending and made after this frame
-                        // returns. It keeps the closure reference retained
-                        // above; everything else the frame owns ends first.
+                        // returns. It keeps a retained closure reference;
+                        // everything else the frame owns ends first.
+                        try self.appendStepRetain(step, .{ .local = assign.closure, .reason = .closure_call_capture });
                         try self.releaseTailCallerFrame(&segment.owned, assign_stmt.target, self.death_scratch);
                         try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
                         step.pre_release_extra_reason = .some(.tail_call_frame);
                         step.replaces_frame = true;
                     } else {
+                        // The closure's unit moves into the callee exactly
+                        // when it dies here; otherwise the call borrows it.
+                        const owner = LIR.erasedCallOwner(assign);
+                        if (self.ownsUnit(&segment.owned, owner) and !try self.groupUsedInPath(assign_stmt.next, owner)) {
+                            _ = try self.takeUnit(&segment.owned, owner);
+                            step.transfer_closure = true;
+                        }
                         try self.noteCallResultDeathIfUnused(&segment.owned, assign_stmt.target, .owned, assign_stmt.next, self.death_scratch);
-                        const singles = [_]LIR.LocalId{ assign.closure, assign.reuse_source orelse assign.closure };
+                        const singles = [_]LIR.LocalId{ assign.closure, owner };
                         try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign_stmt.next, self.death_scratch);
                         try self.copyDeathScratchToStep(step);
                     }
@@ -2994,12 +2997,12 @@ const Inserter = struct {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const borrowed_variant = assign.op.arcBorrowedResultVariant();
                     var use_borrowed = borrowed_variant != null and self.isBindingBorrowed(assign.target);
-                    if (borrowed_variant != null and assign.op == .box_unbox) {
+                    if (assign.op.deadLenderArg()) |lender_position| {
                         const args = self.store.getLocalSpan(assign.args);
-                        const boxed = GuardedList.at(args, 0);
+                        const lender = GuardedList.at(args, lender_position);
                         use_borrowed = !self.options.consume_dead_boxes or
-                            !self.ownsUnit(&segment.owned, boxed) or
-                            try self.groupUsedInPathExcept(assign.next, boxed, assign.target);
+                            !self.ownsUnit(&segment.owned, lender) or
+                            try self.groupUsedInPathExcept(assign.next, lender, assign.target);
                     }
                     const selected_op = if (use_borrowed) borrowed_variant.? else assign.op;
                     const selected_effect = if (borrowed_variant != null) selected_op.rcEffect() else self.store.stmtRow(assign.rc_effect);
@@ -3432,7 +3435,7 @@ const Inserter = struct {
     /// allocation, and the call's value is the procedure's whole result with
     /// the procedure's return layout.
     fn erasedCallIsDeferred(self: *const Inserter, call: @FieldType(LIR.CFStmt, "assign_call_erased")) bool {
-        if (self.store.stmtRow(call.data).reuse_closure) return false;
+        if (self.store.stmtRow(call.data).result_reuse) return false;
         const caller = self.store.getProcSpec(self.current_proc);
         if (caller.hosted.get() != null) return false;
         const joins = self.solution.joinBodiesOf(self.current_source_proc);
@@ -5138,14 +5141,12 @@ const Inserter = struct {
                         try self.appendStepRetain(step, .{ .local = args, .reason = .owned_param_demand });
                     }
                 };
-                // An owned call transfers one unit of its closure: the
-                // closure's own when it dies here, else a retained one.
-                var preserve_reuse_source = false;
-                if (call.reuse_closure) {
-                    if (call.closure == target) arcInvariant("owned erased call cannot consume and rebind the same local");
-                    const reuse_source = call.reuse_source orelse arcInvariant("owned erased call lacked its explicit reuse ownership source");
-                    preserve_reuse_source = try self.groupUsedInPath(next, reuse_source);
-                    if (!preserve_reuse_source) _ = try self.takeUnit(owned, reuse_source);
+                // The closure's unit moves into the callee exactly when it
+                // dies here; otherwise the call borrows it.
+                const closure_owner = LIR.erasedCallOwner(call);
+                if (target != call.closure and self.ownsUnit(owned, closure_owner) and !try self.groupUsedInPath(next, closure_owner)) {
+                    _ = try self.takeUnit(owned, closure_owner);
+                    step.transfer_closure = true;
                 }
                 const release_old_target = if (target == call.closure) false else try self.takeRebindTarget(owned, target);
                 try self.placeCallResultUnit(owned, target, .owned);
@@ -5154,16 +5155,15 @@ const Inserter = struct {
                 if (self.dynErasedCallIsDeferred(target, next)) {
                     // The call is left pending and made after this frame
                     // returns. It keeps one reference to its closure: the
-                    // unit an owned call moved, or one retained here;
-                    // everything else the frame owns ends first.
-                    if (!call.reuse_closure or preserve_reuse_source) try self.appendStepRetain(step, .{ .local = call.closure, .reason = .closure_call_capture });
+                    // unit the call moved, or one retained here; everything
+                    // else the frame owns ends first.
+                    if (!step.transfer_closure) try self.appendStepRetain(step, .{ .local = call.closure, .reason = .closure_call_capture });
                     try self.releaseTailCallerFrame(owned, target, self.death_scratch);
                     try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
                     step.pre_release_extra_reason = .some(.tail_call_frame);
                     step.replaces_frame = true;
                     return;
                 }
-                if (preserve_reuse_source) try self.appendStepRetain(step, .{ .local = call.reuse_source.?, .reason = .reuse_source_preserved });
                 try self.noteCallResultDeathIfUnused(owned, target, .owned, next, self.death_scratch);
                 try self.postStmtDeaths(owned, operands, null, next, self.death_scratch);
                 try self.copyDeathScratchToStep(step);
@@ -9276,8 +9276,8 @@ test "ARC transfers erased call ownership from an explicit outer source" {
             .closure = extracted_callable,
             .args = LIR.LocalSpan.empty(),
             .arg_plan = arg_plan,
-            .reuse_closure = true,
             .reuse_source = owned_callable,
+            .result_reuse = true,
         }),
         .next = ret,
     } }, .test_fixture);
@@ -9333,7 +9333,7 @@ test "ARC transfers erased call ownership from an explicit outer source" {
     return error.MissingErasedCall;
 }
 
-test "ARC retains an erased call reuse source that is read after the call" {
+test "ARC borrows an erased call's closure that is read after the call" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
 
@@ -9351,8 +9351,8 @@ test "ARC retains an erased call reuse source that is read after the call" {
             .closure = extracted_callable,
             .args = LIR.LocalSpan.empty(),
             .arg_plan = arg_plan,
-            .reuse_closure = true,
             .reuse_source = owned_callable,
+            .result_reuse = true,
         }),
         .next = later_use,
     } }, .test_fixture);
@@ -9361,12 +9361,13 @@ test "ARC retains an erased call reuse source that is read after the call" {
 
     try f.run();
 
-    try testing.expectEqual(@as(usize, 1), f.countRc(owned_callable, .incref));
+    // The closure survives the call, so the call borrows it: no retain, no
+    // transfer, and one release after its last read.
+    try testing.expectEqual(@as(usize, 0), f.countRc(owned_callable, .incref));
     try testing.expectEqual(@as(usize, 1), f.countRc(owned_callable, .decref));
     try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .incref));
     try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .decref));
 
-    var saw_retain = false;
     var saw_call = false;
     var saw_later_use = false;
     var cursor = f.store.getProcSpecImmediate(caller).body.get() orelse return error.MissingCallerBody;
@@ -9374,17 +9375,10 @@ test "ARC retains an erased call reuse source that is read after the call" {
     while (remaining > 0) : (remaining -= 1) {
         switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_ref => |assign| cursor = assign.next,
-            .incref => |rc| {
-                if (rc.value == owned_callable) {
-                    try testing.expect(!saw_call);
-                    saw_retain = true;
-                }
-                cursor = rc.next;
-            },
+            .incref => |rc| cursor = rc.next,
             .assign_call_erased => |assign_stmt| {
                 const assign = f.store.stmtRow(assign_stmt.data);
-                try testing.expect(saw_retain);
-                try testing.expect(assign.reuse_closure);
+                try testing.expect(!assign.reuse_closure);
                 try testing.expectEqual(owned_callable, assign.reuse_source.?);
                 saw_call = true;
                 cursor = assign_stmt.next;
@@ -9428,7 +9422,6 @@ test "ARC retains an erased call reuse source that is read after the call" {
             => return error.UnexpectedStatement,
         }
     }
-    try testing.expect(saw_retain);
     try testing.expect(saw_call);
     try testing.expect(saw_later_use);
 }
@@ -18722,19 +18715,25 @@ test "ARC places no reference counts around a callable read from a type table" {
     const proc = try d.proc(&.{table}, body, .u64, null);
     try testing.expect(d.f.store.getProcSpec(proc).shapes.static_literal);
     try d.run(&.{proc});
-    // ARC owns the word as it owns a static-data literal read: no retain
-    // around its uses, one release where it dies, which names image data.
-    try d.f.expectRc(callable, 0, 1, 0);
+    // ARC owns the word as it owns a static-data literal read: the first
+    // call borrows it, and the last call, where it dies, transfers its unit
+    // to the callee instead of releasing it. No refcount statement remains.
+    try d.f.expectRc(callable, 0, 0, 0);
     var immortal = try @import("immortal_locals.zig").compute(testing.allocator, &d.f.store, .static_data);
     defer immortal.deinit(testing.allocator);
     try testing.expect(immortal.contains(callable));
-    try testing.expectEqual(@as(usize, 1), try @import("immortal_locals.zig").elide(testing.allocator, &d.f.store, .static_data));
+    var transfers: usize = 0;
     var walk = try body_clone.ReachableStmts.initWithAllocator(&d.f.store, d.f.store.getProcSpec(proc).body.get().?, testing.allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| switch (d.f.store.getCFStmt(stmt_id)) {
         .incref, .decref, .decref_if_initialized, .free => return error.TestUnexpectedResult,
-        .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
+        .dyn => |dyn_stmt| {
+            const op = d.f.store.stmtRow(dyn_stmt.data);
+            if (op == .call_erased and op.call_erased.reuse_closure) transfers += 1;
+        },
+        .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
     };
+    try testing.expectEqual(@as(usize, 1), transfers);
 }
 
 test "ARC dyn copy of an owned dynamic parameter into the result moves its unit" {

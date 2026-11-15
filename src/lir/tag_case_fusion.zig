@@ -104,6 +104,11 @@ const Candidate = struct {
     /// jumps to it. Fusion keeps these declarations enclosing the fused arms
     /// and the producers alike, so those jumps stay in scope.
     wrappers: std.ArrayList(LIR.CFStmtId),
+    /// Straight-line definitions at the head of the union join's body, before
+    /// its wrappers and its match, in execution order. They run on every path
+    /// through the join whichever variant arrives, so each variant's
+    /// continuation starts with its own copy of them.
+    prefix: std.ArrayList(LIR.CFStmtId),
     /// A structural entry outside the consumer also enters a wrapper. Its
     /// original remainder must survive when this consumer is hoisted.
     shared_wrappers: bool,
@@ -118,6 +123,7 @@ const Candidate = struct {
         self.branch_facts.deinit();
         self.union_locals.deinit(allocator);
         self.wrappers.deinit(allocator);
+        self.prefix.deinit(allocator);
     }
 };
 
@@ -519,10 +525,18 @@ fn findCandidate(
         if (param_layout.tag != .tag_union) continue;
         if (!tag_targets.contains(param)) continue;
 
+        var prefix = std.ArrayList(LIR.CFStmtId).empty;
         var wrappers = std.ArrayList(LIR.CFStmtId).empty;
         var keep_wrappers = false;
-        defer if (!keep_wrappers) wrappers.deinit(allocator);
+        defer if (!keep_wrappers) {
+            wrappers.deinit(allocator);
+            prefix.deinit(allocator);
+        };
         var match_start = join.body;
+        while (prefixStmtNext(store.getCFStmtImmediate(match_start).*, param)) |next| {
+            try prefix.append(allocator, match_start);
+            match_start = next;
+        }
         while (store.getCFStmtImmediate(match_start).* == .join) {
             try wrappers.append(allocator, match_start);
             match_start = store.getCFStmtImmediate(match_start).join.remainder;
@@ -689,6 +703,7 @@ fn findCandidate(
             .branch_facts = branch_facts,
             .union_locals = union_locals,
             .wrappers = wrappers,
+            .prefix = prefix,
             .shared_wrappers = shared_wrappers,
             .match_start = match_start,
             .complete = complete,
@@ -767,6 +782,99 @@ fn cloneSharedConsumer(
     const proc = store.getProcSpecPtr(candidate.proc);
     proc.frame_locals = frame_locals;
     if (store.procNeedsStackProbe(layouts, proc.*)) proc.stack_probe = .required;
+}
+
+/// The successor of a statement that may stand at the head of a union join's
+/// body before its match: a definition with one successor. A read of the
+/// union parameter begins the match itself. Whether a later prefix statement
+/// reads the union through an alias is decided with every other use of it.
+fn prefixStmtNext(stmt: LIR.CFStmt, param: LIR.LocalId) ?LIR.CFStmtId {
+    return switch (stmt) {
+        .assign_ref => |assign| if (assign.op.source == param) null else assign.next,
+        .assign_literal => |assign| assign.next,
+        .assign_low_level => |assign| assign.next,
+        .assign_struct => |assign| assign.next,
+        .init_uninitialized,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_list,
+        .assign_tag,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .dyn,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .join,
+        .jump,
+        .ret,
+        .crash,
+        => null,
+    };
+}
+
+/// Copy the prefix statements so the copy continues at `tail`. The copies
+/// define the same locals as the originals: exactly one copy runs on any
+/// path, and the code after the match reads those locals.
+fn clonePrefix(store: *LirStore, prefix: []const LIR.CFStmtId, tail: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+    var next = tail;
+    var index = prefix.len;
+    while (index > 0) {
+        index -= 1;
+        var stmt = store.getCFStmt(prefix[index]);
+        setPrefixStmtNext(&stmt, next);
+        next = try store.addCFStmt(stmt, fusionOrigin(store.stmtOrigin(prefix[index])));
+    }
+    return next;
+}
+
+fn setPrefixStmtNext(stmt: *LIR.CFStmt, next: LIR.CFStmtId) void {
+    switch (stmt.*) {
+        .assign_ref => |*assign| assign.next = next,
+        .assign_literal => |*assign| assign.next = next,
+        .assign_low_level => |*assign| assign.next = next,
+        .assign_struct => |*assign| assign.next = next,
+        .init_uninitialized,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_list,
+        .assign_tag,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .dyn,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .join,
+        .jump,
+        .ret,
+        .crash,
+        => unreachable, // prefixStmtNext admits only the four definition forms above
+    }
 }
 
 /// Follow a producer edge from the statement after its constructor to the
@@ -1194,7 +1302,7 @@ fn applyCandidate(
             const local = GuardedList.at(frame, index);
             if (plan.copied_defs.get(local) == 0) try cloner.local_map.put(local, local);
         }
-        const body = try cloner.cloneStmt(branch);
+        const body = try clonePrefix(store, candidate.prefix.items, try cloner.cloneStmt(branch));
         try cloned_locals.appendSlice(allocator, cloner.new_locals.items);
         store.getCFStmtPtr(join_stmt).join.body = body;
         try dests.append(allocator, .{
@@ -1230,6 +1338,11 @@ fn applyCandidate(
     else blk: {
         var kept = join;
         kept.body = candidate.match_start;
+        if (candidate.prefix.items.len != 0) {
+            const prefix = candidate.prefix.items;
+            setPrefixStmtNext(store.getCFStmtPtr(prefix[prefix.len - 1]), candidate.match_start);
+            kept.body = prefix[0];
+        }
         break :blk try store.addCFStmt(.{ .join = kept }, store.stmtOrigin(candidate.join_stmt));
     };
     var index = dests.items.len;
@@ -2501,7 +2614,7 @@ test "tag case fusion releases the payload where an arm released the union" {
     try testing.expectEqual(@as(u32, 1), payload_releases);
 }
 
-fn testContinuationJoin(shared_continuation: bool) TestError!void {
+fn testContinuationJoin(shared_continuation: bool, with_prefix: bool) TestError!void {
     const testing = std.testing;
     var store = LirStore.init(testing.allocator);
     defer store.deinit();
@@ -2515,6 +2628,7 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
     const out = try store.addLocal(.{ .layout_idx = .u64 });
     const zero = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
+    const early = try store.addLocal(.{ .layout_idx = .u64 });
     const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(body_clone.firstFreshJoinPoint(&store)));
     const cont_id: LIR.JoinPointId = @fromBackingInt(@intCast(@backingInt(join_id) + 1));
 
@@ -2585,10 +2699,17 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
         .branches = try store.addCFSwitchBranches(producer_branches[0..(if (shared_continuation) @as(usize, 2) else 1)]),
         .default_branch = build_one,
     } }, .test_fixture);
+    // An inlined call computes its other arguments after the union is built
+    // and before the match reads it.
+    const join_body = if (with_prefix) try store.addCFStmt(.{ .assign_literal = .{
+        .target = early,
+        .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u64 } },
+        .next = cont,
+    } }, .test_fixture) else cont;
     const body = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try store.addLocalSpan(&.{param}),
-        .body = cont,
+        .body = join_body,
         .remainder = choose,
     } }, .test_fixture);
     const proc = try store.addProcSpec(.{
@@ -2603,7 +2724,7 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
             .body = cont,
             .remainder = body,
         } }, .test_fixture) else body),
-        .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, out, zero, one }),
+        .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, out, zero, one, early }),
         .ret_layout = .u64,
     }, .none);
 
@@ -2624,6 +2745,7 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
         try testing.expectEqual(cont_id, root.join.id);
     }
     var jumps_to_cont: u32 = 0;
+    var early_defs: u32 = 0;
     var walk = try body_clone.ReachableStmts.init(&store, root.join.remainder);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
@@ -2633,8 +2755,12 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
         }
         if (stmt.* == .assign_ref and stmt.assign_ref.target == disc) return error.TestUnexpectedResult;
         if (stmt.* == .jump and stmt.jump.target == root.join.id) jumps_to_cont += 1;
+        if (stmt.* == .assign_literal and stmt.assign_literal.target == early) early_defs += 1;
     }
     try testing.expectEqual(@as(u32, 2), jumps_to_cont);
+    // Each variant's continuation runs its own copy of the definitions that
+    // preceded the match.
+    try testing.expectEqual(@as(u32, if (with_prefix) 2 else 0), early_defs);
 
     var declarations = collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId).init(testing.allocator);
     defer declarations.deinit();
@@ -2650,11 +2776,15 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
 }
 
 test "tag case fusion keeps the match's continuation join enclosing the fused arms" {
-    try testContinuationJoin(false);
+    try testContinuationJoin(false, false);
+}
+
+test "tag case fusion copies definitions ahead of the match into each variant's continuation" {
+    try testContinuationJoin(false, true);
 }
 
 test "tag case fusion preserves a continuation declaration shared with a producer" {
-    try testContinuationJoin(true);
+    try testContinuationJoin(true, false);
 }
 
 test "tag case fusion keeps the join when a producer edge is shared with another path" {

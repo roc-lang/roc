@@ -101,10 +101,10 @@ pub const Var = enum(u32) {
 /// A mapping from polymorphic type variables to concrete type variables
 pub const VarMap = std.hash_map.HashMap(Var, Var, std.hash_map.AutoContext(Var), 80);
 
-/// Checker decisions a descriptor carries alongside its content. They share
-/// the stored descriptor's word with its kind and rank (`Descriptor.Word`),
-/// which has room for exactly these ten: a new flag must find room there.
-pub const DescriptorFlags = packed struct(u10) {
+/// Checker decisions a descriptor carries alongside its content. A stored
+/// descriptor's word packs them by kind (`Descriptor.FlagBits`): a new flag
+/// must find room there.
+pub const DescriptorFlags = packed struct(u16) {
     /// The checker closed this otherwise-unresolved variable to `[]` after
     /// proving that no runtime constructor can inhabit it. The checked output
     /// preserves the variable identity and carries `[]` only as its row default.
@@ -153,17 +153,44 @@ pub const DescriptorFlags = packed struct(u10) {
     /// into must have exactly this row. A copy of the row is the same host
     /// row, so instantiation carries the flag.
     host_fixed_row: bool = false,
-    /// An anonymous record or tag union (empty ones included) that a
-    /// generalization boundary found was made in its own scope without being
-    /// generalized: every part of it is ground or belongs to an enclosing
-    /// scope. Each use of the binding still gets its own copy, because a use
-    /// can lift the structure into a nominal type whose backing matches, and
-    /// the lift rewrites the class it reaches (design.md "Anonymous Structure
-    /// Is Copied Per Use"). The rank is untouched: the class is not
-    /// polymorphic, only refinable. A copy is a fresh class at its use's
-    /// rank, so instantiation does not carry the flag, and a merge keeps it
-    /// only when both sides had it.
-    per_use_structure: bool = false,
+    /// A record row extension that still stands for "this record, possibly
+    /// lifted into a nominal type or given optional or defaulted fields it
+    /// omits": a record construction's or record pattern's tail (design.md
+    /// "Uncommitted Record Tails"). Meaningful only on a flex class; it never
+    /// stands for a required or undetermined field and never relates to a
+    /// rigid. Copies carry it, and a merge keeps it while the class is a flex.
+    uncommitted_record_tail: bool = false,
+    /// The class holds a copy instantiation made of an uncommitted record
+    /// tail: the record of a use of a binding that quantified the tail. Such
+    /// a class commits, or lets its record lift into a nominal type whose
+    /// backing has exactly the record's fields and is stored like it, and
+    /// absorbs no field (design.md "Uncommitted Record Tails"). Copies carry
+    /// it, and a merge keeps it while the class is a flex.
+    uncommitted_copy: bool = false,
+    /// The class is an uncommitted record tail a record pattern minted, met
+    /// by no tail a construction minted: the record is one its binding takes
+    /// apart rather than builds. Only a diagnostic about the record reads it
+    /// (design.md "Uncommitted Record Tails"). Copies carry it.
+    record_pattern_tail: bool = false,
+    /// An empty record or tag union an uncommitted tail committed to because
+    /// its binding compared or hashed the record or tag union it ends, as a
+    /// plain one (design.md "Methods On Open Rows"). Only the report of a use
+    /// that makes it a nominal type reads it. Copies carry it.
+    compared_plain: bool = false,
+    /// A tag union an annotation or type declaration wrote. Annotated
+    /// structure never lifts into a nominal type, whatever its row's tail
+    /// (design.md "Uncommitted Record Tails"). Copies carry it and a merge
+    /// keeps it if either side had it.
+    annotation_tag_union: bool = false,
+    /// An empty tag union that closes an inferred tag row: checking closed it
+    /// (an exhaustive match, a closed tag pattern), no annotation did. The
+    /// row is closed for every purpose, but its union may still lift into a
+    /// nominal type whose backing fits, and the class generalizes like a
+    /// variable so each use of a binding owns its copy (design.md
+    /// "Uncommitted Tag Tails"). Copies carry it; a merge keeps it unless the
+    /// other side is an empty tag union without it.
+    uncommitted_tag_tail: bool = false,
+    _padding: u1 = 0,
 
     /// The flags a copy of this class carries: those that describe its type.
     /// The others record what happened to this class itself—a rejection, a
@@ -177,6 +204,12 @@ pub const DescriptorFlags = packed struct(u10) {
             .empty_tag_union_is_default = self.empty_tag_union_is_default,
             .nominal_backing_structure = self.nominal_backing_structure,
             .host_fixed_row = self.host_fixed_row,
+            .uncommitted_record_tail = self.uncommitted_record_tail,
+            .uncommitted_copy = self.uncommitted_copy,
+            .record_pattern_tail = self.record_pattern_tail,
+            .compared_plain = self.compared_plain,
+            .annotation_tag_union = self.annotation_tag_union,
+            .uncommitted_tag_tail = self.uncommitted_tag_tail,
         };
     }
 
@@ -187,6 +220,43 @@ pub const DescriptorFlags = packed struct(u10) {
         var flags = self;
         flags.default_decided = false;
         return flags;
+    }
+
+    /// These flags with each one content of kind `kind` cannot hold cleared:
+    /// a write that replaces a class's content keeps only the flags its new
+    /// kind holds (`Descriptor.FlagBits`). A flex-only flag describes a
+    /// row variable and a structure-only flag describes the structure it
+    /// marks, so neither means anything once the class is the other.
+    pub fn forKind(self: DescriptorFlags, kind: ContentKind) DescriptorFlags {
+        var flags = self;
+        if (kind == .flex) {
+            flags.empty_tag_union_is_default = false;
+            flags.host_fixed_row = false;
+            flags.compared_plain = false;
+            flags.annotation_tag_union = false;
+            flags.uncommitted_tag_tail = false;
+        } else {
+            flags.uncommitted_record_tail = false;
+            flags.uncommitted_copy = false;
+            flags.record_pattern_tail = false;
+        }
+        return flags;
+    }
+
+    /// Whether any flag meaningful only on a flex is set: an uncommitted
+    /// record tail's marks. A stored word holds them only on a flex
+    /// (`Descriptor.FlagBits`).
+    pub fn flexOnly(self: DescriptorFlags) bool {
+        return self.uncommitted_record_tail or self.uncommitted_copy or self.record_pattern_tail;
+    }
+
+    /// Whether any flag meaningful only on structure is set: an empty tag
+    /// union's defaulting and tail marks, a host-boundary row, a compared
+    /// plain commitment, or an annotated tag union. A stored word holds them
+    /// on every kind but a flex (`Descriptor.FlagBits`).
+    pub fn nonFlexOnly(self: DescriptorFlags) bool {
+        return self.empty_tag_union_is_default or self.host_fixed_row or self.compared_plain or
+            self.annotation_tag_union or self.uncommitted_tag_tail;
     }
 };
 
@@ -201,9 +271,10 @@ pub const Descriptor = struct {
     /// decodes nothing else.
     pub const Word = packed struct(u32) {
         kind: ContentKind,
-        flags: DescriptorFlags,
-        /// A flex's `Flex.literal`; `.none` for every other kind.
-        literal: Flex.Literal = .none,
+        /// The class's flags and, on a flex, its `Flex.literal`, laid out by
+        /// kind (`FlagBits`). Read and written through `flags`, `setFlags`
+        /// and `literal`.
+        bits: FlagBits,
         /// Generalization's marks (`Generalizer.generalize`): the class is one
         /// the running pass is generalizing, and the pass has adjusted its
         /// rank. A pass sets them and clears them before it returns, so both
@@ -214,6 +285,35 @@ pub const Descriptor = struct {
         rank_adjusted: bool = false,
         rank: Rank,
 
+        /// A word of kind `kind` holding `flags`, a flex's `literal` (`.none`
+        /// for every other kind) and `rank`.
+        pub fn init(kind: ContentKind, flags_: DescriptorFlags, literal_: Flex.Literal, rank: Rank) Word {
+            std.debug.assert(kind == .flex or literal_ == .none);
+            return .{ .kind = kind, .bits = FlagBits.pack(kind, flags_, literal_), .rank = rank };
+        }
+
+        /// The class's flags.
+        pub fn flags(self: Word) DescriptorFlags {
+            return self.bits.unpack(self.kind);
+        }
+
+        /// Replace the class's flags, keeping a flex's literal.
+        pub fn setFlags(self: *Word, flags_: DescriptorFlags) void {
+            self.bits = FlagBits.pack(self.kind, flags_, self.literal());
+        }
+
+        /// Set one of the class's flags, keeping the others.
+        pub fn setFlag(self: *Word, comptime flag: std.meta.FieldEnum(DescriptorFlags), value: bool) void {
+            var flags_ = self.flags();
+            @field(flags_, @tagName(flag)) = value;
+            self.setFlags(flags_);
+        }
+
+        /// A flex's `Flex.literal`; `.none` for every other kind.
+        pub fn literal(self: Word) Flex.Literal {
+            return if (self.kind == .flex) self.bits.flexBits().literal else .none;
+        }
+
         /// Whether either generalization mark is set.
         pub fn marked(self: Word) bool {
             return self.generalizing or self.rank_adjusted;
@@ -221,11 +321,112 @@ pub const Descriptor = struct {
 
         /// `Descriptor.liftsIntoNominal`, read from the word alone.
         pub fn liftsIntoNominal(self: Word) bool {
-            if (self.flags.nominal_backing_structure) return false;
+            if (self.bits.nominal_backing_structure) return false;
             return switch (self.kind) {
                 .record, .tag_union, .empty_record, .empty_tag_union => true,
                 .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .flex, .rigid, .alias, .field_presence, .err => false,
             };
+        }
+    };
+
+    /// A stored descriptor's flags, packed by kind (design.md "Descriptor
+    /// Words"). Seven flags are meaningful on every kind and keep their own
+    /// bits. The remaining bits mean one thing on a flex and another on
+    /// every other kind: a flex's uncommitted record tail marks and literal
+    /// marker, and the other kinds' empty-tag-union, host-row and
+    /// annotated-union marks. A flag that has no bit on a kind is false on
+    /// it: setting it there is a compiler bug (`pack`).
+    pub const FlagBits = packed struct(u12) {
+        frozen: bool = false,
+        static_dispatch_rejected: bool = false,
+        default_decided: bool = false,
+        nominal_backing_structure: bool = false,
+        bounded_row_ext: bool = false,
+        deferred_callable: bool = false,
+        annotation_tag_ext: bool = false,
+        /// `FlexBits` on a flex, `OtherBits` on every other kind.
+        by_kind: u5 = 0,
+
+        /// The bits shared by kind, as a flex holds them.
+        pub fn flexBits(self: FlagBits) FlexBits {
+            return @bitCast(self.by_kind);
+        }
+
+        /// The bits shared by kind, as every kind but a flex holds them.
+        pub fn otherBits(self: FlagBits) OtherBits {
+            return @bitCast(self.by_kind);
+        }
+
+        /// The bits only a flex has.
+        pub const FlexBits = packed struct(u5) {
+            uncommitted_record_tail: bool = false,
+            uncommitted_copy: bool = false,
+            record_pattern_tail: bool = false,
+            literal: Flex.Literal = .none,
+        };
+
+        /// The bits every kind but a flex has.
+        pub const OtherBits = packed struct(u5) {
+            empty_tag_union_is_default: bool = false,
+            host_fixed_row: bool = false,
+            compared_plain: bool = false,
+            annotation_tag_union: bool = false,
+            uncommitted_tag_tail: bool = false,
+        };
+
+        /// `flags` and a flex's `literal` packed for a word of kind `kind`.
+        /// A flag with no bit on `kind` must be false.
+        pub fn pack(kind: ContentKind, flags: DescriptorFlags, literal: Flex.Literal) FlagBits {
+            std.debug.assert(kind == .flex or !flags.flexOnly());
+            std.debug.assert(kind != .flex or !flags.nonFlexOnly());
+            return .{
+                .frozen = flags.frozen,
+                .static_dispatch_rejected = flags.static_dispatch_rejected,
+                .default_decided = flags.default_decided,
+                .nominal_backing_structure = flags.nominal_backing_structure,
+                .bounded_row_ext = flags.bounded_row_ext,
+                .deferred_callable = flags.deferred_callable,
+                .annotation_tag_ext = flags.annotation_tag_ext,
+                .by_kind = if (kind == .flex) @bitCast(FlexBits{
+                    .uncommitted_record_tail = flags.uncommitted_record_tail,
+                    .uncommitted_copy = flags.uncommitted_copy,
+                    .record_pattern_tail = flags.record_pattern_tail,
+                    .literal = literal,
+                }) else @bitCast(OtherBits{
+                    .empty_tag_union_is_default = flags.empty_tag_union_is_default,
+                    .host_fixed_row = flags.host_fixed_row,
+                    .compared_plain = flags.compared_plain,
+                    .annotation_tag_union = flags.annotation_tag_union,
+                    .uncommitted_tag_tail = flags.uncommitted_tag_tail,
+                }),
+            };
+        }
+
+        /// The flags a word of kind `kind` holds.
+        pub fn unpack(self: FlagBits, kind: ContentKind) DescriptorFlags {
+            var flags: DescriptorFlags = .{
+                .frozen = self.frozen,
+                .static_dispatch_rejected = self.static_dispatch_rejected,
+                .default_decided = self.default_decided,
+                .nominal_backing_structure = self.nominal_backing_structure,
+                .bounded_row_ext = self.bounded_row_ext,
+                .deferred_callable = self.deferred_callable,
+                .annotation_tag_ext = self.annotation_tag_ext,
+            };
+            if (kind == .flex) {
+                const flex = self.flexBits();
+                flags.uncommitted_record_tail = flex.uncommitted_record_tail;
+                flags.uncommitted_copy = flex.uncommitted_copy;
+                flags.record_pattern_tail = flex.record_pattern_tail;
+            } else {
+                const other = self.otherBits();
+                flags.empty_tag_union_is_default = other.empty_tag_union_is_default;
+                flags.host_fixed_row = other.host_fixed_row;
+                flags.compared_plain = other.compared_plain;
+                flags.annotation_tag_union = other.annotation_tag_union;
+                flags.uncommitted_tag_tail = other.uncommitted_tag_tail;
+            }
+            return flags;
         }
     };
 
@@ -241,7 +442,8 @@ pub const Descriptor = struct {
     };
 
     comptime {
-        std.debug.assert(@bitSizeOf(ContentKind) + @bitSizeOf(DescriptorFlags) + @bitSizeOf(Flex.Literal) + 2 + @bitSizeOf(Rank) == @bitSizeOf(Word));
+        std.debug.assert(@bitSizeOf(ContentKind) + @bitSizeOf(FlagBits) + 2 + @bitSizeOf(Rank) == @bitSizeOf(Word));
+        std.debug.assert(@bitSizeOf(FlagBits.FlexBits) == @bitSizeOf(FlagBits.OtherBits));
         std.debug.assert(@sizeOf(Row) == @sizeOf(Word) + @sizeOf(Payload));
     }
 
@@ -313,7 +515,7 @@ pub const Descriptor = struct {
                 .empty_tag_union => .empty_tag_union,
             },
         };
-        return .{ .word = .{ .kind = kind, .flags = self.flags, .literal = literal, .rank = self.rank }, .payload = payload };
+        return .{ .word = .init(kind, self.flags, literal, self.rank), .payload = payload };
     }
 
     /// The descriptor a stored row holds. `store` is the type store that
@@ -335,7 +537,7 @@ pub const Descriptor = struct {
             .tag_union => .{ .structure = .{ .tag_union = decodeTagUnion(row) } },
             .empty_tag_union => .{ .structure = .empty_tag_union },
         };
-        return .{ .content = content, .rank = row.word.rank, .flags = row.word.flags };
+        return .{ .content = content, .rank = row.word.rank, .flags = row.word.flags() };
     }
 
     // Each kind's payload, for a reader that has already switched on the
@@ -347,7 +549,7 @@ pub const Descriptor = struct {
         return .{
             .name = if (@as(collections.OptionalU32, @fromBackingInt(row.payload[0])).get()) |dense| Ident.Idx.fromDenseIndex(dense) else null,
             .constraints = getRange(StaticDispatchConstraint.SafeList.Range, row.payload, 1),
-            .literal = row.word.literal,
+            .literal = row.word.literal(),
         };
     }
 
@@ -448,7 +650,9 @@ pub const Descriptor = struct {
     /// The kind, flags and rank of this descriptor, as its stored word holds
     /// them.
     fn word(self: Descriptor) Word {
-        return .{ .kind = ContentKind.of(self.content), .flags = self.flags, .rank = self.rank };
+        const kind = ContentKind.of(self.content);
+        const literal_: Flex.Literal = if (self.content == .flex) self.content.flex.literal else .none;
+        return .init(kind, self.flags, literal_, self.rank);
     }
 };
 
@@ -1147,7 +1351,12 @@ pub const NominalDecl = struct {
         /// How many trailing formals are context variables. Only a
         /// declaration in a function body has any.
         context_len: u16 = 0,
-        _unused: u15 = 0,
+        /// The declaration's record backing has unnamed fields, so its
+        /// values are stored in declared order with padding rather than like
+        /// the record of its named fields (design.md "Nominal Record Field
+        /// Order").
+        padded: bool = false,
+        _unused: u14 = 0,
     };
 
     /// How many of the declaration's formals it declares itself, before its
@@ -1553,6 +1762,8 @@ pub const StaticDispatchConstraint = struct {
     /// literal). Kind-specific flags (binop negation, literal kind) live
     /// *inside* the variant, so they can't exist without or apart from it.
     origin: Origin,
+    /// Which value the method is called on.
+    receiver: Receiver = .holder,
     /// A numeric literal conversion's facts in the owning type store's
     /// `numeral_infos`; present exactly when `origin` is the `numeral`
     /// literal kind. Like the interpolation part range, it is relative to the
@@ -1687,6 +1898,18 @@ pub const StaticDispatchConstraint = struct {
     };
 
     /// Tracks where a static dispatch constraint originated from
+    /// Which value a static-dispatch constraint dispatches on.
+    pub const Receiver = enum(u8) {
+        /// The variable that holds the constraint.
+        holder,
+        /// The record or tag union whose row ends in the row variable that
+        /// holds the constraint: the first argument of `fn_var` (design.md
+        /// "Methods On Open Rows"). The row variable carries the requirement
+        /// through generalization, instantiation, and import copying, and the
+        /// requirement is decided against that value once its type is known.
+        open_row_value,
+    };
+
     pub const Origin = union(enum) {
         /// From binary operator desugaring (e.g., +, -, *). `negated` is true when
         /// the source operator was `!=` rather than `==`.
@@ -1807,3 +2030,85 @@ pub const Polarity = enum {
 /// envs, so text identity (and per-env precomputed `Ident.Idx` identity) is
 /// stable.
 pub const polarity_var_text = "#polarity";
+
+/// Which kinds a descriptor flag has a bit on (`Descriptor.FlagBits`).
+const FlagDomain = enum { every_kind, flex_only, non_flex_only };
+
+fn flagDomain(comptime flag: std.meta.FieldEnum(DescriptorFlags)) FlagDomain {
+    return switch (flag) {
+        .frozen, .static_dispatch_rejected, .default_decided, .nominal_backing_structure, .bounded_row_ext, .deferred_callable, .annotation_tag_ext => .every_kind,
+        .uncommitted_record_tail, .uncommitted_copy, .record_pattern_tail => .flex_only,
+        .empty_tag_union_is_default, .host_fixed_row, .compared_plain, .annotation_tag_union, .uncommitted_tag_tail => .non_flex_only,
+        ._padding => unreachable, // the padding is no flag
+    };
+}
+
+test "a descriptor word keeps each flag alone on every kind it applies to" {
+    inline for (@typeInfo(DescriptorFlags).@"struct".field_names) |field_name| {
+        if (comptime std.mem.eql(u8, field_name, "_padding")) continue;
+        const flag = @field(std.meta.FieldEnum(DescriptorFlags), field_name);
+        for (std.enums.values(ContentKind)) |kind| {
+            const applies = switch (flagDomain(flag)) {
+                .every_kind => true,
+                .flex_only => kind == .flex,
+                .non_flex_only => kind != .flex,
+            };
+            if (!applies) continue;
+            var flags: DescriptorFlags = .{};
+            @field(flags, field_name) = true;
+            const literals: []const Flex.Literal = if (kind == .flex) std.enums.values(Flex.Literal) else &.{.none};
+            for (literals) |literal| {
+                var word = Descriptor.Word.init(kind, flags, literal, .outermost);
+                try std.testing.expectEqual(flags, word.flags());
+                try std.testing.expectEqual(literal, word.literal());
+                try std.testing.expectEqual(kind, word.kind);
+                try std.testing.expectEqual(Rank.outermost, word.rank);
+                word.setFlag(flag, false);
+                try std.testing.expectEqual(DescriptorFlags{}, word.flags());
+                try std.testing.expectEqual(literal, word.literal());
+                word.setFlag(flag, true);
+                try std.testing.expectEqual(flags, word.flags());
+            }
+        }
+    }
+}
+
+test "a descriptor word keeps every flag its kind holds at once" {
+    for (std.enums.values(ContentKind)) |kind| {
+        var all: DescriptorFlags = .{};
+        inline for (@typeInfo(DescriptorFlags).@"struct".field_names) |field_name| {
+            if (comptime std.mem.eql(u8, field_name, "_padding")) continue;
+            const flag = @field(std.meta.FieldEnum(DescriptorFlags), field_name);
+            const applies = switch (flagDomain(flag)) {
+                .every_kind => true,
+                .flex_only => kind == .flex,
+                .non_flex_only => kind != .flex,
+            };
+            if (applies) @field(all, field_name) = true;
+        }
+        const literal: Flex.Literal = if (kind == .flex) .quote else .none;
+        const word = Descriptor.Word.init(kind, all, literal, Rank.deepest);
+        try std.testing.expectEqual(all, word.flags());
+        try std.testing.expectEqual(literal, word.literal());
+        try std.testing.expectEqual(Rank.deepest, word.rank);
+        try std.testing.expect(!word.marked());
+    }
+}
+
+test "a write's flags keep only those the new kind holds" {
+    var flags: DescriptorFlags = .{};
+    inline for (@typeInfo(DescriptorFlags).@"struct".field_names) |field_name| {
+        if (comptime std.mem.eql(u8, field_name, "_padding")) continue;
+        @field(flags, field_name) = true;
+    }
+    const on_flex = flags.forKind(.flex);
+    try std.testing.expect(!on_flex.nonFlexOnly());
+    try std.testing.expect(on_flex.uncommitted_record_tail and on_flex.uncommitted_copy and on_flex.record_pattern_tail);
+    for (std.enums.values(ContentKind)) |kind| {
+        if (kind == .flex) continue;
+        const on_kind = flags.forKind(kind);
+        try std.testing.expect(!on_kind.flexOnly());
+        try std.testing.expect(on_kind.empty_tag_union_is_default and on_kind.host_fixed_row and on_kind.compared_plain and
+            on_kind.annotation_tag_union and on_kind.uncommitted_tag_tail);
+    }
+}

@@ -2765,6 +2765,7 @@ const Solver = struct {
             .box_prepare_update,
             .box_alloc_zeroed,
             .erased_capture_load,
+            .erased_capture_load_borrowed,
             .ptr_alloca,
             .ptr_store,
             .ptr_load,

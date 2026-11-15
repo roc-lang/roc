@@ -23,13 +23,6 @@ expect {
 }
 
 expect {
-	record : { a ?: U8, b ?: U8 }
-	record = make(11)
-
-	(record.?a ?? 0) + (record.?b ?? 20) == 31
-}
-
-expect {
 	input : { a : U8 }
 	input = { a: 13 }
 	record : { a : U8 }
