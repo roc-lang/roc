@@ -369,8 +369,9 @@ fn emitDiagnostics(build_env: *BuildEnv, diag: Diagnostics, gpa: Allocator) Allo
 
 // --- Echo I/O context ---
 
-/// Unified I/O context for the echo platform. Intercepts readFile/fileExists
-/// for synthetic app source, embedded platform files, and extras; delegates
+/// Unified I/O context for the echo platform. Serves the synthetic app source,
+/// the embedded platform files, and the extras as a virtual tree under
+/// `paths` (their reads, existence checks, and canonical paths); delegates
 /// everything else to `fallback`.
 pub const EchoCtx = struct {
     paths: Paths,
@@ -403,7 +404,33 @@ pub const EchoCtx = struct {
     pub fn isSyntheticPath(self: *const EchoCtx, path: []const u8) bool {
         return self.getSyntheticContent(path) != null;
     }
+
+    /// Whether the lexically resolved `path` names a synthetic file or a
+    /// directory that contains one. Those paths exist only in this virtual
+    /// tree, so the fallback filesystem cannot resolve them.
+    fn isVirtualTreePath(self: *const EchoCtx, path: []const u8) bool {
+        for ([_][]const u8{ self.paths.app_abs, self.paths.platform_main, self.paths.echo_module }) |file| {
+            if (virtualFileIsAtOrBelow(file, path)) return true;
+        }
+        for (self.extras) |ef| {
+            if (extraIsAtOrBelow(self.paths.extras_prefix, ef.name, path)) return true;
+        }
+        return false;
+    }
 };
+
+/// Whether the virtual `file` is `path` itself or lies in directory `path`.
+fn virtualFileIsAtOrBelow(file: []const u8, path: []const u8) bool {
+    if (!std.mem.startsWith(u8, file, path)) return false;
+    if (file.len == path.len) return true;
+    return std.mem.endsWith(u8, path, "/") or file[path.len] == '/';
+}
+
+/// `virtualFileIsAtOrBelow` for the extra file `<prefix><name>.roc`: the file
+/// itself, or a directory containing `prefix`, which ends with `/`.
+fn extraIsAtOrBelow(prefix: []const u8, name: []const u8, path: []const u8) bool {
+    return matchesExtra(prefix, name, path) or virtualFileIsAtOrBelow(prefix, path);
+}
 
 fn matchesExtra(prefix: []const u8, name: []const u8, path: []const u8) bool {
     const suffix = ".roc";
@@ -452,7 +479,11 @@ fn echoJoinPath(ctx_ptr: ?*anyopaque, _: std.Io, parts: []const []const u8, gpa:
     return echoGetCtx(ctx_ptr).fallback.joinPath(parts, gpa);
 }
 fn echoCanonicalize(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, gpa: Allocator) Io.CanonicalizeError![]const u8 {
-    return echoGetCtx(ctx_ptr).fallback.canonicalize(path, gpa);
+    const self = echoGetCtx(ctx_ptr);
+    const resolved = try std.fs.path.resolvePosix(gpa, &.{path});
+    if (self.isVirtualTreePath(resolved)) return resolved;
+    gpa.free(resolved);
+    return self.fallback.canonicalize(path, gpa);
 }
 fn echoMakePath(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) Io.MakePathError!void {
     return echoGetCtx(ctx_ptr).fallback.makePath(path);
