@@ -1473,6 +1473,19 @@ pub const LowLevel = enum(u16) {
         return self.arcBorrowedResultVariant().?.rcEffect();
     }
 
+    /// Ownership signature ARC solves for a dead-lender read when it may not
+    /// consume the lender (`consume_dead_boxes` off), so emission always
+    /// selects the borrowing variant. `Box.unbox`'s payload borrows its box.
+    /// An erased frame's capture record is always an owned container
+    /// (design.md "Constraints Per Statement Form"): it takes its own unit
+    /// and leaves the reuse argument unconsumed, so a repack of that
+    /// allocation as the frame's result is not held back by reads of the
+    /// captures that follow it.
+    pub fn arcLiveLenderRcEffect(self: LowLevel) RcEffect {
+        if (self == .erased_capture_load) return .retainsResult();
+        return self.arcBorrowedResultVariant().?.rcEffect();
+    }
+
     /// Whether ARC solves this operation through its borrowed-result variant
     /// and materializes the ordinary operation, which consumes the lender
     /// argument, exactly when the result is owned. An ownership demand on such

@@ -757,8 +757,8 @@ pub const Builder = struct {
     /// `union_value`, the tag at position `variant` among its union's tags, into
     /// `target`; `only` is set when that payload is its tag's only one. A
     /// tag's only payload that can hold refcounted data is the whole active
-    /// variant, so it is read as an ownership-complete projection of the
-    /// union (`tag_payload_struct`) into independent frame storage: ARC can
+    /// variant, so it is read as an ownership-complete tag payload read of
+    /// the union (`tag_payload_struct`) into independent frame storage: ARC can
     /// move the union's unit into it and take its fields. Any other payload
     /// is a component address borrowed from the union.
     pub fn readDynamicTagPayloadInto(self: *Builder, target: LocalId, union_value: LocalId, desc: LocalId, variant: usize, payload_index: u32, only: bool) Allocator.Error!void {

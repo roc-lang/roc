@@ -789,7 +789,7 @@ pub const Ctx = struct {
         const local = self.state.binder_locals.get(binder) orelse invariant("a pattern binder has no local");
         // A dynamic binder's `ref.local` copies the matched value's bytes by
         // its descriptor, and is the pure same-value alias ARC follows from a
-        // payload projection to its uses.
+        // tag payload read to its uses.
         return try self.b.store.addCFStmt(.{ .assign_ref = .{ .target = local, .op = LIR.RefOp.local(source), .next = next } }, self.b.origin(.source));
     }
 

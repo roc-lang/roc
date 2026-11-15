@@ -23142,6 +23142,12 @@ generates constraints per statement:
   reads it again on a failure path. The owner operand keeps the allocation
   live across the read of its capture bytes, so no release of the reuse
   argument can precede it. Post-ARC LIR contains only the borrowing load.
+  Where the selection is off and every dead-lender read borrows, the load
+  is solved as a non-consuming read whose record takes its own unit
+  (`LowLevel.arcLiveLenderRcEffect`): the borrowing copy and a capture-record
+  `incref`, with the reuse argument left live. The record is still an owned
+  container rather than a borrow of the reuse argument, so a repack of that
+  allocation as the result never has to preserve it for later capture reads.
 - `join` / `jump`: each join parameter's resources get modes and lifetime
   relations like an intra-proc signature. `set_local` with
   `initialize_join_param` followed by `jump` is a flow edge from the

@@ -943,7 +943,7 @@ const Solver = struct {
 };
 
 fn inferenceRcEffect(solver: *const Solver, op: anytype, declared: anytype) @TypeOf(declared) {
-    if (!solver.consume_dead_boxes and op.deadLenderArg() != null) return op.arcBorrowedResultVariant().?.rcEffect();
+    if (!solver.consume_dead_boxes and op.deadLenderArg() != null) return op.arcLiveLenderRcEffect();
     return op.arcInferenceRcEffect(declared);
 }
 
@@ -1744,7 +1744,7 @@ fn computeOutcomeRestitution(
                     },
                     .assign_low_level => |assign| {
                         const effect = if (!consume_dead_boxes and assign.op.deadLenderArg() != null)
-                            assign.op.arcBorrowedResultVariant().?.rcEffect()
+                            assign.op.arcLiveLenderRcEffect()
                         else
                             assign.op.arcInferenceRcEffect(store.stmtRow(assign.rc_effect));
                         // Stored arguments may move their entry unit into the
@@ -5219,7 +5219,7 @@ const UniquenessComponentTask = struct {
             if (node.* == .assign_low_level) {
                 const assign = node.assign_low_level;
                 const effect = if (!self.consume_dead_boxes and assign.op.deadLenderArg() != null)
-                    assign.op.arcBorrowedResultVariant().?.rcEffect()
+                    assign.op.arcLiveLenderRcEffect()
                 else
                     assign.op.arcInferenceRcEffect(self.store.stmtRow(assign.rc_effect));
                 const args = self.store.getLocalSpan(assign.args);
@@ -5612,7 +5612,7 @@ fn settleUniquenessOracle(
                 if (node.* == .assign_low_level) {
                     const assign = node.assign_low_level;
                     const rc_effect = if (!consume_dead_boxes and assign.op.deadLenderArg() != null)
-                        assign.op.arcBorrowedResultVariant().?.rcEffect()
+                        assign.op.arcLiveLenderRcEffect()
                     else
                         assign.op.arcInferenceRcEffect(store.stmtRow(assign.rc_effect));
                     const check_mask = rc_effect.may_runtime_uniqueness_check_args;
@@ -6138,7 +6138,7 @@ fn computeUniquenessDetailed(
             },
             .assign_low_level => |assign| {
                 const rc_effect = if (!consume_dead_boxes and assign.op.deadLenderArg() != null)
-                    assign.op.arcBorrowedResultVariant().?.rcEffect()
+                    assign.op.arcLiveLenderRcEffect()
                 else
                     assign.op.arcInferenceRcEffect(store.stmtRow(assign.rc_effect));
                 marks.trackDef(&has_def, &multi_def, assign.target);
