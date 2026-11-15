@@ -15461,6 +15461,12 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     var keep_oracle = try HoistedRootKeepOracle.init(self.gpa, self.selected_hoisted_roots.items, keep_roots);
     defer keep_oracle.deinit(self.gpa);
 
+    const reaches_rejected = try self.hoistedRootsReachingRejectedCode();
+    defer self.gpa.free(reaches_rejected);
+
+    var stability = HoistedStabilityCache{};
+    defer stability.deinit(self.gpa);
+
     var kept_count: usize = 0;
     var kept_expr_count: u32 = 0;
     var kept_pattern_count: u32 = 0;
@@ -15469,7 +15475,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         keep_oracle.current_root_index = i;
         const intrinsic = !self.selectedHoistedRootNamesRetiredBinder(root.*) and
             (root.body == .pattern_error or root.body == .valueless_binding or !self.hoistExprInvalidated(root.expr)) and
-            !try self.hoistedRootReachesRejectedCode(root.*) and
+            !reaches_rejected[i] and
             try self.hoistedRootIsIntrinsicallyKept(root);
         // Top-level extractions define names; they are not optional hoists.
         // Like ordinary top-level constants, their complete checked bodies
@@ -15478,7 +15484,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         const deps = intrinsic and (self.selectedHoistedRootIsTopLevel(root.*) or
             root.body == .pattern_error or
             root.body == .valueless_binding or
-            try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle));
+            try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle, &stability));
         if (!intrinsic) continue;
         if (!deps) continue;
 
@@ -15567,14 +15573,47 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
 /// expression checking replaced with its error after selection. An error
 /// poisons every expression that depends on it, so the root evaluates at
 /// runtime instead, where it reaches the error in source order.
-fn hoistedRootReachesRejectedCode(self: *Self, root: hoist_roots.SelectedHoistedRoot) Allocator.Error!bool {
-    switch (root.body) {
-        .pattern_error, .valueless_binding => return false,
-        .expr, .pattern_extraction, .pattern_validation => {},
+/// For each selected root, by index, whether its expression reaches code
+/// checking rejected: an expression of its subtree that is a rejected
+/// instantiation, invalidated, or a runtime error. Roots nest, so each root
+/// expression's subtree is walked only down to the root expressions nested
+/// in it, and a root's answer combines its own region's with theirs.
+fn hoistedRootsReachingRejectedCode(self: *Self) Allocator.Error![]bool {
+    const roots = self.selected_hoisted_roots.items;
+    const answers = try self.gpa.alloc(bool, roots.len);
+    errdefer self.gpa.free(answers);
+    @memset(answers, false);
+
+    // One region per distinct root expression a walking root names.
+    var region_of: std.AutoHashMapUnmanaged(CIR.Expr.Idx, u32) = .empty;
+    defer region_of.deinit(self.gpa);
+    var region_exprs: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
+    defer region_exprs.deinit(self.gpa);
+    for (roots) |root| {
+        switch (root.body) {
+            .pattern_error, .valueless_binding => continue,
+            .expr, .pattern_extraction, .pattern_validation => {},
+        }
+        const entry = try region_of.getOrPut(self.gpa, root.expr);
+        if (entry.found_existing) continue;
+        entry.value_ptr.* = @intCast(region_exprs.items.len);
+        try region_exprs.append(self.gpa, root.expr);
     }
+
+    const region_count = region_exprs.items.len;
+    const reaches = try self.gpa.alloc(bool, region_count);
+    defer self.gpa.free(reaches);
+    @memset(reaches, false);
+    // The regions directly nested in each region, as edges from parent to child.
+    var nested_heads = try self.gpa.alloc(u32, region_count);
+    defer self.gpa.free(nested_heads);
+    const no_edge = std.math.maxInt(u32);
+    @memset(nested_heads, no_edge);
+    var nested_edges: std.ArrayListUnmanaged(struct { child: u32, next: u32 }) = .empty;
+    defer nested_edges.deinit(self.gpa);
+
     var work: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
     defer work.deinit(self.gpa);
-    try work.append(self.gpa, root.expr);
     const Collector = struct {
         work: *std.ArrayListUnmanaged(CIR.Expr.Idx),
         gpa: Allocator,
@@ -15587,12 +15626,63 @@ fn hoistedRootReachesRejectedCode(self: *Self, root: hoist_roots.SelectedHoisted
 
         fn reassignTarget(_: @This(), _: CIR.Pattern.Idx) Allocator.Error!void {}
     };
-    while (work.pop()) |expr| {
-        if (self.rejected_instantiation_exprs.contains(expr) or self.hoistExprInvalidated(expr)) return true;
-        if (self.cir.store.getExpr(expr) == .e_runtime_error) return true;
-        try self.visitExprChildren(expr, Collector{ .work = &work, .gpa = self.gpa });
+    for (region_exprs.items, 0..) |region_expr, region| {
+        work.clearRetainingCapacity();
+        try work.append(self.gpa, region_expr);
+        while (work.pop()) |expr| {
+            if (expr != region_expr) {
+                if (region_of.get(expr)) |child| {
+                    try nested_edges.append(self.gpa, .{ .child = child, .next = nested_heads[region] });
+                    nested_heads[region] = @intCast(nested_edges.items.len - 1);
+                    continue;
+                }
+            }
+            if (self.rejected_instantiation_exprs.contains(expr) or self.hoistExprInvalidated(expr) or
+                self.cir.store.getExpr(expr) == .e_runtime_error)
+            {
+                reaches[region] = true;
+                break;
+            }
+            try self.visitExprChildren(expr, Collector{ .work = &work, .gpa = self.gpa });
+        }
     }
-    return false;
+
+    // Combine each region's answer with its nested regions', children first.
+    // Nesting follows the expression tree, so the regions form a forest.
+    const visited = try self.gpa.alloc(bool, region_count);
+    defer self.gpa.free(visited);
+    @memset(visited, false);
+    var stack: std.ArrayListUnmanaged(struct { region: u32, expanded: bool }) = .empty;
+    defer stack.deinit(self.gpa);
+    for (0..region_count) |start| {
+        if (visited[start]) continue;
+        try stack.append(self.gpa, .{ .region = @intCast(start), .expanded = false });
+        while (stack.pop()) |frame| {
+            if (frame.expanded) {
+                var edge = nested_heads[frame.region];
+                while (edge != no_edge) : (edge = nested_edges.items[edge].next) {
+                    if (reaches[nested_edges.items[edge].child]) reaches[frame.region] = true;
+                }
+                continue;
+            }
+            if (visited[frame.region]) continue;
+            visited[frame.region] = true;
+            try stack.append(self.gpa, .{ .region = frame.region, .expanded = true });
+            var edge = nested_heads[frame.region];
+            while (edge != no_edge) : (edge = nested_edges.items[edge].next) {
+                const child = nested_edges.items[edge].child;
+                if (!visited[child]) try stack.append(self.gpa, .{ .region = child, .expanded = false });
+            }
+        }
+    }
+
+    for (roots, answers) |root, *answer| {
+        switch (root.body) {
+            .pattern_error, .valueless_binding => {},
+            .expr, .pattern_extraction, .pattern_validation => answer.* = reaches[region_of.get(root.expr).?],
+        }
+    }
+    return answers;
 }
 
 fn hoistedRootIsIntrinsicallyKept(
@@ -15657,6 +15747,8 @@ fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
 
     var keep_oracle = try HoistedRootKeepOracle.init(self.gpa, self.selected_hoisted_roots.items, keep_roots);
     defer keep_oracle.deinit(self.gpa);
+    var stability = HoistedStabilityCache{};
+    defer stability.deinit(self.gpa);
 
     for (self.selected_hoisted_roots.items, 0..) |root, i| {
         if (root.body == .pattern_error) {
@@ -15671,7 +15763,7 @@ fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
         // the optional-hoist dependency predicate.
         if (self.selectedHoistedRootIsTopLevel(root)) continue;
         keep_oracle.current_root_index = i;
-        if (!try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle)) {
+        if (!try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle, &stability)) {
             hoistSelectionInvariant("kept selected hoisted root has unavailable dependency");
         }
     }
@@ -15980,6 +16072,7 @@ fn hoistedRootDependenciesAreKept(
     self: *Self,
     expr: CIR.Expr.Idx,
     keep_oracle: *const HoistedRootKeepOracle,
+    stability: *HoistedStabilityCache,
 ) Allocator.Error!bool {
     var context = HoistedDependencyContext{};
     defer context.deinit(self.gpa);
@@ -15989,7 +16082,7 @@ fn hoistedRootDependenciesAreKept(
     while (pending.pop()) |step| {
         const start = pending.items.len;
         const kept = switch (step) {
-            .expr => |child| try self.hoistedRootExprStep(child, &context, keep_oracle, &pending),
+            .expr => |child| try self.hoistedRootExprStep(child, &context, keep_oracle, stability, &pending),
             .statement => |statement| try self.hoistedRootStatementStep(statement, &pending),
             // Binders introduced and consumed inside this root are transient
             // evaluation state. They need neither separate selected roots nor
@@ -16050,6 +16143,7 @@ fn hoistedRootExprStep(
     expr: CIR.Expr.Idx,
     context: *HoistedDependencyContext,
     keep_oracle: *const HoistedRootKeepOracle,
+    stability: *HoistedStabilityCache,
     pending: *std.ArrayListUnmanaged(HoistedKeptStep),
 ) Allocator.Error!bool {
     if (self.hoistExprInvalidated(expr)) return false;
@@ -16132,7 +16226,7 @@ fn hoistedRootExprStep(
             break :blk true;
         },
         .e_call => |call| blk: {
-            if (!try self.hoistedRootCalleeAllowsStoredConst(call.func, context)) break :blk false;
+            if (!try self.hoistedRootCalleeAllowsStoredConst(call.func, context, stability)) break :blk false;
             try pending.append(gpa, .{ .expr = call.func });
             break :blk try self.pushHoistedKeptExprs(pending, call.args);
         },
@@ -16240,6 +16334,7 @@ fn publishCallableCheckingFacts(self: *Self) Allocator.Error!void {
             .context = &context,
             .publication = .{ .graph = &graph, .ids = &ids, .caller = caller },
         };
+        defer scan.deinit();
         if (!try StoredConstScan.Eval.runWith(self.gpa, &scratch, &scan, .{ .expr = .{
             .module = self.cir,
             .expr = self.cir.store.getDef(def).expr,
@@ -16278,10 +16373,27 @@ fn hoistedRootCalleeAllowsStoredConst(
     self: *Self,
     callee: CIR.Expr.Idx,
     context: *HoistedDependencyContext,
+    stability: *HoistedStabilityCache,
 ) Allocator.Error!bool {
-    var scan = StoredConstScan{ .check = self, .context = context };
+    var scan = StoredConstScan{ .check = self, .context = context, .shared = stability };
+    defer scan.deinit();
     return StoredConstScan.Eval.run(self.gpa, &scan, .{ .callee = .{ .module = self.cir, .callee = callee } });
 }
+
+/// The stability of callees, shared by every root one pass over the selected
+/// hoisted roots scans, so a callee reached from many roots is scanned once.
+/// It holds only results that are final: a callee walked while one of its
+/// callers was still being walked, and reached again through recursion, is
+/// assumed stable there, which holds only within that walk.
+const HoistedStabilityCache = struct {
+    local_procedures: collections.DenseMapUnmanaged(CIR.Expr.Idx, bool) = .{},
+    callables: std.AutoHashMapUnmanaged(HoistedCallableKey, bool) = .{},
+
+    fn deinit(self: *@This(), allocator: Allocator) void {
+        self.local_procedures.deinit(allocator);
+        self.callables.deinit(allocator);
+    }
+};
 
 /// Whether evaluating an expression, and every callee it can reach, is
 /// stable enough to store as a compile-time constant. Callee bodies are
@@ -16295,6 +16407,47 @@ const StoredConstScan = struct {
         ids: *const collections.DenseMap(CIR.Def.Idx, callable_checking.Id),
         caller: callable_checking.Id,
     } = null,
+    /// Final results shared with other scans, read before walking a callee
+    /// and written when a walk's result is final.
+    shared: ?*HoistedStabilityCache = null,
+    /// The callees being walked, outermost first, each with the lowest
+    /// position among them that its walk reached again through recursion.
+    /// A walk whose lowest position is its own has a final result.
+    open: std.ArrayListUnmanaged(u32) = .empty,
+    /// Each callee being walked's position in `open`.
+    open_local_procedures: collections.DenseMapUnmanaged(CIR.Expr.Idx, u32) = .{},
+    open_callables: std.AutoHashMapUnmanaged(HoistedCallableKey, u32) = .{},
+
+    fn deinit(scan: *StoredConstScan) void {
+        const gpa = scan.check.gpa;
+        scan.open.deinit(gpa);
+        scan.open_local_procedures.deinit(gpa);
+        scan.open_callables.deinit(gpa);
+    }
+
+    /// Record that the innermost open walk reached the open walk at
+    /// `position` again.
+    fn reachOpen(scan: *StoredConstScan, position: u32) void {
+        const low = &scan.open.items[scan.open.items.len - 1];
+        low.* = @min(low.*, position);
+    }
+
+    /// Open a walk, returning its position.
+    fn openWalk(scan: *StoredConstScan) Allocator.Error!u32 {
+        const position: u32 = @intCast(scan.open.items.len);
+        try scan.open.append(scan.check.gpa, position);
+        return position;
+    }
+
+    /// Close the innermost walk, whose position is `position`, returning
+    /// whether its result is final, and pass what it reached on to the walk
+    /// enclosing it.
+    fn closeWalk(scan: *StoredConstScan, position: u32) bool {
+        std.debug.assert(scan.open.items.len == position + 1);
+        const low = scan.open.pop().?;
+        if (scan.open.items.len != 0) scan.reachOpen(low);
+        return low == position;
+    }
 
     const Leaf = union(enum) {
         expr: struct { module: *const ModuleEnv, expr: CIR.Expr.Idx },
@@ -16334,8 +16487,13 @@ const StoredConstScan = struct {
                 return .{ .group = .all };
             },
             .local_procedure => |lambda| {
-                if (scan.context.local_procedure_stability.get(lambda)) |state| return stateValue(state);
+                if (scan.context.local_procedure_stability.get(lambda)) |state| {
+                    if (state == .visiting) scan.reachOpen(scan.open_local_procedures.get(lambda).?);
+                    return stateValue(state);
+                }
+                if (scan.shared) |shared| if (shared.local_procedures.get(lambda)) |stable| return .{ .value = stable };
                 try scan.context.local_procedure_stability.put(self.gpa, lambda, .visiting);
+                try scan.open_local_procedures.put(self.gpa, lambda, try scan.openWalk());
                 try addExpr(items, self.cir, lambda);
                 return .{ .group = .all };
             },
@@ -16353,8 +16511,13 @@ const StoredConstScan = struct {
                     .module_addr = @intFromPtr(callable_def.module),
                     .def = callable_def.def,
                 };
-                if (scan.context.callable_stability.get(key)) |state| return stateValue(state);
+                if (scan.context.callable_stability.get(key)) |state| {
+                    if (state == .visiting) scan.reachOpen(scan.open_callables.get(key).?);
+                    return stateValue(state);
+                }
+                if (scan.shared) |shared| if (shared.callables.get(key)) |stable| return .{ .value = stable };
                 try scan.context.callable_stability.put(self.gpa, key, .visiting);
+                try scan.open_callables.put(self.gpa, key, try scan.openWalk());
                 const def = callable_def.module.store.getDef(callable_def.def);
                 try addExpr(items, callable_def.module, def.expr);
                 return .{ .group = .all };
@@ -16362,7 +16525,13 @@ const StoredConstScan = struct {
             .statement => |statement| {
                 const module = statement.module;
                 switch (module.store.getStatement(statement.statement)) {
-                    inline .s_decl, .s_var, .s_reassign, .s_expr => |decl| try addExpr(items, module, decl.expr),
+                    // A promoted local procedure's body is walked once, as
+                    // the procedure, however many places reach it.
+                    .s_decl => |decl| if (self.promotedLocalProcedureDeclaredBy(module, decl.pattern, decl.expr)) |lambda|
+                        try items.add(.{ .local_procedure = lambda })
+                    else
+                        try addExpr(items, module, decl.expr),
+                    inline .s_var, .s_reassign, .s_expr => |decl| try addExpr(items, module, decl.expr),
                     .s_dbg,
                     .s_expect,
                     => return .{ .value = false },
@@ -16531,15 +16700,36 @@ const StoredConstScan = struct {
         const stable = result orelse return;
         const state: HoistedCallableState = if (stable) .stable else .unstable;
         switch (leaf) {
-            .local_procedure => |lambda| scan.context.local_procedure_stability.getPtr(lambda).?.* = state,
-            .callable_def => |callable_def| scan.context.callable_stability.getPtr(.{
-                .module_addr = @intFromPtr(callable_def.module),
-                .def = callable_def.def,
-            }).?.* = state,
+            .local_procedure => |lambda| {
+                scan.context.local_procedure_stability.getPtr(lambda).?.* = state;
+                const final = scan.closeWalk(scan.open_local_procedures.fetchRemove(lambda).?.value);
+                // An unstable result is final however the walk ended.
+                if (scan.shared) |shared| if (final or !stable) try shared.local_procedures.put(scan.check.gpa, lambda, stable);
+            },
+            .callable_def => |callable_def| {
+                const key: HoistedCallableKey = .{
+                    .module_addr = @intFromPtr(callable_def.module),
+                    .def = callable_def.def,
+                };
+                scan.context.callable_stability.getPtr(key).?.* = state;
+                const final = scan.closeWalk(scan.open_callables.fetchRemove(key).?.value);
+                if (scan.shared) |shared| if (final or !stable) try shared.callables.put(scan.check.gpa, key, stable);
+            },
             .expr, .statement, .callee => {},
         }
     }
 };
+
+/// The lambda of the promoted local procedure a declaration of this module
+/// binding `pattern` to `expr` declares, if it declares one.
+fn promotedLocalProcedureDeclaredBy(self: *Self, module: *const ModuleEnv, pattern: CIR.Pattern.Idx, expr: CIR.Expr.Idx) ?CIR.Expr.Idx {
+    if (module != self.cir) return null;
+    if (!self.promoted_local_procedure_patterns.contains(pattern)) return null;
+    const candidate = self.local_procedure_candidates.get(pattern) orelse
+        hoistSelectionInvariant("promoted local procedure had no candidate record");
+    std.debug.assert(candidate.expr == expr);
+    return candidate.expr;
+}
 
 /// The lambda of the promoted local procedure a callee expression of this
 /// module names, if it names one.
@@ -19448,6 +19638,20 @@ fn recordCallEffect(self: *Self, function_var: Var) Allocator.Error!bool {
             try self.recordCurrentFunctionEffectDependency(function_var);
             return false;
         },
+    }
+}
+
+/// A call of a function its scheme was instantiated for at this call depends
+/// on the copy's effect dependencies, not on the copy: nothing else holds
+/// the copy, so its own effect-polymorphic kind is never made effectful,
+/// and calling it is effectful exactly when a dependency is.
+fn recordFreshCalleeEffectDependencies(self: *Self, function_var: Var) Allocator.Error!void {
+    switch (self.types.resolveVar(function_var).desc.content) {
+        .structure => |flat| switch (flat) {
+            .fn_unbound => |func| for (self.types.sliceVars(func.effect_deps)) |dep| try self.recordCurrentFunctionEffectDependency(dep),
+            .fn_pure, .fn_effectful, .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => try self.recordCurrentFunctionEffectDependency(function_var),
+        },
+        .flex, .rigid, .alias, .field_presence, .err => try self.recordCurrentFunctionEffectDependency(function_var),
     }
 }
 
@@ -34095,7 +34299,10 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
         try self.functionEffectState(func_var);
     switch (call_effect_state) {
         .effectful => task.does_fx = true,
-        .unresolved => try self.recordCurrentFunctionEffectDependency(func_var),
+        .unresolved => if (state.callee_scheme != null and !self.callTargetIsInFlightRecursiveRef(call.func))
+            try self.recordFreshCalleeEffectDependencies(func_var)
+        else
+            try self.recordCurrentFunctionEffectDependency(func_var),
         .pure => {},
     }
 
