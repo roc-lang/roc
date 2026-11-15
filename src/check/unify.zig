@@ -876,7 +876,7 @@ const Unifier = struct {
     };
 
     fn scheduleGuardedPair(self: *Self, a_var: Var, b_var: Var, on_mismatch: MismatchHandling) std.mem.Allocator.Error!void {
-        try self.pushWorkFrame(.{ .mismatch_handler = on_mismatch });
+        try self.pushMismatchHandler(on_mismatch);
         try self.pushWorkFrame(.{ .guarded_pair = .{
             .a = a_var,
             .b = b_var,
@@ -890,12 +890,21 @@ const Unifier = struct {
         relation: RootRelation,
         on_mismatch: MismatchHandling,
     ) std.mem.Allocator.Error!void {
-        try self.pushWorkFrame(.{ .mismatch_handler = on_mismatch });
+        try self.pushMismatchHandler(on_mismatch);
         try self.pushWorkFrame(.{ .root_pair = .{
             .a = a_var,
             .b = b_var,
             .relation = relation,
         } });
+    }
+
+    /// Push the handler for a mismatch raised by the frames pushed after it.
+    /// A mismatch that propagates gets no frame: unwinding passes over such a
+    /// frame and running it does nothing, so the stack behaves the same
+    /// without it.
+    fn pushMismatchHandler(self: *Self, on_mismatch: MismatchHandling) std.mem.Allocator.Error!void {
+        if (on_mismatch == .propagate) return;
+        try self.pushWorkFrame(.{ .mismatch_handler = on_mismatch });
     }
 
     fn scheduleMerge(self: *Self, vars: ResolvedVarDescs, content: Content) std.mem.Allocator.Error!void {
