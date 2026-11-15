@@ -23900,6 +23900,27 @@ cannot change variant symbols or emitted LIR. Submission or callback failure
 drains accepted work before freeing its owners; insertion failure discards the
 entire result rather than replaying work against a partially emitted store.
 
+Without uniqueness proofs, as in dev builds and compile-time evaluation, and
+when every statement belongs to exactly one procedure's statement list,
+nothing a procedure's planning or emission reads depends on another
+procedure's source preparation: a complete projection read is decided by the
+one source procedure whose statement list holds it, and an emission consults
+only its own source's decisions. (Procedures may share an ownership-neutral
+body; a statement two of them share takes the decision of the last source to
+decide it, so such a program uses the phased schedule below.) Procedure facts are recorded before
+the first wave, and each wave of owners is one ordered run ("Ordered Runs")
+whose task prepares a base owner's source, plans the owner, and emits it when
+its plan requests no variant. A variant reads its base procedure's prepared
+source, so a wave holds base owners or variants, never both, and every base
+wave precedes every variant wave. The wave then reserves its variants in owner
+order, emits the owners whose plans requested any in a second run, and
+appends every shard in owner order. A shard emitted before the wave's
+reservations names the shorter procedure prefix it was cloned from; appending
+relocates it exactly like one emitted after them. Proving uniqueness settles
+against every source's prepared projections, so that schedule prepares every
+source before any wave and plans, reserves and emits each wave in three
+executor round trips.
+
 A build without optional mode specialization suppresses general cost-only
 demand vectors, but it does not force every call to the solved base `RcSig`.
 Two exact ownership schedules remain mandatory in every ARC run: an owned

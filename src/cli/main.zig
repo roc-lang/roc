@@ -19198,6 +19198,8 @@ fn arcStepLabel(step: lir.CheckedPipeline.ArcTiming.Step) []const u8 {
         .emission_workers => "Emission Workers",
         .shard_append => "Shard Append",
         .certify => "Certification",
+        .procedure_tasks => "Procedure Tasks",
+        .procedure_task_workers => "Procedure Task Workers",
         .parallel_capacity => "Idle Workers",
     };
 }
@@ -19209,7 +19211,8 @@ fn recordArcDetail(reporter: *progress.Reporter, snapshot: lir.CheckedPipeline.T
     var rows: [ArcTiming.step_count]progress.SubTiming = undefined;
     const workers = snapshot.arc_steps_ns[@backingInt(ArcTiming.Step.source_prep_workers)] +|
         snapshot.arc_steps_ns[@backingInt(ArcTiming.Step.planning_workers)] +|
-        snapshot.arc_steps_ns[@backingInt(ArcTiming.Step.emission_workers)];
+        snapshot.arc_steps_ns[@backingInt(ArcTiming.Step.emission_workers)] +|
+        snapshot.arc_steps_ns[@backingInt(ArcTiming.Step.procedure_task_workers)];
     inline for (@typeInfo(ArcTiming.Step).@"enum".field_names, 0..) |name, index| {
         const step = @field(ArcTiming.Step, name);
         const ns = snapshot.arc_steps_ns[index];
