@@ -2974,18 +2974,6 @@ pub const ProgramBuilder = struct {
         return try Common.appendSpan(ExprId, &self.expr_ids, self.allocator, ids);
     }
 
-    pub fn exprSpan(self: *const ProgramBuilder, span_: Span(ExprId)) ProgramSpanBorrow(ExprId, "expr_ids") {
-        return self.expr_ids.borrowSpan(span_.start, span_.len);
-    }
-
-    pub fn addStmtSpan(self: *ProgramBuilder, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
-        return try Common.appendSpan(StmtId, &self.stmt_ids, self.allocator, ids);
-    }
-
-    pub fn stmtSpan(self: *const ProgramBuilder, span_: Span(StmtId)) ProgramSpanBorrow(StmtId, "stmt_ids") {
-        return self.stmt_ids.borrowSpan(span_.start, span_.len);
-    }
-
     pub fn addPatSpan(self: *ProgramBuilder, ids: []const PatId) std.mem.Allocator.Error!Span(PatId) {
         return try Common.appendSpan(PatId, &self.pat_ids, self.allocator, ids);
     }
