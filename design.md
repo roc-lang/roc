@@ -22157,17 +22157,23 @@ An exit is shared when all of the following hold.
   copying it adds its statements once more, so a shorter exit (a lone
   `ret`, or a result alias and a `ret`) is no smaller shared than copied
   and stays in the body.
-- The loop enters it only at its first statement. No other exit begins
-  inside it, and no branch on the cycle has its continuation inside it. A
+- It is entered only at its first statement. No other exit begins inside
+  it, and no branch on the cycle has its continuation inside it. A
   branch's arms reach its continuation without crossing a join, so where
   arms run on into a continuation that is off the cycle, the exit that is
   shared begins at the continuation and the arms' own statements stay in
-  the loop.
+  the loop. Nor does any statement outside it lead to a statement inside
+  it other than the first: where two exits run together into the same
+  statements (a `break` that assigns a variable and then continues with
+  the code after the loop, which the loop's head also continues with),
+  neither is shared, and the statements from where they meet are an exit
+  of their own that both lead to. Sharing one of the two would copy what
+  they have in common once more.
 - Every jump inside it targets a join it declares itself or a join in scope
   where the loop is declared.
 - It holds no statement of an exit already shared.
-- No local it reads from the loop is also defined inside it, so each such
-  local has one value to carry out.
+- Every local it carries out of the loop and also defines is dead wherever
+  the exit jumps out to.
 
 Each shared exit gets a fresh join. What the exit carries out of the loop is
 explicit: every local it reads that the loop's parameters or the rest of the
@@ -22199,6 +22205,31 @@ writes the same parameters as the loop does, because they are read outside
 the body that is copied (`body_clone.keepExitParams`); every other local
 the exit read from the loop is now read only inside the loop and may be the
 copy's own.
+
+An exit may define a local the rest of the body also defines: a variable
+the loop assigns and the code after it assigns again. Two cases.
+
+- The exit defines the local before any read of it, on every path. It
+  never sees the loop's value, so the local is not carried, and the copy of
+  the exit keeps the local as it is.
+- Some path through the exit reads the local before defining it. The
+  loop's value is carried like any other, and the copy of the exit names
+  the parameter everywhere the exit named the local, definitions included.
+  Inside the copy every read sees the value it saw before. What changes is
+  that the exit no longer writes the local itself, and that is the same
+  procedure only when nothing that runs after the exit reads what the exit
+  left in it. An exit ends by returning or stopping, after which nothing
+  reads anything, or by jumping to a join outside itself. The condition is
+  that from the body of every such join, following the procedure's control
+  flow, no read of the local is reached before a definition of it. (An
+  exit can lead back into its own loop through an enclosing one, so reads
+  in the loop's body count like any others.) LIR initializes a local on
+  every path to a read, so the read that comes before a definition is also
+  what guarantees the local is initialized where the parameter is written.
+
+An exit that assigns a variable of an enclosing loop it has also read, and
+jumps back to that loop, fails the condition: the enclosing loop reads the
+variable. It stays in the body and is copied with it.
 
 For loop append promotion the shared exit is the body as promoted: a set in
 it dispatches on its owned flag and an append in it tests its limit,

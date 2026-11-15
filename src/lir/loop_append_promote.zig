@@ -3467,7 +3467,7 @@ const Pass = struct {
         // both versions continue into the same statements.
         var exits = std.ArrayList(body_clone.LoopExit).empty;
         defer exits.deinit(allocator);
-        try body_clone.shareLoopExits(self.store, join, max_join_id, allocator, &exits, new_locals, origin.kind);
+        try body_clone.shareLoopExits(self.store, join, proc_body, max_join_id, self.analysis, allocator, &exits, new_locals, origin.kind);
 
         var renamable = try body_clone.renamableBodyLocals(self.store, join.body, proc_body, self.analysis, allocator);
         defer renamable.deinit();
@@ -3621,7 +3621,7 @@ const Pass = struct {
         // both versions continue into the same statements.
         var exits = std.ArrayList(body_clone.LoopExit).empty;
         defer exits.deinit(allocator);
-        try body_clone.shareLoopExits(self.store, join, max_join_id, allocator, &exits, new_locals, origin.kind);
+        try body_clone.shareLoopExits(self.store, join, proc_body, max_join_id, self.analysis, allocator, &exits, new_locals, origin.kind);
 
         // Flags that may be zero inside the copy: measurements of lists the
         // chain did not carry, and every flag fed by one, to a fixpoint. The
