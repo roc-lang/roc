@@ -1060,10 +1060,25 @@ pub const Program = struct {
             .template => |template| return self.templateIdentity(template.module, template.template, template.binding),
             .lambda => |lambda| {
                 const site = try self.lambdaSite(lambda.module, lambda.expr);
-                const owner = try self.siteOwnerIdentity(site.owner);
+                const outer = self.worker(lambda.outer);
                 hasher.update("lambda");
-                hasher.update(&self.worker(lambda.outer).identityBytes(self));
-                hasher.update(&owner.bytes);
+                hasher.update(&outer.identityBytes(self));
+                // The site's owner is most often the outer worker's own
+                // template, which the outer worker's identity already
+                // names; any other owner is named by its identity.
+                const own_template = switch (outer.key) {
+                    .template => |outer_key| switch (site.owner) {
+                        .template => |owner| owner.module == outer_key.module and owner.template == outer_key.template,
+                        .default => false,
+                    },
+                    .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => false,
+                };
+                if (own_template) {
+                    hasher.update(&[_]u8{0});
+                } else {
+                    hasher.update(&[_]u8{1});
+                    hasher.update(&(try self.siteOwnerIdentity(site.owner)).bytes);
+                }
                 hashWord(&hasher, site.ordinal);
                 hasher.update(&[_]u8{@intFromBool(lambda.captured_scheme)});
             },

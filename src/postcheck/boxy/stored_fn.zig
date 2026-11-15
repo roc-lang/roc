@@ -1103,6 +1103,10 @@ const Encoder = struct {
     /// references index (`templateRef`).
     template_positions: std.ArrayList(u32) = .empty,
     template_slots: std.AutoHashMapUnmanaged(struct { module: types.ModuleIndex, template: checked_names.CheckedProcedureTemplateId }, u32) = .empty,
+    /// Whether the program's workers still name their own procedures, as
+    /// they do until its lowering finishes: a template's identity is then
+    /// read from its procedure rather than hashed again.
+    proc_identities: bool = false,
     bytes: std.ArrayList(u8) = .empty,
 
     fn deinit(self: *Encoder) void {
@@ -1429,9 +1433,10 @@ const Encoder = struct {
                     .generic => .template,
                     .list_int => .template_list_int,
                 });
-                // A finished program's procedures are compacted, so the identity
-                // comes from the key, not the worker's procedure.
-                try self.templateRef(key.module, key.template, program.templateIdentity(key.module, key.template, key.binding).bytes);
+                // A finished program's procedures are compacted, so there
+                // the identity comes from the key, not the worker's procedure.
+                const identity = if (self.proc_identities) record.identityBytes(program) else program.templateIdentity(key.module, key.template, key.binding).bytes;
+                try self.templateRef(key.module, key.template, identity);
                 switch (key.binding) {
                     .generic => {},
                     .list_int => |item| try self.bytes.append(self.allocator, @backingInt(item)),
@@ -2178,7 +2183,7 @@ test "function unit metadata rejects truncated records and invalid type and modu
 /// by module link identities, never by this lowering's ids or a checked
 /// snapshot that can change while the native object stays reusable. Caller frees.
 pub fn encodeNeeds(allocator: Allocator, program: *Program, needs: Tables.Needs) Allocator.Error![]const u8 {
-    var encoder = Encoder{ .allocator = allocator, .program = program, .link_names = true };
+    var encoder = Encoder{ .allocator = allocator, .program = program, .link_names = true, .proc_identities = true };
     defer encoder.deinit();
     try encoder.word(needs.input_count);
     try encoder.word(needs.desc_count);

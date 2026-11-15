@@ -227,7 +227,7 @@ pub const Digests = struct {
             .checking => hasher.update(&artifact.moduleEnvConst().checking_dependency.digest),
             .templates => for (artifact.exported_procedure_templates.templates.items()) |exported| self.hashTemplateRef(hasher, artifact, exported.template),
             .bindings => self.hashBindings(hasher, artifact),
-            .methods => self.hashMethods(hasher, artifact),
+            .methods => try self.hashMethods(hasher, artifact),
             .defaults => hasher.update(std.mem.asBytes(&@as(u32, @intCast(try artifact.bodies().defaultExprCount(self.gpa))))),
             .nominals => try self.hashNominals(hasher, artifact),
             .consts => try self.hashConsts(hasher, artifact),
@@ -322,7 +322,7 @@ pub const Digests = struct {
             self.hashTemplateRef(hasher, artifact, exported.template);
         }
         self.hashBindings(hasher, artifact);
-        self.hashMethods(hasher, artifact);
+        try self.hashMethods(hasher, artifact);
         hasher.update(std.mem.asBytes(&@as(u32, @intCast(try artifact.bodies().defaultExprCount(self.gpa)))));
         try self.hashNominals(hasher, artifact);
         try self.hashConsts(hasher, artifact);
@@ -342,19 +342,82 @@ pub const Digests = struct {
         }
     }
 
-    fn hashMethods(self: *Digests, hasher: *Sha256, artifact: *const Artifact) void {
-        for (artifact.method_registry.entries.items()) |entry| {
-            const target = entry.target orelse {
-                hashTag(hasher, "rejected");
-                continue;
-            };
-            hashTag(hasher, @tagName(std.meta.activeTag(target.kind)));
-            switch (target.kind) {
-                .procedure => |procedure| self.hashTemplateRef(hasher, artifact, procedure.template),
-                .callable_binding => |binding| hashBytes(hasher, std.mem.asBytes(&@backingInt(binding.template))),
-                .local_proc, .structural => {},
+    /// `artifact`'s registered methods, each by its owner (a builtin, or a
+    /// nominal type by its name and its position among the module's
+    /// declarations sharing that name, as a lowering names it), its method
+    /// name, and its target, in an order none of their checked ids decides.
+    fn hashMethods(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
+        const entries = artifact.method_registry.entries.items();
+        if (entries.len == 0) return;
+        const names = &artifact.canonical_names;
+        const checked_types = artifact.typesView();
+        const declarations = checked_types.nominal_declarations;
+        // Each declaration's place among the declarations of its name,
+        // then the declarations by key for the owners' lookups.
+        const by_name = try self.gpa.alloc(u32, declarations.len);
+        defer self.gpa.free(by_name);
+        for (by_name, 0..) |*slot, index| slot.* = @intCast(index);
+        std.mem.sort(u32, by_name, checked_types, struct {
+            fn lessThan(types_view: CheckedArtifact.CheckedTypeStoreView, a: u32, b: u32) bool {
+                const name_a = @backingInt(types_view.nominalDeclarationName(types_view.nominal_declarations[a]));
+                const name_b = @backingInt(types_view.nominalDeclarationName(types_view.nominal_declarations[b]));
+                return name_a < name_b or (name_a == name_b and a < b);
             }
+        }.lessThan);
+        const Owner = struct { key: canonical.NominalTypeKey, name: canonical.TypeNameId, ordinal: u32 };
+        const owners = try self.gpa.alloc(Owner, declarations.len);
+        defer self.gpa.free(owners);
+        for (by_name, 0..) |index, at| {
+            const name = checked_types.nominalDeclarationName(declarations[index]);
+            const same = at != 0 and checked_types.nominalDeclarationName(declarations[by_name[at - 1]]) == name;
+            owners[at] = .{ .key = declarations[index].nominal, .name = name, .ordinal = if (same) owners[at - 1].ordinal + 1 else 0 };
         }
+        const keyOrder = struct {
+            fn lessThan(_: void, a: Owner, b: Owner) bool {
+                return keyLess(a.key, b.key);
+            }
+            fn keyLess(a: canonical.NominalTypeKey, b: canonical.NominalTypeKey) bool {
+                const module_a = @backingInt(a.module);
+                const module_b = @backingInt(b.module);
+                return module_a < module_b or (module_a == module_b and a.source_decl < b.source_decl);
+            }
+            fn order(key: canonical.NominalTypeKey, owner: Owner) std.math.Order {
+                if (keyLess(key, owner.key)) return .lt;
+                if (keyLess(owner.key, key)) return .gt;
+                return .eq;
+            }
+        };
+        std.mem.sort(Owner, owners, {}, keyOrder.lessThan);
+        const digests = try self.gpa.alloc([32]u8, entries.len);
+        defer self.gpa.free(digests);
+        for (entries, digests) |entry, *digest| {
+            var entry_hasher = Sha256.init(.{});
+            switch (entry.key.owner) {
+                .builtin => |builtin| hashTag(&entry_hasher, @tagName(builtin)),
+                .nominal => |key| {
+                    const found = std.sort.binarySearch(Owner, owners, key, keyOrder.order) orelse
+                        base.invariant("a registered method's owner is no nominal declaration of its module", .{});
+                    hashBytes(&entry_hasher, names.typeNameText(owners[found].name));
+                    entry_hasher.update(std.mem.asBytes(&owners[found].ordinal));
+                },
+            }
+            hashBytes(&entry_hasher, names.methodNameText(entry.key.method));
+            if (entry.target) |target| {
+                hashTag(&entry_hasher, @tagName(std.meta.activeTag(target.kind)));
+                switch (target.kind) {
+                    .procedure => |procedure| self.hashTemplateRef(&entry_hasher, artifact, procedure.template),
+                    .callable_binding => |binding| hashBytes(&entry_hasher, std.mem.asBytes(&@backingInt(binding.template))),
+                    .local_proc, .structural => {},
+                }
+            } else hashTag(&entry_hasher, "rejected");
+            digest.* = entry_hasher.finalResult();
+        }
+        std.mem.sort([32]u8, digests, {}, struct {
+            fn lessThan(_: void, a: [32]u8, b: [32]u8) bool {
+                return std.mem.order(u8, &a, &b) == .lt;
+            }
+        }.lessThan);
+        for (digests) |digest| hasher.update(&digest);
     }
 
     /// The names a lowering gives `artifact`'s nominal declarations: each
