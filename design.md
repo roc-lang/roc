@@ -17108,10 +17108,19 @@ entry wrapper restores the stored value, which the other objects of a link read
 through it, so an object lowered while a root was still pending would compute
 the root's body at every read instead. The coordinator's unit scheduler
 (`compile.coordinator.BoxyObjects`) therefore builds each module's object as
-soon as the module can have one, and no sooner: a module restored from the
-checked cache with its roots complete, or one with no roots, the moment it is
-type-checked, while checking continues; every other module the moment the
-evaluator completes its roots. Each unit lowers once its imports' units are
+soon as the module can have one and the compilation needs it, and no sooner: a
+module restored from the checked cache with its roots complete, or one with no
+roots, the moment it is type-checked, while checking continues; every other
+module the moment the evaluator completes its roots. A module's checked data
+says whether its evaluation will run a program against its imports' objects
+(`CompileTimeFinalization.evaluationLinksImportObjects`: a root still to
+evaluate under `.boxy` that the checked-value writer does not complete, and no
+platform requirements), so every compilation, `roc check` included, asks for
+the objects of such a module's import closure the moment the module is
+type-checked, and the units of those that can have an object build while
+checking continues. The evaluation asks for them again, for every such module,
+before it completes the value-form roots and builds the root graph, which
+matters after the scheduler starts over under the link's names. Each unit lowers once its imports' units are
 done, since its calls compile against their export interfaces, and the units
 run on the post-check executor alongside checking, the other units, and the
 evaluations of other modules. The evaluations run the same way: a module's
@@ -17146,7 +17155,9 @@ completes it (`BoxyObjectLowering.Materializer`), so the link reads them back
 without writing them again. While checking continues, a compilation that links
 its program builds only modules reachable through import edges from the root
 package's root and the platform root, which every module the root will see is,
-and leaves one worker to checking; after it, exactly the modules the root sees.
+beside the import closures evaluations need; every compilation leaves one
+worker to checking while it continues. After checking, a compilation that links
+its program builds exactly the modules the root sees.
 Every unit and program build is given the post-check executor, whichever thread
 runs it: a session may be opened on any thread, a running task included, and a
 thread waiting in a session runs that session's queued tasks itself, so the

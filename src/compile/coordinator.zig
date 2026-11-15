@@ -6501,16 +6501,20 @@ pub const Coordinator = struct {
 
         try self.completeModuleSuccessfully(pkg, result.module_id);
 
-        // A compilation that links the objects it builds builds each one as
-        // soon as the module can have one, while checking continues.
-        // Only a module the program's roots can reach is built this early:
-        // the root's exact visibility is known once the root is checked. A
-        // root module waits for that too, since the program's own root links
-        // no library object.
-        if (self.runtime_lowering != null) if (try self.boxyObjects()) |objects| {
+        if (try self.boxyObjects()) |objects| {
             if (self.moduleIsPlatformRoot(mod)) try objects.offerUnboundHosted();
+            // A compilation that links the objects it builds builds each one
+            // as soon as the module can have one, while checking continues.
+            // Only a module the program's roots can reach is built this
+            // early: the root's exact visibility is known once the root is
+            // checked. A root module waits for that too, since the program's
+            // own root links no library object.
             if (objects.lowering.links and !self.moduleIsRoot(mod) and try self.reachableFromRoots(mod)) try objects.offer(artifact_ptr);
-        };
+            // Every compilation's evaluation of this module's roots runs
+            // against the objects of its import closure, which the checked
+            // module names: they build while checking continues.
+            if (eval.CompileTimeFinalization.evaluationLinksImportObjects(artifact_ptr, self.value_form_roots)) try objects.offerClosure(artifact_ptr);
+        }
     }
 
     /// The compilation's Boxy unit scheduler: with `--specialize=no`, a
@@ -13922,6 +13926,137 @@ test "Boxy checked constants share across checkouts and survive unrelated applic
     try std.testing.expect(!parser_changed.cached and !parser_changed.stored_before_evaluation);
     try std.testing.expect(!std.mem.eql(u8, &input_changed.key, &parser_changed.key));
     try std.testing.expectEqual(@as(i64, 15), parser_changed.value);
+}
+
+const CheckOnlyError = CoordinatorError || eval.BuiltinModules.InitError || std.Thread.SpawnError || Coordinator.AppDiscoveryError ||
+    std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || std.Io.Dir.RealPathFileAllocError || error{ TestUnexpectedResult, TestExpectedEqual };
+
+const CheckOnlyObjectOffers = struct { helper: bool, unused: bool, plain: bool, scaled: bool, answer: ?i64 };
+
+/// Check an app whose `Scaled` module has a root the `.boxy` evaluator runs,
+/// reading `Helper`, and whose `Plain` module has only a value-form root and
+/// imports `Unused`, then report which modules' objects the unit scheduler
+/// was asked for when checking completed, and, when `evaluate`, the app's
+/// value after evaluation.
+fn checkOnlyObjectOffers(
+    allocator: Allocator,
+    mode: Mode,
+    max_threads: usize,
+    evaluate: bool,
+) CheckOnlyError!CheckOnlyObjectOffers {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeReuseFixture(&tmp,
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\import Scaled
+        \\import Plain
+        \\answer = Scaled.value + Plain.count
+    );
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Scaled.roc", .data =
+        \\module [value]
+        \\import Helper
+        \\value = Helper.double(21.I64)
+    });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Helper.roc", .data =
+        \\module [double]
+        \\double = |n| n * 2
+    });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Plain.roc", .data =
+        \\module [count, wrap]
+        \\import Unused
+        \\count = 3.I64
+        \\wrap = |x| Unused.same(x)
+    });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Unused.roc", .data =
+        \\module [same]
+        \\same = |x| x
+    });
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const path = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(path);
+    const core = CoreCtx.os(allocator, allocator, std.testing.io);
+    var manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = cache }, core);
+    defer manager.deinit();
+    var coord = try Coordinator.init(allocator, mode, max_threads, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, core);
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+    coord.specialization_strategy = .boxy;
+    coord.boxy_object_lowering = .{
+        .target = roc_target.RocTarget.detectNative(),
+        .config = .{
+            .specialization_strategy = .boxy,
+            .erased_capture_prefix = @import("builtins").erased_callable.hot_reload_capture_prefix_size,
+            .owned_proc_signatures = true,
+        },
+        .opt = "dev",
+        .inline_expects = false,
+    };
+    var arena = base.SingleThreadArena.init(allocator);
+    defer arena.deinit();
+    try coord.start();
+    try coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+    const objects = &(coord.boxy_objects orelse return error.TestUnexpectedResult);
+    const Named = struct {
+        fn artifact(c: *Coordinator, name: []const u8) error{TestUnexpectedResult}!*CheckedArtifact.CheckedModuleArtifact {
+            var modules = c.checked_artifact_index.valueIterator();
+            while (modules.next()) |location| {
+                const candidate = location.module().checkedArtifact().?;
+                if (std.mem.eql(u8, candidate.moduleEnvConst().module_name, name)) return candidate;
+            }
+            return error.TestUnexpectedResult;
+        }
+        fn offered(o: *const BoxyObjects, a: *const CheckedArtifact.CheckedModuleArtifact) bool {
+            return o.units.contains(a.key.bytes) or o.records.contains(a.key.bytes);
+        }
+    };
+    const scaled = try Named.artifact(&coord, "Scaled");
+    const result: CheckOnlyObjectOffers = .{
+        .helper = Named.offered(objects, try Named.artifact(&coord, "Helper")),
+        .unused = Named.offered(objects, try Named.artifact(&coord, "Unused")),
+        .plain = Named.offered(objects, try Named.artifact(&coord, "Plain")),
+        .scaled = Named.offered(objects, scaled),
+        .answer = answer: {
+            if (!evaluate) break :answer null;
+            try coord.finishCheckedProgram(.executable_artifacts);
+            try std.testing.expect(!coord.hasUserErrors());
+            try std.testing.expect(!scaled.hasUnevaluatedRequests(.boxy));
+            const app = try Named.artifact(&coord, "app");
+            for (app.compile_time_roots.roots.items()) |root| {
+                if (root.payload != .const_node) continue;
+                const node = app.const_store.get(root.payload.const_node);
+                if (node == .scalar and node.scalar == .i64) break :answer node.scalar.i64;
+            }
+            return error.TestUnexpectedResult;
+        },
+    };
+    return result;
+}
+
+test "a check-only compilation asks for the objects an evaluation runs against while checking" {
+    if (is_freestanding) return error.SkipZigTest;
+    // `Scaled`'s program runs against `Helper`'s object, which is asked for
+    // as soon as `Scaled` is checked. `Plain`'s only root is value-form, so
+    // its imports' objects are never asked for, and neither module can have
+    // an object of its own before its roots complete.
+    const offers = try checkOnlyObjectOffers(std.testing.allocator, .single_threaded, 1, true);
+    try std.testing.expect(offers.helper);
+    try std.testing.expect(!offers.unused);
+    try std.testing.expect(!offers.plain);
+    try std.testing.expect(!offers.scaled);
+    try std.testing.expectEqual(@as(?i64, 45), offers.answer);
+}
+
+test "a multi-threaded check-only compilation asks for the objects an evaluation runs against while checking" {
+    if (is_freestanding or !threads_available) return error.SkipZigTest;
+    const offers = try checkOnlyObjectOffers(std.testing.allocator, .multi_threaded, 4, true);
+    try std.testing.expect(offers.helper);
+    try std.testing.expect(!offers.unused);
+    try std.testing.expect(!offers.plain);
+    try std.testing.expect(!offers.scaled);
+    try std.testing.expectEqual(@as(?i64, 45), offers.answer);
 }
 
 test "Boxy object record reservation OOM releases the transferred unit" {

@@ -1625,6 +1625,24 @@ pub const BoxyObjectSource = struct {
     target: lir.CheckedPipeline.TargetConfig,
 };
 
+/// Whether a `.boxy` evaluation that links module objects runs a program of
+/// `module`'s roots against its imports' objects, and so asks its object
+/// source for them (`BoxyObjectSource.ready`): the module has a root still to
+/// evaluate under `.boxy` that the checked-value writer does not complete
+/// (`completeValueFormRoots`), and no platform requirements
+/// (`ModuleEvaluation.links`). A module's checked data decides it, so the
+/// objects can be asked for as soon as the module is checked.
+pub fn evaluationLinksImportObjects(module: *const checked.CheckedModuleArtifact, value_form_roots: Options.ValueFormRoots) bool {
+    if (module.platform_type_inputs.requirements.items().len != 0) return false;
+    for (module.root_requests.compile_time_requests.items()) |request| {
+        const root = module.compile_time_roots.root(compileTimeRootForRequest(module, request));
+        if (!root.needsEvaluation(.boxy)) continue;
+        if (value_form_roots == .write and root.completion == .write_value) continue;
+        return true;
+    }
+    return false;
+}
+
 /// The imported objects a `.boxy` evaluation has loaded into this process,
 /// each once, which a module's compile-time program calls by symbol. Each
 /// object's `CodeLocations` say where a failure in its code happened, exactly
@@ -2054,6 +2072,12 @@ fn finalizeProgramBoxy(
     const owned_runtime_roots = try cloneRootRequests(allocator, runtime_roots);
     errdefer deinitRootRequests(allocator, owned_runtime_roots);
 
+    // Every module whose program runs against its imports' objects asks for
+    // them first, so the units not yet built build while this thread
+    // completes the value-form roots and prepares the root graph.
+    if (options.boxy_objects) |source| for (modules) |entry| {
+        if (evaluationLinksImportObjects(entry.module, options.value_form_roots)) _ = try source.ready(source.context, entry.module);
+    };
     try completeValueFormRoots(allocator, modules, lowering_modules, options);
     // The pending roots of the first artifact of each checked identity;
     // another artifact of the same identity repeats its results.
