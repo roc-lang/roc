@@ -14013,6 +14013,36 @@ The kind rules:
   Subsumption, "Deferred result relations"), so the owner's judgment,
   including a kind another statement of the owner makes optional, is what
   the relation sees.
+  A declaration whose value generalized on its own (a value alias, local
+  or top level; Value Bindings Generalize By Expression) is a commitment
+  point for its own pattern. The value is a scheme before the pattern meets
+  it, so the pattern is the generalized binding (Procedure Aliases) and no
+  later boundary owns it: every destructure of that pattern whose kind the
+  scheme's row decides is bound right after the pattern is related to the
+  value, before any use of its name (`Check.bindDecidedRecordDestructs`,
+  called from `resumeStatement` and `finishDef` when the value's variable
+  is a binding scheme). The name's type is then part of the scheme, and a
+  use instantiates it, exactly as it instantiates a name a tuple pattern
+  binds. For a `required` or `defaulted` field that type is the scheme's
+  own field type. For an `optional` field it is `Try(payload,
+  [MissingField])` built generalized over the scheme's field type
+  (`Check.optionalDestructBinderType`): the same type built at the
+  declaration's rank would be one type every use shares, with the scheme's
+  variables inside it. A binder left for a later judgment would likewise be
+  one variable every use shares, and that judgment would relate the
+  scheme's quantified variables to those uses' types: a string or number
+  literal passed to such a name would get the scheme's variable as its
+  type, which no boundary defaults. Binding there decides nothing a later
+  judgment could decide otherwise: a decided kind never changes
+  (`required ~ optional` is a mismatch, and `required` and `defaulted`
+  bind alike), a kind the value leaves undetermined still waits for the
+  boundary that owns it, and so does every other pattern's destructure. A
+  use that does not fit the field's type is an ordinary mismatch at that
+  use and does not reject the declaration. A value that did not generalize
+  (a weak value, or a lookup of one) is not a scheme: its destructures are
+  judged at the commitment points above and the name has one type, shared
+  by every use. `destructured_scheme_alias_test.zig` pins the generalized
+  and the weak side for both pattern kinds and for an optional field.
   Binding a destructure can also ground a deferred static-dispatch receiver
   without adding an ordinary equality constraint. Every literal-defaulting
   boundary therefore begins with a ROUND-ZERO constraint quiescence: ordinary
@@ -19851,9 +19881,11 @@ therefore be used at more than one type, and the constant's requirements are
 met at each.
 
 A local declaration that takes such a lookup apart (`(shout, _) =
-Hooks.pair`) is a destructuring scheme alias
+Hooks.pair`, `{ twice } = Hooks.rec`) is a destructuring scheme alias
 (`body_analyses.bindsDestructuredSchemeAlias`). Its pattern is the
-generalized binding, so the names it binds have no scope of their own. Boxy
+generalized binding, so the names it binds have no scope of their own, and
+each use of one instantiates the name's type. A record pattern's names take
+their field types at the declaration for that reason (Field Kinds). Boxy
 lowers a use of one of those names by fixing the declaration's variables from
 the use's type through the name's type, lowering the lookup and the
 destructuring at those types, and reading the name
@@ -19863,7 +19895,8 @@ requirements from those types (`from_callable`), and the declaration itself
 computes nothing. A closure that reads such a name lowers the declaration in
 its own body and does not capture the name. The `.lss` strategy needs no such
 step: a specialization lowers the declaration at the types it fixes.
-`test/cli/ImportedGenericLocalAlias.roc` runs both forms.
+`test/cli/ImportedGenericLocalAlias.roc` runs both forms, the destructuring
+one with a tuple pattern and with a record pattern.
 
 A call through a forwarding alias is a direct call. Monotype enters the
 alias's scope with the call's use-site evidence and substitution, and requests

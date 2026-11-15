@@ -173,6 +173,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/deferred_rejection_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12016_test.zig"));
     std.testing.refAllDecls(@import("test/value_binding_generalization_test.zig"));
+    std.testing.refAllDecls(@import("test/destructured_scheme_alias_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11214_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11248_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11489_test.zig"));

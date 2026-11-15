@@ -21606,6 +21606,13 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
     }
 
     if (ptrn_result.isEstablished()) {
+        // A value alias is a scheme before its pattern meets it, so the
+        // destructures its row decides bind here, before any use of their
+        // names, as at a local declaration (`resumeStatement`; design.md
+        // "Field Kinds").
+        if (self.patternNodeTag(def.pattern) != .pattern_identifier and self.isBindingSchemeVar(expr_var)) {
+            try self.bindDecidedRecordDestructs(.{ .owned_by = ModuleEnv.nodeIdxFrom(def_idx) }, env);
+        }
         const def_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.pattern));
         _ = try self.checkDestructureExhaustiveness(def.pattern, def.expr, expr_var, env, def_region);
         if (self.patternNodeTag(def.pattern) != .pattern_identifier) {
@@ -33450,6 +33457,17 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             }
 
             if (decl_pattern_result.isEstablished()) {
+                // A value that generalized on its own (a value alias) is a
+                // scheme before the pattern meets it, so the pattern is the
+                // generalized binding and no later boundary owns its
+                // destructures. Each one the scheme's row decides binds
+                // here, before any use of its name: the name's type is then
+                // the scheme's own field type, which a use instantiates as
+                // it does a name a tuple pattern binds (design.md "Field
+                // Kinds").
+                if (decl_pattern != .assign and self.isBindingSchemeVar(decl_expr_var)) {
+                    try self.bindDecidedRecordDestructs(.{ .owned_by = ModuleEnv.nodeIdxFrom(stmt_idx) }, env);
+                }
                 const needs_comptime_validation = try self.checkDestructureExhaustiveness(decl_stmt.pattern, decl_stmt.expr, decl_expr_var, env, stmt_region);
                 if (needs_comptime_validation) {
                     try self.recordHoistPatternValidationCandidate(decl_stmt.pattern, decl_stmt.expr, decl.expectation.hoist_position);
@@ -42082,10 +42100,10 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
 ///
 /// - `required`/`defaulted`: the binder is the field's value (plain bind,
 ///   the pre-optional-fields semantics).
-/// - `optional`: the binder is `Try(payload, [MissingField])`, constructed
-///   exactly as a `.?` access's chain result (`mkTryContent` over
-///   `makeFieldMissingTag`)—destructuring an optional field surfaces its
-///   runtime presence, it never invents the value.
+/// - `optional`: the binder is `Try(payload, [MissingField])`, the type of
+///   a `.?` access's chain result (`optionalDestructBinderType`)—
+///   destructuring an optional field surfaces its runtime presence, it
+///   never invents the value.
 /// - still-flex: pinned to `required` FIRST (the mirror of
 ///   `judgeOptionalFieldAccesses`' optional pin—a destructure alone must
 ///   not silently make a field optional), then bound plainly.
@@ -42124,29 +42142,15 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
 /// uses demand another type) is a rejected pattern: the judgment reports it
 /// and rejects the construct that owns the pattern through
 /// `rejectPatternFailureOwner`.
+///
+/// A declaration whose value is already a scheme when its pattern meets it
+/// binds the destructures that scheme's row decides right there
+/// (`bindDecidedRecordDestructs`, called from `resumeStatement` and
+/// `finishDef`): the pattern is the generalized binding, so no later
+/// commitment point owns it.
 fn judgeRecordDestructBinds(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     while (true) {
-        // Bind every destructure whose field kind is decided. A binding
-        // relates a nested record pattern to the field's value, which can
-        // decide the kinds of that pattern's own fields, so repeat until a
-        // pass binds nothing.
-        var bound_any = true;
-        while (bound_any) {
-            bound_any = false;
-            var retained: usize = 0;
-            var index: usize = 0;
-            while (index < self.pending_record_destructs.items.len) : (index += 1) {
-                const pending = self.pending_record_destructs.items[index];
-                if (self.types.resolveVar(pending.presence_var).desc.content == .flex) {
-                    self.pending_record_destructs.items[retained] = pending;
-                    retained += 1;
-                    continue;
-                }
-                try self.bindRecordDestruct(pending, env);
-                bound_any = true;
-            }
-            self.pending_record_destructs.shrinkRetainingCapacity(retained);
-        }
+        try self.bindDecidedRecordDestructs(.all, env);
         // A still-flex kind commits to `required` only at a commitment point
         // that OWNS the var: the boundary's generalize call is about to
         // promote exactly the vars at (or above) the current rank. Commit one
@@ -42185,21 +42189,52 @@ fn judgeRecordDestructBinds(self: *Self, env: *Env) std.mem.Allocator.Error!void
     }
 }
 
+/// Which pending record destructures a binding pass covers.
+const RecordDestructScope = union(enum) {
+    /// Every pending destructure.
+    all,
+    /// The destructures of the pattern this construct owns
+    /// (`PendingRecordDestruct.failure_owner`), nested record patterns
+    /// included.
+    owned_by: CIR.Node.Idx,
+};
+
+/// Bind every pending destructure in `scope` whose field kind is decided,
+/// and leave the rest pending. A binding relates a nested record pattern to
+/// the field's value, which can decide the kinds of that pattern's own
+/// fields, so the pass repeats until it binds nothing.
+fn bindDecidedRecordDestructs(self: *Self, scope: RecordDestructScope, env: *Env) std.mem.Allocator.Error!void {
+    var bound_any = true;
+    while (bound_any) {
+        bound_any = false;
+        var retained: usize = 0;
+        var index: usize = 0;
+        while (index < self.pending_record_destructs.items.len) : (index += 1) {
+            const pending = self.pending_record_destructs.items[index];
+            const in_scope = switch (scope) {
+                .all => true,
+                .owned_by => |owner| pending.failure_owner == owner,
+            };
+            if (!in_scope or self.types.resolveVar(pending.presence_var).desc.content == .flex) {
+                self.pending_record_destructs.items[retained] = pending;
+                retained += 1;
+                continue;
+            }
+            try self.bindRecordDestruct(pending, env);
+            bound_any = true;
+        }
+        self.pending_record_destructs.shrinkRetainingCapacity(retained);
+    }
+}
+
 /// Bind one destructure's binder by its decided field kind.
 fn bindRecordDestruct(self: *Self, pending: PendingRecordDestruct, env: *Env) std.mem.Allocator.Error!void {
     const bound_var = switch (self.types.resolveVar(pending.presence_var).desc.content) {
         .field_presence => |field_presence| switch (field_presence) {
             .required, .defaulted => pending.payload_var,
-            .optional => blk: {
-                const missing_err_var = try self.makeFieldMissingTag(env, pending.region);
-                break :blk try self.freshFromContent(
-                    try self.mkTryContent(pending.payload_var, missing_err_var),
-                    env,
-                    pending.region,
-                );
-            },
+            .optional => try self.optionalDestructBinderType(pending, env),
         },
-        .flex => unreachable, // judgeRecordDestructBinds binds only entries whose kind is decided
+        .flex => unreachable, // bindDecidedRecordDestructs binds only entries whose kind is decided
         // `.err` and other poisoned contents: the kind mismatch was
         // already reported; the binder still describes the payload.
         .rigid, .alias, .structure, .err => pending.payload_var,
@@ -42217,6 +42252,41 @@ fn bindRecordDestruct(self: *Self, pending: PendingRecordDestruct, env: *Env) st
         _ = try self.appendTypeMismatch(pending.binder_var, bound_var, self.mismatchContext(.record_destructure, bound_var));
         try self.rejectPatternFailureOwner(pending.failure_owner);
     }
+}
+
+/// The type the binder of an optional field's destructure takes:
+/// `Try(payload, [MissingField])`, built where the field's value lives. A
+/// scheme's field value is generalized, so the type built over it is part of
+/// the scheme as well and each use of the name instantiates it, as it does a
+/// required field's value. Over any other value the type belongs to the
+/// current scope.
+fn optionalDestructBinderType(self: *Self, pending: PendingRecordDestruct, env: *Env) std.mem.Allocator.Error!Var {
+    if (self.types.resolveVar(pending.payload_var).desc.rank != .generalized) {
+        const missing_err_var = try self.makeFieldMissingTag(env, pending.region);
+        return try self.freshFromContent(
+            try self.mkTryContent(pending.payload_var, missing_err_var),
+            env,
+            pending.region,
+        );
+    }
+    const missing_field_tag = try self.types.mkTag(self.cir.idents.missing_field, &.{});
+    const err_ext_var = try self.freshGeneralizedFromContent(.{ .structure = .empty_tag_union }, pending.region);
+    const missing_err_var = try self.freshGeneralizedFromContent(
+        try self.types.mkTagUnion(&.{missing_field_tag}, err_ext_var),
+        pending.region,
+    );
+    return try self.freshGeneralizedFromContent(
+        try self.mkTryContent(pending.payload_var, missing_err_var),
+        pending.region,
+    );
+}
+
+/// A fresh generalized var with the provided content. It belongs to a scheme,
+/// so no scope's pool holds it and no boundary generalizes it again.
+fn freshGeneralizedFromContent(self: *Self, content: Content, new_region: Region) Allocator.Error!Var {
+    const var_ = try self.types.freshFromContentWithRank(content, .generalized);
+    try self.setVarRegion(var_, new_region);
+    return var_;
 }
 
 /// Kind defaulting as a checker pass (design.md "Field Kinds"): commit every

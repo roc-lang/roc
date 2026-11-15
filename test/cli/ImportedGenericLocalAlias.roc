@@ -39,7 +39,27 @@ generic = |x| {
     shout(x)
 }
 
+# A name a record destructuring binds, called with a literal whose type only
+# the call settles, and read by a closure.
+record_destructured = {
+    { twice, tag } = ImportedGenericLocalAliasDep.rec
+    apply = |x| twice(x)
+    (twice("xy"), apply("ef"), tag)
+}
+
+# A name a record destructuring binds to an optional field: the name is a
+# `Try` of the field's value.
+record_optional = {
+    { twice, tag } = ImportedGenericLocalAliasDep.optional
+    match twice {
+        Ok(f) => (f("uv"), tag)
+        Err(MissingField) => ("", tag)
+    }
+}
+
 expect destructured == "hi!"
 expect whole == ("abab", [1, 2, 1, 2])
 expect captured == "cd!"
 expect generic("gh") == "gh!"
+expect record_destructured == ("xyxy", "efef", "t")
+expect record_optional == ("uvuv", "o")

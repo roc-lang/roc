@@ -16644,8 +16644,10 @@ const EvidencePass = struct {
                 return;
             }
             // A constant's value can hold functions as data, which a read
-            // hands on before any of them is requested at a concrete type.
-            const constant_value = switch (rec.ref) {
+            // hands on before any of them is requested at a concrete type. A
+            // local alias of a constant reads that constant: the lookup its
+            // alias chain reaches says what the use reads.
+            const constant_value = switch (self.resolved_value_refs.callableTarget(ref_id).ref) {
                 .top_level_const,
                 .imported_const,
                 .selected_hoisted_const,
