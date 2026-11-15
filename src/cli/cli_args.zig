@@ -325,7 +325,7 @@ pub const ExperimentalLspArgs = struct {
 /// Arguments for `roc repl`
 pub const ReplArgs = struct {
     opt: OptLevel = default_dev_opt,
-    specialization_strategy: ?SpecializationStrategy = null,
+    specialization_strategy: ?SpecializationStrategy = null, // accepted so one command line serves every command; REPL evaluation ignores it
 };
 
 /// Arguments for `roc glue`

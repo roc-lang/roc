@@ -167,7 +167,8 @@ fn lowerModuleWithOptions(
     inline_mode: lir.CheckedPipeline.InlineMode,
     options: LowerModuleOptions,
 ) TestError!LoweredSource {
-    const resources = try helpers.parseProgram(allocator, .module, source, options.imports, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    // Published under the strategy the program is lowered under.
+    const resources = try helpers.parseProgram(allocator, .module, source, options.imports, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin(), .strategy = options.specialization_strategy });
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -606,8 +607,7 @@ fn boxyStructuralJsonParserCounts(allocator: Allocator, field_count: usize, pars
         source,
         &.{},
         .native,
-        .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() },
-        .boxy,
+        .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin(), .strategy = .boxy },
     );
     defer compiled.deinit(allocator);
     var counts = BoxyJsonParserCounts{};
@@ -647,8 +647,7 @@ fn boxyStructuralJsonEncoderIncrefs(allocator: Allocator, field_count: usize) Te
         source_buf.items,
         &.{},
         .native,
-        .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() },
-        .boxy,
+        .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin(), .strategy = .boxy },
     );
     defer compiled.deinit(allocator);
     var increfs: usize = 0;
@@ -2174,8 +2173,7 @@ test "boxy root that parses JSON directly receives its codec evidence" {
     ,
         &.{},
         .native,
-        .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() },
-        .boxy,
+        .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin(), .strategy = .boxy },
     );
     defer compiled.deinit(allocator);
     try std.testing.expect(compiled.lowered.view.store.getProcSpecs().len != 0);
@@ -9815,6 +9813,7 @@ test "issue 10181 explicit Str interpolation suffix checks cleanly" {
         &.{},
         try sharedPrePublishedBuiltin(),
         null,
+        .lss,
     );
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 

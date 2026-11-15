@@ -575,3 +575,55 @@ test "issue 11801: whole-use replay replays uses of an imported scheme" {
     try env.assertDefType("third", "List(I64)");
     try env.assertDefType("fourth", "List(U8)");
 }
+
+test "issue 11801: a same-target reach answered while a minted name is unfinished is not reused" {
+    // `step` mints `bump`. The first `step` edge is selected inside
+    // `Other.bump`, while that binding of `bump` is still being checked, so
+    // `bump`'s summary is not final and the edge keeps its digest without
+    // the answer being kept. Once every `bump` binding is checked, neither
+    // mints `step`, so the top-level `step` edges, the later ones answered
+    // from the kept answer of the first, keep no digest.
+    const source =
+        \\Wrap(a) := [W(a)].{
+        \\  step : Wrap(a) -> Wrap(a) where [a.bump : a -> a]
+        \\  step = |Wrap.W(x)| Wrap.W(x.bump())
+        \\}
+        \\
+        \\Cnt := [Cnt(I64)].{
+        \\  bump : Cnt -> Cnt
+        \\  bump = |Cnt.Cnt(n)| Cnt.Cnt(n + 1)
+        \\}
+        \\
+        \\Other := [O].{
+        \\  bump : Other -> Other
+        \\  bump = |o| {
+        \\    _early = Wrap.W(Cnt.Cnt(0.I64)).step()
+        \\    o
+        \\  }
+        \\}
+        \\
+        \\x = Wrap.W(Cnt.Cnt(1.I64)).step()
+        \\y = Wrap.W(Cnt.Cnt(2.I64)).step()
+        \\z = Wrap.W(Cnt.Cnt(3.I64)).step()
+    ;
+    var env = try TestEnv.init("Test", source);
+    defer env.deinit();
+    try env.assertNoErrors();
+
+    var keyed_steps: usize = 0;
+    var keyless_steps: usize = 0;
+    for (env.checker.dispatch_target_instantiations.items) |edge| {
+        const name = env.module_env.getIdentText(edge.method_name);
+        if (textEql(name, "step")) {
+            if (edge.state_type_key != null) {
+                // Every edge selected once the answer is final keeps none.
+                try std.testing.expectEqual(@as(usize, 0), keyless_steps);
+                keyed_steps += 1;
+            } else keyless_steps += 1;
+        } else if (textEql(name, "bump")) {
+            try std.testing.expect(edge.state_type_key == null);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), keyed_steps);
+    try std.testing.expectEqual(@as(usize, 3), keyless_steps);
+}

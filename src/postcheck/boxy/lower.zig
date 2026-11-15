@@ -3293,7 +3293,7 @@ pub const Program = struct {
         var kept: std.ArrayList(checked.CheckedCapture) = .empty;
         for (listed) |capture| {
             const binder = bodies.binder(capture.pattern);
-            if (binder.is_scheme_alias or binder.is_promoted) continue;
+            if (binder.is_scheme_alias or binder.is_promoted or binder.destructured_alias != null) continue;
             try kept.append(self.arena.allocator(), capture);
         }
         return kept.items;

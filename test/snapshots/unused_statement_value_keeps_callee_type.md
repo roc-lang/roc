@@ -144,7 +144,7 @@ run = |f| {
 							(p-assign (ident "f")))
 						(e-string
 							(e-literal (string "world")))))
-				(e-dispatch-call (method "concat") (constraint-fn-var 250)
+				(e-dispatch-call (method "concat") (constraint-fn-var 248)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "y"))))

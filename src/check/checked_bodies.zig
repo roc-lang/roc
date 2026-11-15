@@ -408,8 +408,13 @@ pub const StrPatternStep = struct {
 pub const Binder = struct {
     pattern: PatternId,
     reassignable: bool,
-    /// A generalized callable lookup binding.
+    /// A generalized lookup binding: each use lowers the lookup at the
+    /// use's own instantiation.
     is_scheme_alias: bool,
+    /// The destructuring scheme alias declaration that binds it, if one
+    /// does: each use lowers that declaration's lookup and destructuring at
+    /// the use's own instantiation.
+    destructured_alias: ?StatementId,
     /// The binder of a promoted local procedure, which names a top-level
     /// procedure rather than a value of the body declaring it.
     is_promoted: bool,
@@ -1158,6 +1163,7 @@ pub const CheckedBodies = struct {
             .pattern = pattern_id,
             .reassignable = self.store().getPattern(pattern_id) == .var_assign,
             .is_scheme_alias = module_index.isSchemeAlias(pattern_id),
+            .destructured_alias = module_index.destructuredAliasDecl(pattern_id),
             .is_promoted = module_index.isPromotedPattern(pattern_id),
             .recursive_value = module_index.isRecursiveBinder(pattern_id),
         };

@@ -5080,8 +5080,17 @@ the source/import key and explicit format versions.
 Checking records its problems in the checker's problem store and evaluation
 appends its own to the same store. An entry stores them as `CheckedReports`:
 every problem with the store's strings, the count of checking's, the snapshots
-and regions checking's problems render with (copied out of the checker before
-it is released), and the checker's import display names. The snapshots keep
+checking's problems render with (copied out of the checker before it is
+released), and the checker's import display names. Each problem carries the
+source regions its report highlights, recorded where the problem is created;
+a report reads no other region than those and the module's CIR node regions.
+While it checks, the checker has the region each type variable reports
+problems at without storing one per variable (`VarRegions`): a variable that
+is a CIR node has its node's region; every later variable is given its region
+once, when it is created, so consecutive variables sharing a region are one
+run; and a variable an instantiation copied from a same-module definition
+records the variable it was copied from and has that variable's region. A
+variable an instantiation maps to without creating it keeps its own. The snapshots keep
 their frozen captures and node formats beside the text the miss rendered, so a
 snapshot whose text was never rendered renders on demand with the module's
 names, the stored import display names and the module's default sources, the
@@ -5475,6 +5484,20 @@ node's original inner-scope rank. The child-rank reduction cannot move a capture
 type back into an inner scope. Independent inner-scope variables remain eligible
 for generalization; captured variables wait for their owning boundary.
 
+A rank is 14 bits, so `Rank.deepest` is 16,383 and source can nest at most
+16,382 generalization scopes below the outermost rank. A scope the checker
+would enter inside one at `Rank.deepest` gets no rank of its own
+(`VarPool.pushRank`): the module reports once that its definitions are nested
+too deeply to generalize, pointing at the definition or expression whose scope
+first went past the limit, and checking continues with the scope at the
+enclosing rank, not generalized when it ends. The scope's value (each member
+of a recursive group) is retired to an erroneous value expression, so
+publication and lowering never read a definition that should have been
+generalized and was not. That continuation is diagnostic recovery on an
+already-reported error, so it is a mechanism (Solver-Mutating Rewrites). The limit is a property of the descriptor's representation, not of
+any walk's storage (Stack Safety): no stage's call depth or storage depends on
+it.
+
 Rank adjustment reaches a younger variable only through a variable its own
 generalization visits, so a node unification creates holds no child younger
 than itself. Unification creates nodes at the lower of its two operands'
@@ -5488,6 +5511,34 @@ such as the tail of a top-level value's tag row widened by a generalized
 function's use, would be quantified by that function while the value still
 shares it. Pinned by `src/check/test/issue_13011_test.zig`, the rank tests
 in `src/check/test/unify_test.zig`, and `test/cli/Issue13011StoreWrites.roc`.
+
+### Descriptor Words
+
+A type store keeps each descriptor as a 16-byte row: a 32-bit word and a
+three-word payload laid out by kind (`Descriptor.Row`). A reader that needs
+only the content's kind, flags or rank decodes the word alone. The word is,
+from its low bit:
+
+| Bits  | Field |
+|-------|-------|
+| 0-3   | content kind (`ContentKind`) |
+| 4-10  | the flags every kind can hold: `frozen`, `static_dispatch_rejected`, `default_decided`, `nominal_backing_structure`, `bounded_row_ext`, `deferred_callable`, `annotation_tag_ext` |
+| 11-15 | on a flex: `uncommitted_record_tail`, `uncommitted_copy`, `record_pattern_tail`, and the 2-bit literal marker (`Flex.Literal`); on every other kind: `empty_tag_union_is_default`, `host_fixed_row`, `compared_plain`, `annotation_tag_union`, `uncommitted_tag_tail` |
+| 16-17 | generalization's two scratch marks (`generalizing`, `rank_adjusted`) |
+| 18-31 | the 14-bit rank |
+
+Bits 11-15 are shared by kind (`Descriptor.FlagBits`). Exclusivity is a
+compiler invariant: an uncommitted record tail's marks and a literal marker
+describe a row variable, so only a flex holds them; the empty-tag-union,
+host-row, compared-plain and annotated-union marks describe structure, so a
+flex never holds them. Packing a word asserts it in debug builds. A write that
+replaces a class's content keeps only the flags its new kind holds
+(`DescriptorFlags.forKind`): a flex-only flag means nothing once the class is
+structure, and a structure-only flag nothing once it is a flex. A merge keeps
+the flex-only marks only while the merged class is a flex, the uncommitted tag
+tail only on an empty tag union, and the other structure-only marks only on
+structure, since a merged flex is one whose two sides were both flexes. The
+layout's 32-bit fit is checked at compile time.
 
 Roc generalization is exclusively rank-1. Quantification belongs to a value
 binding; an arbitrary expression does not acquire a scheme, and the result of
@@ -8110,8 +8161,8 @@ operands and the result to be one type, calling `plus`, `minus`, `times`,
 `div_by`, `div_trunc_by`, and `rem_by` at `a, a -> a`. A method of one of those
 names whose second parameter or result is another type, such as
 `times : Duration, I64 -> Duration`, is callable only as an ordinary method
-call (`duration.times(3)`); `duration * 3` is a type mismatch between the
-operands.
+call (`duration.times(3)`); `duration * 3` is an error, reported once as the
+method having an incompatible type (Closed Operator Rejection, below).
 
 These contracts let inference propagate information before a method has been
 selected. Either operand of a comparison or arithmetic operator determines the
@@ -8152,6 +8203,70 @@ type, a type with arguments, a method of this module (whose uses carry
 definition dependencies and instantiation records), a signature of any other
 shape, and an effectful method. Accepted and rejected sides are pinned in
 `closed_operator_test.zig`.
+
+Closed method call resolution is the same mechanism for a method call. When a
+call's receiver has already resolved to a nominal type when the call is
+checked, that type is declared in another module, and that module declares
+the method as a pure function whose parameters and result are all nominal
+types taking no arguments, the first being the receiver's type, with one
+parameter per call argument after it, the call is resolved where it is
+checked (`closedMethodCall`): the checked node names this module's copy of the
+declaration's own callable, and no constraint, per-use function type, carrier
+variable, or dispatch-queue entry exists for it. The constraint a call
+otherwise makes is `receiver, args -> result` over fresh argument and result
+variables. Relating it to the signature, which has no type variables and
+whose first parameter is the receiver's type, could only give each fresh
+variable its parameter's type, so it establishes nothing a fresh copy of the
+parameter types does not, and rejects nothing. Each argument is checked
+against a fresh variable holding its parameter's type, and the call's type
+receives a fresh copy of the declared result once every argument is
+accepted, so a rejected argument relation never reaches the declaration's
+signature, which every call of the method shares. Of the records an ordinary
+method call makes, a closed call keeps only its hoisting proof
+(`noteHoistDispatchDependency`), keyed by the declaration's callable: its
+target is never a local procedure, so the proof always holds, and keeping it
+keeps a compile-time condition warning reported where it otherwise is. It
+needs none of the others: `own_dispatch_exprs` attributes a queued
+relation's resolution and failure to its expression, and a closed call has no
+queued relation; an `expect` watcher asks whether the selected callable is
+effectful, and the method is pure; a scheme requirement candidate becomes a
+requirement only while its receiver is still a flexible variable, and an
+ambiguity candidate is judged only while its receiver still carries
+constraints, and a nominal receiver is neither. The call still drains the
+relations queued before it, as an ordinary call's eager resolution does, so
+those settle at the same point. Every other call keeps its ordinary
+constraint: a receiver whose type is not yet known or is not a nominal type,
+a method of this module, a signature with type variables or a type with
+arguments anywhere in it, a different number of arguments than the signature
+has, an effectful method, a derived method, and a declaration with no
+callable value or an erroneous annotation. The checked node is consumed
+exactly as a closed operator's is. Accepted and rejected sides are pinned in
+`closed_method_call_test.zig`.
+
+Closed operator rejection is the same mechanism for an operator whose method
+can never meet its contract. When an arithmetic or ordering operator's left
+operand has resolved to a nominal type that takes no arguments, and that
+type's method has a final signature (declared in another module, or annotated
+in this one, whose annotation is predeclared as its scheme before any body is
+checked) that is a pure function over nominal types taking no arguments other
+than the operator's contract at that type (`T, T -> T`, or `T, T -> Bool`),
+the operator is rejected where it is checked, before its operands are related
+(`classifyOperatorMethodSignature`). Such a signature has no type
+variables, so relating an instance of it to the contract fails whatever the
+right operand is; the rejection relates a fresh copy of the signature to the
+contract at the left operand's type, reports the failure exactly as the drain
+reports a failed operator constraint, and retires the operator exactly as the
+drain does. It accepts nothing the ordinary path rejects and rejects nothing
+the ordinary path accepts: the only difference is that the right operand is
+never related to the left, so `duration * 3` reports the method's signature
+and not also the literal `3` as a `Duration`. Every other operator keeps its
+ordinary path: a left operand that is not yet a nominal type or takes
+arguments, a defaulted left operand, an unannotated method of this module,
+a signature with type variables or of any other shape, an effectful method, a
+derived method, a declaration with no callable value or an erroneous
+annotation, and any operator checked inside a probe. The accepted (contract)
+side is pinned in `closed_operator_test.zig`, the rejected side in
+`custom_num_type_test.zig` and `test/cli/OperatorMethodMismatch.roc`.
 
 A where alias (`a.Sortable : where [...]`) is a source-level abbreviation for a
 set of method constraints, not a type. Its declaration solves to its receiver: a
@@ -8669,15 +8784,21 @@ requirement tables and synthetic binding ownership. A committed import survives
 later rolled-back cache hits. No cache hit recopies a type graph or re-enumerates
 the source requirements.
 
-Procedure definitions, hoisted source-pattern roots, and callable bindings
-carry evidence parameters on their procedure templates; constant and
-expression entry wrappers do not, because they evaluate a value without a
-caller's dispatch parameters. A callable binding's entry wrapper is a
-zero-argument procedure returning the binding's callable, and a runtime use of
-a pending binding calls it, supplying the binding's evidence as any procedure
-use does. Its parameters are the binding's scheme parameters in the binding's
+Procedure definitions, hoisted source-pattern roots, callable bindings, and
+constants carry evidence parameters on their procedure templates; expression
+entry wrappers do not, because they evaluate a value without a caller's
+dispatch parameters. A callable binding's or a constant's entry wrapper is a
+zero-argument procedure returning the binding's value, and a use that computes
+the binding calls it, supplying the binding's evidence as any procedure use
+does. Its parameters are the binding's scheme parameters in the binding's
 order, and each scheme-callable path is the binding's path below the wrapper's
-`fn_ret`.
+`fn_ret`. A constant whose type is closed has no scheme parameter. A constant
+whose type keeps a variable (`effects = { send: send }` with `send = |x|
+x.concat("!")`) is computed at each instantiation it is read at ("Compile-Time
+Evaluation Strategy"), and a requirement on that variable has no
+implementation until a read fixes it: the read's evidence supplies it, in the
+read's own module or in a module that imports the constant
+(`test/cli/ImportedGenericRecord.roc`).
 
 Every procedure evidence parameter also carries an explicit dispatcher source.
 The source is exactly one of: a checked component path over the procedure's
@@ -9162,12 +9283,13 @@ requires an explicit instantiated root edge with its own evidence. A root has
 no calling site, so Monotype and Boxy lowering both take a root's evidence,
 including its captured codec requirements, from the request's root evidence.
 
-Constant-evaluation entry wrappers retain the evaluated value's quantified type
-variables without accepting its dispatch requirements as wrapper arguments.
-Procedure definitions and hoisted source-pattern roots bind evidence chains;
-constant and expression wrappers resolve their bodies without caller-supplied
-evidence. Call-edge evidence analysis and use-site enumeration consume the same
-explicit root classification.
+A constant's entry wrapper retains the evaluated value's quantified type
+variables and accepts the requirements on them as wrapper arguments, as a
+callable binding's does. Procedure definitions, hoisted source-pattern roots,
+callable bindings, and constants bind evidence chains; expression wrappers
+resolve their bodies without caller-supplied evidence. Call-edge evidence
+analysis and use-site enumeration consume the same explicit root
+classification.
 
 Completed generated codec proof graphs also carry a producer-proven identity
 for specialization reuse. Type-role keys and call metadata select candidates; equality
@@ -16368,9 +16490,10 @@ const SpecializationStrategy = enum {
 
 The command-line spelling is `--specialize=yes` for `.lss` and
 `--specialize=no` for `.boxy`. Every command accepts the flag. A command with
-no runtime consumer (`roc check`, `roc docs`, `roc bump`, the language
-server) ignores it and compiles under `.boxy`, whose compile-time evaluator
-completes every root. If the flag is omitted, `--opt=speed` uses `.lss` and
+no runtime consumer (`roc check`, `roc docs`, `roc bump`, `roc bundle`,
+`roc repl`, the language server) ignores it and compiles under `.boxy`, whose
+compile-time evaluator completes every root. If the flag is omitted,
+`--opt=speed` uses `.lss` and
 every other optimization level (`dev`, `interpreter`, `size`) uses `.boxy`
 (`currentRuntimeSpecializationStrategy`); an explicit flag selects the
 strategy at any level. The `--opt` flag still
@@ -16695,6 +16818,31 @@ different storage, and only then is there an adapter. A worker that forwards
 its dictionary at its own requirement, to another worker or around a
 recursive call, therefore passes the word it was given, and the type tables
 of a recursion's levels are one table.
+
+The rule holds for every scope whose requirement discharges another's, not
+only for a worker's own. A scope the lowering enters while it lowers a body
+(a scheme alias's or an exact procedure alias's scope at one of its uses, a
+literal chain's frame, a declaration context) holds each dictionary at the
+interface its own requirement names, at the types the scope was entered with
+(`AliasScope.requirements`): the edge that entered the scope built the
+dictionary for exactly that parameter. Evidence read inside the scope that
+hands the dictionary on (an alias's forwarded lookup, a frame's edge into the
+next frame, the requirements of a literal conversion's target, a local
+procedure's own scheme) adapts it from that interface to the consumer's, and
+a dispatch through it calls it at that interface (`Builder.scopeInterface`).
+An alias can state its requirement at a narrower row than the procedure it
+forwards to requires (`narrow : b -> [Ok(Str), Err(Str), Extra] where
+[b.status : b -> [Ok(Str), Err(Str)]]` bound to a procedure whose requirement
+names `[Ok(Str), Err(Str), Extra]`), so any step of an alias chain can be an
+adapter. A literal's own conversion, the dispatch a literal chain lowers
+inside its innermost frame, has a signature checking fixes, error row
+included (a `from_numeral` requirement stating another row is a type
+mismatch), so it reads its result as the dictionary stored it; it is called
+at its scope's interface all the same.
+`test/cli/WidenClosedImplAliasScope.roc`,
+`test/cli/WidenClosedTryImplAliasScope.roc`, and
+`test/cli/WidenClosedImplLiteralChain.roc` run the alias scopes and the
+literal chain frames.
 
 A conversion between two CLOSED types is a static row conversion: a worker
 of the converting module (`WorkerKey.convert`, keyed by the source and
@@ -17391,7 +17539,13 @@ declared in a function body is a local procedure of that body: its dispatch
 calls the procedure's function value at the dispatch's instantiation, and its
 dictionary is that value. A target reached through an exact procedure alias
 takes the substitution and evidence each alias's forwarded lookup recorded in
-the alias's scope, alias by alias.
+the alias's scope, alias by alias; each alias's scope holds its dictionaries
+at the alias's own requirements, and a lookup that hands one on adapts it to
+the next scope's (Sealed Result Rows). The dictionary of a method bound to an
+alias, like that of a target whose instantiation follows from its callable,
+is the target's entry at the instantiation so composed, adapted from the
+target's own type there to its consumer's interface as any other target's is
+(`test/cli/WidenClosedImplMethodAlias.roc`).
 
 Evidence the checker leaves to the concrete callable (`from_callable`, a
 target `derived_from_callable`, nested `from_callable` evidence) and the
@@ -18151,6 +18305,24 @@ module holds the same values whichever strategy completed it ("Compile-Time
 Evaluation Under `.lss`"). A module finalized on its own, outside a program
 session (the baked Builtin's among them), is a program of that module alone
 and splits its roots between the two evaluators the same way.
+
+Every producer of checked modules names its strategy; the finalization option
+has no default. One rule decides it everywhere: the strategy of the runtime
+program that consumes the modules, and `.boxy` when nothing lowers them for
+runtime. The coordinator's compilations take it from their command
+(`BuildEnv.setSpecializationStrategy`). The REPL session
+(`roc repl` and the REPL WebAssembly module) evaluates each expression as a
+compile-time root and lowers no runtime program, so it names `.boxy`. The
+playground runs each expression as a `.boxy` runtime program on the LIR
+interpreter, as an `--opt=interpreter` program runs, and names `.boxy`. The
+eval harness publishes each program under the strategy its runtime program
+is lowered under (`Inspected.ParseOptions.strategy`): `.lss` unless the
+program asks for `.boxy`, and `.lss` for the snapshot tool's REPL programs.
+The snapshot tool's documentation snapshots name `.boxy`, as `roc docs`
+does. The Builtin bake names `.lss` and
+`complete_baked_module`, which adds the Boxy representation of every root
+holding a function value ("Stored Function Values").
+
 The `.boxy` compile-time evaluator (`evaluateRootsBoxy`) orders the pending
 roots by the values they read,
 computed from the checked modules alone (`eval/checked_root_graph.zig`: a
@@ -20875,6 +21047,30 @@ point). An alias of a function-valued constant is not a forward; calling it
 calls the evaluated value. Root-request output and platform pairing omit
 evaluation only for this explicit forwarding proof, not for the lookup's
 procedure-reference shape: a computed callable alias still needs its value.
+
+A local binding whose value is a lookup of a constant whose type keeps a
+variable (`pair = Hooks.pair`, with `pair = (|s| s.concat("!"), 1)` in
+`Hooks`) is generalized like any lookup binding, and it is a scheme alias as
+well (`body_analyses.bindsLocalSchemeAlias`): it owns its generalized dispatch
+scope, its declaration computes nothing, and each use lowers the lookup in
+that scope at the use's instantiation, under both strategies. The name can
+therefore be used at more than one type, and the constant's requirements are
+met at each.
+
+A local declaration that takes such a lookup apart (`(shout, _) =
+Hooks.pair`) is a destructuring scheme alias
+(`body_analyses.bindsDestructuredSchemeAlias`). Its pattern is the
+generalized binding, so the names it binds have no scope of their own. Boxy
+lowers a use of one of those names by fixing the declaration's variables from
+the use's type through the name's type, lowering the lookup and the
+destructuring at those types, and reading the name
+(`Body.lowerDestructuredAliasUse`). A variable the name's type does not
+mention seals as a variable no use relates, the lookup resolves its
+requirements from those types (`from_callable`), and the declaration itself
+computes nothing. A closure that reads such a name lowers the declaration in
+its own body and does not capture the name. The `.lss` strategy needs no such
+step: a specialization lowers the declaration at the types it fixes.
+`test/cli/ImportedGenericLocalAlias.roc` runs both forms.
 
 A call through a forwarding alias is a direct call. Monotype enters the
 alias's scope with the call's use-site evidence and substitution, and requests
@@ -27759,8 +27955,25 @@ program it runs against the limits, which bytebox does not enforce.
 
 Compile-time constants use checked finalization after the coordinator's
 frontend tasks have completed. Standalone checking clients complete their
-prepared modules directly. This path is unaffected by the runtime
-`--specialize` flag:
+prepared modules directly. The compilation's strategy decides which of two
+evaluators completes each root ("Compile-Time Evaluation Strategy"). The
+`.boxy` evaluator completes every root of a `.boxy` compilation, and of an
+`.lss` compilation every root that neither holds a function value nor reads
+one, along with every literal argument root:
+
+```text
+checked CIR
+  -> checking seals the solver store and records selected roots
+  -> frontend task completion (coordinated compilations)
+  -> Boxy lowering of the roots' templates
+  -> LIR
+  -> ARC insertion
+  -> native dev backend on native compiler hosts
+  -> store eval result in ConstStore
+```
+
+The Solved program of an `.lss` compilation completes the roots holding a
+function value and the roots reading one:
 
 ```text
 checked CIR
@@ -27788,9 +28001,11 @@ uncalled constrained polymorphic function does not force its body, but checking
 finalization evaluates the selected body itself and stores its `Str` result in
 the root payload. This payload is not a source-visible top-level constant and is
 not installed in the module's const-template tables. An effectful REPL body is a
-checking error; it is never silently demoted to a runtime root. Runtime backend
-selection and specialization settings therefore do not affect ordinary REPL
-expression evaluation. The finalizer replays `dbg` observations in root request
+checking error; it is never silently demoted to a runtime root. A REPL
+evaluation has no runtime consumer, so its session names `.boxy` and the
+`.boxy` evaluator completes its roots: runtime backend selection and
+specialization settings do not affect ordinary REPL expression evaluation.
+The finalizer replays `dbg` observations in root request
 order and forwards observations from the `.repl_expr` root to the REPL's
 structured event stream; observations from other compile-time roots are not
 misattributed to the current interactive expression.
@@ -27804,9 +28019,9 @@ logical Lambda Mono expressions, or any source-level IR.
 The only interpreter path is for compiler hosts that cannot run generated native
 code: freestanding compiler builds, and every host the dev backend has no code
 generator for (`host_lir_codegen_available`), currently wasm32 and 32-bit ARM
-and x86. This decision is made from the compiler's own build target. The Roc
-program target selected by `roc --target` does not affect the compile-time
-evaluation strategy. The interpreter evaluates at the compiler host's pointer
+and x86. This decision is made from the compiler's own build target, under
+either strategy. The Roc program target selected by `roc --target` does not
+affect it. The interpreter evaluates at the compiler host's pointer
 width, and a program target of another width receives the completed values
 re-encoded at its own layouts, exactly as a 64-bit host's values reach a
 32-bit target. Roc exposes no pointer-width type, so a value means the same at
@@ -27820,11 +28035,15 @@ empirical exhaustiveness diagnostics, literal conversion diagnostics, or
 stored constants is a compiler bug in one of the evaluators or
 in the data they consume.
 
-Runtime `.boxy` builds do not make compile-time roots use boxy lowering.
-Compile-time finalization continues to lower the requested compile-time roots
-through the existing Monotype/Lambda/LIR path, interpret the result, and store
-checked values in `ConstStore`. This keeps `roc check` and compile-time
-evaluation independent of runtime backend and specialization choices.
+Both evaluators store the same checked values in `ConstStore`, so a checked
+module holds the same values whichever strategy completed it. A function
+value alone is stored in the representation of the strategy that completed
+it ("Stored Function Values"), which is why a root holding one, and every
+root reading it, belongs to the evaluator of the compilation's own strategy.
+`roc check` and every other compilation with no runtime consumer name
+`.boxy`, so the `.boxy` evaluator completes all of their roots. The
+code-generation backend `--opt` selects affects compile-time evaluation only
+through the strategy it defaults to.
 
 Check-only ARC insertion runs the borrow-inference solver in its single-variant
 form. A shared host/runtime LIR program instead applies its declared runtime
