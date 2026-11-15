@@ -21,7 +21,7 @@ const Work = union(enum) {
     copy: Ast.ExprId,
     /// Every expression inside this one has been delivered: add it again
     /// around those copies.
-    rebuild: Ast.ExprId,
+    assemble: Ast.ExprId,
 };
 
 /// Copy the expression rooted at `root` and return the copy's root.
@@ -64,7 +64,7 @@ pub fn copyInside(program: *Ast.Program, parent: Ast.ExprId, shared: []const Ast
         }
     }
     if (!any) return;
-    program.setExprData(parent, try copier.rebuiltData(data, inside));
+    program.setExprData(parent, try copier.assembledData(data, inside));
 }
 
 const Copier = struct {
@@ -118,7 +118,7 @@ const Copier = struct {
         try self.work.append(self.program.allocator, .{ .copy = root });
         while (self.work.items.len > base) switch (self.work.pop().?) {
             .copy => |expr| try self.begin(expr),
-            .rebuild => |expr| try self.rebuild(expr),
+            .assemble => |expr| try self.assemble(expr),
         };
         return self.delivered.pop().?;
     }
@@ -151,7 +151,7 @@ const Copier = struct {
     }
 
     /// Deliver a leaf as it is, or queue the expressions inside `expr` ahead
-    /// of its own rebuild.
+    /// of assembling its copy around theirs.
     fn begin(self: *Copier, expr: Ast.ExprId) Allocator.Error!void {
         const allocator = self.program.allocator;
         const data = self.program.getExpr(expr).data;
@@ -161,7 +161,7 @@ const Copier = struct {
         }
         self.children.clearRetainingCapacity();
         try self.collectChildren(data);
-        try self.work.append(allocator, .{ .rebuild = expr });
+        try self.work.append(allocator, .{ .assemble = expr });
         // The stack hands the children back first to last.
         var index = self.children.items.len;
         while (index > 0) {
@@ -341,7 +341,7 @@ const Copier = struct {
 
     /// Add `expr` again around the copies of the expressions inside it, at
     /// its own source position, and deliver the copy.
-    fn rebuild(self: *Copier, expr: Ast.ExprId) Allocator.Error!void {
+    fn assemble(self: *Copier, expr: Ast.ExprId) Allocator.Error!void {
         const program = self.program;
         const source = program.getExpr(expr);
         const count = self.childCount(source.data);
@@ -351,7 +351,7 @@ const Copier = struct {
         const copies = try program.allocator.dupe(Ast.ExprId, self.delivered.items[first..]);
         defer program.allocator.free(copies);
         self.delivered.shrinkRetainingCapacity(first);
-        const data = try self.rebuiltData(source.data, copies);
+        const data = try self.assembledData(source.data, copies);
 
         program.current_loc = program.exprLoc(expr);
         program.current_region = program.exprRegion(expr);
@@ -362,7 +362,7 @@ const Copier = struct {
     /// `source` around `inside`, which holds one expression for each
     /// expression directly inside it, in evaluation order. Its spans and
     /// statements are added again.
-    fn rebuiltData(self: *Copier, source: Ast.ExprData, inside: []const Ast.ExprId) Allocator.Error!Ast.ExprData {
+    fn assembledData(self: *Copier, source: Ast.ExprData, inside: []const Ast.ExprId) Allocator.Error!Ast.ExprData {
         const program = self.program;
         var data = source;
         var taken: Taken = .{ .copies = inside };
@@ -500,7 +500,7 @@ const Copier = struct {
             .lambda,
             .def_ref,
             .fn_def,
-            => unreachable, // `begin` queues a rebuild only for the forms below
+            => unreachable, // `begin` queues an assembly only for the forms below
             .list, .tuple => |items| items.len,
             .tag => |tag| tag.payloads.len,
             .low_level => |call| call.args.len,
