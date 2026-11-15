@@ -3869,10 +3869,18 @@ const Solver = struct {
                         try self.pushUnifyPair(stack, left_backing.ty, right_backing.ty);
                     } else if (left_backing.authority == .generated_private) {
                         stack.items[finish_index].finish.action = .{ .link_rhs_to_lhs = .{ .lhs = a, .rhs = b } };
-                        try self.pushRelate(stack, right_backing.ty, left_backing.ty);
+                        if (isCodecRepresentationDef(left_named.def)) {
+                            try self.pushSpanPairs(stack, left_named.args, right_named.args, "codec representation arguments failed Lambda Solved unification");
+                        } else {
+                            try self.pushRelate(stack, right_backing.ty, left_backing.ty);
+                        }
                     } else if (right_backing.authority == .generated_private) {
                         stack.items[finish_index].finish.action = .{ .link_rhs_to_lhs = .{ .lhs = b, .rhs = a } };
-                        try self.pushRelate(stack, left_backing.ty, right_backing.ty);
+                        if (isCodecRepresentationDef(right_named.def)) {
+                            try self.pushSpanPairs(stack, left_named.args, right_named.args, "codec representation arguments failed Lambda Solved unification");
+                        } else {
+                            try self.pushRelate(stack, left_backing.ty, right_backing.ty);
+                        }
                     } else {
                         Common.invariant("named type backing authorities were incompatible during Lambda Solved unification");
                     }
@@ -4297,7 +4305,13 @@ const Solver = struct {
                         if (public_backing.use != private_backing.use) {
                             Common.invariant("generated-private evidence relation received different named backing uses");
                         }
-                        try self.pushRelate(stack, public_backing.ty, private_backing.ty);
+                        // A codec representation's declared public backing
+                        // is never a value's layout, so it corresponds to
+                        // nothing in the generated backing.
+                        const codec_view = public_backing.authority == .checked_public and
+                            private_backing.authority == .generated_private and
+                            isCodecRepresentationDef(private_named.def);
+                        if (!codec_view) try self.pushRelate(stack, public_backing.ty, private_backing.ty);
                     } else if (private_named.backing.get() != null) {
                         Common.invariant("generated-private evidence relation received different named backing presence");
                     }
@@ -4466,6 +4480,17 @@ const Solver = struct {
         }
         try self.pushUnifyPair(stack, self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
         return true;
+    }
+
+    /// Whether a named type with generated-private backing is a codec
+    /// representation (`FieldNames`, `FieldName`, `ParseTagUnionSpec`) rather
+    /// than an iterator. A codec representation is the only runtime
+    /// representation of its named type at its arguments, and its declared
+    /// public backing is never a value's layout, so a checked-public view of
+    /// it relates by its type arguments alone and takes the representation
+    /// (design.md "Tier Unification And Callable Flow").
+    fn isCodecRepresentationDef(def: MonoType.TypeDef) bool {
+        return def.iterator_representation == .none and def.generated == null;
     }
 
     fn unifyPublicGeneratedIterator(

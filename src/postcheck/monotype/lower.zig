@@ -25722,9 +25722,17 @@ const BodyContext = struct {
         // A variable the base relations instantiated holds the base's node,
         // which the child's evidence may answer differently; the child's
         // answer joins its class, exactly as relating the binders in the
-        // child would have joined them.
+        // child would have joined them. A binder's value may carry
+        // generated-private evidence its variable's checked-public answer
+        // only interfaces, and relating the binder in the child would have
+        // related the two through the opaque interface relation.
         for (relation_base.variables.items) |instantiated| {
-            if (try child.enclosingVariableNode(instantiated.checked_ty)) |bound| try child.graph.unify(instantiated.node, bound);
+            const bound = try child.enclosingVariableNode(instantiated.checked_ty) orelse continue;
+            if (try child.graph.containsGeneratedPrivate(instantiated.node) and !try child.graph.containsGeneratedPrivate(bound)) {
+                try child.graph.relateOpaqueInterface(bound, instantiated.node);
+            } else {
+                try child.graph.unify(instantiated.node, bound);
+            }
         }
         return child;
     }
@@ -65130,17 +65138,14 @@ const BodyContext = struct {
 
         const selected_private = try self.graph.containsGeneratedPrivate(selected_node);
         const value_private = try self.graph.containsGeneratedPrivate(value_node);
-        if (selected_private != value_private) {
-            if (!selected_private and value_private) {
-                // A finished private producer remains immutable and therefore
-                // cannot merge into the live public accumulator. Carry its
-                // exact cell forward, then retag earlier branches after the
-                // final representation has been selected.
-                selection.selected = value_cell;
-            } else {
-                Common.invariant("control-flow branch could not use its selected runtime representation");
-            }
-        }
+        // A finished private producer remains immutable and therefore cannot
+        // merge into the live public accumulator. Carry its exact cell
+        // forward, then retag earlier branches after the final
+        // representation has been selected. A public branch value meeting a
+        // finished private selection is related to it through the opaque
+        // interface relation above and takes the selection below, exactly
+        // as an earlier public branch is retagged.
+        if (!selected_private and value_private) selection.selected = value_cell;
         selection.has_value = true;
         self.draft.exprs.items[@backingInt(value)].ty = selection.selected;
     }

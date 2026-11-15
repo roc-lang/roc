@@ -9767,7 +9767,13 @@ and nominal backings without making constructor inspection global to unrelated
 calls. If a control-flow prepass cannot see a private result before emission,
 the first exact private branch upgrades the selection and all already-emitted
 inhabited branches are retagged with that validated selection before the
-control-flow expression is finalized.
+control-flow expression is finalized. A branch whose value is only a public
+interface, such as a generic body's list item or tag payload instantiated at
+the public type its specialization substitutes for a variable, meets a
+finished private selection the same way: its public interface relates to the
+selection through the opaque interface relation and the branch takes the
+selection. Lambda Solved then joins the public interface into the selected
+representation, as it does for a retagged earlier branch.
 
 Call specialization and control-flow result selection consume that same exact
 constructor witness where the producer granted the capability. They propagate
@@ -9845,6 +9851,14 @@ At a forced-dynamic relation, Lambda Solved always unifies the public item type.
 A minted peer also joins its generated-private backing into the dynamic backing;
 an ordinary public peer has no private representation authority, so its backing
 is not merged or reinterpreted.
+
+A codec representation (a generated-private `FieldNames`, `FieldName` or
+`ParseTagUnionSpec`) is the only runtime representation of its named type at
+its arguments, and its declared public backing is never a value's layout. When
+Lambda Solved unification or the public-to-generated walk meets a checked-public
+view of the same named type, it relates the two by their type arguments alone
+and the representation wins; the declared public backing corresponds to nothing
+in the generated backing and is not related to it.
 
 Lambda Solved transfers callable evidence across a public-to-generated relation
 with a separate structure-preserving walk. That walk validates corresponding
@@ -18025,7 +18039,13 @@ context shared by every nested context it creates. Each nested context forks
 those relations and joins every variable node the base instantiated with its
 own evidence's answer for that variable, which places it in exactly the class
 that relating the binders in the nested context would have; the relations
-themselves are not rebuilt per nested context.
+themselves are not rebuilt per nested context. When a binder's
+value carries generated-private evidence and the evidence's answer is the
+checked-public interface its specialization substitutes for the variable (a
+generic body capturing a parameter that holds a minted iterator or a codec
+representation), the answer relates to the variable node through the opaque
+interface relation, exactly as relating the binder in the nested context
+would have.
 
 The nested-site walk records each site's runtime captures: the binders of
 enclosing frames whose values the site needs, which are its source captures
