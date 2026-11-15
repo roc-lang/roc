@@ -12025,8 +12025,7 @@ payload of `parse_record_start`, for instance) is now quantified in its
 scheme, so a stored codec restore reaches that row unresolved while the
 specialization graph is still open. Stored codec restores therefore prepare
 in Phase A and emit in Phase B like every other codec body, and the row is
-decided once, by final sealing. (The two Builder-level `*Expr` restores, which
-own a private graph, are the exception noted in the Monotype sealing rule.)
+decided once, by final sealing.
 
 #### Declaration Position and Adapter Reach
 
@@ -15454,12 +15453,10 @@ at its inline field node and records the finished draft expression
 (`DraftPreparedFieldDefault`); frozen Phase‑B emission consumes exactly
 those prepared values and may not lower another checked expression
 (missing or duplicate demand is an invariant panic). Stored codec
-restores reached during body lowering (`restoreConstParserRuntimeFn[AtNode]`
-/ `restoreConstEncoderForRuntimeFn[AtNode]`) prepare in Phase A and emit in
-Phase B like every other codec body; the two Builder-level restores that run
-in a private graph (`restoreConstParserRuntimeFnExpr` and its encoder twin)
-still take eager resolved views inside that graph and are the last eager
-codec consumers. There is no leading-batch root ordering: no root has to
+restores (`restoreConstCodecRuntimeFn`) prepare in Phase A and emit in
+Phase B like every other codec body, whichever body restores them: a root
+that restores a stored constant is built in a function body of its own
+(Operand Sequencing). There is no leading-batch root ordering: no root has to
 finish before a parser can restore a default, because defaults are
 materialized at each construction site rather than stored.
 
@@ -19592,17 +19589,8 @@ fresh graph instantiation has completed relation production and final sealing.
 The only time an unresolved checked variable with an empty-tag-union row
 default may become durable `tag_union []` is final graph sealing, after every
 checked interface relation and specialization demand for that body has been
-applied. Every codec body reached during specialization-body lowering—derived,
-or restored from a stored constant—is generated after that point.
-One narrow exception remains, and it is not a graph-defaulting exception: the
-two Builder-level stored-codec restores (`restoreConstParserRuntimeFnExpr` and
-`restoreConstEncoderForRuntimeFnExpr`) build their body in a private graph of
-their own and seal it with `sealActiveBodyDraft`. They still take eager
-resolved views inside that private graph (`resolvedTypeViewForNode` of the
-constructor node, `resolvedCheckedTypeView` of the dispatcher) before it
-seals, so a shape whose own cells are still undecided—an optional `?:` field
-slot—panics there. Nothing is defaulted early; the view is simply demanded
-early. They are the last eager codec consumers.
+applied. Every codec body—derived, or restored from a stored constant—is
+generated after that point.
 After sealing, `tag_union []` is closed and uninhabited. Values such as `[]` can
 still be represented as `List(tag_union [])` because they contain no items,
 and code that would need an actual item value must have constrained the
@@ -20178,21 +20166,23 @@ sequence of the expressions already built around it, so that draft's bodies
 are sequenced again in place before they are sealed, each expression keeping
 its id.
 
-A few expressions are assembled outside any body, from sealed operands: a
-compile-time constant restored for a static-data request or a
-procedure-binding root, and that root's call of it. They are added through
-`Builder.addProgramExpr`, which applies the same rule to operands that are
-each a value or one sealed block.
+A root whose body restores a compile-time constant is built in a function
+body of its own like any other, so the same function adds its expressions: a
+static-data request's initializer, and the root of a procedure binding to a
+computed callable, which calls the restored callable. The only bodies written
+straight into the program are single expressions over a root's own arguments:
+a binding's direct call of its target, and a crash.
 
 Lifting keeps the form: it rewrites callable expressions in place and adds no
 statements. Monotype restores each compile-time constant once and names that
 one expression wherever the constant is read, so a body can reach an
 expression or a statement that an earlier parent already holds. Lifting
-records each function whose rewrite reaches one, and once lifting has
-finished it gives that function a structural copy of its own body
-(`monotype_lifted/body_copy.zig`); the earlier parent keeps the original, and
-every other body stays exactly as Monotype emitted it. Debug builds then
-verify the form on every lifted body (`monotype_lifted/sequenced.zig`).
+records each place its rewrite reaches one, and once lifting has finished it
+gives that parent a structural copy of the shared expression alone
+(`monotype_lifted/body_copy.zig`): the first parent keeps the original, each
+later one gets a copy, and every other expression stays exactly as Monotype
+emitted it. Debug builds then verify the form on every lifted body
+(`monotype_lifted/sequenced.zig`).
 
 ### Monotype Specialization
 
@@ -21927,11 +21917,11 @@ Callable lifting rewrites the expression variants whose callable meaning changes
 
 Monotype's bodies arrive operand-sequenced (Operand Sequencing), and these
 rewrites keep them so: a callable expression is replaced where it stands, and
-the capture operands lifting adds are locals. A function whose body reaches a
-subtree an earlier parent holds takes a structural copy of its body, which
-gives every expression with expressions inside it one parent. Debug builds
-verify the sequenced form of every lifted body before the program leaves
-lifting.
+the capture operands lifting adds are locals. A parent that names an
+expression an earlier parent already holds takes a structural copy of that
+expression, which gives every expression with expressions inside it one
+parent. Debug builds verify the sequenced form of every lifted body before
+the program leaves lifting.
 
 This is a representation-sharing rule, not a license for later stages to accept
 pre-lift callable forms. After lifting, a valid lifted program has no reachable
