@@ -16655,6 +16655,9 @@ const EvidencePass = struct {
                 .selected_hoisted_const,
                 .platform_required_const,
                 => true,
+                // A scheme alias of a constant reads that constant at each
+                // use of the alias.
+                .local_proc => |local| local.is_alias and !bindsProcedureAlias(self.module, local.binder, local.expr),
                 .top_level_proc,
                 .imported_proc,
                 .hosted_proc,
@@ -16664,7 +16667,6 @@ const EvidencePass = struct {
                 .local_value,
                 .local_mutable_version,
                 .pattern_binder,
-                .local_proc,
                 .platform_required_declaration,
                 .platform_required_checked_error,
                 => false,

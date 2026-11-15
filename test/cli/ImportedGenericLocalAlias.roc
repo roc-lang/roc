@@ -52,9 +52,17 @@ generic_twice = |x| {
     (twice(x), twice([1.U8, 2]))
 }
 
+# A name a destructuring binds out of a local name for the constant.
+through_name = {
+    doubling = ImportedGenericLocalAliasDep.doubling
+    (twice, _) = doubling
+    (twice("ab"), twice([1.U8, 2]))
+}
+
 expect destructured == "hi!"
 expect whole == ("abab", [1, 2, 1, 2])
 expect captured == "cd!"
 expect generic("gh") == "gh!"
 expect destructured_twice == ("abab", [1, 2, 1, 2])
 expect generic_twice("ab") == ("abab", [1, 2, 1, 2])
+expect through_name == ("abab", [1, 2, 1, 2])

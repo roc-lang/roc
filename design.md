@@ -19848,7 +19848,12 @@ well (`body_analyses.bindsLocalSchemeAlias`): it owns its generalized dispatch
 scope, its declaration computes nothing, and each use lowers the lookup in
 that scope at the use's instantiation, under both strategies. The name can
 therefore be used at more than one type, and the constant's requirements are
-met at each.
+met at each. A use of the name is a read of the constant, so a requirement
+the use's type leaves unpinned (a destructuring scheme alias taking the name
+apart, `(shout, _) = pair`) is recorded by the rule a read of the constant
+itself follows (`UnpinnedRecordEvidence.from_callable`): one reachable
+through a stored function's callable type resolves from that function's
+eventual request.
 
 A local declaration that takes such a lookup apart (`(shout, _) =
 Hooks.pair`) is a destructuring scheme alias
