@@ -519,10 +519,10 @@ main! = |_args| {
 				(p-assign (ident "_args")))
 			(e-block
 				(s-expr
-					(e-call (constraint-fn-var 510)
+					(e-call (constraint-fn-var 509)
 						(e-lookup-local
 							(p-assign (ident "echo!")))
-						(e-call (constraint-fn-var 509)
+						(e-call (constraint-fn-var 508)
 							(e-lookup-local
 								(p-assign (ident "describe_mode")))
 							(e-empty_record))))

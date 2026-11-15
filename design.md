@@ -5430,13 +5430,34 @@ Annotated schemes come before any body. A pre-pass declares a standalone
 generalized scheme from every eligible annotation (a simple `.assign` binding
 whose annotation has no `_` hole and is not rejected by Value Bindings
 Generalize By Expression): the annotation's type is generated once in
-place, deep-copied into disjoint orphan vars, generalized, and the annotation
-nodes are reset so the def's own body check generates them again exactly as
-always. A reference to an annotated def—by name or by dispatch—before or
+place and deep-copied into disjoint orphan vars, and the copy is generalized.
+A reference to an annotated def—by name or by dispatch—before or
 while its body checks instantiates this standalone scheme, exactly like a
 reference to an imported scheme copy; the def itself still checks with its
-annotation generated in its body's frame, sharing vars with the scheme the
+annotation in its body's frame, sharing vars with the scheme the
 checked module outputs, which checked dispatch-evidence resolution relies on.
+
+The body's annotation is that same generation whenever generating it again
+in the body's frame would build the same types
+(`Check.takeOverRetainedAnnotation`). A generation qualifies when it only
+built types: its annotation has no `where` clause, no defaulted record field
+and no host boundary, it reported no problem and deferred no relation, and it
+referenced no for-clause alias, no declaration generated on demand and no
+type declared in a function body. The pre-pass leaves such a generation in
+the annotation's nodes and records the classes it made for itself: all of
+its classes except the instances and ground subtrees that later references
+to the same declaration read (Polarity, below), which generating the
+annotation again would read rather than make. When the body's frame begins,
+those classes take the frame's rank and join its pool, which is the state
+generating the annotation there would have left. A body checked inside a
+local function generates its annotation itself, since its type variable
+lookups mark that function, and so does every body checked once anything in
+the module is erroneous: a mismatch may have made a shared instance or ground
+subtree erroneous, and a new generation copies that declaration afresh and
+records its copy for the references after it. Every other generation
+is discarded where it was made: the pre-pass resets the annotation's nodes
+and drops the generation's diagnostics, and the body's own generation
+reports them.
 
 An annotation with `_` holes cannot be predeclared module-wide: a hole's type
 is inferred from its body, so quantifying it into a standalone scheme would
@@ -11835,8 +11856,8 @@ because the host is a fixed ABI rather than a Roc producer participating in
 unification.
 
 The annotation still BOUNDS the definition—widening happens only at
-instantiation sites. When the definition's body pass generates its annotation,
-every extension that generation mints (`Check.implicit_open_exts`, sliced per
+instantiation sites. When the definition's body has its annotation,
+every extension the annotation's generation minted (`Check.implicit_open_exts`, sliced per
 annotation by `annotation_implicit_open_exts`) is marked bounded
 (`DescriptorFlags.bounded_row_ext`, `Check.beginBoundedAnnotationRows`). A
 bounded row may close or stay open, but the unifier refuses any relation that
@@ -15905,7 +15926,13 @@ Other solved-graph mutations:
   of the scrutinee's. An error-free program never reaches the probe, so no
   program's typechecking or checked-module output changes.
 - `resetAnnotationNodes` (`resetVarToUnbound`)—mechanism: recycles
-  annotation node vars after the scheme was copied off as a disjoint orphan.
+  annotation node vars after the scheme was copied off as a disjoint orphan,
+  for a body that generates its annotation itself.
+- `takeOverRetainedAnnotation` (`setDescRank`)—mechanism: gives the classes
+  of an annotation generation the pre-pass retained the rank of the body
+  frame that takes them over (Def Checking Order). They are the classes
+  generating the annotation in that frame would have made, at the rank it
+  would have made them.
 - `finalizeTypeDeclarationValidity` and occurs-check poisoning
   (`setVarContent(.err)`)—policy: Type Declaration Template Validity (above)
   and diagnostic recovery after an already reported problem.
