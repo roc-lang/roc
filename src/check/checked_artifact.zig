@@ -1194,10 +1194,22 @@ pub const RootRequestTable = struct {
 
         var forwarding_roots = try callable_eval_templates.forwardingRoots(allocator, compile_time_roots.roots.items().len);
         defer forwarding_roots.deinit(allocator);
+        // The roots a compile-time request already names. Each root appends
+        // at most one request below and is visited once, so only requests
+        // made before the loop can name a root it reaches.
+        var requested_roots = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, compile_time_roots.roots.items().len);
+        defer requested_roots.deinit(allocator);
+        for (requests.items) |request| {
+            if (request.abi != .compile_time) continue;
+            const id = request.compile_time_root.get() orelse continue;
+            if (@backingInt(id) >= requested_roots.bit_length) checkedArtifactInvariant("compile-time request root id was outside the root table", .{});
+            requested_roots.set(@backingInt(id));
+        }
         for (compile_time_roots.roots.items()) |root| {
             if (!compileTimeRootRequestIsEligible(root)) continue;
             if (forwarding_roots.isSet(@backingInt(root.id))) continue;
-            if (compileTimeRootHasRootRequest(requests.items, root)) {
+            if (builtin.mode == .debug) std.debug.assert(requested_roots.isSet(@backingInt(root.id)) == compileTimeRootHasRootRequest(requests.items, root));
+            if (requested_roots.isSet(@backingInt(root.id))) {
                 continue;
             }
             try appendRoot(&requests, allocator, .{
@@ -1551,11 +1563,20 @@ const CompileTimeRequestScheduler = struct {
         var sorted = std.ArrayList(RootRequest).empty;
         errdefer sorted.deinit(self.allocator);
 
+        // Every request whose indegree has reached zero, lowest index first.
+        // An indegree never rises again, so a request stays ready until it
+        // is emitted.
+        var ready = ReadyRequests.initContext({});
+        defer ready.deinit(self.allocator);
+        for (self.indegrees, 0..) |indegree, i| {
+            if (indegree == 0) try ready.push(self.allocator, i);
+        }
+
         while (sorted.items.len < self.entries.len) {
             // Hoisted roots can read each other ("Dependency-Ordered
             // Compile-Time Evaluation"): with none ready, the next is a
             // member of a group that depends on no other unemitted root.
-            const next = self.nextReadyRequestIndex() orelse try self.nextGroupRequestIndex();
+            const next = self.nextReadyRequestIndex(&ready) orelse try self.nextGroupRequestIndex();
             self.emitted[next] = true;
             try sorted.append(self.allocator, self.entries[next].request);
 
@@ -1564,13 +1585,34 @@ const CompileTimeRequestScheduler = struct {
                     checkedArtifactInvariant("compile-time root dependency edge underflowed during scheduling", .{});
                 }
                 self.indegrees[dependent] -= 1;
+                if (self.indegrees[dependent] == 0) try ready.push(self.allocator, dependent);
             }
         }
 
         return try sorted.toOwnedSlice(self.allocator);
     }
 
-    fn nextReadyRequestIndex(self: *const CompileTimeRequestScheduler) ?usize {
+    const ReadyRequests = std.PriorityQueue(usize, void, readyRequestOrder);
+
+    fn readyRequestOrder(_: void, a: usize, b: usize) std.math.Order {
+        return std.math.order(a, b);
+    }
+
+    /// The lowest-index unemitted request with no unemitted dependency.
+    fn nextReadyRequestIndex(self: *const CompileTimeRequestScheduler, ready: *ReadyRequests) ?usize {
+        // A request a group emitted while its indegree was nonzero is still
+        // queued once that indegree reaches zero.
+        while (ready.peek()) |i| {
+            if (!self.emitted[i]) break;
+            _ = ready.pop();
+        }
+        const next = ready.pop();
+        if (builtin.mode == .debug) std.debug.assert(next == self.scanReadyRequestIndex());
+        return next;
+    }
+
+    /// `nextReadyRequestIndex` by a scan of every request.
+    fn scanReadyRequestIndex(self: *const CompileTimeRequestScheduler) ?usize {
         for (self.entries, 0..) |_, i| {
             if (self.emitted[i]) continue;
             if (self.indegrees[i] != 0) continue;
@@ -10777,20 +10819,94 @@ pub const CheckedExhaustivenessSite = struct {
     requires_pairing: bool = false,
 };
 
+/// The site `CheckedExhaustivenessSiteTable.lookupByMatchExpr` or
+/// `lookupByDestructurePattern` finds for a CIR node
+/// (`CheckedExhaustivenessSiteTable.sites_by_match_expr`,
+/// `sites_by_destructure_pattern`).
+pub const NodeExhaustivenessSite = extern struct {
+    node: u32,
+    site: CheckedExhaustivenessSiteId,
+
+    fn order(entry: NodeExhaustivenessSite, key: u32) std.math.Order {
+        return std.math.order(entry.node, key);
+    }
+
+    fn lessThan(_: void, a: NodeExhaustivenessSite, b: NodeExhaustivenessSite) bool {
+        if (a.node != b.node) return a.node < b.node;
+        return @backingInt(a.site) < @backingInt(b.site);
+    }
+};
+
 /// Table of checked exhaustiveness sites keyed by checked expressions or patterns.
 pub const CheckedExhaustivenessSiteTable = struct {
     sites: collections.SafeList(CheckedExhaustivenessSite) = .{},
+    /// For each match expression a site names, the first such site, by
+    /// expression, ascending.
+    sites_by_match_expr: collections.SafeList(NodeExhaustivenessSite) = .{},
+    /// For each destructure pattern a site names, the first such site, by
+    /// pattern, ascending.
+    sites_by_destructure_pattern: collections.SafeList(NodeExhaustivenessSite) = .{},
+
+    /// A table of `sites`, indexed for lookup. A site's id is its position
+    /// in `sites`. The table owns `sites` once this returns; on failure the
+    /// caller still does.
+    pub fn fromOwnedSites(allocator: Allocator, sites: []CheckedExhaustivenessSite) Allocator.Error!CheckedExhaustivenessSiteTable {
+        const by_match_expr = try nodeSiteIndex(allocator, sites, .match_expr);
+        errdefer allocator.free(by_match_expr);
+        const by_destructure_pattern = try nodeSiteIndex(allocator, sites, .destructure_pattern);
+        return .{
+            .sites = .fromOwnedSlice(sites),
+            .sites_by_match_expr = .fromOwnedSlice(by_match_expr),
+            .sites_by_destructure_pattern = .fromOwnedSlice(by_destructure_pattern),
+        };
+    }
+
+    const IndexedNode = enum { match_expr, destructure_pattern };
+
+    fn indexedNode(site: CheckedExhaustivenessSite, comptime kind: IndexedNode) ?u32 {
+        return switch (kind) {
+            .match_expr => if (site.checked_expr.get()) |expr| @backingInt(expr) else null,
+            .destructure_pattern => if (site.checked_pattern.get()) |pattern| @backingInt(pattern) else null,
+        };
+    }
+
+    fn nodeSiteIndex(allocator: Allocator, sites: []const CheckedExhaustivenessSite, comptime kind: IndexedNode) Allocator.Error![]NodeExhaustivenessSite {
+        var entries = std.ArrayList(NodeExhaustivenessSite).empty;
+        errdefer entries.deinit(allocator);
+        for (sites) |site| {
+            const node = indexedNode(site, kind) orelse continue;
+            try entries.append(allocator, .{ .node = node, .site = site.id });
+        }
+        std.mem.sort(NodeExhaustivenessSite, entries.items, {}, NodeExhaustivenessSite.lessThan);
+        // Site ids ascend in table order, so the first entry of each node is
+        // the first site naming it.
+        var unique: usize = 0;
+        for (entries.items) |entry| {
+            if (unique != 0 and entries.items[unique - 1].node == entry.node) continue;
+            entries.items[unique] = entry;
+            unique += 1;
+        }
+        entries.shrinkRetainingCapacity(unique);
+        return try entries.toOwnedSlice(allocator);
+    }
 
     pub fn lookupByMatchExpr(self: *const CheckedExhaustivenessSiteTable, expr: CIR.Expr.Idx) ?CheckedExhaustivenessSiteId {
-        for (self.sites.items()) |site| {
-            if (site.checked_expr.get() == expr) return site.id;
-        }
-        return null;
+        const found: ?CheckedExhaustivenessSiteId = if (artifact_serialize.binarySearchByKey(NodeExhaustivenessSite, u32, self.sites_by_match_expr.items(), @backingInt(expr), NodeExhaustivenessSite.order)) |entry| entry.site else null;
+        if (builtin.mode == .debug) std.debug.assert(found == self.scanByNode(@backingInt(expr), .match_expr));
+        return found;
     }
 
     pub fn lookupByDestructurePattern(self: *const CheckedExhaustivenessSiteTable, pattern: CIR.Pattern.Idx) ?CheckedExhaustivenessSiteId {
+        const found: ?CheckedExhaustivenessSiteId = if (artifact_serialize.binarySearchByKey(NodeExhaustivenessSite, u32, self.sites_by_destructure_pattern.items(), @backingInt(pattern), NodeExhaustivenessSite.order)) |entry| entry.site else null;
+        if (builtin.mode == .debug) std.debug.assert(found == self.scanByNode(@backingInt(pattern), .destructure_pattern));
+        return found;
+    }
+
+    /// `lookupByMatchExpr` or `lookupByDestructurePattern` by a scan of
+    /// every site.
+    fn scanByNode(self: *const CheckedExhaustivenessSiteTable, node: u32, comptime kind: IndexedNode) ?CheckedExhaustivenessSiteId {
         for (self.sites.items()) |site| {
-            if (site.checked_pattern.get() == pattern) return site.id;
+            if (indexedNode(site, kind) == node) return site.id;
         }
         return null;
     }
@@ -10805,6 +10921,8 @@ pub const CheckedExhaustivenessSiteTable = struct {
 
     pub const Serialized = extern struct {
         sites: SerializedSlice(CheckedExhaustivenessSite) = .{},
+        sites_by_match_expr: SerializedSlice(NodeExhaustivenessSite) = .{},
+        sites_by_destructure_pattern: SerializedSlice(NodeExhaustivenessSite) = .{},
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedExhaustivenessSiteTable, @This());
         pub const serialize = Serde.serialize;
@@ -24708,6 +24826,17 @@ pub const CompileTimeRootPayload = union(enum) {
     runtime,
 };
 
+/// Which producer completes a compile-time root (design.md "Value-Form
+/// Roots"). Checking decides it once, from the root's checked expression,
+/// and every finalization consumes the decision as it is.
+pub const CompileTimeRootCompletion = enum(u8) {
+    /// A compile-time evaluator lowers, compiles and runs the root.
+    evaluate,
+    /// The root's checked expression is in value form: the checked-value
+    /// writer stores it from the expression, and nothing runs.
+    write_value,
+};
+
 /// Whether a selected compile-time root may become a root request.
 pub const CompileTimeRootRequestEligibility = enum(u8) {
     pending,
@@ -24749,6 +24878,8 @@ pub const CompileTimeRoot = struct {
     /// an aggregate. Boxy must produce its own capture graph for this root.
     /// Readiness never traverses a stored value or rediscovers its type.
     lss_value_has_functions: bool = false,
+    /// The producer that completes the root (`publishValueFormRoots`).
+    completion: CompileTimeRootCompletion = .evaluate,
 
     /// The payload available to this strategy. A completed function in the
     /// other strategy's representation is still pending for this producer.
@@ -24850,6 +24981,22 @@ pub const LiteralConversionRoot = extern struct {
     }
 };
 
+/// The root `CompileTimeRootTable.lookupIdByPattern` finds for a top-level
+/// pattern (`CompileTimeRootTable.roots_by_pattern`).
+pub const PatternRoot = extern struct {
+    pattern: u32,
+    root: ComptimeRootId,
+
+    fn order(entry: PatternRoot, key: u32) std.math.Order {
+        return std.math.order(entry.pattern, key);
+    }
+
+    fn lessThan(_: void, a: PatternRoot, b: PatternRoot) bool {
+        if (a.pattern != b.pattern) return a.pattern < b.pattern;
+        return @backingInt(a.root) < @backingInt(b.root);
+    }
+};
+
 /// The body nodes a compile-time root evaluates (`CompileTimeRoot.bodyParts`).
 pub const RootBodyParts = struct {
     expr: ?CIR.Expr.Idx = null,
@@ -24869,6 +25016,138 @@ fn rootBodyContainsDiagnosticError(diagnostics: *const body_analyses.NodeBits, r
     return false;
 }
 
+/// Mark each constant and hoisted constant root whose checked expression is
+/// in value form (`exprIsValueForm`) for the checked-value writer (design.md
+/// "Value-Form Roots"). It reads the module's dispatch plans and literal
+/// conversion roots, so it runs once both are published. It records a fact
+/// about the checked expression and changes no type.
+fn publishValueFormRoots(allocator: Allocator, roots: *CompileTimeRootTable, bodies: CheckedBodies) Allocator.Error!void {
+    var stack = std.ArrayList(CIR.Expr.Idx).empty;
+    defer stack.deinit(allocator);
+    for (roots.roots.items()) |*root| {
+        switch (root.kind) {
+            .constant, .hoisted_constant => {},
+            .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => continue,
+        }
+        if (root.hoisted_body) |body| switch (body) {
+            .expr => {},
+            .pattern_extraction, .pattern_error, .pattern_validation, .valueless_binding => continue,
+        };
+        const expr = root.expr.get() orelse continue;
+        if (try exprIsValueForm(allocator, bodies, expr, &stack)) root.completion = .write_value;
+    }
+}
+
+/// Whether the checked expression `root` is in value form (design.md
+/// "Value-Form Roots"): a literal whose conversion is the builtin one and
+/// cannot fail, or a list, tuple, record, tag, or nominal construction whose
+/// every part is in value form, with no part read at a row other than its
+/// own. Nothing in it calls, dispatches, reads a definition, or can crash.
+/// `stack` is scratch.
+pub fn exprIsValueForm(allocator: Allocator, bodies: CheckedBodies, root: CIR.Expr.Idx, stack: *std.ArrayList(CIR.Expr.Idx)) Allocator.Error!bool {
+    stack.clearRetainingCapacity();
+    try stack.append(allocator, root);
+    while (stack.pop()) |id| {
+        // A part its parent reads at a wider row is converted there; the
+        // root's own coercion belongs to the site that reads the root.
+        if (id != root and bodies.rowCoercion(id) != null) return false;
+        const raw = @backingInt(id);
+        const data = valueFormCandidate(bodies, id) orelse return false;
+        switch (data) {
+            .numeral => {
+                if (bodies.numeralPlan(raw) != null or bodies.literalConversionRoot(raw) != null) return false;
+                const builtin_type = checkedConcreteBuiltinForLiteralTarget(bodies.types, bodies.exprType(id)) orelse return false;
+                const target = valueFormNumeralTarget(builtin_type) orelse return false;
+                switch (target) {
+                    // A float literal rounds to its nearest value; it never fails.
+                    .f32, .f64 => {},
+                    .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec => {
+                        const exact = bodies.env.exactNumeral(bodies.numeralLiteral(raw));
+                        if (!try exact_numeral.fits(allocator, exact, target)) return false;
+                    },
+                }
+            },
+            .str => |segments| {
+                if (bodies.quoteIsCustom(raw)) return false;
+                if (checkedConcreteBuiltinForLiteralTarget(bodies.types, bodies.exprType(id)) != .str) return false;
+                for (segments) |segment| {
+                    const segment_data = valueFormCandidate(bodies, segment) orelse return false;
+                    if (segment_data != .str_segment) return false;
+                }
+            },
+            .empty_list, .zero_argument_tag => {},
+            // An empty literal at a record type of optional fields builds
+            // each field's slot as missing.
+            .empty_record => if (!recordTypeIsClosedAndRequired(bodies.types, bodies.exprType(id), 0)) return false,
+            .list => |items| try stack.appendSlice(allocator, items),
+            .tuple => |items| try stack.appendSlice(allocator, items),
+            .tag => |tag| try stack.appendSlice(allocator, tag.args),
+            .record => |record| {
+                if (record.ext != null or record.unsets.len != 0) return false;
+                if (!recordTypeIsClosedAndRequired(bodies.types, bodies.exprType(id), record.fields.len)) return false;
+                for (record.fields) |field| try stack.append(allocator, bodies.recordFieldValue(field));
+            },
+            .nominal => |nominal| {
+                // A builtin nominal other than `Bool` and `Try` has no
+                // backing a construction could build.
+                if (checkedConcreteBuiltinForLiteralTarget(bodies.types, bodies.exprType(id))) |builtin_type| switch (builtin_type) {
+                    .bool, .try_ => {},
+                    .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .list, .box, .dict, .set, .iter, .stream, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => return false,
+                };
+                try stack.append(allocator, nominal.backing_expr);
+            },
+            .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .match_, .if_, .call, .block, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return false,
+        }
+    }
+    return true;
+}
+
+/// The checked body reader's view of `id` when its CIR kind can be part of
+/// a value-form expression: a literal or a construction, not retired. Null
+/// for every other kind, which the reader is not asked about here: an
+/// expression of any kind can sit in a root, and some kinds (an associated
+/// lookup or method call not yet resolved) reach the reader only once
+/// publication resolves them.
+fn valueFormCandidate(bodies: CheckedBodies, id: CIR.Expr.Idx) ?checked_bodies_mod.ExprData {
+    switch (bodies.env.store.getExpr(id)) {
+        .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external => {},
+        .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_block, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
+    }
+    if (bodies.exprIsRetired(id)) return null;
+    return bodies.exprData(id);
+}
+
+/// The numeric type a value-form numeral converts to: a builtin scalar
+/// number. A vector or any other builtin type has no value-form numeral.
+fn valueFormNumeralTarget(builtin_type: CheckedBuiltinNominal) ?exact_numeral.Target {
+    return switch (builtin_type) {
+        inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => |tag| @field(exact_numeral.Target, @tagName(tag)),
+        .bool, .try_, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .list, .box, .dict, .set, .iter, .stream, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => null,
+    };
+}
+
+/// Whether `ty` is a closed record type of exactly `field_count` fields,
+/// every one required: a construction listing `field_count` fields then
+/// gives every field its value, and no field is stored by its presence or
+/// filled from a default.
+fn recordTypeIsClosedAndRequired(view: CheckedTypeStoreView, ty: CheckedTypeId, field_count: usize) bool {
+    var current = ty;
+    var count: usize = 0;
+    while (true) switch (view.payload(current)) {
+        .alias => |alias| current = alias.backing,
+        .record => |record| {
+            var fields = record.fields.iterator();
+            while (fields.next()) |field| {
+                if (field.kind.tag != .required) return false;
+                count += 1;
+            }
+            current = record.ext;
+        },
+        .empty_record => return count == field_count,
+        .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .tag_union, .empty_tag_union, .field_kind => return false,
+    };
+}
+
 /// Public `CompileTimeRootTable` declaration.
 ///
 /// This is the durable compile-time root schedule and payload table. It stores
@@ -24883,10 +25162,15 @@ pub const CompileTimeRootTable = struct {
     /// The conversion root of each literal whose conversion is independent of
     /// specialization, by the literal's CIR node, ascending.
     literal_conversions: collections.SafeList(LiteralConversionRoot) = .{},
+    /// For each pattern a root other than a hoisted validation root binds,
+    /// the first such root, by pattern, ascending. Every root added after
+    /// the module's roots are published binds no pattern.
+    roots_by_pattern: collections.SafeList(PatternRoot) = .{},
 
     pub const Serialized = extern struct {
         roots: SerializedSlice(CompileTimeRoot) = .{},
         literal_conversions: SerializedSlice(LiteralConversionRoot) = .{},
+        roots_by_pattern: SerializedSlice(PatternRoot) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CompileTimeRootTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -25021,7 +25305,33 @@ pub const CompileTimeRootTable = struct {
 
         try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, roots.items);
 
-        return .{ .roots = .fromOwnedSlice(try roots.toOwnedSlice(allocator)) };
+        const roots_by_pattern = try patternRootIndex(allocator, roots.items);
+        errdefer allocator.free(roots_by_pattern);
+        return .{
+            .roots = .fromOwnedSlice(try roots.toOwnedSlice(allocator)),
+            .roots_by_pattern = .fromOwnedSlice(roots_by_pattern),
+        };
+    }
+
+    fn patternRootIndex(allocator: Allocator, roots: []const CompileTimeRoot) Allocator.Error![]PatternRoot {
+        var entries = std.ArrayList(PatternRoot).empty;
+        errdefer entries.deinit(allocator);
+        for (roots) |entry| {
+            if (entry.kind == .hoisted_validation) continue;
+            const pattern = entry.pattern.get() orelse continue;
+            try entries.append(allocator, .{ .pattern = @backingInt(pattern), .root = entry.id });
+        }
+        std.mem.sort(PatternRoot, entries.items, {}, PatternRoot.lessThan);
+        // Root ids ascend in table order, so the first entry of each pattern
+        // is the first root binding it.
+        var unique: usize = 0;
+        for (entries.items) |entry| {
+            if (unique != 0 and entries.items[unique - 1].pattern == entry.pattern) continue;
+            entries.items[unique] = entry;
+            unique += 1;
+        }
+        entries.shrinkRetainingCapacity(unique);
+        return try entries.toOwnedSlice(allocator);
     }
 
     /// The conversion root of the literal at a CIR node (an expression, or a
@@ -25042,6 +25352,13 @@ pub const CompileTimeRootTable = struct {
     }
 
     pub fn lookupIdByPattern(self: *const CompileTimeRootTable, pattern: CIR.Pattern.Idx) ?ComptimeRootId {
+        const found: ?ComptimeRootId = if (artifact_serialize.binarySearchByKey(PatternRoot, u32, self.roots_by_pattern.items(), @backingInt(pattern), PatternRoot.order)) |entry| entry.root else null;
+        if (builtin.mode == .debug) std.debug.assert(found == self.scanIdByPattern(pattern));
+        return found;
+    }
+
+    /// `lookupIdByPattern` by a scan of every root.
+    fn scanIdByPattern(self: *const CompileTimeRootTable, pattern: CIR.Pattern.Idx) ?ComptimeRootId {
         for (self.roots.items()) |entry| {
             if (entry.kind == .hoisted_validation) continue;
             if (entry.pattern != .none and entry.pattern.get().? == pattern) return entry.id;
@@ -25100,6 +25417,7 @@ pub const CompileTimeRootTable = struct {
     pub fn deinit(self: *CompileTimeRootTable, allocator: Allocator) void {
         self.roots.deinit(allocator);
         self.literal_conversions.deinit(allocator);
+        self.roots_by_pattern.deinit(allocator);
         self.* = .{};
     }
 
@@ -27124,8 +27442,21 @@ fn publishCheckedExhaustivenessSites(
     const obligations = bodies.env.exhaustiveness_obligations.items();
     const sites = try allocator.alloc(CheckedExhaustivenessSite, obligations.len);
     errdefer allocator.free(sites);
-    var requested_roots = try requestedCompileTimeRoots(allocator, compile_time_roots, root_requests);
-    defer requested_roots.deinit(allocator);
+    if (obligations.len == 0) return CheckedExhaustivenessSiteTable.fromOwnedSites(allocator, sites);
+
+    const node_count = bodies.env.store.nodes.len();
+    const any_pattern_site = for (obligations) |obligation| switch (obligation.source) {
+        .destructure_pattern => break true,
+        .match_expr => {},
+    } else false;
+    var template_owners = try CheckedTreeOwners.init(allocator, node_count, any_pattern_site);
+    defer template_owners.deinit(allocator);
+    try claimTemplateTrees(allocator, bodies, templates, &template_owners);
+    var root_owners = try CheckedTreeOwners.init(allocator, node_count, any_pattern_site);
+    defer root_owners.deinit(allocator);
+    try claimReplacingRootTrees(allocator, bodies, compile_time_roots, root_requests, &root_owners);
+    const root_pairing = try rootRequestPairing(allocator, compile_time_roots, root_requests);
+    defer allocator.free(root_pairing);
 
     for (obligations, sites, 0..) |obligation, *site, index| {
         const id: CheckedExhaustivenessSiteId = @fromBackingInt(@intCast(index));
@@ -27161,12 +27492,18 @@ fn publishCheckedExhaustivenessSites(
             continue;
         }
 
-        const needle: CheckedBodyNeedle = switch (obligation.source) {
-            .match_expr => |source_expr| .{ .expr = source_expr },
-            .destructure_pattern => |source_pattern| .{ .pattern = source_pattern },
+        const source_node: u32 = switch (obligation.source) {
+            .match_expr => |source_expr| @backingInt(source_expr),
+            .destructure_pattern => |source_pattern| @backingInt(source_pattern),
         };
-        const owner_template = try exhaustivenessOwnerTemplateForSource(allocator, bodies, owner_artifact, templates, needle);
-        const replacing_root = try exhaustivenessReplacingRootForSource(allocator, bodies, compile_time_roots, &requested_roots, needle);
+        const owner_template: ?canonical.ProcedureTemplateRef = if (template_owners.owner(source_node)) |template_index| blk: {
+            const template = templates.templates.items()[template_index];
+            break :blk .{ .artifact = owner_artifact, .proc_base = template.proc_base, .template = template.template_id };
+        } else null;
+        const replacing_root: ?CompileTimeRoot = if (root_owners.owner(source_node)) |root_index|
+            compile_time_roots.roots.items()[root_index]
+        else
+            null;
         const policy: ExhaustivenessResolutionPolicy = if (replacing_root) |root|
             .{ .compile_time_replaced_by_root = root.id }
         else if (owner_template) |template_ref|
@@ -27182,12 +27519,9 @@ fn publishCheckedExhaustivenessSites(
             .empirical => .compile_time_only,
             .static => .runtime_reachable,
         };
-        const requires_pairing = if (replacing_root) |root| blk: {
-            for (root_requests.requests.items()) |request| {
-                if (request.compile_time_root.get() == root.id) break :blk request.requires_pairing;
-            }
-            break :blk false;
-        } else if (owner_template) |template| blk: {
+        const requires_pairing = if (replacing_root) |root|
+            root_pairing[@backingInt(root.id)] == .required
+        else if (owner_template) |template| blk: {
             const template_index = reachability.localTemplateIndex(template).?;
             break :blk reachability.pairing_templates[template_index] and !reachability.runtime_templates[template_index];
         } else false;
@@ -27209,257 +27543,288 @@ fn publishCheckedExhaustivenessSites(
         };
     }
 
-    return .{ .sites = .fromOwnedSlice(sites) };
+    return CheckedExhaustivenessSiteTable.fromOwnedSites(allocator, sites);
 }
 
-/// What a checked body search looks for.
-const CheckedBodyNeedle = union(enum) {
-    expr: CIR.Expr.Idx,
-    pattern: CIR.Pattern.Idx,
-};
+/// For every node of the checked trees claimed so far, the first claimant
+/// whose tree holds it. Each claim walks only the nodes no earlier claim
+/// walked as far, so claiming every tree of a module visits each node at most
+/// twice: once outside function bodies and once entering them.
+const CheckedTreeOwners = struct {
+    /// Per CIR node, its owner, or `unowned`.
+    node_owners: []u32,
+    /// Per CIR node, whether a claim has walked it and everything below it.
+    walked: std.DynamicBitSetUnmanaged,
+    /// Per CIR node, whether a claim that skips function bodies has walked
+    /// it and everything below it outside function bodies. Sized on the
+    /// first such claim.
+    walked_outside_functions: std.DynamicBitSetUnmanaged = .{},
+    /// Whether claims walk patterns. Only a destructure's site is a pattern,
+    /// so a module with none never asks for a pattern's owner.
+    patterns: bool,
+    pending: std.ArrayList(Node) = .empty,
 
-/// Which nested function bodies a checked body search enters.
-const FunctionBodySearch = enum {
-    /// Nested lambdas' arguments and bodies are searched.
-    enter,
-    /// Nested lambdas' arguments and bodies are not searched: they run
-    /// wherever their function is called, not where the lambda stands.
-    skip,
-};
+    const unowned = std.math.maxInt(u32);
 
-/// Whether `needle` occurs within the checked expression tree rooted at
-/// `root`. `function_bodies` selects whether nested lambdas' bodies are
-/// searched; promoted procedures' bodies are their own templates'. Nodes wait
-/// on an explicit stack, so body nesting never becomes native call depth.
-fn checkedExprContains(
-    allocator: Allocator,
-    bodies: CheckedBodies,
-    root: CIR.Expr.Idx,
-    needle: CheckedBodyNeedle,
-    function_bodies: FunctionBodySearch,
-) Allocator.Error!bool {
     const Node = union(enum) {
         expr: CIR.Expr.Idx,
         statement: CIR.Statement.Idx,
         pattern: CIR.Pattern.Idx,
     };
-    const patterns = needle == .pattern;
-    var pending: std.ArrayList(Node) = .empty;
-    defer pending.deinit(allocator);
-    try pending.append(allocator, .{ .expr = root });
-    while (pending.pop()) |node| switch (node) {
-        .expr => |expr_id| {
-            if (needle == .expr and needle.expr == expr_id) return true;
-            switch (bodies.exprData(expr_id)) {
-                .str => |segments| if (!bodies.quoteIsCustom(@backingInt(expr_id))) for (segments) |segment| try pending.append(allocator, .{ .expr = segment }),
-                .list, .tuple => |items| for (items) |item| try pending.append(allocator, .{ .expr = item }),
-                .match_ => |match| {
-                    try pending.append(allocator, .{ .expr = match.cond });
-                    for (match.branches) |branch_idx| {
-                        const branch = bodies.matchBranch(branch_idx);
-                        if (patterns) {
-                            for (branch.patterns) |branch_pattern| try pending.append(allocator, .{ .pattern = bodies.matchBranchPattern(branch_pattern).pattern });
+
+    fn init(allocator: Allocator, node_count: usize, patterns: bool) Allocator.Error!CheckedTreeOwners {
+        const node_owners = try allocator.alloc(u32, node_count);
+        errdefer allocator.free(node_owners);
+        @memset(node_owners, unowned);
+        return .{ .node_owners = node_owners, .walked = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count), .patterns = patterns };
+    }
+
+    fn deinit(self: *CheckedTreeOwners, allocator: Allocator) void {
+        self.pending.deinit(allocator);
+        self.walked.deinit(allocator);
+        self.walked_outside_functions.deinit(allocator);
+        allocator.free(self.node_owners);
+    }
+
+    /// The claimant that owns node `raw`, or null when no claimed tree holds it.
+    fn owner(self: *const CheckedTreeOwners, raw: u32) ?u32 {
+        const claimant = self.node_owners[raw];
+        return if (claimant == unowned) null else claimant;
+    }
+
+    /// Give `claimant` node `raw` alone, unless it has an owner. The node is
+    /// not walked: a later claim whose tree holds it still walks below it.
+    fn claimNode(self: *CheckedTreeOwners, raw: u32, claimant: u32) void {
+        if (self.node_owners[raw] == unowned) self.node_owners[raw] = claimant;
+    }
+
+    /// Whether `raw` is new to a claim that walks `function_bodies` as
+    /// given; marks it walked that far and gives it to `claimant` unless it
+    /// has an owner.
+    fn enter(self: *CheckedTreeOwners, raw: u32, claimant: u32, function_bodies: FunctionBodySearch) bool {
+        if (self.walked.isSet(raw)) return false;
+        switch (function_bodies) {
+            .enter => self.walked.set(raw),
+            .skip => {
+                if (self.walked_outside_functions.isSet(raw)) return false;
+                self.walked_outside_functions.set(raw);
+            },
+        }
+        if (self.node_owners[raw] == unowned) self.node_owners[raw] = claimant;
+        return true;
+    }
+
+    /// Give `claimant` every node of the checked expression tree rooted at
+    /// `root` that has no owner. `function_bodies` selects whether nested
+    /// lambdas' bodies are walked; promoted procedures' bodies are their own
+    /// templates'. A node an earlier claim walked at least as far is not
+    /// walked again: that claim walked everything below it.
+    /// Nodes wait on an explicit stack, so body nesting never becomes native
+    /// call depth.
+    fn claim(self: *CheckedTreeOwners, allocator: Allocator, bodies: CheckedBodies, root: CIR.Expr.Idx, claimant: u32, function_bodies: FunctionBodySearch) Allocator.Error!void {
+        if (function_bodies == .skip and self.walked_outside_functions.bit_length == 0) {
+            try self.walked_outside_functions.resize(allocator, self.node_owners.len, false);
+        }
+        self.pending.clearRetainingCapacity();
+        try self.pending.append(allocator, .{ .expr = root });
+        while (self.pending.pop()) |node| switch (node) {
+            .expr => |expr_id| {
+                if (!self.enter(@backingInt(expr_id), claimant, function_bodies)) continue;
+                switch (bodies.exprData(expr_id)) {
+                    .str => |segments| if (!bodies.quoteIsCustom(@backingInt(expr_id))) for (segments) |segment| try self.pending.append(allocator, .{ .expr = segment }),
+                    .list, .tuple => |items| for (items) |item| try self.pending.append(allocator, .{ .expr = item }),
+                    .match_ => |match| {
+                        try self.pending.append(allocator, .{ .expr = match.cond });
+                        for (match.branches) |branch_idx| {
+                            const branch = bodies.matchBranch(branch_idx);
+                            if (self.patterns) for (branch.patterns) |branch_pattern| try self.pending.append(allocator, .{ .pattern = bodies.matchBranchPattern(branch_pattern).pattern });
+                            if (branch.guard) |guard| try self.pending.append(allocator, .{ .expr = guard });
+                            try self.pending.append(allocator, .{ .expr = branch.value });
                         }
-                        if (branch.guard) |guard| try pending.append(allocator, .{ .expr = guard });
-                        try pending.append(allocator, .{ .expr = branch.value });
-                    }
-                },
-                .if_ => |if_| {
-                    for (if_.branches) |branch_idx| {
-                        const branch = bodies.ifBranch(branch_idx);
-                        try pending.append(allocator, .{ .expr = branch.cond });
-                        try pending.append(allocator, .{ .expr = branch.body });
-                    }
-                    try pending.append(allocator, .{ .expr = if_.final_else });
-                },
-                .call => |call| {
-                    try pending.append(allocator, .{ .expr = call.func });
-                    for (call.args) |arg| try pending.append(allocator, .{ .expr = arg });
-                },
-                .record => |record| {
-                    if (record.ext) |ext| try pending.append(allocator, .{ .expr = ext });
-                    for (record.fields) |field| try pending.append(allocator, .{ .expr = bodies.recordFieldValue(field) });
-                },
-                .block => |block| {
-                    for (block.statements) |statement| try pending.append(allocator, .{ .statement = statement });
-                    try pending.append(allocator, .{ .expr = block.final_expr });
-                },
-                .tag => |tag| for (tag.args) |arg| try pending.append(allocator, .{ .expr = arg }),
-                .nominal => |nominal| try pending.append(allocator, .{ .expr = nominal.backing_expr }),
-                .closure => |closure| try pending.append(allocator, .{ .expr = closure.lambda }),
-                .lambda => |lambda| switch (function_bodies) {
-                    .enter => {
-                        if (patterns) for (lambda.args) |arg| try pending.append(allocator, .{ .pattern = arg });
-                        try pending.append(allocator, .{ .expr = lambda.body });
                     },
-                    .skip => {},
+                    .if_ => |if_| {
+                        for (if_.branches) |branch_idx| {
+                            const branch = bodies.ifBranch(branch_idx);
+                            try self.pending.append(allocator, .{ .expr = branch.cond });
+                            try self.pending.append(allocator, .{ .expr = branch.body });
+                        }
+                        try self.pending.append(allocator, .{ .expr = if_.final_else });
+                    },
+                    .call => |call| {
+                        try self.pending.append(allocator, .{ .expr = call.func });
+                        for (call.args) |arg| try self.pending.append(allocator, .{ .expr = arg });
+                    },
+                    .record => |record| {
+                        if (record.ext) |ext| try self.pending.append(allocator, .{ .expr = ext });
+                        for (record.fields) |field| try self.pending.append(allocator, .{ .expr = bodies.recordFieldValue(field) });
+                    },
+                    .block => |block| {
+                        for (block.statements) |statement| try self.pending.append(allocator, .{ .statement = statement });
+                        try self.pending.append(allocator, .{ .expr = block.final_expr });
+                    },
+                    .tag => |tag| for (tag.args) |arg| try self.pending.append(allocator, .{ .expr = arg }),
+                    .nominal => |nominal| try self.pending.append(allocator, .{ .expr = nominal.backing_expr }),
+                    .closure => |closure| try self.pending.append(allocator, .{ .expr = closure.lambda }),
+                    .lambda => |lambda| switch (function_bodies) {
+                        .enter => {
+                            if (self.patterns) for (lambda.args) |arg| try self.pending.append(allocator, .{ .pattern = arg });
+                            try self.pending.append(allocator, .{ .expr = lambda.body });
+                        },
+                        .skip => {},
+                    },
+                    .binop => |binop| {
+                        try self.pending.append(allocator, .{ .expr = binop.lhs });
+                        try self.pending.append(allocator, .{ .expr = binop.rhs });
+                    },
+                    .unary_minus, .dbg, .expect => |child| try self.pending.append(allocator, .{ .expr = child }),
+                    .tuple_access => |access| try self.pending.append(allocator, .{ .expr = access.tuple }),
+                    .field_access => |field| try self.pending.append(allocator, .{ .expr = field.receiver }),
+                    .interpolation => |interpolation| {
+                        try self.pending.append(allocator, .{ .expr = interpolation.first });
+                        for (interpolation.parts) |part| try self.pending.append(allocator, .{ .expr = part });
+                    },
+                    .structural_eq => |eq| {
+                        try self.pending.append(allocator, .{ .expr = eq.lhs });
+                        try self.pending.append(allocator, .{ .expr = eq.rhs });
+                    },
+                    .structural_hash => |h| {
+                        try self.pending.append(allocator, .{ .expr = h.value });
+                        try self.pending.append(allocator, .{ .expr = h.hasher });
+                    },
+                    .expect_err => |expect_err| try self.pending.append(allocator, .{ .expr = expect_err.expr }),
+                    .return_ => |ret| try self.pending.append(allocator, .{ .expr = ret.expr }),
+                    .for_ => |for_| {
+                        if (self.patterns) try self.pending.append(allocator, .{ .pattern = for_.pattern });
+                        try self.pending.append(allocator, .{ .expr = for_.expr });
+                        try self.pending.append(allocator, .{ .expr = for_.body });
+                    },
+                    .run_low_level => |run| for (run.args) |arg| try self.pending.append(allocator, .{ .expr = arg }),
+                    .hosted_lambda => |hosted| switch (function_bodies) {
+                        .enter => if (self.patterns) for (hosted.args) |arg| try self.pending.append(allocator, .{ .pattern = arg }),
+                        .skip => {},
+                    },
+                    .numeral,
+                    .str_segment,
+                    .bytes_literal,
+                    .lookup_local,
+                    .lookup_external,
+                    .lookup_required,
+                    .empty_list,
+                    .empty_record,
+                    .zero_argument_tag,
+                    .dispatch_call,
+                    .method_eq,
+                    .type_dispatch_call,
+                    .runtime_error,
+                    .crash,
+                    .break_,
+                    .ellipsis,
+                    .anno_only,
+                    => {},
+                }
+            },
+            .statement => |statement_id| if (self.enter(@backingInt(statement_id), claimant, function_bodies)) switch (bodies.statementData(statement_id)) {
+                .decl => |decl| {
+                    if (self.patterns) try self.pending.append(allocator, .{ .pattern = decl.pattern });
+                    try self.pending.append(allocator, .{ .expr = decl.expr });
                 },
-                .binop => |binop| {
-                    try pending.append(allocator, .{ .expr = binop.lhs });
-                    try pending.append(allocator, .{ .expr = binop.rhs });
+                // The promoted procedure's lambda is its own template's body.
+                .promoted_proc => |promoted| if (self.patterns) try self.pending.append(allocator, .{ .pattern = promoted.pattern }),
+                .var_ => |var_| {
+                    if (self.patterns) try self.pending.append(allocator, .{ .pattern = var_.pattern });
+                    try self.pending.append(allocator, .{ .expr = var_.expr });
                 },
-                .unary_minus, .dbg, .expect => |child| try pending.append(allocator, .{ .expr = child }),
-                .tuple_access => |access| try pending.append(allocator, .{ .expr = access.tuple }),
-                .field_access => |field| try pending.append(allocator, .{ .expr = field.receiver }),
-                .interpolation => |interpolation| {
-                    try pending.append(allocator, .{ .expr = interpolation.first });
-                    for (interpolation.parts) |part| try pending.append(allocator, .{ .expr = part });
+                .var_uninitialized => |var_| if (self.patterns) try self.pending.append(allocator, .{ .pattern = var_.pattern }),
+                .reassign => |reassign| {
+                    if (self.patterns) try self.pending.append(allocator, .{ .pattern = reassign.pattern });
+                    try self.pending.append(allocator, .{ .expr = reassign.expr });
                 },
-                .structural_eq => |eq| {
-                    try pending.append(allocator, .{ .expr = eq.lhs });
-                    try pending.append(allocator, .{ .expr = eq.rhs });
-                },
-                .structural_hash => |h| {
-                    try pending.append(allocator, .{ .expr = h.value });
-                    try pending.append(allocator, .{ .expr = h.hasher });
-                },
-                .expect_err => |expect_err| try pending.append(allocator, .{ .expr = expect_err.expr }),
-                .return_ => |ret| try pending.append(allocator, .{ .expr = ret.expr }),
+                .dbg, .expr, .expect => |expr| try self.pending.append(allocator, .{ .expr = expr }),
                 .for_ => |for_| {
-                    if (patterns) try pending.append(allocator, .{ .pattern = for_.pattern });
-                    try pending.append(allocator, .{ .expr = for_.expr });
-                    try pending.append(allocator, .{ .expr = for_.body });
+                    if (self.patterns) try self.pending.append(allocator, .{ .pattern = for_.pattern });
+                    try self.pending.append(allocator, .{ .expr = for_.expr });
+                    try self.pending.append(allocator, .{ .expr = for_.body });
                 },
-                .run_low_level => |run| for (run.args) |arg| try pending.append(allocator, .{ .expr = arg }),
-                .hosted_lambda => |hosted| switch (function_bodies) {
-                    .enter => if (patterns) for (hosted.args) |arg| try pending.append(allocator, .{ .pattern = arg }),
-                    .skip => {},
+                .while_, .infinite_loop, .breakable_loop => |loop| {
+                    try self.pending.append(allocator, .{ .expr = loop.cond });
+                    try self.pending.append(allocator, .{ .expr = loop.body });
                 },
-                .numeral,
-                .str_segment,
-                .bytes_literal,
-                .lookup_local,
-                .lookup_external,
-                .lookup_required,
-                .empty_list,
-                .empty_record,
-                .zero_argument_tag,
-                .dispatch_call,
-                .method_eq,
-                .type_dispatch_call,
-                .runtime_error,
+                .return_ => |ret| try self.pending.append(allocator, .{ .expr = ret.expr }),
                 .crash,
                 .break_,
-                .ellipsis,
-                .anno_only,
-                => {},
-            }
-        },
-        .statement => |statement_id| switch (bodies.statementData(statement_id)) {
-            .decl => |decl| {
-                if (patterns) try pending.append(allocator, .{ .pattern = decl.pattern });
-                try pending.append(allocator, .{ .expr = decl.expr });
-            },
-            // The promoted procedure's lambda is its own template's body.
-            .promoted_proc => |promoted| if (patterns) try pending.append(allocator, .{ .pattern = promoted.pattern }),
-            .var_ => |var_| {
-                if (patterns) try pending.append(allocator, .{ .pattern = var_.pattern });
-                try pending.append(allocator, .{ .expr = var_.expr });
-            },
-            .var_uninitialized => |var_| if (patterns) try pending.append(allocator, .{ .pattern = var_.pattern }),
-            .reassign => |reassign| {
-                if (patterns) try pending.append(allocator, .{ .pattern = reassign.pattern });
-                try pending.append(allocator, .{ .expr = reassign.expr });
-            },
-            .dbg, .expr, .expect => |expr| try pending.append(allocator, .{ .expr = expr }),
-            .for_ => |for_| {
-                if (patterns) try pending.append(allocator, .{ .pattern = for_.pattern });
-                try pending.append(allocator, .{ .expr = for_.expr });
-                try pending.append(allocator, .{ .expr = for_.body });
-            },
-            .while_, .infinite_loop, .breakable_loop => |loop| {
-                try pending.append(allocator, .{ .expr = loop.cond });
-                try pending.append(allocator, .{ .expr = loop.body });
-            },
-            .return_ => |ret| try pending.append(allocator, .{ .expr = ret.expr }),
-            .crash,
-            .break_,
-            .rejected_method_decl,
-            .import_,
-            .alias_decl,
-            .where_alias_decl,
-            .nominal_decl,
-            .type_anno,
-            .type_var_alias,
-            .runtime_error,
-            => {},
-        },
-        .pattern => |pattern_id| {
-            if (needle.pattern == pattern_id) return true;
-            switch (bodies.patternData(pattern_id)) {
-                .as => |as| try pending.append(allocator, .{ .pattern = as.pattern }),
-                .applied_tag => |tag| for (tag.args) |arg| try pending.append(allocator, .{ .pattern = arg }),
-                .nominal => |nominal| try pending.append(allocator, .{ .pattern = nominal.backing_pattern }),
-                .record_destructure => |destructs| for (destructs) |destruct| {
-                    try pending.append(allocator, .{ .pattern = bodies.recordDestructPattern(destruct) });
-                },
-                .list => |list| {
-                    for (list.patterns) |child| try pending.append(allocator, .{ .pattern = child });
-                    if (list.rest) |rest| if (rest.pattern) |rest_pattern| try pending.append(allocator, .{ .pattern = rest_pattern });
-                },
-                .tuple => |items| for (items) |item| try pending.append(allocator, .{ .pattern = item }),
-                .str_interpolation => |str| {
-                    var offset: u32 = 0;
-                    while (offset < str.steps.span.len) : (offset += 1) {
-                        if (bodies.strPatternStep(str.steps, offset).capture) |capture| try pending.append(allocator, .{ .pattern = capture });
-                    }
-                },
-                .assign,
-                .numeral_literal,
-                .str_literal,
-                .underscore,
+                .rejected_method_decl,
+                .import_,
+                .alias_decl,
+                .where_alias_decl,
+                .nominal_decl,
+                .type_anno,
+                .type_var_alias,
                 .runtime_error,
                 => {},
-            }
-        },
-    };
-    return false;
-}
+            },
+            .pattern => |pattern_id| {
+                if (!self.enter(@backingInt(pattern_id), claimant, function_bodies)) continue;
+                switch (bodies.patternData(pattern_id)) {
+                    .as => |as| try self.pending.append(allocator, .{ .pattern = as.pattern }),
+                    .applied_tag => |tag| for (tag.args) |arg| try self.pending.append(allocator, .{ .pattern = arg }),
+                    .nominal => |nominal| try self.pending.append(allocator, .{ .pattern = nominal.backing_pattern }),
+                    .record_destructure => |destructs| for (destructs) |destruct| {
+                        try self.pending.append(allocator, .{ .pattern = bodies.recordDestructPattern(destruct) });
+                    },
+                    .list => |list| {
+                        for (list.patterns) |child| try self.pending.append(allocator, .{ .pattern = child });
+                        if (list.rest) |rest| if (rest.pattern) |rest_pattern| try self.pending.append(allocator, .{ .pattern = rest_pattern });
+                    },
+                    .tuple => |items| for (items) |item| try self.pending.append(allocator, .{ .pattern = item }),
+                    .str_interpolation => |str| {
+                        var offset: u32 = 0;
+                        while (offset < str.steps.span.len) : (offset += 1) {
+                            if (bodies.strPatternStep(str.steps, offset).capture) |capture| try self.pending.append(allocator, .{ .pattern = capture });
+                        }
+                    },
+                    .assign,
+                    .numeral_literal,
+                    .str_literal,
+                    .underscore,
+                    .runtime_error,
+                    => {},
+                }
+            },
+        };
+    }
+};
 
-fn exhaustivenessOwnerTemplateForSource(
+/// Claim every checked procedure template's body for the template, by its
+/// index in `templates`, in table order.
+fn claimTemplateTrees(
     allocator: Allocator,
     bodies: CheckedBodies,
-    owner_artifact: canonical.ArtifactRef,
     templates: *const CheckedProcedureTemplateTable,
-    needle: CheckedBodyNeedle,
-) Allocator.Error!?canonical.ProcedureTemplateRef {
-    for (templates.templates.items()) |template| {
+    owners: *CheckedTreeOwners,
+) Allocator.Error!void {
+    for (templates.templates.items(), 0..) |template, index| {
         const root = switch (template.body) {
             .checked_body => |root| root,
             .intrinsic_wrapper, .entry_wrapper, .unimplemented => continue,
         };
-        if (try checkedExprContains(allocator, bodies, root, needle, .enter)) return .{
-            .artifact = owner_artifact,
-            .proc_base = template.proc_base,
-            .template = template.template_id,
-        };
+        try owners.claim(allocator, bodies, root, @intCast(index), .enter);
     }
-    return null;
 }
 
-/// The compile-time roots a root request evaluates, by root id.
-fn requestedCompileTimeRoots(
-    allocator: Allocator,
-    compile_time_roots: *const CompileTimeRootTable,
-    root_requests: *const RootRequestTable,
-) Allocator.Error!std.DynamicBitSetUnmanaged {
-    var requested = try std.DynamicBitSetUnmanaged.initEmpty(allocator, compile_time_roots.roots.items().len);
-    for (root_requests.requests.items()) |request| {
-        if (request.abi != .compile_time) continue;
-        const root = request.compile_time_root.get() orelse continue;
-        requested.set(@backingInt(root));
-    }
-    return requested;
-}
-
-fn exhaustivenessReplacingRootForSource(
+/// Claim, for each requested compile-time root that replaces source
+/// occurrences, by its index in the root table and in table order, the
+/// checked trees its evaluation contains (`compileTimeRootSourceReplacement`).
+fn claimReplacingRootTrees(
     allocator: Allocator,
     bodies: CheckedBodies,
     compile_time_roots: *const CompileTimeRootTable,
-    requested_roots: *const std.DynamicBitSetUnmanaged,
-    needle: CheckedBodyNeedle,
-) Allocator.Error!?CompileTimeRoot {
-    for (compile_time_roots.roots.items()) |root| {
+    root_requests: *const RootRequestTable,
+    owners: *CheckedTreeOwners,
+) Allocator.Error!void {
+    var requested_roots = try requestedCompileTimeRoots(allocator, compile_time_roots, root_requests);
+    defer requested_roots.deinit(allocator);
+    for (compile_time_roots.roots.items(), 0..) |root, index| {
+        const claimant: u32 = @intCast(index);
         const function_bodies: FunctionBodySearch = switch (compileTimeRootSourceReplacement(root.kind)) {
             .none => continue,
             .whole_expression => .enter,
@@ -27477,24 +27842,66 @@ fn exhaustivenessReplacingRootForSource(
                     .pattern_validation => |validation| .{ validation.base_expr, validation.scrutinee_pattern },
                     .expr, .pattern_error, .valueless_binding => unreachable, // the enclosing prong matches only pattern_extraction and pattern_validation
                 };
-                if (needle == .pattern and needle.pattern == exact_pattern) return root;
-
                 // Pattern roots evaluate both their match of the base
                 // expression against the pattern and the base expression
-                // itself. The exact-pattern check above owns the former;
+                // itself. The pattern node alone stands for the former;
                 // sites contained by the base expression belong to the
                 // latter.
-                if (try checkedExprContains(allocator, bodies, base_expr, needle, function_bodies)) return root;
+                owners.claimNode(@backingInt(exact_pattern), claimant);
+                try owners.claim(allocator, bodies, base_expr, claimant, function_bodies);
                 continue;
             },
             // A rejected destructure binder's root crashes and contains no site.
             .pattern_error => continue,
             .expr, .valueless_binding => {},
         };
-        if (try checkedExprContains(allocator, bodies, root.rootExpr(), needle, function_bodies)) return root;
+        try owners.claim(allocator, bodies, root.rootExpr(), claimant, function_bodies);
     }
-    return null;
 }
+
+/// The compile-time roots a root request evaluates, by root id.
+fn requestedCompileTimeRoots(
+    allocator: Allocator,
+    compile_time_roots: *const CompileTimeRootTable,
+    root_requests: *const RootRequestTable,
+) Allocator.Error!std.DynamicBitSetUnmanaged {
+    var requested = try std.DynamicBitSetUnmanaged.initEmpty(allocator, compile_time_roots.roots.items().len);
+    for (root_requests.requests.items()) |request| {
+        if (request.abi != .compile_time) continue;
+        const root = request.compile_time_root.get() orelse continue;
+        requested.set(@backingInt(root));
+    }
+    return requested;
+}
+
+/// Whether the first request for a compile-time root requires pairing.
+const RootRequestPairing = enum(u8) { unrequested, not_required, required };
+
+/// Per compile-time root, by root id, what its first root request says
+/// about pairing.
+fn rootRequestPairing(
+    allocator: Allocator,
+    compile_time_roots: *const CompileTimeRootTable,
+    root_requests: *const RootRequestTable,
+) Allocator.Error![]RootRequestPairing {
+    const pairing = try allocator.alloc(RootRequestPairing, compile_time_roots.roots.items().len);
+    @memset(pairing, .unrequested);
+    for (root_requests.requests.items()) |request| {
+        const root = request.compile_time_root.get() orelse continue;
+        const slot = &pairing[@backingInt(root)];
+        if (slot.* == .unrequested) slot.* = if (request.requires_pairing) .required else .not_required;
+    }
+    return pairing;
+}
+
+/// Which nested function bodies a checked tree claim walks.
+const FunctionBodySearch = enum {
+    /// Nested lambdas' arguments and bodies are walked.
+    enter,
+    /// Nested lambdas' arguments and bodies are not walked: they run
+    /// wherever their function is called, not where the lambda stands.
+    skip,
+};
 
 /// Which source occurrences within a requested root's expression run only
 /// during that root's evaluation, so that the root replaces them.
@@ -31368,7 +31775,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 227);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 230);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -35362,6 +35769,11 @@ pub fn publishFromTypedModule(
         requirement_solutions,
         platform_requirement_root_substs,
     );
+    try publishValueFormRoots(
+        allocator,
+        &compile_time_roots,
+        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
+    );
     try classifyTemplateDispatchPlanRefs(
         allocator,
         &static_dispatch_plans,
@@ -37152,9 +37564,12 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
         .checked_pattern = .some(@fromBackingInt(@intCast(7))),
         .policy = .compile_time_only,
     });
-    const exhaustiveness_sites_src = CheckedExhaustivenessSiteTable{
-        .sites = .fromBorrowedSlice(exhaustiveness_site_entries.items),
+    const owned_sites = try exhaustiveness_site_entries.toOwnedSlice(gpa);
+    var exhaustiveness_sites_src = CheckedExhaustivenessSiteTable.fromOwnedSites(gpa, owned_sites) catch |err| {
+        gpa.free(owned_sites);
+        return err;
     };
+    defer exhaustiveness_sites_src.deinit(gpa);
 
     const identity = ModuleIdentity{
         .stable_hash = @as([32]u8, @splat(0x42)),
@@ -37397,6 +37812,27 @@ test "compile-time root read table keeps earlier rows beside newly evaluated roo
     try std.testing.expectError(error.CorruptArtifact, later.validate(4));
 }
 
+test "exhaustiveness site lookups find the first site naming a node" {
+    const gpa = std.testing.allocator;
+    const sites = try gpa.alloc(CheckedExhaustivenessSite, 4);
+    const policy: ExhaustivenessResolutionPolicy = .compile_time_only;
+    const region = base.Region.from_raw_offsets(0, 1);
+    sites[0] = .{ .id = testIndexId(CheckedExhaustivenessSiteId, 0), .kind = .destructure, .region = region, .checked_pattern = .some(@fromBackingInt(9)), .policy = policy };
+    sites[1] = .{ .id = @fromBackingInt(1), .kind = .match, .region = region, .checked_expr = .some(@fromBackingInt(5)), .policy = policy };
+    sites[2] = .{ .id = @fromBackingInt(2), .kind = .destructure, .region = region, .checked_pattern = .some(@fromBackingInt(9)), .policy = policy };
+    sites[3] = .{ .id = @fromBackingInt(3), .kind = .match, .region = region, .checked_expr = .some(@fromBackingInt(2)), .policy = policy };
+    var table = CheckedExhaustivenessSiteTable.fromOwnedSites(gpa, sites) catch |err| {
+        gpa.free(sites);
+        return err;
+    };
+    defer table.deinit(gpa);
+    try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, testIndexId(CheckedExhaustivenessSiteId, 0)), table.lookupByDestructurePattern(@fromBackingInt(9)));
+    try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, @fromBackingInt(1)), table.lookupByMatchExpr(@fromBackingInt(5)));
+    try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, @fromBackingInt(3)), table.lookupByMatchExpr(@fromBackingInt(2)));
+    try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, null), table.lookupByMatchExpr(@fromBackingInt(9)));
+    try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, null), table.lookupByDestructurePattern(@fromBackingInt(5)));
+}
+
 test "SERIALIZED_VERSION_HASH golden value" {
     // Tripwire: an *accidental* change to `CheckedModuleArtifact.Serialized`'s layout
     // would make a previously-baked builtin blob / cached artifact relocate into a
@@ -37405,8 +37841,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x46, 0xE9, 0x40, 0xDF, 0x24, 0x35, 0xBF, 0x72, 0x1E, 0x7A, 0xE9, 0x6E, 0xF8, 0x0E, 0x05, 0x67,
-        0x96, 0x97, 0xB8, 0x2A, 0x2C, 0xE1, 0x10, 0x36, 0x55, 0xCC, 0x90, 0x64, 0x64, 0xF4, 0xFF, 0x22,
+        0xA0, 0x4A, 0xB9, 0xF4, 0x45, 0x0E, 0x98, 0xFE, 0x76, 0x61, 0x4C, 0x52, 0xB3, 0x1D, 0x4D, 0x8B,
+        0x2A, 0x7C, 0xDA, 0xB1, 0x01, 0x31, 0xA0, 0xC7, 0x62, 0x0E, 0x31, 0xC8, 0x71, 0xE7, 0x65, 0x99,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

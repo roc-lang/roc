@@ -78,6 +78,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      encode absence as zero.
 /// v72: the string literal store carries its dedup table, combined with
 ///      the v69-v71 changes.
+/// v73: procedure debug names are a column parallel to procedure specs.
+/// v74: procedure shapes are 32 bits and record owned erased calls.
 /// v73: erased calls carry `result_reuse`, `erased_capture_load_borrowed`
 ///      renumbers later LowLevel ops, RC reasons name dead-lender reads,
 ///      procedure shapes widen to 32 bits, and dynamic tag payload reads
@@ -88,7 +90,11 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      `assign_ref` `tag_payload_struct` of the dynamic union.
 /// v76: procedure debug names are a column parallel to the procedure
 ///      specs, combined with the v73-v75 changes.
-pub const FORMAT_VERSION: u32 = 76;
+/// v75: combines the v73 and v74 changes above; procedure shapes record
+///      every erased call.
+/// v77: procedure shapes record every erased call, combined with the v73-v76
+///      changes.
+pub const FORMAT_VERSION: u32 = 77;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.

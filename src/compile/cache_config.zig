@@ -401,7 +401,9 @@ pub const Constants = struct {
     ///      recipes and compiler-only function metadata.
     /// 194: combines the two independent 193 entries.
     /// 195: combines the three independent 194 entries.
-    pub const CACHE_VERSION = 195;
+    /// 194: checked artifacts index their compile-time roots by pattern.
+    /// 196: combines the 194 entry above with the 195 entry.
+    pub const CACHE_VERSION = 196;
 };
 
 /// Configuration for the Roc cache system.

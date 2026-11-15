@@ -75,6 +75,65 @@ pub const Input = struct {
     function_unit: ?[32]u8 = null,
     /// What this lowering emits: one program, or one module's object.
     unit: Unit = .program,
+    /// Receives step durations and worker counts when detailed timing is
+    /// enabled; null records nothing.
+    timing: ?*Timing = null,
+};
+
+/// Step durations and worker counts of one lowering, for detailed timing
+/// output. One lowering runs on one thread, so the fields are plain.
+pub const Timing = struct {
+    std_io: std.Io,
+    steps_ns: [step_count]u64 = @splat(0),
+    /// Workers lowered, by `WorkerKey` kind.
+    workers_by_kind: [worker_kind_count]u64 = @splat(0),
+    /// Type tables filled.
+    tables_filled: u64 = 0,
+
+    /// A step that detailed timing itemizes.
+    pub const Step = enum {
+        /// Module registration, platform identities, source files, hosted
+        /// procedures.
+        setup,
+        /// Queueing every worker a module unit defines.
+        seed_workers,
+        /// Lowering the requested roots' entry workers.
+        roots,
+        /// Lowering queued workers' bodies.
+        bodies,
+        /// Filling reserved type tables.
+        tables,
+        /// Layout and static data requests.
+        requests,
+        /// Encoding exported workers' table needs.
+        export_needs,
+        /// Procedure names, expect sites, and runtime schemas.
+        finish,
+        /// Taking the static descriptors, dictionaries, and tables as
+        /// static data exports.
+        static_descriptors,
+    };
+
+    /// The number of `Step` members.
+    pub const step_count = @typeInfo(Step).@"enum".field_names.len;
+    /// The number of `WorkerKey` kinds.
+    pub const worker_kind_count = @typeInfo(std.meta.Tag(WorkerKey)).@"enum".field_names.len;
+
+    fn now(self: *const Timing) i96 {
+        return std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
+    }
+
+    /// The time attributed so far to worker bodies and type tables.
+    fn drainedNs(self: *const Timing) u64 {
+        return self.steps_ns[@backingInt(Step.bodies)] +| self.steps_ns[@backingInt(Step.tables)];
+    }
+
+    /// Add the time since `started` to `step` and return the current time.
+    fn lap(self: *Timing, started: i96, step: Step) i96 {
+        const finished = self.now();
+        self.steps_ns[@backingInt(step)] +|= @intCast(@max(0, finished - started));
+        return finished;
+    }
 };
 
 /// What one lowering emits (design.md "Per-Module Output").
@@ -3937,6 +3996,7 @@ pub const Program = struct {
     /// name. The three alternate until none has work, which completes the
     /// demand closure (design.md "Type Descriptors").
     fn drain(self: *Program) Allocator.Error!void {
+        if (self.input.timing) |timing| return self.drainTimed(timing);
         while (true) {
             while (self.worklist.pop()) |id| {
                 if (self.worker(id).lowered) continue;
@@ -3946,6 +4006,25 @@ pub const Program = struct {
             if (try self.static_descs.drainDemand()) continue;
             const unfilled = self.static_descs.nextUnfilledTable() orelse return;
             try self.fillTable(unfilled);
+        }
+    }
+
+    /// `drain`, attributing its time to body lowering and table filling and
+    /// counting the workers it lowers by kind.
+    fn drainTimed(self: *Program, timing: *Timing) Allocator.Error!void {
+        var started = timing.now();
+        while (true) {
+            while (self.worklist.pop()) |id| {
+                if (self.worker(id).lowered) continue;
+                self.worker(id).lowered = true;
+                timing.workers_by_kind[@backingInt(std.meta.activeTag(self.worker(id).key))] += 1;
+                try Body.lowerWorker(self, id);
+            }
+            started = timing.lap(started, .bodies);
+            const unfilled = self.static_descs.nextUnfilledTable() orelse return;
+            try self.fillTable(unfilled);
+            timing.tables_filled += 1;
+            started = timing.lap(started, .tables);
         }
     }
 
@@ -4238,9 +4317,10 @@ pub fn poolSlice(comptime T: type, pool: []const T, span: anytype) []const T {
     return pool[span.start..][0..span.len];
 }
 
-/// Lower the requested roots and everything they reach.
-pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
-    base.dev_diagnostics.traceBoxyWork("boxy lowering");
+/// A program of `input`'s options with no module registered and nothing
+/// lowered yet. The caller owns it: `Program.release` frees all but its
+/// `result`.
+fn createProgram(allocator: Allocator, input: Input) Allocator.Error!*Program {
     var result = try LirProgram.Result.init(allocator, input.target_usize);
     const program = allocator.create(Program) catch |err| {
         result.deinit();
@@ -4264,14 +4344,6 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         .list_in_place_map = input.list_in_place_map,
         .arena = std.heap.ArenaAllocator.init(allocator),
     };
-    var retained = false;
-    defer if (!retained) {
-        program.release();
-        allocator.destroy(program);
-    };
-    // Scratch must not follow a Program retained for function metadata.
-    defer program.finishErrorTypes();
-    errdefer program.result.deinit();
     program.result.store.runtime_contract = .boxy;
     program.layouts = .{
         .allocator = allocator,
@@ -4282,13 +4354,19 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     program.static_descs = StaticDescs.init(allocator, &program.store, &program.layouts, &program.result, input.target_usize);
     program.static_descs.table_identities = input.stored_functions;
     program.static_descs.table_owner = input.function_unit orelse @splat(0);
+    return program;
+}
 
+/// Register the program's modules (`Input.modules`) and index what each
+/// declares that lowering looks up by module.
+fn registerModules(program: *Program) Allocator.Error!void {
+    const allocator = program.allocator;
+    const input = program.input;
     _ = try program.modules.add(checked.importedView(input.modules.root.module));
     for (input.modules.imports) |view| _ = try program.modules.add(view);
     for (input.modules.root.relation_modules) |view| _ = try program.modules.add(view);
     program.body_indexed = try allocator.alloc(bool, program.modules.views.items.len);
     @memset(program.body_indexed, false);
-    base.dev_diagnostics.countTestWork(.boxy_body_index_available_modules, program.modules.views.items.len);
     for (program.modules.views.items) |view| {
         try program.by_module_idx.put(allocator, view.view.module_identity.module_idx, view.index);
         for (view.view.exported_procedure_bindings.bindings) |*binding| {
@@ -4301,15 +4379,64 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             try program.wrapper_by_root.put(allocator, .{ .module = view.index, .root = wrapper.root }, wrapper.template);
         }
     }
+}
+
+/// A program of `modules` that lowers nothing, whose types, layouts and
+/// constant schema answer how a value of a closed checked type is stored
+/// (`ValueSchema`). Its types convert exactly as a compile-time program's
+/// over the same modules do. `destroySchemaProgram` frees it.
+pub fn createSchemaProgram(allocator: Allocator, modules: Common.CheckedModules, target_usize: base.target.TargetUsize) Allocator.Error!*Program {
+    const program = try createProgram(allocator, .{ .modules = modules, .roots = .{}, .target_usize = target_usize, .compile_time = true });
+    errdefer destroySchemaProgram(program);
+    try registerModules(program);
+    try solvePlatformIdentities(program);
+    return program;
+}
+
+/// Free a program `createSchemaProgram` made.
+pub fn destroySchemaProgram(program: *Program) void {
+    const allocator = program.allocator;
+    program.finishErrorTypes();
+    program.release();
+    program.result.deinit();
+    allocator.destroy(program);
+}
+
+/// Lower the requested roots and everything they reach.
+pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
+    base.dev_diagnostics.traceBoxyWork("boxy lowering");
+    var step_started: i96 = if (input.timing) |timing| timing.now() else 0;
+    const program = try createProgram(allocator, input);
+    var retained = false;
+    defer if (!retained) {
+        program.release();
+        allocator.destroy(program);
+    };
+    // Scratch must not follow a Program retained for function metadata.
+    defer program.finishErrorTypes();
+    errdefer program.result.deinit();
+
+    try registerModules(program);
+    base.dev_diagnostics.countTestWork(.boxy_body_index_available_modules, program.modules.views.items.len);
     try solvePlatformIdentities(program);
     try seedSourceFiles(program);
     try initHosted(program);
+    if (input.timing) |timing| step_started = timing.lap(step_started, .setup);
 
     // A module unit lowers every worker of its modules as a root: the
     // workers other objects reach by symbol (design.md "Per-Module Output").
     // A compile-time program's unit lowers only what its roots reach: nothing
     // links against it.
+    // Seeding drains the worklist, which attributes its own time to worker
+    // bodies and type tables; seeding keeps only the remainder.
+    const drained_before: u64 = if (input.timing) |timing| timing.drainedNs() else 0;
     if (program.moduleUnit() != null and !input.compile_time) try seedUnitWorkers(program);
+    if (input.timing) |timing| {
+        const finished = timing.now();
+        const elapsed: u64 = @intCast(@max(0, finished - step_started));
+        timing.steps_ns[@backingInt(Timing.Step.seed_workers)] +|= elapsed -| (timing.drainedNs() - drained_before);
+        step_started = finished;
+    }
 
     var schema_roots: std.ArrayList(TypeId) = .empty;
     defer schema_roots.deinit(allocator);
@@ -4365,7 +4492,9 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
         try program.result.root_metadata.append(allocator, metadata);
     }
+    if (input.timing) |timing| step_started = timing.lap(step_started, .roots);
     try program.drain();
+    if (input.timing) |timing| step_started = timing.now();
     for (input.roots.layout_requests) |checked_ty| {
         const ty = try program.converter().convert(program.modules.views.items[0].index, checked_ty, .{ .module = program.modules.views.items[0].index, .vars = &.{}, .bound = &.{} });
         _ = try program.layouts.layoutOf(ty);
@@ -4379,7 +4508,9 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         for (input.roots.static_data_requests, initializers, 0..) |request, *initializer, index| {
             initializer.* = try program.staticDataWorker(@intCast(index), request, root_module);
         }
+        if (input.timing) |timing| step_started = timing.lap(step_started, .requests);
         try program.drain();
+        if (input.timing) |timing| step_started = timing.now();
         for (input.roots.static_data_requests, initializers) |request, initializer| {
             const worker = program.worker(initializer).*;
             program.result.store.getProcSpecPtr(worker.proc).is_static_initializer = true;
@@ -4396,6 +4527,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
     }
 
+    if (input.timing) |timing| step_started = timing.lap(step_started, .requests);
     if (program.moduleUnit() != null and !input.compile_time) {
         for (program.workers.items) |worker| {
             if (worker.imported or !program.result.store.getProcSpec(worker.proc).exported) continue;
@@ -4409,6 +4541,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
     }
 
+    if (input.timing) |timing| step_started = timing.lap(step_started, .export_needs);
     if (base.dev_diagnostics.isSet(.perf_map)) try recordPerfNames(program);
 
     if (input.proc_debug_names) {
@@ -4439,7 +4572,9 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     program.result.finishExpectSites();
     var runtime_schemas = try @import("runtime_schemas.zig").collect(program, schema_roots.items);
     errdefer runtime_schemas.deinit();
+    if (input.timing) |timing| step_started = timing.lap(step_started, .finish);
     const static_data = try program.static_descs.takeExports();
+    if (input.timing) |timing| _ = timing.lap(step_started, .static_descriptors);
     const kept = if (input.stored_functions) try StoredFn.retain(allocator, program) else null;
     retained = kept != null;
     return .{

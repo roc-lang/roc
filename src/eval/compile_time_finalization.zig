@@ -104,6 +104,9 @@ pub const Options = struct {
     std_io: ?std.Io = null,
     slow_root_threshold_ns: u64 = 3 * std.time.ns_per_s,
     slow_root_period_ns: u64 = std.time.ns_per_s,
+    /// The slow-root reporter of the evaluation session, which
+    /// `finalizeProgram` and `finalizeProgramBoxy` install.
+    dev_progress: ?*DevProgressReporter = null,
     timing: ?*Timing = null,
     /// Retain each stage's native excerpts for in-memory consumers.
     keep_artifacts: bool = false,
@@ -140,6 +143,19 @@ pub const Options = struct {
     /// it between its phases and between evaluation levels, and fails with
     /// `error.Canceled` once it is set.
     cancel_request: ?*const std.atomic.Value(bool) = null,
+    /// The producer of the roots checking marked for the checked-value
+    /// writer (`CompileTimeRoot.completion`). Only a test hands them to the
+    /// evaluator, to compare the two producers' values (design.md
+    /// "Value-Form Roots").
+    value_form_roots: ValueFormRoots = .write,
+
+    /// Which producer completes value-form roots.
+    pub const ValueFormRoots = enum {
+        /// The checked-value writer (`completeValueFormRoots`).
+        write,
+        /// The evaluator, as if checking had marked no root. Tests only.
+        evaluate,
+    };
 
     fn checkCancelRequest(self: Options) error{Canceled}!void {
         const request = self.cancel_request orelse return;
@@ -944,6 +960,7 @@ fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.Solved
         // reserves none.
         .erased_capture_prefix = if (compilerHostMustUseInterpreterForCtfe()) 0 else builtins.erased_callable.hot_reload_capture_prefix_size,
         .reuse_boxes = false,
+        .reads_branch_expectations = false,
         // Specialization records procedure names for every consumer of the
         // program; a runtime consumer's diagnostics read them.
         .proc_debug_names = true,
@@ -979,6 +996,13 @@ pub fn finalizeProgram(
     runtime_target: ?lir.CheckedPipeline.TargetConfig,
     unfiltered_options: Options,
 ) FinalizeError!ProgramSession {
+    if (unfiltered_options.dev_progress == null) {
+        var progress = DevProgressReporter.init(unfiltered_options);
+        defer progress.deinit();
+        var session_options = unfiltered_options;
+        session_options.dev_progress = &progress;
+        return finalizeProgram(allocator, modules, lowering_modules, unfiltered_program_roots, runtime_roots, runtime_target, session_options);
+    }
     const total_started_ns = if (unfiltered_options.timing) |timing| timing.start() else 0;
     defer if (unfiltered_options.timing) |timing| timing.finish(total_started_ns, .total);
     if (unfiltered_program_roots.source_modules.len != 0 and unfiltered_program_roots.source_modules.len != unfiltered_program_roots.requests.len)
@@ -1012,7 +1036,10 @@ pub fn finalizeProgram(
     // computes complete once that program's roots have (design.md
     // "Compile-Time Evaluation Under `.lss`"). The plan reads which roots
     // remain pending after it.
-    try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, .before_solved);
+    var function_types: checked_root_graph.FunctionTypeMemo = .{};
+    defer function_types.deinit(allocator);
+    try completeValueFormRoots(allocator, modules, lowering_modules, options);
+    try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, &function_types, .before_solved);
     var plan = try planRoots(allocator, modules, lowering_modules, program_roots, options.discovery_roots, lss_runtime, options.timing);
     defer plan.deinit(allocator);
     var evaluated_literals: LiteralRootIdentities = .empty;
@@ -1020,7 +1047,7 @@ pub fn finalizeProgram(
     const verify_literals = builtin.mode == .debug and lss_runtime and !plan.continued;
     var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, &plan, runtime_target, options, &debug_events, demand_driven, if (verify_literals) .{ .record = &evaluated_literals } else .none);
     errdefer specialized.deinit();
-    try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, .after_solved);
+    try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, &function_types, .after_solved);
     var runtime_stages: ProgramSession.RuntimeStages = .evaluation;
     errdefer switch (runtime_stages) {
         .evaluation => {},
@@ -1131,6 +1158,7 @@ fn evaluateBoxyRoots(
     lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
     options: Options,
     debug_events: *DebugEvents,
+    function_types: *checked_root_graph.FunctionTypeMemo,
     phase: BoxyPhase,
 ) FinalizeError!void {
     // The pending roots of the first artifact of each checked identity;
@@ -1171,7 +1199,7 @@ fn evaluateBoxyRoots(
         .before_solved => {
             for (pending.items, chosen, graph.unavailable_boxy_reads) |root, *flag, unavailable| {
                 flag.* = !unavailable and (artifacts[root.module].compile_time_roots.root(root.root).kind == .literal_argument or
-                    !try checked_root_graph.rootHoldsFunction(allocator, artifacts, lowering_modules, root));
+                    !try checked_root_graph.rootHoldsFunction(allocator, function_types, artifacts, lowering_modules, root));
             }
             var changed = true;
             while (changed) {
@@ -1204,7 +1232,7 @@ fn evaluateBoxyRoots(
     defer selected.deinit(allocator);
     for (pending.items, chosen) |root, flag| if (flag) try selected.append(allocator, root);
     if (selected.items.len == 0) return;
-    try evaluateRootsBoxy(allocator, modules, lowering_modules, selected.items, options, debug_events);
+    try evaluateRootsBoxy(allocator, modules, lowering_modules, selected.items, options, debug_events, function_types);
     for (modules) |entry| {
         if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
     }
@@ -1803,6 +1831,8 @@ const BoxyLinkedImages = struct {
             code_range.* = self.code.items[loaded_index.*];
         }
         if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: CTFE images: {d} available, {d} reached, {d} newly loaded\n", .{ self.candidates.items.len, indices.len, newly_loaded });
+        Timing.addCount(timing, .images_selected, indices.len);
+        Timing.addCount(timing, .images_loaded, newly_loaded);
         return .{ .indices = indices, .code = code };
     }
 
@@ -1991,6 +2021,7 @@ fn boxyCompileTimeTarget(options: Options) lir.CheckedPipeline.TargetConfig {
         .boxy_compile_time = true,
         .checked_module_state = .checking_finalization,
         .inline_expects = .run,
+        .reads_branch_expectations = false,
         .erased_capture_prefix = if (compilerHostMustUseInterpreterForCtfe()) 0 else builtins.erased_callable.hot_reload_capture_prefix_size,
         .proc_debug_names = true,
         .post_check_executor = options.post_check_executor,
@@ -2042,6 +2073,13 @@ fn finalizeProgramBoxy(
     runtime_target: ?lir.CheckedPipeline.TargetConfig,
     options: Options,
 ) FinalizeError!ProgramSession {
+    if (options.dev_progress == null) {
+        var progress = DevProgressReporter.init(options);
+        defer progress.deinit();
+        var session_options = options;
+        session_options.dev_progress = &progress;
+        return finalizeProgramBoxy(allocator, modules, lowering_modules, program_roots, runtime_roots, runtime_target, session_options);
+    }
     var debug_events = DebugEvents{ .allocator = allocator };
     defer debug_events.deinit();
     const owned_imports = try allocator.dupe(checked.ImportedModuleView, lowering_modules.imports);
@@ -2051,6 +2089,7 @@ fn finalizeProgramBoxy(
     const owned_runtime_roots = try cloneRootRequests(allocator, runtime_roots);
     errdefer deinitRootRequests(allocator, owned_runtime_roots);
 
+    try completeValueFormRoots(allocator, modules, lowering_modules, options);
     // The pending roots of the first artifact of each checked identity;
     // another artifact of the same identity repeats its results.
     var roots = std.ArrayList(checked_root_graph.Root).empty;
@@ -2067,7 +2106,9 @@ fn finalizeProgramBoxy(
         }
     }
 
-    try evaluateRootsBoxy(allocator, modules, lowering_modules, roots.items, options, &debug_events);
+    var function_types: checked_root_graph.FunctionTypeMemo = .{};
+    defer function_types.deinit(allocator);
+    try evaluateRootsBoxy(allocator, modules, lowering_modules, roots.items, options, &debug_events, &function_types);
     // Every root is complete: a runtime program restores each value from
     // its module's store, and every literal of a generic body converts
     // through its literal argument (design.md "Literal Arguments").
@@ -2098,6 +2139,81 @@ fn finalizeProgramBoxy(
     };
 }
 
+/// Complete every pending value-form root of `modules` with the checked-value
+/// writer (design.md "Value-Form Roots"): store its value from its checked
+/// expression by the plan, layout and stored type the `.boxy` evaluator would
+/// store it by (`BoxyValueSchema`). Such a root reads no other value, so it
+/// completes before any root an evaluator runs, and none of them waits for
+/// it. The pending roots are those the strategy's `.boxy` evaluation takes:
+/// every root still needing evaluation under `.boxy`, and under `.lss`, where
+/// that evaluation runs before the Solved program is specialized, every root
+/// still pending. Every artifact of one checked identity owns its own store,
+/// so each completes its own roots.
+fn completeValueFormRoots(
+    allocator: Allocator,
+    modules: []const ProgramModule,
+    lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
+    options: Options,
+) FinalizeError!void {
+    switch (options.value_form_roots) {
+        .write => {},
+        .evaluate => {
+            if (!builtin.is_test) finalizationInvariant("a compilation outside the tests handed value-form roots to the evaluator");
+            return;
+        },
+    }
+    const started = Timing.startStep(options.timing);
+    defer Timing.finishStep(options.timing, started, .value_form_roots);
+    const target_usize = boxyCompileTimeTarget(options).target_usize;
+    var schema: ?lir.CheckedPipeline.BoxyValueSchema = null;
+    defer if (schema) |*owned| owned.deinit();
+    var completed: u64 = 0;
+    for (modules, 0..) |entry, index| {
+        const module = entry.module;
+        var writer: ?ConstStoreWriter.Writer = null;
+        defer if (writer) |*owned| owned.deinit();
+        for (module.root_requests.compile_time_requests.items()) |request| {
+            const root_id = compileTimeRootForRequest(module, request);
+            const root = module.compile_time_roots.root(root_id);
+            if (root.completion != .write_value) continue;
+            const pending = switch (options.strategy) {
+                .boxy => root.needsEvaluation(.boxy),
+                .lss => root.payload == .pending,
+            };
+            if (!pending) continue;
+            if (schema == null) {
+                const schema_started = Timing.startStep(options.timing);
+                schema = try lir.CheckedPipeline.BoxyValueSchema.init(allocator, lowering_modules, target_usize);
+                Timing.finishStep(options.timing, schema_started, .value_form_schema);
+            }
+            if (writer == null) writer = ConstStoreWriter.Writer.initChecked(allocator, module, .{
+                .bodies = module.bodies(),
+                .schema = &schema.?,
+            });
+            const root_schema_started = Timing.startStep(options.timing);
+            const root_schema = try schema.?.root(module.key.digest(), request);
+            Timing.finishStep(options.timing, root_schema_started, .value_form_root_schemas);
+            const payload: checked.CompileTimeRootPayload = .{ .const_node = try writer.?.storeCheckedRoot(root_schema.plan, root_schema.ret_layout, root.rootExpr()) };
+            const root_type = try writer.?.storeType(root_schema.ret_type);
+            module.compile_time_roots.fillPayload(root_id, payload);
+            finishConstRoot(module, root, payload, root_type);
+            completed += 1;
+            if (Timing.detailOf(options.timing)) |timing| timing.roots_by_kind[@backingInt(root.kind)].add(1);
+        }
+        // A module whose every root is now complete can have its object
+        // built; its importers' programs may be waiting for it. The first
+        // artifact of a checked identity speaks for the others.
+        if (writer == null) continue;
+        const source = options.boxy_objects orelse continue;
+        if (module.hasUnevaluatedRequests(.boxy)) continue;
+        const first = for (modules[0..index]) |earlier| {
+            if (earlier.module.key.digest().eql(module.key.digest())) break false;
+        } else true;
+        if (first) try source.completed(source.context, module);
+    }
+    if (options.timing) |timing| timing.roots_completed_directly.add(completed);
+}
+
 /// Evaluate the pending roots `roots` with the `.boxy` evaluator: each
 /// module's roots as one `.boxy` program (`ModuleEvaluation`), lowered and
 /// compiled once every value its roots read is complete and, where it links
@@ -2114,6 +2230,7 @@ fn evaluateRootsBoxy(
     roots: []const checked_root_graph.Root,
     options: Options,
     debug_events: *DebugEvents,
+    function_types: *checked_root_graph.FunctionTypeMemo,
 ) FinalizeError!void {
     if (roots.len == 0) return;
     if (options.timing) |timing| timing.recordBoxyRoots(roots.len);
@@ -2139,9 +2256,12 @@ fn evaluateRootsBoxy(
         states_initialized += 1;
     }
 
+    if (Timing.detailOf(options.timing)) |timing| recordRootKinds(timing, artifacts, roots);
+    const graph_step_started = Timing.startStep(options.timing);
     const graph_started = if (base.dev_diagnostics.isSet(.trace_boxy_work)) (if (options.timing) |timing| nowNs(timing.std_io) else 0) else 0;
     var graph = try checked_root_graph.build(allocator, artifacts, roots);
     const graph_finished = if (base.dev_diagnostics.isSet(.trace_boxy_work)) (if (options.timing) |timing| nowNs(timing.std_io) else 0) else 0;
+    Timing.finishStep(options.timing, graph_step_started, .root_graph);
     defer graph.deinit(allocator);
     const specialized = try allocator.alloc(bool, roots.len);
     defer allocator.free(specialized);
@@ -2157,11 +2277,13 @@ fn evaluateRootsBoxy(
     // A literal argument root is the `.boxy` evaluator's whatever its
     // value: one holding a function is validated and discarded
     // (design.md "Literal Arguments").
+    const classification_step_started = Timing.startStep(options.timing);
     const classification_started = if (base.dev_diagnostics.isSet(.trace_boxy_work)) (if (options.timing) |timing| nowNs(timing.std_io) else 0) else 0;
     for (roots, specialized) |root, *flag| {
         flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind != .literal_argument and
-            try checked_root_graph.rootHoldsFunction(allocator, artifacts, lowering_modules, root);
+            try checked_root_graph.rootHoldsFunction(allocator, function_types, artifacts, lowering_modules, root);
     }
+    Timing.finishStep(options.timing, classification_step_started, .root_classification);
     if (base.dev_diagnostics.isSet(.trace_boxy_work)) if (options.timing) |timing| {
         std.debug.print("boxy-work: root preparation roots={d} graph_ns={d} classification_ns={d}\n", .{ roots.len, graph_finished - graph_started, nowNs(timing.std_io) - classification_started });
     };
@@ -2196,6 +2318,13 @@ fn evaluateRootsBoxy(
         if (source) |objects| objects.abort(objects.context, err);
         return err;
     };
+}
+
+/// Count the evaluated `roots` by kind, for detailed timing output.
+fn recordRootKinds(timing: *Timing, artifacts: []const *checked.CheckedModuleArtifact, roots: []const checked_root_graph.Root) void {
+    for (roots) |root| {
+        timing.roots_by_kind[@backingInt(artifacts[root.module].compile_time_roots.root(root.root).kind)].add(1);
+    }
 }
 
 /// The evaluation of each module with pending roots.
@@ -2315,7 +2444,10 @@ const ModuleEvaluations = struct {
             // program whose values its roots read, or an object of its import
             // closure.
             const objects = source orelse finalizationInvariant("a module's compile-time program waits with no scheduler to wait on");
-            if (!try objects.progress(objects.context)) finalizationInvariant("a module's compile-time program waits for an import no unit builds");
+            const wait_started = Timing.startStep(options.timing);
+            const progressed_build = try objects.progress(objects.context);
+            Timing.finishStep(options.timing, wait_started, .scheduler_wait);
+            if (!progressed_build) finalizationInvariant("a module's compile-time program waits for an import no unit builds");
         }
     }
 
@@ -2469,7 +2601,9 @@ const ModuleEvaluation = struct {
         if ((comptime !compilerHostMustUseInterpreterForCtfe()) and self.links(shared)) {
             const source = shared.options.boxy_objects.?;
             if (try source.objects(source.context, module)) |set| {
+                const registration_started = Timing.startStep(shared.options.timing);
                 try shared.images.prepare(set.objects, shared.options.timing);
+                Timing.finishStep(shared.options.timing, registration_started, .image_registration);
                 run_options.boxy_linked_images = shared.images;
                 lowering_modules = .{ .root = checked.loweringViewWithRelations(module, &.{}), .imports = set.views };
                 target = boxyLinkedCompileTimeTarget(source, shared.options);
@@ -2539,6 +2673,7 @@ const ModuleEvaluation = struct {
     ) FinalizeError!void {
         const allocator = evaluations.allocator;
         try noteProgram(allocator, shared, members);
+        Timing.addCount(shared.options.timing, if (target.boxy_stored_functions) .function_programs else .programs, 1);
         const pending = try allocator.dupe(u32, members);
         const build = build: {
             errdefer allocator.free(pending);
@@ -2561,7 +2696,9 @@ const ModuleEvaluation = struct {
             build.destroy();
             self.build = null;
         }
+        const run_started = Timing.startStep(shared.options.timing);
         try runBuilt(evaluations.allocator, shared, build);
+        Timing.finishStep(shared.options.timing, run_started, .program_run);
         switch (self.phase) {
             .classify => unreachable, // only a preparation stage submitted by start can complete here
             .ordinary => return self.finish(shared, evaluations),
@@ -2635,6 +2772,7 @@ const ModuleEvaluation = struct {
             if (batch.items.len == 0) continue;
             try collectUndoneKeys(allocator, shared.modules, states, roots, pending, &keys, options.function_roots);
             const retry = CycleRetry{ .pending = keys.items };
+            Timing.addCount(options.timing, .batches, 1);
             try runBoxyBatch(allocator, shared.modules, states, roots, pending, batch.items, options, lowered, const_roots, owners, program, &retry);
         }
         // The levels order the roots by the reads checking records. A root
@@ -2647,7 +2785,10 @@ const ModuleEvaluation = struct {
             const root = roots[member];
             if (!states[root.module].isDone(root.root)) try batch.append(allocator, @intCast(local));
         }
-        if (batch.items.len != 0) try runBoxyPasses(allocator, shared.modules, states, roots, pending, batch.items, options, lowered, const_roots, owners, program, &keys);
+        if (batch.items.len != 0) {
+            Timing.addCount(options.timing, .retry_passes, 1);
+            try runBoxyPasses(allocator, shared.modules, states, roots, pending, batch.items, options, lowered, const_roots, owners, program, &keys);
+        }
     }
 
     /// Every root of the module is complete.
@@ -2745,6 +2886,8 @@ const ProgramBuild = struct {
     }
 
     fn build(self: *ProgramBuild) FinalizeError!void {
+        const build_started = Timing.startStep(self.build_options.timing);
+        defer Timing.finishStep(self.build_options.timing, build_started, .program_build);
         const allocator = self.allocator;
         const roots = self.roots;
         const pending = self.pending;
@@ -2776,7 +2919,9 @@ const ProgramBuild = struct {
             request.* = roots[member].request;
             source.* = self.modules[roots[member].module].module.key.digest();
         }
+        const lowering_started = Timing.startStep(self.build_options.timing);
         self.lowered = try lowerFinalizationModulesToLir(allocator, self.lowering_modules, .{ .requests = requests, .source_modules = source_modules }, self.target);
+        Timing.finishStep(self.build_options.timing, lowering_started, .program_lowering);
         const lowered = &self.lowered.?;
         if (lowered.lir_result.const_roots.items.len != pending.len) finalizationInvariant("the Boxy evaluator's lowering published a different count of compile-time roots than it was asked for");
         if (self.build_options.boxy_program_observer) |observer| try observer.observe(observer.context, &lowered.lir_result);
@@ -3923,6 +4068,9 @@ pub const Timing = struct {
     /// evaluated, which it both declares and evaluates.
     roots_declared: TimingCounter = .{},
     roots_evaluated: TimingCounter = .{},
+    /// Roots the checked-value writer completed, which no evaluator ran
+    /// (design.md "Value-Form Roots").
+    roots_completed_directly: TimingCounter = .{},
     /// Process footprint range observed at burst boundaries. Compile-time
     /// evaluation runs as bursts interleaved with checking, so the progress
     /// reporter cannot window-sample it; the brackets that already time each
@@ -3931,6 +4079,116 @@ pub const Timing = struct {
     mem_max: MemMaxCounter = .{},
     native_emission_mutex: std.atomic.Mutex = .unlocked,
     native_emission: NativeProcCompiler.Metrics = .{},
+    /// Detailed step durations and work counts (`Step`, `Count`), recorded
+    /// only when the lowering timing is detailed (`detail`).
+    steps_ns: [step_count]TimingCounter = @splat(.{}),
+    counts: [count_count]TimingCounter = @splat(.{}),
+    roots_by_kind: [root_kind_count]TimingCounter = @splat(.{}),
+
+    /// A step of compile-time evaluation that detailed timing itemizes.
+    pub const Step = enum {
+        /// Writing the value-form roots from their checked expressions.
+        value_form_roots,
+        /// Within `value_form_roots`: creating the schema program.
+        value_form_schema,
+        /// Within `value_form_roots`: each root's plan, layout and stored
+        /// type from its result type, summed.
+        value_form_root_schemas,
+        /// `checked_root_graph.build` over the pending roots.
+        root_graph,
+        /// Whether each pending root's value holds a function.
+        root_classification,
+        /// The evaluating thread waiting for a program or object build.
+        scheduler_wait,
+        /// Registering the imports' objects a program links against.
+        image_registration,
+        /// A program's whole build on a worker, summed over programs.
+        program_build,
+        /// The lowering, LIR passes, and ARC of a program, summed.
+        program_lowering,
+        /// Generating a program's procedures' native code, summed.
+        procedure_codegen,
+        /// Generating the programs' per-root native entry wrappers, summed.
+        entry_wrappers,
+        /// Selecting and loading the import images a program's code reaches.
+        image_selection,
+        /// Linking a program's code into executable memory with its imports.
+        host_splice,
+        /// Placing a program's static data and resolving its relocations.
+        static_placement,
+        /// Running the built programs on the evaluating thread, summed.
+        program_run,
+        /// Preparing each batch's root jobs before running them.
+        root_job_setup,
+        /// The object cache keys of every module unit, summed over lanes.
+        unit_keys,
+        /// Waiting for every module unit to finish after evaluation.
+        units_wait,
+        /// Committing each evaluated module's results.
+        module_commit,
+        /// Writing the checked modules to the cache after evaluation.
+        cache_writes,
+    };
+
+    /// A deterministic work count of compile-time evaluation.
+    pub const Count = enum {
+        /// Programs evaluating ordinary roots.
+        programs,
+        /// Programs evaluating roots whose values hold functions.
+        function_programs,
+        /// Dependency levels run, each one batch of roots.
+        batches,
+        /// Passes rerunning roots that read a value not yet complete.
+        retry_passes,
+        /// Module units restored from the object cache.
+        units_restored,
+        /// Module units lowered and compiled.
+        units_built,
+        /// Import images a program's code reached.
+        images_selected,
+        /// Import images loaded into this process.
+        images_loaded,
+        /// Threads spawned to report slow roots.
+        progress_threads,
+    };
+
+    /// The number of `Step` members.
+    pub const step_count = @typeInfo(Step).@"enum".field_names.len;
+    /// The number of `Count` members.
+    pub const count_count = @typeInfo(Count).@"enum".field_names.len;
+    /// The number of compile-time root kinds.
+    pub const root_kind_count = @typeInfo(checked.CompileTimeRootKind).@"enum".field_names.len;
+
+    /// Whether detailed steps and counts are recorded.
+    pub fn detail(self: *const Timing) bool {
+        return self.lowering.detailed;
+    }
+
+    /// `timing` when it records detailed steps.
+    pub fn detailOf(timing: ?*Timing) ?*Timing {
+        const active = timing orelse return null;
+        return if (active.detail()) active else null;
+    }
+
+    /// The start of a detailed step: a clock reading, or zero when
+    /// `timing` records no detail.
+    pub fn startStep(timing: ?*Timing) i64 {
+        const active = detailOf(timing) orelse return 0;
+        return nowNs(active.std_io);
+    }
+
+    /// Add the time since `started_ns` to `step` when `timing` records
+    /// detail.
+    pub fn finishStep(timing: ?*Timing, started_ns: i64, step: Step) void {
+        const active = detailOf(timing) orelse return;
+        active.steps_ns[@backingInt(step)].add(@intCast(@max(0, nowNs(active.std_io) - started_ns)));
+    }
+
+    /// Add `amount` to `count` when `timing` records detail.
+    pub fn addCount(timing: ?*Timing, count: Count, amount: u64) void {
+        const active = detailOf(timing) orelse return;
+        active.counts[@backingInt(count)].add(amount);
+    }
 
     pub fn init(std_io: std.Io) Timing {
         return .{
@@ -3956,10 +4214,20 @@ pub const Timing = struct {
             .respecialization_passes = self.respecialization_passes.load(),
             .roots_declared = self.roots_declared.load(),
             .roots_evaluated = self.roots_evaluated.load(),
+            .roots_completed_directly = self.roots_completed_directly.load(),
             .mem_min = self.mem_min.load(),
             .mem_max = self.mem_max.load(),
             .native_emission = self.native_emission,
+            .steps_ns = loadAll(step_count, &self.steps_ns),
+            .counts = loadAll(count_count, &self.counts),
+            .roots_by_kind = loadAll(root_kind_count, &self.roots_by_kind),
         };
+    }
+
+    fn loadAll(comptime n: usize, counters: *const [n]TimingCounter) [n]u64 {
+        var values: [n]u64 = undefined;
+        for (counters, &values) |*counter, *value| value.* = counter.load();
+        return values;
     }
 
     fn addNativeEmission(self: *Timing, metrics: NativeProcCompiler.Metrics) void {
@@ -3982,8 +4250,12 @@ pub const Timing = struct {
         self.respecialization_passes.add(snapshot_value.respecialization_passes);
         self.roots_declared.add(snapshot_value.roots_declared);
         self.roots_evaluated.add(snapshot_value.roots_evaluated);
+        self.roots_completed_directly.add(snapshot_value.roots_completed_directly);
         if (snapshot_value.mem_min != std.math.maxInt(u64)) self.mem_min.min(snapshot_value.mem_min);
         self.mem_max.max(snapshot_value.mem_max);
+        for (&self.steps_ns, snapshot_value.steps_ns) |*counter, value| counter.add(value);
+        for (&self.counts, snapshot_value.counts) |*counter, value| counter.add(value);
+        for (&self.roots_by_kind, snapshot_value.roots_by_kind) |*counter, value| counter.add(value);
     }
 
     fn start(self: *Timing) i64 {
@@ -4053,9 +4325,23 @@ pub const TimingSnapshot = struct {
     respecialization_passes: u64 = 0,
     roots_declared: u64 = 0,
     roots_evaluated: u64 = 0,
+    roots_completed_directly: u64 = 0,
     mem_min: u64 = std.math.maxInt(u64),
     mem_max: u64 = 0,
     native_emission: NativeProcCompiler.Metrics = .{},
+    steps_ns: [Timing.step_count]u64 = @splat(0),
+    counts: [Timing.count_count]u64 = @splat(0),
+    roots_by_kind: [Timing.root_kind_count]u64 = @splat(0),
+
+    /// The recorded duration of `which`.
+    pub fn step(self: TimingSnapshot, which: Timing.Step) u64 {
+        return self.steps_ns[@backingInt(which)];
+    }
+
+    /// The recorded value of `which`.
+    pub fn count(self: TimingSnapshot, which: Timing.Count) u64 {
+        return self.counts[@backingInt(which)];
+    }
 };
 
 test "shared lowering timing preserves full snapshots through aggregation" {
@@ -5071,12 +5357,12 @@ const DevRootJob = struct {
     progress: std.atomic.Value(u8) = std.atomic.Value(u8).init(@backingInt(DevRootProgressState.pending)),
     start_ms: std.atomic.Value(ProgressMillis) = std.atomic.Value(ProgressMillis).init(0),
     last_progress_ms: std.atomic.Value(ProgressMillis) = std.atomic.Value(ProgressMillis).init(0),
-    label: DevRootLabel,
+    /// The root's module, which the progress line names.
+    module: *const checked.CheckedModuleArtifact,
 
     fn deinit(self: *DevRootJob, allocator: Allocator) void {
         self.host.deinit();
         allocator.free(self.ret_buf);
-        self.label.deinit(allocator);
     }
 };
 
@@ -5090,18 +5376,21 @@ const DevRunContext = struct {
 
 const DevProgressThread = if (base.parallel.is_freestanding) struct {} else std.Thread;
 
+/// Prints a progress line for each root that runs long. One reporter serves
+/// an evaluation session: its thread starts with the first batch of roots
+/// and watches each batch's jobs while that batch runs.
 const DevProgressReporter = struct {
     options: Options,
-    jobs: []DevRootJob,
+    /// The running batch's jobs, empty between batches. The reporter thread
+    /// reads them only while holding `mutex`.
+    jobs: []DevRootJob = &.{},
+    mutex: std.Io.Mutex = .init,
     stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     wake_epoch: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     thread: ?DevProgressThread = null,
 
-    fn init(options: Options, jobs: []DevRootJob) DevProgressReporter {
-        return .{
-            .options = options,
-            .jobs = jobs,
-        };
+    fn init(options: Options) DevProgressReporter {
+        return .{ .options = options };
     }
 
     fn deinit(self: *DevProgressReporter) void {
@@ -5109,14 +5398,31 @@ const DevProgressReporter = struct {
         self.* = undefined;
     }
 
-    fn start(self: *DevProgressReporter) std.Thread.SpawnError!void {
-        if (comptime base.parallel.is_freestanding) return;
-        if (self.options.stderr == null) return;
-        if (self.options.std_io == null) return;
-        if (self.jobs.len == 0) return;
-        if (self.options.slow_root_threshold_ns == 0) return;
-        if (self.options.slow_root_period_ns == 0) return;
-        self.thread = try std.Thread.spawn(.{}, progressThreadMain, .{self});
+    /// Watch `jobs` until `endBatch`, starting the thread on the first
+    /// batch. Returns whether the reporter watches them.
+    fn beginBatch(self: *DevProgressReporter, jobs: []DevRootJob) std.Thread.SpawnError!bool {
+        if (comptime base.parallel.is_freestanding) return false;
+        if (self.options.stderr == null) return false;
+        if (self.options.std_io == null) return false;
+        if (jobs.len == 0) return false;
+        if (self.options.slow_root_threshold_ns == 0) return false;
+        if (self.options.slow_root_period_ns == 0) return false;
+        self.lock();
+        self.jobs = jobs;
+        self.unlock();
+        if (self.thread == null) {
+            errdefer self.endBatch();
+            self.thread = try std.Thread.spawn(.{}, progressThreadMain, .{self});
+            Timing.addCount(self.options.timing, .progress_threads, 1);
+        }
+        return true;
+    }
+
+    /// Stop watching the current batch's jobs before they are freed.
+    fn endBatch(self: *DevProgressReporter) void {
+        self.lock();
+        self.jobs = &.{};
+        self.unlock();
     }
 
     fn finish(self: *DevProgressReporter) void {
@@ -5126,6 +5432,16 @@ const DevProgressReporter = struct {
         self.wake();
         thread.join();
         self.thread = null;
+    }
+
+    /// Only a reporter with an `std_io` watches jobs (`beginBatch`), so every
+    /// caller has one.
+    fn lock(self: *DevProgressReporter) void {
+        self.mutex.lockUncancelable(self.options.std_io.?);
+    }
+
+    fn unlock(self: *DevProgressReporter) void {
+        self.mutex.unlock(self.options.std_io.?);
     }
 
     fn rootStarted(self: *DevProgressReporter) void {
@@ -5145,8 +5461,10 @@ const DevProgressReporter = struct {
         while (!self.stop.load(.acquire)) {
             const epoch = self.wake_epoch.load(.acquire);
             const now = nowMs(io);
+            self.lock();
             self.reportDue(now);
             const next_wait_ms = self.nextWaitMs(now);
+            self.unlock();
             if (self.stop.load(.acquire)) break;
             if (next_wait_ms) |wait_ms| {
                 if (wait_ms == 0) continue;
@@ -5184,7 +5502,7 @@ const DevProgressReporter = struct {
             if (job.last_progress_ms.cmpxchgStrong(last, now, .acq_rel, .acquire) != null) continue;
             const elapsed_s = elapsed_since_start / std.time.ms_per_s;
             var line_buf: [4096]u8 = undefined;
-            const line = progressLine(&line_buf, spinner, job.label, @intCast(elapsed_s)) catch return;
+            const line = progressLine(&line_buf, spinner, job.module, job.compile_time_root, @intCast(elapsed_s)) catch return;
             stderr.writeAll(line);
         }
     }
@@ -5212,21 +5530,27 @@ const DevProgressReporter = struct {
         return next;
     }
 
+    /// The progress line of a root, located and quoted from its module's
+    /// source only when it is printed.
     fn progressLine(
         buf: []u8,
         spinner: u8,
-        label: DevRootLabel,
+        module: *const checked.CheckedModuleArtifact,
+        root: checked.CompileTimeRoot,
         elapsed_s: u64,
     ) std.fmt.BufPrintError![]u8 {
+        const location = devRootLocation(module, root);
+        const snippet = truncatedSnippetParts(location.line_text, dev_root_snippet_max_bytes);
         return std.fmt.bufPrint(
             buf,
-            "{c} Evaluating `{s}` at compile time in {s}:{d}:{d} ({d}s)\n",
+            "{c} Evaluating `{s}{s}` at compile time in {s}:{d}:{d} ({d}s)\n",
             .{
                 spinner,
-                label.snippet,
-                label.module_name,
-                label.line,
-                label.column,
+                snippet.prefix,
+                snippet.suffix,
+                location.module_name,
+                location.line,
+                location.column,
                 elapsed_s,
             },
         );
@@ -5925,7 +6249,9 @@ const DevProgram = struct {
         if (options.boxy_linked_images) |images| splice.external = .{ .context = images, .resolve = BoxyLinkedImages.external };
         const static_rc_helpers = try static_data_exports.collectEvaluationRcHelpers(allocator, materialized, lowered.lir_result.erased_fns.items);
         defer allocator.free(static_rc_helpers);
+        const procedures_started = Timing.startStep(options.timing);
         var artifacts = try compileProcedures(allocator, &codegen, evaluation_demand, static_rc_helpers, options);
+        Timing.finishStep(options.timing, procedures_started, .procedure_codegen);
         errdefer artifacts.deinit();
         // Prepared fragments own their carried strings. The splice borrows
         // those bytes until image placement completes.
@@ -5937,6 +6263,7 @@ const DevProgram = struct {
         // wrapper.
         codegen.generation_mode = .native_execution;
 
+        const entry_wrappers_started = Timing.startStep(options.timing);
         var entry_offsets = collections.DenseMap(lir.LIR.LirProcSpecId, usize).init(allocator);
         errdefer entry_offsets.deinit();
         for (lowered.lir_result.const_roots.items, 0..) |root, index| {
@@ -5953,6 +6280,8 @@ const DevProgram = struct {
             const entrypoint = try codegen.generateEntrypointWrapper(symbol_name, root.proc, &.{}, root.ret_layout);
             try entry_offsets.put(root.proc, entrypoint.offset);
         }
+        Timing.finishStep(options.timing, entry_wrappers_started, .entry_wrappers);
+        const image_selection_started = Timing.startStep(options.timing);
         var image_selection: BoxyLinkedImages.Selection = .{};
         errdefer image_selection.deinit(allocator);
         if (options.boxy_linked_images) |images| {
@@ -5965,6 +6294,8 @@ const DevProgram = struct {
             }
             image_selection = try images.select(allocator, references, options.timing);
         }
+        Timing.finishStep(options.timing, image_selection_started, .image_selection);
+        const splice_started = Timing.startStep(options.timing);
         try splice.generateHostedStubs(&codegen);
         try codegen.finishImage();
         var executable = splice.link(&codegen) catch |err| switch (err) {
@@ -5974,6 +6305,8 @@ const DevProgram = struct {
             error.InvalidRelocation => spliceInvariant(&splice, "compile-time code carries a relocation the compile-time evaluator cannot patch"),
         };
         errdefer executable.deinit();
+        Timing.finishStep(options.timing, splice_started, .host_splice);
+        const placement_started = Timing.startStep(options.timing);
         layout_owned = false;
         const static_image = static_layout.place(allocator, splice.staticDataMemory(&executable)) catch |err| return StaticSlotEnvironment.staticImageError(err);
         materialized_owned = false;
@@ -6016,6 +6349,7 @@ const DevProgram = struct {
             error.UnresolvedStaticFunction,
             => finalizationInvariant("compile-time static data referenced an unresolved generated function"),
         };
+        Timing.finishStep(options.timing, placement_started, .static_placement);
         if (options.timing) |timing| timing.finish(code_generation_started_ns, .code_generation);
 
         const root_allocator = try allocator.create(ThreadSafeAllocator);
@@ -6210,6 +6544,7 @@ fn evalDevProgramRoots(
 ) FinalizeError!bool {
     const host_allocator = native.root_allocator.allocator();
 
+    const job_setup_started = Timing.startStep(options.timing);
     var jobs = try allocator.alloc(DevRootJob, const_roots.len);
     var jobs_len: usize = 0;
     {
@@ -6233,11 +6568,6 @@ fn evalDevProgramRoots(
 
             const root_id = root_ids[i];
             const compile_time_root = module.compile_time_roots.root(root_id);
-            const label = try devRootLabel(allocator, module, compile_time_root);
-            errdefer {
-                var owned = label;
-                owned.deinit(allocator);
-            }
 
             jobs[i] = .{
                 .root = root,
@@ -6246,27 +6576,28 @@ fn evalDevProgramRoots(
                 .entry_offset = entry_offset,
                 .ret_buf = ret_buf,
                 .host = CompileTimeHost.init(host_allocator),
-                .label = label,
+                .module = module,
             };
             jobs[i].host.setGeneratedCode(native.executable.generatedCode(), native.linkedCode());
             jobs[i].host.timing_io = if (options.timing) |timing| timing.std_io else null;
             jobs_len += 1;
         }
     }
+    Timing.finishStep(options.timing, job_setup_started, .root_job_setup);
     defer {
         for (jobs[0..jobs_len]) |*job| job.deinit(allocator);
         allocator.free(jobs);
     }
 
     const execution_started_ns = if (options.timing) |timing| timing.start() else 0;
-    var progress = DevProgressReporter.init(options, jobs[0..jobs_len]);
-    defer progress.deinit();
-    try progress.start();
+    const progress = options.dev_progress orelse finalizationInvariant("compile-time evaluation ran roots outside a session's progress reporter");
+    const watched = try progress.beginBatch(jobs[0..jobs_len]);
+    defer if (watched) progress.endBatch();
     var run_context = DevRunContext{
         .program = native,
         .jobs = jobs[0..jobs_len],
         .std_io = options.std_io,
-        .progress_reporter = if (progress.thread == null) null else &progress,
+        .progress_reporter = if (watched) progress else null,
     };
     const max_threads = if (options.max_threads == 0)
         0
@@ -6311,7 +6642,7 @@ fn evalDevProgramRoots(
             },
         );
     }
-    progress.finish();
+    if (watched) progress.endBatch();
     if (options.timing) |timing| {
         timing.finishExecution(execution_started_ns);
     }
@@ -6517,23 +6848,41 @@ fn spinnerByte(tick: usize) u8 {
     return frames[tick % frames.len];
 }
 
-fn devRootLabel(
-    allocator: Allocator,
-    module: *const checked.CheckedModuleArtifact,
-    root: checked.CompileTimeRoot,
-) Allocator.Error!DevRootLabel {
+const dev_root_snippet_max_bytes = 96;
+
+/// Where a compile-time root's source starts, and the text of that line.
+const DevRootLocation = struct {
+    module_name: []const u8,
+    line_text: []const u8,
+    line: u32,
+    column: u32,
+};
+
+fn devRootLocation(module: *const checked.CheckedModuleArtifact, root: checked.CompileTimeRoot) DevRootLocation {
     const env = module.moduleEnvConst();
     const region = devRootSourceRegion(module, root);
     const info = env.calcRegionInfo(region);
     const source = env.getSourceAll();
     const line_starts = env.getLineStartsAll();
-    const raw_line = base.RegionInfo.getLineText(source, line_starts, info.start_line_idx, info.start_line_idx);
-    const snippet = try truncateSnippet(allocator, raw_line, 96);
     return .{
         .module_name = env.module_name,
-        .snippet = snippet,
+        .line_text = base.RegionInfo.getLineText(source, line_starts, info.start_line_idx, info.start_line_idx),
         .line = info.start_line_idx + 1,
         .column = info.start_col_idx + 1,
+    };
+}
+
+fn devRootLabel(
+    allocator: Allocator,
+    module: *const checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+) Allocator.Error!DevRootLabel {
+    const location = devRootLocation(module, root);
+    return .{
+        .module_name = location.module_name,
+        .snippet = try truncateSnippet(allocator, location.line_text, dev_root_snippet_max_bytes),
+        .line = location.line,
+        .column = location.column,
     };
 }
 
@@ -6584,11 +6933,17 @@ fn literalSourceRegion(module: *const checked.CheckedModuleArtifact, node: u32) 
 }
 
 fn truncateSnippet(allocator: Allocator, bytes: []const u8, max_bytes: usize) Allocator.Error![]u8 {
+    const parts = truncatedSnippetParts(bytes, max_bytes);
+    return try std.fmt.allocPrint(allocator, "{s}{s}", .{ parts.prefix, parts.suffix });
+}
+
+/// `bytes` cut to at most `max_bytes`, as a prefix of it and the ellipsis
+/// that marks a cut.
+fn truncatedSnippetParts(bytes: []const u8, max_bytes: usize) struct { prefix: []const u8, suffix: []const u8 } {
     const ellipsis = "…";
-    if (bytes.len <= max_bytes) return try allocator.dupe(u8, bytes);
-    if (max_bytes <= ellipsis.len) return try allocator.dupe(u8, ellipsis);
-    const prefix_len = validUtf8PrefixLen(bytes, max_bytes - ellipsis.len);
-    return try std.fmt.allocPrint(allocator, "{s}{s}", .{ bytes[0..prefix_len], ellipsis });
+    if (bytes.len <= max_bytes) return .{ .prefix = bytes, .suffix = "" };
+    if (max_bytes <= ellipsis.len) return .{ .prefix = "", .suffix = ellipsis };
+    return .{ .prefix = bytes[0..validUtf8PrefixLen(bytes, max_bytes - ellipsis.len)], .suffix = ellipsis };
 }
 
 fn validUtf8PrefixLen(bytes: []const u8, max_bytes: usize) usize {

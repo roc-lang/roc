@@ -263,6 +263,37 @@ pub fn run(
     allocator: Allocator,
     lifted: Lifted.Program,
 ) Common.LowerError!Ast.Program {
+    return runTimed(allocator, lifted, null);
+}
+
+/// Step durations of one solve, recorded only when a caller asks for
+/// detailed timing.
+pub const Timing = struct {
+    std_io: std.Io,
+    /// The analysis solve finding the row-joined types.
+    analysis_ns: u64 = 0,
+    /// Setting up the real solver.
+    setup_ns: u64 = 0,
+    /// The real solve and its finishing passes.
+    solve_ns: u64 = 0,
+
+    fn now(self: *const Timing) i96 {
+        return std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
+    }
+
+    fn lap(self: *const Timing, started: i96, total: *u64) i96 {
+        const finished = self.now();
+        total.* +|= @intCast(@max(0, finished - started));
+        return finished;
+    }
+};
+
+/// `run`, recording its step durations in `timing` when it is given.
+pub fn runTimed(
+    allocator: Allocator,
+    lifted: Lifted.Program,
+    timing: ?*Timing,
+) Common.LowerError!Ast.Program {
     // `Ast.Program.init` cannot fail and takes ownership of `lifted`, so
     // `program.deinit()` is the only cleanup a later error needs.
     var program = Ast.Program.init(allocator, lifted);
@@ -270,7 +301,7 @@ pub fn run(
 
     var counters: WorkCounters = .{};
     const counted = diagnostics.isSet(.lambda_solve_stats);
-    var solver = try solveProgram(allocator, &program, if (counted) &counters else null);
+    var solver = try solveProgram(allocator, &program, if (counted) &counters else null, timing);
     defer solver.deinit();
     if (counted) {
         var buffer: [2048]u8 = undefined;
@@ -305,7 +336,8 @@ pub fn run(
 /// the program's. Otherwise its solution is discarded, and the bodies are
 /// solved again with every row-joined Monotype (`closeRowJoinedTypes`) cloned
 /// per occurrence.
-fn solveProgram(allocator: Allocator, program: *Ast.Program, counters: ?*WorkCounters) Common.LowerError!Solver {
+fn solveProgram(allocator: Allocator, program: *Ast.Program, counters: ?*WorkCounters, timing: ?*Timing) Common.LowerError!Solver {
+    var step_started: i96 = if (timing) |active| active.now() else 0;
     var row_joined = joins: {
         var sharing = try Solver.init(allocator, program);
         errdefer sharing.deinit();
@@ -319,7 +351,9 @@ fn solveProgram(allocator: Allocator, program: *Ast.Program, counters: ?*WorkCou
         sides.setIntersection(sharing.contains_tag_row);
         if (sides.findFirstSet() == null) {
             sides.deinit(allocator);
+            if (timing) |active| step_started = active.lap(step_started, &active.analysis_ns);
             try sharing.finishSolve();
+            if (timing) |active| _ = active.lap(step_started, &active.solve_ns);
             return sharing;
         }
         sharing.deinit();
@@ -330,12 +364,15 @@ fn solveProgram(allocator: Allocator, program: *Ast.Program, counters: ?*WorkCou
         program.resetSolution();
         if (counters) |counted| counted.* = .{ .body_solves = counted.body_solves };
         try closeRowJoinedTypes(allocator, program, &row_joined);
+        if (timing) |active| step_started = active.lap(step_started, &active.analysis_ns);
         break :init try Solver.init(allocator, program);
     };
     errdefer solver.deinit();
     solver.setRowJoined(row_joined);
     solver.counters = counters;
+    if (timing) |active| step_started = active.lap(step_started, &active.setup_ns);
     try solver.solve();
+    if (timing) |active| _ = active.lap(step_started, &active.solve_ns);
     return solver;
 }
 
@@ -7104,7 +7141,7 @@ test "lambda solved Try sequences join forwarded error payloads with their resul
             lifted_owned = false;
             lifted = undefined;
             defer program.deinit();
-            var solver = try solveProgram(allocator, &program, null);
+            var solver = try solveProgram(allocator, &program, null, null);
             defer solver.deinit();
             const input_payloads = try solver.tagPayloadsSpanFor(solver.inferredExpr(input), err, narrow_try);
             const output_payloads = try solver.tagPayloadsSpanFor(solver.inferredExpr(sequence), err, narrow_try);
@@ -7143,7 +7180,7 @@ test "a program solves its bodies again only when a row join can change a row" {
         lifted = undefined;
         defer program.deinit();
         var counters: WorkCounters = .{};
-        var solver = try solveProgram(allocator, &program, &counters);
+        var solver = try solveProgram(allocator, &program, &counters, null);
         defer solver.deinit();
         try std.testing.expectEqual(@as(u64, if (joins) 2 else 1), counters.body_solves);
         try std.testing.expectEqual(@as(u64, 1), counters.functions);
@@ -7179,7 +7216,7 @@ test "expressions and patterns no function body reaches share one type per Monot
         lifted_owned = false;
         lifted = undefined;
         defer program.deinit();
-        var solver = try solveProgram(allocator, &program, null);
+        var solver = try solveProgram(allocator, &program, null, null);
         defer solver.deinit();
         const unreached_ty = program.types.root(program.expr_tys.items[@backingInt(first_expr.?)]);
         try std.testing.expectEqual(unreached_ty, program.types.root(program.expr_tys.items[@backingInt(last_expr)]));

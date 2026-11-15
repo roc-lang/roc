@@ -59,11 +59,12 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// roots published for deferred literals, checked artifacts' type, scheme, blob
 /// and proc-base interning tables, type tags that record whether only `match`
 /// branch patterns put them in their row, literal argument roots whose source
-/// is their edge owner and which hold no expression, and stored function
-/// recipes whose lambda tables refer to their creators' tables. It rejects
-/// every earlier format, including the independent version 19 through 41
-/// formats. Platform-pairing entries share it.
-const checked_envelope_version: u32 = 42;
+/// is their edge owner and which hold no expression, stored function recipes
+/// whose lambda tables refer to their creators' tables, and compile-time roots
+/// indexed by pattern. It rejects every earlier format, including the
+/// independent version 19 through 42 formats. Platform-pairing entries share
+/// it.
+const checked_envelope_version: u32 = 43;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment.
@@ -162,8 +163,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x35, 0xE7, 0xC1, 0x36, 0xBA, 0x5B, 0xC6, 0x7E, 0x01, 0x4F, 0x71, 0xD1, 0x0A, 0x0C, 0x47, 0x36,
-        0x1F, 0x60, 0x5B, 0x3F, 0xDA, 0xC0, 0x79, 0x72, 0xD0, 0xE2, 0x3E, 0xF0, 0x5B, 0x5A, 0x3E, 0xF2,
+        0xC7, 0xDF, 0x65, 0x07, 0xD6, 0x2C, 0x0F, 0x0B, 0x3E, 0x41, 0x18, 0x6B, 0x6C, 0xDE, 0xD3, 0xC2,
+        0x7F, 0xB3, 0xE2, 0x63, 0x18, 0x96, 0x87, 0xB4, 0x6C, 0x82, 0x47, 0x27, 0x5C, 0x44, 0xB2, 0x86,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

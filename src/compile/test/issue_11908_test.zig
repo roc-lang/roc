@@ -84,9 +84,11 @@ fn checkListWithDebug(source: []const u8, scalar: check.ConstStore.ConstPackedSc
     for (messages) |message| try expected_stderr.print(gpa, "[dbg] {s}\n", .{message});
     try std.testing.expectEqualStrings(expected_stderr.items, stderr_capture.bytes.items);
     var constants: usize = 0;
+    var value_form = false;
     for (artifact.compile_time_roots.roots.items()) |root| {
         if (root.kind != .constant) continue;
         constants += 1;
+        value_form = root.completion == .write_value;
         try std.testing.expect(root.payload == .const_node);
         const value = artifact.const_store.get(root.payload.const_node);
         try std.testing.expect(value == .list and value.list.items == .packed_bytes);
@@ -96,9 +98,15 @@ fn checkListWithDebug(source: []const u8, scalar: check.ConstStore.ConstPackedSc
         try std.testing.expectEqualSlices(u8, expected, artifact.const_store.blobData(packed_list.bytes));
     }
     try std.testing.expectEqual(@as(usize, 1), constants);
-    // The constant reads no function value, so the `.boxy` evaluator
-    // completes it (design.md "Compile-Time Evaluation Under `.lss`").
-    try std.testing.expect(measure.measurement.statements != 0);
+    // A list of literals is in value form, which the checked-value writer
+    // completes with no program; any other constant reads no function
+    // value, so the `.boxy` evaluator completes it (design.md "Value-Form
+    // Roots", "Compile-Time Evaluation Under `.lss`").
+    if (value_form) {
+        try std.testing.expectEqual(@as(usize, 0), measure.measurement.statements);
+    } else {
+        try std.testing.expect(measure.measurement.statements != 0);
+    }
     return measure.measurement;
 }
 
@@ -108,14 +116,16 @@ test "issue 11908: numeric literal list evaluation has constant LIR size" {
     for ([_]usize{ 8, 512 }) |count| {
         var source: std.ArrayList(u8) = .empty;
         defer source.deinit(gpa);
-        try source.appendSlice(gpa, "module [values]\nvalues : List(U8)\nvalues = [");
+        // The concatenation is evaluated, so the literal list is lowered
+        // into the evaluator's program.
+        try source.appendSlice(gpa, "module [values]\nvalues : List(U8)\nvalues = List.concat([], [");
         const expected = try gpa.alloc(u8, count);
         defer gpa.free(expected);
         for (expected, 0..) |*byte, index| {
             byte.* = @truncate(index);
             try source.print(gpa, "{d},", .{byte.*});
         }
-        try source.appendSlice(gpa, "]\n");
+        try source.appendSlice(gpa, "])\n");
         const measured = try checkList(source.items, .u8, expected);
         if (count == 8) small = measured else try std.testing.expectEqualDeep(small, measured);
     }
