@@ -19250,7 +19250,7 @@ fn codegenStepLabel(step: lir.CheckedPipeline.CodegenStep) []const u8 {
         .composition => "Image Composition",
         .dwarf => "DWARF Generation",
         .object_encoding => "Object Encoding",
-        .unit_image => "Object to Unit Image",
+        .unit_image => "Unit Image Build",
         .pieces_encoding => "Pieces Encoding",
     };
 }

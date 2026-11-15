@@ -833,8 +833,10 @@ pub const CodegenStep = enum {
     /// Composing the pieces into an object for the unit image.
     composition,
     dwarf,
+    /// Encoding a relocatable object; a unit image is built from its
+    /// composition's object contents with no object encoded.
     object_encoding,
-    /// Reading the composed object back into the unit image.
+    /// Building the unit image from its composition's object contents.
     unit_image,
     /// Encoding the pieces of a unit whose entry holds them.
     pieces_encoding,

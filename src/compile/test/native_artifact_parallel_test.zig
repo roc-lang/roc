@@ -373,6 +373,65 @@ fn object(lowered: *const lir.CheckedPipeline.LoweredProgram, executor: ?tasks.E
     return result;
 }
 
+/// `lowered`'s unit image for `image_target`, built from its composition's
+/// object contents and checked against the image read back from the encoded
+/// object (`ComposeOptions.check_unit_image`).
+fn unitImage(lowered: *const lir.CheckedPipeline.LoweredProgram, image_target: target, executor: ?tasks.Executor) backend.CompilationError![]align(backend.UnitImage.alignment.toByteUnits()) u8 {
+    const program = &lowered.lir_result;
+    var compiler = backend.ObjectFileCompiler.init(allocator);
+    compiler.post_check_executor = executor;
+    compiler.erased_capture_prefix = program.erased_capture_prefix;
+    compiler.link_unit = true;
+    var pieces = try compiler.compileToPieces(&program.store, &program.layouts, &.{}, &.{}, program.store.getProcSpecs(), image_target);
+    defer pieces.deinit();
+    var composed = try compiler.composeObject(&.{&pieces}, image_target, .{
+        .global_procs = true,
+        .capture_code_locations = true,
+        .unit_image = true,
+        .check_unit_image = true,
+    });
+    defer composed.deinit();
+    const image = composed.image;
+    composed.image = &.{};
+    return image;
+}
+
+fn expectUnitImagesFallible(lowered: *const lir.CheckedPipeline.LoweredProgram) InspectionError!void {
+    const image_targets = [_]target{ .x64linux, .arm64linux, .x64mac, .arm64mac, .x64win, .arm64win };
+    var serial: [image_targets.len][]align(backend.UnitImage.alignment.toByteUnits()) u8 = undefined;
+    var built: usize = 0;
+    defer for (serial[0..built]) |image| allocator.free(image);
+    for (image_targets, &serial) |image_target, *image| {
+        image.* = try unitImage(lowered, image_target, null);
+        built += 1;
+        _ = backend.UnitImage.View.init(image.*) catch return error.TestUnexpectedResult;
+    }
+    var builtins = try eval.BuiltinModules.init(allocator, std.testing.io);
+    defer builtins.deinit();
+    var arena = base.SingleThreadArena.init(allocator);
+    defer arena.deinit();
+    for ([_]usize{ 2, 4 }) |workers| {
+        var coord = try Coordinator.init(allocator, .multi_threaded, workers, target.detectNative(), &builtins, @import("build_options").compiler_compatibility_id, null, CoreCtx.default(allocator, arena.allocator(), std.testing.io));
+        defer coord.deinit();
+        try coord.start();
+        try coord.coordinatorLoop();
+        for (image_targets, serial) |image_target, expected| {
+            var observed = DelayedExecutor{ .inner = coord.postCheckExecutor(), .reverse = workers == 4 };
+            const image = try unitImage(lowered, image_target, observed.executor());
+            defer allocator.free(image);
+            try observed.verify();
+            try std.testing.expectEqualSlices(u8, expected, image);
+        }
+    }
+}
+
+fn expectUnitImages(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLirHarnessError!void {
+    expectUnitImagesFallible(lowered) catch |err| {
+        std.log.err("unit image integration failed: {s}", .{@errorName(err)});
+        return error.TestUnexpectedResult;
+    };
+}
+
 fn expectUseful(metrics: Native.Metrics) AssertionError!void {
     try std.testing.expect(metrics.procedures_emitted >= 4);
     try std.testing.expect(metrics.code_bytes_emitted > 0);
@@ -493,6 +552,38 @@ test "native artifacts real parallel workers deterministic code objects and reta
     const path = try dir.dir.realPathFileAlloc(std.testing.io, "main.roc", allocator);
     defer allocator.free(path);
     try harness.runAppPathLoweredInspection(path, .{}, inspect);
+}
+
+test "unit images built from object contents match images read from encoded objects on every image target and worker count" {
+    if (comptime !backend.host_lir_codegen_available) return error.SkipZigTest;
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+    try dir.dir.writeFile(std.testing.io, .{ .sub_path = "main.roc", .data =
+        \\app [main!, text!] { pf: platform "./platform.roc" }
+        \\a = |x| x + 1
+        \\b = |x| x + 2
+        \\c = |x| x + 3
+        \\d = |x| x + 4
+        \\main! : {} => I64
+        \\main! = |_unit| a(8) + b(8) + c(8) + d(8)
+        \\text! : {} => Str
+        \\text! = |_unit| Str.concat("unit images keep this long source string ", Str.repeat("!", 3))
+    });
+    try dir.dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data =
+        \\platform ""
+        \\    requires {} { main! : {} => I64, text! : {} => Str }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_main": run!, "roc_text": string! }
+        \\    hosted {}
+        \\run! : () => I64
+        \\run! = || main!({})
+        \\string! : () => Str
+        \\string! = || text!({})
+    });
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, "main.roc", allocator);
+    defer allocator.free(path);
+    try harness.runAppPathLoweredInspection(path, .{}, expectUnitImages);
 }
 
 test "native artifacts real parallel workers emit many nested helpers in serial queue order" {
