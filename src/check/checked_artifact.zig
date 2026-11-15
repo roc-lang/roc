@@ -5064,9 +5064,7 @@ pub const CheckedTypeStore = struct {
         // content identity.
         var reached: std.ArrayList(Var) = .empty;
         defer reached.deinit(allocator);
-        for (store.sealed_var_facts.items(), 0..) |var_facts, raw| {
-            if (var_facts.reached) try reached.append(allocator, @fromBackingInt(@intCast(raw)));
-        }
+        try sealed_type_view.appendReached(Var, allocator, &reached, store.sealed_var_facts.items(), sealed_type_view.sameVar);
         try embedReachableImportedNominalDecls(allocator, &store, names, import_views, reached.items, 0);
 
         return .{
@@ -24099,9 +24097,7 @@ pub const ModuleInterfaceCapabilities = struct {
         var nominal_types = std.ArrayList(CheckedTypeId).empty;
         defer nominal_types.deinit(allocator);
         for (0..checked_types.payloads.items().len) |index| try nominal_types.append(allocator, type_ids.fromSynthesized(index));
-        for (checked_types.sealed_var_facts.items(), 0..) |var_facts, raw| {
-            if (var_facts.reached) try nominal_types.append(allocator, type_ids.fromVar(@fromBackingInt(@intCast(raw))));
-        }
+        try sealed_type_view.appendReached(CheckedTypeId, allocator, &nominal_types, checked_types.sealed_var_facts.items(), type_ids.fromVar);
         var source_capabilities = std.ArrayList(sealed_type_view.SealedCapabilityRow).empty;
         defer source_capabilities.deinit(allocator);
 

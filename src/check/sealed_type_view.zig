@@ -100,6 +100,35 @@ pub const SealedVarFacts = packed struct(u8) {
     _padding: u5 = 0,
 };
 
+/// Append the variable of every one of `facts` publication reached to `out`,
+/// in variable order, as `fromVar` names it. Whether a variable was reached
+/// is unpredictable, so each is written to the end of `out` and only a
+/// reached one is kept: the slot past the last reached variable takes the
+/// writes of the unreached ones after it.
+pub fn appendReached(
+    comptime T: type,
+    allocator: Allocator,
+    out: *std.ArrayList(T),
+    facts: []const SealedVarFacts,
+    comptime fromVar: fn (Var) T,
+) Allocator.Error!void {
+    var reached_count: usize = 0;
+    for (facts) |var_facts| reached_count += @intFromBool(var_facts.reached);
+    try out.ensureUnusedCapacity(allocator, reached_count + 1);
+    const slots = out.allocatedSlice();
+    var len = out.items.len;
+    for (facts, 0..) |var_facts, raw| {
+        slots[len] = fromVar(@fromBackingInt(@intCast(raw)));
+        len += @intFromBool(var_facts.reached);
+    }
+    out.items.len = len;
+}
+
+/// `var_` itself, for `appendReached` into a list of variables.
+pub fn sameVar(var_: Var) Var {
+    return var_;
+}
+
 /// Checked types read directly from a module's sealed solver store.
 pub const SealedTypeView = struct {
     env: *const ModuleEnv,
