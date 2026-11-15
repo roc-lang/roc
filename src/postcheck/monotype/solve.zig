@@ -5965,6 +5965,10 @@ pub const InstGraph = struct {
                         if (try self.resolvePublicVariableToImportedGeneratedIterator(public_node, public_var, private_node, private_named)) {
                             return;
                         }
+                        if (private_named.generated_iterator == null and private_named.def.iterator_representation == .none) {
+                            try self.resolvePublicVariableToGeneratedRepresentation(public_node, public_var, private_node);
+                            return;
+                        }
                     }
                     try self.relateGeneratedOpaquePair(public_content, private_named, pair.row_width, pending);
                     return;
@@ -6334,6 +6338,29 @@ pub const InstGraph = struct {
         } else if (private_named.backing.get() != null) {
             Common.invariant("opaque interface relation received different named backing presence");
         }
+    }
+
+    /// A checked type variable states no public structure of its own: the
+    /// checker solved it at this use to the type the request supplies, such
+    /// as a codec method's unannotated parameter whose only constraint is a
+    /// method the request's type provides. Related to a generated-private
+    /// named representation (other than an iterator, whose public interface
+    /// relation is defined above), the variable therefore denotes that
+    /// representation itself, exactly as it would denote an imported
+    /// generated iterator.
+    fn resolvePublicVariableToGeneratedRepresentation(
+        self: *InstGraph,
+        public_node: NodeId,
+        public_var: InstVariable,
+        private_node: NodeId,
+    ) Allocator.Error!void {
+        if (public_var.origin != .checked_variable) {
+            Common.invariant("generated-private representation relation received a non-checked public variable");
+        }
+        if (public_var.numeric_default_phase != null or public_var.row_default != null) {
+            Common.invariant("generated-private representation relation received a defaultable public variable");
+        }
+        try self.union_(private_node, public_node);
     }
 
     fn resolvePublicVariableToImportedGeneratedIterator(

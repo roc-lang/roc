@@ -9774,6 +9774,12 @@ the use lifted it into. When that nominal carries generated-private evidence,
 the public structure relates to the nominal's structural backing through the
 opaque relation, so every generated-private node stays distinct from its
 public counterpart, and the public class then takes the request's nominal.
+A checked type variable carries no public structure of its own, so one related
+to a generated-private named representation other than an iterator (such as a
+codec method's unannotated `FieldNames` parameter, constrained only by the
+methods it calls) denotes that representation itself, as a checked variable
+related to an imported generated iterator does. A generated iterator's
+variable takes the iterator's public interface instead.
 
 Match lowering likewise relates each checked pattern interface to the exact
 scrutinee node without merging a generated-private root into that public
