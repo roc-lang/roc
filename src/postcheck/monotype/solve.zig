@@ -6390,7 +6390,7 @@ pub const InstGraph = struct {
     ) Allocator.Error!void {
         switch (public_var.origin) {
             .checked_variable, .interface_parameter => {},
-            .row_extension, .placeholder => Common.invariant("generated-private representation relation received an unfinished or row public variable"),
+            .row_extension, .placeholder, .field_slot => Common.invariant("generated-private representation relation received an unfinished or row public variable"),
         }
         if (public_var.numeric_default_phase != null or public_var.row_default != null) {
             Common.invariant("generated-private representation relation received a defaultable public variable");
