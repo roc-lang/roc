@@ -799,12 +799,14 @@ test "a publication's strategy alone decides which evaluator stores a function-h
         };
         var constants: usize = 0;
         var holding: usize = 0;
+        var memo: FunctionTypeMemo = .{};
+        defer memo.deinit(allocator);
         for (module.root_requests.compile_time_requests.items()) |request| {
             const root_id = request.compile_time_root.get().?;
             const root = module.compile_time_roots.root(root_id);
             if (root.kind != .constant) continue;
             constants += 1;
-            const holds = try rootHoldsFunction(allocator, &.{module}, .{ .root = checked.loweringView(module), .imports = views }, .{ .module = 0, .root = root_id, .request = request });
+            const holds = try rootHoldsFunction(allocator, &memo, &.{module}, .{ .root = checked.loweringView(module), .imports = views }, .{ .module = 0, .root = root_id, .request = request });
             if (holds) holding += 1;
             // The publication's strategy has every value.
             try std.testing.expect(!root.needsEvaluation(strategy));
