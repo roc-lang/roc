@@ -157,18 +157,22 @@ pub const SealedTypeView = struct {
     }
 
     /// The box payload capability representation publication gave the
-    /// nominal type `var_`, if any.
+    /// nominal type `var_`, if any. A variable has at most one row.
     fn capabilityOf(self: SealedTypeView, var_: Var) ?CheckedNominalRepresentationRef {
+        const rows = self.capabilities;
+        if (rows.len == 0) return null;
         const raw: u32 = @backingInt(var_);
-        var low: usize = 0;
-        var high: usize = self.capabilities.len;
-        while (low < high) {
-            const mid = low + (high - low) / 2;
-            const row = self.capabilities[mid];
-            if (row.var_ == raw) return row.representation;
-            if (row.var_ < raw) low = mid + 1 else high = mid;
+        // The last row whose variable is not past `raw` is always among the
+        // `span` rows from `first`. Each step selects a half instead of
+        // branching on the comparison, whose outcome is unpredictable.
+        var first: usize = 0;
+        var span: usize = rows.len;
+        while (span > 1) {
+            const half = span / 2;
+            first = if (rows[first + half].var_ <= raw) first + half else first;
+            span -= half;
         }
-        return null;
+        return if (rows[first].var_ == raw) rows[first].representation else null;
     }
 
     fn facts(self: SealedTypeView, var_: Var) SealedVarFacts {
@@ -186,92 +190,100 @@ pub const SealedTypeView = struct {
     }
 
     /// `var_`'s checked type. `var_` is its class's checked representative,
-    /// and publication reached it.
+    /// and publication reached it. The content is read by kind from the
+    /// stored descriptor, so only the payload of the kind found is decoded.
     pub fn payload(self: SealedTypeView, var_: Var) CheckedTypePayload {
         const env = self.env;
         const type_store = self.typeStore();
-        const resolved = type_store.resolveVar(var_);
+        const desc_idx = type_store.resolveDescIdx(var_);
+        const word = type_store.wordAt(desc_idx);
         if (std.debug.runtime_safety) {
-            if (resolved.var_ != var_) invariant("checked type {d} names a solver variable that is not its class's representative", .{@backingInt(var_)});
+            if (type_store.resolveVarWord(var_).var_ != var_) invariant("checked type {d} names a solver variable that is not its class's representative", .{@backingInt(var_)});
             if (!self.facts(var_).reached) invariant("checked type {d} names a solver variable publication never reached", .{@backingInt(var_)});
         }
         // The checker marks an otherwise-unresolved identity it closed to
         // `[]`; it renders as a variable carrying `[]` only as its row default.
-        if (resolved.desc.flags.empty_tag_union_is_default) return .{ .flex = .{ .row_default = .empty_tag_union } };
-        switch (resolved.desc.content) {
+        if (word.flags.empty_tag_union_is_default) return .{ .flex = .{ .row_default = .empty_tag_union } };
+        switch (word.kind) {
             .err => return .err,
-            .field_presence => |presence| return .{ .field_kind = switch (presence) {
+            .field_presence => return .{ .field_kind = switch (type_store.fieldPresenceAt(desc_idx)) {
                 .required, .defaulted => .required,
                 .optional => .optional,
             } },
-            .flex => |flex| {
-                const variable_facts = checked_artifact.flexVariableFacts(env, flex, resolved.desc.flags.bounded_row_ext);
+            .flex => {
+                const flex = type_store.flexAt(desc_idx);
+                const variable_facts = checked_artifact.flexVariableFacts(env, flex, word.flags.bounded_row_ext);
                 return .{ .flex = .{
                     .name = if (flex.name) |name| checked_artifact.checkedVariableNameText(env, name) else null,
                     .constraints = .{ .sealed = .{ .constraints = type_store.sliceStaticDispatchConstraints(flex.constraints), .view = self } },
                     .numeric_default_phase = variable_facts.numeric_default_phase,
-                    .row_default = self.rowDefault(var_, resolved.desc.content),
+                    .row_default = self.rowDefault(var_, .{ .flex = flex }),
                     .row_default_discharges_constraints = variable_facts.row_default_discharges_constraints,
                     .bounded_row_ext = variable_facts.bounded_row_ext,
                 } };
             },
-            .rigid => |rigid| {
+            .rigid => {
+                const rigid = type_store.rigidAt(desc_idx);
                 const variable_facts = checked_artifact.rigidVariableFacts(env, rigid);
                 return .{ .rigid = .{
                     .name = checked_artifact.checkedVariableNameText(env, rigid.name),
                     .constraints = .{ .sealed = .{ .constraints = type_store.sliceStaticDispatchConstraints(rigid.constraints), .view = self } },
                     .numeric_default_phase = variable_facts.numeric_default_phase,
-                    .row_default = self.rowDefault(var_, resolved.desc.content),
+                    .row_default = self.rowDefault(var_, .{ .rigid = rigid }),
                     .row_default_discharges_constraints = variable_facts.row_default_discharges_constraints,
                     .bounded_row_ext = variable_facts.bounded_row_ext,
                 } };
             },
-            .alias => |alias| return .{ .alias = .{
-                .name = self.typeName(alias.ident.ident_idx),
-                .origin_module = self.originIdentity(alias.origin_module),
-                .owner_module = self.originOwner(alias.origin_module),
-                .source_decl = alias.source_decl.toOptional(),
-                .builtin_origin = alias.source_decl.originIsBuiltin(),
-                .backing = type_ids.fromVar(type_store.getAliasBackingVar(alias)),
-                .args = type_ids.fromVars(type_store.sliceAliasArgs(alias)),
-            } },
-            .structure => |flat| switch (flat) {
-                .empty_record => return .empty_record,
-                .empty_tag_union => return .empty_tag_union,
-                .record => |record| {
-                    if (record.fields.len() == 0 and checked_artifact.checkedRecordExtIsEmpty(env, record.ext)) return .empty_record;
-                    return .{ .record = .{
-                        .fields = .{ .sealed = .{ .fields = type_store.getRecordFieldsSlice(record.fields), .view = self } },
-                        .ext = type_ids.fromVar(record.ext),
-                    } };
-                },
-                .tuple => |tuple| return .{ .tuple = type_ids.fromVars(type_store.sliceVars(tuple.elems)) },
-                .nominal_type => |nominal| {
-                    checked_artifact.debugAssertNominalOpacityMatchesDeclaration(type_store, nominal);
-                    const declaration = type_store.lookupNominalDecl(nominal) orelse
-                        invariant("a sealed nominal type has no declaration in its store", .{});
-                    const row = self.nominals[@backingInt(declaration)];
-                    return .{ .nominal = .{
-                        .name = self.typeName(nominal.ident.ident_idx),
-                        .origin_module = self.originIdentity(nominal.origin_module),
-                        .owner_module = self.originOwner(nominal.origin_module),
-                        .source_decl = nominal.statement(),
-                        .builtin = row.builtin,
-                        .is_opaque = nominal.isOpaque(),
-                        .representation = self.capabilityOf(var_) orelse row.representation orelse
-                            invariant("a sealed nominal type names a declaration whose owner publication could not resolve", .{}),
-                        .args = type_ids.fromVars(type_store.sliceNominalArgs(nominal)),
-                    } };
-                },
-                .fn_pure, .fn_unbound => |func| return .{ .function = functionType(type_store, .pure, func) },
-                .fn_effectful => |func| return .{ .function = functionType(type_store, .effectful, func) },
-                .tag_union => |tag_union| {
-                    if (tag_union.tags.len() == 0 and checked_artifact.checkedTagUnionExtIsEmpty(env, tag_union.ext)) return .empty_tag_union;
-                    return .{ .tag_union = .{
-                        .tags = .{ .sealed = .{ .tags = type_store.getTagsSlice(tag_union.tags), .view = self } },
-                        .ext = type_ids.fromVar(tag_union.ext),
-                    } };
-                },
+            .alias => {
+                const alias = type_store.aliasAt(desc_idx);
+                return .{ .alias = .{
+                    .name = self.typeName(alias.ident.ident_idx),
+                    .origin_module = self.originIdentity(alias.origin_module),
+                    .owner_module = self.originOwner(alias.origin_module),
+                    .source_decl = alias.source_decl.toOptional(),
+                    .builtin_origin = alias.source_decl.originIsBuiltin(),
+                    .backing = type_ids.fromVar(type_store.getAliasBackingVar(alias)),
+                    .args = type_ids.fromVars(type_store.sliceAliasArgs(alias)),
+                } };
+            },
+            .empty_record => return .empty_record,
+            .empty_tag_union => return .empty_tag_union,
+            .record => {
+                const record = type_store.recordAt(desc_idx);
+                if (record.fields.len() == 0 and checked_artifact.checkedRecordExtIsEmpty(env, record.ext)) return .empty_record;
+                return .{ .record = .{
+                    .fields = .{ .sealed = .{ .fields = type_store.getRecordFieldsSlice(record.fields), .view = self } },
+                    .ext = type_ids.fromVar(record.ext),
+                } };
+            },
+            .tuple => return .{ .tuple = type_ids.fromVars(type_store.sliceVars(type_store.tupleAt(desc_idx).elems)) },
+            .nominal_type => {
+                const nominal = type_store.nominalAt(desc_idx);
+                checked_artifact.debugAssertNominalOpacityMatchesDeclaration(type_store, nominal);
+                const declaration = type_store.lookupNominalDecl(nominal) orelse
+                    invariant("a sealed nominal type has no declaration in its store", .{});
+                const row = self.nominals[@backingInt(declaration)];
+                return .{ .nominal = .{
+                    .name = self.typeName(nominal.ident.ident_idx),
+                    .origin_module = self.originIdentity(nominal.origin_module),
+                    .owner_module = self.originOwner(nominal.origin_module),
+                    .source_decl = nominal.statement(),
+                    .builtin = row.builtin,
+                    .is_opaque = nominal.isOpaque(),
+                    .representation = self.capabilityOf(var_) orelse row.representation orelse
+                        invariant("a sealed nominal type names a declaration whose owner publication could not resolve", .{}),
+                    .args = type_ids.fromVars(type_store.sliceNominalArgs(nominal)),
+                } };
+            },
+            .fn_pure, .fn_unbound => return .{ .function = functionType(type_store, .pure, type_store.funcAt(desc_idx)) },
+            .fn_effectful => return .{ .function = functionType(type_store, .effectful, type_store.funcAt(desc_idx)) },
+            .tag_union => {
+                const tag_union = type_store.tagUnionAt(desc_idx);
+                if (tag_union.tags.len() == 0 and checked_artifact.checkedTagUnionExtIsEmpty(env, tag_union.ext)) return .empty_tag_union;
+                return .{ .tag_union = .{
+                    .tags = .{ .sealed = .{ .tags = type_store.getTagsSlice(tag_union.tags), .view = self } },
+                    .ext = type_ids.fromVar(tag_union.ext),
+                } };
             },
         }
     }
@@ -402,11 +414,13 @@ pub fn buildColumns(
     var seen = try std.DynamicBitSetUnmanaged.initEmpty(allocator, type_store.descs.backing.len());
     defer seen.deinit(allocator);
     for (0..@as(usize, @intCast(type_store.len()))) |index| {
-        const resolved = type_store.resolveVar(@fromBackingInt(@intCast(index)));
-        const desc_index: usize = @backingInt(resolved.desc_idx);
+        // A class's descriptor is read once, the first time one of its
+        // variables is met.
+        const desc_idx = type_store.resolveDescIdx(@fromBackingInt(@intCast(index)));
+        const desc_index: usize = @backingInt(desc_idx);
         if (seen.isSet(desc_index)) continue;
         seen.set(desc_index);
-        try builder.content(resolved.desc.content);
+        try builder.descriptor(desc_idx);
     }
 
     var local_nominal_declarations = try LocalNominalDeclarationIds.initFromEnv(allocator, env);
@@ -491,32 +505,33 @@ const ColumnBuilder = struct {
         for (self.env.types.sliceStaticDispatchConstraints(range)) |constraint| try self.methodName(constraint.fn_name);
     }
 
-    fn content(self: *ColumnBuilder, value: types.Content) Allocator.Error!void {
+    /// Intern every name and resolve every module identity the stored
+    /// descriptor `desc_idx` holds, reading the payload of its kind alone.
+    fn descriptor(self: *ColumnBuilder, desc_idx: types.DescStoreIdx) Allocator.Error!void {
         const type_store = &self.env.types;
-        switch (value) {
-            .err => {},
-            .field_presence => |presence| switch (presence) {
+        switch (type_store.kindAt(desc_idx)) {
+            .err, .empty_record, .empty_tag_union, .tuple, .fn_pure, .fn_effectful, .fn_unbound => {},
+            .field_presence => switch (type_store.fieldPresenceAt(desc_idx)) {
                 .required, .optional => {},
                 .defaulted => |id| try self.origin(id.origin_module),
             },
-            .flex => |flex| try self.constraints(flex.constraints),
-            .rigid => |rigid| try self.constraints(rigid.constraints),
-            .alias => |alias| {
+            .flex => try self.constraints(type_store.flexAt(desc_idx).constraints),
+            .rigid => try self.constraints(type_store.rigidAt(desc_idx).constraints),
+            .alias => {
+                const alias = type_store.aliasAt(desc_idx);
                 try self.typeName(alias.ident.ident_idx);
                 try self.origin(alias.origin_module);
             },
-            .structure => |flat| switch (flat) {
-                .empty_record, .empty_tag_union, .tuple, .fn_pure, .fn_effectful, .fn_unbound => {},
-                .nominal_type => |nominal| {
-                    try self.typeName(nominal.ident.ident_idx);
-                    try self.origin(nominal.origin_module);
-                },
-                .record => |record| for (type_store.getRecordFieldsSlice(record.fields).items(.name)) |name| {
-                    try self.recordFieldLabel(name);
-                },
-                .tag_union => |tag_union| for (type_store.getTagsSlice(tag_union.tags).items(.name)) |name| {
-                    try self.tagLabel(name);
-                },
+            .nominal_type => {
+                const nominal = type_store.nominalAt(desc_idx);
+                try self.typeName(nominal.ident.ident_idx);
+                try self.origin(nominal.origin_module);
+            },
+            .record => for (type_store.getRecordFieldsSlice(type_store.recordAt(desc_idx).fields).items(.name)) |name| {
+                try self.recordFieldLabel(name);
+            },
+            .tag_union => for (type_store.getTagsSlice(type_store.tagUnionAt(desc_idx).tags).items(.name)) |name| {
+                try self.tagLabel(name);
             },
         }
     }
@@ -539,71 +554,75 @@ const ReachWalker = struct {
     pending: std.ArrayList(Var) = .empty,
 
     fn reach(self: *ReachWalker, allocator: Allocator, var_: Var, tail: ?RowDefault) Allocator.Error!void {
-        const resolved = self.env.types.resolveVar(var_);
+        const resolved = self.env.types.resolveVarWord(var_);
         const var_facts = &self.var_facts[@backingInt(resolved.var_)];
         if (!var_facts.reached) {
             var_facts.reached = true;
             if (self.newly_reached) |list| try list.append(allocator, resolved.var_);
-            if (!resolved.desc.flags.empty_tag_union_is_default) try self.pending.append(allocator, resolved.var_);
+            if (!resolved.word.flags.empty_tag_union_is_default) try self.pending.append(allocator, resolved.var_);
         }
         switch (tail orelse return) {
             .empty_record => var_facts.record_tail = true,
             .empty_tag_union => var_facts.tag_tail = true,
         }
         if (std.debug.runtime_safety and var_facts.record_tail and var_facts.tag_tail and
-            checked_artifact.checkedRowDefaultForContent(self.env, resolved.desc.content, .empty_record) != null)
+            checked_artifact.checkedRowDefaultForContent(self.env, self.env.types.resolveVar(var_).desc.content, .empty_record) != null)
         {
             invariant("checked row variable {d} received incompatible defaults", .{@backingInt(resolved.var_)});
         }
     }
 
+    /// Reach every variable the class of `var_` holds, reading the payload
+    /// of its descriptor's kind alone.
     fn expand(self: *ReachWalker, allocator: Allocator, var_: Var) Allocator.Error!void {
         const env = self.env;
         const type_store = &env.types;
-        switch (type_store.resolveVar(var_).desc.content) {
-            .err, .field_presence => {},
-            .flex => |flex| for (type_store.sliceStaticDispatchConstraints(flex.constraints)) |source| {
+        const desc_idx = type_store.resolveDescIdx(var_);
+        switch (type_store.kindAt(desc_idx)) {
+            .err, .field_presence, .empty_record, .empty_tag_union => {},
+            .flex => for (type_store.sliceStaticDispatchConstraints(type_store.flexAt(desc_idx).constraints)) |source| {
                 try self.reach(allocator, source.fn_var, null);
             },
-            .rigid => |rigid| for (type_store.sliceStaticDispatchConstraints(rigid.constraints)) |source| {
+            .rigid => for (type_store.sliceStaticDispatchConstraints(type_store.rigidAt(desc_idx).constraints)) |source| {
                 try self.reach(allocator, source.fn_var, null);
             },
-            .alias => |alias| {
+            .alias => {
+                const alias = type_store.aliasAt(desc_idx);
                 try self.reach(allocator, type_store.getAliasBackingVar(alias), null);
                 for (type_store.sliceAliasArgs(alias)) |arg| try self.reach(allocator, arg, null);
             },
-            .structure => |flat| switch (flat) {
-                .empty_record, .empty_tag_union => {},
-                .record => |record| {
-                    if (record.fields.len() == 0 and checked_artifact.checkedRecordExtIsEmpty(env, record.ext)) return;
-                    for (type_store.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
-                        switch (presence.decode()) {
-                            .required => |type_var| try self.reach(allocator, type_var, null),
-                            .unknown => |unknown| {
-                                switch (type_store.resolveVar(unknown.presence).desc.content) {
-                                    .flex => try self.reach(allocator, unknown.presence, null),
-                                    .field_presence, .err => {},
-                                    .rigid, .alias, .structure => invariant("a sealed field presence variable held non-presence content", .{}),
-                                }
-                                try self.reach(allocator, unknown.var_, null);
-                            },
-                        }
+            .record => {
+                const record = type_store.recordAt(desc_idx);
+                if (record.fields.len() == 0 and checked_artifact.checkedRecordExtIsEmpty(env, record.ext)) return;
+                for (type_store.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                    switch (presence.decode()) {
+                        .required => |type_var| try self.reach(allocator, type_var, null),
+                        .unknown => |unknown| {
+                            switch (type_store.kindOf(unknown.presence)) {
+                                .flex => try self.reach(allocator, unknown.presence, null),
+                                .field_presence, .err => {},
+                                .rigid, .alias, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => invariant("a sealed field presence variable held non-presence content", .{}),
+                            }
+                            try self.reach(allocator, unknown.var_, null);
+                        },
                     }
-                    try self.reach(allocator, record.ext, .empty_record);
-                },
-                .tuple => |tuple| for (type_store.sliceVars(tuple.elems)) |elem| try self.reach(allocator, elem, null),
-                .nominal_type => |nominal| for (type_store.sliceNominalArgs(nominal)) |arg| try self.reach(allocator, arg, null),
-                .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    for (type_store.sliceVars(func.args)) |arg| try self.reach(allocator, arg, null);
-                    try self.reach(allocator, func.ret, null);
-                },
-                .tag_union => |tag_union| {
-                    if (tag_union.tags.len() == 0 and checked_artifact.checkedTagUnionExtIsEmpty(env, tag_union.ext)) return;
-                    for (type_store.getTagsSlice(tag_union.tags).items(.args)) |args| {
-                        for (type_store.sliceVars(args)) |arg| try self.reach(allocator, arg, null);
-                    }
-                    try self.reach(allocator, tag_union.ext, .empty_tag_union);
-                },
+                }
+                try self.reach(allocator, record.ext, .empty_record);
+            },
+            .tuple => for (type_store.sliceVars(type_store.tupleAt(desc_idx).elems)) |elem| try self.reach(allocator, elem, null),
+            .nominal_type => for (type_store.sliceNominalArgs(type_store.nominalAt(desc_idx))) |arg| try self.reach(allocator, arg, null),
+            .fn_pure, .fn_effectful, .fn_unbound => {
+                const func = type_store.funcAt(desc_idx);
+                for (type_store.sliceVars(func.args)) |arg| try self.reach(allocator, arg, null);
+                try self.reach(allocator, func.ret, null);
+            },
+            .tag_union => {
+                const tag_union = type_store.tagUnionAt(desc_idx);
+                if (tag_union.tags.len() == 0 and checked_artifact.checkedTagUnionExtIsEmpty(env, tag_union.ext)) return;
+                for (type_store.getTagsSlice(tag_union.tags).items(.args)) |args| {
+                    for (type_store.sliceVars(args)) |arg| try self.reach(allocator, arg, null);
+                }
+                try self.reach(allocator, tag_union.ext, .empty_tag_union);
             },
         }
     }

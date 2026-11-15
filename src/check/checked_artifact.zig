@@ -8771,18 +8771,12 @@ pub fn numericDefaultPhaseForConstraints(
 
 /// Whether a record's extension is the closed empty record.
 pub fn checkedRecordExtIsEmpty(module_env: *const ModuleEnv, ext: Var) bool {
-    return switch ((&module_env.types).resolveVar(ext).desc.content) {
-        .structure => |flat| flat == .empty_record,
-        .flex, .rigid, .alias, .field_presence, .err => false,
-    };
+    return (&module_env.types).kindOf(ext) == .empty_record;
 }
 
 /// Whether a tag union's extension is the closed empty tag union.
 pub fn checkedTagUnionExtIsEmpty(module_env: *const ModuleEnv, ext: Var) bool {
-    return switch ((&module_env.types).resolveVar(ext).desc.content) {
-        .structure => |flat| flat == .empty_tag_union,
-        .flex, .rigid, .alias, .field_presence, .err => false,
-    };
+    return (&module_env.types).kindOf(ext) == .empty_tag_union;
 }
 
 /// Imported origin modules a type publication has resolved, by the
