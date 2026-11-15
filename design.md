@@ -16770,8 +16770,9 @@ and Per-Module Output is the invariant that makes it possible:
   implementation. A module's interface digest covers what its checked module
   tells an importer's lowering (its checking interface, the names and hidden
   inputs of the workers its exposed definitions, bindings, registered
-  methods and constants name, its defaults' count, its nominal declarations,
-  and the stored values an importer restores); its export digest covers the
+  methods and constants name, its defaults' count, the names of its nominal
+  declarations with the number of declarations of each, which is all their
+  runtime names depend on, and the stored values an importer restores); its export digest covers the
   importer-visible export records its object solved (FILE, below). Each folds
   in the same digest of the module's own imports, because lowering reads
   through an import to the modules behind it: a needs list an importer fills
