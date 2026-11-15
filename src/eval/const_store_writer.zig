@@ -37,22 +37,11 @@ pub const Part = union(enum) {
 };
 
 /// What storing parts from checked expressions reads: the module's checked
-/// bodies the expressions belong to, the schema whose plans and layouts the
-/// writer stores them by, and the evaluation target's inline string length.
+/// bodies the expressions belong to, and the schema whose plans and layouts
+/// the writer stores them by.
 pub const CheckedValues = struct {
     bodies: checked.CheckedBodies,
     schema: *const lir.CheckedPipeline.BoxyValueSchema,
-    /// The longest string the evaluation target holds in its descriptor.
-    inline_str_max: usize,
-};
-
-/// A literal an evaluation reads as a view of its content-interned static
-/// backing (`Writer.checkedLiteralKey`): two with the same key are one value.
-const CheckedLiteralKey = struct {
-    plan: u32,
-    layout: u32,
-    bytes: const_store.ConstStr,
-    len: u64,
 };
 
 const RuntimeValueAddress = struct {
@@ -107,7 +96,6 @@ pub const Writer = struct {
     /// Set for a writer that stores value-form roots from their checked
     /// expressions.
     checked: ?CheckedValues = null,
-    checked_literals: std.AutoHashMap(CheckedLiteralKey, checked.ConstNodeId),
     /// Scratch for a checked string's bytes.
     checked_text: std.ArrayList(u8) = .empty,
     erased_callable_resolver: ErasedCallableResolver,
@@ -144,7 +132,6 @@ pub const Writer = struct {
             .names = names,
             .program = program,
             .stored_values = std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId).init(allocator),
-            .checked_literals = std.AutoHashMap(CheckedLiteralKey, checked.ConstNodeId).init(allocator),
             .erased_callable_resolver = .{},
             .product_plans = std.AutoHashMap(ProductPlanKey, ?lir.PackedData.Plan).init(allocator),
             .product_eligibility = collections.DenseMap(LirProgram.ConstPlanId, bool).init(allocator),
@@ -223,7 +210,6 @@ pub const Writer = struct {
         self.product_plans.deinit();
         self.product_eligibility.deinit();
         self.checked_text.deinit(self.allocator);
-        self.checked_literals.deinit();
         self.stored_values.deinit();
     }
 
@@ -280,8 +266,8 @@ pub const Writer = struct {
     }
 
     /// Store a value-form root from its checked expression `expr`, by the
-    /// plan and layout of its result (`BoxyValueSchema.root`). The node graph
-    /// is the one the evaluator stores for the root.
+    /// plan and layout of its result (`BoxyValueSchema.root`). Every part of
+    /// the expression is a node of its own.
     pub fn storeCheckedRoot(
         self: *Writer,
         plan: LirProgram.ConstPlanId,
@@ -289,9 +275,6 @@ pub const Writer = struct {
         expr: CIR.Expr.Idx,
     ) Error!checked.ConstNodeId {
         if (self.checked == null) writerInvariant("a writer of evaluated values stored a checked expression");
-        // Like an evaluated root's addresses, a literal's identity is the
-        // root's own: another root's equal literal is another value.
-        self.checked_literals.clearRetainingCapacity();
         return self.storeValue(plan, ret_layout, .{ .checked = expr });
     }
 
@@ -450,8 +433,9 @@ pub const Writer = struct {
 
     /// Reserves the request's node, fills it when the value has no
     /// components, and pushes the frame that stores its components otherwise.
-    /// A part already stored for the root (the same runtime allocation, or
-    /// the same literal backing) is that node.
+    /// An evaluated part already stored for the root (the same runtime
+    /// allocation) is that node; a checked expression's part is always a
+    /// node of its own.
     fn startStore(self: *Writer, request: ValueRequest) Error!checked.ConstNodeId {
         switch (request.value) {
             .runtime => |value| if (self.memoAddress(request.plan, request.layout_idx, value, request.storage)) |address| {
@@ -461,13 +445,7 @@ pub const Writer = struct {
                 try self.beginFresh(node, request);
                 return node;
             },
-            .checked => |expr| if (try self.checkedLiteralKey(request.plan, request.layout_idx, expr)) |key| {
-                if (self.checked_literals.get(key)) |existing| return existing;
-                const node = try self.store.reserve();
-                try self.checked_literals.put(key, node);
-                try self.beginFresh(node, request);
-                return node;
-            },
+            .checked => {},
         }
         const node = try self.store.reserve();
         try self.beginFresh(node, request);
@@ -1028,39 +1006,6 @@ pub const Writer = struct {
     fn checkedBacking(self: *const Writer, expr: CIR.Expr.Idx) CIR.Expr.Idx {
         const data = self.checkedValues().bodies.exprData(expr);
         return if (data == .nominal) data.nominal.backing_expr else expr;
-    }
-
-    /// The identity of a part the evaluator reads as a view of a literal's
-    /// static backing, which lowering interns by content: a string of one
-    /// non-empty segment too long for the evaluation target to hold inline,
-    /// and a non-empty list at a builtin numeric element type, which
-    /// lowering writes as one packed literal. Two such parts of one plan and
-    /// layout with equal bytes are one value, as two equal literals of one
-    /// evaluation share an address. Every other part is built anew by the
-    /// evaluation, and is a value of its own: null.
-    fn checkedLiteralKey(self: *Writer, plan: LirProgram.ConstPlanId, layout_idx: layout.Idx, expr: CIR.Expr.Idx) Error!?CheckedLiteralKey {
-        const values = self.checkedValues();
-        switch (self.constPlan(plan)) {
-            .str => {
-                var parts: usize = 0;
-                for (checkedStrSegments(values.bodies, expr)) |segment| parts += @intFromBool(!values.bodies.isEmptyStrSegment(segment));
-                if (parts != 1) return null;
-                const text = try self.checkedStrText(expr);
-                if (text.len <= values.inline_str_max) return null;
-                return .{ .plan = @backingInt(plan), .layout = @backingInt(layout_idx), .bytes = try self.storeBytes(text), .len = text.len };
-            },
-            .list => |elem_plan| {
-                if (self.constPlan(elem_plan) != .scalar) return null;
-                const items = self.checkedListItems(expr);
-                if (items.len == 0) return null;
-                const list_layout = self.program.layouts.getLayout(layout_idx);
-                if (list_layout.tag != .list) writerInvariant("packed scalar list had non-list layout");
-                const element = self.packedScalarForLayout(list_layout.getIdx()) orelse
-                    writerInvariant("scalar const plan had a non-packable list element layout");
-                return .{ .plan = @backingInt(plan), .layout = @backingInt(layout_idx), .bytes = try self.checkedPackedBlob(list_layout.getIdx(), element, items), .len = items.len };
-            },
-            .pending, .layout_only, .zst, .scalar, .box, .boxed_sequence, .tuple, .record, .tag_union, .named, .fn_value, .erased_fn, .boxy_fn => return null,
-        }
     }
 
     /// The packed bytes of value-form numerals `items` at element layout

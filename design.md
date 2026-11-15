@@ -2140,15 +2140,11 @@ where a value's parts come from differs: an evaluator's result memory, or the
 checked expression's parts. A numeral's bytes are the bytes lowering gives
 the literal (`exact_numeral.encodeBits`), and a literal list or string has
 no capacity beyond its items (Static Lists And Strings Keep Their Capacity).
-The stored graph shares a node exactly where the evaluator's would: the
-evaluator stores one node for every part it read at one address, and the
-parts a value-form root's evaluation reads at one address are its equal
-literals that lowering interns by content and the evaluation reads as views
-of their static backing, namely a string literal of one non-empty segment
-too long for the evaluation target to hold inline, and a non-empty list of
-numerals whose items have a builtin numeric type, which lowering writes as one
-packed literal. Every other part of such a root is built anew by its
-evaluation, and is a node of its own.
+Every part of a value-form root is a node of its own: the writer shares no
+node between two parts, equal or not. Sharing is an evaluator's record that
+two parts were one allocation, and a checked expression has no allocations
+to record. Equal string and packed list bytes are still stored once, because
+the store interns blob data by content.
 
 A value-form root reads nothing, so finalization completes every pending
 one before any evaluator starts: the evaluators' dependency graph never
@@ -26930,11 +26926,10 @@ lowering or interpreting a compile-time root is still a compiler bug, not a
 user-facing diagnostic.
 
 While storing an eval result, the `ConstStore` writer reserves a `ConstNodeId`
-and inserts the runtime-address-to-node memo before storing its children. The
-checked-value writer keys the same memo by the one kind of address a
-value-form root's evaluation shares, a literal's interned static backing
-("Value-Form Roots"). Repeated
-references and back-edges therefore resolve to that exact node. The builder
+and inserts the runtime-address-to-node memo before storing its children. Repeated
+references and back-edges therefore resolve to that exact node. The
+checked-value writer has no addresses and keeps no memo ("Value-Form
+Roots"). The builder
 verifies that every reserved node was filled exactly once and that every cycle
 crosses a delayed function-capture edge. Const materialization and dependency
 summarization must use explicit graph traversal state keyed by `ConstNodeId`, so
