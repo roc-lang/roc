@@ -222,33 +222,33 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "a"))
-					(e-call (constraint-fn-var 293)
+					(e-call (constraint-fn-var 291)
 						(e-lookup-local
 							(p-assign (ident "unused_regular")))
 						(e-num (value "5"))))
 				(s-let
 					(p-assign (ident "b"))
-					(e-call (constraint-fn-var 296)
+					(e-call (constraint-fn-var 294)
 						(e-lookup-local
 							(p-assign (ident "used_underscore")))
 						(e-num (value "10"))))
 				(s-let
 					(p-assign (ident "c"))
-					(e-call (constraint-fn-var 304)
+					(e-call (constraint-fn-var 300)
 						(e-lookup-local
 							(p-assign (ident "unused_underscore")))
 						(e-num (value "15"))))
 				(s-let
 					(p-assign (ident "d"))
-					(e-call (constraint-fn-var 312)
+					(e-call (constraint-fn-var 306)
 						(e-lookup-local
 							(p-assign (ident "used_regular")))
 						(e-num (value "20"))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 317)
+				(e-dispatch-call (method "plus") (constraint-fn-var 311)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 315)
+						(e-dispatch-call (method "plus") (constraint-fn-var 309)
 							(receiver
-								(e-dispatch-call (method "plus") (constraint-fn-var 313)
+								(e-dispatch-call (method "plus") (constraint-fn-var 307)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "a"))))
