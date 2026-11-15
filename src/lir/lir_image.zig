@@ -86,7 +86,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      renumbering later ops.
 /// v75: dynamic tag payload reads lose `whole`; a tag's only payload is an
 ///      `assign_ref` `tag_payload_struct` of the dynamic union.
-pub const FORMAT_VERSION: u32 = 75;
+/// v76: procedure debug names are a column parallel to the procedure
+///      specs, combined with the v73-v75 changes.
+pub const FORMAT_VERSION: u32 = 76;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -297,7 +299,7 @@ pub const LirStoreImage = extern struct {
             .body_coordinator = null,
             .body_prefix = std.mem.zeroes(LirStore.BodyPrefix),
             .proc_locs = try guardedListFromRef(base.SourceLoc, "LirStore.proc_locs", base_ptr, image_size, self.proc_locs),
-            .proc_debug_names = try guardedListFromRef(LirStore.ProcDebugName, "LirStore.proc_debug_names", base_ptr, image_size, self.proc_debug_names),
+            .proc_debug_names = try guardedListFromRef(base.StringLiteral.Idx, "LirStore.proc_debug_names", base_ptr, image_size, self.proc_debug_names),
             .local_names = try guardedListFromRef(u32, "LirStore.local_names", base_ptr, image_size, self.local_names),
         };
     }

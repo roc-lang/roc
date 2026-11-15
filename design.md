@@ -1280,6 +1280,16 @@ relations before choosing defaults and after each commitment. A receiver's
 commitment can ground a copied relation held outside the deferred queue; that
 relation must constrain its arguments before the next literal round.
 
+A call of a function whose scheme is instantiated for that call depends on
+the instance's dependencies rather than on the instance
+(`recordFreshCalleeEffectDependencies`). Nothing but the call holds the fresh
+copy, so its own effect-polymorphic kind is never related to anything and
+never becomes effectful: the call is effectful exactly when one of the copy's
+dependencies is. Depending on the copy instead would carry the callee's whole
+formula into the caller's scheme, so nested definitions that each call the
+next would carry formulas whose total size grows with the square of the
+nesting depth.
+
 Effect solving assigns sparse, dense slots to the reachable formula graph and
 propagates unresolved and effectful states along reverse caller edges using an
 iterative worklist. Each slot advances at most twice; recursive cycles without

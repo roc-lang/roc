@@ -247,7 +247,6 @@ const Pass = struct {
         try self.remapFrozenExports();
         try self.remapErasedFns();
         self.remapComptimeSites();
-        self.remapProcDebugNames();
         self.compactProcSpecs();
         try self.compactCFStmts();
         self.compactStaticDataValues();
@@ -750,10 +749,6 @@ const Pass = struct {
         }
     }
 
-    fn remapProcDebugNames(self: *Pass) void {
-        self.store.compactProcDebugNames(&self.old_to_new);
-    }
-
     fn compactProcSpecs(self: *Pass) void {
         self.store.compactProcSpecs(self.reachable);
     }
@@ -814,10 +809,6 @@ const Pass = struct {
                     reachableProcInvariant("a static callable named a static initializer");
                 }
             }
-        }
-        for (0..self.store.procDebugNameCount()) |index| {
-            const entry = self.store.getProcDebugName(index);
-            if (entry.proc >= proc_count) reachableProcInvariant("proc debug name exceeds compact proc_specs len");
         }
         for (0..self.store.procSpecCount()) |proc_index| {
             const proc = self.store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
