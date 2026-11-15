@@ -23550,6 +23550,14 @@ const BodyContext = struct {
         field_joins: []const DraftExprId,
     };
 
+    /// Where a record parser's field dispatch sends a field it does not know:
+    /// a jump to `skip_join` with the remaining input in `rest_local`.
+    const ParseRecordUnknownField = struct {
+        skip_join: DraftExprId,
+        rest_local: DraftLocalId,
+        state_ty: Type.TypeId,
+    };
+
     /// Loop-carried control locals for a derived record parser. `done` is set
     /// when the format reports the end of the record so the next iteration
     /// finishes at the loop head, which keeps the record-construction code at
@@ -43123,7 +43131,7 @@ const BodyContext = struct {
         renamed_field_lengths: ?[]const u32,
         renamed_field_texts: ?[]const []const u8,
         matched_bodies: []const DraftExprId,
-        unknown_body: DraftExprId,
+        unknown: ParseRecordUnknownField,
         mode: RecordFieldMatchMode,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
@@ -43137,12 +43145,12 @@ const BodyContext = struct {
                 lengths,
                 renamed_field_texts,
                 matched_bodies,
-                unknown_body,
+                unknown,
                 mode,
                 ret_ty,
             );
         }
-        var body = unknown_body;
+        var body = try self.parseRecordUnknownFieldBody(unknown, ret_ty);
         var index = matched_bodies.len;
         while (index > 0) {
             index -= 1;
@@ -43167,7 +43175,7 @@ const BodyContext = struct {
         renamed_field_lengths: []const u32,
         renamed_field_texts: ?[]const []const u8,
         matched_bodies: []const DraftExprId,
-        unknown_body: DraftExprId,
+        unknown: ParseRecordUnknownField,
         mode: RecordFieldMatchMode,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
@@ -43175,7 +43183,7 @@ const BodyContext = struct {
         const bool_ty = try self.primitiveType(.bool);
         const key_len_local = try self.addLocal(self.builder.symbols.fresh(), u64_ty);
 
-        var body = unknown_body;
+        var body = try self.parseRecordUnknownFieldBody(unknown, ret_ty);
         var index = matched_bodies.len;
         while (index > 0) {
             index -= 1;
@@ -43186,7 +43194,7 @@ const BodyContext = struct {
             else
                 null;
 
-            var group_body = unknown_body;
+            var group_body = try self.parseRecordUnknownFieldBody(unknown, ret_ty);
             var field_index = matched_bodies.len;
             while (field_index > 0) {
                 field_index -= 1;
@@ -43201,17 +43209,20 @@ const BodyContext = struct {
                         .exact => try self.recordFieldNameStaticSmallWordMatch(false, key_local, key_ty, field_text, lane.offset, lane.active_len),
                         .caseless => try self.recordFieldNameStaticSmallWordMatch(true, key_local, key_ty, field_text, lane.offset, lane.active_len),
                     };
-                    const matched_or_next = if (lane.offset == 0 and lane.active_len == length)
-                        matched_bodies[field_index]
+                    // The cheap probe runs first, and the full comparison only
+                    // when the probe matches; either failing falls through to
+                    // the rest of the group, which is built once.
+                    const cond = if (lane.offset == 0 and lane.active_len == length)
+                        probe
                     else blk: {
                         const full_cond = switch (mode) {
                             .direct => Common.invariant("direct field handles do not use string matching"),
                             .exact => try self.recordFieldNameStaticSmallExactMatch(key_local, key_ty, field_text),
                             .caseless => try self.recordFieldNameStaticSmallCaselessMatch(key_local, key_ty, field_text),
                         };
-                        break :blk try self.ifExpr(full_cond, matched_bodies[field_index], group_body, ret_ty);
+                        break :blk try self.ifExpr(probe, full_cond, try self.boolLiteral(false, bool_ty), bool_ty);
                     };
-                    group_body = try self.ifExpr(probe, matched_or_next, group_body, ret_ty);
+                    group_body = try self.ifExpr(cond, matched_bodies[field_index], group_body, ret_ty);
                 } else {
                     const cond = try self.recordFieldNameMatch(
                         key_local,
@@ -43577,14 +43588,6 @@ const BodyContext = struct {
             );
         }
 
-        const unknown_body = try self.jumpToGeneratedJoin(
-            continuations.skip_join,
-            &.{try self.localExpr(rest_local, state_ty)},
-            &.{},
-            &.{},
-            ret_ty,
-        );
-
         return try self.lowerParseRecordNamedDispatchBody(
             key_local,
             key_ty,
@@ -43592,8 +43595,20 @@ const BodyContext = struct {
             renamed_field_lengths,
             renamed_field_texts,
             matched_bodies,
-            unknown_body,
+            .{ .skip_join = continuations.skip_join, .rest_local = rest_local, .state_ty = state_ty },
             mode,
+            ret_ty,
+        );
+    }
+
+    /// The jump an unknown field takes to the skip join. The field dispatch
+    /// reaches it from several branches, and each one gets its own jump.
+    fn parseRecordUnknownFieldBody(self: *BodyContext, unknown: ParseRecordUnknownField, ret_ty: Type.TypeId) Allocator.Error!DraftExprId {
+        return try self.jumpToGeneratedJoin(
+            unknown.skip_join,
+            &.{try self.localExpr(unknown.rest_local, unknown.state_ty)},
+            &.{},
+            &.{},
             ret_ty,
         );
     }
