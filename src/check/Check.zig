@@ -21789,12 +21789,8 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
     }
 
     if (ptrn_result.isEstablished()) {
-        // A value alias is a scheme before its pattern meets it, so the
-        // destructures its row decides bind here, before any use of their
-        // names, as at a local declaration (`resumeStatement`; design.md
-        // "Field Kinds").
-        if (self.patternNodeTag(def.pattern) != .pattern_identifier and self.isBindingSchemeVar(expr_var)) {
-            try self.bindDecidedRecordDestructs(.{ .owned_by = ModuleEnv.nodeIdxFrom(def_idx) }, env);
+        if (self.patternNodeTag(def.pattern) != .pattern_identifier) {
+            try self.bindSchemeAliasDestructs(expr_var, ModuleEnv.nodeIdxFrom(def_idx), env);
         }
         const def_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.pattern));
         _ = try self.checkDestructureExhaustiveness(def.pattern, def.expr, expr_var, env, def_region);
@@ -33858,16 +33854,8 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             }
 
             if (decl_pattern_result.isEstablished()) {
-                // A value that generalized on its own (a value alias) is a
-                // scheme before the pattern meets it, so the pattern is the
-                // generalized binding and no later boundary owns its
-                // destructures. Each one the scheme's row decides binds
-                // here, before any use of its name: the name's type is then
-                // the scheme's own field type, which a use instantiates as
-                // it does a name a tuple pattern binds (design.md "Field
-                // Kinds").
-                if (decl_pattern != .assign and self.isBindingSchemeVar(decl_expr_var)) {
-                    try self.bindDecidedRecordDestructs(.{ .owned_by = ModuleEnv.nodeIdxFrom(stmt_idx) }, env);
+                if (decl_pattern != .assign) {
+                    try self.bindSchemeAliasDestructs(decl_expr_var, ModuleEnv.nodeIdxFrom(stmt_idx), env);
                 }
                 const needs_comptime_validation = try self.checkDestructureExhaustiveness(decl_stmt.pattern, decl_stmt.expr, decl_expr_var, env, stmt_region);
                 if (needs_comptime_validation) {
@@ -42428,9 +42416,8 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
 ///
 /// A declaration whose value is already a scheme when its pattern meets it
 /// binds the destructures that scheme's row decides right there
-/// (`bindDecidedRecordDestructs`, called from `resumeStatement` and
-/// `finishDef`): the pattern is the generalized binding, so no later
-/// commitment point owns it.
+/// (`bindSchemeAliasDestructs`): the pattern is the generalized binding, so
+/// no later commitment point owns it.
 fn judgeRecordDestructBinds(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     while (true) {
         try self.bindDecidedRecordDestructs(.all, env);
@@ -42470,6 +42457,20 @@ fn judgeRecordDestructBinds(self: *Self, env: *Env) std.mem.Allocator.Error!void
     for (self.pending_record_destructs.items) |pending| {
         try self.pinReachableVarsAtRank(pending.binder_var, self.types.resolveVar(pending.presence_var).desc.rank, env);
     }
+}
+
+/// Scheme alias destructure binding (design.md "Field Kinds"), run where a
+/// declaration's pattern has just been related to its value `value_var`. A
+/// value that generalized on its own (a value alias) is a scheme before the
+/// pattern meets it, so the pattern is the generalized binding and no later
+/// boundary owns the destructures of the declaration `owner`. Each one whose
+/// kind the scheme's row decides binds here, before any use of its name: the
+/// name's type is then part of the scheme, which a use instantiates as it
+/// does a name a tuple pattern binds. A value that is not a scheme binds
+/// nothing here.
+fn bindSchemeAliasDestructs(self: *Self, value_var: Var, owner: CIR.Node.Idx, env: *Env) std.mem.Allocator.Error!void {
+    if (!self.isBindingSchemeVar(value_var)) return;
+    try self.bindDecidedRecordDestructs(.{ .owned_by = owner }, env);
 }
 
 /// Which pending record destructures a binding pass covers.

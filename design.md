@@ -14681,15 +14681,16 @@ The kind rules:
   Subsumption, "Deferred result relations"), so the owner's judgment,
   including a kind another statement of the owner makes optional, is what
   the relation sees.
-  A declaration whose value generalized on its own (a value alias, local
-  or top level; Value Bindings Generalize By Expression) is a commitment
-  point for its own pattern. The value is a scheme before the pattern meets
-  it, so the pattern is the generalized binding (Procedure Aliases) and no
-  later boundary owns it: every destructure of that pattern whose kind the
-  scheme's row decides is bound right after the pattern is related to the
-  value, before any use of its name (`Check.bindDecidedRecordDestructs`,
-  called from `resumeStatement` and `finishDef` when the value's variable
-  is a binding scheme). The name's type is then part of the scheme, and a
+  Scheme alias destructure binding: a declaration whose value generalized
+  on its own (a value alias, local or top level; Value Bindings Generalize
+  By Expression) is a commitment point for its own pattern. The value is a
+  scheme before the pattern meets it, so the pattern is the generalized
+  binding (Procedure Aliases) and no later boundary owns it: every
+  destructure of that pattern whose kind the scheme's row decides is bound
+  right after the pattern is related to the value, before any use of its
+  name (`Check.bindSchemeAliasDestructs`, called from `resumeStatement` and
+  `finishDef`, which binds only when the value's variable is a binding
+  scheme). The name's type is then part of the scheme, and a
   use instantiates it, exactly as it instantiates a name a tuple pattern
   binds. For a `required` or `defaulted` field that type is the scheme's
   own field type. For an `optional` field it is `Try(payload,
@@ -14709,8 +14710,16 @@ The kind rules:
   use and does not reject the declaration. A value that did not generalize
   (a weak value, or a lookup of one) is not a scheme: its destructures are
   judged at the commitment points above and the name has one type, shared
-  by every use. `destructured_scheme_alias_test.zig` pins the generalized
-  and the weak side for both pattern kinds and for an optional field.
+  by every use. This is a policy: a record-destructured name of a scheme is
+  accepted at more than one type, and a bare literal passed to one is
+  settled by its use, where binding at a later commitment point rejects the
+  first and leaves the second unsettled. `destructured_scheme_alias_test.zig`
+  pins the accepted side (a required and an optional field's name used at
+  two types, a nested pattern, a pattern over a local name for the
+  constant, a top-level pattern, a bare literal argument) and the rejected
+  side (a weak value's name used at two types, for a tuple pattern, a
+  record pattern and an optional field, and a misuse reported at the use
+  alone).
   Binding a destructure can also ground a deferred static-dispatch receiver
   without adding an ordinary equality constraint. Every literal-defaulting
   boundary therefore begins with a ROUND-ZERO constraint quiescence: ordinary
@@ -15805,6 +15814,15 @@ Other solved-graph mutations:
   Introduction (above). Uses the existing `unifyWith` descriptor-introduction
   mechanism for a proved concrete builtin conversion; does not mutate the
   context's type or introduce a redirect rule.
+- `bindSchemeAliasDestructs` / `optionalDestructBinderType`—policy: Field
+  Kinds, scheme alias destructure binding (above). A probe of whether a
+  declaration's value is a binding scheme, and of whether each field kind of
+  its pattern is decided, gates the ordinary binder unification
+  `judgeRecordDestructBinds` runs at its commitment points, run at the
+  declaration instead. Over a generalized field value an optional kind's
+  `Try(payload, [MissingField])` is created generalized
+  (`Store.freshFromContentWithRank`) before that unification. It writes
+  nothing else outside unification and introduces no redirect rule.
 - `seedLambdaParamsFromContext`—policy: Lambda Parameters Seeded From
   Context (above). A probe of whether the expected context names a type
   constructor gates an ordinary unification of a skeleton over an
