@@ -205,16 +205,11 @@ pub const StaticDispatchRelationMerge = struct {
     retained_fn_var: Var,
 };
 
-/// An empty tag union a relation can no longer lift: written by an
-/// annotation, or committed after inference closed it. The empty tag union
-/// an opening of a nominal declaration's backing minted is the declaration's
-/// own row and decides nothing about the anonymous row it closes.
-fn committedEmptyTagUnion(desc: types.Descriptor) bool {
-    return desc.content == .structure and desc.content.structure == .empty_tag_union and
-        !desc.flags.uncommitted_tag_tail and !desc.flags.nominal_backing_structure;
-}
-
-/// `committedEmptyTagUnion`, read from a stored descriptor's word.
+/// Whether a stored descriptor's word is an empty tag union a relation can no
+/// longer lift: written by an annotation, or committed after inference closed
+/// it. The empty tag union an opening of a nominal declaration's backing
+/// minted is the declaration's own row and decides nothing about the
+/// anonymous row it closes.
 fn committedEmptyTagUnionWord(word: types.Descriptor.Word) bool {
     const flags = word.flags();
     return word.kind == .empty_tag_union and !flags.uncommitted_tag_tail and !flags.nominal_backing_structure;
