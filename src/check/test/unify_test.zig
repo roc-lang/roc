@@ -1449,6 +1449,63 @@ test "unify - two empty nominal types" {
     try std.testing.expectEqual(false, result.isAccepted());
 }
 
+test "unify - two applications of one nominal whose arguments are one class merge into the second" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const arg = try types.freshFromContent(Content{ .structure = .empty_record });
+    const backing_var = try types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const a = try types.freshFromContent(try env.mkNominalType("Wrapper", backing_var, &[_]Var{arg}));
+    const b_nominal = try env.mkNominalType("Wrapper", backing_var, &[_]Var{arg});
+    const b = try types.freshFromContent(b_nominal);
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expectEqual(b, types.resolveVar(a).var_);
+    try std.testing.expectEqual(b_nominal, types.resolveVar(b).desc.content);
+}
+
+test "unify - two applications of one nominal relate their arguments before they merge" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const backing_var = try types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const a_arg = try types.fresh();
+    const a = try types.freshFromContent(try env.mkNominalType("Wrapper", backing_var, &[_]Var{a_arg}));
+    const b_arg = try types.freshFromContent(Content{ .structure = .empty_record });
+    const b_nominal = try env.mkNominalType("Wrapper", backing_var, &[_]Var{b_arg});
+    const b = try types.freshFromContent(b_nominal);
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expectEqual(b_arg, types.resolveVar(a_arg).var_);
+    try std.testing.expectEqual(b, types.resolveVar(a).var_);
+    try std.testing.expectEqual(b_nominal, types.resolveVar(b).desc.content);
+}
+
+test "unify - two applications of one nominal with a mismatched argument do not unify" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const backing_var = try types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const a_arg = try types.freshFromContent(Content{ .structure = .empty_record });
+    const a = try types.freshFromContent(try env.mkNominalType("Wrapper", backing_var, &[_]Var{a_arg}));
+    const b_arg = try types.freshFromContent(try env.mkTuple(&[_]Var{a_arg}));
+    const b = try types.freshFromContent(try env.mkNominalType("Wrapper", backing_var, &[_]Var{b_arg}));
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(false, result.isAccepted());
+}
+
 test "unify - distinct concrete builtin numeric nominals never unify" {
     // Two concrete builtin numeric nominals with different identities
     // (origin + source decl) never unify: the unifier has no implicit numeric

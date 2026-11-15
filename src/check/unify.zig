@@ -1077,6 +1077,7 @@ const Unifier = struct {
                 },
                 .not_through_alias => {},
             }
+            if (try self.relateSameNominalApplications(a_var, b_var, a, b)) return;
 
             try self.enterGuardedPair(a_var, b_var);
             try self.pushWorkFrame(.{ .unify_vars = .{
@@ -1183,6 +1184,42 @@ const Unifier = struct {
         try self.pushWorkFrame(.{ .merge_stored = merge_after });
         try self.pushMismatchHandler(.ignore);
         return .{ .relate = .{ .a = a_backing_var, .b = b_backing_var } };
+    }
+
+    /// Relate the pair `a_var`, `b_var`, resolved as `a` and `b` and not in
+    /// flight, when they are two applications of one valid declaration with
+    /// the same number of arguments, which is `unifyNominalType`'s successful
+    /// case: the arguments relate pairwise and the pair merges into `b`'s
+    /// application. Applications whose arguments are already the same classes
+    /// merge at once. False when the pair needs `unifyVars`: any other pair,
+    /// including every one that is a mismatch or involves an invalid
+    /// declaration.
+    fn relateSameNominalApplications(self: *Self, a_var: Var, b_var: Var, a: ResolvedVarWord, b: ResolvedVarWord) std.mem.Allocator.Error!bool {
+        const store = self.types_store;
+        if (a.word.kind != .nominal_type or b.word.kind != .nominal_type) return false;
+        // One identity row is one declaration. Two rows can still name one
+        // declaration (`sameNominalIdentity`), which `unifyVars` decides.
+        if (store.nominalIdentityRowAt(a.desc_idx) != store.nominalIdentityRowAt(b.desc_idx)) return false;
+        const a_type = store.nominalAt(a.desc_idx);
+        const b_type = store.nominalAt(b.desc_idx);
+        if (a_type.args.count != b_type.args.count) return false;
+        const decl_idx = store.lookupNominalDecl(a_type);
+        if (decl_idx) |decl| if (!store.getNominalDecl(decl).isValid()) return false;
+
+        const rank = Rank.min(a.word.rank, b.word.rank);
+        if (self.sameClasses(a_type.args, b_type.args)) {
+            try store.unionKeepingContent(a.var_, b.var_, .b, rank);
+            return true;
+        }
+        try self.enterGuardedPair(a_var, b_var);
+        try self.pushWorkFrame(.{ .merge_stored = .{
+            .a = a.var_,
+            .b = b.var_,
+            .rank = rank,
+            .content = store.rowAt(b.desc_idx),
+        } });
+        try self.scheduleNominalArgs(a_type, b_type, decl_idx);
+        return true;
     }
 
     /// Whether a class of this kind relates to an alias as it relates to the
@@ -2091,6 +2128,17 @@ const Unifier = struct {
         }
 
         try self.scheduleStoredMerge(vars, .b);
+        try self.scheduleNominalArgs(a_type, b_type, decl_idx);
+    }
+
+    /// Schedule the argument pairs of two applications of the declaration
+    /// `decl_idx`, if they have one, with the same number of arguments.
+    fn scheduleNominalArgs(
+        self: *Self,
+        a_type: NominalType,
+        b_type: NominalType,
+        decl_idx: ?types_mod.NominalDecl.Idx,
+    ) std.mem.Allocator.Error!void {
         // A body-local declaration's trailing context arguments (design.md
         // "Body-Local Type Context") name the instantiation of the enclosing
         // functions its values belong to.
