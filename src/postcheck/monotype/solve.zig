@@ -5656,6 +5656,66 @@ pub const InstGraph = struct {
         return copied;
     }
 
+    /// What a codec query looks for in a type.
+    pub const CodecQuery = enum {
+        /// A codec representation's checked-public named type: a position
+        /// whose value is a generated representation that only its producer
+        /// has related to it.
+        public_codec_interface,
+        /// Generated-private evidence other than a codec representation: an
+        /// iterator representation, which representation selection may
+        /// still join or force dynamic.
+        iterator_evidence,
+    };
+
+    /// Whether `root` reaches a node `query` describes, at any structural
+    /// depth, through arguments and backings alike.
+    pub fn containsCodecQuery(self: *InstGraph, root: NodeId, query: CodecQuery) Allocator.Error!bool {
+        var pending = std.ArrayList(NodeId).empty;
+        defer pending.deinit(self.allocator);
+        var seen = self.node_set_pool.acquire();
+        defer self.node_set_pool.release(&seen);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |raw_node| {
+            const node = self.find(raw_node);
+            if ((try seen.getOrPut(node)).found_existing) continue;
+            switch (try self.rootContent(node)) {
+                .redirect, .leaf => unreachable, // rootContent of a find root expands a leaf
+                .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
+                .list, .box => |child| try pending.append(self.allocator, child),
+                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .func => |function| {
+                    try pending.appendSlice(self.allocator, function.args);
+                    try pending.append(self.allocator, function.ret);
+                },
+                .tag_union => |row| {
+                    for (row.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
+                    try pending.append(self.allocator, row.ext);
+                },
+                .record => |row| {
+                    for (row.fields) |field| {
+                        try pending.append(self.allocator, field.ty);
+                        if (field.value_ty.get()) |value_ty| try pending.append(self.allocator, value_ty);
+                    }
+                    try pending.append(self.allocator, row.ext);
+                },
+                .named => |named| {
+                    if (named.backing.get()) |backing| {
+                        const codec = isCodecRepresentation(named);
+                        const private = backing.authority == .generated_private;
+                        if (switch (query) {
+                            .public_codec_interface => codec and !private,
+                            .iterator_evidence => private and !codec,
+                        }) return true;
+                        try pending.append(self.allocator, backing.node);
+                    }
+                    try pending.appendSlice(self.allocator, named.args);
+                },
+            }
+        }
+        return false;
+    }
+
     pub fn containsGeneratedPrivate(self: *InstGraph, root: NodeId) Allocator.Error!bool {
         if (self.generated_private_nodes == 0) {
             self.countDiagnostic("generated_private_guard_returns");

@@ -9839,6 +9839,23 @@ meets is the same type. A generated iterator's variable and public type keep
 the iterator's public interface instead, because representation selection may
 still join a live iterator's representation or force it dynamic.
 
+A value produced inside a callee reaches its caller the same way a
+callee-authored iterator representation does. A call whose result type holds
+a codec representation's public named type (a helper or format method that
+returns the result of `FieldNames.rename_fields`, say) has no argument that
+relates that result to its representation: only the callee's body does. The
+caller therefore lowers such a callee before it consumes the result, and
+adopts the completed result, exactly as it does for a public iterator
+result. A codec representation among the call's arguments does not hold that
+back, because unlike an iterator representation it never changes.
+
+Because every `FieldNames` value is the generated representation, the
+`FieldNames` operations (`iter`, `for_size`, `shortest_name`, `longest_name`,
+`rename_fields`) read their names only from the generated backing. A
+`FieldNames` argument without it is a compiler invariant violation; there is
+no lowering that reads a record's own field labels in its place, since that
+would silently drop the format's renames.
+
 Match lowering likewise relates each checked pattern interface to the exact
 scrutinee node without merging a generated-private root into that public
 interface. Once all pattern relations have settled, record-field/tag-payload
