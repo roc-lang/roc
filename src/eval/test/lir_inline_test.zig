@@ -15382,9 +15382,12 @@ const user_iter_callback_main =
 // one function type. Its target is `user_iter_fused` for every case at both
 // modes: the result's step set is not the argument's, so nothing contains
 // itself and nothing is boxed. With direct adapters at `.none`, the one
-// tie between the two occurrences is that they share one function type, so
-// the map step that captures the argument lands in the argument's own step
-// set, which then contains itself and is boxed. After `.wrappers` cloning
+// tie between the two occurrences is the callback lambda's signature:
+// Monotype lifts a nested lambda with an exact signature graph
+// (`SignatureRelation.exact_graph`), and Lambda Solved expands that graph in
+// one whole-root context, where its argument and result are one var. The map
+// step that captures the argument then lands in the argument's own step set
+// (with the list step), which contains itself and is boxed. After `.wrappers` cloning
 // nothing is boxed, but one solved set of two members still contains
 // itself.
 test "MyIter lambda sets: callback from iterator to iterator" {
@@ -15404,6 +15407,46 @@ test "MyIter lambda sets: callback from iterator to iterator" {
             .wrappers = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 1, .box_box_count = 0 },
         },
     });
+}
+
+// Two chains held in the fields of one record, each consumed by its own
+// code. The fields are two occurrences of one Monotype in one record type,
+// and nothing relates their values, so their step sets stay apart: neither
+// holds the other chain's step closure. Its target is `user_iter_fused` at
+// both modes; after `.wrappers` call-pattern cloning one set holds two
+// members, though none contains itself.
+test "MyIter lambda sets: two chains in one record" {
+    try expectUserIterCases(&.{.{
+        .name = "record fields",
+        .source = my_iter_direct ++
+            \\main : I64
+            \\main = {
+            \\    offset = 10.I64
+            \\    add_offset = |x| x + offset
+            \\    pair = { a: MyIter.from_list([1.I64, 2]).map(add_offset), b: MyIter.from_list([3.I64, 4]).keep_if(|x| x > 3) }
+            \\    var $sum = pair.a.fold(0, |acc, x| acc + x)
+            \\    var $rest = pair.b
+            \\    while Bool.True {
+            \\        match ($rest.step)() {
+            \\            Done => break
+            \\            Skip({ rest }) => {
+            \\                $rest = rest
+            \\            }
+            \\            One({ item, rest }) => {
+            \\                $sum = $sum + item
+            \\                $rest = rest
+            \\            }
+            \\        }
+            \\    }
+            \\    total = $sum
+            \\    dbg total
+            \\    total
+            \\}
+        ,
+        .dbg = "27",
+        .none = user_iter_fused,
+        .wrappers = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
+    }});
 }
 
 // (d) A chain that grows by one `map` per loop iteration has no bound on its

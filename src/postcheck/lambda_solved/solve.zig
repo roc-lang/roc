@@ -414,9 +414,10 @@ const Solver = struct {
     /// its entry after it expands or joins another class: a class holding
     /// such a var is an instance of that Monotype.
     leaf_origins: collections.DenseMap(Type.TypeVarId, MonoType.TypeId),
-    /// One memo map per lazily materialized tree, tying recursive
-    /// back-references to their existing vars exactly as an eager clone's
-    /// per-call memo did. Allocated on a leaf's first expansion.
+    /// One memo map per clone context: one instance of a cycle, one whole
+    /// producer-authored signature graph, or the shared context, tying each
+    /// occurrence of a Monotype in it to one var. A cycle's context is
+    /// allocated when a leaf on that cycle first expands outside one.
     leaf_contexts: std.ArrayList(collections.DenseMap(MonoType.TypeId, Type.TypeVarId)),
     /// Per clone context, parallel to `leaf_contexts`: what its expansions
     /// have registered so far.
@@ -434,6 +435,10 @@ const Solver = struct {
     leaf_arg_scopes: collections.DenseMap(Type.TypeVarId, u32),
     /// Per lifted Monotype: whether a cycle is reachable from it.
     reaches_cycle: std.DynamicBitSetUnmanaged,
+    /// Per lifted Monotype: the cycle it lies on, or `no_cycle_component`.
+    /// One clone context instantiates one cycle: a leaf joins its parent's
+    /// context only when both lie on the same cycle (`TypeCloner.existingClone`).
+    cycle_components: []u32,
     /// Pools for the short-lived maps the solver creates per work item (clone
     /// memos, visited sets). Their sparse chunks span the large type ID
     /// domains, so per-item fresh maps would spend most of their time
@@ -586,6 +591,7 @@ const Solver = struct {
             .arg_scopes = .empty,
             .leaf_arg_scopes = collections.DenseMap(Type.TypeVarId, u32).init(allocator),
             .reaches_cycle = masks.reaches_cycle,
+            .cycle_components = masks.cycle_components,
             .solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator),
             .solved_position_pool = collections.DenseMapPool(Type.TypeVarId, u32).init(allocator),
             .tag_row_indexes = .empty,
@@ -647,6 +653,7 @@ const Solver = struct {
         while (reachability.next()) |ids| self.allocator.free(ids.*);
         self.expansion_arg_reachability.deinit(self.allocator);
         self.leaf_arg_scopes.deinit();
+        self.allocator.free(self.cycle_components);
         self.reaches_cycle.deinit(self.allocator);
         self.shared_clones.deinit();
         self.leaf_origins.deinit();
@@ -987,7 +994,7 @@ const Solver = struct {
         const callable = try self.program.types.add(.{ .lambda_set = try self.program.types.addMembers(&members) });
 
         if (fn_.signature.get()) |signature| {
-            const fn_ty = try self.monoLeaf(signature);
+            const fn_ty = try self.monoSignatureLeaf(signature);
             const content = try self.resolvedContent(fn_ty);
             if (std.meta.activeTag(content) != .func) Common.invariant("producer-authored lifted function signature was not a function");
             const func = content.func;
@@ -2107,24 +2114,48 @@ const Solver = struct {
         return try self.monoLeaf(ty);
     }
 
+    /// New lazy leaf for an exact producer-authored signature graph
+    /// (`Lifted.Fn.signature`). Its producer means every occurrence of one
+    /// Monotype in the graph to be one value, as `Iter.fromStep`'s result
+    /// keeps its step argument's callable, so the leaf expands in a
+    /// whole-root context that ties every repeated occurrence.
+    fn monoSignatureLeaf(self: *Solver, ty: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
+        const ctx = try self.newLeafContext();
+        self.leaf_context_shapes.items[ctx].whole_root = true;
+        const leaf = try self.program.types.add(.{ .mono = .{ .id = ty, .ctx = ctx } });
+        try self.leaf_origins.put(leaf, ty);
+        try self.leaf_contexts.items[ctx].put(ty, leaf);
+        // Registered like a child its context created, so expanding or
+        // joining it retires it (`retireContextLeaf`).
+        self.leaf_context_shapes.items[ctx].unexpanded += 1;
+        return leaf;
+    }
+
     const MonoLeaf = std.meta.fieldInfo(Type.Content, .mono).type;
 
     /// Materialize a lazy leaf's root one level in place: children become new
-    /// leaves and function callable slots start unbound, exactly as an eager
-    /// clone's would. The leaf's clone context ties recursive back-references
-    /// to their existing vars, so a recursive Monotype materializes as the
-    /// same cyclic graph an eager clone produced.
+    /// leaves and function callable slots start unbound. The leaf's clone
+    /// context ties recursive back-references to their existing vars, so a
+    /// recursive Monotype materializes as a cyclic graph with one var per
+    /// type of each instance of its cycle. A leaf that lies on a cycle and
+    /// has no context yet begins a new instance of that cycle; any other
+    /// leaf without a context expands in none, since nothing beneath it can
+    /// lead back to it (`TypeCloner.existingClone`).
     fn expandMonoRoot(self: *Solver, root: Type.TypeVarId, leaf: MonoLeaf) Allocator.Error!Type.Content {
         self.countWork(.expansions, 1);
         const sharing = self.leafSharing(leaf.id);
-        const ctx: u32 = if (leaf.ctx != Type.no_leaf_context) leaf.ctx else blk: {
-            if (sharing == .shared) break :blk try self.sharedLeafContext();
-            break :blk try self.newLeafContext();
+        const ctx: u32 = if (leaf.ctx != Type.no_leaf_context) leaf.ctx else switch (sharing) {
+            .shared => try self.sharedLeafContext(),
+            .positional => Type.no_leaf_context,
+            .context => if (self.cycle_components[@backingInt(leaf.id)] != no_cycle_component)
+                try self.newLeafContext()
+            else
+                Type.no_leaf_context,
         };
         // Expanding or joining a registered leaf retires it from its
         // context's unexpanded leaves.
         self.retireContextLeaf(leaf);
-        if (sharing != .positional) {
+        if (sharing != .positional and ctx != Type.no_leaf_context) {
             if (self.leaf_contexts.items[ctx].get(leaf.id)) |existing| {
                 const existing_root = self.program.types.rootCompressed(existing);
                 if (existing_root != root) {
@@ -2137,11 +2168,13 @@ const Solver = struct {
         }
         var cloner = TypeCloner.init(self);
         cloner.lazy_ctx = ctx;
+        cloner.lazy_parent = leaf.id;
         defer cloner.deinit();
         const mono_content = self.lifted.types.get(leaf.id);
         // Only type arguments need ties to occurrences in the backing. A
-        // non-generic named type has no such ties to preserve.
-        cloner.arg_scope = if (mono_content == .named and self.contains_tag_row.isSet(@backingInt(leaf.id)))
+        // non-generic named type has no such ties to preserve, and a
+        // clone-invariant one has no occurrence a tie could change.
+        cloner.arg_scope = if (mono_content == .named and !self.isCloneInvariant(leaf.id))
             if (mono_content.named.args.len == 0) null else .{ .id = try self.newArgScope(), .registers = true }
         else if (self.leaf_arg_scopes.get(root)) |scope|
             .{ .id = scope, .registers = false }
@@ -2180,17 +2213,20 @@ const Solver = struct {
         /// occurrence in the program.
         shared,
         /// Callable-free, holding a tag row a row join can change, and
-        /// reaching no cycle: each
-        /// occurrence is its own clone, in no context, and its own expansion
-        /// opens a context of its own. Rows join where values flow (design.md
-        /// "Row Joins"), and two occurrences of one Monotype are two positions
-        /// whose values flow to different places; tying them would join every
-        /// row either reaches. No cycle can lead back to the occurrence, so
-        /// nothing needs the tie.
+        /// reaching no cycle: each occurrence is its own clone, in no
+        /// context. Rows join where values flow (design.md "Row Joins"), and
+        /// two occurrences of one Monotype are two positions whose values flow
+        /// to different places; tying them would join every row either
+        /// reaches. No cycle can lead back to the occurrence, so nothing needs
+        /// the tie.
         positional,
-        /// Callable-bearing, or a row that lies on a cycle: occurrences within
-        /// one clone context are one clone, which ties a recursive type's
-        /// back-references to the var they recur into.
+        /// Callable-bearing, or a row that reaches a cycle: occurrences within
+        /// one clone context are one clone. A context instantiates one cycle
+        /// (or one whole producer-authored signature graph), which ties a
+        /// recursive type's back-references to the var they recur into; an
+        /// occurrence on no cycle with its parent is its own clone, for the
+        /// same reason a positional one is: callable slots join where values
+        /// flow.
         context,
     };
 
@@ -3347,7 +3383,7 @@ const Solver = struct {
             const shared = self.program.types.rootCompressed(entry.value_ptr.*);
             if (read_root == shared) return;
             const raw = self.program.types.get(read_root);
-            if (raw == .mono and raw.mono.id == read_mono and raw.mono.ctx == Type.no_leaf_context) {
+            if (raw == .mono and raw.mono.id == read_mono and raw.mono.ctx == Type.no_leaf_context and !self.leaf_arg_scopes.contains(read_root)) {
                 self.program.types.setLink(read_root, shared);
                 return;
             }
@@ -3513,19 +3549,26 @@ const Solver = struct {
     /// without materializing.
     ///
     /// The expansion is unobservable when the leaf has no clone context (it
-    /// would get a context of its own), or when it is the only unexpanded
-    /// leaf of a context whose every other entry lies on its ancestor chain:
-    /// no other expansion can reach that context again, and an ancestor
-    /// contains the leaf's Monotype, so it is none of its parts unless the
-    /// Monotype reaches a cycle. A cyclic Monotype keeps the ordinary
+    /// would begin a tree of its own), or when it is the only unexpanded
+    /// leaf of a whole-root context whose every other entry lies on its
+    /// ancestor chain: no other expansion can reach that context again, and
+    /// an ancestor contains the leaf's Monotype, so it is none of its parts
+    /// unless the Monotype reaches a cycle. Every other context instantiates
+    /// a cycle, so its leaves reach one. A cyclic Monotype keeps the ordinary
     /// relation, which joins the class's distinct cells at the positions the
     /// clone ties back together; so does an uninhabited one, whose class
     /// selection differs. A clone-invariant leaf already shares one clone.
     /// A positional leaf (`LeafSharing.positional`) holds only fresh rows
     /// and no callable slot, so relating it to a class instantiated from its
-    /// Monotype joins nothing the class does not already have; one in an
-    /// argument scope keeps the ordinary relation only if its expansion
-    /// reads a binding from that scope.
+    /// Monotype joins nothing the class does not already have.
+    ///
+    /// A leaf in an argument scope keeps the ordinary relation if its
+    /// expansion reads a binding from that scope, since a binding ties the
+    /// clone to the scope's var. Without one, a fresh clone's only ties are
+    /// those its own Monotype imposes on every instance of it (each cycle
+    /// instance and each nested named type's scope), which any class
+    /// instantiated from that Monotype already has, so the join adds
+    /// nothing.
     fn canLinkUntouchedLeafToInstance(
         self: *Solver,
         leaf_root: Type.TypeVarId,
@@ -3544,11 +3587,9 @@ const Solver = struct {
         {
             if (try self.exactMonoClone(id, other_root)) return true;
         }
-        if (self.isCallableFree(id)) {
-            if (self.leafSharing(id) != .positional) return false;
-            if (self.leaf_arg_scopes.get(leaf_root)) |scope| {
-                if (try self.expansionReadsArgScope(id, scope)) return false;
-            }
+        if (self.isCallableFree(id) and self.leafSharing(id) != .positional) return false;
+        if (self.leaf_arg_scopes.get(leaf_root)) |scope| {
+            if (try self.expansionReadsArgScope(id, scope)) return false;
         }
         if (leaf.ctx != Type.no_leaf_context) {
             const shape = self.leaf_context_shapes.items[leaf.ctx];
@@ -3684,9 +3725,9 @@ const Solver = struct {
         return true;
     }
 
-    /// A positional leaf can inherit a scope whose bindings are ancestors or
-    /// unrelated arguments. Only bindings its expansion actually reads can
-    /// make that expansion observable. Named children start their own scope.
+    /// A leaf can inherit a scope whose bindings are ancestors or unrelated
+    /// arguments. Only bindings its expansion actually reads can make that
+    /// expansion observable. Named children start their own scope.
     fn expansionReadsArgScope(self: *Solver, root: MonoType.TypeId, scope: u32) Allocator.Error!bool {
         self.countWork(.arg_scope_queries, 1);
         if (self.arg_scopes.items[scope].reads.get(root)) |answer| {
@@ -3726,9 +3767,15 @@ const Solver = struct {
             try seen.put(id, {});
             self.countWork(.arg_scope_walk_nodes, 1);
 
-            if (self.leafSharing(id) != .positional) continue;
+            // A clone-invariant type reads no scope, and a named type opens
+            // its own.
+            if (self.leafSharing(id) == .shared) continue;
             switch (types.get(id)) {
-                .named, .primitive, .zst, .erased, .func, .hole => {},
+                .named, .primitive, .zst, .erased, .hole => {},
+                .func => |func| {
+                    try pending.appendSlice(self.allocator, types.span(func.args));
+                    try pending.append(self.allocator, func.ret);
+                },
                 .list, .box => |child| try pending.append(self.allocator, child),
                 .tuple => |items| try pending.appendSlice(self.allocator, types.span(items)),
                 .record => |fields| for (types.fieldSpan(fields)) |field| {
@@ -5145,6 +5192,11 @@ fn writeU32(hasher: *TypeDigestHasher, value: u32) void {
 
 /// What a lazy clone context's expansions have registered.
 const LeafContextShape = struct {
+    /// Every occurrence of one Monotype in the context's tree is one var: the
+    /// context instantiates an exact producer-authored signature graph
+    /// (`Solver.monoSignatureLeaf`). Every other callable-bearing context
+    /// instantiates one cycle.
+    whole_root: bool = false,
     /// Callable-bearing leaves registered in the context that have neither
     /// expanded nor joined another class.
     unexpanded: u32 = 0,
@@ -5159,8 +5211,12 @@ const ReachabilityMasks = struct {
     contains_forced_dynamic: std.DynamicBitSetUnmanaged,
     contains_tag_row: std.DynamicBitSetUnmanaged,
     reaches_cycle: std.DynamicBitSetUnmanaged,
+    /// Per lifted Monotype: the cycle it lies on (`markCycleMembers`), or
+    /// `no_cycle_component`.
+    cycle_components: []u32,
 
     fn deinit(self: *ReachabilityMasks, allocator: Allocator) void {
+        allocator.free(self.cycle_components);
         self.reaches_cycle.deinit(allocator);
         self.contains_tag_row.deinit(allocator);
         self.contains_forced_dynamic.deinit(allocator);
@@ -5299,22 +5355,39 @@ fn computeReachabilityMasks(allocator: Allocator, types: MonoType.Store.View) Al
 
     var cycle = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
     errdefer cycle.deinit(allocator);
-    try markCycleMembers(allocator, index_.parents, index_.starts, &cycle);
+    const components = try allocator.alloc(u32, count);
+    errdefer allocator.free(components);
+    try markCycleMembers(allocator, index_.parents, index_.starts, &cycle, components);
     try index_.markAncestors(allocator, &cycle);
-    return .{ .contains_callable = flags, .contains_forced_dynamic = forced, .contains_tag_row = rows, .reaches_cycle = cycle };
+    return .{
+        .contains_callable = flags,
+        .contains_forced_dynamic = forced,
+        .contains_tag_row = rows,
+        .reaches_cycle = cycle,
+        .cycle_components = components,
+    };
 }
+
+/// A Monotype that lies on no cycle.
+const no_cycle_component: u32 = std.math.maxInt(u32);
 
 /// Mark every lifted Monotype that lies on a cycle: a member of a strongly
 /// connected component with more than one type, or a type that is its own
-/// child. Tarjan's algorithm over child edges, on an explicit stack.
+/// child. Each such component gets its own id in `components`; every other
+/// type gets `no_cycle_component`. Two types share an id exactly when each
+/// reaches the other. Tarjan's algorithm over child edges, on an explicit
+/// stack.
 fn markCycleMembers(
     allocator: Allocator,
     parents: []const u32,
     parent_starts: []const u32,
     cycle: *std.DynamicBitSetUnmanaged,
+    components: []u32,
 ) Allocator.Error!void {
     const count = cycle.bit_length;
     cycle.unsetAll();
+    @memset(components, no_cycle_component);
+    var next_component: u32 = 0;
     // Child edges are the parent edges reversed.
     const child_starts = try allocator.alloc(u32, count + 1);
     defer allocator.free(child_starts);
@@ -5388,6 +5461,12 @@ fn markCycleMembers(
             for (members) |member| on_stack[member] = false;
             if (members.len > 1) {
                 for (members) |member| cycle.set(member);
+            }
+            // A one-type component lies on a cycle only through its own child
+            // edge, which marked it above.
+            if (cycle.isSet(node)) {
+                for (members) |member| components[member] = next_component;
+                next_component += 1;
             }
             component.items.len = component_start;
         }
@@ -5552,10 +5631,13 @@ const TypeCloner = struct {
     /// finalization shares one clone per Monotype.
     share: bool = false,
     /// One-level mode: children lower to lazy leaves instead of eager clones,
-    /// callable-free ones in the shared context and the rest in this one,
-    /// reusing a context's existing var when the Monotype already occurs in
-    /// it. Used by `expandMonoRoot`.
+    /// clone-invariant ones in the shared context and the rest as
+    /// `existingClone` decides, reusing a context's existing var when the
+    /// Monotype already occurs in it. `Type.no_leaf_context` when the
+    /// expanding leaf has no context. Used by `expandMonoRoot`.
     lazy_ctx: ?u32 = null,
+    /// The Monotype of the leaf a lazy expansion materializes.
+    lazy_parent: MonoType.TypeId = undefined,
     /// Callable-bearing children the current lazy expansion has registered.
     lazy_children: u32 = 0,
     /// The argument scope (`Solver.arg_scopes`) of the lazy expansion: a
@@ -5632,6 +5714,17 @@ const TypeCloner = struct {
 
     /// The clone `ty` already has, or that lazy mode creates without
     /// descending; null when it must be cloned.
+    ///
+    /// In lazy mode, two occurrences of one Monotype beneath one root are one
+    /// var only where something requires it: a clone-invariant type is one
+    /// shared clone everywhere; a named type's argument scope binds a
+    /// backing position of an argument's Monotype to that argument; one
+    /// instance of a cycle has one var per type on the cycle, so a recursive
+    /// type's back-reference reaches the node it recurs into; and a
+    /// whole-root context ties every occurrence in its producer-authored
+    /// graph. Every other occurrence is a fresh leaf of its own, so two
+    /// fields of one record, or a callback's argument and result, never
+    /// share callable slots merely because their Monotypes are equal.
     fn existingClone(self: *TypeCloner, ty: MonoType.TypeId) Allocator.Error!?Type.TypeVarId {
         if (self.lazy_ctx) |parent_ctx| {
             // A clone-invariant child is the same shared clone wherever it
@@ -5654,6 +5747,19 @@ const TypeCloner = struct {
                 }
                 return created;
             }
+            if (sharing == .context) {
+                if (self.arg_scope) |scope| {
+                    if (self.solver.arg_scopes.items[scope.id].get(ty)) |existing| return existing;
+                }
+                if (!self.sameInstance(parent_ctx, ty)) {
+                    // A child on no cycle with its parent begins a tree of its
+                    // own: nothing beneath it leads back into this context.
+                    const created = try self.solver.program.types.add(.{ .mono = .{ .id = ty, .ctx = Type.no_leaf_context } });
+                    try self.solver.leaf_origins.put(created, ty);
+                    try self.bindInArgScope(ty, created);
+                    return created;
+                }
+            }
             const ctx = if (sharing == .shared) try self.solver.sharedLeafContext() else parent_ctx;
             const map = &self.solver.leaf_contexts.items[ctx];
             const shape = &self.solver.leaf_context_shapes.items[ctx];
@@ -5666,12 +5772,17 @@ const TypeCloner = struct {
             }
             if (map.get(ty)) |existing| {
                 if (!callable_free) shape.chain = false;
+                if (sharing == .context) try self.registerInArgScope(ty, existing);
                 return existing;
             }
             const created = try self.solver.program.types.add(.{ .mono = .{ .id = ty, .ctx = ctx } });
             try self.solver.leaf_origins.put(created, ty);
             try map.put(ty, created);
-            if (self.arg_scope) |scope| try self.solver.leaf_arg_scopes.put(created, scope.id);
+            if (sharing == .context) {
+                try self.bindInArgScope(ty, created);
+            } else if (self.arg_scope) |scope| {
+                try self.solver.leaf_arg_scopes.put(created, scope.id);
+            }
             // Every leaf registered outside the shared context is retired
             // when it expands or joins a class (`retireContextLeaf`).
             if (sharing != .shared) shape.unexpanded += 1;
@@ -5691,6 +5802,30 @@ const TypeCloner = struct {
             return self.solver.shared_clones.get(ty);
         }
         return null;
+    }
+
+    /// Whether a callable-bearing or cyclic child `ty` of this expansion
+    /// joins the expanding leaf's context: always in a whole-root context,
+    /// and otherwise when the child lies on the same cycle as its parent, so
+    /// both are parts of one instance of that cycle.
+    fn sameInstance(self: *const TypeCloner, parent_ctx: u32, ty: MonoType.TypeId) bool {
+        if (parent_ctx == Type.no_leaf_context) return false;
+        if (self.solver.leaf_context_shapes.items[parent_ctx].whole_root) return true;
+        const component = self.solver.cycle_components[@backingInt(ty)];
+        return component != no_cycle_component and component == self.solver.cycle_components[@backingInt(self.lazy_parent)];
+    }
+
+    /// Record that `created` reads this expansion's argument scope, and bind
+    /// it there when the expansion is the named type that owns the scope.
+    fn bindInArgScope(self: *TypeCloner, ty: MonoType.TypeId, created: Type.TypeVarId) Allocator.Error!void {
+        const scope = self.arg_scope orelse return;
+        try self.solver.leaf_arg_scopes.put(created, scope.id);
+        try self.registerInArgScope(ty, created);
+    }
+
+    fn registerInArgScope(self: *TypeCloner, ty: MonoType.TypeId, node: Type.TypeVarId) Allocator.Error!void {
+        const scope = self.arg_scope orelse return;
+        if (scope.registers) try self.solver.arg_scopes.items[scope.id].put(ty, node);
     }
 
     const CloneFrame = struct {
@@ -7613,8 +7748,11 @@ test "exact cyclic clone proofs avoid repeated expansion and reject widened or u
     try std.testing.expectEqual(before + 128, program.types.varCount());
     try std.testing.expect(counts.exact_clone_hits >= 128);
 
-    // Bisimilar recursive subtrees are not sufficient: a fresh clone's
-    // repeated recursive source id would tie these two distinct rows together.
+    // The proof requires every repeated source id to name one class, so it
+    // rejects a pair of two distinct rows even though they are bisimilar.
+    // The pair's two occurrences lie on no cycle together, so a fresh clone
+    // of the pair leaves them independent too, and unifying it keeps the two
+    // rows apart.
     const second = try solver.lowerTypeFresh(recursive.ty);
     const second_tags = (try solver.resolvedContent(second)).tag_union;
     const second_list = program.types.spanItem(program.types.tagItem(second_tags, 1).payloads, 0);
@@ -7624,7 +7762,7 @@ test "exact cyclic clone proofs avoid repeated expansion and reject widened or u
     try std.testing.expect(!try solver.exactMonoClone(pair_mono, untied));
     const fresh_pair = try solver.lowerTypeFresh(pair_mono);
     try solver.unify(fresh_pair, untied);
-    try std.testing.expectEqual(program.types.root(root), program.types.root(second));
+    try std.testing.expect(program.types.root(root) != program.types.root(second));
 
     // A semantic write invalidates an earlier successful certificate. Exact
     // source shape no longer holds, and ordinary unification keeps the union.

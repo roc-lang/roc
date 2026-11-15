@@ -11590,18 +11590,32 @@ value's own row (Value Rows: Uses Share One Row) the relation only ties the
 read to the root's slot.
 
 A join follows a value, so Lambda Solved must hold one node per OCCURRENCE of
-a row-bearing type that a join can change, not one per type. Its lazy
-Monotype leaves share clones to save work: within one expanded type every
-occurrence of one sub-type is one node, and a callable-free type that no join
-can change is one node wherever it occurs. Both ties are kept only for types
-that cannot change under unification (`Solver.isCloneInvariant`: no callable
-slot, and no tag row a join can change) and, within a clone context, for rows
-that lie on a cycle, whose back-references the tie exists for. A callable-free
-type holding a row a join can change and reaching no cycle is POSITIONAL
-(`Solver.LeafSharing`): each occurrence is its own leaf, in no context.
-Otherwise two unrelated unions that both receive a value of one narrower type
-would be joined through it by type identity rather than by flow, and one tag
-label standing in both with two payload types would then be unified.
+a type that a join can change, not one per type; the same holds for callable
+slots, which join where function values flow. Its lazy Monotype leaves tie
+two occurrences of one Monotype to one node only where something requires
+it. A type that cannot change under unification (`Solver.isCloneInvariant`:
+no callable slot, and no tag row a join can change) is one node wherever it
+occurs. A clone context instantiates one Monotype cycle: within it, each type
+on the cycle is one node, so a recursive type's back-reference reaches the
+node it recurs into (`rest : Iter(item)` is its enclosing iterator), and the
+next unrolling of the cycle is never a separate copy. A named type's argument
+scope binds each backing position of an argument's Monotype, up to nested
+named types, to that argument. An exact producer-authored signature graph
+(`Lifted.Fn.signature`) expands in one whole-root context in which every
+occurrence of a Monotype is one node, since its producer means them to be
+one value. Monotype lowers nested lambdas with exact signature graphs too, so
+a closure typed `Iter(I64) -> Iter(I64)` has one node for its argument and
+its result. Every other occurrence is its own leaf: a callable-free type
+holding a row a join can change and reaching no cycle is POSITIONAL
+(`Solver.LeafSharing`), and a callable-bearing or cyclic occurrence that is
+not on a cycle with its parent begins a tree of its own, in no context until
+it reaches a cycle. So both fields of `{ a : Iter(I64), b : Iter(I64) }`, or
+the argument and result of a callback typed `Iter(I64) -> Iter(I64)`, have
+independent callable slots. Otherwise two unrelated unions that both receive
+a value of one narrower type would be joined through it by type identity
+rather than by flow, and one tag label standing in both with two payload
+types would then be unified; likewise two function values would share a
+lambda set merely because their types are equal.
 
 Which rows a join can change is found before solving
 (`findRowJoinedTypes`). A row changes only where unification relates two
@@ -20744,13 +20758,19 @@ proven-uninhabited structural type joins a nominal or opaque type whose
 inspectable public backing it stands for.
 
 Monotype Lifted types enter the solved store as lazy leaves that materialize one
-level when unification or a shape read touches them. A leaf that has never
-expanded stands for a fresh clone of its Monotype whose callable slots nothing
-else references when its expansion would be unobservable: the leaf has no clone
-context yet, or it is the only unexpanded leaf of a clone context whose every
-expansion registered at most one callable-bearing child, so every other entry
-of that context lies on its ancestor chain and no other expansion can reach the
-context again. Unifying such a leaf with a class already instantiated from the
+level when unification or a shape read touches them. Which occurrences of one
+Monotype share a node is described in "Row Joins": a clone context holds one
+instance of a Monotype cycle (or one whole signature graph), and an
+occurrence off its parent's cycle begins a tree of its own. A leaf that has
+never expanded stands for a fresh clone of its Monotype whose callable slots
+nothing else references when its expansion would be unobservable: the leaf
+has no clone context yet and reads no binding of an argument scope it
+inherited, or it is the only unexpanded leaf of a whole-root clone context
+whose every expansion registered at most one callable-bearing child, so every
+other entry of that context lies on its ancestor chain and no other expansion
+can reach the context again. Without a binding, a fresh clone's only ties are
+the ones its own Monotype imposes on every instance of it, which any class
+instantiated from that Monotype already has. Unifying such a leaf with a class already instantiated from the
 same Monotype only joins the clone's fresh callable slots to the class's, so the
 leaf joins the class without materializing. A Monotype that reaches a cycle, or
 that is uninhabited, keeps the ordinary relation. Leaves that survive solving

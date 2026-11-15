@@ -132,9 +132,11 @@ pub const Content = union(enum) {
     /// clones that can reach `unify` must own their vars.
     mono: struct {
         id: MonoType.TypeId,
-        /// Clone context tying recursive back-references within one lazily
-        /// materialized tree to their existing vars, exactly as an eager
-        /// clone's memo map did. `no_leaf_context` until first expansion.
+        /// Clone context tying the occurrences of one Monotype within one
+        /// instance of a Monotype cycle (or one whole producer-authored
+        /// signature graph) to one var, so a recursive back-reference reaches
+        /// the node it recurs into. `no_leaf_context` for a leaf that begins
+        /// a tree of its own.
         ctx: u32 = no_leaf_context,
     },
 };
