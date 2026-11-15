@@ -44,6 +44,9 @@ pub const Var = enum {
     ctfe_demand_trace,
     /// Check every object compile against one assembled from its artifacts.
     dev_excerpt_roundtrip,
+    /// Check every unit image built from a composition's object contents
+    /// against the image read back from the encoded object.
+    dev_unit_image_roundtrip,
     /// Append one record to the named file per in-process LLVM object compile.
     test_llvm_object_compile_count_file,
     /// Run the independent ARC certifier in a diagnostics-enabled compiler.
@@ -90,6 +93,7 @@ pub const Var = enum {
             .fresh_type_analysis => "ROC_FRESH_TYPE_ANALYSIS",
             .ctfe_demand_trace => "ROC_CTFE_DEMAND_TRACE",
             .dev_excerpt_roundtrip => "ROC_DEV_EXCERPT_ROUNDTRIP",
+            .dev_unit_image_roundtrip => "ROC_DEV_UNIT_IMAGE_ROUNDTRIP",
             .test_llvm_object_compile_count_file => "ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE",
             .verify_arc => "ROC_VERIFY_ARC",
             .test_command_work => "ROC_TEST_COMMAND_WORK",

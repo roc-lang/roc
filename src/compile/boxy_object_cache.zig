@@ -6,11 +6,13 @@
 //! compatibility identity. An entry holds
 //! everything a build needs of the module's code: the export interface
 //! each importing module compiles its calls against, the hosted symbols the
-//! code references, and the code itself in pieces (`backend.dev.UnitPieces`,
-//! design.md "Unit Pieces And Whole-Program Dead Code"), and for a Linux
-//! x86_64 target the code laid out once more as a unit image
-//! (`backend.dev.UnitImage`), which a fast dev link places directly and
-//! compile-time evaluation loads, with the image's code locations. The
+//! code references, and the code itself: for a target with native unit
+//! images, the unit image (`backend.dev.UnitImage`), which a fast dev link
+//! places directly and compile-time evaluation loads, with the image's code
+//! locations; and the code in pieces (`backend.dev.UnitPieces`, design.md
+//! "Unit Pieces And Whole-Program Dead Code") only in an entry filed under
+//! its unit's pieces key (`piecesKey`), for a link that composes pieces, or
+//! for a target without unit images, whose pieces are all of its code. The
 //! image starts at a page-aligned offset in the entry's cache file, so a
 //! mapped entry serves it in place. Nothing in it refers to another cache.
 
@@ -226,7 +228,9 @@ pub const Entry = struct {
     expect_sites: []const ExpectSiteRecord = &.{},
     /// For a test unit: the wrapper of each top-level expect it exports.
     test_roots: []const TestRootRecord = &.{},
-    /// The module's code in pieces, encoded (`UnitPieces.encode`).
+    /// The module's code in pieces, encoded (`UnitPieces.encode`): empty in
+    /// a native image target's entry unless it is filed under the unit's
+    /// pieces key (`piecesKey`).
     pieces: []const u8,
     /// Where the unit image's code came from (`CodeLocations`, over offsets
     /// from the start of the image's text), which compile-time evaluation
@@ -243,8 +247,42 @@ pub const Entry = struct {
     image: []const u8 = &.{},
 };
 
+/// An encoded entry in two parts, written one after the other: everything
+/// before the image, and the image, which stays borrowed from the entry so
+/// that filing it copies it only into the file.
+pub const Encoded = struct {
+    /// Owned by the encoding's allocator.
+    head: []u8,
+    image: []const u8,
+
+    pub fn len(self: *const Encoded) usize {
+        return self.head.len + self.image.len;
+    }
+
+    pub fn deinit(self: Encoded, allocator: Allocator) void {
+        allocator.free(self.head);
+    }
+
+    /// Write the entry's bytes (a `CoreCtx.FileStream` producer).
+    pub fn write(context: *const anyopaque, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        const self: *const Encoded = @ptrCast(@alignCast(context));
+        try writer.writeAll(self.head);
+        try writer.writeAll(self.image);
+    }
+};
+
 /// Encode `entry` as the bytes filed in the cache. The caller owns the result.
 pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
+    const parts = try encodeParts(allocator, entry);
+    defer parts.deinit(allocator);
+    const bytes = try allocator.alloc(u8, parts.len());
+    @memcpy(bytes[0..parts.head.len], parts.head);
+    @memcpy(bytes[parts.head.len..], parts.image);
+    return bytes;
+}
+
+/// Encode `entry` as `encode` does, in two parts that borrow its image.
+pub fn encodeParts(allocator: Allocator, entry: Entry) Allocator.Error!Encoded {
     var bytes: std.ArrayList(u8) = .empty;
     errdefer bytes.deinit(allocator);
     try bytes.appendSlice(allocator, magic);
@@ -295,11 +333,19 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
     try appendU64(&bytes, allocator, entry.function_metadata.len);
     try bytes.appendSlice(allocator, entry.function_metadata);
     try appendU64(&bytes, allocator, entry.image.len);
-    if (entry.image.len != 0) {
-        try bytes.appendNTimes(allocator, 0, imagePadding(bytes.items.len));
-        try bytes.appendSlice(allocator, entry.image);
-    }
-    return try bytes.toOwnedSlice(allocator);
+    if (entry.image.len != 0) try bytes.appendNTimes(allocator, 0, imagePadding(bytes.items.len));
+    return .{ .head = try bytes.toOwnedSlice(allocator), .image = entry.image };
+}
+
+/// The key of the entry of the unit `image_key` names that also holds the
+/// unit's pieces, for a target with native unit images. Only a link that
+/// composes pieces reads them, so the entry every other command files under
+/// `image_key` holds none.
+pub fn piecesKey(image_key: Key) Key {
+    var hasher = base.Sha256.init(.{});
+    hasher.update("roc-boxy-pieces-unit-v1");
+    hasher.update(&image_key.bytes);
+    return .{ .bytes = hasher.finalResult() };
 }
 
 /// A compiler-only variant of precisely the ordinary unit's declared inputs.
@@ -742,6 +788,36 @@ test "function unit variants preserve content addressing and separate ordinary o
     try std.testing.expectEqual(functionUnitKey(first), functionUnitKey(first));
     try std.testing.expect(!std.mem.eql(u8, &first.bytes, &functionUnitKey(first).bytes));
     try std.testing.expect(!std.mem.eql(u8, &functionUnitKey(first).bytes, &functionUnitKey(second).bytes));
+}
+
+test "a unit's pieces entry is keyed apart from its image entry and every other variant" {
+    const first = Key{ .bytes = @splat(3) };
+    const second = Key{ .bytes = @splat(4) };
+    try std.testing.expectEqual(piecesKey(first), piecesKey(first));
+    try std.testing.expect(!std.mem.eql(u8, &first.bytes, &piecesKey(first).bytes));
+    try std.testing.expect(!std.mem.eql(u8, &piecesKey(first).bytes, &piecesKey(second).bytes));
+    try std.testing.expect(!std.mem.eql(u8, &piecesKey(first).bytes, &functionUnitKey(first).bytes));
+}
+
+test "an entry encoded in parts is the entry encoded whole, with its image borrowed" {
+    const gpa = std.testing.allocator;
+    const image = try gpa.alignedAlloc(u8, .@"16", 48);
+    defer gpa.free(image);
+    for (image, 0..) |*byte, index| byte.* = @truncate(index);
+    const entry: Entry = .{ .exports = &.{}, .exports_digest = try exportRecordsDigest(gpa, &.{}), .hosted_symbols = &.{"hosted"}, .pieces = "", .code_locations = "lines", .image = image };
+    const parts = try encodeParts(gpa, entry);
+    defer parts.deinit(gpa);
+    try std.testing.expectEqual(image.ptr, parts.image.ptr);
+    const whole = try encode(gpa, entry);
+    defer gpa.free(whole);
+    var streamed: std.Io.Writer.Allocating = .init(gpa);
+    defer streamed.deinit();
+    try Encoded.write(&parts, &streamed.writer);
+    try std.testing.expectEqualSlices(u8, whole, streamed.written());
+    const decoded = try decode(gpa, whole);
+    defer deinitEntry(gpa, decoded);
+    try std.testing.expectEqualSlices(u8, image, decoded.image);
+    try std.testing.expectEqualStrings("lines", decoded.code_locations);
 }
 
 test "a Boxy object export digest is persisted independently of its code payload" {

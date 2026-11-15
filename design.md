@@ -17659,7 +17659,7 @@ compiler (`compile.boxy_embedded_units`), so a compiler that embeds it never
 lowers or compiles it for that key, with a cold cache, a warm one, or
 `--no-cache`.
 
-Exactly one entry is embedded: the Builtin's ordinary unit for the target
+One unit is embedded: the Builtin's ordinary unit for the target
 the compiler runs on at its default CPU level
 (`RocTarget.fromStdTarget` of the compiler's own target), at dev opt with
 inline expects compiled in, with no run image, no expect sites and no wasm
@@ -17667,8 +17667,13 @@ stack checks, under the Builtin's stable link name. That is the unit
 compile-time evaluation links against (`lowering_policy.compileTimeObjectLowering`)
 and the unit a native dev `roc build` or `roc run`, and a `roc test` whose
 Builtin unit needs no expect sites (the Builtin has no expects), links,
-since all of them key it identically. A compiler target without a dev
-backend embeds nothing.
+since all of them key it identically. On a target with native unit images
+it is embedded as two entries from one build: the entry holding its image,
+under its key, and the entry holding its pieces and image, under its pieces
+key (`boxy_object_cache.piecesKey`), which a link that composes pieces
+(an `Archive` output) restores (Unit Pieces And Whole-Program Dead Code).
+The table records the pieces entry with the same key input and a flag. A
+compiler target without a dev backend embeds nothing.
 
 Selection is by key, never by a description of the unit. The table records
 each entry's `KeyInput` (the Builtin's `objectInput`, the target and opt
@@ -17714,7 +17719,8 @@ pair (another Builtin, or the Builtin named by content) hashes as usual.
 `zig build run-test-builtin-unit` builds the unit through `restoreOrBuild`
 into an empty cache, with the tool compiled as the compiler is (its target,
 its optimize mode), and requires the filed entry to be byte-identical to
-the Debug tool's table entry, the table to serve its key, and the embedded
+the Debug tool's table entry, the table to serve its key, and likewise for
+the entry it files under its pieces key, and the embedded
 digests to be the ones hashing the Builtin gives. MiniCI runs it in
 ReleaseSafe, so it compares a Debug build's unit with an optimized build's;
 a compiler for a target the build machine cannot run is not verified.
@@ -17740,8 +17746,15 @@ optimization level. This is the native half of the Roc-only composition
 phase the Sealed Roc Object Boundary requires (compiler-owned code "merged,
 resolved, dead-stripped from the `provides` roots, and localized").
 
-- A UNIT'S CACHE ENTRY holds its code in PIECES, one per function, never a
-  finished object. A piece is one procedure's, refcount helper's, entry
+- A UNIT'S CACHE ENTRY for a link that composes pieces holds its code in
+  PIECES, one per function, never a finished object. Only such a link
+  reads pieces (an `archive` output, an `arm32` target, or a host without
+  unit images), so on a target with native unit images a unit's pieces are
+  encoded and filed only by a build whose link composes them, in an entry of
+  their own under the unit's pieces key (`boxy_object_cache.piecesKey`),
+  and every other command files an entry holding the unit image and no
+  pieces under the unit's key. A target without native unit images files
+  pieces under the unit's key, since they are all of its code. A piece is one procedure's, refcount helper's, entry
   wrapper's or static-data initializer's machine code with its frame and
   unwind data, its source lines and failure sites, and its outgoing
   references: to other pieces by stable identity (a procedure by its
@@ -17833,8 +17846,9 @@ unit's link name (`Program.programLocalIdentity`). A link that places whole
 unit images (the fast dev link, the wasm link, and `roc test`'s loaded
 images) keeps every unit's copy of such a worker its own calls reach, and
 binds a symbol two images define to one of them.
-`ROC_VERIFY_BOXY_OBJECT_REUSE` compares a restored unit's encoded pieces
-with a rebuilt unit's exactly as it compared objects.
+`ROC_VERIFY_BOXY_OBJECT_REUSE` compares a restored unit's encoded pieces,
+when its entry holds them, with a rebuilt unit's exactly as it compared
+objects.
 
 ### Compile-Time Evaluation Strategy
 
@@ -29451,8 +29465,9 @@ A `.boxy` dev `roc run` of an app without a platform header builds it
 against the synthetic default platform with a fast dev link and runs the
 binary, reusing every object `roc check` filed (Caching Under `.boxy`).
 
-**Unit images.** A `.boxy` unit's cache entry (`boxy_object_cache`) carries,
-beside its pieces, a unit image (`backend.dev.UnitImage`): the unit's text
+**Unit images.** A `.boxy` unit's cache entry (`boxy_object_cache`) carries
+a unit image (`backend.dev.UnitImage`), beside its pieces only in the entry
+of a link that composes them (Unit Pieces And Whole-Program Dead Code): the unit's text
 followed by its read-only data in one block, its writable data and zero-fill
 size, its symbols, its patch sites, its DWARF fragments and its content
 digest. Every reference the unit's own placement decides is resolved when the
@@ -29464,9 +29479,21 @@ the image's regions. A site's kind is the field's encoding, x86_64's
 is placed page aligned, so an arm64 page-relative reference inside the block
 resolves at build time like an x86_64 displacement. The image is built from
 the unit's relocatable object in the target's format, ELF, Mach-O or COFF
-for either instruction set, and names its symbols by their C
+for either instruction set, read into one format-neutral form
+(`UnitImage.Object`: classified sections, symbols in symbol-table order,
+relocations with their addends), and names its symbols by their C
 names (a Mach-O name without its underscore), so images, hosted symbols and
-provides read the same on every target. A load through the global offset
+provides read the same on every target. A unit's own image never goes
+through encoded object bytes: each dev object writer gives the object it
+would encode in that form directly (`ObjectWriter.indexedImageObject`),
+exactly what reading its encoded bytes back gives, and the composition
+builds the image from it (`ObjectFileCompiler.buildUnitImage`).
+`ROC_DEV_UNIT_IMAGE_ROUNDTRIP` also encodes every unit's object, reads the
+image back from the bytes and requires the two images to be identical. The
+image builder resolves each symbol once, at its first reference, rather
+than looking its name up at every relocation. Encoded object bytes are
+read only for the compiler's support objects, which Roc's build graph
+converts. A load through the global offset
 table reads a slot the image keeps in its writable data, one per referenced
 symbol. The image is a pure function of the unit (Per-Module Output), so two
 builds of a unit write identical images. The block divides into atoms, one
@@ -30273,9 +30300,11 @@ A module unit's native code generation reports backend setup, procedure
 setup, the ordered runs, worker setup, stack planning with emission, fragment
 extraction, idle workers, fragment commit, symbolic reference resolution,
 entrypoints, the steps lifting code into pieces, image composition, DWARF,
-object encoding and the unit image, with the bytes of code, objects,
+the unit image built from the composition's object contents, and the
+encoding of pieces for an entry that holds them, with the bytes of code,
 images, pieces and cache entries, and code bytes and statements by LIR
-statement kind. A statement's bytes run from its start to the next
+statement kind. A cache entry is written to its file in two parts, its
+records and its image, so filing it copies the image only into the file. A statement's bytes run from its start to the next
 statement's start.
 
 Lambda-set solving reports its analysis solve, which finds the row-joined
