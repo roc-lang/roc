@@ -2830,7 +2830,7 @@ pub const ReportBuilder = struct {
             }, self, &report, &report.headline);
         }
 
-        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_region);
 
         const value_str = try report.addOwnedString(try self.getFormattedString(annotated_row.value_snapshot));
         try D.renderSlice(&.{

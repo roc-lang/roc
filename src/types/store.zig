@@ -1105,7 +1105,7 @@ pub const Store = struct {
     }
 
     fn debugAssertUnfrozenWrite(self: *const Self, idx: DescStore.Idx) void {
-        if (std.debug.runtime_safety and self.descs.getWord(idx).flags.frozen) {
+        if (std.debug.runtime_safety and self.descs.getWord(idx).flags().frozen) {
             base.invariant("a frozen type class was written in place", .{});
         }
     }
@@ -1142,7 +1142,7 @@ pub const Store = struct {
 
     /// `setDescWord` without the frozen-class guard, for freezing and thawing.
     inline fn setDescWordUnguarded(self: *Self, idx: DescStore.Idx, word: Desc.Word) Allocator.Error!void {
-        std.debug.assert(word.kind == self.descs.getWord(idx).kind and word.literal() == self.descs.getWord(idx).literal);
+        std.debug.assert(word.kind == self.descs.getWord(idx).kind and word.literal() == self.descs.getWord(idx).literal());
         try self.journalDescWrite(idx);
         self.descs.setWord(idx, word);
     }
@@ -1269,7 +1269,7 @@ pub const Store = struct {
         const index: u32 = @backingInt(desc_idx);
         if (index < self.settled_descs.bits.bit_length) self.settled_descs.bits.unset(index);
         if (index < self.class_watch.watched.bit_length) self.class_watch.watched.unset(index);
-        if (self.descs.getWord(desc_idx).flags.frozen) _ = self.frozen_anchors.remove(desc_idx);
+        if (self.descs.getWord(desc_idx).flags().frozen) _ = self.frozen_anchors.remove(desc_idx);
         const plan_slot = self.derivedMapPlanSlot(desc_idx);
         if (plan_slot.found) _ = self.derived_map_plans.orderedRemove(plan_slot.index);
         self.free_descs.appendAssumeCapacity(desc_idx);
@@ -2854,12 +2854,12 @@ pub const Store = struct {
 
     /// The flags of `var_`'s class.
     pub fn flagsOf(self: *const Self, var_: Var) types.DescriptorFlags {
-        return self.descs.getWord(self.resolveDescIdx(var_)).flags;
+        return self.descs.getWord(self.resolveDescIdx(var_)).flags();
     }
 
     /// The flags of descriptor `desc_idx`.
     pub fn flagsAt(self: *const Self, desc_idx: DescStore.Idx) types.DescriptorFlags {
-        return self.descs.getWord(desc_idx).flags;
+        return self.descs.getWord(desc_idx).flags();
     }
 
     // resolvers //

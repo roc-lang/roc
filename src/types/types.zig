@@ -101,10 +101,10 @@ pub const Var = enum(u32) {
 /// A mapping from polymorphic type variables to concrete type variables
 pub const VarMap = std.hash_map.HashMap(Var, Var, std.hash_map.AutoContext(Var), 80);
 
-/// Checker decisions a descriptor carries alongside its content. They share
-/// the stored descriptor's word with its kind and rank (`Descriptor.Word`),
-/// which has room for exactly these ten: a new flag must find room there.
-pub const DescriptorFlags = packed struct(u10) {
+/// Checker decisions a descriptor carries alongside its content. A stored
+/// descriptor's word packs them by kind (`Descriptor.FlagBits`): a new flag
+/// must find room there.
+pub const DescriptorFlags = packed struct(u16) {
     /// The checker closed this otherwise-unresolved variable to `[]` after
     /// proving that no runtime constructor can inhabit it. The checked output
     /// preserves the variable identity and carries `[]` only as its row default.
@@ -287,33 +287,31 @@ pub const Descriptor = struct {
 
         /// A word of kind `kind` holding `flags`, a flex's `literal` (`.none`
         /// for every other kind) and `rank`.
-        pub inline fn init(kind: ContentKind, flags_: DescriptorFlags, literal_: Flex.Literal, rank: Rank) Word {
+        pub fn init(kind: ContentKind, flags_: DescriptorFlags, literal_: Flex.Literal, rank: Rank) Word {
             std.debug.assert(kind == .flex or literal_ == .none);
-            var word: Word = .{ .kind = kind, .bits = .{}, .rank = rank };
-            word.bits = FlagBits.pack(kind, flags_, literal_);
-            return word;
+            return .{ .kind = kind, .bits = FlagBits.pack(kind, flags_, literal_), .rank = rank };
         }
 
         /// The class's flags.
-        pub inline fn flags(self: Word) DescriptorFlags {
+        pub fn flags(self: Word) DescriptorFlags {
             return self.bits.unpack(self.kind);
         }
 
         /// Replace the class's flags, keeping a flex's literal.
-        pub inline fn setFlags(self: *Word, flags_: DescriptorFlags) void {
+        pub fn setFlags(self: *Word, flags_: DescriptorFlags) void {
             self.bits = FlagBits.pack(self.kind, flags_, self.literal());
         }
 
         /// Set one of the class's flags, keeping the others.
-        pub inline fn setFlag(self: *Word, comptime flag: std.meta.FieldEnum(DescriptorFlags), value: bool) void {
+        pub fn setFlag(self: *Word, comptime flag: std.meta.FieldEnum(DescriptorFlags), value: bool) void {
             var flags_ = self.flags();
             @field(flags_, @tagName(flag)) = value;
             self.setFlags(flags_);
         }
 
         /// A flex's `Flex.literal`; `.none` for every other kind.
-        pub inline fn literal(self: Word) Flex.Literal {
-            return if (self.kind == .flex) self.bits.by_kind.flex.literal else .none;
+        pub fn literal(self: Word) Flex.Literal {
+            return if (self.kind == .flex) self.bits.flexBits().literal else .none;
         }
 
         /// Whether either generalization mark is set.
@@ -346,12 +344,18 @@ pub const Descriptor = struct {
         bounded_row_ext: bool = false,
         deferred_callable: bool = false,
         annotation_tag_ext: bool = false,
-        by_kind: ByKind = .{ .other = .{} },
+        /// `FlexBits` on a flex, `OtherBits` on every other kind.
+        by_kind: u5 = 0,
 
-        pub const ByKind = packed union {
-            flex: FlexBits,
-            other: OtherBits,
-        };
+        /// The bits shared by kind, as a flex holds them.
+        pub fn flexBits(self: FlagBits) FlexBits {
+            return @bitCast(self.by_kind);
+        }
+
+        /// The bits shared by kind, as every kind but a flex holds them.
+        pub fn otherBits(self: FlagBits) OtherBits {
+            return @bitCast(self.by_kind);
+        }
 
         /// The bits only a flex has.
         pub const FlexBits = packed struct(u5) {
@@ -372,7 +376,7 @@ pub const Descriptor = struct {
 
         /// `flags` and a flex's `literal` packed for a word of kind `kind`.
         /// A flag with no bit on `kind` must be false.
-        pub inline fn pack(kind: ContentKind, flags: DescriptorFlags, literal: Flex.Literal) FlagBits {
+        pub fn pack(kind: ContentKind, flags: DescriptorFlags, literal: Flex.Literal) FlagBits {
             std.debug.assert(kind == .flex or !flags.flexOnly());
             std.debug.assert(kind != .flex or !flags.nonFlexOnly());
             return .{
@@ -383,23 +387,23 @@ pub const Descriptor = struct {
                 .bounded_row_ext = flags.bounded_row_ext,
                 .deferred_callable = flags.deferred_callable,
                 .annotation_tag_ext = flags.annotation_tag_ext,
-                .by_kind = if (kind == .flex) .{ .flex = .{
+                .by_kind = if (kind == .flex) @bitCast(FlexBits{
                     .uncommitted_record_tail = flags.uncommitted_record_tail,
                     .uncommitted_copy = flags.uncommitted_copy,
                     .record_pattern_tail = flags.record_pattern_tail,
                     .literal = literal,
-                } } else .{ .other = .{
+                }) else @bitCast(OtherBits{
                     .empty_tag_union_is_default = flags.empty_tag_union_is_default,
                     .host_fixed_row = flags.host_fixed_row,
                     .compared_plain = flags.compared_plain,
                     .annotation_tag_union = flags.annotation_tag_union,
                     .uncommitted_tag_tail = flags.uncommitted_tag_tail,
-                } },
+                }),
             };
         }
 
         /// The flags a word of kind `kind` holds.
-        pub inline fn unpack(self: FlagBits, kind: ContentKind) DescriptorFlags {
+        pub fn unpack(self: FlagBits, kind: ContentKind) DescriptorFlags {
             var flags: DescriptorFlags = .{
                 .frozen = self.frozen,
                 .static_dispatch_rejected = self.static_dispatch_rejected,
@@ -410,12 +414,12 @@ pub const Descriptor = struct {
                 .annotation_tag_ext = self.annotation_tag_ext,
             };
             if (kind == .flex) {
-                const flex = self.by_kind.flex;
+                const flex = self.flexBits();
                 flags.uncommitted_record_tail = flex.uncommitted_record_tail;
                 flags.uncommitted_copy = flex.uncommitted_copy;
                 flags.record_pattern_tail = flex.record_pattern_tail;
             } else {
-                const other = self.by_kind.other;
+                const other = self.otherBits();
                 flags.empty_tag_union_is_default = other.empty_tag_union_is_default;
                 flags.host_fixed_row = other.host_fixed_row;
                 flags.compared_plain = other.compared_plain;
@@ -2026,3 +2030,85 @@ pub const Polarity = enum {
 /// envs, so text identity (and per-env precomputed `Ident.Idx` identity) is
 /// stable.
 pub const polarity_var_text = "#polarity";
+
+/// Which kinds a descriptor flag has a bit on (`Descriptor.FlagBits`).
+const FlagDomain = enum { every_kind, flex_only, non_flex_only };
+
+fn flagDomain(comptime flag: std.meta.FieldEnum(DescriptorFlags)) FlagDomain {
+    return switch (flag) {
+        .frozen, .static_dispatch_rejected, .default_decided, .nominal_backing_structure, .bounded_row_ext, .deferred_callable, .annotation_tag_ext => .every_kind,
+        .uncommitted_record_tail, .uncommitted_copy, .record_pattern_tail => .flex_only,
+        .empty_tag_union_is_default, .host_fixed_row, .compared_plain, .annotation_tag_union, .uncommitted_tag_tail => .non_flex_only,
+        ._padding => unreachable, // the padding is no flag
+    };
+}
+
+test "a descriptor word keeps each flag alone on every kind it applies to" {
+    inline for (@typeInfo(DescriptorFlags).@"struct".field_names) |field_name| {
+        if (comptime std.mem.eql(u8, field_name, "_padding")) continue;
+        const flag = @field(std.meta.FieldEnum(DescriptorFlags), field_name);
+        for (std.enums.values(ContentKind)) |kind| {
+            const applies = switch (flagDomain(flag)) {
+                .every_kind => true,
+                .flex_only => kind == .flex,
+                .non_flex_only => kind != .flex,
+            };
+            if (!applies) continue;
+            var flags: DescriptorFlags = .{};
+            @field(flags, field_name) = true;
+            const literals: []const Flex.Literal = if (kind == .flex) std.enums.values(Flex.Literal) else &.{.none};
+            for (literals) |literal| {
+                var word = Descriptor.Word.init(kind, flags, literal, .outermost);
+                try std.testing.expectEqual(flags, word.flags());
+                try std.testing.expectEqual(literal, word.literal());
+                try std.testing.expectEqual(kind, word.kind);
+                try std.testing.expectEqual(Rank.outermost, word.rank);
+                word.setFlag(flag, false);
+                try std.testing.expectEqual(DescriptorFlags{}, word.flags());
+                try std.testing.expectEqual(literal, word.literal());
+                word.setFlag(flag, true);
+                try std.testing.expectEqual(flags, word.flags());
+            }
+        }
+    }
+}
+
+test "a descriptor word keeps every flag its kind holds at once" {
+    for (std.enums.values(ContentKind)) |kind| {
+        var all: DescriptorFlags = .{};
+        inline for (@typeInfo(DescriptorFlags).@"struct".field_names) |field_name| {
+            if (comptime std.mem.eql(u8, field_name, "_padding")) continue;
+            const flag = @field(std.meta.FieldEnum(DescriptorFlags), field_name);
+            const applies = switch (flagDomain(flag)) {
+                .every_kind => true,
+                .flex_only => kind == .flex,
+                .non_flex_only => kind != .flex,
+            };
+            if (applies) @field(all, field_name) = true;
+        }
+        const literal: Flex.Literal = if (kind == .flex) .quote else .none;
+        const word = Descriptor.Word.init(kind, all, literal, Rank.deepest);
+        try std.testing.expectEqual(all, word.flags());
+        try std.testing.expectEqual(literal, word.literal());
+        try std.testing.expectEqual(Rank.deepest, word.rank);
+        try std.testing.expect(!word.marked());
+    }
+}
+
+test "a write's flags keep only those the new kind holds" {
+    var flags: DescriptorFlags = .{};
+    inline for (@typeInfo(DescriptorFlags).@"struct".field_names) |field_name| {
+        if (comptime std.mem.eql(u8, field_name, "_padding")) continue;
+        @field(flags, field_name) = true;
+    }
+    const on_flex = flags.forKind(.flex);
+    try std.testing.expect(!on_flex.nonFlexOnly());
+    try std.testing.expect(on_flex.uncommitted_record_tail and on_flex.uncommitted_copy and on_flex.record_pattern_tail);
+    for (std.enums.values(ContentKind)) |kind| {
+        if (kind == .flex) continue;
+        const on_kind = flags.forKind(kind);
+        try std.testing.expect(!on_kind.flexOnly());
+        try std.testing.expect(on_kind.empty_tag_union_is_default and on_kind.host_fixed_row and on_kind.compared_plain and
+            on_kind.annotation_tag_union and on_kind.uncommitted_tag_tail);
+    }
+}

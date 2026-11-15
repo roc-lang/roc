@@ -12410,7 +12410,7 @@ fn groundTypeHash(self: *Self, var_: Var) std.mem.Allocator.Error!?u64 {
             continue;
         }
         visit.value_ptr.* = @intCast(seen.count() - 1);
-        std.hash.autoHash(&hasher, @as(u16, @as(u10, @bitCast(resolved.desc.flags.copied()))));
+        std.hash.autoHash(&hasher, @as(u16, @bitCast(resolved.desc.flags.copied())));
         std.hash.autoHash(&hasher, std.meta.activeTag(resolved.desc.content));
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => return null,
@@ -24705,12 +24705,7 @@ fn stateRowVariableRequirementsOnTheirValues(self: *Self, root: Var, env: *Env) 
                 self.var_map.clearRetainingCapacity();
                 try self.var_map.put(ending.row, value_ending.value);
                 const signature = try instantiator.instantiateVar(constraint.fn_var);
-                const region = self.getRegionAt(constraint.fn_var);
-                var copied_iter = self.var_map.valueIterator();
-                while (copied_iter.next()) |copied| {
-                    try self.fillInRegionsThrough(copied.*);
-                    self.setRegionAt(copied.*, region);
-                }
+                try self.setCopiedVarsRegion(&self.var_map, self.getRegionAt(constraint.fn_var));
                 self.var_map.clearRetainingCapacity();
                 try self.recordAnnotationDispatchRelationOwner(signature);
                 var on_value = constraint;
@@ -50735,7 +50730,7 @@ fn appendReplayShapeWalk(self: *Self) Allocator.Error!?void {
             continue;
         }
         seen.value_ptr.* = @intCast(self.scratch_replay_shape_vars.count() - 1);
-        const relational_flags: u16 = @as(u10, @bitCast(resolved.desc.flags.relational()));
+        const relational_flags: u16 = @bitCast(resolved.desc.flags.relational());
         try out.appendSlice(self.gpa, &.{ @truncate(relational_flags), @truncate(relational_flags >> 8) });
         // Children are pushed in reverse, so they are encoded in order.
         switch (resolved.desc.content) {
