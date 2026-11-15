@@ -12008,7 +12008,9 @@ fn instantiateVarPolarized(
     // An instance that is not ground still has ground subtrees, identical in
     // every instance at this position: the declaration's own ground subtrees,
     // copied. The latest instance's ground subtrees that are still ground are
-    // read by the next instance instead of being copied again.
+    // read by the next instance instead of being copied again. An instance
+    // that reads all of them, and takes no copy from its context, has exactly
+    // those maximal ground subtrees, so the recorded ones stand for it too.
     var shared_subtrees = self.shared_subtrees_scratch;
     self.shared_subtrees_scratch = .empty;
     defer {
@@ -12019,9 +12021,14 @@ fn instantiateVarPolarized(
             shared_subtrees.deinit(self.gpa);
         }
     }
+    var reads_every_recorded_subtree = false;
     if (evidence == .none) {
         if (self.polarized_instance_subtrees.get(instance_key)) |entries| {
             try self.groundSubtreeEntries(entries.items, &shared_subtrees);
+            reads_every_recorded_subtree = shared_subtrees.items.len == entries.items.len and
+                self.codec_instance_copies.len == 0 and
+                self.method_receiver_context.len == 0 and
+                self.typeDeclTemplateContext(var_to_instantiate).len == 0;
         }
     }
     var opened_marker_exts: std.ArrayListUnmanaged(Instantiator.OpenedMarkerExt) = .empty;
@@ -12044,8 +12051,12 @@ fn instantiateVarPolarized(
         } else {
             const slot = try self.polarized_instance_subtrees.getOrPut(self.gpa, instance_key);
             if (!slot.found_existing) slot.value_ptr.* = .empty;
-            slot.value_ptr.clearRetainingCapacity();
-            try self.maximalGroundSubtreeCopies(instantiated, slot.value_ptr);
+            if (reads_every_recorded_subtree) {
+                try self.debugAssertMaximalGroundSubtreeCopies(instantiated, slot.value_ptr.items);
+            } else {
+                slot.value_ptr.clearRetainingCapacity();
+                try self.maximalGroundSubtreeCopies(instantiated, slot.value_ptr);
+            }
         }
     }
     return instantiated;
@@ -12252,6 +12263,27 @@ fn maximalGroundSubtreeCopies(self: *Self, instance_root: Var, entries: *std.Arr
         }
         if (!maximal) continue;
         try entries.append(self.gpa, .{ .source = copy.key_ptr.*, .copy = resolved_copy });
+    }
+}
+
+/// Debug builds verify that `recorded` is what `maximalGroundSubtreeCopies`
+/// finds for `instance_root`, the instance `instantiateVarPolarized` just made
+/// by reading every one of them.
+fn debugAssertMaximalGroundSubtreeCopies(self: *Self, instance_root: Var, recorded: []const Instantiator.SharedSubtree) Allocator.Error!void {
+    if (builtin.mode != .debug) return;
+    var found: std.ArrayListUnmanaged(Instantiator.SharedSubtree) = .empty;
+    defer found.deinit(self.gpa);
+    try self.maximalGroundSubtreeCopies(instance_root, &found);
+    var matches = found.items.len == recorded.len;
+    for (found.items) |entry| {
+        if (!matches) break;
+        matches = for (recorded) |known| {
+            if (self.types.resolveVar(known.source).var_ == self.types.resolveVar(entry.source).var_ and
+                self.types.resolveVar(known.copy).var_ == self.types.resolveVar(entry.copy).var_) break true;
+        } else false;
+    }
+    if (!matches) {
+        base.invariant("type checker invariant violated: an instance that read every recorded ground subtree has {d} maximal ground subtrees, not the {d} recorded", .{ found.items.len, recorded.len });
     }
 }
 
