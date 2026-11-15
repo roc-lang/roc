@@ -1153,9 +1153,12 @@ const Unifier = struct {
 
     /// Whether `resolved` is a flex that states nothing: it has no
     /// constraints and no literal marker, and it is not a bounded row
-    /// extension.
+    /// extension or an uncommitted record tail (design.md "Uncommitted Record
+    /// Tails").
     fn isPlainFlex(self: *const Self, resolved: ResolvedVarWord) bool {
-        if (resolved.word.kind != .flex or resolved.word.literal() != .none or resolved.word.flags().bounded_row_ext) return false;
+        if (resolved.word.kind != .flex or resolved.word.literal() != .none) return false;
+        const flags = resolved.word.flags();
+        if (flags.bounded_row_ext or flags.uncommitted_record_tail or flags.uncommitted_copy) return false;
         return self.types_store.flexAt(resolved.desc_idx).constraints.len() == 0;
     }
 

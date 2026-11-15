@@ -1305,6 +1305,9 @@ link_var_map: collections.DenseMap(Var, Var),
 link_scratch_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
 link_scratch_owned: std.ArrayListUnmanaged(Var) = .empty,
 link_new_copies: std.ArrayListUnmanaged(LinkedCopy) = .empty,
+/// The operand whose region the running unification's fresh variables take
+/// (`adoptUnifyScratch`); null outside a unification.
+unify_fresh_region_var: ?Var = null,
 /// Uses linked inside the current probes, with the copies their links made,
 /// registered when the outermost probe commits.
 probe_links: std.ArrayListUnmanaged(ProbeLink) = .empty,
@@ -2062,6 +2065,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .link_scratch_pairs = .scratch,
     .link_scratch_owned = .scratch,
     .link_new_copies = .scratch,
+    .unify_fresh_region_var = .lexical,
     .probe_links = .frame_partitioned,
     .probe_link_copies = .frame_partitioned,
     .use_replayable_schemes = .keyed,
@@ -8701,6 +8705,9 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     if (self.probe_depth == 0 or self.commit_probe_active) {
         unify_opts.repeated_label_rows = .return_row;
     }
+    const saved_fresh_region_var = self.unify_fresh_region_var;
+    self.unify_fresh_region_var = b;
+    defer self.unify_fresh_region_var = saved_fresh_region_var;
     var result = try unifier.unify(&unify_env, a, b, unify_opts);
     while (unify_opts.repeated_label_rows == .return_row and result == .mismatch) {
         const row = self.unify_scratch.repeatedLabelRow() orelse break;
@@ -8745,6 +8752,20 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     return result;
 }
 
+/// Give each variable the running unification has created so far and that
+/// has no region yet the region its adoption gives it (`adoptUnifyScratch`),
+/// before a link inside that unification creates variables of its own:
+/// variables get their regions in the order they are created (`VarRegions`).
+fn setPendingUnifyFreshRegions(self: *Self) Allocator.Error!void {
+    const region_var = self.unify_fresh_region_var orelse return;
+    const fresh_vars = self.unify_scratch.fresh_vars.items();
+    if (fresh_vars.len == 0) return;
+    const region = self.getRegionAt(region_var);
+    for (fresh_vars) |fresh_var| {
+        if (!self.var_regions.isCovered(fresh_var)) try self.setVarRegion(fresh_var, region);
+    }
+}
+
 /// Give the fresh variables and deferred constraints the last unification
 /// created to the checker. Fresh variables take `actual`'s region.
 fn adoptUnifyScratch(self: *Self, env: *Env, actual: Var, owner: DeferredDispatchObligationOwner) Allocator.Error!void {
@@ -8767,8 +8788,9 @@ fn adoptUnifyScratch(self: *Self, env: *Env, actual: Var, owner: DeferredDispatc
             const fresh_rank = self.types.resolveVar(fresh_var).desc.rank;
             try env.var_pool.addVarToRank(fresh_var, fresh_rank);
 
-            // Set the region
-            try self.setVarRegion(fresh_var, region);
+            // Set the region, unless a link the unification ran already
+            // set it (`setPendingUnifyFreshRegions`).
+            if (!self.var_regions.isCovered(fresh_var)) try self.setVarRegion(fresh_var, region);
         }
     }
 
@@ -14878,6 +14900,7 @@ fn unifyWithFresh(
                 // must unify, so the constraints are checked against `content`.
                 var desc = resolved_target.desc;
                 desc.content = content;
+                desc.flags = desc.flags.forKind(types_mod.types.ContentKind.of(content));
                 try self.types.dangerousSetVarDesc(target_var, desc);
                 return;
             }
@@ -14895,6 +14918,7 @@ fn unifyWithFresh(
             if (resolved_target.is_root and isUnconstrainedFlex(resolved_target.desc.content)) {
                 var desc = resolved_target.desc;
                 desc.content = content;
+                desc.flags = desc.flags.forKind(types_mod.types.ContentKind.of(content));
                 try self.types.dangerousSetVarDesc(target_var, desc);
                 return;
             }
@@ -51470,6 +51494,8 @@ fn linkUseCallables(self: *Self, use_idx: u32) Allocator.Error!void {
 
     // The copies get their regions where they are created, as the
     // instantiation's own copies did; a rollback forgets them with the copies.
+    // Variables the running unification created before them get theirs first.
+    try self.setPendingUnifyFreshRegions();
     switch (link.region_behavior) {
         .explicit, .use_root_instantiated => {
             self.scratch_region_vars.clearRetainingCapacity();

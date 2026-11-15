@@ -1279,7 +1279,7 @@ pub const Instantiator = struct {
                 try self.var_map.put(resolved_var, fresh_var);
 
                 if (self.close_bounded_row_exts and resolved.word.flags().bounded_row_ext) {
-                    try self.fillPlaceholder(fresh_var, .{ .structure = .empty_tag_union }, flags);
+                    try self.fillPlaceholder(fresh_var, .{ .structure = .empty_tag_union }, flags.forKind(.empty_tag_union));
                     try machine.value_stack.append(self.store.gpa, fresh_var);
                     return true;
                 }

@@ -3441,6 +3441,7 @@ pub const Store = struct {
                 var desc = self.descAt(desc_idx);
                 self.noteContentRewrite(desc.content);
                 desc.content = content;
+                desc.flags = desc.flags.forKind(types.ContentKind.of(content));
                 try self.setDesc(desc_idx, desc);
             },
             .redirect => {
