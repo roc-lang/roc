@@ -8448,7 +8448,7 @@ const Builder = struct {
         defer ctx.deinit();
 
         const draft = FinalBodyOutputGuard.begin(self);
-        const restored = try runConstRestore(&ctx, view, type_view, const_node.id, ret_ty, request.const_locator);
+        const restored = try ctx.restoreConstValue(view, type_view, const_node.id, ret_ty, request.const_locator, false);
         if (self.comptime_value_reads) try body_draft.recordRestoredRootRead(restored, view.key, root);
         try body_draft.addScopeRoot(restored);
         const draft_end = draft.end(self);
