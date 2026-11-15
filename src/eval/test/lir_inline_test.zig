@@ -9698,10 +9698,12 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
     const pair_first = try mono.addExpr(.{ .ty = u32_ty, .data = .{ .tuple_access = .{ .tuple = pair_ref, .elem_index = 0 } } });
     const scalar_ref = try mono.addExpr(.{ .ty = u32_ty, .data = .{ .local = scalar_local } });
     const result_pair = try mono.addExpr(.{ .ty = pair_ty, .data = .{ .tuple = try mono.addExprSpan(&.{ pair_first, scalar_ref }) } });
-    const worker_body = try mono.addExpr(.{ .ty = pair_ty, .data = .{ .let_ = .{
-        .bind = scalar_pat,
-        .value = scalar_value,
-        .rest = result_pair,
+    // Monotype emits operand-sequenced bodies, so the binding is a block's
+    // statement (design.md "Operand Sequencing").
+    const scalar_binding = try mono.addStmt(.{ .let_ = .{ .pat = scalar_pat, .value = scalar_value } });
+    const worker_body = try mono.addExpr(.{ .ty = pair_ty, .data = .{ .block = .{
+        .statements = try mono.addStmtSpan(&.{scalar_binding}),
+        .final_expr = result_pair,
     } } });
 
     try mono.defs.append(allocator, .{
