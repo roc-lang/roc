@@ -50016,6 +50016,19 @@ const BodyContext = struct {
     /// container to be rebuilt. Every accepted difference must carry
     /// producer-authored representation or completion evidence; constructor
     /// lowering never guesses from shape.
+    /// The produced field of an inline (required or defaulted) constructor
+    /// field whose child supplied a distinct witness slot. An inline field's
+    /// runtime slot is its source value, so the witness slot is both.
+    fn inlineFieldWithWitnessSlot(field: InstField, witness_slot: NodeId) InstField {
+        return .{
+            .name = field.name,
+            .ty = witness_slot,
+            .value_ty = if (field.value_ty != .none) .of(witness_slot) else .none,
+            .kind = field.kind,
+            .default = field.default,
+        };
+    }
+
     fn constructorChildWitness(
         self: *BodyContext,
         slot_node: NodeId,
@@ -51622,13 +51635,7 @@ const BodyContext = struct {
                     "record graph update child differed without explicit representation evidence",
                 );
                 if (witness.requires_witness) requires_distinct_witness = true;
-                produced_fields[index] = .{
-                    .name = field.name,
-                    .ty = witness.slot,
-                    .value_ty = field.value_ty,
-                    .kind = field.kind,
-                    .default = field.default,
-                };
+                produced_fields[index] = inlineFieldWithWitnessSlot(field, witness.slot);
             }
             const produced_node = if (requires_distinct_witness) blk: {
                 const witness_fields = try self.graph.arena().dupe(InstField, produced_fields);
@@ -51721,13 +51728,7 @@ const BodyContext = struct {
                     "record graph constructor child differed without explicit representation evidence",
                 );
                 if (witness.requires_witness) requires_distinct_witness = true;
-                produced_fields[index] = .{
-                    .name = field.name,
-                    .ty = witness.slot,
-                    .value_ty = field.value_ty,
-                    .kind = field.kind,
-                    .default = field.default,
-                };
+                produced_fields[index] = inlineFieldWithWitnessSlot(field, witness.slot);
                 break :blk pre;
             } else if (base_expr) |base_value| blk: {
                 // Record update copies unmentioned slots verbatim—for an
