@@ -185,6 +185,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_12014_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12128_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12024_test.zig"));
+    std.testing.refAllDecls(@import("test/redundant_return_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12030_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12141_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12151_test.zig"));
@@ -199,6 +200,8 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_12489_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12553_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12586_test.zig"));
+    std.testing.refAllDecls(@import("test/derived_codec_signature_test.zig"));
+    std.testing.refAllDecls(@import("test/where_clause_erroneous_type_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12587_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12677_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12794_test.zig"));
@@ -215,6 +218,9 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/default_cycle_alias_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12965_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12994_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_13022_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_13006_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_13011_test.zig"));
 
     // Cross-module monomorphization tests
     std.testing.refAllDecls(@import("test/cross_module_mono_test.zig"));

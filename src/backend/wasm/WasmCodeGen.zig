@@ -11234,12 +11234,6 @@ fn emitListLenLocal(self: *Self, list_local: u32) Allocator.Error!u32 {
     return len_local;
 }
 
-/// Push `@min(a, b)` for the unsigned i32 locals `a` and `b`.
-fn emitU32Min(self: *Self, a: u32, b: u32) Allocator.Error!void {
-    try self.emitLocalGets(.{ a, b, a, b });
-    try self.emitOps(.{ Op.i32_lt_u, Op.select });
-}
-
 fn generateList(self: *Self, l: anytype) Allocator.Error!void {
     const ls = self.getLayoutStore();
     const elems = self.store.getLocalSpan(l.elems);
@@ -12203,10 +12197,12 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
             const rec_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
             const window: ListSublistWindow = .{ .record = .{ .rec_local = rec_local, .len_field_off = len_field_off, .start_field_off = start_field_off } };
-            switch (ll.op) {
-                .list_sublist => try self.generateListSublist(.{ .owned = .{ .unique_args = ll.unique_args } }, list_local, window, ll.ret_layout),
-                .list_sublist_borrowed => try self.generateListSublist(.borrowed, list_local, window, ll.ret_layout),
-                else => unreachable, // the enclosing prong admits only the two sublist ops
+            if (ll.op == .list_sublist) {
+                try self.generateListSublist(.{ .owned = .{ .unique_args = ll.unique_args } }, list_local, window, ll.ret_layout);
+            } else {
+                // The enclosing prong admits only the two sublist ops.
+                std.debug.assert(ll.op == .list_sublist_borrowed);
+                try self.generateListSublist(.borrowed, list_local, window, ll.ret_layout);
             }
         },
         // list_clear(list) -> the zero-length sublist from index zero, the
@@ -19702,7 +19698,7 @@ fn wasmSublistOutcome(case: SublistCase, element: layout.Idx) (ListWindowLengthE
     };
 }
 
-fn expectSublistMatchesBuiltin(case: SublistCase, element: layout.Idx, native_width: usize, elements_refcounted: bool) !void {
+fn expectSublistMatchesBuiltin(case: SublistCase, element: layout.Idx, native_width: usize, elements_refcounted: bool) (ListWindowLengthError || HostedSymbolError || error{TestExpectedEqual})!void {
     const expected = nativeSublistOutcome(case, native_width, elements_refcounted);
     const actual = try wasmSublistOutcome(case, element);
     std.testing.expectEqualDeep(expected, actual) catch |err| {

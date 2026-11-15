@@ -754,6 +754,52 @@ const Unifier = struct {
         return var_;
     }
 
+    /// A fresh node holding existing children: `content`'s direct children
+    /// may come from the younger operand, so each is lowered to the node's
+    /// rank. Ranks never increase going deeper (design.md "Def Checking
+    /// Order"); a younger child left under this older node would be reached by
+    /// no variable its own generalization visits, and would be quantified
+    /// while the older node still refers to it.
+    fn freshParent(self: *Self, vars: *const ResolvedVarDescs, content: Content) std.mem.Allocator.Error!Var {
+        const var_ = try self.fresh(vars, content);
+        const rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank);
+        switch (content) {
+            .flex, .rigid, .field_presence, .err => {},
+            .alias => |alias| for (self.types_store.sliceAliasAllArgs(alias)) |arg| try self.lowerRankTo(arg, rank),
+            .structure => |flat_type| switch (flat_type) {
+                .empty_record, .empty_tag_union => {},
+                .tuple => |tuple| for (self.types_store.sliceVars(tuple.elems)) |elem| try self.lowerRankTo(elem, rank),
+                .nominal_type => |nominal| for (self.types_store.sliceNominalArgs(nominal)) |arg| try self.lowerRankTo(arg, rank),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    for (self.types_store.sliceVars(func.args)) |arg| try self.lowerRankTo(arg, rank);
+                    for (self.types_store.sliceVars(func.effect_deps)) |dep| try self.lowerRankTo(dep, rank);
+                    try self.lowerRankTo(func.ret, rank);
+                },
+                .record => |record| {
+                    for (self.types_store.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                        try self.lowerRankTo(presence.typeVar(), rank);
+                        if (presence.presenceVar()) |presence_var| try self.lowerRankTo(presence_var, rank);
+                    }
+                    try self.lowerRankTo(record.ext, rank);
+                },
+                .tag_union => |tag_union| {
+                    for (self.types_store.getTagsSlice(tag_union.tags).items(.args)) |args| {
+                        for (self.types_store.sliceVars(args)) |arg| try self.lowerRankTo(arg, rank);
+                    }
+                    try self.lowerRankTo(tag_union.ext, rank);
+                },
+            },
+        }
+        return var_;
+    }
+
+    fn lowerRankTo(self: *Self, var_: Var, rank: Rank) std.mem.Allocator.Error!void {
+        const resolved = self.types_store.resolveVar(var_);
+        if (@backingInt(resolved.desc.rank) > @backingInt(rank)) {
+            try self.types_store.setDescRank(resolved.desc_idx, rank);
+        }
+    }
+
     /// Record a deferred constraint check for later verification.
     /// Always uses b's var for error regions (via unresolved_b) because b represents
     /// the "actual" type from the user's code, while a represents the "expected" type
@@ -2104,14 +2150,14 @@ const Unifier = struct {
             if (targets.contains(resolved.desc_idx)) {
                 const spliced = if (resolved.desc_idx == targets.a) &spliced_a else &spliced_b;
                 if (spliced.*) {
-                    return try self.finishRowForMerge(kind, range, try self.fresh(vars, resolved.desc.content));
+                    return try self.finishRowForMerge(kind, range, try self.freshParent(vars, resolved.desc.content));
                 }
 
                 spliced.* = true;
                 const target_row = switch (resolved.desc.content) {
                     .structure => |flat_type| kind.rowOf(flat_type),
                     .flex, .rigid, .alias, .field_presence, .err => null,
-                } orelse return try self.finishRowForMerge(kind, range, try self.fresh(vars, resolved.desc.content));
+                } orelse return try self.finishRowForMerge(kind, range, try self.freshParent(vars, resolved.desc.content));
                 try self.mergeRowEntriesIntoScratch(kind, &range, kind.entriesOf(target_row));
                 ext_var = target_row.ext;
                 continue;
@@ -2192,7 +2238,7 @@ const Unifier = struct {
     /// A fresh row holding `entries` over `ext`.
     fn freshRow(self: *Self, comptime kind: RowKind, vars: *const ResolvedVarDescs, entries: []const kind.Entry(), ext: Var) std.mem.Allocator.Error!Var {
         const range = try kind.appendToStore(self.types_store, entries);
-        return try self.fresh(vars, kind.content(kind.row(range, ext)));
+        return try self.freshParent(vars, kind.content(kind.row(range, ext)));
     }
 
     fn unifyTagUnionWithNominal(

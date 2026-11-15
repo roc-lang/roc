@@ -1208,7 +1208,7 @@ pub fn devEvalTopLevelExpects(
         std.debug.assert(metadata.kind == .test_expect and metadata.order == request.order);
         regions[index] = switch (request.source) {
             .statement => |statement| resources.module_env.store.getStatementRegion(statement),
-            .def, .expr, .required_binding, .hoisted, .literal => {
+            .def, .expr, .required_binding, .hoisted, .literal, .literal_argument => {
                 base.invariant("eval helper invariant violated: test root was not published from an expect statement", .{});
             },
         };

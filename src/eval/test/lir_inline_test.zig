@@ -188,7 +188,7 @@ fn lowerModuleWithOptions(
     const main_request = for (resources.checked_artifact.root_requests.requests.items()) |request| {
         switch (request.source) {
             .def => |def| if (def == main_def) break request,
-            .expr, .statement, .required_binding, .hoisted, .literal => {},
+            .expr, .statement, .required_binding, .hoisted, .literal, .literal_argument => {},
         }
     } else return error.MissingRootProcedure;
     const published_roots = [_]check.CheckedArtifact.RootRequest{main_request};
@@ -293,12 +293,14 @@ fn lowerMonotypeModuleWithOptions(
         },
     };
 
+    const modules: postcheck.Common.CheckedModules = .{
+        .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+        .imports = import_views,
+    };
+    try modules.demandBodyIndexes();
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
-        .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
-            .imports = import_views,
-        },
+        modules,
         .{
             .requests = root_requests,
         },
@@ -339,12 +341,14 @@ fn monotypeCountersForModuleWithImports(
     }
 
     var counters: postcheck.Monotype.Lower.SpecializationCounters = .{};
+    const modules: postcheck.Common.CheckedModules = .{
+        .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+        .imports = import_views,
+    };
+    try modules.demandBodyIndexes();
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
-        .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
-            .imports = import_views,
-        },
+        modules,
         .{ .requests = resources.checked_artifact.root_requests.requests.items() },
         .{ .specialization_counters = &counters },
     );
@@ -1074,12 +1078,14 @@ fn liftModuleAfterSpecConstr(
         view_index += 1;
     }
 
+    const modules: postcheck.Common.CheckedModules = .{
+        .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+        .imports = import_views,
+    };
+    try modules.demandBodyIndexes();
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
-        .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
-            .imports = import_views,
-        },
+        modules,
         .{ .requests = resources.checked_artifact.root_requests.requests.items() },
         .{},
     );
@@ -1283,12 +1289,14 @@ fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
         view_index += 1;
     }
 
+    const modules: postcheck.Common.CheckedModules = .{
+        .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+        .imports = import_views,
+    };
+    try modules.demandBodyIndexes();
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
-        .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
-            .imports = import_views,
-        },
+        modules,
         .{ .requests = resources.checked_artifact.root_requests.requests.items() },
         .{ .proc_debug_names = true },
     );
@@ -3308,12 +3316,14 @@ test "differently ordered source record rows produce normalized monotype rows" {
         view_index += 1;
     }
 
+    const modules: postcheck.Common.CheckedModules = .{
+        .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+        .imports = import_views,
+    };
+    try modules.demandBodyIndexes();
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
-        .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
-            .imports = import_views,
-        },
+        modules,
         .{ .requests = resources.checked_artifact.root_requests.requests.items() },
         .{},
     );
@@ -3573,7 +3583,10 @@ test "single-use block helper with return is not inlined" {
     try expectInlinePlanDecision(
         \\helper : U64 -> U64
         \\helper = |x| {
-        \\    return x
+        \\    if x > 3 {
+        \\        return 0
+        \\    }
+        \\    x + 1
         \\}
         \\
         \\main : U64

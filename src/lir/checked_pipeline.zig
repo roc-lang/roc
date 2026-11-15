@@ -1846,7 +1846,17 @@ fn finishLoweredOutput(
     // first gives each variable carried out of a construct with its result
     // its own parameter, so pruning can remove it.
     try runProcedurePass(allocator, &lowered.lir_result, pass_target, .scalarize);
-    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .prune_join_params);
+    {
+        // A read of a compile-time value whose evaluation can fail is guarded
+        // after ARC, so pruning keeps it even when nothing reads its value.
+        var guarded_reads = try @import("comptime_value_guards.zig").guardedSlots(allocator, &lowered.lir_result, if (frozen.*) |*data| data else null);
+        defer if (guarded_reads) |*set| set.deinit(allocator);
+        if (guarded_reads) |*set| {
+            try ProcPasses.runPruneJoinParams(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, pass_target.post_check_executor, pass_target.lir_pass_parallel_metrics_out, set);
+        } else {
+            try runProcedurePass(allocator, &lowered.lir_result, pass_target, .prune_join_params);
+        }
+    }
     if (target.promote_loop_appends.enabled()) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .loop_append);
     }

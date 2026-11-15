@@ -7,6 +7,10 @@ const memory_fault = @import("memory_fault.zig");
 const signal_handler = @import("signal_handler.zig");
 const ice_context = @import("ice_context.zig");
 
+/// Keep crash reports tied to the crashing binary without allocating in a signal handler.
+const ISSUE_REPORT_MESSAGE = "Please report this issue at: https://github.com/roc-lang/roc/issues" ++
+    " and mention that the Roc compiler version is " ++ @import("compiler_version").compiler_version ++ "\n\n";
+
 /// Error message to display on stack overflow
 const COMPILER_STACK_OVERFLOW_MESSAGE = "\nThe Roc compiler overflowed its stack memory and had to exit.\n\n";
 
@@ -135,7 +139,7 @@ fn handleAccessViolation(fault_addr: usize, context: signal_handler.AccessViolat
         const addr_str = memory_fault.formatHex(fault_addr, &addr_buf);
 
         const msg1 = "\nAccess violation in the Roc compiler.\nFault address: ";
-        const msg2 = "Please report this issue at: https://github.com/roc-lang/roc/issues\n\n";
+        const msg2 = ISSUE_REPORT_MESSAGE;
         const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
         var bytes_written: DWORD = 0;
         _ = kernel32.WriteFile(stderr_handle, msg1.ptr, msg1.len, &bytes_written, null);
@@ -171,7 +175,7 @@ fn handleAccessViolation(fault_addr: usize, context: signal_handler.AccessViolat
             const unavailable_msg = "(stack trace unavailable on this target)\n";
             _ = std.c.write(posix.STDERR_FILENO, unavailable_msg.ptr, unavailable_msg.len);
         }
-        const report_msg = "\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n";
+        const report_msg = "\n" ++ ISSUE_REPORT_MESSAGE;
         _ = std.c.write(posix.STDERR_FILENO, report_msg.ptr, report_msg.len);
         std.process.exit(139);
     }
@@ -228,6 +232,7 @@ test "access violation handler is not reported as stack overflow" {
     else
         "Segmentation fault";
     try testCrashInChildProcess("high-access-violation", expected_msg, 139);
+    try testCrashInChildProcess("high-access-violation", ISSUE_REPORT_MESSAGE, 139);
 }
 
 test "worker thread installs stack overflow handler" {

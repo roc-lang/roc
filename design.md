@@ -613,6 +613,13 @@ within an explicit code-growth limit; a larger value keeps its named binding.
 A compile-time value read is not a substitutable read: its value guard crashes
 where the program evaluates the read when that value's evaluation failed, so
 substitution may neither drop a discarded read nor move one to a later use.
+LIR passes that run before the guards are inserted observe the same rule: the
+slots `comptime_value_guards.guardedSlots` names are the reads the guards will
+guard, and join-parameter pruning never deletes a read of one as a dead pure
+definition, even one of a zero-sized value whose only consumer is a call of a
+callable with no variants. Pinned by "a hoisted call of a function field read
+from a value checking rejected reports nothing more" in
+`src/compile/test/hoisted_constants_test.zig`.
 Making a value reusable is decided by substitutability alone, never by that
 limit: a substitutable value of any size is already reusable and is kept whole,
 so reuse never walks or copies its structure. A long interpolation binds one
@@ -1389,7 +1396,11 @@ checker recovery. The recovery rules:
   undeclared type) declares no type, and nothing may be related to it. Checking
   records this on the annotation itself (`CIR.Annotation.erroneous`) as soon as
   it generates the annotation's type, before any body or use is related to it,
-  so the record is available in every module that can see the definition. The
+  so the record is available in every module that can see the definition. A
+  where clause's method signature or where alias application is part of the
+  type the annotation generates, so one that names an undeclared type, or a
+  builtin type internal to its module (`Encoding.JsonEncoding`), makes the
+  annotation erroneous too. The
   definition's right-hand side becomes the runtime error, a method included.
   Every use of the definition, in its own module or an importing one, by name
   or as an associated item, is erroneous at the use (`defReference` classifies
@@ -1966,6 +1977,16 @@ checked as one. Alias traversal has no source-text reconstruction or fixed hop
 limit; invalid and cyclic aliases must already resolve to the checker error
 type.
 
+Every other method lookup on a type follows the same rule. An alias
+declaration owns no methods (an alias cannot have an associated block), so a
+static-dispatch receiver, the format type whose methods a generated codec
+calls (`encode_record`, `parse_record_start`, ...), and a codec receiver
+classified for scheme ownership are each resolved through their aliases to the
+terminal type first: a nominal type's declaration owns the methods, and a
+structural backing derives them. The format method is still instantiated
+against the type as written, so the alias stays the presented type (Type
+Alias Invariant).
+
 A resolved lookup's module identity is local to the module owning its expression.
 Consumers visiting imported bodies resolve that identity through the expression
 owner's identity table, then use the target module's definition store. An
@@ -2011,12 +2032,43 @@ rewrite above, this replacement resolves a reference; it mutates no solved
 type and stamps no dispatch plan, so it adds no Rewrite Inventory entry
 (Solver-Mutating Rewrites). Omitted defaulted fields of a construction through
 an alias are found by checking, as for any construction whose nominal type
-canonicalization does not know (Defaulted Fields). The default-cycle pass is
-the one place canonicalization looks through an alias, and only along names it
-resolved itself: an alias whose annotation is a reference to a local type
-declaration names that declaration, so a construction through it contributes
-the same omission edges as one written through the nominal type's own name
-(Defaulted Fields).
+canonicalization does not know (Defaulted Fields). Canonicalization looks
+through an alias in exactly two places, and only along names it resolved
+itself. The default-cycle pass is one: an alias whose annotation is a
+reference to a local type declaration names that declaration, so a
+construction through it contributes the same omission edges as one written
+through the nominal type's own name (Defaulted Fields). The exposed type
+surface check is the other (Exposed Type Surfaces).
+
+### Exposed Type Surfaces
+
+A module warns when an exposed, non-opaque nominal type's backing mentions a
+type that other modules cannot name: `private_type_in_exposed_field` for a
+mention inside a record field, `private_type_in_exposed_type` otherwise.
+Canonicalization runs this check (`Can.checkExposedTypeSurfaces`) over the
+annotations of the module's public type declarations: the exposed types, the
+type module's main type, and every exposed type declared under them. Local
+alias annotations are walked through, so a mention through a private alias is
+judged at the type the alias names. Imported types are other modules' surfaces
+and are not walked; opaque types expose no backing and are skipped.
+
+A private local nominal type is publicly named when a public alias renames it,
+by the same rule documentation and `roc bump` apply to solved types (Builtin
+Types Named Through Aliases): the alias's annotation, with parentheses
+stripped and private local aliases followed, applies the nominal type to
+exactly the alias's own parameters, in order. Following an alias composes the
+parameter positions its arguments carry, so `A(x, y) : B(y, x)` with
+`B(p, q) : N(q, p)` renames `N`, while a partial application, a repeated
+parameter, the parameters in another order, a concrete argument where the
+nominal type takes a parameter, or any type built around the nominal does
+not. A chain that reaches a public alias leaves the renaming to that alias.
+When several public aliases rename one nominal type, the one declared first
+in the source names it. A renamed nominal type is not warned about, and
+unless it is opaque its own backing is checked as a public surface, with
+warnings naming the renaming alias. Renaming publishes the nominal type's own
+name only: a type path does not resolve through an alias into the block of
+the type it names, so a mention of a type nested in a renamed type's block
+still warns, and an alias nested there renames nothing.
 
 ### Builtin Types Named Through Aliases
 
@@ -2053,7 +2105,10 @@ behaves in any module.
   entry of its own, and every reference to it renders as a reference to the
   alias. The nominal type may be declared in the alias's module or in a
   module the package does not expose, and a renamed type can rename further
-  types through aliases nested in it.
+  types through aliases nested in it. The exposed type surface check
+  applies the same renaming rule within one module to its annotations
+  (Exposed Type Surfaces), so a field typed through such an alias draws no
+  private-type warning.
 
 ### Compile-Time Evaluation And Static Storage
 
@@ -3120,11 +3175,14 @@ or return, grouping parentheses preserve it, and an `if` with an `else` or
 a `match` propagates it to its branch bodies. A return's operand also occupies
 that position. Bindings, operands of other expressions, conditions, guards,
 loops and `if` without `else` do not propagate it. Nested lambdas start their own independent result positions.
-Canonicalization consumes this inventory to warn on redundant returns, and
-formatting consumes the same inventory to remove their keywords while preserving
-comments and adding parentheses where a bare identifier would otherwise parse
-as a punned record. Explicit early returns retain their control-flow meaning in
-CIR.
+Canonicalization consumes this inventory to warn on redundant returns and to
+canonicalize each one to its operand, so a redundant `return` produces the same
+CIR, types and generated code as the program written without it; no later stage
+sees a return node for it. Returns inside `expect` and returns outside any
+function are not redundant and keep their diagnostics. Formatting consumes the
+same inventory to remove their keywords while preserving comments and adding
+parentheses where a bare identifier would otherwise parse as a punned record.
+Explicit early returns retain their control-flow meaning in CIR as return nodes.
 
 ### Bidirectional source controls
 
@@ -5189,6 +5247,20 @@ node's original inner-scope rank. The child-rank reduction cannot move a capture
 type back into an inner scope. Independent inner-scope variables remain eligible
 for generalization; captured variables wait for their owning boundary.
 
+Rank adjustment reaches a younger variable only through a variable its own
+generalization visits, so a node unification creates holds no child younger
+than itself. Unification creates nodes at the lower of its two operands'
+ranks: a row holding one operand's unshared tags or fields, or a copy of a
+merge destination's content. Such a node can hold the younger operand's
+variables, so unification lowers each direct child of a node it creates to
+the node's rank (`Unifier.freshParent`); a younger variable nested deeper is
+reached through that child when the child's own generalization visits it at
+its lowered rank. Otherwise a younger variable beneath an older value's row,
+such as the tail of a top-level value's tag row widened by a generalized
+function's use, would be quantified by that function while the value still
+shares it. Pinned by `src/check/test/issue_13011_test.zig`, the rank tests
+in `src/check/test/unify_test.zig`, and `test/cli/Issue13011StoreWrites.roc`.
+
 Roc generalization is exclusively rank-1. Quantification belongs to a value
 binding; an arbitrary expression does not acquire a scheme, and the result of
 calling a polymorphic function is a monotype even when that result contains a
@@ -5679,6 +5751,12 @@ field or list item holding such a conditional stores the lambdas without a
 construction edge. Evidence for such a lambda's requirements on a variable
 checking left unquantified comes from its callable-derived dispatch scope
 (Static Dispatch In Monotype), not from a scheme.
+
+A lambda stored at a construction edge whose slot expects a function type has
+its parameters seeded from that type before its body is checked (Lambda
+Parameters Seeded From Context), as a call operand's are. Its parameters are
+then the slot's, so its scheme quantifies only what the slot leaves free; the
+construction edge still instantiates whatever it quantifies.
 
 An annotation cannot make a weak binding polymorphic. An annotation on a weak
 binding that introduces a type variable, named (`a`, `_a`) or an anonymous
@@ -6382,7 +6460,13 @@ lowering in its worker's workspace and never added to the checked module:
   (`RootSource.literal`, a `LiteralNode` naming a literal expression or a
   custom literal pattern; `CompileTimeRoot.literalNode`), it holds no
   expression, and lowering converts the literal's value through the
-  conversion plan keyed by the literal's node.
+  conversion plan keyed by the literal's node;
+- a literal argument root's body ("Literal Arguments"): the root's source is
+  the expression owning its edge (`RootSource.literal_argument`), which
+  locates the root for reports and which the root does not evaluate; it holds
+  no expression and no body nodes (`bodyParts` is empty), and lowering
+  converts its literal at the edge `CompileTimeRoot.literal_argument`
+  records.
 
 ### Forbidden Checked-Boundary Shapes
 
@@ -6689,6 +6773,23 @@ No candidate is recorded inside an ordinary top-level constant, because that
 enclosing root already evaluates and owns the destructure site. Validation uses
 the checked pattern compiler and compile-time evaluator; it never reinterprets
 source patterns separately.
+
+Only a requested root is evaluated, so only a requested root replaces its source
+occurrence. A root that receives no request (its checked type is not concrete,
+for example) replaces nothing, and an exhaustiveness site it would have
+validated is classified as if no root had been recorded. A site that runtime
+code can reach is decided statically even when it was classified for empirical
+validation, because runtime code can arrive there with any value of its type.
+Empirical validation decides only the sites that compile-time evaluation alone
+reaches.
+
+A requested callable binding root replaces its source occurrence too: runtime
+code reads the root's completed callable instead of computing it, so the
+destructure it extracts from, and every site its expression evaluates, runs
+only during the root's evaluation. The exception is a site inside a function
+body within that expression. The callable can hold that function, and runtime
+code that calls it reaches the site with any argument, so such a site stays
+classified by its enclosing procedure template.
 
 Local binding dependencies likewise remain candidates until their enclosing
 expression is either selected or rejected. A selected maximal parent owns the
@@ -8469,7 +8570,12 @@ encoding and state types for exactly the methods needed by that shape:
 
 Selecting a derived method relates its public signature to the call before
 deciding whether the shape is supported, exactly as selecting an ordinary
-method relates that method's signature. A call on a type name such as
+method relates that method's signature. That relation belongs to the dispatch:
+a requirement whose runtime function is not the derived method's (`r.encoder_for
+: Str -> {}`, or `p.parser_for : {} -> p`) leaves both solved types as they
+are, is reported as a missing method on the receiver (as an undetermined type
+when a default decided the receiver), and retires the dispatch that owns it,
+so no erroneous type reaches lowering. A call on a type name such as
 `List.parser_for(format)` names the receiver with fresh type arguments, so the
 parser's `value` or the encoder's value argument is what determines them.
 Derivation needs every part of the receiver: a receiver that is still
@@ -10128,6 +10234,38 @@ uses its state whole keeps the aggregate in the copy too. The walk follows the r
 known tag or callable in a field still counts where a `match` or call inside
 the loop reads it.
 
+An admitted copy carries only the part of the body the known value improves.
+A gainable slot is a parameter or capture whose type holds a tag union or a
+function. A stretch of a source body is a maximal run of its top-level
+statements none of which reads a gainable slot (directly or through a local
+bound by a statement that does), binds or reads a top-level local whose type
+holds a tag union or function, or is fixed in place: a `return`, loop control
+or join jump that leaves the statement, a recursive or uninitialized binding,
+a payload-initialization construct, a crash, or a call into the function's
+own cycle of the call graph. Each stretch divides into runs, each the longest
+segment from where the previous one ended that binds exactly one local a
+later position reads (SpecConstr creates no types, so a run's function
+returns that local's type); a statement that starts no such segment stays,
+as does a run of a single wrapper-shaped statement (`wrapper_body.zig`),
+which costs less than a call. Optional productive inlines and call-pattern
+workers count as copies of their callee (iterator-protocol, wrapper and
+foreign-capture inlines do not, and functions that call or produce iterators
+are never split). The copy that leaves two copies of a body in the program
+(a second copy, or a first copy of a function the source names at two or
+more places or that is a root) splits it at that serial point: each run moves
+into a prefix function, reserved then and written like a worker in the
+source function's root context, and the source body becomes the same
+statements with a binding of the run's live-out to a call on its live-ins in
+place of each run. The run therefore runs at the same point, once, with the
+same effects in the same order, and ARC sees an ordinary call. Every later
+clone reads the split source, a prefix function is never inlined, and a
+worker or the function's own body already written from the old source is
+written again, so the program holds one copy of each run. The first copy of
+a body that only one place names is not split, since the body's own function
+is then unused; if a later copy appears after all, the split leaves the
+first copy's run as the only second copy. The split applies wherever
+SpecConstr runs with `.all_calls` clone inlining.
+
 A known argument is one the clone holds as a constructor, callable, or known
 local at the consumed path, or a nested direct call whose callee constructs
 that part on every path or always passes it through from a known argument.
@@ -10824,6 +10962,55 @@ The accepted and rejected sides are pinned in `issue_11229_test.zig`: let-bound
 arithmetic remains polymorphic, including heterogeneous user arithmetic;
 nominal and extended rows still guide nested defaulted/optional construction;
 inconsistent shared type variables and unsupported real dispatches still fail.
+
+### Lambda Parameters Seeded From Context
+
+A lambda with no annotation of its own is checked knowing the parameter types
+its position expects, whenever that position supplies an expected function
+type: a call argument (the callee's formal parameter slot), a stored value in
+an aggregate (a record field, tuple or list item, or tag payload, through
+the enclosing construction's projected cell), or a record update field (the
+base row's field of that name). Before the body is checked, a skeleton function
+over the lambda's own parameter variables is related to that expected type
+(`seedLambdaParamsFromContext`). Dispatch on a parameter therefore resolves
+inside the body against the parameter's known type, and a generic method of
+that type can be called at several types, exactly as in the same lambda
+written as an annotated definition:
+
+```roc
+in_record : { seen : Store -> (List(U64), List(Str)) }
+in_record = { seen: |s| (s.read(count_cell), s.read(title_cell)) }
+```
+
+checks with `s : Store`, where checking the body first would leave `s` a
+variable that needs two `read` methods of different types.
+
+This is a policy: it accepts programs that checking the body first rejects.
+It changes no typing judgment of a well-typed program, because the expected
+type is the one the owning relation relates the lambda to anyway: a call's
+argument relation, or the aggregate's relation of the lambda's instantiated
+use to its slot. An expression-position lambda is instantiated exactly once,
+at its construction edge, so the parameters linked to the slot lose no
+polymorphism a program could use. The rule reads only explicit context:
+
+- Only a context whose type already names a type constructor (through
+  aliases) seeds anything; an unknown slot leaves the lambda as it was.
+- A projected cell is already the construction's own fresh shape copy and is
+  related directly. A record update's borrowed field is copied
+  (`copyExpectedShape`) inside the seed's commit-probe, so the base's own
+  type is never constrained by the seed.
+- The relation runs in one commit-probe. An expectation the lambda does not
+  fit (a different arity, or erroneous context) is rolled back with its copy,
+  and the owning relation reports the mismatch exactly as without the seed.
+- An annotated lambda is checked against its annotation and is not seeded.
+
+Pinned by `src/check/test/issue_13006_test.zig`. Accepted: a lambda in an
+annotated record field, tuple item, list item, tag payload, and record
+update calling a generic method at two types, and the record field form
+agreeing with the named annotated function. Rejected: a lambda with no
+expected context still needs two incompatible `read` methods on one
+parameter, and an arity mismatch against the expected function type is the
+ordinary mismatch.
 
 ### Call Arguments Relate In Order
 
@@ -12622,6 +12809,16 @@ the later finalization boundary is not their creator.
 This validates in a private copy and rewrites no solved variable the program can
 reach, so it adds no Rewrite Inventory entry (Solver-Mutating Rewrites).
 
+Every parked relation is validated or rejected before the module freezes its
+codec contracts, which a debug assertion in
+`Check.freezeBoundaryCodecDerivations` pins. Module finalization drains the
+parked relations before its settled default-materialization fixpoint
+(`checkInstantiatedStaticDispatchConstraints(.settled)`), and a default that
+fixpoint materializes can ground a receiver whose derived codec relation then
+parks. That fixpoint therefore validates whatever is parked before it judges
+another round, and propagates a validated relation's error-row growth to the
+widened uses of the value that holds the row, as the drain before it does.
+
 The instance's copy of each of the template's variables is that variable
 throughout the instance's derivation (`Check.final_codec_instance_copies`). A
 format method of a type declared in the definition's body can name the
@@ -12765,6 +12962,20 @@ generalized interpolation's scheme relates its parts to the item type
 `a -> b where [b.from_interpolation : List(Str) -> Try(Iter(a) -> b, [InvalidInterpolation(Str)])]`),
 so a body compiled once for every instantiation builds its items from its parts
 without consulting any use.
+
+An interpolation whose target this boundary's literal defaulting decides is not
+related there: a receiver of the boundary's rank that no root's interface
+reaches (`boundary_reachable_vars`) defaults, and each of its interpolations is
+then discharged against the default on its own, exactly as when the target was
+decided before the boundary. Relating parts there would let one value retype
+another, and relating the receiver's interpolations into one requirement
+would leave all but one interpolation's parts unchecked. Relating a part can
+make it reachable, so the boundary recollects the reachable set and revisits
+its pool until no interpolation is newly related (`relateBoundaryRequirements`).
+In `var $o = ""` followed by `$o = "${Ok(n)}"` and `$o = "${n.to_str()}"`, with
+`$o` never escaping, only `Ok(n)` is rejected. Pinned by
+test/snapshots/static_dispatch/interpolation_defaulted_local_parts_unrelated.md
+and test/snapshots/static_dispatch/interpolation_defaulted_local_sites_unrelated.md.
 
 Instantiating a generalized interpolation copies its constraint and its parts'
 types, so a part rejected by an instantiated copy is rejected by that use's
@@ -14661,6 +14872,12 @@ Other solved-graph mutations:
   Introduction (above). Uses the existing `unifyWith` descriptor-introduction
   mechanism for a proved concrete builtin conversion; does not mutate the
   context's type or introduce a redirect rule.
+- `seedLambdaParamsFromContext`—policy: Lambda Parameters Seeded From
+  Context (above). A probe of whether the expected context names a type
+  constructor gates an ordinary unification of a skeleton over an
+  unannotated lambda's parameters with that context, committed only when it
+  succeeds. It writes nothing outside unification and introduces no redirect
+  rule.
 
 - `rowForMerge` (record and tag-union rows)—mechanism: row-extension
   preservation during ordinary unification. Both operand equivalence classes
@@ -19790,7 +20007,10 @@ neither fail nor bind anything else. A type has one method of each name, so
 when a receiver is still a type variable at its definition's generalization
 boundary, its requirements of one method become one requirement: the boundary
 relates their callables before it defaults literals and generalizes, and an
-inferred scheme never holds two requirements of one method on one type.
+inferred scheme never holds two requirements of one method on one type. A
+receiver that the boundary's literal defaulting decides is not about to be
+generalized, so its requirements are not related: each is discharged against
+the default on its own ("Builtin Str Interpolation Part Compatibility").
 Requirements that cannot be one are a type mismatch. That includes a relation
 that would make the method's type infinite, which no type can be (two uses of
 `row.i32()` whose results must be both `a` and `{ id: a }`); unification
@@ -25652,7 +25872,7 @@ multi-worker build emit the same bytes.
 The Wasm backend emits some list and string low-levels as inline code instead
 of a builtin call. Every inline lowering has exactly the outcomes of the
 builtin that every other backend calls, case by case: the same result value,
-the same allocations, and the same reference count and element releases. An
+the same allocations, and the same reference count and item releases. An
 inline lowering is a faster spelling of the builtin, never a different
 operation.
 
@@ -25660,7 +25880,7 @@ Every value an inline lowering produces keeps the list representation the
 builtins rely on. A list that is not a seamless slice owns an allocation
 exactly when its capacity is nonzero, and the empty list with no capacity is
 `{null, 0, 0}`. A zero-length result that owns nothing is therefore that empty
-list, never a pointer to a refcount word with no element storage: a
+list, never a pointer to a refcount word with no item storage: a
 capacity-zero list is one the builtins' `RocList.decref` never frees, so such
 an allocation would leak the first time a builtin consumed it.
 
@@ -25672,7 +25892,7 @@ capacity word.
 
 `list_sublist_borrowed` is inline, with `listSublistBorrowed`'s outcomes: an
 empty window gives the empty list, and any other window is a seamless slice
-that records the source's element count for teardown while the source is
+that records the source's item count for teardown while the source is
 exclusive. `list_sublist` is inline when its items are not refcounted, with
 `listSublist`'s outcomes. The list is reusable when it is not a seamless
 slice and is exclusive: its argument is proven unique (`unique_args`), it has
@@ -25682,8 +25902,8 @@ and gives the empty list; a window from index zero of a reusable list shrinks
 it in place; any other window is a seamless slice that takes over the list's
 reference. With refcounted items, `list_sublist` calls `listSublist`, which
 also releases the items a reusable list drops; the call is cheap next to the
-per-item releases it may make. The split is by the list layout's
-`elements_refcounted`, never by anything the lowering guesses. Zero-sized
+per-item releases it may make. The split is by whether the list layout marks
+its items refcounted, never by anything the lowering guesses. Zero-sized
 items have no bytes to slice, so their sublist is the window length alone.
 `list_take_first` and `list_take_last`, which a list rest pattern lowers to,
 are `list_sublist` over the first `count` items and over the items from

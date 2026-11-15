@@ -19060,6 +19060,19 @@ fn checkInstantiatedStaticDispatchConstraints(
             // a suffix this settled loop will judge and validate next.
             try self.checkGroundedStoredTypeSchemeRequirementsAtFinalization(env, is_numeric_default_pass);
         }
+        if (default_phase == .settled and self.final_codec_dispatch_constraints.items.len != 0) {
+            // A materialized default can ground a receiver whose derived
+            // codec relation then parks for final validation. Every final
+            // validation pass has already run, so this phase validates it and
+            // judges whatever that validation grounds in another round. A
+            // validated relation can grow a value's error row with its
+            // format's tags, which every widened use of that value must see.
+            try self.checkFinalGeneratedCodecConstraints(env);
+            while (try self.propagateValueRowsToWidenedUses(env)) {
+                if (self.final_codec_dispatch_constraints.items.len != 0) try self.checkFinalGeneratedCodecConstraints(env);
+            }
+            continue;
+        }
         if (self.instantiation_dispatchers_checked == self.instantiation_dispatchers.items.len and
             (default_phase == .ordinary or
                 (materializations_checked == self.default_materializations.items.len and
@@ -23927,11 +23940,30 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
     // An erroneous annotation declares no type. Record that on the annotation
     // itself, before anything is related to it, so every consumer (including
     // importers, which read this module's annotations) can refuse to relate
-    // anything to it.
+    // anything to it. A where clause's method signature is part of the type
+    // the annotation generates, so an error there makes the annotation
+    // erroneous too.
     self.var_set.clearRetainingCapacity();
-    if (try self.varContainsError(annotation_var, &self.var_set)) {
+    if (try self.varContainsError(annotation_var, &self.var_set) or
+        try self.whereSignaturesContainError(annotation.where))
+    {
         self.cir.store.markAnnotationErroneous(annotation_idx);
     }
+}
+
+/// Whether a method signature or where alias application an annotation's
+/// where clause generated holds an erroneous type.
+fn whereSignaturesContainError(self: *Self, where: ?CIR.WhereClause.Span) Allocator.Error!bool {
+    const where_span = where orelse return false;
+    for (self.cir.store.sliceWhereClauses(where_span)) |where_idx| {
+        const generated: CIR.TypeAnno.Idx = switch (self.cir.store.getWhereClause(where_idx)) {
+            .w_method => |method| method.anno,
+            .w_alias => |alias| alias.alias,
+            .w_malformed => continue,
+        };
+        if (try self.varContainsError(ModuleEnv.varFrom(generated), &self.var_set)) return true;
+    }
+    return false;
 }
 
 /// One implicitly opened tag-union extension minted while generating an
@@ -28651,9 +28683,11 @@ const Expected = struct {
     /// payloads) can generalize before the enclosing aggregate relates their
     /// instantiated use to its slot. Passing `expected_type` to those children
     /// would constrain the generalized scheme rather than that use. This
-    /// separate channel lets aggregate expressions project child slots early;
-    /// their owner still establishes the ordinary relation after the stored
-    /// value's check returns the instantiated value.
+    /// separate channel lets aggregate expressions project child slots early,
+    /// and lets a lambda child seed its parameters from the slot's function
+    /// type (`seedLambdaParamsFromContext`); their owner still establishes the
+    /// ordinary relation after the stored value's check returns the
+    /// instantiated value.
     contextual_type: ?ExpectedType = null,
     branch_result: ?Var = null,
     /// What `branch_result` is: a branch relates to an annotated result as a
@@ -30894,8 +30928,11 @@ fn abortExprTask(self: *Self, task: *ExprTask, env: *Env) void {
 /// function's static-dispatch evidence.
 fn storedValueVar(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env) std.mem.Allocator.Error!Var {
     const source_var = ModuleEnv.varFrom(expr_idx);
-    const resolved_source = self.types.resolveVar(source_var);
-    if (resolved_source.desc.rank != .generalized and !self.isBindingSchemeVar(source_var)) {
+    if (!self.isBindingSchemeVar(source_var)) {
+        // A generalized root reaches a quantified variable, so its binding
+        // boundary classified it as a scheme; a stored child that is no
+        // scheme therefore has a root its own scope still owns.
+        std.debug.assert(self.types.resolveVar(source_var).desc.rank != .generalized);
         return source_var;
     }
 
@@ -33626,21 +33663,14 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
         }
     }
 
-    // A lambda in call-argument position gets its parameters seeded from the
-    // parameter type the call expects there, before the body is checked.
-    // The body then checks against known parameter types, so dispatch on a
-    // parameter resolves inside the body and its diagnostics name concrete
-    // types. The seed is a skeleton over the parameter vars related to the
-    // expected type itself inside a commit probe: a non-matching expectation
-    // is rolled back and left to the call's own argument relation, which
-    // owns the final check and its diagnostic either way. Only the
-    // call-argument channel is seeded; a stored value's contextual slot
-    // relates to an instantiated use instead.
+    // Lambda Parameters Seeded From Context (design.md): a lambda without an
+    // annotation whose position supplies an expected function type (a call
+    // argument, or a stored value's aggregate slot) gets its parameters
+    // seeded from that type before the body is checked, so dispatch on a
+    // parameter resolves inside the body.
     if (state.mb_anno_func == null) {
         if (nested_expected.contextual_type) |contextual| {
-            if (contextual.context == .fn_call_arg) {
-                try self.seedLambdaParamsFromExpectedFn(lambda.args, contextual.var_, contextual.context, env, expr_region);
-            }
+            try self.seedLambdaParamsFromContext(lambda.args, contextual, env, expr_region);
         }
     }
 
@@ -37875,15 +37905,50 @@ fn publishUnaryDispatchExpr(
 /// function over the parameter vars (with a fresh return) is unified with the
 /// expected var inside a commit probe; a mismatch rolls back and records
 /// nothing, leaving the call's argument relation to report it.
-fn seedLambdaParamsFromExpectedFn(
+/// POLICY: Lambda Parameters Seeded From Context (design.md). Relate a
+/// skeleton over an unannotated lambda's parameter vars to the function type
+/// its position expects, before its body is checked:
+///
+///   - a call argument's expected parameter type, related as it is, since the
+///     call's own argument relation relates the lambda to it anyway;
+///   - a stored value's projected aggregate cell (a record field, tuple or
+///     list item, or tag payload), which is already the enclosing
+///     construction's own fresh shape copy;
+///   - a record update field's borrowed base field, read from the base row
+///     and copied (`copyExpectedShape`) so the base's own type is untouched.
+///
+/// Only a context that already names a type constructor seeds anything. The
+/// relation runs inside one commit probe: an expectation the lambda does not
+/// fit is rolled back with its copy and left to the owning relation, which
+/// reports the mismatch.
+fn seedLambdaParamsFromContext(
     self: *Self,
     args: CIR.Pattern.Span,
-    expected_var: Var,
-    context: problem.Context,
+    contextual: Expected.ExpectedType,
     env: *Env,
     region: Region,
 ) std.mem.Allocator.Error!void {
-    if (!self.varResolvesToKnownType(expected_var)) return;
+    if (contextual.context != .fn_call_arg and !contextual.projected_cell and contextual.record_field == null) return;
+    if (contextual.record_field == null and !self.varResolvesToKnownType(contextual.var_)) return;
+
+    var commit_probe = try self.beginCommitProbe(env);
+    var committed = false;
+    defer if (!committed) commit_probe.rollback();
+
+    const source = if (contextual.record_field) |name|
+        try self.borrowExpectedRecordField(contextual.var_, name, env) orelse return
+    else
+        contextual.var_;
+    if (contextual.record_field != null and !self.varResolvesToKnownType(source)) return;
+    // Error context is diagnostic recovery, never construction evidence.
+    if ((contextual.projected_cell or contextual.record_field != null) and self.types.mayContainErrorState()) {
+        self.var_set.clearRetainingCapacity();
+        const source_contains_error = try self.varContainsError(source, &self.var_set);
+        self.var_set.clearRetainingCapacity();
+        if (source_contains_error) return;
+    }
+    const expected_fn = if (contextual.record_field != null) try self.copyExpectedShape(source, env) else source;
+
     const arg_vars_top = try self.pushLambdaArgVars(args);
     const seed_args = blk: {
         defer self.scratch_vars.clearFrom(arg_vars_top);
@@ -37895,10 +37960,7 @@ fn seedLambdaParamsFromExpectedFn(
         .ret = seed_ret,
     } } }, env, region);
 
-    var commit_probe = try self.beginCommitProbe(env);
-    var committed = false;
-    defer if (!committed) commit_probe.rollback();
-    const result = try commit_probe.unifyInContext(expected_var, seed_fn_var, context);
+    const result = try commit_probe.unifyInContext(expected_fn, seed_fn_var, contextual.context);
     if (!result.isEstablished()) return;
     committed = true;
     try commit_probe.commit();
@@ -40601,10 +40663,10 @@ fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
 
     var iter = self.erroneous_value_exprs.keyIterator();
     while (iter.next()) |expr_idx| {
-        switch (self.cir.store.getExpr(expr_idx.*)) {
-            .e_runtime_error => continue,
-            .e_call => |call| try self.runtime_error_call_callees.put(self.gpa, call.func, {}),
-            else => {},
+        const erroneous_expr = self.cir.store.getExpr(expr_idx.*);
+        if (erroneous_expr == .e_runtime_error) continue;
+        if (erroneous_expr == .e_call) {
+            try self.runtime_error_call_callees.put(self.gpa, erroneous_expr.e_call.func, {});
         }
         const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
             .region = self.cir.store.getExprRegion(expr_idx.*),
@@ -44175,8 +44237,10 @@ const SameMethodRelation = enum { merged, conflict, erroneous };
 /// checked, so each is discharged against the type its receiver resolves to;
 /// only a receiver that is still a type variable here becomes one requirement.
 /// Relating two callables can bring other receivers' requirements together,
-/// so the pool is revisited until a pass relates nothing.
-fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRoot, env: *Env) Allocator.Error!void {
+/// so the pool is revisited until a pass relates nothing. A receiver whose
+/// literal this boundary defaults is not about to be generalized and is
+/// skipped (`boundaryDefaultsReceiver`).
+fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRoot, defaulting: BoundaryDefaulting, env: *Env) Allocator.Error!void {
     const rank = env.rank();
     var snapshot: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
     defer snapshot.deinit(self.gpa);
@@ -44199,6 +44263,7 @@ fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRo
                 .rigid, .alias, .structure, .field_presence, .err => continue,
             };
             if (flex.constraints.len() <= 1) continue;
+            if (self.boundaryDefaultsReceiver(defaulting, resolved, rank)) continue;
             if ((try visited.getOrPut(resolved.var_)).found_existing) continue;
 
             // Relating appends merged constraint ranges to the store, so the
@@ -44846,7 +44911,8 @@ fn schemeCandidateUsesGeneratedCodec(
         candidate.constraint.fn_name.eql(self.cir.idents.encoder_for);
     if (!is_codec) return false;
 
-    const resolved = self.types.resolveVar(candidate.receiver_var);
+    // An alias's methods are those of the type its backing chain ends in.
+    const resolved = self.types.resolveThroughAliases(candidate.receiver_var);
     return switch (resolved.desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| blk: {
@@ -44872,21 +44938,7 @@ fn schemeCandidateUsesGeneratedCodec(
             => true,
             .fn_pure, .fn_effectful, .fn_unbound => false,
         },
-        .alias => |alias| blk: {
-            const original_env, _ = self.ownerEnvForOriginModule(
-                alias.origin_module,
-                alias.source_decl.toOptional(),
-                alias.source_decl.originIsBuiltin(),
-                "scheme generated codec alias",
-            );
-            const method = self.lookupStaticDispatchMethodBinding(
-                original_env,
-                alias.source_decl.toOptional(),
-                self.cir,
-                candidate.constraint.fn_name,
-            );
-            break :blk method == null or staticDispatchBindingIsDerivedMarker(method.?);
-        },
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .flex, .rigid, .field_presence, .err => false,
     };
 }
@@ -45401,10 +45453,17 @@ fn reportDerivedCodecOpenRecord(
 /// type for all of an interpolation's parts (design.md "Builtin Str
 /// Interpolation Part Compatibility"); an interpolation whose target is
 /// decided was related when its constraint was discharged.
-fn relateUndischargedInterpolationParts(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+/// A receiver whose literal this boundary defaults is skipped
+/// (`boundaryDefaultsReceiver`). Returns whether it related a receiver not in
+/// `related_roots`, which it extends.
+fn relateUndischargedInterpolationParts(
+    self: *Self,
+    defaulting: BoundaryDefaulting,
+    related_roots: *std.AutoHashMapUnmanaged(Var, void),
+    env: *Env,
+) std.mem.Allocator.Error!bool {
     const rank = env.rank();
-    var related_roots: std.AutoHashMapUnmanaged(Var, void) = .empty;
-    defer related_roots.deinit(self.gpa);
+    var related_any = false;
     var pool_index: usize = 0;
     // Relating a part can add vars to this rank's pool; they are fresh
     // structure, never an interpolation's constrained target, so the scan
@@ -45417,12 +45476,92 @@ fn relateUndischargedInterpolationParts(self: *Self, env: *Env) std.mem.Allocato
             .rigid, .alias, .structure, .field_presence, .err => continue,
         };
         if (flex.constraints.isEmpty()) continue;
+        if (self.boundaryDefaultsReceiver(defaulting, resolved, rank)) continue;
         if ((try related_roots.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+        related_any = true;
         var constraints = self.types.iterStaticDispatchConstraints(flex.constraints);
         while (constraints.next()) |constraint| {
             if (constraint.origin.literalKind() != .interpolation) continue;
             try self.relateInterpolationPartsToItem(constraint, null, env);
         }
+    }
+    return related_any;
+}
+
+/// Whether a boundary relates its receivers' requirements under literal
+/// defaulting's protection set (`boundary_reachable_vars`). A boundary whose
+/// pool holds no literal candidate defaults nothing.
+const BoundaryDefaulting = enum { none, gated };
+
+/// Whether this boundary's literal defaulting decides `resolved`: a literal
+/// receiver of this rank that no root's interface reaches defaults here, and
+/// each of its requirements is then discharged against the default's method
+/// on its own (design.md "Builtin Str Interpolation Part Compatibility").
+/// Relating its same-method requirements or its interpolations' parts first
+/// would let one use retype another.
+fn boundaryDefaultsReceiver(self: *Self, defaulting: BoundaryDefaulting, resolved: types_mod.ResolvedVarDesc, rank: Rank) bool {
+    return switch (defaulting) {
+        .none => false,
+        .gated => resolved.desc.rank == rank and
+            !self.boundary_reachable_vars.contains(resolved.var_) and
+            self.varLiteralKind(resolved.var_) != null,
+    };
+}
+
+/// Whether this boundary's pool holds an open literal: a var still flex at
+/// this rank with literal-conversion provenance.
+fn boundaryHasLiteralCandidate(self: *Self, env: *Env) bool {
+    const rank = env.rank();
+    for (env.var_pool.getVarsForRank(rank)) |pool_var| {
+        const resolved = self.types.resolveVar(pool_var);
+        if (resolved.desc.content != .flex) continue;
+        if (resolved.desc.rank != rank) continue;
+        if (self.varLiteralKind(resolved.var_) == null) continue;
+        return true;
+    }
+    return false;
+}
+
+/// The reachable closure of every def root at this boundary (recursing into
+/// `where`-constraint signatures), plus the receiver-excluded overlay of the
+/// roots' scheme requirement relations, into `boundary_reachable_vars`. A
+/// recursive group generalizes as one unit, so all members' roots seed the
+/// same protection set. Recursive references need no special seeding: the
+/// binding-group recursion rule unifies them with the member's in-flight type
+/// immediately, so a literal constrained through a recursive call is already
+/// reachable from the member's root.
+fn collectBoundaryReachableVars(self: *Self, roots: []const BoundaryRoot) std.mem.Allocator.Error!void {
+    self.boundary_reachable_vars.clearRetainingCapacity();
+    for (roots) |root| {
+        try self.collectReachableVars(root.interface, &self.boundary_reachable_vars);
+    }
+    try self.addSchemeDispatchRequirementsToBoundaryReachability(roots);
+
+    // Every plain walk into the boundary set is done; fold in the
+    // receiver-excluded relation overlay for the membership-only consumers
+    // (defaulting protection and leak detection).
+    var relation_iter = self.scheme_relation_reachable_vars.keyIterator();
+    while (relation_iter.next()) |var_| {
+        try self.boundary_reachable_vars.put(var_.*, {});
+    }
+}
+
+/// Relate the requirements this boundary generalizes: each receiver's
+/// same-method requirements, then each undecided interpolation's parts to its
+/// item type, before defaulting and generalization read the pool. A receiver
+/// that defaulting decides is left to its default (`boundaryDefaultsReceiver`).
+/// Relating a part to its item type can make the part reachable, so the
+/// protection set is recollected and the pool revisited until a pass relates
+/// no new interpolation.
+fn relateBoundaryRequirements(self: *Self, roots: []const BoundaryRoot, env: *Env) std.mem.Allocator.Error!void {
+    const defaulting: BoundaryDefaulting = if (self.boundaryHasLiteralCandidate(env)) .gated else .none;
+    var related_interpolations: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer related_interpolations.deinit(self.gpa);
+    while (true) {
+        if (defaulting == .gated) try self.collectBoundaryReachableVars(roots);
+        try self.relateSameMethodRequirementsAtBoundary(roots, defaulting, env);
+        if (!try self.relateUndischargedInterpolationParts(defaulting, &related_interpolations, env)) return;
+        if (defaulting == .none) return;
     }
 }
 
@@ -45439,8 +45578,7 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
     var boundary_codecs = std.ArrayList(FinalCodecDispatchConstraint).empty;
     defer boundary_codecs.deinit(self.gpa);
 
-    try self.relateSameMethodRequirementsAtBoundary(roots, env);
-    try self.relateUndischargedInterpolationParts(env);
+    try self.relateBoundaryRequirements(roots, env);
 
     try self.settleBoundaryLocalDerivedCodecRecords(roots, env);
 
@@ -45457,16 +45595,7 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
     const pool_vars = env.var_pool.getVarsForRank(rank);
 
     // Fast path: no open literal at this boundary, nothing to do.
-    var has_candidate = false;
-    for (pool_vars) |pool_var| {
-        const resolved = self.types.resolveVar(pool_var);
-        if (resolved.desc.content != .flex) continue;
-        if (resolved.desc.rank != rank) continue;
-        if (self.varLiteralKind(resolved.var_) == null) continue;
-        has_candidate = true;
-        break;
-    }
-    if (!has_candidate) {
+    if (!self.boundaryHasLiteralCandidate(env)) {
         // A boundary without literals still owns the instantiated relations
         // its definition created, so they settle here, in this definition's
         // context, exactly as the literal path's round zero settles them.
@@ -45478,26 +45607,9 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
         return;
     }
 
-    // The reachable closure of every def root at this boundary (recursing into
-    // `where`-constraint signatures). A recursive group generalizes as one
-    // unit, so all members' roots seed the same protection set. Recursive
-    // references need no special seeding: the binding-group recursion rule
-    // unifies them with the member's in-flight type immediately, so a literal
-    // constrained through a recursive call is already reachable from the
-    // member's root.
-    self.boundary_reachable_vars.clearRetainingCapacity();
-    for (roots) |root| {
-        try self.collectReachableVars(root.interface, &self.boundary_reachable_vars);
-    }
-    try self.addSchemeDispatchRequirementsToBoundaryReachability(roots);
-
-    // Every plain walk into the boundary set is done; fold in the
-    // receiver-excluded relation overlay for the membership-only consumers
-    // (defaulting protection and leak detection).
-    var relation_iter = self.scheme_relation_reachable_vars.keyIterator();
-    while (relation_iter.next()) |var_| {
-        try self.boundary_reachable_vars.put(var_.*, {});
-    }
+    // Capture can add scheme requirement relations, so the protection set is
+    // collected again for defaulting.
+    try self.collectBoundaryReachableVars(roots);
 
     // Default every unreachable candidate through the shared component machinery—
     // identical to `finalizeLiteralDefaults` except for the candidate universe
@@ -52893,8 +53005,9 @@ inline fn processDeferredDispatchEntryRelations(
     };
     defer self.passOnDeferredEntryFailureExpr(env, &ownership);
 
-    const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
-    const dispatcher_content = dispatcher_resolved.desc.content;
+    // An alias names the type its backing chain ends in: a nominal type's
+    // declaration owns the methods, and a structural backing derives them.
+    const dispatcher_content = self.types.resolveThroughAliases(deferred_constraint.var_).desc.content;
     dispatch_resolution: while (true) {
         if (dispatcher_content == .err) {
             // If the root type is an error, then skip constraint checking
@@ -53364,172 +53477,6 @@ inline fn processDeferredDispatchEntryRelations(
                                 try self.retireMergedMethodDefinitions(merged);
                             }
                         }
-                    },
-                }
-            }
-            break :dispatch_resolution;
-        } else if (dispatcher_content == .alias) {
-            const alias = dispatcher_content.alias;
-
-            // Get the module ident that this alias type was defined in
-            const original_module_ident = alias.origin_module;
-            const original_env, _ = self.ownerEnvForOriginModule(
-                original_module_ident,
-                alias.source_decl.toOptional(),
-                alias.source_decl.originIsBuiltin(),
-                "static dispatch alias",
-            );
-
-            const region = self.getRegionAt(deferred_constraint.var_);
-            const constraints_range = deferred_constraint.constraints;
-            const constraints_len = constraints_range.len();
-            const constraints_start: usize = @backingInt(constraints_range.start);
-            var constraint_i: usize = 0;
-            while (constraint_i < constraints_len) : (constraint_i += 1) {
-                const constraint = self.types.static_dispatch_constraints.items()[constraints_start + constraint_i];
-                self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
-                const failure_expr = try self.enterDeferredEntryConstraint(env, &ownership, constraint);
-                if (self.staticDispatchConstraintIsInactive(constraint)) continue;
-                const constraint_fn_resolved = self.types.resolveThroughAliases(constraint.fn_var).desc.content;
-                if (constraint_fn_resolved == .err) {
-                    // An erroneous method signature was already reported and
-                    // can never be discharged, so the obligation is rejected.
-                    try self.markStaticDispatchRejected(constraint);
-                    continue;
-                }
-
-                if (self.derivedMethodKind(constraint.fn_name)) |kind| derived: {
-                    if ((kind == .parser or kind == .encoder) and
-                        self.schemeDefersGeneratedCodecConstraint(constraint.fn_var)) continue;
-                    if (self.lookupStaticDispatchMethodBinding(
-                        original_env,
-                        alias.source_decl.toOptional(),
-                        self.cir,
-                        constraint.fn_name,
-                    )) |method_lookup| {
-                        // Exact attached implementations win over derivation.
-                        if (!staticDispatchBindingIsDerivedMarker(method_lookup)) break :derived;
-                    }
-                    switch (try self.satisfyDerivedForShape(
-                        kind,
-                        .{ .shape = self.types.getAliasBackingVar(alias) },
-                        deferred_constraint,
-                        constraint,
-                        env,
-                        region,
-                        failure_expr,
-                        is_numeric_default_pass,
-                    )) {
-                        .done => continue,
-                        .redeferred => break :dispatch_resolution,
-                        .unsupported => {},
-                    }
-                }
-
-                const method_lookup = self.lookupStaticDispatchMethodBinding(
-                    original_env,
-                    alias.source_decl.toOptional(),
-                    self.cir,
-                    constraint.fn_name,
-                ) orelse {
-                    try self.reportConstraintError(
-                        deferred_constraint.var_,
-                        constraint,
-                        .{ .missing_method = .nominal },
-                        env,
-                        failure_expr,
-                    );
-                    continue;
-                };
-                if (try self.rejectValuelessMethodDispatch(
-                    method_lookup,
-                    deferred_constraint.var_,
-                    constraint,
-                    env,
-                    failure_expr,
-                )) continue;
-                const method_env = method_lookup.env;
-                const method_is_this_module = method_lookup.is_this_module;
-                const method_binding = method_lookup.binding;
-                const def_idx = method_binding.def_idx;
-                if (constraint.fn_name.eql(self.cir.idents.from_numeral)) {
-                    if (try self.reportUnmaterializableNumeralLiteral(deferred_constraint.var_, constraint, env)) {
-                        continue;
-                    }
-                }
-                if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
-                    self.rewriteEqBinopAsMethodEq(constraint);
-                }
-
-                const def = method_env.store.getDef(def_idx);
-                var cycle_method_expr_var: ?Var = null;
-                var predeclared_scheme_for_method: ?Var = null;
-                if (method_is_this_module) {
-                    if (self.topLevelPattern(def.pattern)) |processing_def| {
-                        switch (try self.resolveLocalDispatchTargetByStatus(
-                            deferred_constraint,
-                            constraint,
-                            processing_def,
-                            def_idx,
-                            def,
-                            env,
-                        )) {
-                            .def_var => {},
-                            .predeclared_scheme => |scheme_var| predeclared_scheme_for_method = scheme_var,
-                            .in_flight_rhs => |rhs_var| cycle_method_expr_var = rhs_var,
-                            .waiting => continue,
-                        }
-                    }
-                }
-
-                const method_var = (try self.resolveDispatchTargetMethodVar(
-                    deferred_constraint.var_,
-                    self.dispatch_derivation_by_child_fn_var.get(constraint.fn_var),
-                    constraint,
-                    method_lookup,
-                    cycle_method_expr_var,
-                    predeclared_scheme_for_method,
-                    env,
-                    region,
-                    failure_expr,
-                    .{ .deferred = deferred_constraint, .retained_top = retained_top },
-                )) orelse continue;
-
-                // A requirement whose type is not a function was reported
-                // at its where clause (`reportNonFunctionWhereRequirement`).
-                if (constraint_fn_resolved.unwrapFunc() == null) {
-                    _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
-                        .method_type = .{
-                            .constraint_var = constraint.fn_var,
-                            .dispatcher_name = alias.ident.ident_idx,
-                            .method_name = constraint.fn_name,
-                        },
-                    });
-                    try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
-                    try self.markStaticDispatchRejected(constraint);
-                    continue;
-                }
-
-                const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
-                    .method_type = .{
-                        .constraint_var = deferred_constraint.var_,
-                        .dispatcher_name = alias.ident.ident_idx,
-                        .method_name = constraint.fn_name,
-                    },
-                });
-                switch (fn_result) {
-                    .unified => {
-                        // The method's signature has decided the item type,
-                        // so each part is now checked against it.
-                        if (constraint.origin.literalKind() == .interpolation) {
-                            try self.relateInterpolationPartsToItem(constraint, explicitDeferredConstraintFailureExpr(deferred_constraint), env);
-                        }
-                        try self.recordSuccessfulStaticDispatch(constraint);
-                        if (self.dispatch_replay_candidates.count() != 0) try self.recordDispatchReplaySource(constraint.fn_var);
-                    },
-                    .suppressed_by_error, .problem, .mismatch => {
-                        try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
-                        try self.markStaticDispatchRejected(constraint);
                     },
                 }
             }
@@ -58280,11 +58227,7 @@ fn relateDerivedParserShape(
     const err_var = try self.fresh(env, region);
     const parse_result_var = try self.freshParseResultTryVar(dispatcher_var, state_var, err_var, env, region);
     const parser_var = try self.freshFromContent(try self.types.mkFuncPure(&.{state_var}, parse_result_var), env, region);
-    const ret_result = try self.unifyInContext(parser_var, runtime_fn_var, env, .none);
-    if (!ret_result.isEstablished()) {
-        try self.markStaticDispatchRejected(constraint);
-        return null;
-    }
+    if (!try self.relateDerivedCodecSignature(parser_var, runtime_fn_var, dispatcher_var, constraint, env, failure_expr, failure_expr)) return null;
     return .{ .runtime_fn = runtime_fn_var, .encoding_var = encoding_var, .state_var = state_var, .err_var = err_var };
 }
 /// An implicit parser relation whose derived parser is validated as one
@@ -58497,12 +58440,40 @@ fn relateDerivedEncoderShape(
     const err_var = try self.fresh(env, region);
     const encode_result_var = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
     const encoder_var = try self.freshFromContent(try self.types.mkFuncPure(&.{ dispatcher_var, state_var }, encode_result_var), env, region);
-    const ret_result = try self.unifyInContext(encoder_var, runtime_fn_var, env, .none);
-    if (!ret_result.isEstablished()) {
-        try self.markStaticDispatchRejected(constraint);
-        return null;
-    }
+    if (!try self.relateDerivedCodecSignature(encoder_var, runtime_fn_var, dispatcher_var, constraint, env, null, owner_expr)) return null;
     return .{ .runtime_fn = runtime_fn_var, .encoding_var = encoding_var, .state_var = state_var, .err_var = err_var };
+}
+
+/// Relate a derived codec method's public runtime function to the runtime
+/// function its requirement declares. The relation is owned by the dispatch:
+/// a mismatch keeps both operands' solved types as they are, reports the
+/// requirement as one the receiver's derived method does not satisfy, and
+/// retires the dispatch that owns it.
+fn relateDerivedCodecSignature(
+    self: *Self,
+    derived_runtime_fn: Var,
+    required_runtime_fn: Var,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    explicit_error_expr: ?CIR.Expr.Idx,
+    owner_expr: ?CIR.Expr.Idx,
+) Allocator.Error!bool {
+    switch (try self.runUnify(derived_runtime_fn, required_runtime_fn, env, .{ .on_mismatch = .write_no_report })) {
+        .unified => return true,
+        // An erroneous type was already reported; only the dispatch is left
+        // to retire.
+        .suppressed_by_error => {
+            try self.poisonConstraintFailure(dispatcher_var, constraint, env, explicit_error_expr);
+            try self.markStaticDispatchRejected(constraint);
+            return false;
+        },
+        .mismatch => {
+            try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, explicit_error_expr, owner_expr);
+            return false;
+        },
+        .problem => unreachable, // a `.write_no_report` relation records no problem of its own
+    }
 }
 
 fn satisfyImplicitEncoderForConstraint(
@@ -58851,6 +58822,10 @@ fn recordGeneratedCodecDerivationSnapshot(
 /// have settled. No shape walk, method selection, or constraint replay occurs.
 fn freezeBoundaryCodecDerivations(self: *Self, env: *Env) Allocator.Error!void {
     std.debug.assert(!self.constraining_boundary_codecs);
+    // Every relation parked for final validation was validated or rejected
+    // before the module's contracts freeze; publication reads only their
+    // outcomes.
+    std.debug.assert(self.final_codec_dispatch_constraints.items.len == 0);
     for (self.boundary_codec_derivations.items) |derivation| {
         const roots = derivation.roots;
         try self.recordGeneratedCodecDerivationSnapshot(
@@ -59665,6 +59640,11 @@ fn encodeFormatMethodName(self: *Self, decl: BuiltinEncodeSpecDecl) Allocator.Er
     return try @constCast(self.cir).insertIdent(base.Ident.for_text(text));
 }
 
+/// The format method `method_name` of the encoding type, instantiated against
+/// `encoding_var`. An alias names the nominal type at the end of its backing
+/// chain, and that nominal type's declaration owns the methods, so the lookup
+/// follows aliases while the instantiation keeps the alias the format was
+/// written through.
 fn parseFormatMethodVarForEncoding(
     self: *Self,
     encoding_var: Var,
@@ -59672,7 +59652,7 @@ fn parseFormatMethodVarForEncoding(
     env: *Env,
     region: Region,
 ) Allocator.Error!?ParseFormatMethodVar {
-    const resolved = self.types.resolveVar(encoding_var);
+    const resolved = self.types.resolveThroughAliases(encoding_var);
     return switch (resolved.desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| blk: {
@@ -59703,24 +59683,7 @@ fn parseFormatMethodVarForEncoding(
             .empty_tag_union,
             => null,
         },
-        .alias => |alias| blk: {
-            const original_env, _ = self.ownerEnvForOriginModule(
-                alias.origin_module,
-                alias.source_decl.toOptional(),
-                alias.source_decl.originIsBuiltin(),
-                "parser format method",
-            );
-            const method_lookup = self.lookupStaticDispatchMethodBinding(
-                original_env,
-                alias.source_decl.toOptional(),
-                self.cir,
-                method_name,
-            ) orelse break :blk null;
-            break :blk .{
-                .var_ = try self.instantiateGeneratedFormatMethodTarget(method_lookup, encoding_var, env, region),
-                .dispatcher_name = alias.ident.ident_idx,
-            };
-        },
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .err => null,
         .flex, .rigid, .field_presence => null,
     };
