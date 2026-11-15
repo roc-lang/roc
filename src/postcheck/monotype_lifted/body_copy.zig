@@ -21,7 +21,7 @@ const Work = union(enum) {
     copy: Ast.ExprId,
     /// Every expression inside this one has been delivered: add it again
     /// around those copies.
-    rebuild: Ast.ExprId,
+    assemble: Ast.ExprId,
 };
 
 /// Copy the body rooted at `root` and return the copy's root. Expression
@@ -41,7 +41,7 @@ pub fn copy(program: *Ast.Program, root: Ast.ExprId) Allocator.Error!Ast.ExprId 
     try copier.work.append(program.allocator, .{ .copy = root });
     while (copier.work.pop()) |work| switch (work) {
         .copy => |expr| try copier.begin(expr),
-        .rebuild => |expr| try copier.rebuild(expr),
+        .assemble => |expr| try copier.assemble(expr),
     };
     std.debug.assert(copier.delivered.items.len == 1);
     return copier.delivered.items[0];
@@ -101,7 +101,7 @@ const Copier = struct {
     }
 
     /// Deliver a leaf as it is, or queue the expressions inside `expr` ahead
-    /// of its own rebuild.
+    /// of assembling its copy around theirs.
     fn begin(self: *Copier, expr: Ast.ExprId) Allocator.Error!void {
         const allocator = self.program.allocator;
         const data = self.program.getExpr(expr).data;
@@ -207,7 +207,7 @@ const Copier = struct {
                 try self.child(block.final_expr);
             },
         }
-        try self.work.append(allocator, .{ .rebuild = expr });
+        try self.work.append(allocator, .{ .assemble = expr });
         // The stack hands the children back first to last.
         var index = self.children.items.len;
         while (index > 0) {
@@ -285,7 +285,7 @@ const Copier = struct {
 
     /// Add `expr` again around the copies of the expressions inside it, at
     /// its own source position, and deliver the copy.
-    fn rebuild(self: *Copier, expr: Ast.ExprId) Allocator.Error!void {
+    fn assemble(self: *Copier, expr: Ast.ExprId) Allocator.Error!void {
         const program = self.program;
         const source = program.getExpr(expr);
         var data = source.data;
@@ -317,7 +317,7 @@ const Copier = struct {
             .lambda,
             .def_ref,
             .fn_def,
-            => unreachable, // `begin` queues a rebuild only for the forms below
+            => unreachable, // `begin` queues an assembly only for the forms below
             .list, .tuple => |*items| items.* = try self.takeExprs(&taken, items.*),
             .tag => |*tag| tag.payloads = try self.takeExprs(&taken, tag.payloads),
             .low_level => |*call| call.args = try self.takeExprs(&taken, call.args),
@@ -437,7 +437,7 @@ const Copier = struct {
             .lambda,
             .def_ref,
             .fn_def,
-            => unreachable, // `begin` queues a rebuild only for the forms below
+            => unreachable, // `begin` queues an assembly only for the forms below
             .list, .tuple => |items| items.len,
             .tag => |tag| tag.payloads.len,
             .low_level => |call| call.args.len,
