@@ -1609,6 +1609,13 @@ literal_defaulting_group_warnings: std.ArrayListUnmanaged(PendingBoundaryWarning
 literal_defaulting_constraint_ranges: std.ArrayListUnmanaged(StaticDispatchConstraint.SafeList.Range) = .empty,
 literal_defaulting_kinds: std.ArrayListUnmanaged(StaticDispatchConstraint.LiteralKind) = .empty,
 literal_defaulting_candidate_vars: std.ArrayListUnmanaged(Var) = .empty,
+/// The round's pending use copies of scheme requirements, chained per
+/// still-flex receiver root (`indexPendingRequirementCopies`). A copy is
+/// detached from its receiver's descriptor, so this index is how defaulting
+/// counts it among that receiver's requirements.
+literal_defaulting_receiver_copies: std.ArrayListUnmanaged(ReceiverCopy) = .empty,
+literal_defaulting_receiver_copy_heads: collections.DenseMap(Var, u32),
+literal_defaulting_receiver_worklist: std.ArrayListUnmanaged(Var) = .empty,
 // Match alternative-pattern binding scratch (front-loaded; cleared per call/branch).
 alt_pattern_baseline: std.AutoHashMap(u32, MatchAltBaselineEntry),
 alt_pattern_bindings: std.ArrayList(PatternBinding) = .empty,
@@ -2116,6 +2123,9 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .literal_defaulting_constraint_ranges = .scratch,
     .literal_defaulting_kinds = .scratch,
     .literal_defaulting_candidate_vars = .scratch,
+    .literal_defaulting_receiver_copies = .scratch,
+    .literal_defaulting_receiver_copy_heads = .scratch,
+    .literal_defaulting_receiver_worklist = .scratch,
     .alt_pattern_baseline = .scratch,
     .alt_pattern_bindings = .scratch,
     .alt_pattern_current = .scratch,
@@ -4827,6 +4837,7 @@ fn initAssumePrepared(
         .literal_defaulting_seen_roots = collections.DenseMap(Var, void).init(gpa),
         .literal_defaulting_footprint_owner = collections.DenseMap(Var, usize).init(gpa),
         .literal_defaulting_footprint = collections.DenseMap(Var, void).init(gpa),
+        .literal_defaulting_receiver_copy_heads = collections.DenseMap(Var, u32).init(gpa),
         .alt_pattern_baseline = std.AutoHashMap(u32, MatchAltBaselineEntry).init(gpa),
         .alt_pattern_current = std.AutoHashMap(u32, CIR.Pattern.Idx).init(gpa),
         .effectful_lambda_bodies = collections.DenseMap(CIR.Expr.Idx, void).init(gpa),
@@ -43051,28 +43062,18 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
             // is possible here.
             try self.literal_defaulting_footprint_owner.putNoClobber(root, idx);
         }
+        const has_receiver_copies = try self.indexPendingRequirementCopies();
         for (self.literal_defaulting_open_roots.items, 0..) |root, idx| {
             const constraint_range = self.types.resolveVar(root).desc.content.flex.constraints;
-            const drives = self.rangeHasNonLiteralConstraint(constraint_range);
-            try self.literal_defaulting_is_driver.append(self.gpa, drives);
-            if (!drives) continue;
+            const own_drives = self.rangeHasNonLiteralConstraint(constraint_range);
+            try self.literal_defaulting_is_driver.append(self.gpa, own_drives or
+                (has_receiver_copies and self.literalHasReceiverCopies(root)));
+            if (!own_drives) continue;
 
             try self.collectConstraintSignatureReachable(constraint_range, &self.literal_defaulting_footprint);
-            var fp_iter = self.literal_defaulting_footprint.keyIterator();
-            while (fp_iter.next()) |fp_var| {
-                // Only still-flex roots interfere; everything else is immune to
-                // pinning. (Union order is irrelevant: unions commute, so the
-                // partition is independent of hash-map iteration order.)
-                if (self.types.resolveVar(fp_var.*).desc.content != .flex) continue;
-                try self.recordDefaultDecidedVar(fp_var.*, .reached);
-                const gop = try self.literal_defaulting_footprint_owner.getOrPut(fp_var.*);
-                if (gop.found_existing) {
-                    componentUnion(self.literal_defaulting_component_parent.items, idx, gop.value_ptr.*);
-                } else {
-                    gop.value_ptr.* = idx;
-                }
-            }
+            try self.claimLiteralFootprint(idx, .attached);
         }
+        if (has_receiver_copies) try self.joinReceiverCopyFootprints();
 
         // --- 3. Commit every component (disjoint, so order is unobservable). ---
         // Thread each component's members, in index order, from its leader,
@@ -43205,6 +43206,122 @@ fn commitGatheredGroup(
             }
         },
     }
+}
+
+/// Assign every still-flex variable in `literal_defaulting_footprint` to the
+/// component of literal `idx`, merging with the component that already owns
+/// it. `.receiver_copies` additionally queues each newly owned variable that
+/// is the receiver of pending use copies, so their callables join too.
+fn claimLiteralFootprint(self: *Self, idx: usize, queue: enum { attached, receiver_copies }) std.mem.Allocator.Error!void {
+    var fp_iter = self.literal_defaulting_footprint.keyIterator();
+    while (fp_iter.next()) |fp_var| {
+        // Only still-flex roots interfere; everything else is immune to
+        // pinning. (Union order is irrelevant: unions commute, so the
+        // partition is independent of hash-map iteration order.)
+        if (self.types.resolveVar(fp_var.*).desc.content != .flex) continue;
+        try self.recordDefaultDecidedVar(fp_var.*, .reached);
+        const gop = try self.literal_defaulting_footprint_owner.getOrPut(fp_var.*);
+        if (gop.found_existing) {
+            componentUnion(self.literal_defaulting_component_parent.items, idx, gop.value_ptr.*);
+            continue;
+        }
+        gop.value_ptr.* = idx;
+        if (queue == .receiver_copies and self.literalHasReceiverCopies(fp_var.*)) {
+            try self.literal_defaulting_receiver_worklist.append(self.gpa, fp_var.*);
+        }
+    }
+}
+
+/// One pending use copy of a scheme requirement, linked to the next copy that
+/// shares its receiver.
+const ReceiverCopy = struct {
+    constraints: StaticDispatchConstraint.SafeList.Range,
+    next: collections.OptionalU32,
+};
+
+/// Index the pending use copies of scheme requirements by their still-flex
+/// receiver root for this round, returning whether there are any. See
+/// design.md's "Pending Requirement Copies In Literal Defaulting".
+fn indexPendingRequirementCopies(self: *Self) std.mem.Allocator.Error!bool {
+    self.literal_defaulting_receiver_copies.clearRetainingCapacity();
+    self.literal_defaulting_receiver_copy_heads.clearRetainingCapacity();
+    for (self.pending_scheme_requirement_dispatchers.items) |dispatcher_idx| {
+        const dispatcher = self.instantiation_dispatchers.items[dispatcher_idx];
+        if (dispatcher.deferred_enqueued) continue;
+        const receiver = self.types.resolveVar(dispatcher.dispatcher_var);
+        if (receiver.desc.content != .flex) continue;
+        if (!self.rangeHasNonLiteralConstraint(dispatcher.constraints)) continue;
+        const copy_idx: u32 = @intCast(self.literal_defaulting_receiver_copies.items.len);
+        const gop = try self.literal_defaulting_receiver_copy_heads.getOrPut(receiver.var_);
+        try self.literal_defaulting_receiver_copies.append(self.gpa, .{
+            .constraints = dispatcher.constraints,
+            .next = if (gop.found_existing) .some(gop.value_ptr.*) else .none,
+        });
+        gop.value_ptr.* = copy_idx;
+    }
+    return self.literal_defaulting_receiver_copies.items.len != 0;
+}
+
+/// Whether this round indexed a pending use copy whose receiver is `root`.
+fn literalHasReceiverCopies(self: *const Self, root: Var) bool {
+    return self.literal_defaulting_receiver_copy_heads.contains(root);
+}
+
+/// The first pending use copy this round indexed under receiver `root`.
+fn firstReceiverCopy(self: *const Self, root: Var) collections.OptionalU32 {
+    return if (self.literal_defaulting_receiver_copy_heads.get(root)) |head| .some(head) else .none;
+}
+
+/// Extend the round's partition through pending use copies: the callable of a
+/// copy whose receiver a component owns belongs to that component, and so does
+/// the callable of any copy on a variable reached that way.
+fn joinReceiverCopyFootprints(self: *Self) std.mem.Allocator.Error!void {
+    self.literal_defaulting_receiver_worklist.clearRetainingCapacity();
+    var owned_iter = self.literal_defaulting_footprint_owner.keyIterator();
+    while (owned_iter.next()) |owned| {
+        if (self.literalHasReceiverCopies(owned.*)) {
+            try self.literal_defaulting_receiver_worklist.append(self.gpa, owned.*);
+        }
+    }
+    // A receiver is queued once: here, or when a claim first gives it an owner.
+    while (self.literal_defaulting_receiver_worklist.pop()) |receiver| {
+        const owner_idx = self.literal_defaulting_footprint_owner.get(receiver) orelse unreachable; // queued receivers are owned
+        self.literal_defaulting_footprint.clearRetainingCapacity();
+        var copy = self.firstReceiverCopy(receiver);
+        while (copy.get()) |copy_idx| {
+            const entry = self.literal_defaulting_receiver_copies.items[copy_idx];
+            copy = entry.next;
+            for (self.types.sliceStaticDispatchConstraints(entry.constraints)) |constraint| {
+                if (constraint.origin == .from_literal) continue;
+                try self.collectReachableVars(constraint.fn_var, &self.literal_defaulting_footprint);
+            }
+        }
+        try self.claimLiteralFootprint(owner_idx, .receiver_copies);
+    }
+}
+
+/// Whether `candidate_var` satisfies every pending use copy whose receiver is
+/// the gathered literal `literal_root`, under the open `probe` scope.
+fn candidateSatisfiesReceiverCopies(
+    self: *Self,
+    probe: *CommitProbe,
+    literal_root: Var,
+    candidate_var: Var,
+    env: *Env,
+) Allocator.Error!bool {
+    var copy = self.firstReceiverCopy(literal_root);
+    while (copy.get()) |copy_idx| {
+        const entry = self.literal_defaulting_receiver_copies.items[copy_idx];
+        copy = entry.next;
+        if (!try self.candidateSatisfiesRangeConstraints(probe, entry.constraints, candidate_var, env)) return false;
+    }
+    return true;
+}
+
+/// Whether the gathered literal `literal_root` carries a method requirement a
+/// default must satisfy: one attached to it, or a pending use copy on it.
+fn literalHasMethodRequirement(self: *Self, literal_root: Var, constraint_range: StaticDispatchConstraint.SafeList.Range) bool {
+    return self.rangeHasNonLiteralConstraint(constraint_range) or self.literalHasReceiverCopies(literal_root);
 }
 
 /// Union-find `find` with path compression over the per-round component index
@@ -43349,6 +43466,12 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, component_fits: 
                 self.literal_defaulting_candidate_vars.items[driver_idx],
                 env,
             )) continue :candidate;
+            if (!try self.candidateSatisfiesReceiverCopies(
+                &commit_probe,
+                drivers[driver_idx],
+                self.literal_defaulting_candidate_vars.items[driver_idx],
+                env,
+            )) continue :candidate;
         }
 
         committed = true;
@@ -43374,14 +43497,14 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, component_fits: 
         if (self.types.resolveVar(driver).desc.content != .flex) continue;
         switch (kind) {
             .numeral => {
-                if (self.rangeHasNonLiteralConstraint(range)) {
+                if (self.literalHasMethodRequirement(driver, range)) {
                     try self.recordConflictedDefaultLiteral(driver);
                 }
                 _ = try self.commitLiteralDefaultHead(driver, env);
                 self.noteNumeralDefaulted(driver);
             },
             .quote, .interpolation => {
-                if (self.rangeHasNonLiteralConstraint(range) and
+                if (self.literalHasMethodRequirement(driver, range) and
                     !try self.quoteDefaultSatisfiesConstraints(driver, range, env))
                 {
                     try self.recordConflictedDefaultLiteral(driver);
@@ -43442,6 +43565,15 @@ fn boundaryDefaultLeaksIntoSignature(self: *Self, literal_var: Var) std.mem.Allo
     if (resolved.desc.content != .flex) return false;
 
     try self.collectConstraintSignatureReachable(resolved.desc.content.flex.constraints, &self.boundary_leak_vars);
+    var copy = self.firstReceiverCopy(resolved.var_);
+    while (copy.get()) |copy_idx| {
+        const entry = self.literal_defaulting_receiver_copies.items[copy_idx];
+        copy = entry.next;
+        for (self.types.sliceStaticDispatchConstraints(entry.constraints)) |constraint| {
+            if (constraint.origin == .from_literal) continue;
+            try self.collectReachableVars(constraint.fn_var, &self.boundary_leak_vars);
+        }
+    }
 
     var leak_iter = self.boundary_leak_vars.keyIterator();
     while (leak_iter.next()) |leak_var| {
@@ -45947,7 +46079,7 @@ fn commitLiteralDefault(self: *Self, literal_var: Var, kind: StaticDispatchConst
     switch (kind) {
         .numeral => {
             const constraint_range = self.types.resolveVar(literal_var).desc.content.flex.constraints;
-            if (self.rangeHasNonLiteralConstraint(constraint_range)) {
+            if (self.literalHasMethodRequirement(literal_var, constraint_range)) {
                 for (numeral_default_candidates) |candidate_kind| {
                     // Cheap structural pre-filter: skip the full probe when
                     // read-only inspection PROVES it would fail. Skipping is
@@ -46010,7 +46142,7 @@ fn commitLiteralDefault(self: *Self, literal_var: Var, kind: StaticDispatchConst
         // normally in the cascade.
         .quote, .interpolation => {
             const constraint_range = self.types.resolveVar(literal_var).desc.content.flex.constraints;
-            if (self.rangeHasNonLiteralConstraint(constraint_range) and
+            if (self.literalHasMethodRequirement(literal_var, constraint_range) and
                 !try self.quoteDefaultSatisfiesConstraints(literal_var, constraint_range, env))
             {
                 try self.recordConflictedDefaultLiteral(literal_var);
@@ -46087,7 +46219,8 @@ fn quoteDefaultSatisfiesConstraints(
     const candidate_var = try self.freshStr(env, self.getRegionAt(literal_var));
     const unify_result = try commit_probe.unify(literal_var, candidate_var);
     if (!unify_result.isEstablished()) return false;
-    return try self.candidateSatisfiesRangeConstraints(&commit_probe, constraint_range, candidate_var, env);
+    return try self.candidateSatisfiesRangeConstraints(&commit_probe, constraint_range, candidate_var, env) and
+        try self.candidateSatisfiesReceiverCopies(&commit_probe, literal_var, candidate_var, env);
 }
 
 /// Commit Str—the single (and therefore default) candidate for string literals—
@@ -46724,6 +46857,7 @@ fn tryCommitNumeralCandidate(
     if (!unify_result.isEstablished()) return null;
 
     if (!try self.candidateSatisfiesRangeConstraints(&commit_probe, constraint_range, candidate_var, env)) return null;
+    if (!try self.candidateSatisfiesReceiverCopies(&commit_probe, literal_var, candidate_var, env)) return null;
 
     committed = true;
     try commit_probe.commit();

@@ -6018,10 +6018,11 @@ const LiteralArgumentRootIndex = struct {
     }
 
     /// The literal a root converts, when it is a `literal_argument` root
-    /// whose value is stored.
+    /// whose value is stored. A sealed root's type is closed in no
+    /// specialization.
     fn storedSite(root: checked.CompileTimeRoot) ?Site {
         const argument = root.literal_argument orelse return null;
-        if (root.payload != .const_node) return null;
+        if (root.payload != .const_node or argument.sealed) return null;
         return .{ .module = argument.site.module.bytes, .node = argument.site.node, .kind = argument.site.kind };
     }
 
@@ -9766,6 +9767,9 @@ const Builder = struct {
     /// Whether a discovery request reaches no literal root
     /// (`LiteralDemand`): its procedure's module reaches none, its types name
     /// no reaching nominal, and its evidence selects no reaching procedure.
+    /// The procedure's own literal requirements count: a specialization is
+    /// shared by every request for it, and one made at an instantiation
+    /// checking records no edge for converts them in this body.
     fn discoveryRequestReachesNoLiteralRoot(
         self: *Builder,
         template_ref: names.ProcTemplate,
@@ -9775,7 +9779,7 @@ const Builder = struct {
     ) Allocator.Error!bool {
         const demand = self.literal_demand orelse
             Common.invariant("discovery request reached Monotype without its literal demand");
-        var flags = demand.templateFlags(template_ref);
+        var flags = demand.templateFlags(template_ref).merge(demand.requirementFlags(template_ref));
         flags = flags.merge(try self.monoTypeLiteralFlags(demand, fn_ty));
         if (subst) |slots| for (slots) |slot| switch (slot) {
             .ty => |ty| flags = flags.merge(try self.monoTypeLiteralFlags(demand, ty)),

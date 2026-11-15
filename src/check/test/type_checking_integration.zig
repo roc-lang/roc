@@ -12416,6 +12416,120 @@ test "check type - weak top-level literal rejects second use at different type" 
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
+// design.md "Pending Requirement Copies In Literal Defaulting": a use of a
+// function that calls a method on a weak top-level literal copies that
+// requirement, and the copy counts among the literal's requirements when the
+// literal defaults. The copy's own literals wait for the method it selects.
+test "issue 13055: method on a weak top-level number used through a function called twice" {
+    const source =
+        \\weak = 5
+        \\f = |g| [weak.to_str().repeat(2)].map(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "Dec" },
+        .{ .def = "lengths", .expected = "List(U64)" },
+        .{ .def = "selves", .expected = "List(Str)" },
+    });
+}
+
+test "issue 13055: method on a weak top-level interpolation used through a function called twice" {
+    const source =
+        \\weak = "a${"x"}b"
+        \\f = |g| [weak.repeat(2)].map(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "Str" },
+        .{ .def = "lengths", .expected = "List(U64)" },
+        .{ .def = "selves", .expected = "List(Str)" },
+    });
+}
+
+test "issue 13055: one top-level use of a function that calls a method on a weak literal" {
+    const source =
+        \\f = |{}| weak.to_str().repeat(2)
+        \\a = { v: f({}) }
+        \\weak = 5
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "Dec" },
+        .{ .def = "a", .expected = "{ v: Str }" },
+    });
+}
+
+test "issue 13055: a weak literal's method requirement copied through a second function" {
+    const source =
+        \\weak = 5
+        \\f = |{}| weak.to_str().repeat(2)
+        \\g = |{}| f({})
+        \\a = g({})
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "issue 13055: expect uses a function that calls a method on a weak literal" {
+    const source =
+        \\weak = 5
+        \\f = |{}| weak.to_str().repeat(2)
+        \\
+        \\expect f({}) == "55"
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "Dec" },
+    });
+}
+
+// The copy's argument decides the literal exactly as the direct operation
+// `weak + 3.U8` does: the default must satisfy the copy.
+test "issue 13055: a use's copied requirement chooses the weak literal's type" {
+    const source =
+        \\weak = 5
+        \\f = |x| weak + x
+        \\a = f(3.U8)
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "U8" },
+        .{ .def = "a", .expected = "U8" },
+    });
+}
+
+test "issue 13055: a copied requirement inside a function chooses the weak literal's type" {
+    const source =
+        \\weak = 5
+        \\f = |x| weak + x
+        \\g = |{}| f(3.U8)
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "U8" },
+        .{ .def = "g", .expected = "{} -> U8" },
+    });
+}
+
+// Rejected side: weak means one type, so two copies that need different types
+// for the literal cannot both be satisfied.
+test "issue 13055: copied requirements that need different types for a weak literal are rejected" {
+    const source =
+        \\weak = 5
+        \\f = |x| weak + x
+        \\a = f(3.U8)
+        \\b = f(3.I64)
+    ;
+    try checkTypesModule(source, .fail, "Missing Method");
+}
+
+// Rejected side: no numeric type has the method the copy needs.
+test "issue 13055: a copied requirement no default satisfies is rejected" {
+    const source =
+        \\weak = 5
+        \\f = |{}| weak.count_utf8_bytes()
+        \\a = f({})
+    ;
+    try checkTypesModule(source, .fail, "Missing Method");
+}
+
 // PRINCIPALITY. Writing an annotation may only ever NARROW an inferred type,
 // never widen it. These two modules differ ONLY in whether the dispatch
 // chain's receiver carries an annotation, so every def must infer the same
