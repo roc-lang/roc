@@ -657,6 +657,10 @@ fn emitMergedBitcodeModulesToObject(
         .lower_memory_intrinsics_to_loops = options.lower_memory_intrinsics_to_loops,
     };
 
+    // In-process objects are for the host, which keeps LLVM's own memory
+    // intrinsic expansion limits. They are process-wide options that another
+    // compile in this process may have set, so every compile sets them.
+    bindings.setMemoryIntrinsicStoreLimit(bindings.memory_intrinsic_target_default);
     var emit_error: [*:0]const u8 = undefined;
     var object_ptr: [*]u8 = undefined;
     var object_len: usize = 0;

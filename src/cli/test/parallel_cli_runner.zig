@@ -712,6 +712,8 @@ const CustomCase = enum {
     issue_12741_wasm_generic_tail_calls_size,
     issue_12741_wasm_generic_tail_calls_speed,
     issue_12848_wasm_shared_helper_emitted_once_size,
+    issue_13028_wasm_size_small_copy_is_memory_copy,
+    issue_13028_wasm_speed_small_copy_is_scalar,
     issue_13029_wasm_size_static_data_segments_merged,
     boxy_recursive_method_dispatch_wasm_dev,
     boxy_recursive_method_dispatch_wasm_size,
@@ -5079,6 +5081,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_dev } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_size } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12848: a helper with many callers is emitted once on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_12848_wasm_shared_helper_emitted_once_size } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13028: a twelve-byte copy is one memory.copy on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_13028_wasm_size_small_copy_is_memory_copy } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13028: a twelve-byte copy stays loads and stores on wasm32 (speed)", .timeout_ms = 600_000, .backend = .speed, .body = .{ .custom = .issue_13028_wasm_speed_small_copy_is_scalar } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 13029: static data is a few merged segments on wasm32 and unused constants are dropped (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_13029_wasm_size_static_data_segments_merged } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (speed)", .timeout_ms = 600_000, .backend = .speed, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_speed } },
     .{ .id = 0, .suite = .subcommands, .name = "Boxy composes the dictionaries of a method whose scheme requires itself on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .boxy_recursive_method_dispatch_wasm_dev } },
@@ -6753,6 +6757,8 @@ fn runCustomCase(
         .issue_12741_wasm_generic_tail_calls_dev => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
         .issue_12741_wasm_generic_tail_calls_size => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=size"),
         .issue_12848_wasm_shared_helper_emitted_once_size => customIssue12848WasmSharedHelperEmittedOnce(io, allocator, &env, &timer, timeout_ms),
+        .issue_13028_wasm_size_small_copy_is_memory_copy => customIssue13028WasmSizeSmallCopyIsMemoryCopy(io, allocator, &env, &timer, timeout_ms),
+        .issue_13028_wasm_speed_small_copy_is_scalar => customIssue13028WasmSpeedSmallCopyIsScalar(io, allocator, &env, &timer, timeout_ms),
         .issue_13029_wasm_size_static_data_segments_merged => customIssue13029WasmSizeStaticDataSegmentsMerged(io, allocator, &env, &timer, timeout_ms),
         .issue_12741_wasm_generic_tail_calls_speed => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=speed"),
         .boxy_recursive_method_dispatch_wasm_dev => customBoxyRecursiveMethodDispatchWasm(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
@@ -14584,6 +14590,111 @@ fn customIssue12848WasmSharedHelperEmittedOnce(
     }
     if (copies[1] > copies[0]) {
         return customFailure(allocator, timer, "--opt=size emitted {d} copies of the helper for sixteen callers but {d} for one caller: the helper must be emitted once and called", .{ copies[1], copies[0] });
+    }
+    return null;
+}
+
+/// Under `--opt=size` on wasm32, whose instruction set has bulk memory, a
+/// copy of a constant twelve bytes is one `memory.copy`: `i32.const 12`
+/// (`41 0c`) then `memory.copy 0 0` (`fc 0a 00 00`) encodes smaller than the
+/// two loads and two stores that move the same bytes. The fixture copies a
+/// twelve-byte record out of a list element the program computes at run
+/// time, so the module's code section must hold that sequence.
+/// https://github.com/roc-lang/roc/issues/13028
+fn customIssue13028WasmSizeSmallCopyIsMemoryCopy(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const copy_twelve_bytes = [_]u8{ 0x41, 0x0c, 0xfc, 0x0a, 0x00, 0x00 };
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "small-copy.wasm" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
+    defer allocator.free(output_path);
+    const output_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output argument: {}", .{err});
+    defer allocator.free(output_arg);
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache", output_arg },
+        .roc_file = "test/wasm/issue_13028_small_copy_app.roc",
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+    })) |failure| return failure;
+    if (validateWasmOutput(io, allocator, timer, output_path)) |failure| return failure;
+
+    var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+        return customFailure(allocator, timer, "failed to load the small copy wasm module: {}", .{err});
+    defer wasm.deinit();
+    const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+        return customFailure(allocator, timer, "small copy wasm execution failed: {}", .{err});
+    // The host's input is 21 bytes long, so the program picks element 0.
+    if (!std.mem.eql(u8, result, "66")) {
+        return customFailure(allocator, timer, "small copy wasm returned \"{s}\", expected \"66\"", .{result});
+    }
+
+    const wasm_bytes = std.Io.Dir.cwd().readFileAlloc(io, output_path, allocator, .unlimited) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read wasm output {s}: {}", .{ output_path, err });
+    defer allocator.free(wasm_bytes);
+    const code = wasmSectionPayload(wasm_bytes, 10) catch |err|
+        return customFailure(allocator, timer, "failed to read the small copy module's sections: {}", .{err});
+    const section = code orelse return customFailure(allocator, timer, "the small copy module has no code section", .{});
+    if (std.mem.find(u8, section, &copy_twelve_bytes) == null) {
+        return customFailure(allocator, timer, "--opt=size lowered the twelve-byte record copy to scalar loads and stores instead of one memory.copy", .{});
+    }
+    return null;
+}
+
+/// Under `--opt=speed` on wasm32, LLVM's own limits apply, and they expand a
+/// twelve-byte copy into loads and stores: the size build's single-store
+/// limit never reaches a speed build. The module's code section therefore
+/// holds no `i32.const 12` (`41 0c`) followed by `memory.copy 0 0`
+/// (`fc 0a 00 00`).
+/// https://github.com/roc-lang/roc/issues/13028
+fn customIssue13028WasmSpeedSmallCopyIsScalar(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const copy_twelve_bytes = [_]u8{ 0x41, 0x0c, 0xfc, 0x0a, 0x00, 0x00 };
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "small-copy-speed.wasm" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
+    defer allocator.free(output_path);
+    const output_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output argument: {}", .{err});
+    defer allocator.free(output_arg);
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--target=wasm32", "--opt=speed", "--no-cache", output_arg },
+        .roc_file = "test/wasm/issue_13028_small_copy_app.roc",
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+    })) |failure| return failure;
+    if (validateWasmOutput(io, allocator, timer, output_path)) |failure| return failure;
+
+    var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+        return customFailure(allocator, timer, "failed to load the small copy wasm module: {}", .{err});
+    defer wasm.deinit();
+    const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+        return customFailure(allocator, timer, "small copy wasm execution failed: {}", .{err});
+    // The host's input is 21 bytes long, so the program picks element 0.
+    if (!std.mem.eql(u8, result, "66")) {
+        return customFailure(allocator, timer, "small copy wasm returned \"{s}\", expected \"66\"", .{result});
+    }
+
+    const wasm_bytes = std.Io.Dir.cwd().readFileAlloc(io, output_path, allocator, .unlimited) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read wasm output {s}: {}", .{ output_path, err });
+    defer allocator.free(wasm_bytes);
+    const code = wasmSectionPayload(wasm_bytes, 10) catch |err|
+        return customFailure(allocator, timer, "failed to read the small copy module's sections: {}", .{err});
+    const section = code orelse return customFailure(allocator, timer, "the small copy module has no code section", .{});
+    if (std.mem.find(u8, section, &copy_twelve_bytes) != null) {
+        return customFailure(allocator, timer, "--opt=speed lowered a twelve-byte copy to memory.copy: the size build's memory intrinsic limit reached a speed build", .{});
     }
     return null;
 }

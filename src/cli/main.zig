@@ -1455,6 +1455,7 @@ fn generatePlatformHostShimFromLirData(
         .optimization = .speed,
         .target = target,
         .report_config = ctx.reportConfig(.stderr),
+        .memory_intrinsic_stores = .forCompile(.speed, std_target),
         .cpu = llvm_cpu,
         .features = llvm_features,
         .debug = debug, // Use the debug flag passed from caller
@@ -9750,6 +9751,27 @@ test "LLVM builds link the SHA-256 rounds each target's CPU features select" {
     }
 }
 
+// https://github.com/roc-lang/roc/issues/13028
+// Only a size build for a WebAssembly target with bulk memory expands memory
+// intrinsics into at most one store; speed builds, native targets and
+// `wasm32v1`, which has no bulk memory, keep LLVM's own limits.
+test "LLVM builds limit memory intrinsic expansion only for size-optimized wasm with bulk memory" {
+    const expected = [_]struct { RocTarget, builder.OptimizationLevel, builder.MemoryIntrinsicStores }{
+        .{ .wasm32, .size, .single },
+        .{ .wasm32, .speed, .target_default },
+        .{ .wasm32v1, .size, .target_default },
+        .{ .wasm32v1, .speed, .target_default },
+        .{ .x64musl, .size, .target_default },
+        .{ .x64musl, .speed, .target_default },
+        .{ .arm64mac, .size, .target_default },
+        .{ .arm32musl, .size, .target_default },
+    };
+    for (expected) |entry| {
+        const std_target = try std.zig.system.resolveTargetQuery(std.Options.debug_io, entry[0].llvmTargetQuery());
+        try std.testing.expectEqual(entry[2], builder.MemoryIntrinsicStores.forCompile(entry[1], std_target));
+    }
+}
+
 fn compileLlvmAppObject(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
@@ -9852,6 +9874,7 @@ fn compileLlvmAppObject(
         .optimization = llvmOptimizationLevel(args.opt),
         .target = target,
         .report_config = ctx.reportConfig(.stderr),
+        .memory_intrinsic_stores = .forCompile(llvmOptimizationLevel(args.opt), std_target),
         .cpu = llvm_cpu,
         .features = llvm_features,
         .debug = args.debug,

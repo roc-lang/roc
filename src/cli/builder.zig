@@ -80,6 +80,37 @@ pub const LinkedBuiltins = struct {
     stack_checked: bool = false,
 };
 
+/// How many stores LLVM's code generator may expand an `llvm.memcpy`,
+/// `llvm.memmove` or `llvm.memset` with a constant length into before it
+/// emits the target's bulk instruction or a library call instead.
+pub const MemoryIntrinsicStores = enum {
+    /// The target's own limits.
+    target_default,
+    /// One store. A size-optimized wasm module with bulk memory uses this:
+    /// `memory.copy` or `memory.fill` with a constant length encodes in about
+    /// as many bytes as one load/store pair and in fewer than any longer
+    /// sequence, while LLVM's WebAssembly limits for size expand up to four.
+    single,
+
+    /// The limit for a compile at `optimization` for `std_target`, the target
+    /// whose CPU and features the compile names.
+    pub fn forCompile(optimization: OptimizationLevel, std_target: std.Target) MemoryIntrinsicStores {
+        return switch (optimization) {
+            .speed => .target_default,
+            .size => if (std_target.cpu.arch.isWasm() and std_target.cpu.has(.wasm, .bulk_memory_opt)) .single else .target_default,
+        };
+    }
+
+    /// The value LLVM's `max-store-memcpy`, `max-store-memmove` and
+    /// `max-store-memset` options take, where 0 means the target's limits.
+    fn llvmOptionValue(self: MemoryIntrinsicStores) c_uint {
+        return switch (self) {
+            .target_default => 0,
+            .single => 1,
+        };
+    }
+};
+
 /// Configuration for compiling LLVM bitcode to object files
 pub const CompileConfig = struct {
     input_path: []const u8,
@@ -87,6 +118,7 @@ pub const CompileConfig = struct {
     optimization: OptimizationLevel,
     target: target.RocTarget,
     report_config: reporting.ReportingConfig,
+    memory_intrinsic_stores: MemoryIntrinsicStores,
     cpu: []const u8 = "",
     features: []const u8 = "",
     debug: bool = false, // Enable debug info generation in output
@@ -240,6 +272,7 @@ const llvm_externs = if (llvm_available) struct {
         abi_name: ?[*:0]const u8,
         emulated_tls: bool,
     ) ?*anyopaque;
+    extern fn ZigLLVMSetMemoryIntrinsicStoreLimit(limit: c_uint) void;
 
     // LLVM wrapper functions
     extern fn ZigLLVMInitializeAllTargets() void;
@@ -973,6 +1006,9 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         .lower_memory_intrinsics_to_loops = config.lower_memory_intrinsics_to_loops,
     };
 
+    // LLVM keeps this limit in process-wide options that code generation
+    // reads, so every compile sets it, to its own value, before it emits.
+    externs.ZigLLVMSetMemoryIntrinsicStoreLimit(config.memory_intrinsic_stores.llvmOptionValue());
     const emit_result = externs.ZigLLVMTargetMachineEmitToFile(
         target_machine,
         module,

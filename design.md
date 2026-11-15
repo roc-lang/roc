@@ -3056,6 +3056,26 @@ is the one measure of every inlining decision, exactly as it is for a C or
 Zig module built for minimum size. The pinned leaf builtins keep
 `alwaysinline` in every mode.
 
+A size build for a WebAssembly target with bulk memory (`wasm32`, not
+`wasm32v1`) also lowers every `llvm.memcpy`, `llvm.memmove` and
+`llvm.memset` that needs more than one store to one `memory.copy` or
+`memory.fill`. With a constant length either instruction encodes in about
+as many bytes as one load/store pair and in fewer than any longer sequence,
+while LLVM's WebAssembly backend keeps its generic limit of four stores for
+`optsize` code. A copy from a constant is no exception: the WebAssembly
+backend does not turn constant loads into immediates, so its expansion loads
+from the constant's address like any other copy. LLVM exposes the limit only
+as its `max-store-memcpy`, `max-store-memmove` and `max-store-memset`
+options, which are process-wide, replace the limits for size and speed alike,
+and are read when code generation decides each expansion. Every LLVM compile
+therefore sets them for itself before it emits
+(`builder.MemoryIntrinsicStores`, `ZigLLVMSetMemoryIntrinsicStoreLimit`): 1
+for a size compile whose target has `bulk_memory_opt`, and 0, LLVM's "use the
+target's limits", for every other compile, including the in-process host
+objects of `roc test`, eval and glue (`llvm_compile`). A process runs its
+LLVM compiles one at a time, so the value a compile sets is the one its code
+generation reads.
+
 There are two string joins with one meaning. `str_concat` is the join a
 program spells (`Str.concat`); its LLVM wrapper carries the small-into-small
 fast path and is pinned, because a spelled join is usually one of a few and
