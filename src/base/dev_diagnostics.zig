@@ -24,7 +24,8 @@ pub const Var = enum {
     /// which part an edit changed. Hashing the parts separately costs more
     /// than the digests themselves, so the work trace leaves it out.
     trace_boxy_digests,
-    /// Rebuild every restored Boxy object and compare it with the cached one.
+    /// Rebuild every restored or embedded Boxy object and compare it with the
+    /// cached or embedded one.
     verify_boxy_object_reuse,
     /// Separate coordinator request-resolution costs into exclusive phases.
     spec_resolution_profile,
@@ -71,6 +72,9 @@ pub const Var = enum {
     /// readable name a lowering of the process recorded (`notePerfName`),
     /// otherwise by symbol.
     perf_map,
+    /// Print when `roc` starts a program it built and when it has released
+    /// the build's state, so the order of the two is visible.
+    trace_run_order,
 
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
@@ -95,6 +99,7 @@ pub const Var = enum {
             .dump_wasm_unit_images => "ROC_DUMP_WASM_UNIT_IMAGES",
             .storage_work => "ROC_STORAGE_WORK",
             .perf_map => "ROC_PERF_MAP",
+            .trace_run_order => "ROC_TRACE_RUN_ORDER",
         };
     }
 };

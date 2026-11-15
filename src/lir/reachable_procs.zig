@@ -6,6 +6,7 @@
 //! explicit callable data.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const collections = @import("collections");
 const core = @import("lir_core");
@@ -775,7 +776,9 @@ const Pass = struct {
         self.result.static_data_values.shrinkRetainingCapacity(write);
     }
 
+    /// Checks compiler invariants only, so release builds skip the scan.
     fn verifyReachableProcRefs(self: *Pass) Allocator.Error!void {
+        if (builtin.mode != .debug) return;
         const proc_count = self.store.procSpecCount();
         const stmt_count = self.store.cfStmtCount();
         for (self.result.root_procs.items) |proc| {
@@ -815,10 +818,7 @@ const Pass = struct {
                 }
             }
         }
-        for (0..self.store.procDebugNameCount()) |index| {
-            const entry = self.store.getProcDebugName(index);
-            if (entry.proc >= proc_count) reachableProcInvariant("proc debug name exceeds compact proc_specs len");
-        }
+        if (self.store.procDebugNameCount() != proc_count) reachableProcInvariant("proc debug names are not parallel to compact proc_specs");
         for (0..self.store.procSpecCount()) |proc_index| {
             const proc = self.store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             if (proc.body.get()) |body| self.verifyStmtRef(body, stmt_count) else if (proc.hosted.get() == null and !proc.external) {

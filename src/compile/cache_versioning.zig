@@ -57,13 +57,14 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// that every use shares when nothing visible can lift or widen it, literal
 /// conversion roots published for deferred literals, checked artifacts' type,
 /// scheme, blob and proc-base interning tables, type tags that record
-/// whether only `match` branch patterns put them in their row, and literal
+/// whether only `match` branch patterns put them in their row, literal
 /// argument roots whose source is their edge owner and which hold no
-/// expression, with each checking problem carrying the source regions its
-/// report highlights in place of a region per type variable. It rejects every
-/// earlier format, including the independent version 19 through 40 formats.
-/// Platform-pairing entries share it.
-const checked_envelope_version: u32 = 41;
+/// expression, compile-time roots indexed by pattern, and each checking
+/// problem carrying the source regions its report highlights in place of a
+/// region per type variable. It rejects every earlier format, including the
+/// independent version 19 through 41 formats. Platform-pairing entries share
+/// it.
+const checked_envelope_version: u32 = 42;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment.
@@ -162,8 +163,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x68, 0xD3, 0xFD, 0x8F, 0x0D, 0x28, 0x34, 0x08, 0x50, 0xB7, 0x4E, 0x3D, 0x25, 0x46, 0x97, 0xE5,
-        0xDA, 0x6D, 0x3A, 0x37, 0xA2, 0x5D, 0x24, 0xFC, 0x13, 0xAC, 0x54, 0xF8, 0xD4, 0xEB, 0x09, 0x89,
+        0xB4, 0x75, 0x4C, 0x44, 0x89, 0x6B, 0x46, 0x91, 0x42, 0xFF, 0x5C, 0x0E, 0x7B, 0x84, 0x7D, 0x4B,
+        0x83, 0xCE, 0x5D, 0xC7, 0x0E, 0x3E, 0xBA, 0xB8, 0x29, 0x3D, 0x94, 0x17, 0xC5, 0xAE, 0xB2, 0x15,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

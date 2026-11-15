@@ -1312,7 +1312,7 @@ fn lowerAppPathToLir(
     }
 
     var timing = lir.CheckedPipeline.Timing.init(std.testing.io);
-    if (opts.detailed_monotype_diagnostics) timing.enableDetailedMonotypeBody();
+    if (opts.detailed_monotype_diagnostics) timing.enableDetail();
     const coordinator_executor = if (opts.specialization_workers > 1)
         coord.postCheckExecutor()
     else

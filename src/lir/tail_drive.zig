@@ -20,9 +20,11 @@
 //! argument, and the cleanup projections do not read or overwrite its result.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const collections = @import("collections");
 const core = @import("lir_core");
 const body_clone = @import("body_clone.zig");
+const invariant = @import("base").invariant;
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -53,107 +55,50 @@ const DeferredCall = struct {
 
 /// Stamp `drive` on every statement that can be followed by a pending call.
 /// `entered_from_outside` names the procedures something other than a direct
-/// Roc call or the erased-call runtime can enter.
+/// Roc call or the erased-call runtime can enter. `deferred_erased_calls` is
+/// ARC's report of whether its insertion deferred any erased call
+/// (`Arc.InsertResult`); no other stage produces a deferred call.
 pub fn run(
     allocator: Allocator,
     store: *LirStore,
     entered_from_outside: []const []const LIR.LirProcSpecId,
+    deferred_erased_calls: bool,
 ) Allocator.Error!void {
     const proc_count = store.procSpecCount();
-    var direct_calls = std.ArrayList(DirectCall).empty;
-    defer direct_calls.deinit(allocator);
-    var deferred_calls = std.ArrayList(DeferredCall).empty;
-    defer deferred_calls.deinit(allocator);
-    var outside = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count);
-    defer outside.deinit(allocator);
-    for (entered_from_outside) |procs| {
-        for (procs) |proc| outside.set(@backingInt(proc));
-    }
-
-    var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
-    defer seen.deinit(allocator);
-    var work = std.ArrayList(LIR.CFStmtId).empty;
-    defer work.deinit(allocator);
-    // The body of each join of the procedure being walked, by join id. A
-    // join encloses every jump to it, so it is recorded before they are read.
-    var join_bodies = std.ArrayList(collections.OptionalId(LIR.CFStmtId)).empty;
-    defer join_bodies.deinit(allocator);
-    for (0..proc_count) |proc_index| {
-        const proc = store.getProcSpecImmediate(@fromBackingInt(@as(u32, @intCast(proc_index))));
-        const body = proc.body.get() orelse continue;
-        join_bodies.clearRetainingCapacity();
-        try work.append(allocator, body);
-        while (work.pop()) |stmt_id| {
-            if (seen.isSet(@backingInt(stmt_id))) continue;
-            seen.set(@backingInt(stmt_id));
-            const stmt = store.getCFStmt(stmt_id);
-            if (stmt == .join) {
-                const join_index = @backingInt(stmt.join.id);
-                if (join_index >= join_bodies.items.len) {
-                    try join_bodies.appendNTimes(allocator, .none, join_index + 1 - join_bodies.items.len);
-                }
-                join_bodies.items[join_index] = .some(stmt.join.body);
-            } else if (stmt == .assign_call) {
-                try direct_calls.append(allocator, .{
-                    .caller = @intCast(proc_index),
-                    .callee = @backingInt(stmt.assign_call.proc),
-                    .stmt = stmt_id,
-                    .returns = returnOf(store, join_bodies.items, stmt.assign_call.target, stmt.assign_call.next),
-                });
-            } else if (stmt == .assign_call_erased) {
-                const erased = store.stmtRow(stmt.assign_call_erased.data);
-                if (erased.deferred) try deferred_calls.append(allocator, .{
-                    .caller = @intCast(proc_index),
-                    .stmt = stmt_id,
-                    .returns = returnOf(store, join_bodies.items, stmt.assign_call_erased.target, stmt.assign_call_erased.next),
-                });
-            } else if (stmt == .dyn) {
-                const op = store.stmtRow(stmt.dyn.data);
-                if (op == .call_erased and op.call_erased.deferred) try deferred_calls.append(allocator, .{
-                    .caller = @intCast(proc_index),
-                    .stmt = stmt_id,
-                    .returns = returnOf(store, join_bodies.items, stmt.dyn.target.?, stmt.dyn.next),
-                });
-            } else if (stmt == .assign_literal and stmt.assign_literal.value == .proc_ref) {
-                outside.set(@backingInt(stmt.assign_literal.value.proc_ref));
+    // Only a deferred call or a cached body's summary can seed a pending
+    // call. Without either, no procedure may leave one and no statement is
+    // stamped, so the walk is skipped and only the summaries are committed.
+    if (!deferred_erased_calls and !anyExternalMayLeavePending(store)) {
+        if (builtin.mode == .debug) {
+            var walk = try Walk.collect(allocator, store, entered_from_outside);
+            defer walk.deinit(allocator);
+            if (walk.deferred_calls.items.len != 0) {
+                invariant("tail drive found a deferred erased call ARC did not report", .{});
             }
-            try body_clone.appendSuccessors(store, &work, stmt_id, allocator);
+            var may_pend = try walk.mayPend(allocator, store);
+            defer may_pend.deinit(allocator);
+            if (may_pend.count() != 0) invariant("tail drive found a pending call without a deferred call or cached summary", .{});
         }
+        for (0..proc_count) |index| {
+            store.getProcSpecPtr(@fromBackingInt(@as(u32, @intCast(index)))).may_leave_pending = false;
+        }
+        return;
     }
 
-    // A procedure can return with a call pending when it defers one itself,
-    // or hands up one a callee left.
-    var may_pend = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count);
+    var walk = try Walk.collect(allocator, store, entered_from_outside);
+    defer walk.deinit(allocator);
+    const direct_calls = &walk.direct_calls;
+    const deferred_calls = &walk.deferred_calls;
+    const outside = &walk.outside;
+    var may_pend = try walk.mayPend(allocator, store);
     defer may_pend.deinit(allocator);
-    // A body supplied by the native cache has already been analyzed by its
-    // producer. Its absence here says nothing about whether it leaves work
-    // pending; replay that explicit summary before propagating to callers.
-    for (0..proc_count) |index| {
-        const proc = store.getProcSpecImmediate(@fromBackingInt(@as(u32, @intCast(index))));
-        if (proc.external and proc.may_leave_pending) may_pend.set(index);
-    }
-    for (deferred_calls.items) |deferred| {
-        if (deferred.returns == .no) continue;
-        if (handsUp(store, &outside, deferred.caller) != .never) may_pend.set(deferred.caller);
-    }
-    var changed = true;
-    while (changed) {
-        changed = false;
-        for (direct_calls.items) |call| {
-            if (may_pend.isSet(call.caller) or !may_pend.isSet(call.callee)) continue;
-            if (handsUp(store, &outside, call.caller) == .never) continue;
-            if (call.returns == .no) continue;
-            may_pend.set(call.caller);
-            changed = true;
-        }
-    }
 
     for (0..proc_count) |index| {
         store.getProcSpecPtr(@fromBackingInt(@as(u32, @intCast(index)))).may_leave_pending = may_pend.isSet(index);
     }
 
     for (deferred_calls.items) |deferred| {
-        const drive = driveAfter(store, &outside, deferred.caller, deferred.returns != .no);
+        const drive = driveAfter(store, outside, deferred.caller, deferred.returns != .no);
         switch (store.getCFStmtPtr(deferred.stmt).*) {
             .assign_call_erased => |*updated| {
                 var data = store.stmtRow(updated.data);
@@ -173,7 +118,7 @@ pub fn run(
     }
     for (direct_calls.items) |call| {
         if (!may_pend.isSet(call.callee)) continue;
-        const drive = driveAfter(store, &outside, call.caller, call.returns != .no);
+        const drive = driveAfter(store, outside, call.caller, call.returns != .no);
         const updated = &store.getCFStmtPtr(call.stmt).assign_call;
         var extra = store.stmtRowOrDefault(updated.extra);
         extra.drive = drive;
@@ -185,6 +130,142 @@ pub fn run(
         if (drive == .unless_caller_drives) caller.reads_caller_drives = true;
     }
 }
+
+/// Whether a body-less procedure the native cache supplied may return with a
+/// call pending, by the summary its producer committed.
+fn anyExternalMayLeavePending(store: *const LirStore) bool {
+    for (0..store.procSpecCount()) |index| {
+        const proc = store.getProcSpecImmediate(@fromBackingInt(@as(u32, @intCast(index))));
+        if (proc.external and proc.may_leave_pending) return true;
+    }
+    return false;
+}
+
+/// Every direct call and deferred call reachable from a procedure body, and
+/// the procedures something other than Roc code or the erased-call runtime
+/// can enter.
+const Walk = struct {
+    direct_calls: std.ArrayList(DirectCall),
+    deferred_calls: std.ArrayList(DeferredCall),
+    outside: std.bit_set.DynamicBitSetUnmanaged,
+
+    fn deinit(self: *Walk, allocator: Allocator) void {
+        self.direct_calls.deinit(allocator);
+        self.deferred_calls.deinit(allocator);
+        self.outside.deinit(allocator);
+    }
+
+    fn collect(
+        allocator: Allocator,
+        store: *const LirStore,
+        entered_from_outside: []const []const LIR.LirProcSpecId,
+    ) Allocator.Error!Walk {
+        const proc_count = store.procSpecCount();
+        var walk: Walk = .{
+            .direct_calls = .empty,
+            .deferred_calls = .empty,
+            .outside = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count),
+        };
+        errdefer walk.deinit(allocator);
+        for (entered_from_outside) |procs| {
+            for (procs) |proc| walk.outside.set(@backingInt(proc));
+        }
+
+        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
+        defer seen.deinit(allocator);
+        var work = std.ArrayList(LIR.CFStmtId).empty;
+        defer work.deinit(allocator);
+        // The body of each join of the procedure being walked, by join id. A
+        // join encloses every jump to it, so it is recorded before they are
+        // read. Join ids can be unique across the whole store, so the table
+        // is never shrunk: each procedure clears only the entries it set, and
+        // reads see the prefix up to its largest join id.
+        var join_bodies = std.ArrayList(collections.OptionalId(LIR.CFStmtId)).empty;
+        defer join_bodies.deinit(allocator);
+        var touched_joins = std.ArrayList(u32).empty;
+        defer touched_joins.deinit(allocator);
+        var join_len: usize = 0;
+        for (0..proc_count) |proc_index| {
+            const proc = store.getProcSpecImmediate(@fromBackingInt(@as(u32, @intCast(proc_index))));
+            const body = proc.body.get() orelse continue;
+            for (touched_joins.items) |join_index| join_bodies.items[join_index] = .none;
+            touched_joins.clearRetainingCapacity();
+            join_len = 0;
+            try work.append(allocator, body);
+            while (work.pop()) |stmt_id| {
+                if (seen.isSet(@backingInt(stmt_id))) continue;
+                seen.set(@backingInt(stmt_id));
+                const stmt = store.getCFStmt(stmt_id);
+                if (stmt == .join) {
+                    const join_index = @backingInt(stmt.join.id);
+                    if (join_index >= join_bodies.items.len) {
+                        try join_bodies.appendNTimes(allocator, .none, join_index + 1 - join_bodies.items.len);
+                    }
+                    try touched_joins.append(allocator, join_index);
+                    join_bodies.items[join_index] = .some(stmt.join.body);
+                    join_len = @max(join_len, join_index + 1);
+                } else if (stmt == .assign_call) {
+                    try walk.direct_calls.append(allocator, .{
+                        .caller = @intCast(proc_index),
+                        .callee = @backingInt(stmt.assign_call.proc),
+                        .stmt = stmt_id,
+                        .returns = returnOf(store, join_bodies.items[0..join_len], stmt.assign_call.target, stmt.assign_call.next),
+                    });
+                } else if (stmt == .assign_call_erased) {
+                    const erased = store.stmtRow(stmt.assign_call_erased.data);
+                    if (erased.deferred) try walk.deferred_calls.append(allocator, .{
+                        .caller = @intCast(proc_index),
+                        .stmt = stmt_id,
+                        .returns = returnOf(store, join_bodies.items[0..join_len], stmt.assign_call_erased.target, stmt.assign_call_erased.next),
+                    });
+                } else if (stmt == .dyn) {
+                    const op = store.stmtRow(stmt.dyn.data);
+                    if (op == .call_erased and op.call_erased.deferred) try walk.deferred_calls.append(allocator, .{
+                        .caller = @intCast(proc_index),
+                        .stmt = stmt_id,
+                        .returns = returnOf(store, join_bodies.items[0..join_len], stmt.dyn.target.?, stmt.dyn.next),
+                    });
+                } else if (stmt == .assign_literal and stmt.assign_literal.value == .proc_ref) {
+                    walk.outside.set(@backingInt(stmt.assign_literal.value.proc_ref));
+                }
+                try body_clone.appendSuccessors(store, &work, stmt_id, allocator);
+            }
+        }
+        return walk;
+    }
+
+    /// The procedures that can return with a call pending: those that defer
+    /// one themselves, or hand up one a callee left.
+    fn mayPend(self: *const Walk, allocator: Allocator, store: *const LirStore) Allocator.Error!std.bit_set.DynamicBitSetUnmanaged {
+        const proc_count = store.procSpecCount();
+        var may_pend = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count);
+        errdefer may_pend.deinit(allocator);
+        // A body supplied by the native cache has already been analyzed by
+        // its producer. Its absence here says nothing about whether it leaves
+        // work pending; replay that explicit summary before propagating to
+        // callers.
+        for (0..proc_count) |index| {
+            const proc = store.getProcSpecImmediate(@fromBackingInt(@as(u32, @intCast(index))));
+            if (proc.external and proc.may_leave_pending) may_pend.set(index);
+        }
+        for (self.deferred_calls.items) |deferred| {
+            if (deferred.returns == .no) continue;
+            if (handsUp(store, &self.outside, deferred.caller) != .never) may_pend.set(deferred.caller);
+        }
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (self.direct_calls.items) |call| {
+                if (may_pend.isSet(call.caller) or !may_pend.isSet(call.callee)) continue;
+                if (handsUp(store, &self.outside, call.caller) == .never) continue;
+                if (call.returns == .no) continue;
+                may_pend.set(call.caller);
+                changed = true;
+            }
+        }
+        return may_pend;
+    }
+};
 
 const HandsUp = enum { never, always, when_runtime_called };
 
@@ -334,7 +415,7 @@ test "cached pending-call summaries propagate without a locally deferred call" {
             .body = .some(root_call),
             .ret_layout = .u64,
         }, .none);
-        try run(a, &store, &.{&.{root}});
+        try run(a, &store, &.{&.{root}}, false);
         try std.testing.expectEqual(pending, store.getProcSpecImmediate(external).may_leave_pending);
         try std.testing.expectEqual(pending, store.getProcSpecImmediate(relay).may_leave_pending);
         try std.testing.expect(!store.getProcSpecImmediate(root).may_leave_pending);
@@ -347,4 +428,23 @@ test "cached pending-call summaries propagate without a locally deferred call" {
         try std.testing.expectEqual(if (pending) LIR.PendingDrive.handed_up else .none, store.stmtRowOrDefault(store.getCFStmtImmediate(call).assign_call.extra).drive);
         try std.testing.expectEqual(if (pending) LIR.PendingDrive.always else .none, store.stmtRowOrDefault(store.getCFStmtImmediate(root_call).assign_call.extra).drive);
     }
+}
+
+test "without a deferred call or cached summary no procedure may leave a call pending" {
+    const a = std.testing.allocator;
+    var store = LirStore.init(a);
+    defer store.deinit();
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = .empty(),
+        .body = .some(ret),
+        .ret_layout = .u64,
+        .may_leave_pending = true,
+    }, .none);
+    try run(a, &store, &.{&.{proc}}, false);
+    try std.testing.expect(!store.getProcSpecImmediate(proc).may_leave_pending);
+    try std.testing.expect(!store.getProcSpecImmediate(proc).uses_pending_cell);
 }

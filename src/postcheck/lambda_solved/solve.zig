@@ -259,12 +259,45 @@ pub fn run(
     allocator: Allocator,
     lifted: Lifted.Program,
 ) Common.LowerError!Ast.Program {
+    return runTimed(allocator, lifted, null);
+}
+
+/// Step durations of one solve, recorded only when a caller asks for
+/// detailed timing.
+pub const Timing = struct {
+    std_io: std.Io,
+    /// The analysis solve finding the row-joined types.
+    analysis_ns: u64 = 0,
+    /// Setting up the real solver.
+    setup_ns: u64 = 0,
+    /// The real solve and its finishing passes.
+    solve_ns: u64 = 0,
+
+    fn now(self: *const Timing) i96 {
+        return std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
+    }
+
+    fn lap(self: *const Timing, started: i96, total: *u64) i96 {
+        const finished = self.now();
+        total.* +|= @intCast(@max(0, finished - started));
+        return finished;
+    }
+};
+
+/// `run`, recording its step durations in `timing` when it is given.
+pub fn runTimed(
+    allocator: Allocator,
+    lifted: Lifted.Program,
+    timing: ?*Timing,
+) Common.LowerError!Ast.Program {
     // `Ast.Program.init` cannot fail and takes ownership of `lifted`, so
     // `program.deinit()` is the only cleanup a later error needs.
     var program = Ast.Program.init(allocator, lifted);
     errdefer program.deinit();
 
+    var step_started: i96 = if (timing) |active| active.now() else 0;
     var row_joined = try findRowJoinedTypes(allocator, &program);
+    if (timing) |active| step_started = active.lap(step_started, &active.analysis_ns);
     var solver = Solver.init(allocator, &program) catch |err| {
         row_joined.deinit(allocator);
         return err;
@@ -273,7 +306,9 @@ pub fn run(
     solver.setRowJoined(row_joined);
     var counters: WorkCounters = .{};
     if (diagnostics.isSet(.lambda_solve_stats)) solver.counters = &counters;
+    if (timing) |active| step_started = active.lap(step_started, &active.setup_ns);
     try solver.solve();
+    if (timing) |active| _ = active.lap(step_started, &active.solve_ns);
     if (diagnostics.isSet(.lambda_solve_stats)) {
         var buffer: [2048]u8 = undefined;
         var out = std.Io.Writer.fixed(&buffer);

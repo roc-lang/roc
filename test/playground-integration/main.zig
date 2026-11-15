@@ -1418,6 +1418,18 @@ pub fn main(init: std.process.Init) anyerror!void {
         .steps = repl_protocol_steps,
     });
 
+    // A definition holding function values, and an expression calling them.
+    var repl_function_steps = try allocator.alloc(MessageStep, 4);
+    repl_function_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
+    repl_function_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS", .expected_message_contains = "REPL initialized" };
+    repl_function_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "table = [|n| n + 1.I64, |n| n * 2.I64]" }, .expected_status = "SUCCESS", .expected_result_output_contains = "assigned `table`" };
+    repl_function_steps[3] = .{ .message = .{ .type = "REPL_STEP", .input = "table.fold(40.I64, |acc, f| f(acc))" }, .expected_status = "SUCCESS", .expected_result_output_contains = "82" };
+
+    try test_cases.append(allocator, .{
+        .name = "REPL - Definition Holding Functions",
+        .steps = repl_function_steps,
+    });
+
     if (case_filters.items.len > 0) {
         var kept = std.ArrayList(TestCase).empty;
         for (test_cases.items) |case| {
