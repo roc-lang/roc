@@ -13710,6 +13710,7 @@ fn collectExpectBindingPatterns(
                 try stack.append(allocator, binop.rhs);
             },
             .e_unary_minus => |unary| try stack.append(allocator, unary.expr),
+            .e_unary_not => |unary| try stack.append(allocator, unary.expr),
             .e_field_access => |field| try stack.append(allocator, field.receiver),
             inline .e_method_call, .e_dispatch_call => |call| {
                 try stack.append(allocator, call.receiver);
@@ -18982,6 +18983,7 @@ fn boxyStepLabel(step: lir.CheckedPipeline.BoxyTiming.Step) []const u8 {
         .seed_workers => "Unit Worker Seeding",
         .roots => "Root Workers",
         .bodies => "Worker Bodies",
+        .demand => "Descriptor Demand",
         .tables => "Type Table Filling",
         .requests => "Layout + Static Data Requests",
         .export_needs => "Export Needs Encoding",

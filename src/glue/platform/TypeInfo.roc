@@ -10,4 +10,8 @@ import TypeRepr
 ##   from src/lir/program.zig and src/layout/store.zig.
 ## - `rc` is emitted from layout store refcount facts, not target-language
 ##   traversal.
-TypeInfo := { layout : AbiLayout, rc : HostRcPlan, repr : TypeRepr }
+## - `shape_id` is the id of the first row describing the same host type. Rows
+##   with equal shape ids agree on repr, layout and ownership at every depth,
+##   so one declaration serves all of them; rows that share a name but not a
+##   shape id are different host types and need different names.
+TypeInfo := { layout : AbiLayout, rc : HostRcPlan, repr : TypeRepr, shape_id : U64 }

@@ -2742,6 +2742,44 @@ test "check type - direct lambda equality - no is_eq" {
     try checkTypesExpr(source, .fail, "Type Does Not Support Equality");
 }
 
+test "check type - lambda equality - a numeral argument is decided by relating its plus requirements" {
+    // `x + n` and `x + 1` are two `plus` requirements on one `x`, whose
+    // relation makes the literal `1` a `U64` rather than defaulting it first.
+    var test_env = try TestEnv.init("Test",
+        \\f = |args| {
+        \\    n = List.len(args)
+        \\    {
+        \\        dbg "lhs"
+        \\        |x| x + n
+        \\    } == {
+        \\        dbg "rhs"
+        \\        |x| x + 1
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Type Does Not Support Equality"});
+}
+
+test "check type - lambda equality - plus operands at two types are a type mismatch" {
+    var test_env = try TestEnv.init("Test",
+        \\f = |args| {
+        \\    n = List.len(args)
+        \\    {
+        \\        dbg "lhs"
+        \\        |x| x + n
+        \\    } == {
+        \\        dbg "rhs"
+        \\        |x| x + "s"
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{ "Type Mismatch", "Type Does Not Support Equality" });
+}
+
 // anonymous type inequality (desugars to is_eq().not()) //
 
 test "check type - (a == b) desugars to a.is_eq(b) with unified args" {
@@ -4480,8 +4518,8 @@ test "check type - unary not" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
-test "check type - unary not infers Bool argument" {
-    try checkTypesModule("negate = |value| !value", .{ .pass = .last_def }, "Bool -> Bool");
+test "check type - unary not infers a where clause for a generic operand" {
+    try checkTypesModule("negate = |value| !value", .{ .pass = .last_def }, "a -> a where [a.not : a -> a]");
 }
 
 test "check type - unary not mutable boolean in loop" {
@@ -4502,22 +4540,164 @@ test "check type - unary not mutable boolean in loop" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
-test "check type - unary not mismatch" {
+test "check type - unary not on a type without not is a missing method" {
     const source =
         \\x = !"Hello"
+    ;
+    try checkTypesModule(source, .fail, "Missing Method");
+}
+
+test "check type - unary not on a nominal type without not is a missing method" {
+    const source =
+        \\Plain := [On, Off]
+        \\
+        \\p : Plain
+        \\p = Plain.On
+        \\
+        \\result = !p
+    ;
+    try checkTypesModule(source, .fail, "Missing Method");
+}
+
+test "check type - unary not on a tag literal resolves at Bool" {
+    try checkTypesModule("x = !True", .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - unary not on a tag literal compared with a tag" {
+    try checkTypesModule("x = !True == False", .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - unary not twice on a tag literal" {
+    try checkTypesModule("x = !!True", .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - unary not on an unannotated tag binding in an if" {
+    const source =
+        \\go : U64 -> U64
+        \\go = |n| {
+        \\    var $done = False
+        \\    if n > 3 { $done = True }
+        \\    if !$done { n } else { 0 }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "U64 -> U64");
+}
+
+test "check type - unary not on an unannotated tag binding returned unrelated" {
+    const source =
+        \\flip = |_| {
+        \\    done = False
+        \\    !done
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Bool");
+}
+
+test "check type - unary not in a while condition" {
+    const source =
+        \\count : List(U64) -> U64
+        \\count = |items| {
+        \\    var $done = False
+        \\    var $n = 0
+        \\    var $rest = items
+        \\    while !$done {
+        \\        match $rest.first() {
+        \\            Ok(x) => {
+        \\                $n = $n + x
+        \\                $rest = $rest.drop_first(1)
+        \\            }
+        \\            Err(_) => { $done = True }
+        \\        }
+        \\    }
+        \\    $n
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "List(U64) -> U64");
+}
+
+test "check type - unary not on and operands" {
+    try checkTypesModule("x = !True and !False", .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - unary not inside map" {
+    try checkTypesModule("x = [True, False].map(|f| !f)", .{ .pass = .last_def }, "List(Bool)");
+}
+
+test "check type - unary not on a method result" {
+    try checkTypesModule("x = ![1.U8, 2].is_empty()", .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - unary not on a tag union with other tags is a mismatch against Bool" {
+    const source =
+        \\x = !Foo
     ;
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - unary not rejects custom not method" {
+test "check type - unary not of a generic function applied to a tag literal is a missing method" {
     const source =
-        \\Custom := [Value].{
-        \\    not : Custom -> Custom
-        \\    not = |value| value
-        \\}
-        \\result = !Custom.Value
+        \\negate = |value| !value
+        \\x = negate(True)
     ;
-    try checkTypesModule(source, .fail, "Type Mismatch");
+    try checkTypesModule(source, .fail, "Missing Method");
+}
+
+test "check type - unary not on a tag literal an annotation pins to a nominal type" {
+    const source =
+        \\Switch := [On, Off].{
+        \\    not : Switch -> Switch
+        \\    not = |s| match s {
+        \\        On => Off
+        \\        Off => On
+        \\    }
+        \\}
+        \\
+        \\result : Switch
+        \\result = !On
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Switch");
+}
+
+test "check type - unary not on a local tag binding a later annotation pins" {
+    const source =
+        \\Switch := [On, Off].{
+        \\    not : Switch -> Switch
+        \\    not = |s| match s {
+        \\        On => Off
+        \\        Off => On
+        \\    }
+        \\}
+        \\
+        \\result = |_| {
+        \\    v = On
+        \\    flipped = !v
+        \\    pinned : Switch
+        \\    pinned = flipped
+        \\    pinned
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Switch");
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/13001: `!x` is sugar for
+// `x.not()`, so it dispatches to the operand type's `not` method, the same way
+// `-x` dispatches to `negate`.
+test "check type - unary not dispatches to a nominal type's not method" {
+    const source =
+        \\Switch := [On, Off].{
+        \\    not : Switch -> Switch
+        \\    not = |s| match s {
+        \\        On => Off
+        \\        Off => On
+        \\    }
+        \\}
+        \\
+        \\s : Switch
+        \\s = Switch.On
+        \\
+        \\result = !s
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Switch");
 }
 
 // unary minus
@@ -9192,6 +9372,98 @@ test "check type - polymorphic recursion at a context-free body-local type allow
     });
 }
 
+test "check type - recursion at an alias of the definition's own variable is accepted" {
+    // `Same(a)` is `a`, so the recursive use passes `a` along unchanged.
+    const source =
+        \\Same(x) : x
+        \\depth : a, U64 -> U64
+        \\depth = |x, n| {
+        \\    y : Same(a)
+        \\    y = x
+        \\    if n == 0 { 0 } else { 1 + depth(y, n - 1) }
+        \\}
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "depth", .expected = "a, U64 -> U64" },
+    });
+}
+
+test "check type - recursion at an alias whose backing ignores its argument is accepted" {
+    // `Phantom(a)` is `U64`, a closed type, so the recursion reaches one
+    // further instantiation and stays there.
+    const source =
+        \\Phantom(x) : U64
+        \\depth : a, U64 -> U64
+        \\depth = |x, n| {
+        \\    y : Phantom(a)
+        \\    y = 5
+        \\    _ignored = x
+        \\    if n == 0 { 0 } else { 1 + depth(y, n - 1) }
+        \\}
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "depth", .expected = "a, U64 -> U64" },
+    });
+}
+
+test "check type - recursion at an alias that drops another variable is accepted" {
+    // `First(a, b)` is `a`: `b` names no part of the type, so nothing flows
+    // from `b` into `a`.
+    const source =
+        \\First(x, y) : x
+        \\depth : a, b, U64 -> U64
+        \\depth = |x, y, n| {
+        \\    z : First(a, b)
+        \\    z = x
+        \\    if n == 0 { 0 } else { 1 + depth(z, y, n - 1) }
+        \\}
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "depth", .expected = "a, b, U64 -> U64" },
+    });
+}
+
+test "check type - polymorphic recursion at an alias whose backing grows is rejected" {
+    const source =
+        \\Wrap(x) : List(x)
+        \\depth : a, U64 -> U64
+        \\depth = |x, n| {
+        \\    y : Wrap(a)
+        \\    y = [x]
+        \\    if n == 0 { 0 } else { 1 + depth(y, n - 1) }
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - polymorphic recursion at a structure around an alias of the variable is rejected" {
+    const source =
+        \\Same(x) : x
+        \\depth : a, U64 -> U64
+        \\depth = |x, n| {
+        \\    y : List(Same(a))
+        \\    y = [x]
+        \\    if n == 0 { 0 } else { 1 + depth(y, n - 1) }
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - variables swapped through an alias are rejected" {
+    // `First(b, a)` is `b`, so the recursive use passes `y` as `a` and `x`
+    // as `b`.
+    const source =
+        \\First(x, y) : x
+        \\swap : a, b, U64 -> U64
+        \\swap = |x, y, n| {
+        \\    z : First(b, a)
+        \\    z = y
+        \\    if n == 0 { 0 } else { 1 + swap(z, x, n - 1) }
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
 test "check type - polymorphic recursion through a literal requirement is rejected" {
     // The recursive use instantiates `a` at `Poly(a)`, so the literal would
     // need conversions at `Poly(U8)`, `Poly(Poly(U8))`, and so on, as deep as
@@ -12388,6 +12660,120 @@ test "check type - weak top-level literal rejects second use at different type" 
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
+// design.md "Pending Requirement Copies In Literal Defaulting": a use of a
+// function that calls a method on a weak top-level literal copies that
+// requirement, and the copy counts among the literal's requirements when the
+// literal defaults. The copy's own literals wait for the method it selects.
+test "issue 13055: method on a weak top-level number used through a function called twice" {
+    const source =
+        \\weak = 5
+        \\f = |g| [weak.to_str().repeat(2)].map(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "Dec" },
+        .{ .def = "lengths", .expected = "List(U64)" },
+        .{ .def = "selves", .expected = "List(Str)" },
+    });
+}
+
+test "issue 13055: method on a weak top-level interpolation used through a function called twice" {
+    const source =
+        \\weak = "a${"x"}b"
+        \\f = |g| [weak.repeat(2)].map(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "Str" },
+        .{ .def = "lengths", .expected = "List(U64)" },
+        .{ .def = "selves", .expected = "List(Str)" },
+    });
+}
+
+test "issue 13055: one top-level use of a function that calls a method on a weak literal" {
+    const source =
+        \\f = |{}| weak.to_str().repeat(2)
+        \\a = { v: f({}) }
+        \\weak = 5
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "Dec" },
+        .{ .def = "a", .expected = "{ v: Str }" },
+    });
+}
+
+test "issue 13055: a weak literal's method requirement copied through a second function" {
+    const source =
+        \\weak = 5
+        \\f = |{}| weak.to_str().repeat(2)
+        \\g = |{}| f({})
+        \\a = g({})
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "issue 13055: expect uses a function that calls a method on a weak literal" {
+    const source =
+        \\weak = 5
+        \\f = |{}| weak.to_str().repeat(2)
+        \\
+        \\expect f({}) == "55"
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "Dec" },
+    });
+}
+
+// The copy's argument decides the literal exactly as the direct operation
+// `weak + 3.U8` does: the default must satisfy the copy.
+test "issue 13055: a use's copied requirement chooses the weak literal's type" {
+    const source =
+        \\weak = 5
+        \\f = |x| weak + x
+        \\a = f(3.U8)
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "U8" },
+        .{ .def = "a", .expected = "U8" },
+    });
+}
+
+test "issue 13055: a copied requirement inside a function chooses the weak literal's type" {
+    const source =
+        \\weak = 5
+        \\f = |x| weak + x
+        \\g = |{}| f(3.U8)
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "U8" },
+        .{ .def = "g", .expected = "{} -> U8" },
+    });
+}
+
+// Rejected side: weak means one type, so two copies that need different types
+// for the literal cannot both be satisfied.
+test "issue 13055: copied requirements that need different types for a weak literal are rejected" {
+    const source =
+        \\weak = 5
+        \\f = |x| weak + x
+        \\a = f(3.U8)
+        \\b = f(3.I64)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+// Rejected side: no numeric type has the method the copy needs.
+test "issue 13055: a copied requirement no default satisfies is rejected" {
+    const source =
+        \\weak = 5
+        \\f = |{}| weak.count_utf8_bytes()
+        \\a = f({})
+    ;
+    try checkTypesModule(source, .fail, "Missing Method");
+}
+
 // PRINCIPALITY. Writing an annotation may only ever NARROW an inferred type,
 // never widen it. These two modules differ ONLY in whether the dispatch
 // chain's receiver carries an annotation, so every def must infer the same
@@ -12457,6 +12843,19 @@ test "check type - principality - inferred enclosing weak receiver, two call sit
         \\    f = |g| weak.split_on(",").map(g)
         \\    lengths = f(|s| s.count_utf8_bytes())
         \\    selves = f(|s| s)
+        \\    (lengths, selves)
+        \\}
+        \\result = outer({})
+    ;
+    try checkTypesModuleDefs(source, principality_enclosing_defs);
+}
+
+test "check type - principality - inferred enclosing weak receiver, direct calls" {
+    const source =
+        \\outer = |_unit| {
+        \\    weak = "a,b,c"
+        \\    lengths = weak.split_on(",").map(|s| s.count_utf8_bytes())
+        \\    selves = weak.split_on(",").map(|s| s)
         \\    (lengths, selves)
         \\}
         \\result = outer({})

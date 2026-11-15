@@ -105,6 +105,15 @@ pub fn isIdentityVariable(desc: types.Descriptor) bool {
     };
 }
 
+/// `isIdentityVariable`, judged from the descriptor's stored word.
+pub fn isIdentityVariableWord(word: types.Descriptor.Word) bool {
+    if (word.flags().empty_tag_union_is_default) return true;
+    return switch (word.kind) {
+        .flex, .rigid => true,
+        .alias, .field_presence, .err, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => false,
+    };
+}
+
 /// Enumerate a complete scheme under one identity numbering. The callable's
 /// variables keep their `identityVarsFromVar` order; explicit relation roots
 /// append only identities not already reachable from that callable.

@@ -106,8 +106,6 @@ pub const LowLevel = enum(u16) {
     list_replace_unsafe,
     list_swap,
     list_prepend,
-    list_take_first,
-    list_take_last,
     list_reverse,
     list_reserve,
     list_reserve_for_append,
@@ -1119,8 +1117,6 @@ pub const LowLevel = enum(u16) {
 
         .list_drop_at = byLayout(.runtimeUniquenessMaybeSharedResult(arg_0)).elements(&.{ .layout, .none }),
         .list_sublist = byLayout(.runtimeUniquenessMaybeSharedResult(arg_0)).elements(&.{ .layout, .none }),
-        .list_take_first = byType(.runtimeUniquenessMaybeSharedResult(arg_0)).elements(&.{ .layout, .none }),
-        .list_take_last = byType(.runtimeUniquenessMaybeSharedResult(arg_0)).elements(&.{ .layout, .none }),
 
         .list_sublist_borrowed = byType(.retainsResultBorrowingArgs(arg_0)).elements(&.{ .layout, .none }),
 
@@ -1474,6 +1470,19 @@ pub const LowLevel = enum(u16) {
         // variant when the lender survives, but an owned variant must not
         // leave the result's unit keyed to the consumed allocation.
         if (!self.arcOwnedResultConsumesLender()) return declared;
+        return self.arcBorrowedResultVariant().?.rcEffect();
+    }
+
+    /// Ownership signature ARC solves for a dead-lender read when it may not
+    /// consume the lender (`consume_dead_boxes` off), so emission always
+    /// selects the borrowing variant. `Box.unbox`'s payload borrows its box.
+    /// An erased frame's capture record is always an owned container
+    /// (design.md "Constraints Per Statement Form"): it takes its own unit
+    /// and leaves the reuse argument unconsumed, so a repack of that
+    /// allocation as the frame's result is not held back by reads of the
+    /// captures that follow it.
+    pub fn arcLiveLenderRcEffect(self: LowLevel) RcEffect {
+        if (self == .erased_capture_load) return .retainsResult();
         return self.arcBorrowedResultVariant().?.rcEffect();
     }
 

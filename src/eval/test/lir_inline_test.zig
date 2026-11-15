@@ -4845,8 +4845,8 @@ test "LIR statements and procs carry resolved source locations" {
     try std.testing.expectEqual(store.getProcSpecs().len, store.proc_locs.unsafeRawItemsForView().len);
     try std.testing.expectEqual(store.getProcSpecs().len, store.proc_debug_names.unsafeRawItemsForView().len);
     var named: usize = 0;
-    for (store.proc_debug_names.unsafeRawItemsForView()) |string| {
-        if (string != .none) named += 1;
+    for (store.proc_debug_names.unsafeRawItemsForView()) |name| {
+        if (name != base.StringLiteral.Idx.none) named += 1;
     }
     try std.testing.expect(named > 0);
     try std.testing.expect(store.sourceFileCount() >= 1);
@@ -9711,10 +9711,12 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
     const pair_first = try mono.addExpr(.{ .ty = u32_ty, .data = .{ .tuple_access = .{ .tuple = pair_ref, .elem_index = 0 } } });
     const scalar_ref = try mono.addExpr(.{ .ty = u32_ty, .data = .{ .local = scalar_local } });
     const result_pair = try mono.addExpr(.{ .ty = pair_ty, .data = .{ .tuple = try mono.addExprSpan(&.{ pair_first, scalar_ref }) } });
-    const worker_body = try mono.addExpr(.{ .ty = pair_ty, .data = .{ .let_ = .{
-        .bind = scalar_pat,
-        .value = scalar_value,
-        .rest = result_pair,
+    // Monotype emits operand-sequenced bodies, so the binding is a block's
+    // statement (design.md "Operand Sequencing").
+    const scalar_binding = try mono.addStmt(.{ .let_ = .{ .pat = scalar_pat, .value = scalar_value } });
+    const worker_body = try mono.addExpr(.{ .ty = pair_ty, .data = .{ .block = .{
+        .statements = try mono.addStmtSpan(&.{scalar_binding}),
+        .final_expr = result_pair,
     } } });
 
     try mono.defs.append(allocator, .{
@@ -10005,7 +10007,7 @@ test "custom literal field default gets an ordinary conversion root" {
         switch (conversion.kind) {
             .numeral_conversion => numeral_roots += 1,
             .quote_conversion => quote_roots += 1,
-            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect, .repl_expr, .literal_argument => return error.TestUnexpectedResult,
+            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect, .interpolation_conversion, .repl_expr, .literal_argument => return error.TestUnexpectedResult,
         }
     }
     try std.testing.expectEqual(@as(usize, 1), numeral_roots);
@@ -14042,7 +14044,7 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_gate_source);
     try std.testing.expectEqual(@as(usize, 11), stats.functions);
     try std.testing.expectEqual(@as(usize, 12), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 493), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 522), stats.expressions);
     try std.testing.expectEqual(@as(usize, 110), stats.locals);
     try std.testing.expectEqual(@as(u64, 16), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
@@ -14169,8 +14171,8 @@ test "stored parser restore lowers a shape with an optional field" {
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_optional_gate_source);
     try std.testing.expectEqual(@as(usize, 11), stats.functions);
     try std.testing.expectEqual(@as(usize, 12), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 623), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 128), stats.locals);
+    try std.testing.expectEqual(@as(usize, 660), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 130), stats.locals);
     try std.testing.expectEqual(@as(u64, 16), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }
@@ -14188,7 +14190,7 @@ test "stored encoder_for restore lowers a shape with an optional field" {
     // Each of the two restored Values keeps its source static-data candidate,
     // active-binding reservation, and deferred-use reservation. These six
     // graph slots do not add helper workers; the counts above and below pin sharing.
-    try std.testing.expectEqual(@as(usize, 212), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 214), stats.expressions);
     try std.testing.expectEqual(@as(usize, 6), stats.static_candidates);
     try std.testing.expectEqual(@as(usize, 71), stats.locals);
     try std.testing.expectEqual(@as(u64, 18), stats.template_misses);
