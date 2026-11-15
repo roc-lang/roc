@@ -567,7 +567,7 @@ test "unit images built from object contents match images read from encoded obje
         \\main! : {} => I64
         \\main! = |_unit| a(8) + b(8) + c(8) + d(8)
         \\text! : {} => Str
-        \\text! = |_unit| Str.concat("unit images keep this long source string ", Str.repeat("!", 3))
+        \\text! = |_unit| "unit images keep this long source string after image teardown"
     });
     try dir.dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data =
         \\platform ""
