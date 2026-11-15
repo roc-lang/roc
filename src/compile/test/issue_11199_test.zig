@@ -42,6 +42,7 @@ test "issue 11199: a call site supplying the field types of a generic record che
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     try coord.start();
@@ -213,6 +214,7 @@ test "issue 11199: a concrete unsupported field is rejected during checking" {
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     try coord.start();

@@ -55,7 +55,7 @@ fn checkListWithDebug(source: []const u8, scalar: check.ConstStore.ConstPackedSc
     defer gpa.free(cwd);
     const path = try tmp.dir.realPathFileAlloc(io, "Repro.roc", gpa);
     defer gpa.free(path);
-    var build = try compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build = try compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build.deinit();
     var stderr_capture: StderrCapture = .{};
     defer stderr_capture.bytes.deinit(gpa);

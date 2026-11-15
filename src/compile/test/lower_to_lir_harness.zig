@@ -1239,10 +1239,10 @@ fn lowerAppPathToLir(
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        opts.specialization_strategy,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
-    coord.specialization_strategy = opts.specialization_strategy;
 
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
