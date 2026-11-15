@@ -938,7 +938,7 @@ const Solver = struct {
 };
 
 fn inferenceRcEffect(solver: *const Solver, op: anytype, declared: anytype) @TypeOf(declared) {
-    if (!solver.consume_dead_boxes and op.deadLenderArg() != null) return op.arcBorrowedResultVariant().?.rcEffect();
+    if (!solver.consume_dead_boxes and op == .box_unbox) return op.arcBorrowedResultVariant().?.rcEffect();
     return op.arcInferenceRcEffect(declared);
 }
 
@@ -1738,7 +1738,7 @@ fn computeOutcomeRestitution(
                         }
                     },
                     .assign_low_level => |assign| {
-                        const effect = if (!consume_dead_boxes and assign.op.deadLenderArg() != null)
+                        const effect = if (!consume_dead_boxes and assign.op == .box_unbox)
                             assign.op.arcBorrowedResultVariant().?.rcEffect()
                         else
                             assign.op.arcInferenceRcEffect(store.stmtRow(assign.rc_effect));
@@ -5164,7 +5164,7 @@ const UniquenessComponentTask = struct {
             const node = self.store.getCFStmtImmediate(stmt);
             if (node.* == .assign_low_level) {
                 const assign = node.assign_low_level;
-                const effect = if (!self.consume_dead_boxes and assign.op.deadLenderArg() != null)
+                const effect = if (!self.consume_dead_boxes and assign.op == .box_unbox)
                     assign.op.arcBorrowedResultVariant().?.rcEffect()
                 else
                     assign.op.arcInferenceRcEffect(self.store.stmtRow(assign.rc_effect));
@@ -5557,7 +5557,7 @@ fn settleUniquenessOracle(
                 const node = store.getCFStmtImmediate(stmt);
                 if (node.* == .assign_low_level) {
                     const assign = node.assign_low_level;
-                    const rc_effect = if (!consume_dead_boxes and assign.op.deadLenderArg() != null)
+                    const rc_effect = if (!consume_dead_boxes and assign.op == .box_unbox)
                         assign.op.arcBorrowedResultVariant().?.rcEffect()
                     else
                         assign.op.arcInferenceRcEffect(store.stmtRow(assign.rc_effect));
@@ -6083,7 +6083,7 @@ fn computeUniquenessDetailed(
                 }
             },
             .assign_low_level => |assign| {
-                const rc_effect = if (!consume_dead_boxes and assign.op.deadLenderArg() != null)
+                const rc_effect = if (!consume_dead_boxes and assign.op == .box_unbox)
                     assign.op.arcBorrowedResultVariant().?.rcEffect()
                 else
                     assign.op.arcInferenceRcEffect(store.stmtRow(assign.rc_effect));

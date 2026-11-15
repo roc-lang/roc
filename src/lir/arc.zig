@@ -2868,7 +2868,10 @@ const Inserter = struct {
                     if (assign.op.deadLenderArg()) |lender_position| {
                         const args = self.store.getLocalSpan(assign.args);
                         const lender = GuardedList.at(args, lender_position);
-                        use_borrowed = !self.options.consume_dead_boxes or
+                        // Only a box's payload transfer is optional: an
+                        // erased frame's reuse argument is always the
+                        // allocation its capture bytes live in.
+                        use_borrowed = (!self.options.consume_dead_boxes and assign.op == .box_unbox) or
                             !self.ownsUnit(&segment.owned, lender) or
                             try self.groupUsedInPathExcept(assign.next, lender, assign.target);
                     }

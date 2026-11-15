@@ -23122,6 +23122,12 @@ generates constraints per statement:
   reads it again on a failure path. The owner operand keeps the allocation
   live across the read of its capture bytes, so no release of the reuse
   argument can precede it. Post-ARC LIR contains only the borrowing load.
+  Unlike a box's payload transfer, which only the allocation-faithful
+  compiled pipeline selects, the capture load is solved as consuming in
+  every pipeline, the interpreter's included: the reuse argument is the
+  allocation the capture bytes live in by the erased ABI, so a record
+  borrowed from it would keep that allocation live past the repack of it
+  as the procedure's result.
 - `join` / `jump`: each join parameter's resources get modes and lifetime
   relations like an intra-proc signature. `set_local` with
   `initialize_join_param` followed by `jump` is a flow edge from the
