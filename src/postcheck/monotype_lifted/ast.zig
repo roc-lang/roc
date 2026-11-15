@@ -1567,6 +1567,122 @@ pub const Program = struct {
         };
     }
 
+    /// The binding groups of this program (`BindingGroups`). Reads only the
+    /// explicit function references of the bodies, so a pass that changes
+    /// which functions a body references must run before this is taken.
+    pub fn bindingGroups(self: *const Program, allocator: std.mem.Allocator) std.mem.Allocator.Error!BindingGroups {
+        const fn_count = self.fnCount();
+        if (fn_count == 0) return .empty;
+        if (fn_count >= std.math.maxInt(u32)) return error.OutOfMemory;
+
+        // Every function each function references, in one flat list.
+        const edge_starts = try allocator.alloc(u32, fn_count + 1);
+        defer allocator.free(edge_starts);
+        var edges = std.ArrayList(u32).empty;
+        defer edges.deinit(allocator);
+        const Collector = struct {
+            program: *const Program,
+            allocator: std.mem.Allocator,
+            edges: *std.ArrayList(u32),
+
+            pub fn enterExpr(collector: @This(), expr_id: ExprId) std.mem.Allocator.Error!ExprWalk {
+                const data = collector.program.getExpr(expr_id).data;
+                if (data == .fn_ref) try collector.edges.append(collector.allocator, @backingInt(data.fn_ref.fn_id));
+                if (data == .call_proc) switch (data.call_proc.callee) {
+                    .lifted => |callee| try collector.edges.append(collector.allocator, @backingInt(callee)),
+                    .func => Common.invariant("unlifted call target reached Monotype Lifted binding groups"),
+                };
+                return .descend;
+            }
+
+            pub fn exitExpr(_: @This(), _: ExprId) std.mem.Allocator.Error!void {}
+        };
+        for (0..fn_count) |raw| {
+            edge_starts[raw] = std.math.cast(u32, edges.items.len) orelse return error.OutOfMemory;
+            const fn_id: FnId = @fromBackingInt(@intCast(raw));
+            switch (self.getFn(fn_id).body) {
+                .roc => |body_expr| try walkExprs(allocator, self, .{ .expr = body_expr }, Collector{ .program = self, .allocator = allocator, .edges = &edges }),
+                .hosted => {},
+            }
+        }
+        edge_starts[fn_count] = std.math.cast(u32, edges.items.len) orelse return error.OutOfMemory;
+
+        const fns = try allocator.alloc(FnId, fn_count);
+        errdefer allocator.free(fns);
+        var starts = try std.ArrayList(u32).initCapacity(allocator, 1);
+        errdefer starts.deinit(allocator);
+        starts.appendAssumeCapacity(0);
+
+        // Tarjan's algorithm on an explicit stack. A component is complete
+        // only once every component it reaches is, so components complete
+        // callee-first.
+        const unvisited: u32 = 0;
+        const index_of = try allocator.alloc(u32, fn_count);
+        defer allocator.free(index_of);
+        @memset(index_of, unvisited);
+        const low = try allocator.alloc(u32, fn_count);
+        defer allocator.free(low);
+        const on_stack = try allocator.alloc(bool, fn_count);
+        defer allocator.free(on_stack);
+        @memset(on_stack, false);
+        var component = std.ArrayList(u32).empty;
+        defer component.deinit(allocator);
+        const Frame = struct { node: u32, next: u32 };
+        var frames = std.ArrayList(Frame).empty;
+        defer frames.deinit(allocator);
+        var next_index: u32 = 1;
+        var written: usize = 0;
+
+        for (0..fn_count) |start| {
+            if (index_of[start] != unvisited) continue;
+            try frames.append(allocator, .{ .node = @intCast(start), .next = edge_starts[start] });
+            index_of[start] = next_index;
+            low[start] = next_index;
+            next_index += 1;
+            try component.append(allocator, @intCast(start));
+            on_stack[start] = true;
+            while (frames.items.len > 0) {
+                const frame = &frames.items[frames.items.len - 1];
+                const node = frame.node;
+                if (frame.next < edge_starts[node + 1]) {
+                    const callee = edges.items[frame.next];
+                    frame.next += 1;
+                    if (index_of[callee] == unvisited) {
+                        index_of[callee] = next_index;
+                        low[callee] = next_index;
+                        next_index += 1;
+                        try component.append(allocator, callee);
+                        on_stack[callee] = true;
+                        try frames.append(allocator, .{ .node = callee, .next = edge_starts[callee] });
+                    } else if (on_stack[callee]) {
+                        low[node] = @min(low[node], index_of[callee]);
+                    }
+                    continue;
+                }
+                frames.items.len -= 1;
+                if (frames.items.len > 0) {
+                    const caller = frames.items[frames.items.len - 1].node;
+                    low[caller] = @min(low[caller], low[node]);
+                }
+                if (low[node] != index_of[node]) continue;
+                const component_start = std.mem.findScalarLast(u32, component.items, node).?;
+                const members = component.items[component_start..];
+                // Members in ascending `FnId` order, so a group's order does
+                // not depend on where the walk entered it.
+                std.mem.sort(u32, members, {}, std.sort.asc(u32));
+                for (members) |member| {
+                    on_stack[member] = false;
+                    fns[written] = @fromBackingInt(member);
+                    written += 1;
+                }
+                try starts.append(allocator, @intCast(written));
+                component.items.len = component_start;
+            }
+        }
+        std.debug.assert(written == fn_count);
+        return .{ .fns = fns, .starts = try starts.toOwnedSlice(allocator) };
+    }
+
     /// Checked source identity of a function whose template is keyed by
     /// layout (`Mono.FnTemplate.procedure_keyed_by_layout`): the template and
     /// its evidence, without the Monotype type, whose place in the procedure
@@ -2298,6 +2414,34 @@ pub fn anyChild(allocator: std.mem.Allocator, program: *const Program, root: Exp
 /// A decision `anyExpr` asks its visitor for at each expression.
 pub const ExprSearch = enum { found, skip, descend, children };
 
+/// The strongly connected components of the lifted-function reference graph,
+/// whose edges are the functions a body names (`fn_ref` and direct
+/// `call_proc`). Every lifted function belongs to exactly one group. Groups
+/// are listed callee-first: a group follows every group its functions
+/// reference, so the functions of one group reference each other or earlier
+/// groups only. Within a group, functions are in ascending `FnId` order.
+pub const BindingGroups = struct {
+    /// Group `g` is `fns[starts[g]..starts[g + 1]]`.
+    fns: []FnId = &.{},
+    starts: []u32 = &.{},
+
+    pub const empty: BindingGroups = .{};
+
+    pub fn deinit(self: *BindingGroups, allocator: std.mem.Allocator) void {
+        allocator.free(self.fns);
+        allocator.free(self.starts);
+        self.* = .empty;
+    }
+
+    pub fn count(self: BindingGroups) usize {
+        return if (self.starts.len == 0) 0 else self.starts.len - 1;
+    }
+
+    pub fn group(self: BindingGroups, index: usize) []const FnId {
+        return self.fns[self.starts[index]..self.starts[index + 1]];
+    }
+};
+
 /// What `walkExprs` does at one expression.
 pub const ExprWalk = enum {
     /// Leave the expression's children unvisited.
@@ -2598,6 +2742,45 @@ test "code reaching the app digests what it reaches there and names its app call
     try std.testing.expect(!std.mem.eql(u8, &before[0], &(try program.fnSourceDigest(callers[0])).?));
     try std.testing.expectEqualSlices(u8, &before[1], &(try program.fnSourceDigest(callers[1])).?);
     try std.testing.expectEqualSlices(u8, &before[2], &(try program.fnSourceDigest(outer)).?);
+}
+
+test "binding groups are the reference graph's components, callee-first" {
+    var symbols: Common.SymbolGen = .{};
+    var program = testLiftedProgram(std.testing.allocator);
+    defer program.deinit();
+    const ret_ty = try program.types.add(.zst);
+
+    // Callers precede their callees in `FnId` order: the first function
+    // refers to the fourth, which calls into the cycle of the second and
+    // third; the fifth references nothing.
+    var fn_ids: [5]FnId = undefined;
+    for (&fn_ids) |*fn_id| fn_id.* = try program.reserveFnSlot();
+    const bodies = [_]?ExprData{
+        .{ .fn_ref = .{ .fn_id = fn_ids[3] } },
+        .{ .call_proc = .{ .callee = .{ .lifted = fn_ids[2] }, .args = Span(ExprId).empty() } },
+        .{ .call_proc = .{ .callee = .{ .lifted = fn_ids[1] }, .args = Span(ExprId).empty() } },
+        .{ .call_proc = .{ .callee = .{ .lifted = fn_ids[1] }, .args = Span(ExprId).empty() } },
+        null,
+    };
+    for (bodies, fn_ids) |maybe_body, fn_id| {
+        const body: FnBody = if (maybe_body) |data| .{ .roc = try program.addExpr(.{ .ty = ret_ty, .data = data }) } else .hosted;
+        program.setFn(fn_id, .{
+            .symbol = symbols.fresh(),
+            .args = Span(TypedLocal).empty(),
+            .captures = Span(TypedLocal).empty(),
+            .body = body,
+            .ret = ret_ty,
+        });
+    }
+    program.next_symbol = symbols.next;
+
+    var groups = try program.bindingGroups(std.testing.allocator);
+    defer groups.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 4), groups.count());
+    try std.testing.expectEqualSlices(FnId, &.{ fn_ids[1], fn_ids[2] }, groups.group(0));
+    try std.testing.expectEqualSlices(FnId, &.{fn_ids[3]}, groups.group(1));
+    try std.testing.expectEqualSlices(FnId, &.{fn_ids[0]}, groups.group(2));
+    try std.testing.expectEqualSlices(FnId, &.{fn_ids[4]}, groups.group(3));
 }
 
 test "a folded match resolves only a layout-resolved site to the branch its answer selects" {

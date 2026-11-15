@@ -20654,9 +20654,27 @@ second type parameter for what this operand states directly.
 
 Solving is monomorphic. Every lifted function's type is registered before any
 body is solved, and all of a function's call sites unify with those same type
-nodes; there is no generalization, per-use instantiation, or recursive-group
-ordering, and definitions are output in `FnId` order because consumers
-reach functions only through explicit references. Monotype specialization
+nodes; there is no generalization or per-use instantiation. Definitions are
+output in `FnId` order because consumers reach functions only through explicit
+references.
+
+Bodies are solved one binding group at a time. A binding group is a strongly
+connected component of the lifted-function reference graph, whose edges are
+the functions a body names (`fn_ref` and direct `call_proc`); the groups are
+listed callee-first, and a group's functions in ascending `FnId` order
+(`Lifted.Program.bindingGroups`). The groups are a pure function of the final
+lifted program's explicit references, which SpecConstr may still rewrite
+after lifting, so Lambda Solved computes them as its first step from the
+program it consumes and records them on its output program
+(`Ast.Program.binding_groups`) for every later consumer. Every reference
+still unifies with the one registered type. The order in which merges meet
+lambda-set members does not reach any consumer, since the final member order
+is canonical (below). The solved classes themselves are not independent of
+the order bodies are solved in: the `MyIter` tests in `lir_inline_test.zig`
+pin two programs whose classes differ between `FnId` order and binding-group
+order, with the same LIR.
+
+Monotype specialization
 shares one `FnId` among every call site that reaches a callable at the same
 closed type, so those sites' lambda sets become their union. The union is
 sound: a finite callable value carries the tag of the member it was built

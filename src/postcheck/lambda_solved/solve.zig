@@ -2,9 +2,11 @@
 //!
 //! Solving is monomorphic: every lifted function's type is registered once,
 //! before any body is solved, and all of that function's call sites unify
-//! with the same type nodes. There is no generalization, per-use
-//! instantiation, or recursive-group ordering. The stage is sound because of
-//! these properties, each checked where it is consumed:
+//! with the same type nodes. There is no generalization or per-use
+//! instantiation. Bodies are solved one binding group at a time, callee
+//! groups first (`Lifted.BindingGroups`, stored on the output program), and
+//! every reference still unifies with the one registered type. The stage is
+//! sound because of these properties, each checked where it is consumed:
 //!
 //! - Monotype specialization shares one `FnId` among every call site that
 //!   reaches a callable at the same closed type, so those sites' lambda sets
@@ -263,6 +265,7 @@ pub fn run(
     // `program.deinit()` is the only cleanup a later error needs.
     var program = Ast.Program.init(allocator, lifted);
     errdefer program.deinit();
+    program.binding_groups = try program.lifted.bindingGroups(allocator);
 
     var row_joined = try findRowJoinedTypes(allocator, &program);
     var solver = Solver.init(allocator, &program) catch |err| {
@@ -698,9 +701,10 @@ const Solver = struct {
         }
 
         self.countWork(.functions, self.lifted.fns.len);
-        for (self.lifted.fns, 0..) |fn_, index| {
-            const fn_id: Lifted.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-            try self.solveFn(fn_id, fn_);
+        const groups = self.program.binding_groups;
+        if (groups.fns.len != self.lifted.fns.len) Common.invariant("Lambda Solved binding groups did not cover every lifted function");
+        for (0..groups.count()) |group_index| {
+            for (groups.group(group_index)) |fn_id| try self.solveFn(fn_id, self.lifted.fns[@backingInt(fn_id)]);
         }
     }
 
@@ -6956,6 +6960,7 @@ test "lambda solved traverses deep sequential and nested expressions without nat
     lifted_owned = false;
     lifted = undefined;
     defer program.deinit();
+    program.binding_groups = try program.lifted.bindingGroups(allocator);
     var solver = try Solver.init(allocator, &program);
     defer solver.deinit();
     try solver.solve();
@@ -6992,6 +6997,7 @@ test "lambda solved compact record updates relate only unchanged field represent
     lifted_owned = false;
     lifted = undefined;
     defer program.deinit();
+    program.binding_groups = try program.lifted.bindingGroups(allocator);
     var solver = try Solver.init(allocator, &program);
     defer solver.deinit();
     try solver.solve();
@@ -7060,6 +7066,7 @@ test "lambda solved Try sequences join forwarded error payloads with their resul
             lifted_owned = false;
             lifted = undefined;
             defer program.deinit();
+            program.binding_groups = try program.lifted.bindingGroups(allocator);
             var solver = try Solver.init(allocator, &program);
             defer solver.deinit();
             solver.setRowJoined(try findRowJoinedTypes(allocator, &program));

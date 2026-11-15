@@ -15303,8 +15303,8 @@ const user_iter_chain_main =
 // adapters, every iterator value of the chain reaches the one `MyIter.next`,
 // so their step closures share one lambda set, which then contains itself
 // through the captured upstream iterator and is boxed. Direct adapters fuse
-// at `.none`; after `.wrappers` call-pattern cloning, three sets hold two
-// members each, though none contains itself.
+// at `.none`; after `.wrappers` call-pattern cloning, one set holds two
+// members, though none contains itself.
 test "MyIter lambda sets: map keep_if chain consumed at once" {
     try expectUserIterCases(&.{
         .{
@@ -15319,7 +15319,7 @@ test "MyIter lambda sets: map keep_if chain consumed at once" {
             .source = my_iter_direct ++ user_iter_chain_main,
             .dbg = "27",
             .none = user_iter_fused,
-            .wrappers = .{ .multi_member_sets = 3, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
+            .wrappers = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
         },
     });
 }
@@ -15385,7 +15385,8 @@ const user_iter_callback_main =
 // tie between the two occurrences is that they share one function type, so
 // the map step that captures the argument lands in the argument's own step
 // set, which then contains itself and is boxed. After `.wrappers` cloning
-// nothing is boxed, but two solved sets still contain themselves.
+// nothing is boxed, but one solved set of two members still contains
+// itself.
 test "MyIter lambda sets: callback from iterator to iterator" {
     try expectUserIterCases(&.{
         .{
@@ -15400,7 +15401,7 @@ test "MyIter lambda sets: callback from iterator to iterator" {
             .source = my_iter_direct ++ user_iter_callback_main,
             .dbg = "36",
             .none = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 1, .box_box_count = 3 },
-            .wrappers = .{ .multi_member_sets = 0, .max_members = 1, .self_containing_sets = 2, .box_box_count = 0 },
+            .wrappers = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 1, .box_box_count = 0 },
         },
     });
 }

@@ -48,6 +48,7 @@ pub const ProgramView = struct {
     fn_tys: []const Type.TypeVarId,
     layout_requests: []const LayoutRequest,
     runtime_schema_requests: []const RuntimeSchemaRequest,
+    binding_groups: Lifted.BindingGroups,
 };
 
 /// Lambda Solved program plus the solved type store.
@@ -64,6 +65,9 @@ pub const Program = struct {
     fn_tys: std.ArrayList(Type.TypeVarId),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
+    /// The lifted program's binding groups, callee-first, in the order the
+    /// solver solved them (`Lifted.Program.bindingGroups`).
+    binding_groups: Lifted.BindingGroups = .empty,
 
     pub fn init(allocator: std.mem.Allocator, lifted: Lifted.Program) Program {
         return .{
@@ -81,6 +85,7 @@ pub const Program = struct {
     }
 
     pub fn deinit(self: *Program) void {
+        self.binding_groups.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.fn_tys.deinit(self.allocator);
@@ -97,8 +102,8 @@ pub const Program = struct {
         }
     }
 
-    /// Drop every solved type and table, keeping the lifted program, so the
-    /// program can be solved again from the start.
+    /// Drop every solved type and table, keeping the lifted program and its
+    /// binding groups, so the program can be solved again from the start.
     pub fn resetSolution(self: *Program) void {
         self.types.deinit();
         self.types = Type.Store.init(self.allocator);
@@ -122,6 +127,7 @@ pub const Program = struct {
             .fn_tys = self.fn_tys.items,
             .layout_requests = self.layout_requests.items,
             .runtime_schema_requests = self.runtime_schema_requests.items,
+            .binding_groups = self.binding_groups,
         };
     }
 };
