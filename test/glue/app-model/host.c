@@ -293,21 +293,6 @@ static Msg reset_msg(void) {
     return Msg_make_reset();
 }
 
-static void roc_box_decref(RocBox box) {
-    if (box == NULL) {
-        return;
-    }
-    uint8_t *data = (uint8_t *)box;
-    intptr_t *rc = (intptr_t *)(data - sizeof(intptr_t));
-    if (*rc == 0) {
-        return;
-    }
-    *rc -= 1;
-    if (*rc == 0) {
-        roc_dealloc(data - sizeof(size_t), ROC_ALIGNOF(size_t));
-    }
-}
-
 static RocList *view_messages(View *view) {
     return &view->messages;
 }
@@ -320,10 +305,12 @@ static RocStr *view_title(View *view) {
     return &view->title;
 }
 
-static void view_decref(View view) {
+/* A View holds the application's model, which only Roc can release, so the
+ * view is released part by part and the model is handed back to Roc. */
+static void view_release(View view) {
     RocStr *title = view_title(&view);
     roc_str_decref(*title);
-    roc_box_decref(*view_model(&view));
+    roc_release_model(*view_model(&view));
 }
 
 static void run_app_model_contract(void) {
@@ -344,7 +331,7 @@ static void run_app_model_contract(void) {
     if (messages->length != 0) {
         record_failure("render messages expected empty got %zu", messages->length);
     }
-    view_decref(view);
+    view_release(view);
 }
 
 int main(void) {
