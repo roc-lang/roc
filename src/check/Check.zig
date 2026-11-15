@@ -12795,7 +12795,7 @@ fn instantiateVarHelpFromScheme(
                 x.value_ptr.*,
                 instantiator.var_map,
                 var_context,
-                self.instantiatedReceiverPosition(&row_tail_copies, x.value_ptr.*),
+                .{ .among = &row_tail_copies },
                 env,
             );
         }
@@ -12948,6 +12948,15 @@ fn instantiatedReceiverPosition(
     return if (row_tail_copies.contains(self.types.resolveVar(receiver_var).var_)) .row_tail else .value;
 }
 
+/// Where an instantiation placed a variable it copied, as
+/// `registerInstantiatedVar` is told it.
+const InstantiatedVarPosition = union(enum) {
+    known: AmbiguityCandidate.Position,
+    /// `instantiatedReceiverPosition` among these row-tail copies, which
+    /// only a copy that carries a relation of its own looks up.
+    among: *const collections.DenseMap(Var, void),
+};
+
 /// Register one variable an instantiation copied (`old` in the scheme,
 /// `fresh` its copy, standing at `position` in the copied type): its
 /// substitution pairs, its relations, its rank pool and its region.
@@ -12957,13 +12966,16 @@ inline fn registerInstantiatedVar(
     fresh_copy: Var,
     var_map: *const collections.DenseMap(Var, Var),
     ctx: InstantiatedVarContext,
-    position: AmbiguityCandidate.Position,
+    position: InstantiatedVarPosition,
     env: *Env,
 ) Allocator.Error!void {
     // Get the newly created var
     const fresh_var = fresh_copy;
 
-    const fresh_resolved = self.types.resolveVar(fresh_var);
+    // Only the copy's kind, rank and constraints are read, so its
+    // descriptor is not decoded.
+    const fresh_resolved = self.types.resolveVarWord(fresh_var);
+    const fresh_constraints = self.types.variableConstraintsAt(fresh_resolved.desc_idx);
 
     if (ctx.records_scheme_use) {
         // A constrained scheme var was copied: remember (scheme var → fresh
@@ -12977,11 +12989,6 @@ inline fn registerInstantiatedVar(
         // Every copied quantified variable is paired, constrained or not:
         // the pairs are the instantiation's substitution, and a
         // specialization is the scheme plus that substitution.
-        const fresh_constraints_len = switch (fresh_resolved.desc.content) {
-            .flex => |flex| flex.constraints.len(),
-            .rigid => |rigid| rigid.constraints.len(),
-            .alias, .field_presence, .structure, .err => 0,
-        };
         // The scheme-side variable is judged, by the same predicate
         // the identity walk over the scheme uses, because the copy
         // need not itself be a variable: the instantiator resolves a
@@ -12994,19 +13001,15 @@ inline fn registerInstantiatedVar(
         // publication reaches only the recorded fresh copies.
         // Structural nodes that are not identities stay unpaired, so a
         // substitution's length stays the scheme's identity count.
-        const old_resolved = self.types.resolveVar(old);
-        if (canonical_type_keys.isIdentityVariable(old_resolved.desc)) {
+        const old_resolved = self.types.resolveVarWord(old);
+        if (canonical_type_keys.isIdentityVariableWord(old_resolved.word)) {
             try self.scratch_evidence_pairs.append(self.gpa, .{
                 .old_var = @backingInt(old),
                 .fresh_var = @backingInt(fresh_var),
             });
         }
-        if (fresh_constraints_len > 0) {
-            const old_constraints_range = switch (old_resolved.desc.content) {
-                .flex => |flex| flex.constraints,
-                .rigid => |rigid| rigid.constraints,
-                .alias, .field_presence, .structure, .err => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
-            };
+        if (fresh_constraints.len() > 0) {
+            const old_constraints_range = self.types.variableConstraintsAt(old_resolved.desc_idx);
             for (self.types.sliceStaticDispatchConstraints(old_constraints_range)) |old_constraint| {
                 // `var_map` keys are resolved roots (see `Instantiator`).
                 const old_fn_root = self.types.resolveVar(old_constraint.fn_var).var_;
@@ -13031,22 +13034,21 @@ inline fn registerInstantiatedVar(
     // constraint solver already validates the receiver once this
     // call's arguments unify, so an extra enqueue would only
     // double-process and shift error attribution.
-    if (fresh_resolved.desc.content == .flex) {
-        const flex = fresh_resolved.desc.content.flex;
-        if (flex.constraints.len() > 0) {
+    if (fresh_resolved.word.kind == .flex) {
+        if (fresh_constraints.len() > 0) {
             // Every constraint copied out of a selected dispatch
             // target belongs to that edge's derivation chain,
             // literal conversions included: recursive-dispatch
             // detection walks exactly this lineage.
             if (ctx.target_fn_var) |parent_fn_var| {
-                try self.recordDispatchDerivations(flex.constraints, parent_fn_var);
+                try self.recordDispatchDerivations(fresh_constraints, parent_fn_var);
             }
             if (self.active_codec_derivation_frame) |frame| {
-                for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |c| {
+                for (self.types.sliceStaticDispatchConstraints(fresh_constraints)) |c| {
                     try self.recordCodecDerivationChild(c.fn_var, frame);
                 }
             }
-            const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+            const constraints = self.types.sliceStaticDispatchConstraints(fresh_constraints);
             if (ctx.registers_use) {
                 for (constraints) |c| try self.scratch_use_owned.append(self.gpa, c.fn_var);
             }
@@ -13061,7 +13063,7 @@ inline fn registerInstantiatedVar(
             }
             const instantiation_expr = ctx.instantiation_expr;
             if (has_literal_constraint) {
-                try self.recordOpenLiteralVar(fresh_var, flex.constraints, instantiation_expr);
+                try self.recordOpenLiteralVar(fresh_var, fresh_constraints, instantiation_expr);
                 if (instantiation_expr) |use_expr| {
                     for (constraints) |c| {
                         if (!self.constraintIsLiteralConversion(c)) continue;
@@ -13075,17 +13077,22 @@ inline fn registerInstantiatedVar(
             if (has_other_constraint) {
                 try self.registerInstantiatedAttachedDispatch(
                     fresh_var,
-                    flex.constraints,
+                    fresh_constraints,
                     instantiation_expr,
                     ctx.group_index,
-                    position,
+                    switch (position) {
+                        .known => |known| known,
+                        // Row-tail copies are keyed by representative; the
+                        // copy's is the one resolved on entry.
+                        .among => |row_tail_copies| if (row_tail_copies.contains(fresh_resolved.var_)) .row_tail else .value,
+                    },
                 );
             }
         }
     }
 
     // Add to pool
-    try env.var_pool.addVarToRank(fresh_var, fresh_resolved.desc.rank);
+    try env.var_pool.addVarToRank(fresh_var, fresh_resolved.word.rank);
 
     self.var_regions.setOrigin(ctx.copy_origins, fresh_var, old);
 }
@@ -45438,7 +45445,7 @@ fn copyRelationToEnclosingScope(
     try self.setCopiedVarsRegion(instantiator.var_map, region);
     var copied = instantiator.var_map.iterator();
     while (copied.next()) |entry| {
-        try self.registerInstantiatedVar(entry.key_ptr.*, entry.value_ptr.*, instantiator.var_map, context, .value, env);
+        try self.registerInstantiatedVar(entry.key_ptr.*, entry.value_ptr.*, instantiator.var_map, context, .{ .known = .value }, env);
     }
     const saved_source = self.instantiation_source_expr;
     defer self.instantiation_source_expr = saved_source;
@@ -51418,7 +51425,7 @@ fn registerLinkedCopies(self: *Self, use_idx: u32, new_copies: []const LinkedCop
         .deferred = null,
     };
     for (new_copies) |copy| {
-        try self.registerInstantiatedVar(copy.old, copy.fresh, &self.link_var_map, var_context, copy.position, env);
+        try self.registerInstantiatedVar(copy.old, copy.fresh, &self.link_var_map, var_context, .{ .known = copy.position }, env);
     }
 
     // A replayed use's record names its source's substitution.

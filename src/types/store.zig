@@ -1414,6 +1414,12 @@ pub const Store = struct {
         return Desc.decodeRigid(self.descs.getRow(desc_idx));
     }
 
+    /// The constraints of descriptor `desc_idx` when it is a flex or a
+    /// rigid; none for any other kind.
+    pub inline fn variableConstraintsAt(self: *const Self, desc_idx: DescStore.Idx) StaticDispatchConstraint.SafeList.Range {
+        return Desc.variableConstraints(self.descs.getRow(desc_idx));
+    }
+
     pub inline fn aliasAt(self: *const Self, desc_idx: DescStore.Idx) Alias {
         return Desc.decodeAlias(self.descs.getRow(desc_idx), self);
     }
