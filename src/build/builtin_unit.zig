@@ -136,6 +136,9 @@ const BuiltinUnit = struct {
             .interfaces = &self.interfaces,
             .cache_manager = null,
             .key = key,
+            // Compile-time evaluation and fast dev links read the unit's
+            // image alone, so the entry they file holds no pieces.
+            .want_pieces = false,
         };
     }
 };
@@ -148,8 +151,7 @@ fn builtinUnitTable(gpa: std.mem.Allocator, io: std.Io, target: RocTarget) MainE
     try builtin_unit.init(gpa, io, &builtins, target);
     defer builtin_unit.deinit();
     const input = try builtin_unit.keyInput(gpa);
-    var unit = builtin_unit.unit(gpa, object_cache.key(input));
-    unit.want_pieces = false;
+    const unit = builtin_unit.unit(gpa, object_cache.key(input));
     const result = try boxy_unit.buildEntry(unit);
     defer result.built.deinit(gpa);
     defer gpa.free(result.bytes);
