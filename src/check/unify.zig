@@ -4243,6 +4243,11 @@ pub const DeferredConstraintCheck = struct {
     /// The checker relation that queued this obligation; the problems its
     /// resolution records belong to that relation (`problem.RelationOwner`).
     relation_owner: problem_mod.RelationOwner = .none,
+    /// The source region of `var_`, where the obligation's resolution reports
+    /// and which the variables it instantiates take. A variable's region
+    /// never changes, so the checker reads it once, where the obligation
+    /// enters the deferred queue, and stamps it here.
+    region: base.Region = base.Region.zero(),
 
     pub const SafeList = MkSafeList(@This());
 };

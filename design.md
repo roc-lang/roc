@@ -4938,7 +4938,10 @@ is a CIR node has its node's region; every later variable is given its region
 once, when it is created, so consecutive variables sharing a region are one
 run; and a variable an instantiation copied from a same-module definition
 records the variable it was copied from and has that variable's region. A
-variable an instantiation maps to without creating it keeps its own. The snapshots keep
+variable an instantiation maps to without creating it keeps its own. A
+variable's region never changes once given, so a deferred static-dispatch
+obligation carries its receiver's region from where it enters the deferred
+queue, and resolving it reads that instead of looking the region up again. The snapshots keep
 their frozen captures and node formats beside the text the miss rendered, so a
 snapshot whose text was never rendered renders on demand with the module's
 names, the stored import display names and the module's default sources, the

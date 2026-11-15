@@ -23435,12 +23435,15 @@ const DeferredDispatchObligationOwner = union(enum) {
 };
 
 /// The single door into the deferred dispatch queue, so an obligation's owning
-/// group is stamped in exactly one place. `owner` is explicit at every call:
-/// an obligation created by the work of the frame being checked takes
-/// `.current_group`, one replayed from a record that already captured its
-/// creating frame takes `.recorded`. The retained entries
+/// group and its receiver's region are stamped in exactly one place. `owner`
+/// is explicit at every call: an obligation created by the work of the frame
+/// being checked takes `.current_group`, one replayed from a record that
+/// already captured its creating frame takes `.recorded`. The receiver has
+/// its region by the time its obligation is queued, and a variable's region
+/// never changes, so the drain reads the stamped region instead of searching
+/// the region store per entry. The retained entries
 /// `checkStaticDispatchConstraints` copies back at the end of a pass are not
-/// enqueues—they keep the stamp they entered with.
+/// enqueues—they keep the stamps they entered with.
 fn enqueueDeferredDispatchConstraint(
     self: *Self,
     env: *Env,
@@ -23455,7 +23458,15 @@ fn enqueueDeferredDispatchConstraint(
     // The relation whose checking queued the obligation owns what its
     // resolution reports.
     if (owned.relation_owner.kind == .none) owned.relation_owner = self.relation_owner;
+    owned.region = self.getRegionAt(owned.var_);
     _ = try env.deferred_static_dispatch_constraints.append(self.gpa, owned);
+}
+
+/// The region of a queued obligation's receiver, as the queue's door stamped
+/// it on the entry.
+inline fn deferredEntryRegion(self: *const Self, deferred: DeferredConstraintCheck) Region {
+    if (std.debug.runtime_safety) std.debug.assert(deferred.region.eq(self.getRegionAt(deferred.var_)));
+    return deferred.region;
 }
 
 /// Enqueue an obligation that a unification run while checking `use_expr`
@@ -45988,7 +45999,7 @@ fn reportDerivedCodecOpenRecord(
     const region = self.derivedCodecDiagnosticRegion(
         constraint,
         self.dispatchInstantiationExpr(constraint) orelse failure_expr,
-        self.getRegionAt(deferred.var_),
+        self.deferredEntryRegion(deferred),
     );
     const snapshot = try self.snapshotVarForError(deferred.var_);
     _ = try self.problems.appendProblem(.{ .derived_codec_open_record = .{
@@ -53649,7 +53660,7 @@ inline fn processDeferredDispatchEntryRelations(
             );
 
             // Get some data about the nominal type
-            const region = self.getRegionAt(deferred_constraint.var_);
+            const region = self.deferredEntryRegion(deferred_constraint);
 
             // Whether a default chose this receiver's type, read once for the
             // entry: a requirement of the entry that the default satisfies
@@ -53853,7 +53864,7 @@ inline fn processDeferredDispatchEntryRelations(
 
                 const fn_ctx: problem.Context = .{
                     .method_type = .{
-                        .constraint_region = self.getRegionAt(deferred_constraint.var_),
+                        .constraint_region = self.deferredEntryRegion(deferred_constraint),
                         .dispatcher_name = nominal_type.ident.ident_idx,
                         .method_name = constraint.fn_name,
                         .requirement_fn_var = constraint.fn_var,
@@ -53941,7 +53952,7 @@ inline fn processDeferredDispatchEntryRelations(
                 "static dispatch alias",
             );
 
-            const region = self.getRegionAt(deferred_constraint.var_);
+            const region = self.deferredEntryRegion(deferred_constraint);
             const constraints_range = deferred_constraint.constraints;
             const constraints_len = constraints_range.len();
             const constraints_start: usize = @backingInt(constraints_range.start);
@@ -54073,7 +54084,7 @@ inline fn processDeferredDispatchEntryRelations(
 
                 const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                     .method_type = .{
-                        .constraint_region = self.getRegionAt(deferred_constraint.var_),
+                        .constraint_region = self.deferredEntryRegion(deferred_constraint),
                         .dispatcher_name = alias.ident.ident_idx,
                         .method_name = constraint.fn_name,
                     },
@@ -54129,7 +54140,7 @@ inline fn processDeferredDispatchEntryRelations(
                     deferred_constraint,
                     constraint,
                     env,
-                    self.getRegionAt(deferred_constraint.var_),
+                    self.deferredEntryRegion(deferred_constraint),
                     failure_expr,
                     is_numeric_default_pass,
                 )) {
