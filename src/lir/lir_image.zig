@@ -84,7 +84,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      carry `whole`.
 /// v74: `list_take_first` and `list_take_last` leave the LowLevel enum,
 ///      renumbering later ops.
-pub const FORMAT_VERSION: u32 = 74;
+/// v75: dynamic tag payload reads lose `whole`; a tag's only payload is an
+///      `assign_ref` `tag_payload_struct` of the dynamic union.
+pub const FORMAT_VERSION: u32 = 75;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.

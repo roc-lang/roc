@@ -8231,6 +8231,8 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         .assign_ref => |assign| {
             if (assign.op.kind == .field and self.localDyn(assign.op.source) != null) {
                 try self.generateDyn(assign.target, .{ .field_addr = .{ .base = assign.op.source, .desc = self.localDyn(assign.op.source).?.desc, .field_index = .{ .immediate = assign.op.index } } });
+            } else if (assign.op.kind == .tag_payload_struct and self.localDyn(assign.op.source) != null) {
+                try self.generateDyn(assign.target, .{ .tag_payload_addr = .{ .base = assign.op.source, .desc = self.localDyn(assign.op.source).?.desc, .payload_index = 0 } });
             } else if (assign.op.kind == .local and self.localDyn(assign.target) != null) {
                 try self.generateDyn(assign.target, .{ .copy = .{ .src = assign.op.source, .desc = self.localDyn(assign.target).?.desc } });
             } else if (assign.op.kind == .local and self.backing_aliases.contains(assign.target)) {

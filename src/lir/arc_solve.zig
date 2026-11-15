@@ -760,6 +760,11 @@ const BindingFact = union(enum) {
     /// An owned result selects the consuming primitive, so its input must
     /// supply a unit. This is ownership flow, not same-value aliasing.
     consuming_result: OwnershipFlow,
+    /// The only payload of a dynamic tag union's active variant, read as an
+    /// ownership-complete projection: it holds every refcounted byte of the
+    /// union on that path, so an ownership demand on it is a demand on the
+    /// union's unit, as on a same-value alias.
+    complete_projection: OwnershipFlow,
 };
 
 const VisibilityFact = union(enum) {
@@ -2509,7 +2514,7 @@ fn collectAll(solver: *Solver) SolveError!void {
         .borrow => |borrow| noteBorrowDef(solver, borrow.target, borrow.source),
         .alias => |alias| noteAlias(solver, alias.target, alias.source),
         .demand => |local| noteDemand(solver, local),
-        .consuming_result => {},
+        .consuming_result, .complete_projection => {},
     };
 
     // Direct-call demands depend on the current optimistic parameter
@@ -2541,7 +2546,7 @@ fn bindingOwnershipFlow(solver: *const Solver, fact: BindingFact) ?OwnershipFlow
             if (solver.defs[target] != .multi) edge else null
         else
             null,
-        .consuming_result => |edge| edge,
+        .consuming_result, .complete_projection => |edge| edge,
         .fresh, .multi, .borrow, .demand => null,
     };
 }
@@ -2553,7 +2558,7 @@ const JoinParamWrite = struct { target: u32, source: u32 };
 fn joinParamWrite(solver: *const Solver, fact: BindingFact) ?JoinParamWrite {
     const edge = switch (fact) {
         .alias => |edge| edge,
-        .fresh, .multi, .borrow, .demand, .consuming_result => return null,
+        .fresh, .multi, .borrow, .demand, .consuming_result, .complete_projection => return null,
     };
     const target = solver.domain.indexOf(edge.target) orelse return null;
     if (!solver.join_param.isSet(target)) return null;
@@ -2934,7 +2939,12 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 .discriminant => try solver.binding_facts.append(allocator, .{ .fresh = assign.target }),
                 .field => try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = assign.op.source } }),
                 .tag_payload => try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = assign.op.source } }),
-                .tag_payload_struct => try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = assign.op.source } }),
+                .tag_payload_struct => {
+                    try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = assign.op.source } });
+                    if (solver.layouts.getLayout(store.getLocal(assign.op.source).layout_idx).tag == .dynamic) {
+                        try solver.binding_facts.append(allocator, .{ .complete_projection = .{ .target = assign.target, .source = assign.op.source } });
+                    }
+                },
                 inline .list_reinterpret, .nominal => {
                     try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = assign.op.source } });
                     try solver.binding_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = assign.op.source } });

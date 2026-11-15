@@ -740,9 +740,28 @@ pub const Builder = struct {
 
     /// Whether `local`'s layout can hold refcounted data: a dynamic local
     /// always can, since its descriptor decides at runtime.
-    pub fn holdsRefcounted(self: *Builder, local: LocalId) bool {
+    fn holdsRefcounted(self: *Builder, local: LocalId) bool {
         const layouts = &self.program.result.layouts;
         return layouts.layoutContainsRefcounted(layouts.getLayout(self.store.getLocal(local).layout_idx));
+    }
+
+    /// Payload `payload_index` of the active tag of the dynamic tag union
+    /// `union_value`, the tag at position `variant` among its union's tags, into
+    /// `target`; `only` is set when that payload is its tag's only one. A
+    /// tag's only payload that can hold refcounted data is the whole active
+    /// variant, so it is read as an ownership-complete projection of the
+    /// union (`tag_payload_struct`) into independent frame storage: ARC can
+    /// move the union's unit into it and take its fields. Any other payload
+    /// is a component address borrowed from the union.
+    pub fn readDynamicTagPayloadInto(self: *Builder, target: LocalId, union_value: LocalId, desc: LocalId, variant: usize, payload_index: u32, only: bool) Allocator.Error!void {
+        if (only and self.holdsRefcounted(target)) {
+            if (self.store.localDyn(target)) |dyn| {
+                if (dyn.storage == .view) self.store.getLocalPtr(target).dyn_storage = .frame;
+            }
+            const index: layout.VariantIndex = @intCast(variant);
+            return self.emitLinear(.{ .assign_ref = .{ .target = target, .op = LIR.RefOp.tagPayloadStruct(union_value, index, index), .next = undefined } });
+        }
+        try self.emitDyn(target, .{ .tag_payload_addr = .{ .base = union_value, .desc = desc, .payload_index = payload_index } });
     }
 
     /// A local holding a value of `ty`: an ordinary local of its committed
@@ -9886,12 +9905,14 @@ pub const Builder = struct {
         const matches = try self.closedLocal(.bool);
         try self.emitLowLevel(matches, .num_is_eq, &.{ actual, expected });
         try self.branchOrMiss(matches, miss);
-        const payload_types = for (store.tagSpan(union_ty.tags)) |tag| {
-            if (tag.name == name and tag.payloads.len == args.len) break store.span(tag.payloads);
+        const tags = store.tagSpan(union_ty.tags);
+        const variant = for (tags, 0..) |tag, position| {
+            if (tag.name == name and tag.payloads.len == args.len) break position;
         } else invariant("a tag pattern's tag is absent from its type");
+        const payload_types = store.span(tags[variant].payloads);
         for (args, payload_types, 0..) |arg, payload_ty, index| {
             const local = try self.localOf(payload_ty, .view);
-            try self.emitDyn(local, .{ .tag_payload_addr = .{ .base = value, .desc = desc, .payload_index = @intCast(index), .whole = payload_types.len == 1 and self.holdsRefcounted(local) } });
+            try self.readDynamicTagPayloadInto(local, value, desc, variant, @intCast(index), payload_types.len == 1);
             try pending.append(self.allocator, .{ .pattern = arg, .value = local, .ty = payload_ty });
         }
     }
@@ -10648,12 +10669,14 @@ pub const Builder = struct {
         const ty = try self.structuralType(raw_ty);
         if (!try self.closed(ty)) {
             const union_ty = self.program.store.get(ty).tag_union;
-            const payloads = for (self.program.store.tagSpan(union_ty.tags)) |tag| {
-                if (tag.name == name) break self.program.store.span(tag.payloads);
+            const tags = self.program.store.tagSpan(union_ty.tags);
+            const variant = for (tags, 0..) |tag, position| {
+                if (tag.name == name) break position;
             } else invariant("a tag payload's tag is absent from its type");
+            const payloads = self.program.store.span(tags[variant].payloads);
             const payload_ty = payloads[index];
             const local = try self.localOf(payload_ty, .view);
-            try self.emitDyn(local, .{ .tag_payload_addr = .{ .base = value, .desc = try self.descOf(ty), .payload_index = index, .whole = payloads.len == 1 and self.holdsRefcounted(local) } });
+            try self.readDynamicTagPayloadInto(local, value, try self.descOf(ty), variant, index, payloads.len == 1);
             return .{ .value = local, .ty = payload_ty };
         }
         const variant = try self.closedVariant(ty, name);

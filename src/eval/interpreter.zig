@@ -2385,6 +2385,11 @@ pub const Interpreter = struct {
                         current = assign.next;
                         continue;
                     }
+                    if (assign.op.kind == .tag_payload_struct and self.store.getLocal(assign.op.source).dyn != null) {
+                        try self.execDyn(frame, current, assign.target, .{ .tag_payload_addr = .{ .base = assign.op.source, .desc = self.store.getLocal(assign.op.source).dyn.?.desc, .payload_index = 0 } });
+                        current = assign.next;
+                        continue;
+                    }
                     if (assign.op.kind == .local and self.store.getLocal(assign.target).dyn != null) {
                         try self.execDyn(frame, current, assign.target, .{ .copy = .{ .src = assign.op.source, .desc = self.store.getLocal(assign.target).dyn.?.desc } });
                         current = assign.next;

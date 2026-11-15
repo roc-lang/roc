@@ -4676,6 +4676,9 @@ pub const MonoLlvmCodeGen = struct {
         if (op.kind == .field and self.localDyn(op.source) != null) {
             return self.emitDyn(target, .{ .field_addr = .{ .base = op.source, .desc = self.localDyn(op.source).?.desc, .field_index = .{ .immediate = op.index } } });
         }
+        if (op.kind == .tag_payload_struct and self.localDyn(op.source) != null) {
+            return self.emitDyn(target, .{ .tag_payload_addr = .{ .base = op.source, .desc = self.localDyn(op.source).?.desc, .payload_index = 0 } });
+        }
         if (op.kind == .local and self.localDyn(target) != null) {
             return self.emitDyn(target, .{ .copy = .{ .src = op.source, .desc = self.localDyn(target).?.desc } });
         }
