@@ -4725,7 +4725,7 @@ pub const Builder = struct {
                         .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a literal literal_requirement's literal is not a literal expression"),
                     };
                 },
-                .node, .use => {
+                .node, .use, .requirement => {
                     literal_requirements = try self.enterEdge(literal_requirement.edge);
                     index = literal_requirement.callee_requirement;
                 },
@@ -4765,6 +4765,21 @@ pub const Builder = struct {
                 };
                 defer self.allocator.free(instance.hidden);
                 return try self.enterWorkerFrame(callee, instance, if (deferred) edge else null);
+            },
+            // The platform's invocation of the app procedure: its frame
+            // derives its dictionaries and literal arguments from its types,
+            // as the invocation's literal thunks do.
+            .requirement => |requirement| {
+                const solution = self.view.view.platform_requirement_solutions.lookupByRequiredIndex(requirement.requires_idx) orelse
+                    invariant("a requirement edge names no solution of its module");
+                const callee = try self.program.templateRefWorker(self.view.view.checked_procedure_templates.templateRef(self.view.key, requirement.template));
+                const subst = self.view.view.static_dispatch_plans.site_substitutions.items()[solution.root_subst.start..][0..solution.root_subst.len];
+                const owned = try self.boundTypesAt(callee, subst, try self.convert(solution.solved_root));
+                defer self.allocator.free(owned);
+                const bound = try self.program.arena.allocator().dupe(TypeId, owned);
+                try self.enterDerivedFrame(callee, bound);
+                const worker = self.program.worker(callee).*;
+                return if (worker.literal_scopes.len == 0) &.{} else worker.literal_scopes[0];
             },
             .use => |expr| {
                 if (self.view.view.resolved_value_refs.lookupIdByExpr(expr)) |ref_id| {

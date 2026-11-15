@@ -424,6 +424,7 @@ const Walker = struct {
                 const ref_id = artifact.resolved_value_refs.lookupIdByExpr(expr) orelse return;
                 try self.walkRef(artifact.resolved_value_refs.records.items()[@backingInt(ref_id)].ref);
             },
+            .requirement => |requirement| try self.pushTemplate(artifact.checked_procedure_templates.templateRef(artifact.key.digest(), requirement.template)),
         }
     }
 
