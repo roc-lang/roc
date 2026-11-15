@@ -2,9 +2,10 @@ app [main!] { pf: platform "./platform/main.roc" }
 
 # Repro for https://github.com/roc-lang/roc/issues/12230
 #
-# `Loud` matches `Enc.Form`'s backing but declares its own encoder, so passing
-# it to `Enc.encode` must keep a specialization of its own, separate from the
-# one every plain-record caller shares.
+# `Loud` matches `Enc.Form`'s fields but declares its own encoder. An annotated
+# record is never a named type, so `Loud` goes through `Enc.encode_any`, whose
+# encoder specialization stays separate from the one every plain-record caller
+# of `Enc.encode` shares.
 
 import Enc
 import Site1
@@ -19,7 +20,7 @@ main! = |args| {
     loud : Loud
     loud = { name: arg, email: arg, phone: arg }
     lifted =
-        match Enc.encode(loud) {
+        match Enc.encode_any(loud) {
             Ok(json) => json
             Err(_) => ""
         }

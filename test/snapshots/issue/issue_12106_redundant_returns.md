@@ -326,7 +326,7 @@ expect fizz_buzz(1) == "other"
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_lt") (constraint-fn-var 355)
+								(e-dispatch-call (method "is_lt") (constraint-fn-var 349)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "n"))))
@@ -338,9 +338,8 @@ expect fizz_buzz(1) == "other"
 											(e-literal (string "negative")))))))
 						(if-else
 							(e-empty_record))))
-				(e-return
-					(e-string
-						(e-literal (string "non-negative"))))))
+				(e-string
+					(e-literal (string "non-negative")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))
@@ -356,7 +355,7 @@ expect fizz_buzz(1) == "other"
 						(if-branch
 							(e-method-eq (negated "false")
 								(lhs
-									(e-dispatch-call (method "rem_by") (constraint-fn-var 362)
+									(e-dispatch-call (method "rem_by") (constraint-fn-var 357)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "n"))))
@@ -365,13 +364,12 @@ expect fizz_buzz(1) == "other"
 								(rhs
 									(e-num (value "0"))))
 							(e-block
-								(e-return
-									(e-string
-										(e-literal (string "fizzbuzz"))))))
+								(e-string
+									(e-literal (string "fizzbuzz")))))
 						(if-branch
 							(e-method-eq (negated "false")
 								(lhs
-									(e-dispatch-call (method "rem_by") (constraint-fn-var 362)
+									(e-dispatch-call (method "rem_by") (constraint-fn-var 357)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "n"))))
@@ -380,13 +378,12 @@ expect fizz_buzz(1) == "other"
 								(rhs
 									(e-num (value "0"))))
 							(e-block
-								(e-return
-									(e-string
-										(e-literal (string "fizz"))))))
+								(e-string
+									(e-literal (string "fizz")))))
 						(if-branch
 							(e-method-eq (negated "false")
 								(lhs
-									(e-dispatch-call (method "rem_by") (constraint-fn-var 362)
+									(e-dispatch-call (method "rem_by") (constraint-fn-var 357)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "n"))))
@@ -395,14 +392,12 @@ expect fizz_buzz(1) == "other"
 								(rhs
 									(e-num (value "0"))))
 							(e-block
-								(e-return
-									(e-string
-										(e-literal (string "buzz")))))))
+								(e-string
+									(e-literal (string "buzz"))))))
 					(if-else
 						(e-block
-							(e-return
-								(e-string
-									(e-literal (string "other")))))))))
+							(e-string
+								(e-literal (string "other"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))
@@ -414,9 +409,8 @@ expect fizz_buzz(1) == "other"
 				(p-assign (ident "n")))
 			(e-block
 				(e-block
-					(e-return
-						(e-lookup-local
-							(p-assign (ident "n")))))))
+					(e-lookup-local
+						(p-assign (ident "n"))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))
@@ -424,7 +418,7 @@ expect fizz_buzz(1) == "other"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 376)
+				(e-call (constraint-fn-var 371)
 					(e-lookup-local
 						(p-assign (ident "identity")))
 					(e-num (value "42"))))
@@ -433,7 +427,7 @@ expect fizz_buzz(1) == "other"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 381)
+				(e-call (constraint-fn-var 376)
 					(e-lookup-local
 						(p-assign (ident "sign_label")))
 					(e-num (value "-1"))))
@@ -443,7 +437,7 @@ expect fizz_buzz(1) == "other"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 389)
+				(e-call (constraint-fn-var 384)
 					(e-lookup-local
 						(p-assign (ident "sign_label")))
 					(e-num (value "1"))))
@@ -453,7 +447,7 @@ expect fizz_buzz(1) == "other"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 394)
+				(e-call (constraint-fn-var 389)
 					(e-lookup-local
 						(p-assign (ident "fizz_buzz")))
 					(e-num (value "15"))))
@@ -463,7 +457,7 @@ expect fizz_buzz(1) == "other"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 399)
+				(e-call (constraint-fn-var 394)
 					(e-lookup-local
 						(p-assign (ident "fizz_buzz")))
 					(e-num (value "3"))))
@@ -473,7 +467,7 @@ expect fizz_buzz(1) == "other"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 404)
+				(e-call (constraint-fn-var 399)
 					(e-lookup-local
 						(p-assign (ident "fizz_buzz")))
 					(e-num (value "5"))))
@@ -483,7 +477,7 @@ expect fizz_buzz(1) == "other"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 409)
+				(e-call (constraint-fn-var 404)
 					(e-lookup-local
 						(p-assign (ident "fizz_buzz")))
 					(e-num (value "1"))))

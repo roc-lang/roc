@@ -376,6 +376,92 @@ test "unify - row extensions preserve either merged equivalence class" {
     }
 }
 
+// unification - ranks of created rows //
+
+const old_rank = types_mod.Rank.outermost;
+const young_rank = types_mod.Rank.outermost.next();
+
+fn rankOf(env: *TestEnv, var_: Var) types_mod.Rank {
+    return env.module_env.types.resolveVar(var_).desc.rank;
+}
+
+fn flexAt(env: *TestEnv, rank: types_mod.Rank) std.mem.Allocator.Error!Var {
+    return env.module_env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, rank);
+}
+
+const RowShape = enum { tag_union, record };
+const RowOverlap = enum { young_extends_old, old_extends_young, both_extend };
+
+/// An old row and a young row sharing `Shared`. The young row has an
+/// unshared entry whose payload is the young `payload`, over the young
+/// `young_ext`; under `both_extend` the old row has an unshared entry too.
+fn mkRankedRows(env: *TestEnv, shape: RowShape, overlap: RowOverlap, payload: Var, young_ext: Var) std.mem.Allocator.Error![2]Var {
+    const store = &env.module_env.types;
+    const shared_value = try store.freshFromContentWithRank(.{ .structure = .empty_record }, old_rank);
+    const old_ext = try flexAt(env, old_rank);
+    const old_has_own = overlap != .young_extends_old;
+    const young_has_own = overlap != .old_extends_young;
+    const old_content, const young_content = switch (shape) {
+        .tag_union => blk: {
+            const shared = try env.mkTag("Shared", &.{shared_value});
+            const old_tags: []const Tag = if (old_has_own) &.{ shared, try env.mkTag("Old", &.{}) } else &.{shared};
+            const young_tags: []const Tag = if (young_has_own) &.{ shared, try env.mkTag("Young", &.{payload}) } else &.{shared};
+            break :blk .{ (try env.mkTagUnion(old_tags, old_ext)).content, (try env.mkTagUnion(young_tags, young_ext)).content };
+        },
+        .record => blk: {
+            const shared = try env.mkRecordField("shared", shared_value);
+            const old_fields: []const RecordField = if (old_has_own) &.{ shared, try env.mkRecordField("old", shared_value) } else &.{shared};
+            const young_fields: []const RecordField = if (young_has_own) &.{ shared, try env.mkRecordField("young", payload) } else &.{shared};
+            break :blk .{ (try env.mkRecord(old_fields, old_ext)).content, (try env.mkRecord(young_fields, young_ext)).content };
+        },
+    };
+    return .{
+        try store.freshFromContentWithRank(old_content, old_rank),
+        try store.freshFromContentWithRank(young_content, young_rank),
+    };
+}
+
+test "unify - a row made of the younger operand's unshared entries holds nothing younger than itself" {
+    // Ranks never increase going deeper (design.md "Def Checking Order"): the
+    // row unification makes for the younger operand's unshared entries is
+    // created at the older rank, so the younger payload and extension it
+    // holds are lowered to that rank, in either operand order.
+    for ([_]RowShape{ .tag_union, .record }) |shape| {
+        for ([_]RowOverlap{ .young_extends_old, .both_extend }) |overlap| {
+            for ([_]bool{ false, true }) |young_first| {
+                var env = try TestEnv.init(std.testing.allocator);
+                defer env.deinit();
+                const payload = try flexAt(&env, young_rank);
+                const young_ext = try flexAt(&env, young_rank);
+                const rows = try mkRankedRows(&env, shape, overlap, payload, young_ext);
+                const result = if (young_first) try env.unify(rows[1], rows[0]) else try env.unify(rows[0], rows[1]);
+                try std.testing.expectEqual(.unified, result);
+                try std.testing.expectEqual(old_rank, rankOf(&env, payload));
+                try std.testing.expectEqual(old_rank, rankOf(&env, young_ext));
+                try std.testing.expectEqual(old_rank, rankOf(&env, rows[1]));
+            }
+        }
+    }
+}
+
+test "unify - a nested younger payload under a created row is reached through its lowered parent" {
+    // Only the created row's direct children are lowered: a younger payload
+    // nested inside one keeps its rank, and the generalization that visits
+    // the lowered child lowers it in turn.
+    for ([_]RowShape{ .tag_union, .record }) |shape| {
+        var env = try TestEnv.init(std.testing.allocator);
+        defer env.deinit();
+        const store = &env.module_env.types;
+        const nested = try flexAt(&env, young_rank);
+        const payload = try store.freshFromContentWithRank(try env.mkTuple(&.{nested}), young_rank);
+        const young_ext = try flexAt(&env, young_rank);
+        const rows = try mkRankedRows(&env, shape, .young_extends_old, payload, young_ext);
+        try std.testing.expectEqual(.unified, try env.unify(rows[0], rows[1]));
+        try std.testing.expectEqual(old_rank, rankOf(&env, payload));
+        try std.testing.expectEqual(young_rank, rankOf(&env, nested));
+    }
+}
+
 test "unify - a tag repeated along one row's chain relates its payloads" {
     for ([_]enum { related, conflicting, arity }{ .related, .conflicting, .arity }) |case| {
         var env = try TestEnv.init(std.testing.allocator);
@@ -1313,7 +1399,10 @@ test "unify - issue 11024 - empty nominal row absorption respects field kinds an
                     try env.mkUnknownRecordField("field", presence, value),
                 })).content);
                 const nominal = try store.freshFromContent(try env.mkNominalType("Cfg", backing, &.{}));
-                const empty = try store.freshFromContent(.{ .structure = .empty_record });
+                // A `{}` literal: no fields over an uncommitted tail.
+                const tail = try store.fresh();
+                try store.markUncommittedRecordTail(tail, false);
+                const empty = try store.freshFromContent((try env.mkRecord(&.{}, tail)).content);
                 const a = if (order == 0) nominal else empty;
                 const b = if (order == 0) empty else nominal;
                 const result = if (exact) try env.unifyExact(a, b) else try env.unifyWriteNoReport(a, b);
@@ -1326,9 +1415,14 @@ test "unify - issue 11024 - empty nominal row absorption respects field kinds an
                 const omissions = env.scratch.absorbed_record_defaults.items();
                 try std.testing.expectEqual(@as(usize, if (accepts and kind == .defaulted) 1 else 0), omissions.len);
                 if (omissions.len != 0) {
-                    try std.testing.expectEqual(empty, omissions[0].record_var);
+                    try std.testing.expectEqual(tail, omissions[0].record_var);
                     try std.testing.expectEqual(default_id, omissions[0].default);
                 }
+
+                // A committed empty record never lifts.
+                const committed = try store.freshFromContent(.{ .structure = .empty_record });
+                const committed_result = if (order == 0) try env.unifyWriteNoReport(nominal, committed) else try env.unifyWriteNoReport(committed, nominal);
+                try std.testing.expectEqual(Result.mismatch, committed_result);
             }
         }
     }
@@ -1363,7 +1457,9 @@ test "unify - issue 11024 - zero-field nominal backing stays structural across c
         const backing = try store.freshFromContent((try env.mkRecordClosed(&.{})).content);
         const nominal = try store.freshFromContent(try env.mkNominalType("Cfg", backing, &.{}));
         for (0..2) |_| {
-            const empty = try store.freshFromContent(.{ .structure = .empty_record });
+            const tail = try store.fresh();
+            try store.markUncommittedRecordTail(tail, false);
+            const empty = try store.freshFromContent((try env.mkRecord(&.{}, tail)).content);
             const result = if (order == 0)
                 try env.unifyExact(nominal, empty)
             else
@@ -1388,17 +1484,23 @@ test "unify - empty nominal type with empty tag union (nominal on left)" {
         try env.mkNominalType("Empty", backing_var, &[_]Var{}),
     );
 
-    // Create empty tag union: []
+    // Create an empty tag union inference closed: []
     const empty_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    try env.module_env.types.markUncommittedTagTail(empty_var);
+    const empty_union = try env.module_env.types.freshFromContent((try env.mkTagUnion(&.{}, empty_var)).content);
 
     // Unify: Empty ~ []
-    const result = try env.unify(nominal_var, empty_var);
+    const result = try env.unify(nominal_var, empty_union);
 
     // Should succeed and merge to nominal type
     try std.testing.expectEqual(.unified, result);
-    const resolved = env.module_env.types.resolveVar(empty_var);
+    const resolved = env.module_env.types.resolveVar(empty_union);
     try std.testing.expect(resolved.desc.content == .structure);
     try std.testing.expect(resolved.desc.content.structure == .nominal_type);
+
+    // A committed empty tag union never lifts.
+    const committed = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    try std.testing.expect((try env.unify(nominal_var, committed)).isProblem());
 }
 
 test "unify - empty tag union with empty nominal type (nominal on right)" {
@@ -1406,8 +1508,10 @@ test "unify - empty tag union with empty nominal type (nominal on right)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    // Create empty tag union: []
+    // Create an empty tag union inference closed: []
     const empty_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    try env.module_env.types.markUncommittedTagTail(empty_var);
+    const empty_union = try env.module_env.types.freshFromContent((try env.mkTagUnion(&.{}, empty_var)).content);
 
     // Create nominal type: Empty := []
     const backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
@@ -1416,11 +1520,11 @@ test "unify - empty tag union with empty nominal type (nominal on right)" {
     );
 
     // Unify: [] ~ Empty
-    const result = try env.unify(empty_var, nominal_var);
+    const result = try env.unify(empty_union, nominal_var);
 
     // Should succeed and merge to nominal type
     try std.testing.expectEqual(.unified, result);
-    const resolved = env.module_env.types.resolveVar(empty_var);
+    const resolved = env.module_env.types.resolveVar(empty_union);
     try std.testing.expect(resolved.desc.content == .structure);
     try std.testing.expect(resolved.desc.content.structure == .nominal_type);
 }

@@ -145,6 +145,7 @@ const Printer = struct {
                     if (s.reuse_source) |reuse_source| {
                         try writer.print(" reuse_source=l{d}", .{@backingInt(reuse_source)});
                     }
+                    if (s.result_reuse) try writer.writeAll(" result_reuse");
                     if (s.deferred) try writer.writeAll(" deferred");
                     if (s.drive != .none) try writer.print(" drive={s}", .{@tagName(s.drive)});
                     try writer.writeByte('\n');
@@ -458,6 +459,7 @@ const Printer = struct {
             },
             .call_erased => |call| {
                 if (call.reuse_closure) try writer.writeAll(" owned");
+                if (call.result_reuse) try writer.writeAll(" result_reuse");
                 if (call.deferred) try writer.writeAll(" deferred");
                 if (call.drive != .none) try writer.print(" drive={s}", .{@tagName(call.drive)});
             },
@@ -470,7 +472,10 @@ const Printer = struct {
                 .immediate => |discriminant| try writer.print(" #{d}", .{discriminant}),
                 .local => {},
             },
-            .tag_payload_addr => |payload| try writer.print(" #{d}", .{payload.payload_index}),
+            .tag_payload_addr => |payload| {
+                try writer.print(" #{d}", .{payload.payload_index});
+                if (payload.whole) try writer.writeAll(" whole");
+            },
             .frame_alloc, .copy, .list_item_addr, .box_payload_addr, .tag_discriminant, .record, .record_update, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .view, .adapt => {},
         }
         const operands = DynOps.Operands.of(op);
