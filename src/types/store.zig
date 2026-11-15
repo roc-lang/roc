@@ -2981,7 +2981,7 @@ pub const Store = struct {
 
     /// The backing var of the alias stored at `desc_idx`: the first of its
     /// vars (`getAliasBackingVar`).
-    inline fn aliasBackingVarAt(self: *const Self, desc_idx: DescStore.Idx) Var {
+    pub inline fn aliasBackingVarAt(self: *const Self, desc_idx: DescStore.Idx) Var {
         const row = self.descs.getRow(desc_idx);
         std.debug.assert(row.word.kind == .alias);
         return self.vars.items[row.payload[1]];

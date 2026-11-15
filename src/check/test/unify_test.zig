@@ -851,6 +851,135 @@ test "unify - alias (concrete backing) with rigid (fail, other way)" {
     try std.testing.expectEqual(false, result.isAccepted());
 }
 
+test "unify - two uses of one alias whose arguments are one class merge into the second use" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const arg = try types.freshFromContent(Content{ .structure = .empty_record });
+
+    const a_backing_var = try types.freshFromContent(try env.mkTuple(&[_]Var{arg}));
+    const a_alias = try env.mkAlias("Alias", a_backing_var, &[_]Var{arg});
+    const a = try types.freshFromContent(a_alias);
+
+    const b_backing_var = try types.freshFromContent(try env.mkTuple(&[_]Var{arg}));
+    const b_alias = try env.mkAlias("Alias", b_backing_var, &[_]Var{arg});
+    const b = try types.freshFromContent(b_alias);
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expectEqual(b, types.resolveVar(a).var_);
+    try std.testing.expectEqual(b_alias, types.resolveVar(b).desc.content);
+    // The two backings are related as well.
+    try std.testing.expectEqual(b_backing_var, types.resolveVar(a_backing_var).var_);
+}
+
+test "unify - two uses of one alias over one backing merge into the second use" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const backing_var = try types.freshFromContent(Content{ .structure = .empty_record });
+    const a_alias = try env.mkAlias("Alias", backing_var, &[_]Var{});
+    const a = try types.freshFromContent(a_alias);
+    const b_alias = try env.mkAlias("Alias", backing_var, &[_]Var{});
+    const b = try types.freshFromContent(b_alias);
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expectEqual(b, types.resolveVar(a).var_);
+    try std.testing.expectEqual(b_alias, types.resolveVar(b).desc.content);
+}
+
+test "unify - two uses of one alias relate their arguments before they merge" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const a_arg = try types.fresh();
+    const a_backing_var = try types.freshFromContent(try env.mkTuple(&[_]Var{a_arg}));
+    const a_alias = try env.mkAlias("Alias", a_backing_var, &[_]Var{a_arg});
+    const a = try types.freshFromContent(a_alias);
+
+    const b_arg = try types.freshFromContent(Content{ .structure = .empty_record });
+    const b_backing_var = try types.freshFromContent(try env.mkTuple(&[_]Var{b_arg}));
+    const b_alias = try env.mkAlias("Alias", b_backing_var, &[_]Var{b_arg});
+    const b = try types.freshFromContent(b_alias);
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expectEqual(b_arg, types.resolveVar(a_arg).var_);
+    try std.testing.expectEqual(b, types.resolveVar(a).var_);
+    try std.testing.expectEqual(b_alias, types.resolveVar(b).desc.content);
+    try std.testing.expectEqual(b_backing_var, types.resolveVar(a_backing_var).var_);
+}
+
+test "unify - two uses of one alias with a mismatched argument do not unify" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const a_arg = try types.freshFromContent(Content{ .structure = .empty_record });
+    const a_backing_var = try types.freshFromContent(try env.mkTuple(&[_]Var{a_arg}));
+    const a = try types.freshFromContent(try env.mkAlias("Alias", a_backing_var, &[_]Var{a_arg}));
+
+    const b_arg = try types.freshFromContent(try env.mkTuple(&[_]Var{a_arg}));
+    const b_backing_var = try types.freshFromContent(try env.mkTuple(&[_]Var{b_arg}));
+    const b = try types.freshFromContent(try env.mkAlias("Alias", b_backing_var, &[_]Var{b_arg}));
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(false, result.isAccepted());
+}
+
+test "unify - an alias of an alias relates to a structure through both backings" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const inner_backing_var = try types.fresh();
+    const inner = try types.freshFromContent(try env.mkAlias("Inner", inner_backing_var, &[_]Var{}));
+    const outer_alias = try env.mkAlias("Outer", inner, &[_]Var{});
+    const a = try types.freshFromContent(outer_alias);
+    const b = try types.freshFromContent(Content{ .structure = .empty_record });
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    // Both aliases stay as they are, and the innermost backing is the
+    // structure's class.
+    try std.testing.expectEqual(outer_alias, types.resolveVar(a).desc.content);
+    try std.testing.expect(types.resolveVar(inner).desc.content == .alias);
+    try std.testing.expectEqual(b, types.resolveVar(inner_backing_var).var_);
+}
+
+test "unify - an alias backed by itself relates to a structure without looping" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const a = try types.fresh();
+    try types.setRootVarContent(a, try env.mkAlias("Loop", a, &[_]Var{}));
+    const b = try types.freshFromContent(Content{ .structure = .empty_record });
+
+    const result = try env.unify(a, b);
+
+    // The alias leads only back to the pair already being related, so there
+    // is nothing further to relate.
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expect(types.resolveVar(a).desc.content == .alias);
+    try std.testing.expect(types.resolveVar(a).var_ != types.resolveVar(b).var_);
+}
+
 // unification - structure/flex_vars //
 
 test "unify - a is builtin and b is flex_var" {

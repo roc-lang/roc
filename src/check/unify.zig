@@ -1042,28 +1042,58 @@ const Unifier = struct {
         return constructorBackingIsAnonymous(self.types_store, expected) orelse error.TypeMismatch;
     }
 
-    fn processGuardedPair(self: *Self, a_var: Var, b_var: Var) Error!void {
-        // Only the two classes' words are read here. Their content is decoded
-        // when the pair's `unify_vars` frame runs, if it comes to that.
-        const a = self.types_store.resolveVarWordAndCompressPath(a_var);
-        const b = self.types_store.resolveVarWordAndCompressPath(b_var);
-        if (a.desc_idx == b.desc_idx) return;
+    fn processGuardedPair(self: *Self, first_a_var: Var, first_b_var: Var) Error!void {
+        var a_var = first_a_var;
+        var b_var = first_b_var;
+        while (true) {
+            // Only the two classes' words are read here. Their content is
+            // decoded when the pair's `unify_vars` frame runs, if it comes to
+            // that.
+            const a = self.types_store.resolveVarWordAndCompressPath(a_var);
+            const b = self.types_store.resolveVarWordAndCompressPath(b_var);
+            if (a.desc_idx == b.desc_idx) return;
 
-        // A deferred requirement callable is linked to its copy before
-        // anything relates it.
-        if (a.word.flags.deferred_callable or b.word.flags.deferred_callable) {
-            try self.linkDeferredCallable(a);
-            try self.linkDeferredCallable(b);
-            return self.processGuardedPair(a_var, b_var);
-        }
-        if (try self.isPairVisited(a_var, b_var)) {
+            // A deferred requirement callable is linked to its copy before
+            // anything relates it.
+            if (a.word.flags.deferred_callable or b.word.flags.deferred_callable) {
+                try self.linkDeferredCallable(a);
+                try self.linkDeferredCallable(b);
+                continue;
+            }
+            if (try self.isPairVisited(a_var, b_var)) {
+                return;
+            }
+
+            if (self.storedContentMerge(a, b)) |kept| {
+                return self.types_store.unionKeepingContent(a.var_, b.var_, kept, Rank.min(a.word.rank, b.word.rank));
+            }
+
+            switch (try self.relateThroughAlias(a_var, b_var, a, b)) {
+                .related => return,
+                .relate => |pair| {
+                    a_var = pair.a;
+                    b_var = pair.b;
+                    continue;
+                },
+                .not_through_alias => {},
+            }
+
+            try self.enterGuardedPair(a_var, b_var);
+            try self.pushWorkFrame(.{ .unify_vars = .{
+                .a = a.var_,
+                .a_desc = a.desc_idx,
+                .b = b.var_,
+                .b_desc = b.desc_idx,
+            } });
             return;
         }
+    }
 
-        if (self.storedContentMerge(a, b)) |kept| {
-            return self.types_store.unionKeepingContent(a.var_, b.var_, kept, Rank.min(a.word.rank, b.word.rank));
-        }
-
+    /// Put the pair `a_var`, `b_var` in flight: until the frames pushed after
+    /// this have run, the pair is not related again, and it is the pair whose
+    /// unresolved variables a deferred constraint or a determined literal
+    /// names.
+    fn enterGuardedPair(self: *Self, a_var: Var, b_var: Var) std.mem.Allocator.Error!void {
         const visited_vars_len: u32 = @intCast(self.scratch.visited_vars.items().len);
         _ = try self.scratch.visited_vars.append(self.scratch.gpa, a_var);
         _ = try self.scratch.visited_vars.append(self.scratch.gpa, b_var);
@@ -1078,12 +1108,138 @@ const Unifier = struct {
             .saved_unresolved_a = saved_unresolved_a,
             .saved_unresolved_b = saved_unresolved_b,
         } });
-        try self.pushWorkFrame(.{ .unify_vars = .{
+    }
+
+    /// What relating a pair comes to when an alias is all that stands
+    /// between it and its parts.
+    const ThroughAlias = union(enum) {
+        /// The pair is related, or its relation is scheduled.
+        related,
+        /// The pair is in flight, and relating it is relating this pair.
+        relate: struct { a: Var, b: Var },
+        /// The pair needs `unifyVars`.
+        not_through_alias,
+    };
+
+    /// Relate the pair `a_var`, `b_var`, resolved as `a` and `b` and not in
+    /// flight, when `unifyVars` would do nothing for it but look through an
+    /// alias. These are its cases with an alias on either side whose other
+    /// side is an alias, a rigid or a structure: no bounded row extension
+    /// is involved and no literal is determined, since neither side is a
+    /// flex.
+    ///
+    /// An alias is transparent, so the pair relates as the alias's backing
+    /// and the other side do (`unifyAlias`, `unifyRigid`, `unifyStructure`),
+    /// except that two uses of one alias relate argument by argument and then
+    /// merge into `b`'s (`unifyTwoAliases`). Two uses whose arguments are
+    /// already the same classes have no argument left to fail, so they go
+    /// straight to what follows the arguments (`processSameAliasAfterArgs`).
+    fn relateThroughAlias(self: *Self, a_var: Var, b_var: Var, a: ResolvedVarWord, b: ResolvedVarWord) std.mem.Allocator.Error!ThroughAlias {
+        const store = self.types_store;
+        if (a.word.kind != .alias) {
+            if (b.word.kind != .alias or !relatesAsAliasBacking(a.word.kind)) return .not_through_alias;
+            try self.enterGuardedPair(a_var, b_var);
+            return .{ .relate = .{ .a = a.var_, .b = store.aliasBackingVarAt(b.desc_idx) } };
+        }
+        if (b.word.kind != .alias) {
+            if (!relatesAsAliasBacking(b.word.kind)) return .not_through_alias;
+            try self.enterGuardedPair(a_var, b_var);
+            return .{ .relate = .{ .a = store.aliasBackingVarAt(a.desc_idx), .b = b.var_ } };
+        }
+
+        const a_alias = store.aliasAt(a.desc_idx);
+        const b_alias = store.aliasAt(b.desc_idx);
+        const a_backing_var = store.getAliasBackingVar(a_alias);
+        const b_backing_var = store.getAliasBackingVar(b_alias);
+        if (!sameAliasIdentity(a_alias, b_alias)) {
+            try self.enterGuardedPair(a_var, b_var);
+            return .{ .relate = .{ .a = a_backing_var, .b = b_backing_var } };
+        }
+
+        var a_args_range = a_alias.vars.nonempty;
+        a_args_range.dropFirstElem();
+        var b_args_range = b_alias.vars.nonempty;
+        b_args_range.dropFirstElem();
+        // A different number of arguments is a mismatch, which `unifyVars`
+        // raises.
+        if (a_args_range.len() != b_args_range.len()) return .not_through_alias;
+
+        const merge_after: StoredMerge = .{
             .a = a.var_,
-            .a_desc = a.desc_idx,
             .b = b.var_,
-            .b_desc = b.desc_idx,
+            .rank = Rank.min(a.word.rank, b.word.rank),
+            .content = store.rowAt(b.desc_idx),
+        };
+        if (!self.sameClasses(a_args_range, b_args_range)) {
+            try self.enterGuardedPair(a_var, b_var);
+            try self.scheduleSameAliasArgs(merge_after, a_args_range, b_args_range, a_backing_var, b_backing_var);
+            return .related;
+        }
+        if (store.resolveDescIdx(a_backing_var) == store.resolveDescIdx(b_backing_var)) {
+            try store.unionStoringContent(merge_after.a, merge_after.b, merge_after.content, merge_after.rank);
+            return .related;
+        }
+        try self.enterGuardedPair(a_var, b_var);
+        try self.pushWorkFrame(.{ .merge_stored = merge_after });
+        try self.pushMismatchHandler(.ignore);
+        return .{ .relate = .{ .a = a_backing_var, .b = b_backing_var } };
+    }
+
+    /// Whether a class of this kind relates to an alias as it relates to the
+    /// alias's backing, with nothing else to do first.
+    fn relatesAsAliasBacking(kind: types_mod.types.ContentKind) bool {
+        return switch (kind) {
+            .rigid, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => true,
+            // A flex that reaches here is not plain: it may be a bounded row
+            // extension, carry a literal the relation determines, or defer
+            // constraints. A presence fact never relates to an alias, and an
+            // erroneous type relates to nothing.
+            .flex, .field_presence, .err => false,
+            // Two aliases relate by their identities.
+            .alias => false,
+        };
+    }
+
+    /// Whether each variable of `a_vars` is already in the class of the
+    /// variable of `b_vars` at its position, so that relating the two ranges
+    /// pairwise relates nothing. The ranges have the same length.
+    fn sameClasses(self: *const Self, a_vars: Var.SafeList.Range, b_vars: Var.SafeList.Range) bool {
+        std.debug.assert(a_vars.len() == b_vars.len());
+        for (self.types_store.sliceVars(a_vars), self.types_store.sliceVars(b_vars)) |a_arg, b_arg| {
+            if (self.types_store.resolveDescIdx(a_arg) != self.types_store.resolveDescIdx(b_arg)) return false;
+        }
+        return true;
+    }
+
+    /// Schedule the argument pairs of two uses of one alias, and what follows
+    /// them: `merge` and the relation of the two backings.
+    fn scheduleSameAliasArgs(
+        self: *Self,
+        merge_after: StoredMerge,
+        a_args_range: Var.SafeList.Range,
+        b_args_range: Var.SafeList.Range,
+        a_backing_var: Var,
+        b_backing_var: Var,
+    ) std.mem.Allocator.Error!void {
+        const did_arg_error_flag = try self.newMismatchFlag();
+        // Rust compiler comment:
+        // Don't report real_var mismatches, because they must always be surfaced higher, from the argument types.
+        try self.pushWorkFrame(.{ .same_alias_after_args = .{
+            .merge = merge_after,
+            .a_backing_var = a_backing_var,
+            .b_backing_var = b_backing_var,
+            .did_arg_error_flag = did_arg_error_flag,
         } });
+
+        var i: u32 = a_args_range.len();
+        while (i > 0) {
+            i -= 1;
+            try self.scheduleGuardedPair(
+                self.types_store.getVarAt(a_args_range, i),
+                self.types_store.getVarAt(b_args_range, i),
+                .{ .set_flag = did_arg_error_flag },
+            );
+        }
     }
 
     /// The side whose stored content is what relating `a` and `b` merges
@@ -1564,8 +1720,6 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        const did_arg_error_flag = try self.newMismatchFlag();
-
         var a_args_range = a_alias.vars.nonempty;
         a_args_range.dropFirstElem();
         var b_args_range = b_alias.vars.nonempty;
@@ -1575,26 +1729,13 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        // Rust compiler comment:
-        // Don't report real_var mismatches, because they must always be surfaced higher, from the argument types.
-        const a_backing_var = self.types_store.getAliasBackingVar(a_alias);
-        const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
-        try self.pushWorkFrame(.{ .same_alias_after_args = .{
-            .merge = self.storedMerge(vars, vars.b),
-            .a_backing_var = a_backing_var,
-            .b_backing_var = b_backing_var,
-            .did_arg_error_flag = did_arg_error_flag,
-        } });
-
-        var i: u32 = a_args_range.len();
-        while (i > 0) {
-            i -= 1;
-            try self.scheduleGuardedPair(
-                self.types_store.getVarAt(a_args_range, i),
-                self.types_store.getVarAt(b_args_range, i),
-                .{ .set_flag = did_arg_error_flag },
-            );
-        }
+        try self.scheduleSameAliasArgs(
+            self.storedMerge(vars, vars.b),
+            a_args_range,
+            b_args_range,
+            self.types_store.getAliasBackingVar(a_alias),
+            self.types_store.getAliasBackingVar(b_alias),
+        );
     }
 
     // Unify structure //
