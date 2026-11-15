@@ -26787,9 +26787,21 @@ image or a `.boxy` module object's `CodeLocations`:
   means more than a crash at its statement (`LIR.FailureMeaning`): code
   checking rejected, a literal conversion rejecting its literal, an
   exhaustiveness failure at a checked site, or a read of a compile-time value
-  whose producer failed. Meanings name checked modules by checked module key and
-  checked ids, never program-local statement ids or numbering, so cached code
-  reports its failures exactly like freshly compiled code. `LirStore`
+  whose producer failed. Meanings name modules and checked ids, never
+  program-local statement ids or numbering, so cached code reports its
+  failures exactly like freshly compiled code. A program names each module by
+  its checked module key. A `.boxy` module unit names each module by its link
+  name (`LirStore.lowering_module_identities`): the unit's object is reused
+  across compilations whose checked keys differ (an import's implementation
+  edit changes the importer's key, but not its object key, which covers its
+  imports' interfaces and every module's link name), so naming a module by
+  its checked key would make a reused object differ from a fresh build of it.
+  A compile-time program that links module objects lowers as a module unit
+  too, so its own code and the objects it loads name modules in one link-name
+  domain. The evaluator reads every meaning it takes from running code
+  through its program's table from each module's identity to its checked key
+  (`Program.Result.meaningByCheckedKey`), one lookup per module the meaning
+  names, so every consumer reads meanings by checked key. `LirStore`
   derives a failing statement's meaning (`failureMeaning`); code generation
   records it at each crash call, and the interpreter applies it to the
   statement it stopped at, so both evaluators classify failures from one

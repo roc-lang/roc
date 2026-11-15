@@ -4234,7 +4234,10 @@ fn seedSourceFiles(program: *Program) Allocator.Error!void {
             .module_identity = program.modules.linkName(view.index),
         };
         program.source_files[module_position] = @intCast(file_index);
-        program.lowering_module_ids[module_position] = try program.result.appendLoweringModule(view.key);
+        // A module unit's object outlives the compilation that built it, and
+        // its key covers each module's link name but not its checked key.
+        const failure_identity = if (program.moduleUnit() != null) program.modules.linkName(view.index) else view.key.bytes;
+        program.lowering_module_ids[module_position] = try program.result.appendLoweringModule(view.key, failure_identity);
     }
     try program.result.store.setSourceFiles(files);
 }
