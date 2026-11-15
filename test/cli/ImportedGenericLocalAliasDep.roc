@@ -4,4 +4,7 @@ ImportedGenericLocalAliasDep := [].{
     pair = (|s| s.concat("!"), 1)
 
     fns = [|s| s.concat(s)]
+
+    # A tuple whose function runs at every type that has a `concat`.
+    doubling = (|s| s.concat(s), 1)
 }

@@ -20664,7 +20664,12 @@ well (`body_analyses.bindsLocalSchemeAlias`): it owns its generalized dispatch
 scope, its declaration computes nothing, and each use lowers the lookup in
 that scope at the use's instantiation, under both strategies. The name can
 therefore be used at more than one type, and the constant's requirements are
-met at each.
+met at each. A use of the name is a read of the constant, so a requirement
+the use's type leaves unpinned (a destructuring scheme alias taking the name
+apart, `(shout, _) = pair`) is recorded by the rule a read of the constant
+itself follows (`UnpinnedRecordEvidence.from_callable`): one reachable
+through a stored function's callable type resolves from that function's
+eventual request.
 
 A local declaration that takes such a lookup apart (`(shout, _) =
 Hooks.pair`) is a destructuring scheme alias
@@ -20677,9 +20682,17 @@ destructuring at those types, and reading the name
 mention seals as a variable no use relates, the lookup resolves its
 requirements from those types (`from_callable`), and the declaration itself
 computes nothing. A closure that reads such a name lowers the declaration in
-its own body and does not capture the name. The `.lss` strategy needs no such
-step: a specialization lowers the declaration at the types it fixes.
-`test/cli/ImportedGenericLocalAlias.roc` runs both forms.
+its own body and does not capture the name. The `.lss` strategy follows the
+same rule: Monotype lowers a use of one of those names as a block whose one
+statement is the declaration and whose value is the name's
+(`BodyContext.stepDestructuredAlias`), in a fresh instantiation context that
+relates the name's type to the use's type. A variable the name's type does
+not mention stays a variable of that context, the lookup resolves its
+requirements there as any lookup does, the declaration itself computes
+nothing, and a closure that reads such a name does not capture it. Each use
+instantiates the name's type, so the specialization-interface relation table
+records no equality between a use of one of those names and the name's own
+type. `test/cli/ImportedGenericLocalAlias.roc` runs both forms.
 
 A call through a forwarding alias is a direct call. Monotype enters the
 alias's scope with the call's use-site evidence and substitution, and requests
