@@ -2491,7 +2491,18 @@ const Certifier = struct {
             const container_layout = self.layouts.getLayout(container_layout_idx);
             const range: SlotRange = switch (container_layout.tag) {
                 .struct_, .dynamic => blk: {
-                    const fields = arc_dismantle.ProductFields.of(self.store, self.layouts, container_origin) orelse break :walk false;
+                    const fields = arc_dismantle.ProductFields.of(self.store, self.layouts, container_origin) orelse {
+                        // A dynamic tag union has no enumerated shape: its
+                        // complete payload projection spends its one unit.
+                        if (container_layout.tag != .dynamic or !arc_dismantle.projectionOwnsAllRc(
+                            self.store,
+                            self.layouts,
+                            container_origin,
+                            info.origin,
+                            info.payload_projection,
+                        )) break :walk false;
+                        break :blk .{ .first = 0, .count = 1 };
+                    };
                     break :blk carried orelse .{
                         .first = fields.slotBase(info.payload_projection.first),
                         .count = self.layouts.ownershipSlotCount(self.store.getLocal(info.origin).layout_idx),
@@ -2683,6 +2694,9 @@ const Certifier = struct {
             for (slots.items) |slot| required = try required.withField(self.claim_arena.allocator(), slot.slot);
             return required;
         }
+        // A dynamic value without an enumerated shape is one unit, which only
+        // a complete payload projection of a dynamic tag union claims.
+        if (self.layouts.getLayout(self.store.getLocal(origin).layout_idx).tag == .dynamic) return .{ .low = 1 };
         return try self.requiredClaimsForLayout(self.store.getLocal(origin).layout_idx);
     }
 
@@ -6603,13 +6617,6 @@ const Certifier = struct {
                     return;
                 }
                 try self.bindSameValue(state, defined, source);
-                // A whole tag payload carries its union's unit, and its own
-                // layout or product shape describes that unit's contents on
-                // this path: field reads through the value use that shape.
-                if (op == .tag_payload_addr) {
-                    const value = state.valueOf(defined);
-                    if (value != no_value) self.values.items[value].origin = defined;
-                }
             },
             .construct => try self.applyAggregate(state, target.?, self.dyn_operands.items),
             .borrow_operands => {

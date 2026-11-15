@@ -760,6 +760,11 @@ const BindingFact = union(enum) {
     /// An owned result selects the consuming primitive, so its input must
     /// supply a unit. This is ownership flow, not same-value aliasing.
     consuming_result: OwnershipFlow,
+    /// The only payload of a dynamic tag union's active variant, read as an
+    /// ownership-complete projection: it holds every refcounted byte of the
+    /// union on that path, so an ownership demand on it is a demand on the
+    /// union's unit, as on a same-value alias.
+    complete_projection: OwnershipFlow,
 };
 
 const VisibilityFact = union(enum) {
@@ -938,7 +943,7 @@ const Solver = struct {
 };
 
 fn inferenceRcEffect(solver: *const Solver, op: anytype, declared: anytype) @TypeOf(declared) {
-    if (!solver.consume_dead_boxes and op.deadLenderArg() != null) return op.arcBorrowedResultVariant().?.rcEffect();
+    if (!solver.consume_dead_boxes and op.deadLenderArg() != null) return op.arcLiveLenderRcEffect();
     return op.arcInferenceRcEffect(declared);
 }
 
@@ -1739,7 +1744,7 @@ fn computeOutcomeRestitution(
                     },
                     .assign_low_level => |assign| {
                         const effect = if (!consume_dead_boxes and assign.op.deadLenderArg() != null)
-                            assign.op.arcBorrowedResultVariant().?.rcEffect()
+                            assign.op.arcLiveLenderRcEffect()
                         else
                             assign.op.arcInferenceRcEffect(store.stmtRow(assign.rc_effect));
                         // Stored arguments may move their entry unit into the
@@ -2509,7 +2514,7 @@ fn collectAll(solver: *Solver) SolveError!void {
         .borrow => |borrow| noteBorrowDef(solver, borrow.target, borrow.source),
         .alias => |alias| noteAlias(solver, alias.target, alias.source),
         .demand => |local| noteDemand(solver, local),
-        .consuming_result => {},
+        .consuming_result, .complete_projection => {},
     };
 
     // Direct-call demands depend on the current optimistic parameter
@@ -2541,9 +2546,24 @@ fn bindingOwnershipFlow(solver: *const Solver, fact: BindingFact) ?OwnershipFlow
             if (solver.defs[target] != .multi) edge else null
         else
             null,
-        .consuming_result => |edge| edge,
+        .consuming_result, .complete_projection => |edge| edge,
         .fresh, .multi, .borrow, .demand => null,
     };
+}
+
+/// One write of a pure same-value alias into a join parameter, as dense
+/// indices: the parameter and the value the write names.
+const JoinParamWrite = struct { target: u32, source: u32 };
+
+fn joinParamWrite(solver: *const Solver, fact: BindingFact) ?JoinParamWrite {
+    const edge = switch (fact) {
+        .alias => |edge| edge,
+        .fresh, .multi, .borrow, .demand, .consuming_result, .complete_projection => return null,
+    };
+    const target = solver.domain.indexOf(edge.target) orelse return null;
+    if (!solver.join_param.isSet(target)) return null;
+    const source = solver.domain.indexOf(edge.source) orelse return null;
+    return .{ .target = target, .source = source };
 }
 
 /// Settles the borrowed-parameter lattice from the facts collected above.
@@ -2600,18 +2620,47 @@ fn solveParameterModes(solver: *Solver) SolveError!void {
 
     // A returned truncation must transfer ownership too: lending its input
     // and retaining at the return would discard a unique buffer's capacity.
-    // Ordinary payload reads and same-value returns retain their borrow rules.
+    // The returned value reaches the truncation through pure same-value
+    // aliases and through the join parameters a value join writes them
+    // into, each write naming one alias source of the parameter. Ordinary
+    // payload reads and same-value returns retain their borrow rules.
+    const join_offsets = try solver.allocator.alloc(u32, local_count + 1);
+    defer solver.allocator.free(join_offsets);
+    @memset(join_offsets, 0);
+    for (solver.binding_facts.items) |fact| {
+        const edge = joinParamWrite(solver, fact) orelse continue;
+        join_offsets[edge.target + 1] += 1;
+    }
+    for (1..join_offsets.len) |index| join_offsets[index] += join_offsets[index - 1];
+    const join_sources = try solver.allocator.alloc(u32, join_offsets[local_count]);
+    defer solver.allocator.free(join_sources);
+    const join_fill = try solver.allocator.dupe(u32, join_offsets[0..local_count]);
+    defer solver.allocator.free(join_fill);
+    for (solver.binding_facts.items) |fact| {
+        const edge = joinParamWrite(solver, fact) orelse continue;
+        join_sources[join_fill[edge.target]] = edge.source;
+        join_fill[edge.target] += 1;
+    }
     var returned_aliases = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(solver.allocator, local_count);
     defer returned_aliases.deinit(solver.allocator);
+    var returned_work = std.ArrayList(u32).empty;
+    defer returned_work.deinit(solver.allocator);
     for (solver.proc_returns.items.items) |local| {
-        var cursor = solver.domain.indexOf(@fromBackingInt(@intCast(local))) orelse continue;
+        const start = solver.domain.indexOf(@fromBackingInt(@intCast(local))) orelse continue;
+        try returned_work.append(solver.allocator, start);
+    }
+    while (returned_work.pop()) |start| {
+        var cursor = start;
         while (!returned_aliases.isSet(cursor)) {
             returned_aliases.set(cursor);
             if (consuming_results.isSet(cursor)) {
                 solver.demand[cursor] = true;
                 break;
             }
-            if (solver.defs[cursor] == .multi) break;
+            if (solver.defs[cursor] == .multi) {
+                try returned_work.appendSlice(solver.allocator, join_sources[join_offsets[cursor]..join_offsets[cursor + 1]]);
+                break;
+            }
             cursor = solver.alias_source[cursor].get() orelse break;
         }
     }
@@ -2890,7 +2939,12 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 .discriminant => try solver.binding_facts.append(allocator, .{ .fresh = assign.target }),
                 .field => try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = assign.op.source } }),
                 .tag_payload => try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = assign.op.source } }),
-                .tag_payload_struct => try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = assign.op.source } }),
+                .tag_payload_struct => {
+                    try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = assign.op.source } });
+                    if (solver.layouts.getLayout(store.getLocal(assign.op.source).layout_idx).tag == .dynamic) {
+                        try solver.binding_facts.append(allocator, .{ .complete_projection = .{ .target = assign.target, .source = assign.op.source } });
+                    }
+                },
                 inline .list_reinterpret, .nominal => {
                     try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = assign.op.source } });
                     try solver.binding_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = assign.op.source } });
@@ -5165,7 +5219,7 @@ const UniquenessComponentTask = struct {
             if (node.* == .assign_low_level) {
                 const assign = node.assign_low_level;
                 const effect = if (!self.consume_dead_boxes and assign.op.deadLenderArg() != null)
-                    assign.op.arcBorrowedResultVariant().?.rcEffect()
+                    assign.op.arcLiveLenderRcEffect()
                 else
                     assign.op.arcInferenceRcEffect(self.store.stmtRow(assign.rc_effect));
                 const args = self.store.getLocalSpan(assign.args);
@@ -5558,7 +5612,7 @@ fn settleUniquenessOracle(
                 if (node.* == .assign_low_level) {
                     const assign = node.assign_low_level;
                     const rc_effect = if (!consume_dead_boxes and assign.op.deadLenderArg() != null)
-                        assign.op.arcBorrowedResultVariant().?.rcEffect()
+                        assign.op.arcLiveLenderRcEffect()
                     else
                         assign.op.arcInferenceRcEffect(store.stmtRow(assign.rc_effect));
                     const check_mask = rc_effect.may_runtime_uniqueness_check_args;
@@ -6084,7 +6138,7 @@ fn computeUniquenessDetailed(
             },
             .assign_low_level => |assign| {
                 const rc_effect = if (!consume_dead_boxes and assign.op.deadLenderArg() != null)
-                    assign.op.arcBorrowedResultVariant().?.rcEffect()
+                    assign.op.arcLiveLenderRcEffect()
                 else
                     assign.op.arcInferenceRcEffect(store.stmtRow(assign.rc_effect));
                 marks.trackDef(&has_def, &multi_def, assign.target);

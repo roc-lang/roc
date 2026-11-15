@@ -23949,6 +23949,14 @@ const BodyContext = struct {
         field_joins: []const DraftExprId,
     };
 
+    /// Where a record parser's field dispatch sends a field it does not know:
+    /// a jump to `skip_join` with the remaining input in `rest_local`.
+    const ParseRecordUnknownField = struct {
+        skip_join: DraftExprId,
+        rest_local: DraftLocalId,
+        state_ty: Type.TypeId,
+    };
+
     /// Loop-carried control locals for a derived record parser. `done` is set
     /// when the format reports the end of the record so the next iteration
     /// finishes at the loop head, which keeps the record-construction code at
@@ -36794,16 +36802,15 @@ const BodyContext = struct {
             .step_expr => {
                 task.step_expr = input.?.exprValue();
                 try self.constrainCheckedInterfaceToCell(task.plan.forLoopSite().step_ty, self.exprTypeCell(task.step_expr));
-                task.done_body = if (task.carries.len == 0)
-                    try self.addExprWithTypeCell(task.loop_cell, .{ .break_ = null })
-                else
-                    try self.addExprWithTypeCell(task.loop_cell, .{ .break_ = try self.loopStateExpr(task.loop_cell, task.carries) });
+                task.done_body = try self.iteratorLoopDoneBody(task);
                 task.branches[0] = .{
                     .pat = try self.iteratorDonePattern(task.step),
                     .body = task.done_body,
                 };
                 if (try self.nodeIsProvenUninhabited(task.step.one_item.node)) {
-                    task.branches[1] = try self.uninhabitedIteratorOneBranch(task.step, task.done_body);
+                    // The branch's own break, built afresh like the done
+                    // branch's: no break is shared between two branches.
+                    task.branches[1] = try self.uninhabitedIteratorOneBranch(task.step, try self.iteratorLoopDoneBody(task));
                     return self.finishIteratorLoop(task);
                 }
                 return self.beginIteratorOneBranch(task);
@@ -43341,12 +43348,15 @@ const BodyContext = struct {
         defer demand_scope.leave();
         const item_local = try self.addLocal(self.builder.symbols.fresh(), field_handle_ty);
         const item_local_expr = try self.localExpr(item_local, field_handle_ty);
+        // Both the matching and the skipping step continue with the rest of
+        // the iterator, so it binds to a local each branch reads.
+        const rest_local = try self.addLocal(self.builder.symbols.fresh(), rest_ty);
         const topology = try self.iteratorRepresentationNames(.iter);
 
         const one_tag = self.monoTagByName(step_ret_ty, topology.one_tag);
         const one_payloads = self.typeStore().span(one_tag.payloads);
         if (one_payloads.len != 1) Common.invariant("Iter step One tag did not have one record payload");
-        const one_payload = try self.lowerGeneratedIterOnePayload(GuardedList.at(one_payloads, 0), item_local_expr, rest_expr);
+        const one_payload = try self.lowerGeneratedIterOnePayload(GuardedList.at(one_payloads, 0), item_local_expr, try self.localExpr(rest_local, rest_ty));
         const one_body = try self.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
             .name = one_tag.name,
             .payloads = try self.addExprSpan(&[_]DraftExprId{one_payload}),
@@ -43355,7 +43365,7 @@ const BodyContext = struct {
         const skip_tag = self.monoTagByName(step_ret_ty, topology.skip_tag);
         const skip_payloads = self.typeStore().span(skip_tag.payloads);
         if (skip_payloads.len != 1) Common.invariant("Iter step Skip tag did not have one record payload");
-        const skip_payload = try self.lowerGeneratedIterSkipPayload(GuardedList.at(skip_payloads, 0), rest_expr);
+        const skip_payload = try self.lowerGeneratedIterSkipPayload(GuardedList.at(skip_payloads, 0), try self.localExpr(rest_local, rest_ty));
         const skip_body = try self.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
             .name = skip_tag.name,
             .payloads = try self.addExprSpan(&[_]DraftExprId{skip_payload}),
@@ -43370,7 +43380,7 @@ const BodyContext = struct {
             item_local,
             field_handle_ty,
             item_expr,
-            try self.ifExpr(cond, one_body, skip_body, step_ret_ty),
+            try self.wrapLet(rest_local, rest_ty, rest_expr, try self.ifExpr(cond, one_body, skip_body, step_ret_ty), step_ret_ty),
             step_ret_ty,
         );
         return try self.lowerFieldNamesStepLambda(checked_source_ty, source_expr_id, index, .for_size, step_fn_ty, body);
@@ -44775,7 +44785,7 @@ const BodyContext = struct {
         renamed_field_lengths: ?[]const u32,
         renamed_field_texts: ?[]const []const u8,
         matched_bodies: []const DraftExprId,
-        unknown_body: DraftExprId,
+        unknown: ParseRecordUnknownField,
         mode: RecordFieldMatchMode,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
@@ -44789,12 +44799,12 @@ const BodyContext = struct {
                 lengths,
                 renamed_field_texts,
                 matched_bodies,
-                unknown_body,
+                unknown,
                 mode,
                 ret_ty,
             );
         }
-        var body = unknown_body;
+        var body = try self.parseRecordUnknownFieldBody(unknown, ret_ty);
         var index = matched_bodies.len;
         while (index > 0) {
             index -= 1;
@@ -44819,7 +44829,7 @@ const BodyContext = struct {
         renamed_field_lengths: []const u32,
         renamed_field_texts: ?[]const []const u8,
         matched_bodies: []const DraftExprId,
-        unknown_body: DraftExprId,
+        unknown: ParseRecordUnknownField,
         mode: RecordFieldMatchMode,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
@@ -44827,7 +44837,7 @@ const BodyContext = struct {
         const bool_ty = try self.primitiveType(.bool);
         const key_len_local = try self.addLocal(self.builder.symbols.fresh(), u64_ty);
 
-        var body = unknown_body;
+        var body = try self.parseRecordUnknownFieldBody(unknown, ret_ty);
         var index = matched_bodies.len;
         while (index > 0) {
             index -= 1;
@@ -44838,7 +44848,7 @@ const BodyContext = struct {
             else
                 null;
 
-            var group_body = unknown_body;
+            var group_body = try self.parseRecordUnknownFieldBody(unknown, ret_ty);
             var field_index = matched_bodies.len;
             while (field_index > 0) {
                 field_index -= 1;
@@ -44853,17 +44863,20 @@ const BodyContext = struct {
                         .exact => try self.recordFieldNameStaticSmallWordMatch(false, key_local, key_ty, field_text, lane.offset, lane.active_len),
                         .caseless => try self.recordFieldNameStaticSmallWordMatch(true, key_local, key_ty, field_text, lane.offset, lane.active_len),
                     };
-                    const matched_or_next = if (lane.offset == 0 and lane.active_len == length)
-                        matched_bodies[field_index]
+                    // The cheap probe runs first, and the full comparison only
+                    // when the probe matches; either failing falls through to
+                    // the rest of the group, which is built once.
+                    const cond = if (lane.offset == 0 and lane.active_len == length)
+                        probe
                     else blk: {
                         const full_cond = switch (mode) {
                             .direct => Common.invariant("direct field handles do not use string matching"),
                             .exact => try self.recordFieldNameStaticSmallExactMatch(key_local, key_ty, field_text),
                             .caseless => try self.recordFieldNameStaticSmallCaselessMatch(key_local, key_ty, field_text),
                         };
-                        break :blk try self.ifExpr(full_cond, matched_bodies[field_index], group_body, ret_ty);
+                        break :blk try self.ifExpr(probe, full_cond, try self.boolLiteral(false, bool_ty), bool_ty);
                     };
-                    group_body = try self.ifExpr(probe, matched_or_next, group_body, ret_ty);
+                    group_body = try self.ifExpr(cond, matched_bodies[field_index], group_body, ret_ty);
                 } else {
                     const cond = try self.recordFieldNameMatch(
                         key_local,
@@ -45229,14 +45242,6 @@ const BodyContext = struct {
             );
         }
 
-        const unknown_body = try self.jumpToGeneratedJoin(
-            continuations.skip_join,
-            &.{try self.localExpr(rest_local, state_ty)},
-            &.{},
-            &.{},
-            ret_ty,
-        );
-
         return try self.lowerParseRecordNamedDispatchBody(
             key_local,
             key_ty,
@@ -45244,8 +45249,20 @@ const BodyContext = struct {
             renamed_field_lengths,
             renamed_field_texts,
             matched_bodies,
-            unknown_body,
+            .{ .skip_join = continuations.skip_join, .rest_local = rest_local, .state_ty = state_ty },
             mode,
+            ret_ty,
+        );
+    }
+
+    /// The jump an unknown field takes to the skip join. The field dispatch
+    /// reaches it from several branches, and each one gets its own jump.
+    fn parseRecordUnknownFieldBody(self: *BodyContext, unknown: ParseRecordUnknownField, ret_ty: Type.TypeId) Allocator.Error!DraftExprId {
+        return try self.jumpToGeneratedJoin(
+            unknown.skip_join,
+            &.{try self.localExpr(unknown.rest_local, unknown.state_ty)},
+            &.{},
+            &.{},
             ret_ty,
         );
     }
@@ -59468,7 +59485,9 @@ const BodyContext = struct {
             index: usize = 0,
             written: std.ArrayList(EncodeWrittenItem) = .empty,
         },
-        list: struct { inputs: EncodeInputs, value: EncodeValue, elem_ty: Type.TypeId, loop: EncodeLoop = undefined, body_state_local: DraftLocalId = undefined, writer_local: DraftLocalId = undefined, len_value: DraftExprId = undefined, u64_ty: Type.TypeId = undefined },
+        /// `list_local` binds a list that is not already a local read: the
+        /// length and every item's read in the loop read it.
+        list: struct { inputs: EncodeInputs, value: EncodeValue, elem_ty: Type.TypeId, loop: EncodeLoop = undefined, body_state_local: DraftLocalId = undefined, writer_local: DraftLocalId = undefined, len_value: DraftExprId = undefined, u64_ty: Type.TypeId = undefined, list_ty: Type.TypeId = undefined, list_local: ?DraftLocalId = null },
         dict: struct {
             inputs: EncodeInputs,
             value: EncodeValue,
@@ -59826,13 +59845,17 @@ const BodyContext = struct {
                 if (stage == 0) {
                     task.u64_ty = try self.primitiveType(.u64);
                     const list_ty = try self.exprType(task.value.value_expr);
+                    task.list_ty = list_ty;
+                    if (self.draft.exprs.items[@backingInt(task.value.value_expr)].data != .local) {
+                        task.list_local = try self.addLocal(self.builder.symbols.fresh(), list_ty);
+                    }
                     const method = try self.resolveEncodeContainerMethod("encode_list", .list, list_ty, task.value.state_ty, task.value.ret_ty);
                     task.body_state_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
                     task.writer_local = try self.addLocal(self.builder.symbols.fresh(), method.writer_ty);
                     const len_local = try self.addLocal(self.builder.symbols.fresh(), task.u64_ty);
                     const index_local = try self.addLocal(self.builder.symbols.fresh(), task.u64_ty);
                     const loop_state_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
-                    task.len_value = try self.lowLevelExpr(.list_len, &.{task.value.value_expr}, task.u64_ty);
+                    task.len_value = try self.lowLevelExpr(.list_len, &.{try self.encodeListRead(task.value.value_expr, task.list_local, list_ty)}, task.u64_ty);
                     frame.scope = try self.enterCallableBodyDemandScope(
                         &.{ method.container_state_ty, method.writer_ty },
                         &.{ list_ty, task.inputs.encoding_ty, task.u64_ty },
@@ -59850,7 +59873,7 @@ const BodyContext = struct {
                         .elem_ty = task.elem_ty,
                         .key_ty = undefined,
                         .entry_ty = undefined,
-                        .value_expr = task.value.value_expr,
+                        .value_expr = try self.encodeListRead(task.value.value_expr, task.list_local, list_ty),
                         .loop = task.loop,
                     } } };
                 }
@@ -59870,7 +59893,9 @@ const BodyContext = struct {
                     method,
                     &.{ task.value.state_expr, try self.localExpr(task.loop.len_local, task.u64_ty), body_lambda },
                 );
-                return encodeExpr(try self.wrapLet(task.loop.len_local, task.u64_ty, task.len_value, encode_list, task.value.ret_ty));
+                const with_len = try self.wrapLet(task.loop.len_local, task.u64_ty, task.len_value, encode_list, task.value.ret_ty);
+                const local = task.list_local orelse return encodeExpr(with_len);
+                return encodeExpr(try self.wrapLet(local, task.list_ty, task.value.value_expr, with_len, task.value.ret_ty));
             },
             .dict => |*task| return try self.stepEncodeDict(frame, task, stage, input),
             .loop_body => |*task| {
@@ -60373,6 +60398,13 @@ const BodyContext = struct {
         });
         try self.encoder_defs.put(address, .{ .ready = task.def_id });
         return .{ .done = .{ .def = task.def_id } };
+    }
+
+    /// One read of a list a derived encoder writes: its local when it binds
+    /// to one, else the list's own local read.
+    fn encodeListRead(self: *BodyContext, value: DraftExprId, list_local: ?DraftLocalId, list_ty: Type.TypeId) Allocator.Error!DraftExprId {
+        const local = list_local orelse return value;
+        return try self.localExpr(local, list_ty);
     }
 
     fn stepEncodeDict(
@@ -64921,6 +64953,14 @@ const BodyContext = struct {
         });
     }
 
+    /// The local an aggregate derivation binds `operand` to: one when two or
+    /// more components read it and it is not already a local read.
+    fn derivationOperandLocal(self: *BodyContext, operand: DraftExprId, ty: Type.TypeId, component_count: usize) Allocator.Error!?DraftLocalId {
+        if (component_count < 2) return null;
+        if (self.draft.exprs.items[@backingInt(operand)].data == .local) return null;
+        return try self.addLocal(self.builder.symbols.fresh(), ty);
+    }
+
     /// Hash `value` (of `value_ty`) into `hasher`, producing a new Hasher of
     /// `hasher_ty`. The threading is "innermost first": each component feeds the
     /// hasher accumulated so far.
@@ -65004,7 +65044,12 @@ const BodyContext = struct {
             /// `fields` and `items` are spans of the graph's type store, read
             /// afresh as each component is reached.
             aggregate: struct {
+                /// The type of the operands, which every component reads.
+                ty: Type.TypeId,
                 operand: D.Operand,
+                /// The operands before `D.aggregateEnter` bound them.
+                source: D.Operand = undefined,
+                locals: D.AggregateLocals = undefined,
                 fields: Type.Span = .empty(),
                 items: Type.Span = .empty(),
                 state: DraftExprId = undefined,
@@ -65150,8 +65195,8 @@ const BodyContext = struct {
     /// representation.
     fn derivationNamedTask(self: *BodyContext, comptime D: type, named_ty: Type.TypeId, backing_ty: Type.TypeId, operand: D.Operand) Allocator.Error!DerivationTask(D) {
         return switch (self.typeStore().get(backing_ty)) {
-            .record => |fields| .{ .aggregate = .{ .operand = operand, .fields = fields } },
-            .tuple => |items| .{ .aggregate = .{ .operand = operand, .items = items } },
+            .record => |fields| .{ .aggregate = .{ .ty = named_ty, .operand = operand, .fields = fields } },
+            .tuple => |items| .{ .aggregate = .{ .ty = named_ty, .operand = operand, .items = items } },
             .primitive, .named, .tag_union, .list, .box, .func, .erased, .zst, .hole => .{ .named = .{
                 .named_ty = named_ty,
                 .backing_ty = backing_ty,
@@ -65224,8 +65269,8 @@ const BodyContext = struct {
                 }
                 const body: ?DerivationTask(D) = switch (shape) {
                     .list => Common.invariant("structural derivation expansion reached a List; List derivations dispatch to a method target"),
-                    .record => |fields| .{ .aggregate = .{ .operand = operand, .fields = fields } },
-                    .tuple => |items| .{ .aggregate = .{ .operand = operand, .items = items } },
+                    .record => |fields| .{ .aggregate = .{ .ty = ty, .operand = operand, .fields = fields } },
+                    .tuple => |items| .{ .aggregate = .{ .ty = ty, .operand = operand, .items = items } },
                     .tag_union => |tags| .{ .tag_union = .{ .ty = ty, .tags_span = tags, .operand = operand } },
                     .named => |named| if (named.backing.get()) |backing| try self.derivationNamedTask(D, ty, backing.ty, operand) else null,
                     .primitive, .zst, .func, .erased, .box => null,
@@ -65298,14 +65343,20 @@ const BodyContext = struct {
                 return .{ .done = .{ .def = def.def_id } };
             },
             .aggregate => |*aggregate| {
+                const len = aggregate.fields.len + aggregate.items.len;
                 if (stage == 0) {
+                    aggregate.source = aggregate.operand;
+                    const entry = try D.aggregateEnter(self, aggregate.ty, aggregate.operand, len);
+                    aggregate.locals = entry.locals;
+                    aggregate.operand = entry.operand;
                     aggregate.state = try D.combineSeed(self, aggregate.operand, ctx);
                 } else {
                     aggregate.state = try D.combine(self, aggregate.state, input.?.expr, ctx);
                     aggregate.next += 1;
                 }
-                const len = aggregate.fields.len + aggregate.items.len;
-                if (aggregate.next == len) return derivationExpr(aggregate.state, D);
+                if (aggregate.next == len) {
+                    return derivationExpr(try D.aggregateExit(self, aggregate.ty, aggregate.locals, aggregate.source, aggregate.state, ctx), D);
+                }
                 const index = if (D.forward) aggregate.next else len - 1 - aggregate.next;
                 if (aggregate.fields.len != 0) {
                     const field = self.spanFieldAt(aggregate.fields, index);
@@ -66212,8 +66263,13 @@ const BodyContext = struct {
         value_node: NodeId,
     ) Allocator.Error!void {
         const list = self.view.bodies.pattern(request.pattern).data.list;
-        const value = request.value;
         const value_cell = request.value_cell;
+        // The list is read by its length check and by each item and rest
+        // read, so a list that is not already a local read binds to one.
+        const list_local: ?DraftLocalId = if (self.draft.exprs.items[@backingInt(request.value)].data == .local)
+            null
+        else
+            try self.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
         const elem_node = try self.graph.listElementNode(value_node);
         const elem_cell = DraftTypeCell.fromGraphNode(elem_node);
         const values = try self.allocator.alloc(DraftExprId, list.patterns.len);
@@ -66227,14 +66283,14 @@ const BodyContext = struct {
         }
         for (pending_per_item) |*pending| pending.* = .empty;
         const u64_ty = try self.primitiveType(.u64);
-        const needs_len = if (list.rest) |rest| rest.index < list.patterns.len or rest.pattern != null else false;
-        const len = if (needs_len) try self.lowLevelExpr(.list_len, &.{value}, u64_ty) else null;
 
         for (list.patterns, 0..) |pattern_id, index| {
+            const counts_from_end = if (list.rest) |rest| index >= rest.index else false;
+            const len = if (counts_from_end) try self.lowLevelExpr(.list_len, &.{try self.listPatternListRead(request.value, list_local, value_cell)}, u64_ty) else null;
             const item_index = try self.listPatternItemIndex(index, list.patterns.len, list.rest, len, u64_ty);
             values[index] = try self.addExprWithTypeCell(elem_cell, .{ .low_level = .{
                 .op = .list_get_unsafe,
-                .args = try self.addExprSpan(&.{ value, item_index }),
+                .args = try self.addExprSpan(&.{ try self.listPatternListRead(request.value, list_local, value_cell), item_index }),
             } });
             patterns[index] = try self.lowerPatternPlanPlaceholderAtNode(pattern_id, elem_node, &pending_per_item[index]);
         }
@@ -66245,14 +66301,14 @@ const BodyContext = struct {
         defer rest_pending.deinit(self.allocator);
         if (list.rest) |rest| {
             if (rest.pattern) |rest_pattern| {
-                const list_len = len orelse try self.lowLevelExpr(.list_len, &.{value}, u64_ty);
+                const list_len = try self.lowLevelExpr(.list_len, &.{try self.listPatternListRead(request.value, list_local, value_cell)}, u64_ty);
                 const fixed_count = try self.intLiteralExpr(list.patterns.len, u64_ty);
                 const rest_len = try self.lowLevelExpr(.num_minus, &.{ list_len, fixed_count }, u64_ty);
                 const rest_start = try self.intLiteralExpr(rest.index, u64_ty);
                 const range = try self.sublistRangeExpr(rest_start, rest_len, u64_ty);
                 rest_value = try self.addExprWithTypeCell(value_cell, .{ .low_level = .{
                     .op = .list_sublist,
-                    .args = try self.addExprSpan(&.{ value, range }),
+                    .args = try self.addExprSpan(&.{ try self.listPatternListRead(request.value, list_local, value_cell), range }),
                 } });
                 rest_pat = try self.lowerPatternPlanPlaceholderAtNode(rest_pattern, value_node, &rest_pending);
             }
@@ -66281,7 +66337,20 @@ const BodyContext = struct {
                 .pat = patterns[fixed_index],
             } });
         }
-        try materialize_run.steps.append(self.allocator, .{ .list_cond = .{ .value = value, .pattern = request.pattern } });
+        try materialize_run.steps.append(self.allocator, .{ .list_cond = .{
+            .value = try self.listPatternListRead(request.value, list_local, value_cell),
+            .pattern = request.pattern,
+        } });
+        if (list_local) |local| {
+            try materialize_run.steps.append(self.allocator, .{ .let_value = .{ .local = local, .value = request.value, .cell = value_cell } });
+        }
+    }
+
+    /// One read of a list a list pattern destructures: its local when it
+    /// binds to one, else the list's own local read.
+    fn listPatternListRead(self: *BodyContext, value: DraftExprId, list_local: ?DraftLocalId, value_cell: DraftTypeCell) Allocator.Error!DraftExprId {
+        const local = list_local orelse return value;
+        return try self.addExprWithTypeCell(value_cell, .{ .local = local });
     }
 
     fn prepareRecordRestPatternBinding(
@@ -68320,6 +68389,15 @@ const BodyContext = struct {
             .name = try tagName(self.nameStoreMut(), self.view, step.done_tag),
             .payloads = .empty(),
         } });
+    }
+
+    /// A `for` loop's exit when its iterator is done: a break carrying the
+    /// loop's state.
+    fn iteratorLoopDoneBody(self: *BodyContext, task: anytype) Allocator.Error!DraftExprId {
+        return if (task.carries.len == 0)
+            try self.addExprWithTypeCell(task.loop_cell, .{ .break_ = null })
+        else
+            try self.addExprWithTypeCell(task.loop_cell, .{ .break_ = try self.loopStateExpr(task.loop_cell, task.carries) });
     }
 
     fn uninhabitedIteratorOneBranch(
@@ -72251,6 +72329,30 @@ const EqDeriver = struct {
 
     const missing_component_method_msg = "checked method registry is missing List equality target";
 
+    /// An operand read by two or more components binds to a local, unless it
+    /// already is a local read, so each component reads the local rather than
+    /// sharing the operand's expression.
+    const AggregateLocals = struct { lhs: ?DraftLocalId, rhs: ?DraftLocalId };
+
+    const AggregateEntry = struct { locals: AggregateLocals, operand: Operand };
+
+    fn aggregateEnter(self: *BodyContext, ty: Type.TypeId, operand: Operand, component_count: usize) Allocator.Error!AggregateEntry {
+        const lhs = try self.derivationOperandLocal(operand.lhs, ty, component_count);
+        const rhs = try self.derivationOperandLocal(operand.rhs, ty, component_count);
+        return .{
+            .locals = .{ .lhs = lhs, .rhs = rhs },
+            .operand = .{
+                .lhs = if (lhs) |local| try self.localExpr(local, ty) else operand.lhs,
+                .rhs = if (rhs) |local| try self.localExpr(local, ty) else operand.rhs,
+            },
+        };
+    }
+
+    fn aggregateExit(self: *BodyContext, ty: Type.TypeId, locals: AggregateLocals, source: Operand, result: DraftExprId, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
+        const with_rhs = if (locals.rhs) |local| try self.wrapLet(local, ty, source.rhs, result, ctx.result_ty) else result;
+        return if (locals.lhs) |local| try self.wrapLet(local, ty, source.lhs, with_rhs, ctx.result_ty) else with_rhs;
+    }
+
     fn methodArgTypes(ty: Type.TypeId, _: Type.TypeId) [2]Type.TypeId {
         return .{ ty, ty };
     }
@@ -72471,6 +72573,28 @@ const HashDeriver = struct {
     }
 
     const missing_component_method_msg = "checked method registry is missing List to_hash target";
+
+    /// A value read by two or more components binds to a local, unless it
+    /// already is a local read. The hasher is the fold's state, which only
+    /// the first component reads.
+    const AggregateLocals = struct { value: ?DraftLocalId };
+
+    const AggregateEntry = struct { locals: AggregateLocals, operand: Operand };
+
+    fn aggregateEnter(self: *BodyContext, ty: Type.TypeId, operand: Operand, component_count: usize) Allocator.Error!AggregateEntry {
+        const value = try self.derivationOperandLocal(operand.value, ty, component_count);
+        return .{
+            .locals = .{ .value = value },
+            .operand = .{
+                .value = if (value) |local| try self.localExpr(local, ty) else operand.value,
+                .hasher = operand.hasher,
+            },
+        };
+    }
+
+    fn aggregateExit(self: *BodyContext, ty: Type.TypeId, locals: AggregateLocals, source: Operand, result: DraftExprId, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
+        return if (locals.value) |local| try self.wrapLet(local, ty, source.value, result, ctx.result_ty) else result;
+    }
 
     fn methodArgTypes(ty: Type.TypeId, result_ty: Type.TypeId) [2]Type.TypeId {
         return .{ ty, result_ty };

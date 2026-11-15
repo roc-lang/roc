@@ -216,6 +216,14 @@ pub fn projectionOwnsAllRc(
                 structHasOneRcField(layouts, source_layout, field_idx);
         },
         .tag_payload, .tag_payload_struct => {
+            // A dynamic tag union is read through `tag_payload_struct` only
+            // for a tag with exactly one payload, so the read holds every
+            // refcounted byte of the active variant whatever its descriptor
+            // says (design.md "Resources Over Layouts").
+            if (source_layout.tag == .dynamic) {
+                return projection.kind == .tag_payload_struct and
+                    layouts.layoutContainsRefcounted(layouts.getLayout(target_layout_idx));
+            }
             if (source_layout.tag != .tag_union) return false;
             const info = layouts.getTagUnionInfo(source_layout);
             const variant_index = projection.first;
@@ -711,7 +719,6 @@ const Analysis = struct {
         if (local_index >= self.rc_local.len) dismantleInvariant("ARC dismantle resource table did not cover local");
         if (!self.rc_local[local_index]) return false;
         const fields = ProductFields.of(self.store, self.layouts, local) orelse return false;
-        if (!unitHasOwnShape(self.store, self.layouts, self.solution, local)) return false;
         if (self.solution.isBorrowed(local) and !self.is_param[local_index] and self.projected_root[local_index] == .none and self.view_root.items[local_index] == .none) return false;
         if (self.solution.isJoinParam(local) and !self.explicit_init_join[local_index]) return false;
         if (self.solution.maybeUninitializedCondition(local) != null) return false;
@@ -2592,15 +2599,8 @@ fn classifyStatement(
                 }
             };
             const use: Use = .{ .analysis = analysis, .current = current };
-            const op = store.stmtRow(stmt.data);
-            try DynOps.Operands.of(op).each(store, &use, Use.visit);
-            if (stmt.target) |target| {
-                try analysis.noteDef(target, current);
-                // A whole tag payload addresses its union's bytes and carries
-                // the union's unit, which has no product shape to take
-                // fields out of, so it never dismantles.
-                if (op == .tag_payload_addr) analysis.disqualify(target);
-            }
+            try DynOps.Operands.of(store.stmtRow(stmt.data)).each(store, &use, Use.visit);
+            if (stmt.target) |target| try analysis.noteDef(target, current);
         },
     }
 }
@@ -3026,23 +3026,11 @@ fn projectionEdgeOf(
                 .local, .discriminant, .list_reinterpret, .nominal => unreachable, // the enclosing prong matched only field and tag-payload kinds
             };
             if (!projectionOwnsAllRc(store, layouts, local, assign.target, projection)) return null;
-            if (!unitHasOwnShape(store, layouts, solution, local)) return null;
             break :blk .{ local, true };
         },
         .discriminant, .list_reinterpret, .nominal => return null,
     };
     return .{ .source = source, .target = assign.target, .stmt = stmt_id, .is_projection = is_projection };
-}
-
-/// Whether the ownership unit `local` belongs to has the aggregate shape
-/// `local`'s own reads address. A whole tag payload carries its dynamic
-/// union's unit, which has no enumerated shape, so neither a projection of
-/// the payload nor a take from it can name a part of that unit.
-fn unitHasOwnShape(store: *const LirStore, layouts: *const layout_mod.Store, solution: *const arc_solve.Solution, local: LIR.LocalId) bool {
-    const unit = solution.unitLocalOf(local);
-    if (unit == local) return true;
-    const unit_local = store.getLocal(unit);
-    return unit_local.product != .none or layouts.getLayout(unit_local.layout_idx).tag != .dynamic;
 }
 
 const PlaceEdgeKind = union(enum) {
@@ -3078,7 +3066,6 @@ fn placeLinkOf(
                 .local, .discriminant, .list_reinterpret, .nominal => unreachable, // the enclosing prong matched only field and tag-payload kinds
             };
             if (!projectionOwnsAllRc(store, layouts, projection_source, assign.target, projection)) return null;
-            if (!unitHasOwnShape(store, layouts, solution, projection_source)) return null;
             break :blk .{ projection_source, .{ .projection = stmt_index } };
         },
         .discriminant, .list_reinterpret, .nominal => return null,

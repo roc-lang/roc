@@ -2657,8 +2657,6 @@ const Solver = struct {
             .list_reserve_for_append,
             .list_drop_at,
             .list_sublist,
-            .list_take_first,
-            .list_take_last,
             => {
                 expectLowLevelArity(op, args, 2);
                 try self.unify(expected, args[0]);
