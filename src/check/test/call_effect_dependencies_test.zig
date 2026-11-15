@@ -11,7 +11,7 @@ const TestEnv = @import("./TestEnv.zig");
 const ModuleEnv = can.ModuleEnv;
 
 /// The number of effect dependencies of the top-level function `name`.
-fn effectDepCount(env: *TestEnv, name: []const u8) !usize {
+fn effectDepCount(env: *TestEnv, name: []const u8) error{TestUnexpectedResult}!usize {
     const idents = env.module_env.getIdentStoreConst();
     for (env.module_env.store.sliceDefs(env.module_env.all_defs)) |def_idx| {
         const def = env.module_env.store.getDef(def_idx);
