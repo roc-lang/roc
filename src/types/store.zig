@@ -2728,20 +2728,22 @@ pub const Store = struct {
     // generalization marks //
 
     /// Set the `generalizing` mark of descriptor `desc_idx`
-    /// (`types.Descriptor.Word`). A mark is a generalization pass's scratch,
+    /// (`types.Descriptor.Word`) when `condition` holds, and leave it as it
+    /// is otherwise; the word is written either way, so nothing branches on
+    /// `condition`. A mark is a generalization pass's scratch,
     /// which the pass clears before it returns, so a mark write is neither
     /// journaled nor reported to class watches: no probe opens or rolls back
     /// while a pass runs, and a journaled row never carries a mark
     /// (`journalDescRow`).
-    pub fn markGeneralizing(self: *Self, desc_idx: DescStore.Idx) void {
+    pub fn markGeneralizingIf(self: *Self, desc_idx: DescStore.Idx, condition: bool) void {
         self.debugAssertUnsealed();
         var word = self.descs.getWord(desc_idx);
-        word.generalizing = true;
+        word.generalizing = word.generalizing or condition;
         self.descs.setWord(desc_idx, word);
     }
 
     /// Set the `rank_adjusted` mark of descriptor `desc_idx`; see
-    /// `markGeneralizing`.
+    /// `markGeneralizingIf`.
     pub fn markRankAdjusted(self: *Self, desc_idx: DescStore.Idx) void {
         self.debugAssertUnsealed();
         var word = self.descs.getWord(desc_idx);
@@ -2750,7 +2752,7 @@ pub const Store = struct {
     }
 
     /// Clear both generalization marks of descriptor `desc_idx`; see
-    /// `markGeneralizing`.
+    /// `markGeneralizingIf`.
     pub fn clearGeneralizationMarks(self: *Self, desc_idx: DescStore.Idx) void {
         self.debugAssertUnsealed();
         var word = self.descs.getWord(desc_idx);
