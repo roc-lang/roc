@@ -15889,8 +15889,9 @@ input takes as one hidden argument after its explicit checked parameters
 ("Type Tables"). A generalized local function (a dispatch scope with its own
 `scheme_vars` and `evidence_params`) is a worker with its own hidden inputs in
 the same way. A nested lambda that is not generalized has no scheme of its own: the
-descriptors and dictionaries its body mentions belong to the enclosing worker
-and reach it as captures (see Function Values).
+descriptors and dictionaries its body mentions belong to the enclosing worker,
+and it reads them through the enclosing worker's table, which its own table
+refers to (see Type Tables and Function Values).
 
 Checking can give a local function a dispatch scope that quantifies nothing
 and takes no hidden argument: no variable, dictionary, or literal argument
@@ -16345,6 +16346,18 @@ a row node is an input, so a worker whose signature has one takes a table.
 Importing and defining units derive this ABI from the worker's signature
 alone.
 
+A worker's *scope* is the descriptors of its variables, its dictionaries,
+then its literal arguments. A lambda worker's scope extends the scope of the
+worker that creates it (`WorkerKey.lambda.outer`): its variables follow its
+creator's, and the dictionaries and literal arguments of its own generalized
+scope, if it has one, lead its creator's. Its table does not repeat its
+creator's scope. Its inputs are its creator's table, when the creator has
+one, followed by only the inputs its own scope adds (`Tables.InputLayout`);
+every other worker's inputs are its scope. A lambda nested in a lambda thus
+refers to a chain of tables, each holding only what its own scope adds and
+the words its own body reads, so the tables of a nest of lambdas are linear
+in its depth however many variables the outermost scheme has.
+
 A table's words are the worker's inputs, then one word per recipe its body
 reads that the inputs determine (`postcheck/boxy/tables.zig`): the descriptor
 of a type over the worker's variables, carrying the override callables of the
@@ -16353,7 +16366,11 @@ literal thunk, an immortal callable capturing its entry's table; an argument
 record's descriptor; the table of each worker the body calls or packs; the
 discriminant of a tag or the label-order index of a field under a descriptor
 (`tag_index`, `field_index`), an integer word read into a `u32` local; and a
-record update's or a coercion's plan (`update_plan`, `adapt_plan`). A
+record update's or a coercion's plan (`update_plan`, `adapt_plan`); an input
+of the creator's scope (`inherited`); and the table of the worker itself or
+of a worker up its chain of creators (`scope_table`), which a function value
+of a lambda it creates, or of a local procedure an enclosing body declares,
+captures. A
 position or plan whose descriptor reads no input is static: a position is an
 immediate operand, a plan static data the body reads directly.
 The worker's needs list says what each word is, as a recipe over its inputs.
@@ -16368,9 +16385,15 @@ evaluated where the body reads it, into static data. A table is reserved,
 keyed by its worker and its input words, when a word naming it is evaluated,
 and filled once its worker's needs list exists: lowering alternates between
 lowering queued workers and filling reserved tables until neither has work.
-Evaluating a descriptor recipe substitutes the types its descriptor inputs
-describe into its type, in the override scope of those inputs and its own
-overrides. Recipes that lead back to one another (a dictionary whose
+Evaluating a descriptor recipe substitutes, for each variable its type
+mentions, the type that variable's descriptor describes, in the override
+scope of those descriptors and its own overrides. An `inherited` word is read
+from the creator's table, and from that table's creator's in turn until a
+table holds it; a table whose worker's scope is its creator's scope unchanged
+is passed over in one step, so the read costs one step per scope that adds
+inputs, not one per lambda. Evaluation is at compile time: a body never
+follows the chain at runtime, since every word it reads is a word of its own
+table. Recipes that lead back to one another (a dictionary whose
 requirements capture it, a descriptor whose override captures that
 descriptor) are evaluated together, their callables reserved before any is
 filled. Such a group is interned by its content, so the same group is the
@@ -16840,11 +16863,13 @@ and holds the capture bytes after the fixed capture offset. This is the host
 ABI representation of `Box(function)` and is unchanged by strategy.
 
 The captures of a compiler-created callable are the captured binders' values,
-followed by its worker's type table, whose inputs are the hidden descriptors
-and dictionaries of the enclosing worker ("Type Tables"). A closure created in
-a generic body thus carries the type knowledge of its creation site, and its
-worker takes no hidden argument of its own: it reads its inputs from the
-table it captured. When any capture is of variable type, the capture record
+followed by its worker's type table, whose first input is the type table of
+the enclosing worker ("Type Tables"). A closure created in a generic body
+thus carries the type knowledge of its creation site, and its worker takes
+no hidden argument of its own: it reads its inputs from the table it
+captured. A stored function value records its table's inputs as a capture
+graph, its creator's table among them, so restoring it rebuilds the chain
+(`StoredFn.ScopeLevel`). When any capture is of variable type, the capture record
 is a dynamic record whose descriptor is a word of the creating worker's type
 table (`Tables.Recipe.args_desc` over the captures' types), its first word is the capture record's
 descriptor, its second word the capture capacity of the allocation holding it
@@ -16994,6 +17019,10 @@ host allocation and free operations.
   function value uses, and codec derivations. Each worker is lowered once.
 - Every memo is a hash map keyed by checked identity (type, expression,
   template, derivation). Linear scans over program-sized tables are forbidden.
+- A worker's body converts its checked types in one environment per scope
+  (`Program.scopeEnv`), whose variables are indexed: a lambda whose scope adds
+  no variable shares its creator's, and conversions in it are remembered per
+  checked type and environment, so a nest of lambdas converts each type once.
 - Lowering is iterative under the Stack Safety rules: explicit frames and work
   stacks, no recursion over source structure.
 - The lowerer emits no conversions between representations of one type, no

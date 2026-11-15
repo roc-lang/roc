@@ -394,7 +394,11 @@ pub const Constants = struct {
     ///      open rows are held on the row variable for the whole record or tag
     ///      union, and snapshots record which value a requirement is about.
     /// 194: combines the two independent 193 entries.
-    pub const CACHE_VERSION = 194;
+    /// 194: a Boxy lambda's type table refers to its creator's table instead
+    ///      of repeating its creator's inputs, in needs lists, stored function
+    ///      recipes and compiler-only function metadata.
+    /// 195: combines the two independent 194 entries.
+    pub const CACHE_VERSION = 195;
 };
 
 /// Configuration for the Roc cache system.
