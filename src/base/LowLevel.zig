@@ -638,7 +638,14 @@ pub const LowLevel = enum(u16) {
     /// runtime check succeeds; otherwise copies the payload into a fresh box,
     /// retains nested payload children, and releases the consumed input.
     box_prepare_update,
+    /// (capture pointer, owner) -> captures: read an erased frame's capture
+    /// record from the capture pointer. The owner is the frame's reuse
+    /// argument, the erased-callable allocation holding the capture bytes
+    /// whenever the caller transferred it. Like `box_unbox`, the neutral
+    /// operation consumes its owner, taking the captures out of it.
     erased_capture_load,
+    /// ARC-only borrowing variant of erased_capture_load.
+    erased_capture_load_borrowed,
     /// Pack an erased step and its length hint into one opaque sequence handle.
     boxed_sequence_pack,
     /// Unpack a sequence's record while borrowing the owning handle.
@@ -1251,10 +1258,8 @@ pub const LowLevel = enum(u16) {
 
         .box_prepare_update = byType(.runtimeUniqueness(arg_0)),
 
-        // The capture environment is read through the executing frame's
-        // closure, not through an explicit refcounted argument, so the
-        // result cannot name a lender to borrow from.
-        .erased_capture_load = byType(.retainsResult()),
+        .erased_capture_load = byType(.{ .may_retain_or_release = true, .consume_args = arg_1, .result_shares_args = arg_1 }),
+        .erased_capture_load_borrowed = byType(.retainsResultBorrowingArgs(arg_1)),
         .boxed_sequence_pack = byType(.allocatesConsumingArgs(arg_0)),
         .boxed_sequence_unpack = byType(.retainsResultBorrowingArgs(arg_0)),
 
@@ -1443,6 +1448,20 @@ pub const LowLevel = enum(u16) {
     pub fn arcBorrowedResultVariant(self: LowLevel) ?LowLevel {
         if (self == .list_sublist) return .list_sublist_borrowed;
         if (self == .box_unbox) return .box_unbox_borrowed;
+        if (self == .erased_capture_load) return .erased_capture_load_borrowed;
+        return null;
+    }
+
+    /// The argument position of the allocation a dead-lender read takes its
+    /// result out of: `box_unbox`'s box and `erased_capture_load`'s owner.
+    /// Such an operation is solved as consuming that allocation, so its
+    /// result has an ownership place of its own. Emission selects the
+    /// borrowing variant while the allocation stays live, and otherwise
+    /// normalizes the consuming form into the borrowing read, a retain of
+    /// the result, and a release of the allocation.
+    pub fn deadLenderArg(self: LowLevel) ?u32 {
+        if (self == .box_unbox) return 0;
+        if (self == .erased_capture_load) return 1;
         return null;
     }
 
@@ -1450,10 +1469,10 @@ pub const LowLevel = enum(u16) {
     /// Operations without an ARC-only borrowed variant retain their declared
     /// statement effect, including synthetic effects used by focused tests.
     pub fn arcInferenceRcEffect(self: LowLevel, declared: RcEffect) RcEffect {
-        // Box.unbox must establish an independent payload ownership place in
-        // the solved graph. Emission may still select the borrowing variant
-        // when the box lender survives, but an owned variant must not leave
-        // the payload's unit keyed to the consumed box allocation.
+        // A dead-lender read must establish an independent result ownership
+        // place in the solved graph. Emission may still select the borrowing
+        // variant when the lender survives, but an owned variant must not
+        // leave the result's unit keyed to the consumed allocation.
         if (!self.arcOwnedResultConsumesLender()) return declared;
         return self.arcBorrowedResultVariant().?.rcEffect();
     }
@@ -1463,7 +1482,7 @@ pub const LowLevel = enum(u16) {
     /// argument, exactly when the result is owned. An ownership demand on such
     /// a result is therefore a demand on its lender's unit.
     pub fn arcOwnedResultConsumesLender(self: LowLevel) bool {
-        if (self == .box_unbox) return false;
+        if (self.deadLenderArg() != null) return false;
         return self.arcBorrowedResultVariant() != null;
     }
 

@@ -2,7 +2,7 @@ import LiftingMaker
 
 ImportedPlainUseRuns :: [].{}
 
-plain = LiftingMaker.make(2)
+plain = LiftingMaker.make(2.U64)
 
 plain_token = LiftingMaker.unit(2)
 

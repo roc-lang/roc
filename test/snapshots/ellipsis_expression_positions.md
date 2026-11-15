@@ -1286,7 +1286,7 @@ lambda_arg = |f| f(|_| ...)
 		(e-lambda
 			(args
 				(p-assign (ident "f")))
-			(e-call (constraint-fn-var 847)
+			(e-call (constraint-fn-var 854)
 				(e-lookup-local
 					(p-assign (ident "f")))
 				(e-lambda

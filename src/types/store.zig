@@ -9,7 +9,6 @@ const collections = @import("collections");
 const types = @import("types.zig");
 const debug = @import("debug.zig");
 const instantiate = @import("instantiate.zig");
-const use_absorbers = @import("use_absorbers.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -206,6 +205,21 @@ pub const StaticDispatchRelationMerge = struct {
     retained_fn_var: Var,
 };
 
+/// An empty tag union a relation can no longer lift: written by an
+/// annotation, or committed after inference closed it. The empty tag union
+/// an opening of a nominal declaration's backing minted is the declaration's
+/// own row and decides nothing about the anonymous row it closes.
+fn committedEmptyTagUnion(desc: types.Descriptor) bool {
+    return desc.content == .structure and desc.content.structure == .empty_tag_union and
+        !desc.flags.uncommitted_tag_tail and !desc.flags.nominal_backing_structure;
+}
+
+/// `committedEmptyTagUnion`, read from a stored descriptor's word.
+fn committedEmptyTagUnionWord(word: types.Descriptor.Word) bool {
+    const flags = word.flags();
+    return word.kind == .empty_tag_union and !flags.uncommitted_tag_tail and !flags.nominal_backing_structure;
+}
+
 /// How a store loaded from serialized bytes may be used.
 pub const LoadedAccess = enum {
     /// A solved module's types, only ever read.
@@ -267,12 +281,6 @@ pub const Store = struct {
     /// merge keeps it, a member detached from the class keeps it, and a copy
     /// of a relation's callable carries it.
     derived_map_plans: DerivedMapPlanEntry.SafeList = .{},
-    /// The sorted, distinct name hashes (`use_absorbers.nameHash`) of every
-    /// optional or defaulted field a record of this store holds, filled when
-    /// the store is sealed. A module checking against this store reads them
-    /// as the fields a relation can widen a record with (design.md
-    /// "Anonymous Structure Is Copied Per Use").
-    widening_names: collections.SafeList(u64) = .{},
 
     /// The identity of every nominal type application and alias a descriptor
     /// of this store holds, one row per distinct identity: a stored nominal or
@@ -508,37 +516,7 @@ pub const Store = struct {
     /// Checking calls this once, when it finishes a module.
     pub fn canonicalizeAndSeal(self: *Self, idents: *const base.Ident.Store) Allocator.Error!void {
         try self.canonicalizeForSeal(idents);
-        try self.collectWideningNames(idents);
         self.seal();
-    }
-
-    /// Fill `widening_names` from the field table, which holds every field of
-    /// every record of the store. A field of a record no longer reachable only
-    /// adds a name, which can only make a structure look changeable.
-    fn collectWideningNames(self: *Self, idents: *const base.Ident.Store) Allocator.Error!void {
-        var hashes: std.ArrayListUnmanaged(u64) = .empty;
-        defer hashes.deinit(self.gpa);
-        for (0..self.record_fields.len()) |index| {
-            const field = self.record_fields.get(@fromBackingInt(@intCast(index)));
-            const may_widen = switch (field.presence.decode()) {
-                .required => false,
-                .unknown => |unknown| switch (self.resolveVar(unknown.presence).desc.content) {
-                    .field_presence => |kind| kind != .required,
-                    .flex, .rigid, .alias, .structure, .err => false,
-                },
-            };
-            if (may_widen) try hashes.append(self.gpa, use_absorbers.nameHash(idents.getText(field.name)));
-        }
-        std.mem.sortUnstable(u64, hashes.items, {}, std.sort.asc(u64));
-        var distinct: usize = 0;
-        for (hashes.items) |hash| {
-            if (distinct != 0 and hashes.items[distinct - 1] == hash) continue;
-            hashes.items[distinct] = hash;
-            distinct += 1;
-        }
-        self.widening_names.deinit(self.gpa);
-        self.widening_names = try collections.SafeList(u64).initCapacity(self.gpa, distinct);
-        for (hashes.items[0..distinct]) |hash| _ = try self.widening_names.append(self.gpa, hash);
     }
 
     /// The last write to a solved store. Every slot comes to name its
@@ -756,7 +734,6 @@ pub const Store = struct {
         self.nominal_decls.deinit(self.gpa);
         self.nominal_decl_index.deinit(self.gpa);
         self.derived_map_plans.deinit(self.gpa);
-        self.widening_names.deinit(self.gpa);
         self.nominal_identities.deinit(self.gpa);
         self.alias_identities.deinit(self.gpa);
     }
@@ -781,7 +758,6 @@ pub const Store = struct {
             .nominal_decl_index = try self.nominal_decl_index.clone(gpa),
             .invalid_nominal_decl_written = self.invalid_nominal_decl_written,
             .derived_map_plans = try self.derived_map_plans.clone(gpa),
-            .widening_names = try self.widening_names.clone(gpa),
             .nominal_identities = try self.nominal_identities.clone(gpa),
             .alias_identities = try self.alias_identities.clone(gpa),
         };
@@ -1129,7 +1105,7 @@ pub const Store = struct {
     }
 
     fn debugAssertUnfrozenWrite(self: *const Self, idx: DescStore.Idx) void {
-        if (std.debug.runtime_safety and self.descs.getWord(idx).flags.frozen) {
+        if (std.debug.runtime_safety and self.descs.getWord(idx).flags().frozen) {
             base.invariant("a frozen type class was written in place", .{});
         }
     }
@@ -1166,7 +1142,7 @@ pub const Store = struct {
 
     /// `setDescWord` without the frozen-class guard, for freezing and thawing.
     inline fn setDescWordUnguarded(self: *Self, idx: DescStore.Idx, word: Desc.Word) Allocator.Error!void {
-        std.debug.assert(word.kind == self.descs.getWord(idx).kind and word.literal == self.descs.getWord(idx).literal);
+        std.debug.assert(word.kind == self.descs.getWord(idx).kind and word.literal() == self.descs.getWord(idx).literal());
         try self.journalDescWrite(idx);
         self.descs.setWord(idx, word);
     }
@@ -1293,7 +1269,7 @@ pub const Store = struct {
         const index: u32 = @backingInt(desc_idx);
         if (index < self.settled_descs.bits.bit_length) self.settled_descs.bits.unset(index);
         if (index < self.class_watch.watched.bit_length) self.class_watch.watched.unset(index);
-        if (self.descs.getWord(desc_idx).flags.frozen) _ = self.frozen_anchors.remove(desc_idx);
+        if (self.descs.getWord(desc_idx).flags().frozen) _ = self.frozen_anchors.remove(desc_idx);
         const plan_slot = self.derivedMapPlanSlot(desc_idx);
         if (plan_slot.found) _ = self.derived_map_plans.orderedRemove(plan_slot.index);
         self.free_descs.appendAssumeCapacity(desc_idx);
@@ -1662,7 +1638,7 @@ pub const Store = struct {
         std.debug.assert(!storage.desc.flags.frozen);
         std.debug.assert(storage.meta.checked_var == var_);
         var word = self.descs.getWord(storage.desc_idx);
-        word.flags.frozen = true;
+        word.setFlag(.frozen, true);
         try self.frozen_anchors.put(storage.desc_idx, var_);
         try self.setDescWordUnguarded(storage.desc_idx, word);
     }
@@ -1674,7 +1650,7 @@ pub const Store = struct {
         while (anchors.next()) |entry| {
             const idx = entry.key_ptr.*;
             var word = self.descs.getWord(idx);
-            word.flags.frozen = false;
+            word.setFlag(.frozen, false);
             try self.setDescWordUnguarded(idx, word);
         }
         self.frozen_anchors.clearRetainingCapacity();
@@ -1787,6 +1763,7 @@ pub const Store = struct {
         self.noteContentRewrite(resolved.desc.content);
         var desc = resolved.desc;
         desc.content = content;
+        desc.flags = desc.flags.forKind(types.ContentKind.of(content));
         desc.flags.empty_tag_union_is_default = false;
         try self.setDescUnguarded(resolved.desc_idx, desc);
     }
@@ -1831,6 +1808,7 @@ pub const Store = struct {
         self.noteContentRewrite(resolved.desc.content);
         var desc = resolved.desc;
         desc.content = content;
+        desc.flags = desc.flags.forKind(types.ContentKind.of(content));
         desc.flags.empty_tag_union_is_default = false;
         try self.setDesc(resolved.desc_idx, desc);
     }
@@ -1845,6 +1823,7 @@ pub const Store = struct {
         self.noteContentRewrite(resolved.desc.content);
         var desc = resolved.desc;
         desc.content = .{ .structure = .empty_tag_union };
+        desc.flags = desc.flags.forKind(.empty_tag_union);
         desc.flags.empty_tag_union_is_default = true;
         try self.setDesc(resolved.desc_idx, desc);
     }
@@ -1861,8 +1840,8 @@ pub const Store = struct {
         try self.isolateWriteTarget(target_var);
         const desc_idx = self.resolveDescIdx(target_var);
         var word = self.descs.getWord(desc_idx);
-        if (word.flags.static_dispatch_rejected) return false;
-        word.flags.static_dispatch_rejected = true;
+        if (word.flags().static_dispatch_rejected) return false;
+        word.setFlag(.static_dispatch_rejected, true);
         try self.setDescWord(desc_idx, word);
         return true;
     }
@@ -1874,8 +1853,8 @@ pub const Store = struct {
         std.debug.assert(@backingInt(target_var) < self.len());
         const desc_idx = self.resolveDescIdx(target_var);
         var word = self.descs.getWord(desc_idx);
-        if (word.flags.default_decided) return;
-        word.flags.default_decided = true;
+        if (word.flags().default_decided) return;
+        word.setFlag(.default_decided, true);
         try self.setDescWord(desc_idx, word);
     }
 
@@ -1886,8 +1865,8 @@ pub const Store = struct {
         std.debug.assert(@backingInt(target_var) < self.len());
         const desc_idx = self.resolveDescIdx(target_var);
         var word = self.descs.getWord(desc_idx);
-        if (!word.flags.default_decided) return;
-        word.flags.default_decided = false;
+        if (!word.flags().default_decided) return;
+        word.setFlag(.default_decided, false);
         try self.setDescWord(desc_idx, word);
     }
 
@@ -1924,7 +1903,7 @@ pub const Store = struct {
             if (resolved.desc.flags.nominal_backing_structure) continue;
             self.ground_epoch +%= 1;
             var word = self.descs.getWord(resolved.desc_idx);
-            word.flags.nominal_backing_structure = true;
+            word.setFlag(.nominal_backing_structure, true);
             try self.setDescWord(resolved.desc_idx, word);
         }
     }
@@ -1937,7 +1916,7 @@ pub const Store = struct {
         const desc_idx = self.resolveDescIdx(target_var);
         var word = self.descs.getWord(desc_idx);
         std.debug.assert(word.kind == .flex);
-        word.flags.annotation_tag_ext = true;
+        word.setFlag(.annotation_tag_ext, true);
         try self.setDescWord(desc_idx, word);
     }
 
@@ -1948,8 +1927,67 @@ pub const Store = struct {
         self.debugAssertUnsealed();
         const resolved = try self.resolveWriteTarget(target_var);
         var word = self.descs.getWord(resolved.desc_idx);
-        word.flags.host_fixed_row = true;
+        word.setFlag(.host_fixed_row, true);
         try self.setDescWord(resolved.desc_idx, word);
+    }
+
+    /// Make a flex class an uncommitted record tail (design.md "Uncommitted
+    /// Record Tails"), minted by a record pattern when `pattern` holds. The
+    /// mark travels with the class and its copies.
+    pub fn markUncommittedRecordTail(self: *Self, target_var: Var, pattern: bool) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        const resolved = try self.resolveWriteTarget(target_var);
+        std.debug.assert(resolved.desc.content == .flex);
+        var desc = resolved.desc;
+        desc.flags.uncommitted_record_tail = true;
+        desc.flags.record_pattern_tail = pattern;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
+    /// Record that an empty record or tag union is the commitment of an
+    /// uncommitted tail its binding compared or hashed (design.md "Methods On
+    /// Open Rows").
+    pub fn markComparedPlain(self: *Self, target_var: Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        const resolved = try self.resolveWriteTarget(target_var);
+        var desc = resolved.desc;
+        desc.flags.compared_plain = true;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
+    /// Make a fresh empty tag union an uncommitted tag tail (design.md
+    /// "Uncommitted Tag Tails").
+    pub fn markUncommittedTagTail(self: *Self, target_var: Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        const resolved = try self.resolveWriteTarget(target_var);
+        std.debug.assert(resolved.desc.content == .structure and resolved.desc.content.structure == .empty_tag_union);
+        var desc = resolved.desc;
+        desc.flags.uncommitted_tag_tail = true;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
+    /// Commit an uncommitted tag tail (`DescriptorFlags.uncommitted_tag_tail`):
+    /// the empty tag union it is stays, and no longer lifts or generalizes
+    /// (design.md "Uncommitted Tag Tails").
+    pub fn commitUncommittedTagTail(self: *Self, target_var: Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        const resolved = try self.resolveWriteTarget(target_var);
+        std.debug.assert(resolved.desc.content == .structure and resolved.desc.content.structure == .empty_tag_union);
+        var desc = resolved.desc;
+        desc.flags.uncommitted_tag_tail = false;
+        desc.rank = .outermost;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
+    /// Mark a tag union an annotation or type declaration wrote (design.md
+    /// "Uncommitted Record Tails"). The mark travels with the class and its
+    /// copies.
+    pub fn markAnnotationTagUnion(self: *Self, target_var: Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        const resolved = try self.resolveWriteTarget(target_var);
+        var desc = resolved.desc;
+        desc.flags.annotation_tag_union = true;
+        try self.setDesc(resolved.desc_idx, desc);
     }
 
     /// Bound an annotated definition's implicitly opened row (design.md
@@ -1958,7 +1996,7 @@ pub const Store = struct {
         self.debugAssertUnsealed();
         const resolved = try self.resolveWriteTarget(target_var);
         var word = self.descs.getWord(resolved.desc_idx);
-        word.flags.bounded_row_ext = true;
+        word.setFlag(.bounded_row_ext, true);
         try self.setDescWord(resolved.desc_idx, word);
     }
 
@@ -1969,7 +2007,7 @@ pub const Store = struct {
         self.debugAssertUnsealed();
         const resolved = try self.resolveWriteTarget(target_var);
         var word = self.descs.getWord(resolved.desc_idx);
-        word.flags.bounded_row_ext = false;
+        word.setFlag(.bounded_row_ext, false);
         try self.setDescWord(resolved.desc_idx, word);
     }
 
@@ -2697,24 +2735,12 @@ pub const Store = struct {
 
     // rank //
 
-    /// Mark a class a generalization boundary found to be anonymous structure
-    /// made in its own scope and left ungeneralized
-    /// (`DescriptorFlags.per_use_structure`). A frozen class never changes,
-    /// so no use can lift it and it stays shared.
-    pub fn markPerUseStructure(self: *Self, desc_idx: DescStore.Idx) Allocator.Error!void {
-        self.debugAssertUnsealed();
-        var word = self.descs.getWord(desc_idx);
-        if (word.flags.frozen or word.flags.per_use_structure) return;
-        word.flags.per_use_structure = true;
-        try self.setDescWord(desc_idx, word);
-    }
-
     /// Set the rank for a descriptor. Writes the descriptor's word alone.
     pub inline fn setDescRank(self: *Self, desc_idx: DescStore.Idx, rank: Rank) Allocator.Error!void {
         self.debugAssertUnsealed();
         var word = self.descs.getWord(desc_idx);
         // A frozen class is ground, so no rank changes what it means.
-        if (word.flags.frozen) return;
+        if (word.flags().frozen) return;
         word.rank = rank;
         try self.setDescWord(desc_idx, word);
     }
@@ -2828,12 +2854,12 @@ pub const Store = struct {
 
     /// The flags of `var_`'s class.
     pub fn flagsOf(self: *const Self, var_: Var) types.DescriptorFlags {
-        return self.descs.getWord(self.resolveDescIdx(var_)).flags;
+        return self.descs.getWord(self.resolveDescIdx(var_)).flags();
     }
 
     /// The flags of descriptor `desc_idx`.
     pub fn flagsAt(self: *const Self, desc_idx: DescStore.Idx) types.DescriptorFlags {
-        return self.descs.getWord(desc_idx).flags;
+        return self.descs.getWord(desc_idx).flags();
     }
 
     // resolvers //
@@ -3083,7 +3109,7 @@ pub const Store = struct {
         const b_data = self.findStorageRoot(b_var);
         const a_word = self.descs.getWord(a_data.desc_idx);
         const b_word = self.descs.getWord(b_data.desc_idx);
-        if (a_word.flags.frozen or b_word.flags.frozen) {
+        if (a_word.flags().frozen or b_word.flags().frozen) {
             return self.unionWithFrozen(a_data, a_word, b_data, b_word, new_desc.content == .err);
         }
 
@@ -3109,13 +3135,13 @@ pub const Store = struct {
             .a => a_data.desc_idx,
             .b => b_data.desc_idx,
         });
-        if (a_word.flags.frozen or b_word.flags.frozen) {
+        if (a_word.flags().frozen or b_word.flags().frozen) {
             return self.unionWithFrozen(a_data, a_word, b_data, b_word, merged_row.word.kind == .err);
         }
 
         // No generalization pass is running, so the kept word is unmarked.
         std.debug.assert(!merged_row.word.marked());
-        merged_row.word.flags = mergedFlags(.{}, merged_row.word.kind, a_word, b_word);
+        merged_row.word.setFlags(mergedFlags(.{}, merged_row.word.kind, a_word, b_word));
         merged_row.word.rank = rank;
         return self.unionRows(a_data, a_word, b_data, b_word, merged_row);
     }
@@ -3129,35 +3155,58 @@ pub const Store = struct {
         b_word: Desc.Word,
     ) types.DescriptorFlags {
         var flags = stated;
+        const a_flags = a_word.flags();
+        const b_flags = b_word.flags();
         flags.annotation_tag_ext = merged_kind == .flex and
-            (a_word.flags.annotation_tag_ext or b_word.flags.annotation_tag_ext);
-        flags.bounded_row_ext = a_word.flags.bounded_row_ext or b_word.flags.bounded_row_ext;
-        flags.host_fixed_row = a_word.flags.host_fixed_row or b_word.flags.host_fixed_row;
+            (a_flags.annotation_tag_ext or b_flags.annotation_tag_ext);
+        flags.bounded_row_ext = a_flags.bounded_row_ext or b_flags.bounded_row_ext;
+        flags.host_fixed_row = a_flags.host_fixed_row or b_flags.host_fixed_row;
         if (merged_kind == .empty_tag_union) {
-            const a_is_explicit_empty = a_word.kind == .empty_tag_union and !a_word.flags.empty_tag_union_is_default;
-            const b_is_explicit_empty = b_word.kind == .empty_tag_union and !b_word.flags.empty_tag_union_is_default;
+            const a_is_explicit_empty = a_word.kind == .empty_tag_union and !a_flags.empty_tag_union_is_default;
+            const b_is_explicit_empty = b_word.kind == .empty_tag_union and !b_flags.empty_tag_union_is_default;
             flags.empty_tag_union_is_default = !a_is_explicit_empty and !b_is_explicit_empty and
-                (a_word.flags.empty_tag_union_is_default or b_word.flags.empty_tag_union_is_default);
+                (a_flags.empty_tag_union_is_default or b_flags.empty_tag_union_is_default);
         } else {
             flags.empty_tag_union_is_default = false;
         }
         // A rejected dispatch edge is a fact about the constraint callable's
         // equivalence class, so merging two classes rejects the result if
         // either side was rejected.
-        flags.static_dispatch_rejected = a_word.flags.static_dispatch_rejected or
-            b_word.flags.static_dispatch_rejected;
+        flags.static_dispatch_rejected = a_flags.static_dispatch_rejected or
+            b_flags.static_dispatch_rejected;
         // Declared backing structure stays declared: a class that merged with
         // an opened nominal backing component is that component.
-        flags.nominal_backing_structure = a_word.flags.nominal_backing_structure or
-            b_word.flags.nominal_backing_structure;
-        // Structure copied per use stays so only while it is nothing else: a
-        // class it merged with keeps its own sharing.
-        flags.per_use_structure = a_word.flags.per_use_structure and
-            b_word.flags.per_use_structure;
+        flags.nominal_backing_structure = a_flags.nominal_backing_structure or
+            b_flags.nominal_backing_structure;
+        // An uncommitted record tail, and the mark of a copy of one, describe
+        // a flex class; a class that became anything else is no tail.
+        flags.uncommitted_record_tail = merged_kind == .flex and
+            (a_flags.uncommitted_record_tail or b_flags.uncommitted_record_tail);
+        flags.uncommitted_copy = merged_kind == .flex and
+            (a_flags.uncommitted_copy or b_flags.uncommitted_copy);
+        // A record a pattern takes apart stays one only while no tail a
+        // construction minted joins its class.
+        const a_constructed = a_flags.uncommitted_record_tail and !a_flags.record_pattern_tail;
+        const b_constructed = b_flags.uncommitted_record_tail and !b_flags.record_pattern_tail;
+        // A row committed because its binding compared it as a plain one
+        // stays one.
+        flags.compared_plain = a_flags.compared_plain or b_flags.compared_plain;
+        flags.record_pattern_tail = merged_kind == .flex and
+            (a_flags.record_pattern_tail or b_flags.record_pattern_tail) and
+            !a_constructed and !b_constructed;
+        // Annotated structure stays annotated: a tag union that merged with
+        // one an annotation wrote is that annotation's union.
+        flags.annotation_tag_union = a_flags.annotation_tag_union or
+            b_flags.annotation_tag_union;
+        // An inference-closed empty tag union stays uncommitted unless it
+        // meets one an annotation or a commitment closed.
+        flags.uncommitted_tag_tail = merged_kind == .empty_tag_union and
+            (a_flags.uncommitted_tag_tail or b_flags.uncommitted_tag_tail) and
+            !committedEmptyTagUnionWord(a_word) and !committedEmptyTagUnionWord(b_word);
         // A defaulting decision about one side is a decision about the merged
         // class: the default it committed is the type both sides now share.
-        flags.default_decided = a_word.flags.default_decided or
-            b_word.flags.default_decided;
+        flags.default_decided = a_flags.default_decided or
+            b_flags.default_decided;
         return flags;
     }
 
@@ -3172,8 +3221,8 @@ pub const Store = struct {
     ) Allocator.Error!void {
         if ((kindIsLeaf(merged_row.word.kind) and
             (!kindIsLeaf(a_word.kind) or !kindIsLeaf(b_word.kind))) or
-            !sameCopiedFlags(merged_row.word.flags, a_word.flags) or
-            !sameCopiedFlags(merged_row.word.flags, b_word.flags))
+            !sameCopiedFlags(merged_row.word.flags(), a_word.flags()) or
+            !sameCopiedFlags(merged_row.word.flags(), b_word.flags()))
         {
             self.ground_epoch +%= 1;
         }
@@ -3221,12 +3270,12 @@ pub const Store = struct {
     ) Allocator.Error!void {
         if (a.storage_var == b.storage_var) return;
         if (merged_is_err) return;
-        const frozen = if (b_word.flags.frozen) b else a;
-        const other = if (b_word.flags.frozen) a else b;
+        const frozen = if (b_word.flags().frozen) b else a;
+        const other = if (b_word.flags().frozen) a else b;
         if (std.debug.runtime_safety) {
-            const frozen_word = if (b_word.flags.frozen) b_word else a_word;
-            const other_word = if (b_word.flags.frozen) a_word else b_word;
-            if (other_word.flags.static_dispatch_rejected and !frozen_word.flags.static_dispatch_rejected) {
+            const frozen_word = if (b_word.flags().frozen) b_word else a_word;
+            const other_word = if (b_word.flags().frozen) a_word else b_word;
+            if (other_word.flags().static_dispatch_rejected and !frozen_word.flags().static_dispatch_rejected) {
                 base.invariant("a rejected dispatch callable was related to a frozen type class", .{});
             }
         }
@@ -3392,6 +3441,7 @@ pub const Store = struct {
                 var desc = self.descAt(desc_idx);
                 self.noteContentRewrite(desc.content);
                 desc.content = content;
+                desc.flags = desc.flags.forKind(types.ContentKind.of(content));
                 try self.setDesc(desc_idx, desc);
             },
             .redirect => {
@@ -3438,7 +3488,6 @@ pub const Store = struct {
         nominal_decls: NominalDecl.SafeList.Serialized,
         nominal_decl_index: NominalDeclIndexEntry.SafeList.Serialized,
         derived_map_plans: DerivedMapPlanEntry.SafeList.Serialized,
-        widening_names: collections.SafeList(u64).Serialized,
         nominal_identities: NominalIdentity.SafeList.Serialized,
         alias_identities: AliasIdentity.SafeList.Serialized,
         /// `Store.invalid_nominal_decl_written`, as 0 or 1.
@@ -3469,7 +3518,6 @@ pub const Store = struct {
             try self.nominal_decls.serialize(&store.nominal_decls, allocator, writer);
             try self.nominal_decl_index.serialize(&store.nominal_decl_index, allocator, writer);
             try self.derived_map_plans.serialize(&store.derived_map_plans, allocator, writer);
-            try self.widening_names.serialize(&store.widening_names, allocator, writer);
             try self.nominal_identities.serialize(&store.nominal_identities, allocator, writer);
             try self.alias_identities.serialize(&store.alias_identities, allocator, writer);
             self.invalid_nominal_decl_written = @intFromBool(store.invalid_nominal_decl_written);
@@ -3505,7 +3553,6 @@ pub const Store = struct {
                 .nominal_decls = self.nominal_decls.deserializeInto(base_addr),
                 .nominal_decl_index = self.nominal_decl_index.deserializeInto(base_addr),
                 .derived_map_plans = self.derived_map_plans.deserializeInto(base_addr),
-                .widening_names = self.widening_names.deserializeInto(base_addr),
                 .nominal_identities = self.nominal_identities.deserializeInto(base_addr),
                 .alias_identities = self.alias_identities.deserializeInto(base_addr),
                 .invalid_nominal_decl_written = self.invalid_nominal_decl_written != 0,
@@ -3669,7 +3716,7 @@ const DescStore = struct {
     /// Whether two rows hold the same content, whatever their words' flags
     /// and ranks.
     fn sameContent(a: Desc.Row, b: Desc.Row) bool {
-        return a.word.kind == b.word.kind and a.word.literal == b.word.literal and std.mem.eql(u32, &a.payload, &b.payload);
+        return a.word.kind == b.word.kind and a.word.literal() == b.word.literal() and std.mem.eql(u32, &a.payload, &b.payload);
     }
 
     /// Deinit & free allocated memory
