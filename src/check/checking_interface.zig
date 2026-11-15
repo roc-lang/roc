@@ -22,6 +22,9 @@ pub const Definition = union(enum) {
     derived_method: @FieldType(CIR.Expr, "e_derived_method"),
     valueless,
     non_effectful_hosted,
+    /// A definition whose annotation is erroneous declares no type, so each
+    /// use is erroneous at the use.
+    erroneous_annotation,
     value,
 };
 

@@ -192,6 +192,11 @@ pub const Index = struct {
     /// Each function's strongly connected component of the call graph.
     scc: []u32,
     on_cycle: []bool,
+    /// How many direct calls and function values in the source bodies name
+    /// each function, one per body that holds the naming expression.
+    references: []u32,
+    /// The body holding the first of those references.
+    first_referrer: []u32,
     /// Whether each function always inlines as a wrapper (`WrapperBody`)
     /// that lies on no call cycle and passes none of its calls a value it
     /// builds where the callee consumes it.
@@ -209,6 +214,8 @@ pub const Index = struct {
             .returns = try gpa.alloc(std.ArrayList(Ast.ExprId), source_bodies.len),
             .scc = try gpa.alloc(u32, source_bodies.len),
             .on_cycle = try gpa.alloc(bool, source_bodies.len),
+            .references = try gpa.alloc(u32, source_bodies.len),
+            .first_referrer = try gpa.alloc(u32, source_bodies.len),
             .wrapper = try gpa.alloc(bool, source_bodies.len),
         };
         @memset(self.use_head, .none);
@@ -237,6 +244,8 @@ pub const Index = struct {
         gpa.free(self.returns);
         gpa.free(self.scc);
         gpa.free(self.on_cycle);
+        gpa.free(self.references);
+        gpa.free(self.first_referrer);
         gpa.free(self.wrapper);
         gpa.destroy(self);
     }
@@ -277,6 +286,29 @@ pub const Index = struct {
     fn sameScc(self: *const Index, a: Ast.FnId, b: Ast.FnId) bool {
         if (!self.isOriginal(a) or !self.isOriginal(b)) return false;
         return self.scc[@backingInt(a)] == self.scc[@backingInt(b)];
+    }
+
+    /// Whether `a` and `b` are original functions in one strongly connected
+    /// component of the call graph; a function is in its own component.
+    pub fn inSameComponent(self: *const Index, a: Ast.FnId, b: Ast.FnId) bool {
+        return self.sameScc(a, b);
+    }
+
+    /// How many direct calls and function values in the source bodies name
+    /// the original function `fn_id`.
+    pub fn referenceCount(self: *const Index, fn_id: Ast.FnId) u32 {
+        const raw = @backingInt(fn_id);
+        if (raw >= self.references.len) Common.invariant("inline crossing was asked about a function created after it was indexed");
+        return self.references[raw];
+    }
+
+    /// The original function whose source body holds the first reference
+    /// to `fn_id`, when one does.
+    pub fn firstReferrer(self: *const Index, fn_id: Ast.FnId) ?Ast.FnId {
+        const raw = @backingInt(fn_id);
+        if (raw >= self.references.len) Common.invariant("inline crossing was asked about a function created after it was indexed");
+        if (self.references[raw] == 0) return null;
+        return @fromBackingInt(self.first_referrer[raw]);
     }
 
     const IndexTask = union(enum) {
@@ -536,6 +568,11 @@ pub const Index = struct {
 
     /// Tarjan's algorithm over direct calls and function values, on an
     /// explicit stack so call chains never become native call depth.
+    fn noteReference(self: *Index, referenced: u32, referrer: u32) void {
+        if (self.references[referenced] == 0) self.first_referrer[referenced] = referrer;
+        self.references[referenced] +|= 1;
+    }
+
     fn computeSccs(self: *Index, program: *const Ast.Program) Allocator.Error!void {
         const gpa = self.gpa;
         const n = self.bodies.len;
@@ -545,6 +582,7 @@ pub const Index = struct {
             gpa.free(edges);
         }
         for (edges) |*list| list.* = .empty;
+        @memset(self.references, 0);
         var stack: std.ArrayList(Ast.ExprChild) = .empty;
         defer stack.deinit(gpa);
         for (self.bodies, 0..) |maybe_body, index| {
@@ -557,9 +595,15 @@ pub const Index = struct {
                     switch (program.getExpr(e).data) {
                         .comptime_value => continue,
                         .call_proc => |call| if (Ast.localDirectCallee(call)) |callee| {
-                            if (@backingInt(callee) < n) try edges[index].append(gpa, @backingInt(callee));
+                            if (@backingInt(callee) < n) {
+                                try edges[index].append(gpa, @backingInt(callee));
+                                self.noteReference(@backingInt(callee), @intCast(index));
+                            }
                         },
-                        .fn_ref => |r| if (@backingInt(r.fn_id) < n) try edges[index].append(gpa, @backingInt(r.fn_id)),
+                        .fn_ref => |r| if (@backingInt(r.fn_id) < n) {
+                            try edges[index].append(gpa, @backingInt(r.fn_id));
+                            self.noteReference(@backingInt(r.fn_id), @intCast(index));
+                        },
                         .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
                     }
                     try Ast.appendChildren(gpa, program, e, &stack);

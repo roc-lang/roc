@@ -982,10 +982,20 @@ fn callBoxedTransitionWithoutReuse(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8
     return result;
 }
 
-fn hostAddCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8, ret_desc: *?*const anyopaque) callconv(.c) void {
+/// Release the callable allocation a caller transferred through the erased
+/// ABI's reuse argument. A caller passes it non-null when its own reference
+/// to the callable ends at the call, and the callee then owns that reference:
+/// a callable whose result cannot repack the allocation releases it once it
+/// has finished reading its captures. A null argument is a borrowed call.
+fn releaseTransferredCallable(reuse: ?[*]u8, ops: *builtins.host_abi.RocOps) void {
+    if (reuse) |allocation| builtins.erased_callable.decref(allocation, ops);
+}
+
+fn hostAddCallable(ops: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, reuse: ?[*]u8, ret_desc: *?*const anyopaque) callconv(.c) void {
     const capture = capturePtrAs(AddCapture, capture_ptr);
     writeI64Result(ret, readI64ToI64Arg(args) + capture.amount);
     ret_desc.* = null;
+    releaseTransferredCallable(reuse, ops);
 }
 
 fn hostAddCaptureOnDrop(_: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
@@ -1006,11 +1016,12 @@ fn hostedHostBoxedAdd(amount: i64) callconv(.c) ?[*]u8 {
     return ret;
 }
 
-fn hostNestedRecordCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8, ret_desc: *?*const anyopaque) callconv(.c) void {
+fn hostNestedRecordCallable(ops: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, reuse: ?[*]u8, ret_desc: *?*const anyopaque) callconv(.c) void {
     const capture = capturePtrAs(NestedRecordCapture, capture_ptr);
     const x = readI64ToI64Arg(args);
     writeI64Result(ret, x + capture.inner.base + capture.adjustment + @as(i64, @intCast(capture.inner.label.asSlice().len)));
     ret_desc.* = null;
+    releaseTransferredCallable(reuse, ops);
 }
 
 fn hostNestedRecordCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
@@ -1110,10 +1121,11 @@ fn hostTreeSum(tree: *const HostTree) i64 {
     };
 }
 
-fn hostTreeCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8, ret_desc: *?*const anyopaque) callconv(.c) void {
+fn hostTreeCallable(ops: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, reuse: ?[*]u8, ret_desc: *?*const anyopaque) callconv(.c) void {
     const capture = capturePtrAs(TreeCapture, capture_ptr);
     writeI64Result(ret, readI64ToI64Arg(args) + hostTreeSum(&capture.tree));
     ret_desc.* = null;
+    releaseTransferredCallable(reuse, ops);
 }
 
 fn hostTreeCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
@@ -1138,11 +1150,12 @@ fn hostedHostBoxedRecursiveTree(tree: HostTree) callconv(.c) ?[*]u8 {
     return ret;
 }
 
-fn hostBoxedCaptureCallable(ops: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8, ret_desc: *?*const anyopaque) callconv(.c) void {
+fn hostBoxedCaptureCallable(ops: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, reuse: ?[*]u8, ret_desc: *?*const anyopaque) callconv(.c) void {
     const capture = capturePtrAs(BoxedCallableCapture, capture_ptr);
     const x = readI64ToI64Arg(args);
     writeI64Result(ret, callBoxedI64ToI64(ops, capture.inner, x) + capture.bonus);
     ret_desc.* = null;
+    releaseTransferredCallable(reuse, ops);
 }
 
 fn hostBoxedCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
@@ -1234,8 +1247,9 @@ fn hostedHostCallBoxedTransition(boxed: ?[*]u8) callconv(.c) i64 {
     return callBoxedTransitionWithoutReuse(g_roc_ops.?, boxed);
 }
 
-fn hostTransitionInnerCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, _: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8) callconv(.c) void {
+fn hostTransitionInnerCallable(ops: *builtins.host_abi.RocOps, ret: ?[*]u8, _: ?[*]const u8, capture_ptr: ?[*]u8, reuse: ?[*]u8) callconv(.c) void {
     writeI64Result(ret, capturePtrAs(TransitionCapture, capture_ptr).value);
+    releaseTransferredCallable(reuse, ops);
 }
 
 fn hostTransitionInnerOnDrop(_: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {

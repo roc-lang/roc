@@ -14,7 +14,6 @@ foo = Json.parse(data)
 DUPLICATE DEFINITION - inline_ingested_file.md:2:1:2:12
 FILE NOT FOUND - inline_ingested_file.md:1:1:1:34
 MOD NOT FOUND - inline_ingested_file.md:2:1:2:12
-MISSING METHOD - inline_ingested_file.md:4:7:4:17
 # PROBLEMS
 ~~~clojure
 (reports
@@ -60,34 +59,7 @@ MISSING METHOD - inline_ingested_file.md:4:7:4:17
 			(annotated code "Json")
 			(reflow " was not found in this Roc project."))
 		(document
-			(source-region (file "inline_ingested_file.md") (start 2 1) (end 2 12) (annotation error) (line-text "import Json"))))
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 4 7) (end 4 17))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "parser_for")
-			(reflow " ")
-			(reflow "call is on")
-			(reflow " ")
-			(reflow "a value of type")
-			(reflow " ")
-			(annotated code "a")
-			(reflow ",")
-			(reflow " ")
-			(reflow "which never resolved to a concrete type,")
-			(reflow " ")
-			(reflow "so it has no")
-			(reflow " ")
-			(annotated code "parser_for")
-			(reflow " ")
-			(reflow "method."))
-		(document
-			(source-region (file "inline_ingested_file.md") (start 4 7) (end 4 17) (annotation error) (line-text "foo = Json.parse(data)"))
-			(line-break)
-			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
+			(source-region (file "inline_ingested_file.md") (start 2 1) (end 2 12) (annotation error) (line-text "import Json")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -125,7 +97,8 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "foo"))
 		(e-runtime-error (tag "erroneous_value_expr")
-			(e-runtime-error (tag "erroneous_value_expr"))
+			(e-lookup-external
+				(builtin))
 			(e-runtime-error (tag "erroneous_value_expr"))))
 	(s-import (mod "Json")
 		(exposes)))
