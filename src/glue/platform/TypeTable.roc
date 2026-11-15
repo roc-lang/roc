@@ -63,6 +63,17 @@ TypeTable := { entries : List(TypeInfo) }.{
 		match table.rc_plan(type_id) {
 			RcNoop => Bool.False
 			RcRefcounted => Bool.True
+			RcRocReleased => Bool.True
+		}
+
+	## True when a host that owns a value of this type cannot release it: the
+	## value holds a reference only Roc can release. See `HostRcPlan`.
+	is_roc_released : TypeTable, U64 -> Bool
+	is_roc_released = |table, type_id|
+		match table.rc_plan(type_id) {
+			RcNoop => Bool.False
+			RcRefcounted => Bool.False
+			RcRocReleased => Bool.True
 		}
 
 	repr_is_refcounted : TypeTable, TypeRepr -> Bool
@@ -134,72 +145,25 @@ TypeTable := { entries : List(TypeInfo) }.{
 			_ => Bool.False
 		}
 
-	## Stable structural token for a type, independent of type-table entry
-	## order. Named types (record / tag union / unknown) contribute their name
-	## and terminate the recursion (a recursive shape routes through a named
-	## nominal, and anonymous records already carry a structural `__AnonStruct_`
-	## name assigned by the compiler); box and list recurse into their element;
-	## primitives contribute a fixed token. This mirrors the compiler-side
-	## `hashStructuralId` used to name anonymous structs.
-	structural_token : TypeTable, U64 -> Str
-	structural_token = |table, type_id|
-		match table.get(type_id) {
-			RocBool => "bool"
-			RocBox(inner) => Str.concat("box:", table.structural_token(inner))
-			RocDec => "dec"
-			RocErasedCallable(_) => "erased_callable"
-			RocF32 => "f32"
-			RocF64 => "f64"
-			RocI128 => "i128"
-			RocI16 => "i16"
-			RocI32 => "i32"
-			RocI64 => "i64"
-			RocI8 => "i8"
-			RocList(elem) => Str.concat("list:", table.structural_token(elem))
-			RocRecord(rec) => Str.concat("rec:", rec.name)
-			RocStr => "str"
-			RocTagUnion(tu) => Str.concat("tu:", tu.name)
-			RocU128 => "u128"
-			RocU16 => "u16"
-			RocU32 => "u32"
-			RocU64 => "u64"
-			RocU8 => "u8"
-			RocU8x16 => "u8x16"
-			RocI8x16 => "i8x16"
-			RocU16x8 => "u16x8"
-			RocI16x8 => "i16x8"
-			RocU32x4 => "u32x4"
-			RocI32x4 => "i32x4"
-			RocU64x2 => "u64x2"
-			RocI64x2 => "i64x2"
-			RocUnit => "unit"
-			RocUnknown(s) => Str.concat("unk:", s)
+	## Id of the first row describing the same host type as `type_id`; see
+	## `TypeInfo`.
+	shape_id : TypeTable, U64 -> U64
+	shape_id = |table, type_id| (table.type_info(type_id)).shape_id
+
+	## The suffix that tells row `type_id` apart from other rows emitted under
+	## `name`, or "" when `name` is not in `duplicate_names`. It is built from
+	## the row's shape id, so every row of one shape gets the same suffix.
+	shape_suffix : TypeTable, List(Str), Str, U64 -> Str
+	shape_suffix = |table, duplicate_names, name, type_id|
+		if List.contains(duplicate_names, name) {
+			"Type${U64.to_str(table.shape_id(type_id))}"
+		} else {
+			""
 		}
 
-	## Stable structural signature of a tag union: its ABI size and alignment
-	## plus each tag's name and payload shapes. Two same-named tag-union entries
-	## with equal signatures are the same emitted type (glue renders them
-	## identically, and the emitter deduplicates them by name); unequal
-	## signatures are genuinely distinct shapes that need disambiguation.
-	tag_union_signature : TypeTable, AbiLayout, TagUnionRepr -> Str
-	tag_union_signature = |table, abi_layout, tu| {
-		var $sig = "${U64.to_str(abi_layout.size64)}/${U64.to_str(abi_layout.alignment64)}/${U64.to_str(abi_layout.size32)}/${U64.to_str(abi_layout.alignment32)}"
-
-		for tag in tu.tags {
-			$sig = Str.concat($sig, "|${tag.name}(")
-			for payload_id in tag.payload {
-				$sig = Str.concat($sig, Str.concat(table.structural_token(payload_id), ","))
-			}
-			$sig = Str.concat($sig, ")")
-		}
-
-		$sig
-	}
-
-	## Names of tag unions that need per-entry disambiguation: a name qualifies
-	## only when two or more entries share it with genuinely distinct structural
-	## signatures. Entries that merely repeat an identical shape are the same
-	## emitted type and collapse to the bare name, so they are not reported.
+	## Names of tag unions that need per-shape disambiguation: a name qualifies
+	## when two or more rows share it with different shape ids. Rows that
+	## repeat one shape are the same emitted type and keep the bare name.
 	duplicate_tag_union_names : TypeTable -> List(Str)
 	duplicate_tag_union_names = |table| {
 		var $seen = []
@@ -209,16 +173,15 @@ TypeTable := { entries : List(TypeInfo) }.{
 			match entry.repr {
 				RocTagUnion(tu) =>
 					if List.len(tu.tags) >= 2 and tu.name != "" {
-						sig = table.tag_union_signature(entry.layout, tu)
-						conflicts = List.any($seen, |e| e.name == tu.name and e.sig != sig)
+						conflicts = List.any($seen, |e| e.name == tu.name and e.shape_id != entry.shape_id)
 						if conflicts {
 							if !(List.contains($duplicates, tu.name)) {
 								$duplicates = $duplicates.append(tu.name)
 							}
 						}
-						already = List.any($seen, |e| e.name == tu.name and e.sig == sig)
+						already = List.any($seen, |e| e.name == tu.name and e.shape_id == entry.shape_id)
 						if !already {
-							$seen = $seen.append({ name: tu.name, sig: sig })
+							$seen = $seen.append({ name: tu.name, shape_id: entry.shape_id })
 						}
 					}
 				_ => {}
@@ -228,27 +191,10 @@ TypeTable := { entries : List(TypeInfo) }.{
 		$duplicates
 	}
 
-	## Stable structural signature of a record: its ABI size and alignment plus
-	## each field's name and shape. Same-named record entries with equal
-	## signatures are the same emitted type (the emitter deduplicates them by
-	## name); unequal signatures are genuinely distinct shapes needing
-	## disambiguation. Mirrors `tag_union_signature`.
-	record_signature : TypeTable, AbiLayout, RecordRepr -> Str
-	record_signature = |table, abi_layout, rec| {
-		var $sig = "${U64.to_str(abi_layout.size64)}/${U64.to_str(abi_layout.alignment64)}/${U64.to_str(abi_layout.size32)}/${U64.to_str(abi_layout.alignment32)}"
-
-		for field in rec.fields {
-			$sig = Str.concat($sig, "|${field.name}:${table.structural_token(field.type_id)}")
-		}
-
-		$sig
-	}
-
-	## Names of records that need per-entry disambiguation: a name qualifies
-	## only when two or more entries share it with genuinely distinct structural
-	## signatures. Entries that merely repeat an identical shape are the same
-	## emitted type and collapse to the bare name, so they are not reported.
-	## Mirrors `duplicate_tag_union_names`.
+	## Names of records that need per-shape disambiguation: a name qualifies
+	## when two or more rows share it with different shape ids, as two
+	## instantiations of one generic nominal do. Rows that repeat one shape are
+	## the same emitted type and keep the bare name.
 	duplicate_record_names : TypeTable -> List(Str)
 	duplicate_record_names = |table| {
 		var $seen = []
@@ -258,16 +204,15 @@ TypeTable := { entries : List(TypeInfo) }.{
 			match entry.repr {
 				RocRecord(rec) =>
 					if rec.name != "" {
-						sig = table.record_signature(entry.layout, rec)
-						conflicts = List.any($seen, |e| e.name == rec.name and e.sig != sig)
+						conflicts = List.any($seen, |e| e.name == rec.name and e.shape_id != entry.shape_id)
 						if conflicts {
 							if !(List.contains($duplicates, rec.name)) {
 								$duplicates = $duplicates.append(rec.name)
 							}
 						}
-						already = List.any($seen, |e| e.name == rec.name and e.sig == sig)
+						already = List.any($seen, |e| e.name == rec.name and e.shape_id == entry.shape_id)
 						if !already {
-							$seen = $seen.append({ name: rec.name, sig: sig })
+							$seen = $seen.append({ name: rec.name, shape_id: entry.shape_id })
 						}
 					}
 				_ => {}
@@ -296,21 +241,21 @@ ref_layout = {
 	details: AbiBuiltin,
 }
 
-sample_info : TypeRepr -> TypeInfo
-sample_info = |repr| { repr, layout: sample_layout, rc: RcNoop }
+sample_info : TypeRepr, U64 -> TypeInfo
+sample_info = |repr, shape_id| { repr, layout: sample_layout, rc: RcNoop, shape_id }
 
-ref_info : TypeRepr -> TypeInfo
-ref_info = |repr| { repr, layout: ref_layout, rc: RcRefcounted }
+ref_info : TypeRepr, U64 -> TypeInfo
+ref_info = |repr, shape_id| { repr, layout: ref_layout, rc: RcRefcounted, shape_id }
 
 sample_table : TypeTable
 sample_table = TypeTable.from_list([
-	sample_info(RocU8),
-	ref_info(RocStr),
-	ref_info(RocList(0)),
-	ref_info(RocRecord({ name: "Pair", anonymous: Bool.False, fields: [{ name: "left", type_id: 1, is_padding: Bool.False }] })),
-	ref_info(RocTagUnion({ name: "Wrapped", tags: [{ name: "Wrapped", payload: [3] }] })),
-	ref_info(RocTagUnion({ name: "Try", tags: [{ name: "Err", payload: [1] }, { name: "Ok", payload: [0] }] })),
-	ref_info(RocTagUnion({ name: "Try", tags: [{ name: "Err", payload: [2] }, { name: "Ok", payload: [0] }] })),
+	sample_info(RocU8, 0),
+	ref_info(RocStr, 1),
+	ref_info(RocList(0), 2),
+	ref_info(RocRecord({ name: "Pair", anonymous: Bool.False, fields: [{ name: "left", type_id: 1, is_padding: Bool.False }] }), 3),
+	ref_info(RocTagUnion({ name: "Wrapped", tags: [{ name: "Wrapped", payload: [3] }] }), 4),
+	ref_info(RocTagUnion({ name: "Try", tags: [{ name: "Err", payload: [1] }, { name: "Ok", payload: [0] }] }), 5),
+	ref_info(RocTagUnion({ name: "Try", tags: [{ name: "Err", payload: [2] }, { name: "Ok", payload: [0] }] }), 6),
 ])
 
 ## Checks the sample `TypeTable.is_unit` behavior.

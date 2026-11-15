@@ -122,7 +122,8 @@ const RequestError = ReplSession.ReplInitError ||
 fn ensureSession() ReplSession.ReplInitError!*ReplSession {
     if (repl_session == null) {
         const roc_ctx = CoreCtx.default(allocator, allocator, @as(std.Io, undefined));
-        repl_session = try ReplSession.initVirtual(allocator, roc_ctx, .interpreter, .lss);
+        // A REPL evaluation is a compile-time root with no runtime consumer.
+        repl_session = try ReplSession.initVirtual(allocator, roc_ctx, .interpreter, .boxy);
     }
     return &repl_session.?;
 }

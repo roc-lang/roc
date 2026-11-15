@@ -114,6 +114,15 @@ pub const StaticDescs = struct {
     /// Completed label-reachability proofs over append-only type nodes.
     /// Initialized on demand; negative cycles complete as one component.
     label_reachability: ?LabelWalk = null,
+    /// The operations demanded of each descriptor (`demand`): the demand
+    /// closure so far.
+    demanded: std.AutoHashMapUnmanaged(Key, OpSet) = .empty,
+    /// The demands whose consequences `drainDemand` has not followed yet.
+    demand_queue: std.ArrayList(Demanded) = .empty,
+    /// The override callable of each demanded operation of a nominal or
+    /// SIMD vector descriptor that has one, in the order first demanded:
+    /// the slots of its `Methods` node (`writeMethods`).
+    method_callables: std.AutoArrayHashMapUnmanaged(Key, [3]?ExportIndex) = .empty,
 
     /// A descriptor's identity: a type, or the recursion box around one, and
     /// the override scope that supplies the overrides of the nominal types
@@ -133,6 +142,14 @@ pub const StaticDescs = struct {
     /// `nominal`, in `Methods` order; null where it has none.
     pub const ScopedMethods = struct { nominal: TypeId, methods: [3]?CaptureWord };
 
+    /// A descriptor-guided operation a runtime walker performs on a value
+    /// (`roc_desc_eq`, `roc_desc_hash`, `roc_desc_inspect`), in `Methods`
+    /// order: the override slot it reads.
+    pub const DescOp = enum(u2) { eq = 0, hash = 1, inspect = 2 };
+
+    /// A set of descriptor-guided operations.
+    pub const OpSet = std.EnumSet(DescOp);
+
     /// A table reserved by `table` whose words its worker's needs give.
     /// `index` is its position among the reserved tables.
     pub const UnfilledTable = struct { worker: WorkerId, inputs: []const CaptureWord, reserved: Reserved, index: u32 };
@@ -141,6 +158,7 @@ pub const StaticDescs = struct {
     pub const CapturedRecord = struct { leading: u32, elems: []const CaptureWord };
 
     const Pending = struct { key: Key, node: ExportIndex };
+    const Demanded = struct { key: Key, op: DescOp };
 
     pub fn init(allocator: Allocator, store: *types.Store, layouts: *Layouts, result: *LirProgram.Result, target_usize: base.target.TargetUsize) StaticDescs {
         return .{
@@ -196,6 +214,9 @@ pub const StaticDescs = struct {
         self.names_blocks.deinit(self.allocator);
         if (self.label_reachability) |*walk| walk.deinit();
         self.pending.deinit(self.allocator);
+        self.demanded.deinit(self.allocator);
+        self.demand_queue.deinit(self.allocator);
+        self.method_callables.deinit(self.allocator);
     }
 
     pub const WordContext = struct {
@@ -277,8 +298,11 @@ pub const StaticDescs = struct {
         map.deinit(allocator);
     }
 
-    /// Hand the emitted exports to the program; the caller owns them after.
+    /// Hand the emitted exports to the program, once the demand closure is
+    /// complete: each descriptor's `Methods` node is written first
+    /// (`writeMethods`). The caller owns them after.
     pub fn takeExports(self: *StaticDescs) Allocator.Error![]StaticDataExport {
+        try self.writeMethods();
         return try self.exports.toOwnedSlice(self.allocator);
     }
 
@@ -639,37 +663,141 @@ pub const StaticDescs = struct {
         return @alignCast(@fieldParentPtr("static_descs", self));
     }
 
-    /// The `Methods` node of the closed nominal type `ty`'s overrides, or
-    /// null when it has none. Where the descriptor's override scope gives
-    /// `ty` its overrides, the node holds those callables; otherwise each
-    /// override is an immortal static callable of the method's dictionary
-    /// entry, capturing the descriptors of the types the method's scheme
-    /// takes.
-    fn methodsNode(self: *StaticDescs, key: Key) Allocator.Error!?ExportIndex {
+    /// Demand the operation `op` of the descriptor the descriptor word
+    /// `word` names: a walker performs `op` on values it describes
+    /// (design.md "Type Descriptors").
+    pub fn demandWord(self: *StaticDescs, word: CaptureWord, op: DescOp) Allocator.Error!void {
+        try self.demand(try self.wordKey(word), op);
+    }
+
+    /// Add `(key, op)` to the demand closure; `drainDemand` follows it.
+    fn demand(self: *StaticDescs, key: Key, op: DescOp) Allocator.Error!void {
+        const entry = try self.demanded.getOrPut(self.allocator, key);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        if (entry.value_ptr.contains(op)) return;
+        entry.value_ptr.insert(op);
+        try self.demand_queue.append(self.allocator, .{ .key = key, .op = op });
+    }
+
+    /// Follow every queued demand to the descriptors and override callables
+    /// it reaches; whether there was any. An override callable built here
+    /// reserves the tables and queues the workers its entry needs, which
+    /// can bring further demand.
+    pub fn drainDemand(self: *StaticDescs) Allocator.Error!bool {
+        if (self.demand_queue.items.len == 0) return false;
+        while (self.demand_queue.pop()) |item| try self.followDemand(item.key, item.op);
+        return true;
+    }
+
+    /// The descriptors a walker performing `op` on a value `key` describes
+    /// reads next, each demanded in turn, as `boxy_runtime.walk` reads them:
+    /// a nominal type's override for `op` ends the walk there; a nominal
+    /// type without one continues into its backing, except that inspection
+    /// prints an opaque type without one as opaque; a record, tuple, tag
+    /// payload, list item, box payload, or recursion box continues into its
+    /// components; a function value ends it, but inspection renders a
+    /// boxed sequence through its own descriptor; a SIMD vector inspects
+    /// through its `to_inspect`.
+    fn followDemand(self: *StaticDescs, key: Key, op: DescOp) Allocator.Error!void {
         const ty = key.ty;
-        const scoped = self.scopedMethods(key.scope, ty);
-        const overrides = try self.program().nominalOverrides(ty);
-        if (scoped == null and overrides[0] == null and overrides[1] == null and overrides[2] == null) return null;
-        const owner = @backingInt(self.desc_slots.get(key).?.slot);
+        if (!key.recursive_box) {
+            switch (self.store.get(ty)) {
+                .primitive => |primitive| return switch (primitive) {
+                    .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => if (op == .inspect) {
+                        _ = try self.overrideCallable(key, op) orelse types.invariant("a SIMD vector type has no to_inspect");
+                    },
+                    .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => {},
+                },
+                .empty_record, .function => return,
+                .box => |payload| if (self.store.isErasedBoxPayload(payload)) {
+                    if (op == .inspect and self.store.isSequence(payload)) try self.demand(.{ .ty = payload, .recursive_box = false }, op);
+                    return;
+                },
+                .nominal => |nominal| {
+                    if (nominal.builtin == .bool) return;
+                    if (try self.overrideCallable(key, op) != null) return;
+                    if (op == .inspect and nominal.is_opaque) return;
+                    const backing = try self.layouts.converter.backing(ty);
+                    return try self.demand(.{ .ty = backing, .recursive_box = false, .scope = try self.restrictScope(key.scope, backing) }, op);
+                },
+                .list, .record, .tuple, .tag_union => {},
+                .variable => types.invariant("a type variable reached descriptor demand"),
+            }
+        }
+        const shape = try self.shapeOf(key);
+        defer shape.deinit(self.allocator);
+        switch (shape) {
+            .list, .box, .recursive_box => |child| try self.demand(child, op),
+            .record, .tuple => |fields| for (fields) |field| {
+                if (!field.padding) try self.demand(field.key, op);
+            },
+            .tag_union => |tag_union| for (tag_union.variants) |variant| try self.demand(variant.payload, op),
+            .leaf, .bool_, .nominal => types.invariant("a descriptor demand's structure disagrees with its type"),
+        }
+    }
+
+    /// The override callable for `op` of the nominal or SIMD vector
+    /// descriptor `key`, built and recorded for its `Methods` node, or null
+    /// when it has none. Where the descriptor's override scope gives the
+    /// type its overrides, it is that scope's callable; otherwise an
+    /// immortal static callable of the method's dictionary entry, capturing
+    /// the descriptors of the types the method's scheme takes.
+    fn overrideCallable(self: *StaticDescs, key: Key, op: DescOp) Allocator.Error!?ExportIndex {
+        const index = @backingInt(op);
+        const owner = @backingInt((self.desc_slots.get(key) orelse types.invariant("a demanded descriptor was never reserved")).slot);
+        const callable: ?ExportIndex = if (self.scopedMethods(key.scope, key.ty)) |methods_words|
+            if (methods_words[index]) |word| switch (word) {
+                .callable => |node| node,
+                .desc, .scoped_desc, .table, .node, .zero, .int => types.invariant("an override scope's method is not a callable"),
+            } else null
+        else if ((try self.program().nominalOverrides(key.ty))[index]) |override| switch (override) {
+            .procedure => |procedure| try self.staticCallable(owner, @as(u32, 4) + index, procedure),
+            .local => types.invariant("a static descriptor's type holds a local-procedure override outside the override scope that supplies it"),
+        } else null;
+        const node = callable orelse return null;
+        const entry = try self.method_callables.getOrPut(self.allocator, key);
+        if (!entry.found_existing) entry.value_ptr.* = .{ null, null, null };
+        entry.value_ptr[index] = node;
+        return node;
+    }
+
+    /// Write the `Methods` node of each descriptor a demanded operation
+    /// found an override in, holding exactly those overrides, and point
+    /// the descriptor at it. Every other descriptor's `methods` is null.
+    fn writeMethods(self: *StaticDescs) Allocator.Error!void {
+        if (self.demand_queue.items.len != 0) types.invariant("static data was taken before the demand closure was complete");
+        const desc_layout = desc_format.TypeDesc.layout(self.width);
         const methods_layout = desc_format.Methods.layout(self.width);
-        const methods = try self.addExport(try LirProgram.staticDataNodeSymbolName(self.allocator, owner, 3), methods_layout.size, self.ptrSize(), null);
+        const fields = [_]std.meta.FieldEnum(desc_format.Methods){ .is_eq, .to_hash, .to_inspect };
         var pointers: std.ArrayList(Pointer) = .empty;
         defer pointers.deinit(self.allocator);
-        const fields = [_]std.meta.FieldEnum(desc_format.Methods){ .is_eq, .to_hash, .to_inspect };
-        inline for (fields, 0..) |field, index| {
-            const callable: ?ExportIndex = if (scoped) |methods_words|
-                if (methods_words[index]) |word| switch (word) {
-                    .callable => |node| node,
-                    .desc, .scoped_desc, .table, .node, .zero, .int => types.invariant("an override scope's method is not a callable"),
-                } else null
-            else if (overrides[index]) |override| switch (override) {
-                .procedure => |procedure| try self.staticCallable(owner, @intCast(4 + index), procedure),
-                .local => types.invariant("a static descriptor's type holds a local-procedure override outside the override scope that supplies it"),
-            } else null;
-            if (callable) |node| try pointers.append(self.allocator, .{ .offset = methods_layout.of(field), .target = node, .addend = static_callable_header });
+        var entries = self.method_callables.iterator();
+        while (entries.next()) |entry| {
+            const reserved = self.desc_slots.get(entry.key_ptr.*).?;
+            const methods = try self.addExport(try LirProgram.staticDataNodeSymbolName(self.allocator, @backingInt(reserved.slot), 3), methods_layout.size, self.ptrSize(), null);
+            pointers.clearRetainingCapacity();
+            inline for (fields, 0..) |field, index| {
+                if (entry.value_ptr[index]) |node| try pointers.append(self.allocator, .{ .offset = methods_layout.of(field), .target = node, .addend = static_callable_header });
+            }
+            try self.setRelocations(methods, pointers.items);
+            try self.appendRelocation(reserved.node, .{ .offset = desc_layout.of(.methods), .target = methods });
         }
-        try self.setRelocations(methods, pointers.items);
-        return methods;
+        self.method_callables.clearRetainingCapacity();
+    }
+
+    /// Add one pointer to the relocations of `owner`.
+    fn appendRelocation(self: *StaticDescs, owner: ExportIndex, pointer: Pointer) Allocator.Error!void {
+        const item = &self.exports.items[owner];
+        const relocations = try self.allocator.alloc(StaticDataRelocation, item.relocations.len + 1);
+        @memcpy(relocations[0..item.relocations.len], item.relocations);
+        relocations[item.relocations.len] = .{
+            .offset = pointer.offset,
+            .target_symbol_name = self.exports.items[pointer.target].symbol_name,
+            .target = .{ .data_symbol = @fromBackingInt(pointer.target) },
+            .addend = pointer.addend,
+        };
+        self.allocator.free(item.relocations);
+        item.relocations = relocations;
     }
 
     /// Bytes before a static callable's payload: alignment padding, then the
@@ -1056,9 +1184,6 @@ pub const StaticDescs = struct {
                 .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => {
                     kind = .scalar;
                     scalar = scalarOf(primitive);
-                    if (scalar.isVector()) {
-                        if (try self.methodsNode(item.key)) |methods| try pointers.append(self.allocator, .{ .offset = desc_layout.of(.methods), .target = methods });
-                    }
                 },
             },
             .empty_record => kind = .record,
@@ -1125,7 +1250,6 @@ pub const StaticDescs = struct {
                     const backing = try self.layouts.converter.backing(ty);
                     const backing_node = (try self.reserveDescriptor(.{ .ty = backing, .recursive_box = false, .scope = try self.restrictScope(scope_id, backing) })).node;
                     try pointers.append(self.allocator, .{ .offset = desc_layout.of(.child), .target = backing_node });
-                    if (try self.methodsNode(item.key)) |methods| try pointers.append(self.allocator, .{ .offset = desc_layout.of(.methods), .target = methods });
                 }
             },
             .variable => types.invariant("a type variable reached static descriptor emission"),
@@ -1702,7 +1826,7 @@ pub const StaticDescs = struct {
         return switch (word) {
             .desc => |ty| .{ .ty = ty, .recursive_box = false },
             .scoped_desc => |scoped| .{ .ty = scoped.ty, .recursive_box = false, .scope = try self.restrictScope(scoped.scope, scoped.ty) },
-            .callable, .table, .node, .zero, .int => types.invariant("a coercion plan's operand is not a descriptor"),
+            .callable, .table, .node, .zero, .int => types.invariant("a descriptor operand is not a descriptor"),
         };
     }
 

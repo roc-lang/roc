@@ -338,7 +338,7 @@ fn storedRootType(artifact: *const Artifact, root: CompileTimeRoot) error{ NoTop
             .procedure_binding => return error.NotAConstant,
         },
         .hoisted_constant => (artifact.hoisted_constants.lookupByRoot(root.id) orelse return error.NoHoistedConst).const_ref,
-        .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => return error.NotAStoredKind,
+        .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => return error.NotAStoredKind,
     };
     const state = artifact.const_templates.get(const_ref).state;
     if (state != .stored_const) return error.NotStored;
@@ -413,7 +413,7 @@ fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMat
         switch (right_root.kind) {
             .constant => constants += 1,
             .hoisted_constant => hoisted += 1,
-            .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => return error.WrongKind,
+            .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => return error.WrongKind,
         }
         if (left_root.payload != .const_node or right_root.payload != .const_node) {
             std.debug.print("value-form root {d} ({?s}) was not completed\n", .{ @backingInt(right_root.id), rootName(right, right_root) });
