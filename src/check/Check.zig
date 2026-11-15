@@ -1301,6 +1301,10 @@ use_saved_copies: std.ArrayListUnmanaged(SavedCopy) = .empty,
 use_link_contexts: std.ArrayListUnmanaged(DeferredLinkContext) = .empty,
 /// Uses whose deferred callables are not linked yet.
 uses_with_deferred_callables: std.ArrayListUnmanaged(u32) = .empty,
+/// The callables of scheme requirements that settled after an instantiation
+/// copied them (design.md "Late-settled scheme requirements", under
+/// "Whole-use replay").
+late_settled_scheme_requirements: std.ArrayListUnmanaged(Var) = .empty,
 scratch_deferred_callables: std.ArrayListUnmanaged(types_mod.instantiate.DeferredCallable) = .empty,
 scratch_deferred_placeholders: collections.DenseMap(Var, Var),
 scratch_deferred_slots: std.ArrayListUnmanaged(u32) = .empty,
@@ -2011,6 +2015,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .use_saved_copies = .keyed,
     .use_link_contexts = .keyed,
     .uses_with_deferred_callables = .boundary,
+    .late_settled_scheme_requirements = .keyed,
     .scratch_deferred_callables = .scratch,
     .scratch_deferred_placeholders = .scratch,
     .scratch_deferred_slots = .scratch,
@@ -2377,6 +2382,10 @@ const TypeScheme = struct {
     capture_group_index: ?u32,
     indexed_vars: std.ArrayListUnmanaged(Var) = .empty,
     dispatch_requirements: std.ArrayListUnmanaged(SchemeDispatchRequirement) = .empty,
+    /// Whether an instantiation has copied this scheme's requirements. A
+    /// requirement that settles after that is logged in
+    /// `late_settled_scheme_requirements`.
+    requirements_copied: bool = false,
 };
 
 const StructuralSchemeRequirementOrigin = struct {
@@ -3123,6 +3132,7 @@ fn copySchemeDispatchRequirements(
     out: *std.ArrayListUnmanaged(InstantiatedSchemeDispatchRequirement),
 ) std.mem.Allocator.Error!void {
     const requirements_len = self.type_schemes.items[scheme_idx].dispatch_requirements.items.len;
+    if (requirements_len != 0) self.type_schemes.items[scheme_idx].requirements_copied = true;
     var requirement_idx: usize = 0;
     while (requirement_idx < requirements_len) : (requirement_idx += 1) {
         // Instantiation grows the type store but not `type_schemes`; copy
@@ -14916,6 +14926,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.finalizeBindingSchemeNodes();
 
     try self.finalizePlatformRequirementSolutions();
+    try self.extendSubstitutionsWithLateSettledRequirements();
     try self.finishDispatchReplayFreezes();
     try self.withdrawSupersededLiteralDefaultWarnings();
 
@@ -20817,6 +20828,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
     try self.verifyPredeclaredSchemeUsesRecorded();
     try self.finalizeBindingSchemeNodes();
+    try self.extendSubstitutionsWithLateSettledRequirements();
     try self.finishDispatchReplayFreezes();
 
     self.debugAssertNominalDeclTableComplete();
@@ -44390,7 +44402,7 @@ fn unifyEquivalentGeneralizedCallables(self: *Self, retained_fn_var: Var, duplic
 /// Retire side-table requirements only after their exact deferred callable was
 /// consumed or rejected. A receiver becoming concrete, rigid, aliased, or
 /// erroneous is not by itself evidence that this relation was visited.
-fn retireResolvedTypeSchemeRequirements(self: *Self) void {
+fn retireResolvedTypeSchemeRequirements(self: *Self) Allocator.Error!void {
     var scheme_idx: usize = 0;
     while (scheme_idx < self.type_schemes.items.len) {
         const scheme = &self.type_schemes.items[scheme_idx];
@@ -44410,9 +44422,15 @@ fn retireResolvedTypeSchemeRequirements(self: *Self) void {
                 write += 1;
                 continue;
             }
-            const still_pending = !self.settled_static_dispatch_constraint_fns.contains(requirement.constraint.fn_var) and
+            const settled = self.settled_static_dispatch_constraint_fns.contains(requirement.constraint.fn_var);
+            const still_pending = !settled and
                 !self.staticDispatchConstraintIsInactive(requirement.constraint);
-            if (!still_pending) continue;
+            if (!still_pending) {
+                if (settled and scheme.requirements_copied) {
+                    try self.late_settled_scheme_requirements.append(self.gpa, requirement.constraint.fn_var);
+                }
+                continue;
+            }
             scheme.dispatch_requirements.items[write] = requirement;
             write += 1;
         }
@@ -44612,7 +44630,7 @@ fn publishBindingSchemeCodecRequirement(
 /// later specialization has the same concrete shape, so their exact relation
 /// is serialized on the binding scheme for downstream revalidation.
 fn finalizeTypeSchemeRequirementsAtCheckedBoundary(self: *Self) Allocator.Error!void {
-    self.retireResolvedTypeSchemeRequirements();
+    try self.retireResolvedTypeSchemeRequirements();
 
     self.cir.binding_scheme_codec_requirements.clearRetainingCapacity();
     for (self.retired_binding_scheme_codec_requirements.items) |requirement| {
@@ -45559,7 +45577,7 @@ fn quiesceSchemeRequirementsAtBoundary(
                 }
                 _ = self.final_codec_dispatch_constraint_fns.remove(codec.constraint.fn_var);
                 try self.settled_static_dispatch_constraint_fns.put(self.gpa, codec.constraint.fn_var, {});
-                self.retireResolvedTypeSchemeRequirements();
+                try self.retireResolvedTypeSchemeRequirements();
             }
             try self.checkStaticDispatchConstraints(env, false);
             try self.checkAllConstraints(env);
@@ -50999,6 +51017,120 @@ fn beginDeferredEntryUse(self: *Self, entry: DeferredConstraintCheck, env: *Env)
     return .{ .settle = use_idx };
 }
 
+/// MECHANISM: late-settled scheme requirements (design.md). A scheme
+/// requirement that settles after an instantiation copied it refines the
+/// scheme's type, which can let further relations of the scheme settle, and
+/// each target instance those select adds its variables to the scheme. Every
+/// copy settles on its own instance of the same method scheme. So a
+/// scheme-use record that copies a late-settled requirement is extended
+/// through each relation callable it pairs whose original and copy both
+/// selected a target: each variable of the original's instance is paired
+/// with the copy's variable for the same method-scheme variable, and the
+/// relations those instances derived are followed the same way.
+fn extendSubstitutionsWithLateSettledRequirements(self: *Self) Allocator.Error!void {
+    if (self.late_settled_scheme_requirements.items.len == 0) return;
+
+    // Each late-settled callable, by the root a record's pair resolves to.
+    var late_by_root = collections.DenseMap(Var, Var).init(self.gpa);
+    defer late_by_root.deinit();
+    for (self.late_settled_scheme_requirements.items) |fn_var| {
+        try late_by_root.put(self.types.resolveVar(fn_var).var_, fn_var);
+    }
+
+    // The record each dispatch edge's target instantiation wrote, by the
+    // edge's raw constraint callable.
+    var edge_records: std.AutoHashMapUnmanaged(u32, u32) = .empty;
+    defer edge_records.deinit(self.gpa);
+    const record_count = self.cir.scheme_uses.items().len;
+    for (self.cir.scheme_uses.items(), 0..) |record, index| {
+        if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.dispatch_target)) continue;
+        try edge_records.put(self.gpa, record.slot_data, @intCast(index));
+    }
+
+    // (original callable, copy's callable) links still to follow.
+    var links: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty;
+    defer links.deinit(self.gpa);
+    var visited = collections.DenseMap(Var, void).init(self.gpa);
+    defer visited.deinit();
+    var extended: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty;
+    defer extended.deinit(self.gpa);
+
+    for (0..record_count) |record_idx| {
+        const record = self.cir.scheme_uses.items()[record_idx];
+        const record_pairs = self.cir.scheme_use_pairs.items()[record.pairs_start..][0..record.pairs_len];
+        const first_late = for (record_pairs, 0..) |pair, index| {
+            if (late_by_root.contains(self.types.resolveVar(@fromBackingInt(@intCast(pair.old_var))).var_)) break index;
+        } else continue;
+        links.clearRetainingCapacity();
+        try links.appendSlice(self.gpa, record_pairs);
+        for (links.items[first_late..]) |*link| {
+            const root = self.types.resolveVar(@fromBackingInt(@intCast(link.old_var))).var_;
+            if (late_by_root.get(root)) |late| link.old_var = @backingInt(late);
+        }
+
+        visited.clearRetainingCapacity();
+        extended.clearRetainingCapacity();
+        try extended.appendSlice(self.gpa, self.cir.scheme_use_pairs.items()[record.pairs_start..][0..record.pairs_len]);
+        const original_len = extended.items.len;
+        while (links.pop()) |link| {
+            if (link.old_var == link.fresh_var) continue;
+            if ((try visited.getOrPut(@fromBackingInt(@intCast(link.old_var)))).found_existing) continue;
+            const definition_record = edge_records.get(link.old_var) orelse continue;
+            const copy_record = edge_records.get(link.fresh_var) orelse continue;
+            self.debugAssertSameDispatchTarget(link);
+            // Both records instantiate one method scheme, and each holds its
+            // pairs sorted by the scheme's variable.
+            const definition = self.cir.scheme_uses.items()[definition_record];
+            const copy = self.cir.scheme_uses.items()[copy_record];
+            const all_pairs = self.cir.scheme_use_pairs.items();
+            const definition_pairs = all_pairs[definition.pairs_start..][0..definition.pairs_len];
+            const copy_pairs = all_pairs[copy.pairs_start..][0..copy.pairs_len];
+            var definition_idx: usize = 0;
+            var copy_idx: usize = 0;
+            while (definition_idx < definition_pairs.len and copy_idx < copy_pairs.len) {
+                const definition_pair = definition_pairs[definition_idx];
+                const copy_pair = copy_pairs[copy_idx];
+                if (definition_pair.old_var < copy_pair.old_var) {
+                    definition_idx += 1;
+                } else if (definition_pair.old_var > copy_pair.old_var) {
+                    copy_idx += 1;
+                } else {
+                    const paired: ModuleEnv.SchemeUsePair = .{
+                        .old_var = definition_pair.fresh_var,
+                        .fresh_var = copy_pair.fresh_var,
+                    };
+                    try extended.append(self.gpa, paired);
+                    try links.append(self.gpa, paired);
+                    definition_idx += 1;
+                    copy_idx += 1;
+                }
+            }
+        }
+        if (extended.items.len == original_len) continue;
+
+        try self.canonicalizeSchemeUsePairs(&extended);
+        const pairs_start: u32 = @intCast(self.cir.scheme_use_pairs.items().len);
+        for (extended.items) |pair| {
+            _ = try self.cir.scheme_use_pairs.append(self.gpa, pair);
+        }
+        const updated = &self.cir.scheme_uses.items()[record_idx];
+        updated.pairs_start = pairs_start;
+        updated.pairs_len = @intCast(extended.items.len);
+    }
+}
+
+/// A relation and an instantiation's copy of it select one method target.
+fn debugAssertSameDispatchTarget(self: *const Self, link: ModuleEnv.SchemeUsePair) void {
+    if (!std.debug.runtime_safety) return;
+    const definition_idx = self.dispatch_target_instantiation_by_fn_var.get(@fromBackingInt(@intCast(link.old_var))) orelse return;
+    const copy_idx = self.dispatch_target_instantiation_by_fn_var.get(@fromBackingInt(@intCast(link.fresh_var))) orelse return;
+    const definition = self.dispatch_target_instantiations.items[definition_idx];
+    const copy = self.dispatch_target_instantiations.items[copy_idx];
+    if (definition.target_env != copy.target_env or !std.meta.eql(definition.target_binding, copy.target_binding)) {
+        base.invariant("a scheme relation and its copy selected different method targets", .{});
+    }
+}
+
 /// A use none of whose relations can still settle as one unit: it is
 /// neither replayed nor a replay source.
 fn excludeUseFromReplay(self: *Self, use_idx: u32) void {
@@ -52326,7 +52458,7 @@ fn recordSettledDeferredDispatchRelation(
     }
     // A later child can inspect this scheme before the queue finishes.
     // Retire only the exact relations this validation step just consumed.
-    self.retireResolvedTypeSchemeRequirements();
+    try self.retireResolvedTypeSchemeRequirements();
 }
 
 /// Move one structurally known generated codec obligation out of the hot
@@ -52777,7 +52909,7 @@ fn resumeStaticDispatchDrain(
     if (!self.commit_probe_active and
         self.settled_static_dispatch_constraint_fns.count() != drain.settled_relations_before)
     {
-        self.retireResolvedTypeSchemeRequirements();
+        try self.retireResolvedTypeSchemeRequirements();
     }
     return .done;
 }
