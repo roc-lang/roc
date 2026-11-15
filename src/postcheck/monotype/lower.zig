@@ -63236,6 +63236,14 @@ const BodyContext = struct {
         });
     }
 
+    /// The local an aggregate derivation binds `operand` to: one when two or
+    /// more components read it and it is not already a local read.
+    fn derivationOperandLocal(self: *BodyContext, operand: DraftExprId, ty: Type.TypeId, component_count: usize) Allocator.Error!?DraftLocalId {
+        if (component_count < 2) return null;
+        if (self.draft.exprs.items[@backingInt(operand)].data == .local) return null;
+        return try self.addLocal(self.builder.symbols.fresh(), ty);
+    }
+
     /// Hash `value` (of `value_ty`) into `hasher`, producing a new Hasher of
     /// `hasher_ty`. The threading is "innermost first": each component feeds the
     /// hasher accumulated so far.
@@ -63319,7 +63327,12 @@ const BodyContext = struct {
             /// `fields` and `items` are spans of the graph's type store, read
             /// afresh as each component is reached.
             aggregate: struct {
+                /// The type of the operands, which every component reads.
+                ty: Type.TypeId,
                 operand: D.Operand,
+                /// The operands before `D.aggregateEnter` bound them.
+                source: D.Operand = undefined,
+                locals: D.AggregateLocals = undefined,
                 fields: Type.Span = .empty(),
                 items: Type.Span = .empty(),
                 state: DraftExprId = undefined,
@@ -63465,8 +63478,8 @@ const BodyContext = struct {
     /// representation.
     fn derivationNamedTask(self: *BodyContext, comptime D: type, named_ty: Type.TypeId, backing_ty: Type.TypeId, operand: D.Operand) Allocator.Error!DerivationTask(D) {
         return switch (self.typeStore().get(backing_ty)) {
-            .record => |fields| .{ .aggregate = .{ .operand = operand, .fields = fields } },
-            .tuple => |items| .{ .aggregate = .{ .operand = operand, .items = items } },
+            .record => |fields| .{ .aggregate = .{ .ty = named_ty, .operand = operand, .fields = fields } },
+            .tuple => |items| .{ .aggregate = .{ .ty = named_ty, .operand = operand, .items = items } },
             .primitive, .named, .tag_union, .list, .box, .func, .erased, .zst, .hole => .{ .named = .{
                 .named_ty = named_ty,
                 .backing_ty = backing_ty,
@@ -63539,8 +63552,8 @@ const BodyContext = struct {
                 }
                 const body: ?DerivationTask(D) = switch (shape) {
                     .list => Common.invariant("structural derivation expansion reached a List; List derivations dispatch to a method target"),
-                    .record => |fields| .{ .aggregate = .{ .operand = operand, .fields = fields } },
-                    .tuple => |items| .{ .aggregate = .{ .operand = operand, .items = items } },
+                    .record => |fields| .{ .aggregate = .{ .ty = ty, .operand = operand, .fields = fields } },
+                    .tuple => |items| .{ .aggregate = .{ .ty = ty, .operand = operand, .items = items } },
                     .tag_union => |tags| .{ .tag_union = .{ .ty = ty, .tags_span = tags, .operand = operand } },
                     .named => |named| if (named.backing.get()) |backing| try self.derivationNamedTask(D, ty, backing.ty, operand) else null,
                     .primitive, .zst, .func, .erased, .box => null,
@@ -63613,14 +63626,20 @@ const BodyContext = struct {
                 return .{ .done = .{ .def = def.def_id } };
             },
             .aggregate => |*aggregate| {
+                const len = aggregate.fields.len + aggregate.items.len;
                 if (stage == 0) {
+                    aggregate.source = aggregate.operand;
+                    const entry = try D.aggregateEnter(self, aggregate.ty, aggregate.operand, len);
+                    aggregate.locals = entry.locals;
+                    aggregate.operand = entry.operand;
                     aggregate.state = try D.combineSeed(self, aggregate.operand, ctx);
                 } else {
                     aggregate.state = try D.combine(self, aggregate.state, input.?.expr, ctx);
                     aggregate.next += 1;
                 }
-                const len = aggregate.fields.len + aggregate.items.len;
-                if (aggregate.next == len) return derivationExpr(aggregate.state, D);
+                if (aggregate.next == len) {
+                    return derivationExpr(try D.aggregateExit(self, aggregate.ty, aggregate.locals, aggregate.source, aggregate.state, ctx), D);
+                }
                 const index = if (D.forward) aggregate.next else len - 1 - aggregate.next;
                 if (aggregate.fields.len != 0) {
                     const field = self.spanFieldAt(aggregate.fields, index);
@@ -70563,6 +70582,30 @@ const EqDeriver = struct {
 
     const missing_component_method_msg = "checked method registry is missing List equality target";
 
+    /// An operand read by two or more components binds to a local, unless it
+    /// already is a local read, so each component reads the local rather than
+    /// sharing the operand's expression.
+    const AggregateLocals = struct { lhs: ?DraftLocalId, rhs: ?DraftLocalId };
+
+    const AggregateEntry = struct { locals: AggregateLocals, operand: Operand };
+
+    fn aggregateEnter(self: *BodyContext, ty: Type.TypeId, operand: Operand, component_count: usize) Allocator.Error!AggregateEntry {
+        const lhs = try self.derivationOperandLocal(operand.lhs, ty, component_count);
+        const rhs = try self.derivationOperandLocal(operand.rhs, ty, component_count);
+        return .{
+            .locals = .{ .lhs = lhs, .rhs = rhs },
+            .operand = .{
+                .lhs = if (lhs) |local| try self.localExpr(local, ty) else operand.lhs,
+                .rhs = if (rhs) |local| try self.localExpr(local, ty) else operand.rhs,
+            },
+        };
+    }
+
+    fn aggregateExit(self: *BodyContext, ty: Type.TypeId, locals: AggregateLocals, source: Operand, result: DraftExprId, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
+        const with_rhs = if (locals.rhs) |local| try self.wrapLet(local, ty, source.rhs, result, ctx.result_ty) else result;
+        return if (locals.lhs) |local| try self.wrapLet(local, ty, source.lhs, with_rhs, ctx.result_ty) else with_rhs;
+    }
+
     fn methodArgTypes(ty: Type.TypeId, _: Type.TypeId) [2]Type.TypeId {
         return .{ ty, ty };
     }
@@ -70783,6 +70826,28 @@ const HashDeriver = struct {
     }
 
     const missing_component_method_msg = "checked method registry is missing List to_hash target";
+
+    /// A value read by two or more components binds to a local, unless it
+    /// already is a local read. The hasher is the fold's state, which only
+    /// the first component reads.
+    const AggregateLocals = struct { value: ?DraftLocalId };
+
+    const AggregateEntry = struct { locals: AggregateLocals, operand: Operand };
+
+    fn aggregateEnter(self: *BodyContext, ty: Type.TypeId, operand: Operand, component_count: usize) Allocator.Error!AggregateEntry {
+        const value = try self.derivationOperandLocal(operand.value, ty, component_count);
+        return .{
+            .locals = .{ .value = value },
+            .operand = .{
+                .value = if (value) |local| try self.localExpr(local, ty) else operand.value,
+                .hasher = operand.hasher,
+            },
+        };
+    }
+
+    fn aggregateExit(self: *BodyContext, ty: Type.TypeId, locals: AggregateLocals, source: Operand, result: DraftExprId, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
+        return if (locals.value) |local| try self.wrapLet(local, ty, source.value, result, ctx.result_ty) else result;
+    }
 
     fn methodArgTypes(ty: Type.TypeId, result_ty: Type.TypeId) [2]Type.TypeId {
         return .{ ty, result_ty };
