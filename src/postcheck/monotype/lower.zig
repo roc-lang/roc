@@ -50008,6 +50008,19 @@ const BodyContext = struct {
         return runtime_boundary;
     }
 
+    /// The produced field of an inline (required or defaulted) constructor
+    /// field whose child supplied a distinct witness slot. An inline field's
+    /// runtime slot is its source value, so the witness slot is both.
+    fn inlineFieldWithWitnessSlot(field: InstField, witness_slot: NodeId) InstField {
+        return .{
+            .name = field.name,
+            .ty = witness_slot,
+            .value_ty = if (field.value_ty != .none) .of(witness_slot) else .none,
+            .kind = field.kind,
+            .default = field.default,
+        };
+    }
+
     /// What one constructor child contributes to its container's value
     /// witness.
     const ConstructorChildWitness = struct {
@@ -50026,19 +50039,6 @@ const BodyContext = struct {
     /// container to be rebuilt. Every accepted difference must carry
     /// producer-authored representation or completion evidence; constructor
     /// lowering never guesses from shape.
-    /// The produced field of an inline (required or defaulted) constructor
-    /// field whose child supplied a distinct witness slot. An inline field's
-    /// runtime slot is its source value, so the witness slot is both.
-    fn inlineFieldWithWitnessSlot(field: InstField, witness_slot: NodeId) InstField {
-        return .{
-            .name = field.name,
-            .ty = witness_slot,
-            .value_ty = if (field.value_ty != .none) .of(witness_slot) else .none,
-            .kind = field.kind,
-            .default = field.default,
-        };
-    }
-
     fn constructorChildWitness(
         self: *BodyContext,
         slot_node: NodeId,
