@@ -205,12 +205,11 @@ pub const StaticDispatchRelationMerge = struct {
     retained_fn_var: Var,
 };
 
-/// Whether a stored descriptor's word is an empty tag union a relation can no
-/// longer lift: written by an annotation, or committed after inference closed
-/// it. The empty tag union an opening of a nominal declaration's backing
-/// minted is the declaration's own row and decides nothing about the
-/// anonymous row it closes.
-fn committedEmptyTagUnionWord(word: types.Descriptor.Word) bool {
+/// An empty tag union a relation can no longer lift: written by an
+/// annotation, or committed after inference closed it. The empty tag union
+/// an opening of a nominal declaration's backing minted is the declaration's
+/// own row and decides nothing about the anonymous row it closes.
+fn committedEmptyTagUnion(word: types.Descriptor.Word) bool {
     const flags = word.flags();
     return word.kind == .empty_tag_union and !flags.uncommitted_tag_tail and !flags.nominal_backing_structure;
 }
@@ -3197,7 +3196,7 @@ pub const Store = struct {
         // meets one an annotation or a commitment closed.
         flags.uncommitted_tag_tail = merged_kind == .empty_tag_union and
             (a_flags.uncommitted_tag_tail or b_flags.uncommitted_tag_tail) and
-            !committedEmptyTagUnionWord(a_word) and !committedEmptyTagUnionWord(b_word);
+            !committedEmptyTagUnion(a_word) and !committedEmptyTagUnion(b_word);
         // A defaulting decision about one side is a decision about the merged
         // class: the default it committed is the type both sides now share.
         flags.default_decided = a_flags.default_decided or
