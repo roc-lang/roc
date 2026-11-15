@@ -3325,12 +3325,28 @@ const Unifier = struct {
         const a_entries = gathered.sliceRange(a_range);
         self.sortRowByName(Entry, a_entries);
         const b_entries = gathered.sliceRange(b_range);
-        self.sortRowByName(Entry, b_entries);
 
         // Get the start of index of the new range
         const a_start: u32 = @intCast(only_in_a.len());
         const b_start: u32 = @intCast(only_in_b.len());
         const both_start: u32 = @intCast(in_both.len());
+
+        // Two rows that hold the same names in the same positions are in the
+        // same order, which is `a`'s sorted order, and share every entry. An
+        // identifier is its text's one interned index, so no text is compared
+        // to see this.
+        if (sameNamesInOrder(Entry, a_entries, b_entries)) {
+            try in_both.ensureUnusedCapacity(scratch.gpa, a_entries.len);
+            for (a_entries, b_entries) |a_next, b_next| {
+                _ = in_both.appendAssumeCapacity(.{ .a = a_next, .b = b_next });
+            }
+            return .{
+                .only_in_a = only_in_a.rangeToEnd(a_start),
+                .only_in_b = only_in_b.rangeToEnd(b_start),
+                .in_both = in_both.rangeToEnd(both_start),
+            };
+        }
+        self.sortRowByName(Entry, b_entries);
 
         // Iterate over the entries in order, grouping them
         var a_i: usize = 0;
@@ -3338,7 +3354,11 @@ const Unifier = struct {
         while (a_i < a_entries.len and b_i < b_entries.len) {
             const a_next = a_entries[a_i];
             const b_next = b_entries[b_i];
-            switch (Entry.orderByName(self.ident_store, a_next, b_next)) {
+            const order: std.math.Order = if (a_next.name.eql(b_next.name))
+                .eq
+            else
+                Entry.orderByName(self.ident_store, a_next, b_next);
+            switch (order) {
                 .eq => {
                     _ = try in_both.append(scratch.gpa, .{ .a = a_next, .b = b_next });
                     a_i += 1;
@@ -3371,6 +3391,16 @@ const Unifier = struct {
             .only_in_b = only_in_b.rangeToEnd(b_start),
             .in_both = in_both.rangeToEnd(both_start),
         };
+    }
+
+    /// Whether `a_entries` and `b_entries` hold the same names, position by
+    /// position.
+    fn sameNamesInOrder(comptime Entry: type, a_entries: []const Entry, b_entries: []const Entry) bool {
+        if (a_entries.len != b_entries.len) return false;
+        for (a_entries, b_entries) |a_entry, b_entry| {
+            if (!a_entry.name.eql(b_entry.name)) return false;
+        }
+        return true;
     }
 
     /// Order entries by name text. A row gathered from one built by an
@@ -5101,9 +5131,10 @@ pub const Scratch = struct {
         const gathered = self.rowList(kind, "gathered_");
         const start_int = gathered.len();
         const slice = multi_list.sliceRange(range);
+        try gathered.ensureUnusedCapacity(self.gpa, slice.len);
         // Whole entries are copied so a tag's pattern-only mark travels with it.
         for (0..slice.len) |index| {
-            _ = try gathered.append(self.gpa, slice.get(index));
+            _ = gathered.appendAssumeCapacity(slice.get(index));
         }
         return gathered.rangeToEnd(@intCast(start_int));
     }
