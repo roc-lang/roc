@@ -21870,6 +21870,19 @@ counter's floor that needs the bound on its increment, which itself takes
 rounds to settle). Assumptions are never retried against the proof data they
 already failed under, so each epoch revives each assumption at most once.
 
+An invariant is stated where a pass through the loop begins, so the value it
+bounds the parameter against must exist there: a literal, a local the loop's
+cycle never defines, or a parameter of the loop. A back edge also proves
+bounds against locals that the pass it ends defined. A loop that reads its
+list's length at the top of a pass and then appends three items ends that
+pass with the length three above that local. Such a bound is never assumed.
+Where the next pass begins the local does not hold that pass's value yet, and
+no entry edge has a value of it at all, so the assumption could not verify
+and would only spend a proof round. Within that round the local would also
+name two values, the unknown one the head read and the one its definition
+gives it, and the bound restated between them would say that a value is below
+itself.
+
 Everything a round carries into later rounds (each merge's environment meet
 and ordering intersection, each loop's entry orderings, each loop parameter's
 bounds) is a list of bounds or orderings, each identified by what it bounds:
@@ -28660,6 +28673,12 @@ and installation phases under the same diagnostic.
 `ROC_TEST_COMMAND_WORK` prints deterministic test-command counters at exit.
 The specialization, evaluation, runtime LIR, ARC, static-data and native test
 execution producers increment their own counters. This variable uses the same developer-only gate.
+
+`ROC_RANGE_PROVE_STATS` prints one line of deterministic work counters for
+each procedure the range prover walks: its proof rounds and restarts, the
+regions and statements it walked, its slack walks, and the sum refreshes with
+the size of their closures and the relaxations they ran. The counters measure
+how much work a procedure cost the prover and change nothing it proves.
 
 `ROC_PROFILE_ALLOCATIONS` attributes native test-root allocations on Linux x64.
 Each root owns its diagnostic table, aggregating allocation and reallocation

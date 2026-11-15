@@ -75,6 +75,9 @@ pub const Var = enum {
     /// and what its loop guards cost: guards made, guards withdrawn, proofs
     /// started over, and the fact-graph walks spent looking for a test.
     range_guard_stats,
+    /// Print one line of deterministic range prover work counters per
+    /// procedure the prover walks.
+    range_prove_stats,
 
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
@@ -100,6 +103,7 @@ pub const Var = enum {
             .storage_work => "ROC_STORAGE_WORK",
             .perf_map => "ROC_PERF_MAP",
             .range_guard_stats => "ROC_RANGE_GUARD_STATS",
+            .range_prove_stats => "ROC_RANGE_PROVE_STATS",
         };
     }
 };
