@@ -197,10 +197,10 @@ NO CHANGE
 				(p-assign (ident "_args")))
 			(e-block
 				(s-expr
-					(e-call (constraint-fn-var 378)
+					(e-call (constraint-fn-var 374)
 						(e-lookup-local
 							(p-assign (ident "echo!")))
-						(e-call (constraint-fn-var 377)
+						(e-call (constraint-fn-var 373)
 							(e-lookup-local
 								(p-assign (ident "describe")))
 							(e-tag (name "Square")))))

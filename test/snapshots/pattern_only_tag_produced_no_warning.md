@@ -432,10 +432,10 @@ main! = |_args| {
 						(e-match
 							(match
 								(cond
-									(e-call (constraint-fn-var 430)
+									(e-call (constraint-fn-var 431)
 										(e-lookup-local
 											(p-assign (ident "countdown")))
-										(e-dispatch-call (method "minus") (constraint-fn-var 428)
+										(e-dispatch-call (method "minus") (constraint-fn-var 429)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "n"))))

@@ -214,30 +214,6 @@ MISSING METHOD - fuzz_crash_032.md:7:10:7:30
 			(source-region (file "fuzz_crash_032.md") (start 8 3) (end 8 4) (annotation error) (line-text "  B.Blue => LocalStatus.Pending"))))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 7 10) (end 7 30))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "minus")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
-		(document
-			(source-region (file "fuzz_crash_032.md") (start 7 10) (end 7 30) (annotation error) (line-text "Green => LocalStatus-Complete"))
-			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "minus")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "[Complete, LocalStatus]")
-			(annotation-end)))
-	(report
-		(severity runtime_error)
 		(title "Type Mismatch")
 		(region (start 7 10) (end 7 30))
 		(headline
@@ -265,7 +241,7 @@ MISSING METHOD - fuzz_crash_032.md:7:10:7:30
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Complete, LocalStatus]")
+			(text "[Complete, LocalStatus, ..a] where [a.minus : a, a -> a]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -317,7 +293,7 @@ MISSING METHOD - fuzz_crash_032.md:7:10:7:30
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[LocalStatus]")
+			(text "[Complete, LocalStatus]")
 			(annotation-end))))
 ~~~
 # TOKENS
