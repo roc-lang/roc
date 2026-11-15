@@ -2531,7 +2531,10 @@ app's procedure, a method dispatch selects by type, a stored function value,
 a target derived from a function's type), a custom interpolation, or a
 conversion root no evaluation requests. A specialization that converts a
 literal at the closed type of a stored `literal_argument` root restores that
-root's value instead of registering a literal root. Specializing the rest of
+root's value instead of registering a literal root, and one that converts a
+literal at the closed type of a validate-only `literal_argument` root (every
+interpolation's among them) converts it in place, since that root's
+evaluation already reports its outcome. Specializing the rest of
 the runtime program, or lowering any of it for execution, is runtime work,
 and compile-time evaluation without an LSS runtime consumer to continue its
 program does none of it. Its program roots are *discovery roots*,
@@ -12075,21 +12078,23 @@ Otherwise two unrelated unions that both receive a value of one narrower type
 would be joined through it by type identity rather than by flow, and one tag
 label standing in both with two payload types would then be unified.
 
-Which rows a join can change is found before solving
-(`findRowJoinedTypes`). A row changes only where unification relates two
-types instantiated from DIFFERENT Monotypes; relating two instances of one
-Monotype unites rows that are already equal. An analysis solve relates every
-body exactly as the real solve does, but with one clone per callable-free
-Monotype, and records both Monotypes of every such pair. Sharing a clone only
-adds relations, so the analysis relates every pair the real solve does. The
-recorded row-bearing Monotypes, every Monotype structurally equal to one
-(equal equality digests), and every Monotype containing one are row-joined;
-the analysis's solution is then discarded and the real solve shares every
-other callable-free Monotype. A declared nominal row that no value is ever
-joined into, such as a large parse tree's, is thus one node for the whole
-program instead of a copy of its whole row per occurrence. Debug builds
-assert that a shared row-bearing clone never meets a different Monotype in
-unification.
+Which rows a join can change is found by solving (`solveProgram`). A row
+changes only where unification relates two types instantiated from DIFFERENT
+Monotypes; relating two instances of one Monotype unites rows that are
+already equal. The sharing solve relates every body with one clone per
+callable-free Monotype, and records both Monotypes of every such pair.
+Sharing a clone only adds relations, so the sharing solve relates every pair
+that a solve sharing fewer clones does. When it records no row-bearing
+Monotype, no row was joined, every clone it shared is one no join can change,
+and its solution is the program's: a program without row joins solves its
+bodies once. Otherwise the recorded row-bearing Monotypes, every Monotype
+structurally equal to one (equal equality digests), and every Monotype
+containing one are row-joined (`closeRowJoinedTypes`); the sharing solve's
+solution is discarded and the bodies are solved again, sharing every other
+callable-free Monotype. A declared nominal row that no value is ever joined
+into, such as a large parse tree's, is thus one node for the whole program
+instead of a copy of its whole row per occurrence. Debug builds assert that a
+shared row-bearing clone never meets a different Monotype in unification.
 
 A fresh callable-free cyclic leaf may join an existing instance without
 expansion only after an exact clone proof. That proof reads the immutable
@@ -16857,7 +16862,12 @@ strategy).
   program's modules by literal (`LiteralArgumentRootIndex`), and a
   specialization converting a literal whose node's type is closed restores
   the value of the root whose type's Monotype is that type
-  (`restoredLiteralArgument`) instead of registering a literal root. A debug
+  (`restoredLiteralArgument`) instead of registering a literal root. A
+  specialization converting a literal at the type of a validate-only root,
+  which stores no value, converts the literal in place, as a runtime program
+  does where it needs the value, and registers no literal root either
+  (`literalArgumentRootValidates`): the root's evaluation, which every
+  compilation runs, reports its outcome. A debug
   compiler asserts that every root for the literal at that type stored the
   same value. A root whose conversion failed reported the failure in its
   module and stores it; the specialization restores it as a failure already
@@ -19541,6 +19551,84 @@ from the same draft owner may reuse an in-progress nested body. Final
 specialization identity and capture ABI identity remain responsible for durable
 deduplication after owner-local bodies have been sealed.
 
+### Operand Sequencing
+
+Monotype emits every body operand-sequenced, and every later `.lss` stage
+reads bodies in that form: the order of a statement list is evaluation order,
+and a binding is in lexical scope for everything that follows it in its list.
+Monotype threads reassigned binders as explicit state, so a block, a `let` or
+a state merge used as an operand binds the mutable variable version that
+later source expressions name. Sequencing is what puts that binding in their
+scope.
+
+The sequenced form is:
+
+- Strict operands are evaluated left to right, before their consumer. An
+  operand is never a block or a `let`: the statements it carried stand in the
+  statement list that encloses the consumer. Where a later operand contributes
+  statements, every earlier operand that is not a local or a literal is bound
+  to a new local at its own position first. This is sequencing, not code
+  motion: nothing is speculated or reordered, and even a pure call keeps its
+  place relative to every later operand's statements.
+- An operand that transfers control ends its sequence. Its consumer is not
+  emitted and no binding is emitted for its absent value: the transfer is the
+  last statement of its list, nothing follows it there, and an `unreachable`
+  marker remains only as the final expression of the block that list belongs
+  to.
+- A function body, a match branch body, an `if` branch body and false
+  continuation, a loop body, a join body and remainder, a try ok body, an
+  initialized-payload arm, an `expect` condition, a recursive binding's value,
+  a compile-time value's initializer and a static-data candidate's runtime
+  value are each the whole of a scope of their own. The statements such an
+  expression carries form a block there. A block appears nowhere else, has at
+  least one statement, and does not end in another block.
+- No `let` expression remains; its binding is a statement.
+- An `if` has one condition. A later condition of a source chain executes
+  only when every earlier one is false, so it and its statements live in the
+  preceding false continuation, never before the first `if`.
+- A match branch's bindings are a statement list of their own, which the
+  guard's statements join. A guard whose evaluation transfers control ends
+  the bindings there and leaves the branch without a guard.
+- The child of a `dbg`, a row widening, a typed boundary or a `return` joins
+  the sequence of the expression that holds it without being a strict
+  operand, so it may itself transfer control.
+- An expression that has expressions inside it has exactly one parent. Only
+  locals, literals and markers are named from more than one place.
+
+The lowerer produces this form as it builds each body, not by rewriting
+bodies afterwards. Every body expression is added through one function
+(`BodyContext.addExprWithTypeCell`), which sequences the expression's
+operands as it adds it. When statements belong before an expression whose
+enclosing statement list does not exist yet, the draft records them as that
+expression's leading statements, and whichever consumer, statement list or
+scope takes the expression next places them. Placing them leaves the record
+in place and gives the consumer an expression of its own to name, so an
+expression that several consumers name carries its statements to each of
+them. An expression none of whose operands carries statements or transfers
+control is added exactly as given, so sequencing costs work only where it
+changes something. Draft sealing gives each function body, and each value a
+sealed draft hands back, its scope. A reservation that sealing fills in place
+with an expression that carries statements or transfers control changes the
+sequence of the expressions already built around it, so that draft's bodies
+are sequenced again in place before they are sealed, each expression keeping
+its id.
+
+A few expressions are assembled outside any body, from sealed operands: a
+compile-time constant restored for a static-data request or a
+procedure-binding root, and that root's call of it. They are added through
+`Builder.addProgramExpr`, which applies the same rule to operands that are
+each a value or one sealed block.
+
+Lifting keeps the form: it rewrites callable expressions in place and adds no
+statements. Monotype restores each compile-time constant once and names that
+one expression wherever the constant is read, so a body can reach an
+expression or a statement that an earlier parent already holds. Lifting
+records each function whose rewrite reaches one, and once lifting has
+finished it gives that function a structural copy of its own body
+(`monotype_lifted/body_copy.zig`); the earlier parent keeps the original, and
+every other body stays exactly as Monotype emitted it. Debug builds then
+verify the form on every lifted body (`monotype_lifted/sequenced.zig`).
+
 ### Monotype Specialization
 
 Monotype specialization is `.lss`-only and root driven.
@@ -21128,21 +21216,6 @@ No `for` node exists after Monotype IR.
 
 ## Monotype Lifted IR
 
-The lifting boundary sequences strict expression operands before outputting lifted
-bodies. A block or `let` used as an operand contributes its bindings to the
-enclosing continuation, so a mutable variable version named by later source
-expressions is explicitly in lexical scope. Operands are evaluated from left to
-right; opaque computations are named at their original position before any
-following operand's bindings. This transformation does not speculate or reorder
-work. Branches, loop bodies, joins, expect contexts, and compile-time evidence
-retain their own execution scopes. Later `if` conditions remain inside the
-preceding false continuation. State-merge patterns emitted by Monotype carry
-branch mutations into the enclosing continuation; sequencing consumes those
-explicit patterns rather than rediscovering writes or declining optimization.
-A strict operand that transfers control terminates its sequence explicitly; no
-consumer binding is emitted for its absent value, and an `unreachable` marker
-remains only the final expression of the terminated block.
-
 Monotype Lifted IR is `.lss`-only. It removes closures and local functions from
 expression position. Its type store is the Monotype type store.
 
@@ -21155,10 +21228,13 @@ Callable lifting rewrites the expression variants whose callable meaning changes
 - a direct-call callee changes from a Monotype function template to a lifted
   function id
 
-Operand sequencing then appends the explicit ordered bodies, retaining source
-patterns and local identities and propagating source locations and regions.
-Function definitions refer to the sequenced body roots. Literal and local leaves
-can continue to reference the transferred prefix.
+Monotype's bodies arrive operand-sequenced (Operand Sequencing), and these
+rewrites keep them so: a callable expression is replaced where it stands, and
+the capture operands lifting adds are locals. A function whose body reaches a
+subtree an earlier parent holds takes a structural copy of its body, which
+gives every expression with expressions inside it one parent. Debug builds
+verify the sequenced form of every lifted body before the program leaves
+lifting.
 
 This is a representation-sharing rule, not a license for later stages to accept
 pre-lift callable forms. After lifting, a valid lifted program has no reachable
@@ -21446,7 +21522,11 @@ leaf joins the class without materializing. A Monotype that reaches a cycle, or
 that is uninhabited, keeps the ordinary relation. Leaves that survive solving
 were never unified: their callable slots all close empty and their
 forced-dynamic marks depend only on their Monotype, so finalization gives every
-untouched leaf of one Monotype one shared clone. A clone-invariant Monotype
+untouched leaf of one Monotype one shared clone. An expression or pattern that
+no function body reaches is never typed by solving, and the store holds many
+of them (the rows a rewritten body no longer uses). Each gets the type its
+Monotype's untouched leaf finalizes to, so all of them of one Monotype share
+one leaf rather than each minting a variable. A clone-invariant Monotype
 that solving expanded in the shared leaf context already has its one var, and
 finalization reuses it rather than minting a second: a named type whose
 arguments were read lazily and whose backing is cloned only at finalization
@@ -21463,7 +21543,9 @@ Compatibility traversal scratch belongs to one solver invocation. Deterministic
 work counters distinguish compatibility queries and structural pairs from lazy
 expansion, unification, member merging and final ordering. The developer-only
 `ROC_LAMBDA_SOLVE_STATS` diagnostic reports one record per invocation, including
-its required roots and functions;
+its required roots and functions and how many times it solved its bodies
+(`body_solves`, two when a row join made it solve them again; the other
+counters count the solve it kept);
 pre-evaluation solving and normalization from stored values remain separate
 invocations. No diagnostic state or solved compatibility proofs cross those
 boundaries.
@@ -27814,7 +27896,11 @@ that found them all in the cache specializes it
 every conversion their own code uses. That specialization demands no
 compile-time root; it registers the runtime program's literal roots again and
 evaluates them, and their outcomes, which the first evaluation already
-reported, report nowhere. A literal root is not stored by any compilation, so
+reported, report nowhere. Every literal root it registers is therefore one the
+first evaluation registered, which is what specializing the program roots as
+discovery roots guarantees; debug builds verify it by comparing the content
+identities of the two specializations' literal roots (`LiteralRootCheck`). A
+literal root is not stored by any compilation, so
 both kinds of compilation read literal roots' completed values from the stages
 that evaluated them, the same way. A compilation with neither specializes
 once, with its program roots in full, and its runtime consumer continues that

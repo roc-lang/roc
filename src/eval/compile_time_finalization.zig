@@ -1015,7 +1015,10 @@ pub fn finalizeProgram(
     try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, .before_solved);
     var plan = try planRoots(allocator, modules, lowering_modules, program_roots, options.discovery_roots, lss_runtime, options.timing);
     defer plan.deinit(allocator);
-    var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, &plan, runtime_target, options, &debug_events, demand_driven);
+    var evaluated_literals: LiteralRootIdentities = .empty;
+    defer evaluated_literals.deinit(allocator);
+    const verify_literals = builtin.mode == .debug and lss_runtime and !plan.continued;
+    var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, &plan, runtime_target, options, &debug_events, demand_driven, if (verify_literals) .{ .record = &evaluated_literals } else .none);
     errdefer specialized.deinit();
     try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, .after_solved);
     var runtime_stages: ProgramSession.RuntimeStages = .evaluation;
@@ -1035,8 +1038,9 @@ pub fn finalizeProgram(
         // such a compilation specializes it: every read of a completed value
         // restores the value as a constant. Only the literal roots that
         // specialization registers evaluate again; their outcomes were
-        // reported when the evaluation above ran them. The discovery roots
-        // that evaluation specialized contribute no runtime entrypoint.
+        // reported when the evaluation above ran them, which debug builds
+        // verify (`LiteralRootCheck`). The discovery roots that evaluation
+        // specialized contribute no runtime entrypoint.
         const quiet_modules = try allocator.alloc(ProgramModule, modules.len);
         defer allocator.free(quiet_modules);
         for (modules, quiet_modules) |entry, *quiet| quiet.* = .{ .module = entry.module, .problem_store = null };
@@ -1065,6 +1069,7 @@ pub fn finalizeProgram(
             quiet_options,
             &quiet_events,
             demand_driven,
+            if (verify_literals) .{ .verify = &evaluated_literals } else .none,
         );
         runtime_prepared = respecialized.prepared;
         respecialized.prepared = null;
@@ -1222,6 +1227,21 @@ const QuietUnfinalizedReports = struct {
         destination.problem_store = null;
         return destination;
     }
+};
+
+/// The literal roots a specialization registered, each by its definition's
+/// content identity: one literal converted at one type.
+const LiteralRootIdentities = std.AutoHashMapUnmanaged([32]u8, void);
+
+/// What a specialization does with the identities of the literal roots it
+/// registers. A runtime program specialized after its evaluation completed
+/// reports no literal root outcome, so it must register only literal roots
+/// that evaluation registered, and so reported: debug builds record the
+/// evaluation's and verify the runtime program's against them.
+const LiteralRootCheck = union(enum) {
+    none,
+    record: *LiteralRootIdentities,
+    verify: *const LiteralRootIdentities,
 };
 
 /// What one specialization of a program and the evaluation of its
@@ -1393,6 +1413,7 @@ fn specializeAndEvaluate(
     options: Options,
     debug_events: *DebugEvents,
     demand_driven: bool,
+    literal_check: LiteralRootCheck,
 ) FinalizeError!SpecializedProgram {
     const requests = &plan.requests;
     const source_modules = &plan.source_modules;
@@ -1454,6 +1475,20 @@ fn specializeAndEvaluate(
     };
     var monotype_owned = true;
     errdefer if (monotype_owned) monotype.deinit();
+    switch (literal_check) {
+        .none => {},
+        .record => |evaluated| {
+            var identities = monotype.program.literalRootIdentities();
+            while (identities.next()) |identity| try evaluated.put(allocator, identity.bytes, {});
+        },
+        .verify => |evaluated| {
+            var identities = monotype.program.literalRootIdentities();
+            while (identities.next()) |identity| {
+                if (!evaluated.contains(identity.bytes))
+                    finalizationInvariant("a runtime program specialized after its evaluation completed registered a literal root that evaluation did not");
+            }
+        },
+    }
     demand = monotype.takeComptimeDemand();
     const compile_time_root_count = demand.?.root_reads.len;
     result.compile_time_root_count = compile_time_root_count;
