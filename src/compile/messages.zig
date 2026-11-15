@@ -470,6 +470,11 @@ pub const WorkerResult = union(enum) {
     operation_failed: WorkerOperationFailure,
     /// A worker stage ran out of memory
     worker_oom: WorkerOom,
+    /// Something the frontend loop reacts to happened outside a task's
+    /// result: a task of the module-object scheduler's session finished, or
+    /// a worker ran out of memory (`Coordinator.worker_oom`). It carries
+    /// nothing.
+    wake,
 
     /// Release a result that shutdown prevented the coordinator from accepting.
     /// Parsed environments have no coordinator owner yet; later stages borrow
@@ -485,7 +490,7 @@ pub const WorkerResult = union(enum) {
                 var storage: CheckedArtifact.ModuleEnvStorage = .{ .checked_source = r.module_env };
                 storage.deinit();
             },
-            .cached_parse, .canonicalized, .type_checked, .operation_failed, .worker_oom => {},
+            .cached_parse, .canonicalized, .type_checked, .operation_failed, .worker_oom, .wake => {},
         }
         self.deinit(gpa);
     }
@@ -524,6 +529,7 @@ pub const WorkerResult = union(enum) {
             },
             .operation_failed => {},
             .worker_oom => {},
+            .wake => {},
         }
     }
 };

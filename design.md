@@ -4884,6 +4884,15 @@ already delivered: its reports and imports, which come from the same source
 bytes as the record, are not taken a second time (debug builds check that they
 match).
 
+The coordinator's loop waits only while a frontend task is out, and then for
+a worker's result: every event it reacts to arrives through the result
+channel (a task's result, a wake for a finished task of the module-object
+scheduler's session, or a wake from a worker that ran out of memory), and the
+channel's wait ends the moment one is sent. A cancel request is a flag its
+embedder sets without waking anyone, so a cancellable compilation waits at
+most 10 ms at a time to read it. With no frontend task out, the loop does
+not wait: nothing it waits for can arrive.
+
 ## Cache Boundary
 
 Every cache entry is keyed by the content hash of its inputs: the module's
@@ -17215,9 +17224,9 @@ native code) starts compile-time evaluation while checking continues
 (`CompileTimeFinalization.EarlyEvaluation`, which the coordinator drives).
 Once every module of the build is known (every module parsed, so every import
 registered, and every import of another package naming its module), the
-coordinator hands it each freshly checked module whose evaluation is exactly
-the one the program evaluation would run, the moment every module its
-lowering sees has every compile-time root complete:
+coordinator reads each module's checked result as the module is checked and
+hands the evaluation each freshly checked module whose evaluation is exactly
+the one the program evaluation would run:
 
 - it is not the root module of the root package or of the platform;
 - neither it nor a module its lowering sees has platform requirements;
@@ -17227,23 +17236,48 @@ lowering sees has every compile-time root complete:
   the first artifact evaluates for both, or be named in the link by their
   content identities, which only the finished link shows
   (`BoxyObjects.settleNames`);
-- when the build pairs an app with its platform, neither it nor a module its
-  lowering sees is in the platform root's import closure, which the
-  platform-only evaluation completes and commits before the program's.
+- when the build pairs an app with its platform and it, or a module its
+  lowering sees, is in the platform root's import closure, no platform-only
+  evaluation can run: the checked platform root is finalized or has no
+  compile-time requests of its own, so every module of that closure is
+  evaluated with the program's.
 
-A module restored from the checked cache is never handed over; a cached
-module with roots left to evaluate is reopened by the program evaluation.
-Taking a module completes its value-form roots and prepares the root graph,
+A module is handed over the moment the last module its lowering sees
+completes: the coordinator counts, for each eligible module, the seen modules
+not complete yet (`EarlyCandidate`), and a module completing (restored
+complete from the checked cache, checked with nothing to evaluate, or
+completed during checking) releases the modules waiting for it. A module in
+or seeing the platform root's closure also waits for the platform root to be
+checked, and is never handed over when a platform-only evaluation can run:
+that evaluation completes and commits the closure's modules before the
+program's, with report destinations of its own and a different module
+receiving the Builtin module's reports, and whether it runs depends on whether
+the app root checks, which is known only when checking ends. A module
+restored from the checked cache is never handed over; a cached module with
+roots left to evaluate is reopened by the program evaluation.
+
+Taking a module completes its value-form roots under one value schema that
+every module taken extends with the modules its lowering sees (a root's
+schema reads only the modules its type names), and prepares the root graph,
 classification and module evaluation `evaluateRootsBoxy` prepares for it,
 over the module and the modules its lowering sees that this compilation
 commits, whose problem stores its programs can report to. A module whose only
 roots are value-form is complete at once, so its object can build. Every other
 module's program is lowered and compiled as a task of the scheduler's session
-once its imports' objects are known, and the coordinating thread runs it
-between frontend results, waiting at most a millisecond for a result while one
-of these programs is out. Completing a module's roots lets its object build
-and its importers be handed over, so evaluation and unit building follow
-checking up the import graph.
+once its imports' objects are known, and then run as another task
+(`EarlyEvaluation.RunTask`): its roots run as executor tasks on the workers,
+alongside checking, unit builds and the programs of other modules, several of
+which can run at once. A run writes its own module's store, which nothing
+reads or writes until the module completes, and stores its roots' results
+holding one lock (`Options.store_lock`), since storing also writes the report
+stores and observations of modules other programs reach. The coordinating
+thread does only what decides the next step: it takes modules, starts their
+programs once the objects are known, and when a run completes moves the
+module to its next stage and, once every root is complete, tells the object
+scheduler the module completed and releases the modules waiting for it. The
+frontend loop learns of each completion as it learns of a frontend result: a
+worker finishing a task of the scheduler's session posts a wake through the
+result channel the loop waits on (`Coordinator.wakeFrontendLoop`).
 Importers' checking reads a module's checked interface and never its
 evaluation columns, so a module's importers are checked while its roots are
 evaluated. A coordinator without workers runs no task while checking
@@ -17255,11 +17289,13 @@ completion before any other evaluation uses the scheduler's session; a module
 whose program has not started is left to the program evaluation, which finds
 its value-form roots complete and evaluates the rest exactly as it would have.
 The program evaluation replays and persists the observations made during
-checking with its own (`Options.early_evaluation`), and takes over the report
+checking with its own (`Options.early_evaluation`), takes over the report
 destinations the evaluation during checking used for modules no evaluation of
 this compilation completes (cached modules and the Builtin module), so its
-reports are those one evaluation makes. Modules are committed, and their
-checked entries queued for writing, after the program evaluation: the
+reports are those one evaluation makes, and links its programs against the
+images the evaluation during checking loaded, unless the scheduler started
+over under the link's names, which unloads them. Modules are committed, and
+their checked entries queued for writing, after the program evaluation: the
 evaluation of a module importing another can still report to the imported
 module's problem store (an exhaustiveness failure in its code reached through
 its object), so a module's reports are final only once every importer's roots

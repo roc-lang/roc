@@ -3792,7 +3792,28 @@ fn registerModules(program: *Program) Allocator.Error!void {
     for (input.modules.root.relation_modules) |view| _ = try program.modules.add(view);
     program.body_indexed = try allocator.alloc(bool, program.modules.views.items.len);
     @memset(program.body_indexed, false);
-    for (program.modules.views.items) |view| {
+    try indexModules(program, 0);
+}
+
+/// Register with a schema program (`createSchemaProgram`) the modules of
+/// `views` it does not hold yet. A root's schema reads only the modules its
+/// type names, so a program holding more modules answers it exactly as one
+/// holding fewer.
+pub fn addSchemaModules(program: *Program, views: []const checked.ImportedModuleView) Allocator.Error!void {
+    const first = program.modules.views.items.len;
+    for (views) |view| _ = try program.modules.add(view);
+    const count = program.modules.views.items.len;
+    if (count == first) return;
+    program.body_indexed = try program.allocator.realloc(program.body_indexed, count);
+    @memset(program.body_indexed[first..], false);
+    try indexModules(program, first);
+}
+
+/// Index what each registered module from position `first` on declares that
+/// lowering looks up by module.
+fn indexModules(program: *Program, first: usize) Allocator.Error!void {
+    const allocator = program.allocator;
+    for (program.modules.views.items[first..]) |view| {
         try program.by_module_idx.put(allocator, view.view.module_identity.module_idx, view.index);
         for (view.view.exported_procedure_bindings.bindings) |*binding| {
             try program.exported_bindings.put(allocator, .{ .module = view.index, .def = binding.binding.def, .pattern = binding.binding.pattern }, binding);
