@@ -157,6 +157,7 @@ pub fn run(
     program.retains_declared_captures = owned.retains_declared_captures;
 
     const source_view = movedMonoView(&owned, &program);
+    if (@import("builtin").mode == .debug) try assertMonotypeSharingInvariant(allocator, &program, source_view.defs);
     var lifter = try Lifter.init(allocator, source_view, &program);
     defer lifter.deinit();
 
@@ -169,6 +170,56 @@ pub fn run(
 
     owned.deinit();
     return program;
+}
+
+/// Debug builds check the Monotype sharing invariant where lifting consumes
+/// Monotype: no expression with children is reachable twice from the
+/// definitions' bodies, within one body or across bodies. A leaf (a local
+/// read, a literal) may be shared, since lowering it again costs nothing.
+fn assertMonotypeSharingInvariant(allocator: Allocator, program: *const Ast.Program, defs: []const Mono.Def) Allocator.Error!void {
+    const expr_seen = try allocator.alloc(bool, program.exprs.len());
+    defer allocator.free(expr_seen);
+    @memset(expr_seen, false);
+    const stmt_seen = try allocator.alloc(bool, program.stmts.len());
+    defer allocator.free(stmt_seen);
+    @memset(stmt_seen, false);
+    var stack: std.ArrayList(Ast.ExprChild) = .empty;
+    defer stack.deinit(allocator);
+    var children: std.ArrayList(Ast.ExprChild) = .empty;
+    defer children.deinit(allocator);
+    for (defs) |def| {
+        const body = switch (def.body) {
+            .roc => |body| body,
+            .hosted => continue,
+        };
+        try stack.append(allocator, .{ .expr = @fromBackingInt(@backingInt(body)) });
+        while (stack.pop()) |item| {
+            children.clearRetainingCapacity();
+            switch (item) {
+                .expr => |id| {
+                    try Ast.appendChildren(allocator, program, id, &children);
+                    if (expr_seen[@backingInt(id)]) {
+                        if (children.items.len != 0) {
+                            Common.invariantFmt("Monotype expression {d} ({s}) is reachable from two positions", .{
+                                @backingInt(id),
+                                @tagName(program.getExpr(id).data),
+                            });
+                        }
+                        continue;
+                    }
+                    expr_seen[@backingInt(id)] = true;
+                },
+                .stmt => |id| {
+                    if (stmt_seen[@backingInt(id)]) {
+                        Common.invariantFmt("Monotype statement {d} is reachable from two positions", .{@backingInt(id)});
+                    }
+                    stmt_seen[@backingInt(id)] = true;
+                    try Ast.appendStmtChildren(allocator, program, id, &children);
+                },
+            }
+            try stack.appendSlice(allocator, children.items);
+        }
+    }
 }
 
 /// Build the read-only Monotype input view after side arrays have been moved

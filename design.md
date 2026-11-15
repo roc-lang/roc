@@ -21632,7 +21632,28 @@ once and read the local at each position. A structural `to_hash` of a tag union
 with two or more variants binds the incoming hasher, which holds every earlier
 component's hash, so its branches do not each carry a copy. Constant
 restoration binds a `ConstStore` node it reaches twice ("Stored Function Capture
-Contract"). The match
+Contract"). Structural `is_eq` and `to_hash` bind a record or tuple operand that
+two or more components read; list destructuring binds the list it reads for its
+length, its items and its rest; a derived encoder binds the item list of a
+`Set` it writes; and a FieldNames size filter binds the rest of its iterator,
+which both its matching and its skipping step continue with. A branch that
+transfers control builds its own transfer: a record parser's unknown-field
+jump and a `for` loop's exit break are built once per branch that takes them.
+
+The rule is exact: no expression that has a child expression or statement is
+reachable from two positions in the definitions' bodies, within one body or
+across bodies, and no statement is reachable twice. An expression with no
+children may be shared, because lowering it again duplicates nothing: a local
+read, a literal, `unit`, `unreachable`, `def_ref`, `crash` and `checked_error`,
+`uninitialized`, and a childless instance of any other form, such as a jump with
+no arguments, a break with no value, an empty list, tuple or record, or a tag
+with no payloads. Control-transfer forms get no other exemption: a jump with
+arguments or a break with a value is re-lowered with its children at each
+reference, so it is built per branch like any other expression. Debug builds
+check the rule where lifting consumes Monotype (`lift.zig`,
+`assertMonotypeSharingInvariant`); release builds compile no check.
+
+The match
 compiler holds the invariant by construction: rows (branches) are never
 duplicated during specialization—a row that does not test the selected
 occurrence ends the test group instead of being copied into every arm, and the
