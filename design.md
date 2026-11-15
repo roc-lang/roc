@@ -13634,6 +13634,27 @@ the outermost commit registers them. Builds with runtime safety check that
 no instantiation copies a placeholder, and that by the end of checking every
 use not replayed is linked.
 
+Late-settled scheme requirements. A scheme-use record's pairs are its
+instantiation's substitution, so they must name every quantified variable
+of the scheme as published. A stored requirement whose receiver depends on
+an unannotated value of an enclosing scope (`weak = "a,b,c"` with
+`f = |g| weak.split_on(",").map(g)`) can settle after a use copied it. Its
+target instance then refines the scheme's type, which can let more of the
+scheme's relations settle, and each target instance those select adds its
+variables to the scheme (`map`'s result item above). The use's copies
+settle separately, on their own instances of the same method schemes, and
+the use's substitution does not yet name the new variables. When a stored
+requirement retires as settled after its scheme was copied, its callable is
+logged. Once solving ends, and only when that log is nonempty, every record
+that pairs a logged callable is extended. For each callable pair in the
+record whose original and copy both selected a target, the two target
+records instantiate one method scheme, so their pairs match one-to-one by
+method-scheme variable. Each variable of the original's instance is paired
+with the copy's variable for the same method-scheme variable, and the
+relations those instances derived are followed the same way. Builds with
+runtime safety check that each such original and copy selected the same
+method target. The regression test is the compile test "issue 13051".
+
 A generalization boundary captures its owned requirements before literal
 defaulting, then drains grounded copied requirements together with local codec
 constraint production to quiescence. Capture transfers a settled local codec
@@ -25060,6 +25081,20 @@ loop versioning; it cannot authorize an unconditional jump to the unique body.
 Shared metadata locals are needed only for merged definitions, and tracked
 edges retain their existing hot path. Debug validation checks that every planned
 definition emitted its metadata.
+
+A loop whose list parameter is also a procedure argument (the loop plain TCE
+makes of a tail-recursive procedure, whose join parameters are the
+procedure's own arguments) is entered by jumps that write nothing, since the
+argument already holds the incoming list. Promotion gives each such entry
+jump the same entry write as any outside list: the argument's unit is
+acquired through `list_map_prepare_reuse`, measured, and written back into
+the parameter beside its metadata, so the head never reads metadata the
+entry did not compute. The loop qualifies only when every back edge writes
+the parameter, because TCE omits identity writes and an unwritten back edge
+passes the head's list along through a use control-flow use ordering does
+not see; when no statement before the loop writes the parameter or feeds a
+chain edge from a carrier; and when no statement is reachable both before
+the loop and inside it.
 
 Versioning (a head that dispatches on the ownership flags to a unique-only
 copy of the loop body) is applied only to leaf loops: promoted loops whose
