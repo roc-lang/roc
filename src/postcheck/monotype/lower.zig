@@ -26977,7 +26977,11 @@ const BodyContext = struct {
     }
 
     /// Constrain a checked type to a Monotype: instantiate the checked type
-    /// into the graph and unify with the (linked or imported) Monotype node.
+    /// into the graph and relate it to the (linked or imported) Monotype node.
+    /// A Monotype carrying generated-private representation evidence is the
+    /// private side of an opaque interface relation, exactly as a type cell
+    /// carrying it is in `constrainCheckedInterfaceToCell`; any other
+    /// Monotype unifies.
     fn constrainTypeToMono(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
@@ -26985,7 +26989,13 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
-        try self.graph.unify(try self.instNode(checked_ty), try self.graph.importMono(mono_ty));
+        const checked_node = try self.instNode(checked_ty);
+        const mono_node = try self.graph.importMono(mono_ty);
+        if (try self.graph.containsGeneratedPrivate(mono_node)) {
+            try self.graph.relateOpaqueInterface(checked_node, mono_node);
+        } else {
+            try self.graph.unify(checked_node, mono_node);
+        }
     }
 
     fn requireClosedCheckedType(
