@@ -84,9 +84,17 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      renumbers later LowLevel ops, RC reasons name dead-lender reads,
 ///      procedure shapes widen to 32 bits, and dynamic tag payload reads
 ///      carry `whole`.
+/// v74: `list_take_first` and `list_take_last` leave the LowLevel enum,
+///      renumbering later ops.
+/// v75: dynamic tag payload reads lose `whole`; a tag's only payload is an
+///      `assign_ref` `tag_payload_struct` of the dynamic union.
+/// v76: procedure debug names are a column parallel to the procedure
+///      specs, combined with the v73-v75 changes.
 /// v75: combines the v73 and v74 changes above; procedure shapes record
 ///      every erased call.
-pub const FORMAT_VERSION: u32 = 75;
+/// v77: procedure shapes record every erased call, combined with the v73-v76
+///      changes.
+pub const FORMAT_VERSION: u32 = 77;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.

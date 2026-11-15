@@ -300,11 +300,15 @@ pub const ConstFnCallableInstantiation = struct {
 /// function is restored after compile-time evaluation.
 pub const ConstFnStructuralEvidence = struct {
     callable_contracts: u32 = 0,
+    /// How many evidence trees follow the callable contracts: the evidence
+    /// of each forwarded call of the codec contract, in the order lowering
+    /// lists those calls.
+    forwarded: u32 = 0,
     derivation: static_dispatch.StructuralDerivation,
     checked: ?CheckedStructuralEdge = null,
 
     pub fn identityEql(left: ConstFnStructuralEvidence, right: ConstFnStructuralEvidence) bool {
-        if (left.callable_contracts != right.callable_contracts) return false;
+        if (left.callable_contracts != right.callable_contracts or left.forwarded != right.forwarded) return false;
         if (!std.meta.eql(left.derivation, right.derivation) or (left.checked == null) != (right.checked == null)) return false;
         const a = left.checked orelse return true;
         const b = right.checked.?;
@@ -452,6 +456,15 @@ pub const ConstFnEvidenceVector = struct {
     /// The structural payload of a `.structural` entry.
     pub fn structural(self: ConstFnEvidenceVector, index: u32) *const ConstFnStructuralEvidence {
         return &self.structurals[index];
+    }
+
+    /// How many evidence trees follow `entry`'s nested evidence: its
+    /// callable contracts, then a structural entry's forwarded evidence.
+    pub fn trailingTrees(self: ConstFnEvidenceVector, entry: ConstFnEvidence) u32 {
+        return self.callableContracts(entry) + switch (entry) {
+            .structural => |index| self.structurals[index].forwarded,
+            .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => 0,
+        };
     }
 
     /// How many callable-contract trees follow `entry`'s nested evidence.
@@ -1444,9 +1457,9 @@ pub const ConstStore = struct {
             if (cursor >= nodes.len) return null;
             const node = nodes[cursor];
             cursor += 1;
-            // A node's nested vector precedes its callable contracts, so the
-            // contracts wait beneath it on the stack.
-            const contracts = evidence.callableContracts(node);
+            // A node's nested vector precedes its callable contracts and
+            // forwarded evidence, so those wait beneath it on the stack.
+            const contracts = evidence.trailingTrees(node);
             if (contracts != 0) try open.append(allocator, .{ .remaining = contracts, .nested = null });
             switch (node) {
                 .target => |target| {

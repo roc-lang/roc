@@ -8,26 +8,40 @@ type=expr
 !3
 ~~~
 # EXPECTED
-TYPE MISMATCH - bang_on_numeric_literal.md:1:2:1:3
+MISSING METHOD - bang_on_numeric_literal.md:1:2:1:3
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Type Mismatch")
+		(title "Missing Method")
 		(region (start 1 2) (end 1 3))
 		(headline
-			(reflow "This number is being used where a non-number type is needed."))
+			(reflow "This number's type never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "not")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "bang_on_numeric_literal.md") (start 1 2) (end 1 3) (annotation error) (line-text "!3"))
 			(line-break)
-			(reflow "Other code expects this to have the type:")
+			(reflow "Its type needs all of these:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "Bool")
-			(annotation-end))))
+			(text "a where [a.not : a -> a]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "None of the built-in number types")
+			(reflow " ")
+			(reflow "have a method named")
+			(reflow " ")
+			(annotated code "not")
+			(reflow "."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -45,11 +59,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call (constraint-fn-var 222)
-	(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18876") (target-def "18876"))
-	(e-runtime-error (tag "erroneous_value_expr")))
+(e-runtime-error (tag "erroneous_value_expr")
+	(e-num (value "3")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Bool"))
+(expr (type "Dec"))
 ~~~

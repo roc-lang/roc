@@ -377,7 +377,13 @@ fn run_app_model_contract(host: &abi::RocHost) {
         env_mut().fail(format_args!("render messages expected empty got {}", view.messages.length));
     }
     unsafe {
-        view.decref(host);
+        // A `View` holds the application's model, which only Roc can release,
+        // so the view is released part by part and the model is handed back
+        // to Roc.
+        view.title.decref(host);
+        abi::decref_list_of_msg(view.messages, host);
+        view.lifecycle.decref(host);
+        abi::roc_release_model(view.model);
     }
 }
 
