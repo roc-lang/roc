@@ -19861,8 +19861,14 @@ destructuring at those types, and reading the name
 mention seals as a variable no use relates, the lookup resolves its
 requirements from those types (`from_callable`), and the declaration itself
 computes nothing. A closure that reads such a name lowers the declaration in
-its own body and does not capture the name. The `.lss` strategy needs no such
-step: a specialization lowers the declaration at the types it fixes.
+its own body and does not capture the name. The `.lss` strategy follows the
+same rule: Monotype lowers a use of one of those names as a block whose one
+statement is the declaration and whose value is the name's
+(`BodyContext.stepDestructuredAlias`), in a fresh instantiation context that
+relates the name's type to the use's type. A variable the name's type does
+not mention stays a variable of that context, the lookup resolves its
+requirements there as any lookup does, the declaration itself computes
+nothing, and a closure that reads such a name does not capture it.
 `test/cli/ImportedGenericLocalAlias.roc` runs both forms.
 
 A call through a forwarding alias is a direct call. Monotype enters the

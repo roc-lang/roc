@@ -39,7 +39,14 @@ generic = |x| {
     shout(x)
 }
 
+# A name a destructuring binds, called at two types.
+destructured_twice = {
+    (twice, _) = ImportedGenericLocalAliasDep.doubling
+    (twice("ab"), twice([1.U8, 2]))
+}
+
 expect destructured == "hi!"
 expect whole == ("abab", [1, 2, 1, 2])
 expect captured == "cd!"
 expect generic("gh") == "gh!"
+expect destructured_twice == ("abab", [1, 2, 1, 2])
