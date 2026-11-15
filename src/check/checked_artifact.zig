@@ -15101,10 +15101,11 @@ const EvidencePass = struct {
     ) Allocator.Error!void {
         const expr_data = self.module.expr(expr).data;
         if (expr_data == .e_lambda or expr_data == .e_closure) return;
-        // A procedure alias owns an exact evidence scope. Its right-hand
+        // A scheme alias owns an exact evidence scope. Its right-hand
         // side's requirements belong to that scope, not to a representative
         // use.
         if (bindsProcedureAlias(self.module, pattern, expr)) return;
+        if (self.module_index.isSchemeAlias(pattern)) return;
         // Resolution reaches a pattern only through one of its value-use
         // records. A decl nobody instantiated (for example a local inside a
         // generalized definition, whose variables are generalized only as

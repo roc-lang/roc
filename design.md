@@ -19845,6 +19845,30 @@ calls the evaluated value. Root-request output and platform pairing omit
 evaluation only for this explicit forwarding proof, not for the lookup's
 procedure-reference shape: a computed callable alias still needs its value.
 
+A local binding whose value is a lookup of a constant whose type keeps a
+variable (`pair = Hooks.pair`, with `pair = (|s| s.concat("!"), 1)` in
+`Hooks`) is generalized like any lookup binding, and it is a scheme alias as
+well (`body_analyses.bindsLocalSchemeAlias`): it owns its generalized dispatch
+scope, its declaration computes nothing, and each use lowers the lookup in
+that scope at the use's instantiation, under both strategies. The name can
+therefore be used at more than one type, and the constant's requirements are
+met at each.
+
+A local declaration that takes such a lookup apart (`(shout, _) =
+Hooks.pair`) is a destructuring scheme alias
+(`body_analyses.bindsDestructuredSchemeAlias`). Its pattern is the
+generalized binding, so the names it binds have no scope of their own. Boxy
+lowers a use of one of those names by fixing the declaration's variables from
+the use's type through the name's type, lowering the lookup and the
+destructuring at those types, and reading the name
+(`Body.lowerDestructuredAliasUse`). A variable the name's type does not
+mention seals as a variable no use relates, the lookup resolves its
+requirements from those types (`from_callable`), and the declaration itself
+computes nothing. A closure that reads such a name lowers the declaration in
+its own body and does not capture the name. The `.lss` strategy needs no such
+step: a specialization lowers the declaration at the types it fixes.
+`test/cli/ImportedGenericLocalAlias.roc` runs both forms.
+
 A call through a forwarding alias is a direct call. Monotype enters the
 alias's scope with the call's use-site evidence and substitution, and requests
 the lookup's own callee there, so the call reaches the aliased procedure's specialization with

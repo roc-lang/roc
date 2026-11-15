@@ -154,6 +154,12 @@ pub const Task = union(enum) {
     end_loop,
     /// Leave the innermost scheme alias scope (`Builder.alias_scopes`).
     leave_alias_scope,
+    /// Push the value the declaration a destructured alias use just lowered
+    /// bound to `binder` (`lowerDestructuredAliasUse`).
+    read_binder: BinderId,
+    /// Leave the instantiation a destructured alias use lowered its
+    /// declaration at.
+    restore_env: types.Env,
     /// Leave the frames a literal chain entered (`SavedScope`).
     restore_scope: SavedScope,
     /// A loop whose pattern checking rejected, its iterable evaluated:
@@ -3176,6 +3182,8 @@ pub const Builder = struct {
                 const scope = self.alias_scopes.pop().?;
                 self.env = scope.saved_env;
             },
+            .read_binder => |binder| try self.pushValue(self.binders.get(binder) orelse invariant("a destructured alias's declaration did not bind the binder its use reads")),
+            .restore_env => |saved| self.env = saved,
             .restore_scope => |saved| {
                 self.module = saved.module;
                 self.view = saved.view;
@@ -4920,6 +4928,7 @@ pub const Builder = struct {
     fn lowerResolvedValue(self: *Builder, expr_id: ExprId, ref: checked.ResolvedValueRef) Allocator.Error!void {
         switch (ref) {
             .local_param, .local_value, .pattern_binder, .local_mutable_version => |binding| {
+                if (self.bodies().index().destructuredAliasDecl(binding.binder)) |decl| return try self.lowerDestructuredAliasUse(expr_id, binding.binder, decl);
                 return try self.pushValue(self.binders.get(binding.binder) orelse invariant("a local lookup named a binder this body never bound"));
             },
             .top_level_const, .imported_const => |use| return try self.restoreConstUse(expr_id, use, try self.constReadType(expr_id)),
@@ -4942,6 +4951,48 @@ pub const Builder = struct {
             .platform_required_checked_error => return try self.crashValue("runtime error", try self.exprType(expr_id)),
             .platform_required_declaration => invariant("a platform requirement reached lowering unpaired with its app binding"),
         }
+    }
+
+    /// A use `expr_id` of `binder`, which the destructuring scheme alias
+    /// declaration `stmt_id` binds: the declaration lowered as this use
+    /// instantiates it, and the value it then binds to `binder`. The
+    /// declaration's variables are those of its pattern's type that this
+    /// body's scope does not bind; each takes the type the use's type gives
+    /// it through the binder's type, and one the binder's type does not
+    /// mention seals as a variable no use relates. The declaration's lookup
+    /// resolves its own requirements at those types.
+    fn lowerDestructuredAliasUse(self: *Builder, expr_id: ExprId, binder: BinderId, stmt_id: StatementId) Allocator.Error!void {
+        const decl = switch (self.bodies().statement(stmt_id).data) {
+            .decl => |decl| decl,
+            .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .rejected_method_decl, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => invariant("a destructured alias binder's declaration is not a declaration"),
+        };
+        const converter = self.program.converter();
+        const arena = self.program.arena.allocator();
+        const mentioned = try converter.typeVariables(arena, self.module, self.bodies().patternType(decl.pattern));
+        var own: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer own.deinit(self.allocator);
+        for (mentioned) |variable| {
+            if (std.mem.findScalar(checked.CheckedTypeId, self.env.vars, variable) == null) try own.append(self.allocator, variable);
+        }
+        const outer_count = self.env.vars.len;
+        const vars = try std.mem.concat(arena, checked.CheckedTypeId, &.{ own.items, self.env.vars });
+        const generic_bound = try self.allocator.alloc(TypeId, vars.len);
+        defer self.allocator.free(generic_bound);
+        for (generic_bound[0..own.items.len], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(outer_count + index));
+        for (generic_bound[own.items.len..], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
+        const generic_binder = try converter.convert(self.module, self.bodies().patternType(binder), .{ .module = self.module, .vars = vars, .bound = generic_bound });
+        const related = try self.relateVariablesPartial(&.{.{ generic_binder, try self.exprType(expr_id) }}, outer_count + own.items.len);
+        defer self.allocator.free(related);
+        const bound = try arena.alloc(TypeId, vars.len);
+        for (bound[0..own.items.len], related[outer_count..], own.items) |*slot, ty, variable| {
+            slot.* = ty.get() orelse try converter.sealedScheme(self.module, variable);
+        }
+        @memcpy(bound[own.items.len..], self.env.bound);
+        try self.push(.{ .restore_env = self.env });
+        self.env = .{ .module = self.module, .vars = vars, .bound = bound };
+        try self.push(.{ .read_binder = binder });
+        try self.push(.{ .bind = .{ .pattern = decl.pattern, .ty = try self.valueType(decl.expr) } });
+        try self.push(.{ .expr = decl.expr });
     }
 
     /// A use `expr_id` of a scheme alias: the value its declaration bound,
@@ -10206,6 +10257,10 @@ pub const Builder = struct {
                         if (!scheme.isEmpty()) return;
                     }
                 }
+                // A destructuring scheme alias binds nothing either: each
+                // use of one of its binders lowers the declaration at the
+                // use's instantiation (`lowerDestructuredAliasUse`).
+                if (self.bodies().index().isDestructuredAliasDecl(stmt_id)) return;
                 // A value that diverges binds nothing.
                 if (try self.bodies().exprDiverges(decl.expr, self.inlineExpectMode())) {
                     try self.push(.discard);
