@@ -4988,7 +4988,7 @@ fn recordExports(program: *Program) Allocator.Error!void {
         for (needs.recipes) |recipe| switch (recipe) {
             .callable => |callable| try visit.worker(callable.entry),
             .table => |table| try visit.worker(table.worker),
-            .input, .desc, .args_desc, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => {},
+            .input, .inherited, .scope_table, .desc, .args_desc, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => {},
         };
     }
 
