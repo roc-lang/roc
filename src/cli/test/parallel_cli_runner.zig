@@ -678,6 +678,7 @@ const CustomCase = enum {
     boxy_platform_evaluation,
     boxy_platform_bindings,
     boxy_interface_edits,
+    boxy_reused_object_failure,
     issue_11710_shared_object_cache,
     issue_12220_shared_object_cache_literals,
     issue_12564_package_from_numeral_cache,
@@ -3925,6 +3926,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no platform evaluation retains app units waiting for later roots", .timeout_ms = 120_000, .body = .{ .custom = .boxy_platform_evaluation } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no build files one object per module and rebuilds only edited modules", .timeout_ms = 600_000, .body = .{ .custom = .boxy_module_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no objects depend on their imports' interfaces, not their implementations", .timeout_ms = 900_000, .body = .{ .custom = .boxy_interface_edits } },
+    .{ .id = 0, .suite = .subcommands, .name = "--specialize=no compile-time evaluation classifies a rejection inside a reused module object", .timeout_ms = 900_000, .body = .{ .custom = .boxy_reused_object_failure } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12220: shared object cache keeps each module's list literals in a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_12220_shared_object_cache_literals } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12564: a package from_numeral cached by one app's check converts another app's literal", .timeout_ms = 600_000, .body = .{ .custom = .issue_12564_package_from_numeral_cache } },
@@ -6705,6 +6707,7 @@ fn runCustomCase(
         .boxy_platform_evaluation => customBoxyPlatformEvaluation(io, allocator, &env, &timer, timeout_ms),
         .boxy_module_object_cache => customBoxyModuleObjectCache(io, allocator, &env, &timer, timeout_ms),
         .boxy_interface_edits => customBoxyInterfaceEdits(io, allocator, &env, &timer, timeout_ms),
+        .boxy_reused_object_failure => customBoxyReusedObjectFailure(io, allocator, &env, &timer, timeout_ms),
         .issue_11710_shared_object_cache => customIssue11710SharedObjectCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12220_shared_object_cache_literals => customIssue12220SharedObjectCacheLiterals(io, allocator, &env, &timer, timeout_ms),
         .issue_12564_package_from_numeral_cache => customIssue12564PackageFromNumeralCache(io, allocator, &env, &timer, timeout_ms),
@@ -11648,7 +11651,7 @@ fn customBoxyInterfaceEdits(
         return customInfraFailure(allocator, timer, "failed to allocate the source dir: {}", .{err});
     std.Io.Dir.cwd().createDirPath(io, source_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to create the source dir: {}", .{err});
-    for ([_][]const u8{ "main.roc", "A.roc", "B.roc", "C.roc", "Point.roc", "Adder.roc", "Spaced.roc" }) |name| {
+    for ([_][]const u8{ "main.roc", "A.roc", "B.roc", "C.roc", "Point.roc", "Adder.roc", "Spaced.roc", "Html.roc" }) |name| {
         const from = std.fs.path.join(allocator, &.{ "test/cli/boxy_interface_edits", name }) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate a fixture path: {}", .{err});
         const contents = std.Io.Dir.cwd().readFileAlloc(io, from, allocator, .limited(1024 * 1024)) catch |err|
@@ -11743,6 +11746,65 @@ fn customBoxyInterfaceEdits(
         return customInfraFailure(allocator, timer, "run the build: {}", .{err});
     if (!processSucceeded(packages_ran.term)) return failureFromRun(allocator, timer, packages_ran, "the two-package build did not run");
     if (std.mem.find(u8, packages_ran.stdout, "left 3") == null or std.mem.find(u8, packages_ran.stdout, "right 3") == null) return customFailure(allocator, timer, "the two-package build ran the other package's module: `{s}`", .{packages_ran.stdout});
+    return null;
+}
+
+/// Run an app whose compile-time constant runs a module object that rejects
+/// a literal, then edit an implementation the object's importer does not
+/// read and run it again, reusing the object, with object reuse verified
+/// (`ROC_VERIFY_BOXY_OBJECT_REUSE`). Both runs report the rejection exactly as
+/// the object's module and the constant's module see it.
+fn customBoxyReusedObjectFailure(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err| return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
+    defer isolated.env_map.deinit();
+    const cache_root = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "boxy_reused_object_failure_cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the cache root: {}", .{err});
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        isolated.env_map.put(key, cache_root) catch |err| return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
+    }
+    isolated.env_map.put("ROC_VERIFY_BOXY_OBJECT_REUSE", "1") catch |err| return customInfraFailure(allocator, timer, "failed to enable verification: {}", .{err});
+
+    const source_dir = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "boxy_reused_object_failure" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the source dir: {}", .{err});
+    std.Io.Dir.cwd().createDirPath(io, source_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create the source dir: {}", .{err});
+    for ([_][]const u8{ "main.roc", "A.roc", "B.roc", "Html.roc" }) |name| {
+        const from = std.fs.path.join(allocator, &.{ "test/cli/boxy_reused_object_failure", name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate a fixture path: {}", .{err});
+        const contents = std.Io.Dir.cwd().readFileAlloc(io, from, allocator, .limited(1024 * 1024)) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read {s}: {}", .{ from, err });
+        const to = std.fs.path.join(allocator, &.{ source_dir, name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate a source path: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = to, .data = contents }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ to, err });
+    }
+    const main_path = std.fs.path.join(allocator, &.{ source_dir, "main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the app path: {}", .{err});
+    const a_path = std.fs.path.join(allocator, &.{ source_dir, "A.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the edit path: {}", .{err});
+
+    for (0..2) |run_index| {
+        if (run_index == 1) replaceInFile(io, allocator, a_path, "other = |x| x + 1", "other = |x| x + 2") catch |err|
+            return customInfraFailure(allocator, timer, "edit A.roc: {}", .{err});
+        const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "reused object failure test timed out");
+        const ran = runRocInEnv(io, allocator, &isolated, &.{ "--opt=dev", "--specialize=no", "--no-color" }, main_path, .absolute, &.{}, null, remaining) catch |err|
+            return customInfraFailure(allocator, timer, "run: {}", .{err});
+        if (std.mem.find(u8, ran.stderr, "internal compiler error") != null or std.mem.find(u8, ran.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, ran, "compile-time evaluation did not classify the reused object's failure");
+        }
+        if (std.mem.count(u8, ran.stderr, "invalid string interpolation") != 2 or
+            std.mem.find(u8, ran.stderr, "main.roc:9:1") == null or
+            std.mem.find(u8, ran.stderr, "B.roc:6:18") == null)
+        {
+            return failureFromRun(allocator, timer, ran, "the rejection was not reported at the constant and at the literal");
+        }
+    }
     return null;
 }
 
