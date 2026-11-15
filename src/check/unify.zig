@@ -794,7 +794,8 @@ const Unifier = struct {
     /// The in-flight pairs are indexed by their current resolved descriptors,
     /// re-indexed whenever a slot write may have changed a resolution, so a
     /// nested walk does not rescan the whole in-flight path per pair.
-    fn isPairVisited(self: *Self, a_var: Var, b_var: Var) std.mem.Allocator.Error!bool {
+    /// `a_desc` and `b_desc` are the descriptors the pair resolves to now.
+    fn isPairVisited(self: *Self, a_desc: types_mod.DescStoreIdx, b_desc: types_mod.DescStoreIdx) std.mem.Allocator.Error!bool {
         const scratch = self.scratch;
         // Visited vars are stored as pairs: [a1, b1, a2, b2, ...]
         const items = scratch.visited_vars.items();
@@ -803,13 +804,11 @@ const Unifier = struct {
             // Few pairs are in flight in nearly every unification, and
             // scanning them is cheaper than keeping the index in step. The
             // index catches up from `visited_index_pairs` once it is needed.
-            const a = self.types_store.resolveVar(a_var).desc_idx;
-            const b = self.types_store.resolveVar(b_var).desc_idx;
             var i: usize = 0;
             while (i + 1 < items.len) : (i += 2) {
-                const visited_a = self.types_store.resolveVar(items[i]).desc_idx;
-                const visited_b = self.types_store.resolveVar(items[i + 1]).desc_idx;
-                if ((a == visited_a and b == visited_b) or (a == visited_b and b == visited_a)) return true;
+                const visited_a = self.types_store.resolveDescIdx(items[i]);
+                const visited_b = self.types_store.resolveDescIdx(items[i + 1]);
+                if ((a_desc == visited_a and b_desc == visited_b) or (a_desc == visited_b and b_desc == visited_a)) return true;
             }
             return false;
         }
@@ -826,7 +825,7 @@ const Unifier = struct {
         }
         // Unordered keys match both orderings, since unify(A,B) is symmetric
         // with unify(B,A).
-        return scratch.visited_index.contains(self.visitedPairKey(a_var, b_var));
+        return scratch.visited_index.contains(descPairKey(a_desc, b_desc));
     }
 
     /// In-flight pairs up to this many are scanned; more are looked up in
@@ -834,8 +833,14 @@ const Unifier = struct {
     const visited_scan_limit = 16;
 
     fn visitedPairKey(self: *Self, a_var: Var, b_var: Var) VisitedPairKey {
-        const a = @backingInt(self.types_store.resolveVar(a_var).desc_idx);
-        const b = @backingInt(self.types_store.resolveVar(b_var).desc_idx);
+        return descPairKey(self.types_store.resolveDescIdx(a_var), self.types_store.resolveDescIdx(b_var));
+    }
+
+    /// The key of the pair of classes that resolve to `a_desc` and `b_desc`,
+    /// whichever way round.
+    fn descPairKey(a_desc: types_mod.DescStoreIdx, b_desc: types_mod.DescStoreIdx) VisitedPairKey {
+        const a = @backingInt(a_desc);
+        const b = @backingInt(b_desc);
         return .{ .low = @min(a, b), .high = @max(a, b) };
     }
 
@@ -1060,7 +1065,7 @@ const Unifier = struct {
                 try self.linkDeferredCallable(b);
                 continue;
             }
-            if (try self.isPairVisited(a_var, b_var)) {
+            if (try self.isPairVisited(a.desc_idx, b.desc_idx)) {
                 return;
             }
 
