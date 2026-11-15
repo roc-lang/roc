@@ -1,14 +1,14 @@
-//! A structural copy of a lifted function body.
+//! Structural copies of lifted expressions.
 //!
 //! Monotype restores each compile-time constant once and names that one
-//! expression wherever the constant is read, so a body can reach an
-//! expression or a statement another parent already holds. An expression with
-//! expressions inside it has exactly one parent in lifted output (design.md
-//! "Operand Sequencing"), so lifting gives such a body a copy of its own:
-//! every statement and every expression with expressions inside it is added
-//! again, and locals, literals and markers stay the ones the source names.
-//! The copy runs from an explicit stack, so the depth of a body never becomes
-//! native call depth.
+//! expression wherever the constant is read, so two parents can hold the same
+//! expression. An expression with expressions inside it has exactly one
+//! parent in lifted output (design.md "Operand Sequencing"), so lifting gives
+//! every parent after the first a copy of its own: each statement and each
+//! expression with expressions inside it is added again, and locals, literals
+//! and markers stay the ones the source names.
+//! Copying runs from an explicit stack, so the depth of an expression never
+//! becomes native call depth.
 const std = @import("std");
 const collections = @import("collections");
 const Ast = @import("ast.zig");
@@ -24,27 +24,47 @@ const Work = union(enum) {
     rebuild: Ast.ExprId,
 };
 
-/// Copy the body rooted at `root` and return the copy's root. Expression
-/// shapes are recorded for whichever function's shapes the program is
-/// collecting.
+/// Copy the expression rooted at `root` and return the copy's root.
+/// Expression shapes are recorded for whichever function's shapes the program
+/// is collecting.
 pub fn copy(program: *Ast.Program, root: Ast.ExprId) Allocator.Error!Ast.ExprId {
     var copier: Copier = .{ .program = program };
     defer copier.deinit();
-    const loc = program.current_loc;
-    const region = program.current_region;
-    const inline_scope = program.current_inline_scope;
-    defer {
-        program.current_loc = loc;
-        program.current_region = region;
-        program.current_inline_scope = inline_scope;
+    const position = copier.savePosition();
+    defer copier.restorePosition(position);
+    return try copier.copyOne(root);
+}
+
+/// Give `parent` a copy of its own of each expression in `shared`, which are
+/// expressions directly inside it that another parent also holds. An
+/// expression listed twice is copied at two of the places `parent` names it.
+/// `parent` keeps its id.
+pub fn copyInside(program: *Ast.Program, parent: Ast.ExprId, shared: []const Ast.ExprId) Allocator.Error!void {
+    var copier: Copier = .{ .program = program };
+    defer copier.deinit();
+    const position = copier.savePosition();
+    defer copier.restorePosition(position);
+
+    const data = program.getExpr(parent).data;
+    copier.children.clearRetainingCapacity();
+    try copier.collectChildren(data);
+    const inside = try program.allocator.dupe(Ast.ExprId, copier.children.items);
+    defer program.allocator.free(inside);
+    const copied = try program.allocator.alloc(bool, inside.len);
+    defer program.allocator.free(copied);
+    @memset(copied, false);
+    var any = false;
+    for (shared) |expr| {
+        for (inside, copied) |*child, *done| {
+            if (done.* or child.* != expr) continue;
+            child.* = try copier.copyOne(expr);
+            done.* = true;
+            any = true;
+            break;
+        }
     }
-    try copier.work.append(program.allocator, .{ .copy = root });
-    while (copier.work.pop()) |work| switch (work) {
-        .copy => |expr| try copier.begin(expr),
-        .rebuild => |expr| try copier.rebuild(expr),
-    };
-    std.debug.assert(copier.delivered.items.len == 1);
-    return copier.delivered.items[0];
+    if (!any) return;
+    program.setExprData(parent, try copier.rebuiltData(data, inside));
 }
 
 const Copier = struct {
@@ -71,6 +91,36 @@ const Copier = struct {
         self.children.deinit(allocator);
         self.delivered.deinit(allocator);
         self.work.deinit(allocator);
+    }
+
+    const Position = struct {
+        loc: @FieldType(Ast.Program, "current_loc"),
+        region: @FieldType(Ast.Program, "current_region"),
+        inline_scope: @FieldType(Ast.Program, "current_inline_scope"),
+    };
+
+    fn savePosition(self: *Copier) Position {
+        return .{
+            .loc = self.program.current_loc,
+            .region = self.program.current_region,
+            .inline_scope = self.program.current_inline_scope,
+        };
+    }
+
+    fn restorePosition(self: *Copier, position: Position) void {
+        self.program.current_loc = position.loc;
+        self.program.current_region = position.region;
+        self.program.current_inline_scope = position.inline_scope;
+    }
+
+    fn copyOne(self: *Copier, root: Ast.ExprId) Allocator.Error!Ast.ExprId {
+        const base = self.work.items.len;
+        try self.work.append(self.program.allocator, .{ .copy = root });
+        while (self.work.items.len > base) switch (self.work.pop().?) {
+            .copy => |expr| try self.begin(expr),
+            .rebuild => |expr| try self.rebuild(expr),
+        };
+        return self.delivered.pop().?;
     }
 
     fn child(self: *Copier, expr: Ast.ExprId) Allocator.Error!void {
@@ -110,6 +160,19 @@ const Copier = struct {
             return;
         }
         self.children.clearRetainingCapacity();
+        try self.collectChildren(data);
+        try self.work.append(allocator, .{ .rebuild = expr });
+        // The stack hands the children back first to last.
+        var index = self.children.items.len;
+        while (index > 0) {
+            index -= 1;
+            try self.work.append(allocator, .{ .copy = self.children.items[index] });
+        }
+    }
+
+    /// Append every expression directly inside `data` to `children`, in
+    /// evaluation order.
+    fn collectChildren(self: *Copier, data: Ast.ExprData) Allocator.Error!void {
         switch (data) {
             .local,
             .unit,
@@ -125,7 +188,7 @@ const Copier = struct {
             .crash,
             .checked_error,
             .comptime_exhaustiveness_failed,
-            => unreachable, // leaves were delivered above
+            => {},
             .let_ => Common.invariant("a `let` expression reached a lifted body copy"),
             .lambda, .def_ref, .fn_def => Common.invariant("an unlifted function reached a lifted body copy"),
             .list, .tuple => |items| try self.childExprs(items),
@@ -207,13 +270,6 @@ const Copier = struct {
                 try self.child(block.final_expr);
             },
         }
-        try self.work.append(allocator, .{ .rebuild = expr });
-        // The stack hands the children back first to last.
-        var index = self.children.items.len;
-        while (index > 0) {
-            index -= 1;
-            try self.work.append(allocator, .{ .copy = self.children.items[index] });
-        }
     }
 
     /// The copies an expression takes, first to last.
@@ -288,15 +344,28 @@ const Copier = struct {
     fn rebuild(self: *Copier, expr: Ast.ExprId) Allocator.Error!void {
         const program = self.program;
         const source = program.getExpr(expr);
-        var data = source.data;
-        const count = self.childCount(data);
+        const count = self.childCount(source.data);
         const first = self.delivered.items.len - count;
-        // The copies are read from scratch storage of their own: adding
-        // spans below never moves them.
+        // The copies are read from storage of their own: copying statements
+        // below never moves them.
         const copies = try program.allocator.dupe(Ast.ExprId, self.delivered.items[first..]);
         defer program.allocator.free(copies);
         self.delivered.shrinkRetainingCapacity(first);
-        var taken: Taken = .{ .copies = copies };
+        const data = try self.rebuiltData(source.data, copies);
+
+        program.current_loc = program.exprLoc(expr);
+        program.current_region = program.exprRegion(expr);
+        program.current_inline_scope = program.exprInlineScope(expr);
+        try self.delivered.append(program.allocator, try program.addExpr(.{ .ty = source.ty, .data = data }));
+    }
+
+    /// `source` around `inside`, which holds one expression for each
+    /// expression directly inside it, in evaluation order. Its spans and
+    /// statements are added again.
+    fn rebuiltData(self: *Copier, source: Ast.ExprData, inside: []const Ast.ExprId) Allocator.Error!Ast.ExprData {
+        const program = self.program;
+        var data = source;
+        var taken: Taken = .{ .copies = inside };
 
         switch (data) {
             .local,
@@ -313,11 +382,9 @@ const Copier = struct {
             .crash,
             .checked_error,
             .comptime_exhaustiveness_failed,
-            .let_,
-            .lambda,
-            .def_ref,
-            .fn_def,
-            => unreachable, // `begin` queues a rebuild only for the forms below
+            => {},
+            .let_ => Common.invariant("a `let` expression reached a lifted body copy"),
+            .lambda, .def_ref, .fn_def => Common.invariant("an unlifted function reached a lifted body copy"),
             .list, .tuple => |*items| items.* = try self.takeExprs(&taken, items.*),
             .tag => |*tag| tag.payloads = try self.takeExprs(&taken, tag.payloads),
             .low_level => |*call| call.args = try self.takeExprs(&taken, call.args),
@@ -407,12 +474,8 @@ const Copier = struct {
                 block.final_expr = taken.one();
             },
         }
-        std.debug.assert(taken.next == copies.len);
-
-        program.current_loc = program.exprLoc(expr);
-        program.current_region = program.exprRegion(expr);
-        program.current_inline_scope = program.exprInlineScope(expr);
-        try self.delivered.append(program.allocator, try program.addExpr(.{ .ty = source.ty, .data = data }));
+        std.debug.assert(taken.next == inside.len);
+        return data;
     }
 
     /// How many expressions stand directly inside `data`.
@@ -515,4 +578,32 @@ test "a copied body names no statement or compound expression its source names" 
     const items = t.program.getExpr(copied_constant).data.tuple;
     try std.testing.expect(GuardedList.at(t.program.exprSpan(items), 0) != GuardedList.at(t.program.exprSpan(t.program.getExpr(constant).data.tuple), 0));
     try std.testing.expectEqual(seven, GuardedList.at(t.program.exprSpan(items), 1));
+}
+
+test "a parent given its own copy of a shared expression keeps its id and everything else it names" {
+    var t = try sequenced.TestProgram.init(std.testing.allocator);
+    defer t.deinit();
+    const seven = try t.int(7);
+    // One restored constant, read once by one function and twice by another.
+    const constant = try t.tuple(&.{ try t.tuple(&.{seven}), seven });
+    const own = try t.tuple(&.{seven});
+    _ = try t.function(try t.tuple(&.{constant}));
+    const holder = try t.tuple(&.{ own, constant, constant });
+    _ = try t.function(holder);
+    try std.testing.expectEqualStrings(
+        "an expression with expressions inside it is used in two places",
+        (try sequenced.check(&t.program)).?.message,
+    );
+
+    try copyInside(&t.program, holder, &.{ constant, constant });
+    try std.testing.expectEqual(@as(?sequenced.Violation, null), try sequenced.check(&t.program));
+
+    const items = t.program.getExpr(holder).data.tuple;
+    const second = GuardedList.at(t.program.exprSpan(items), 1);
+    const third = GuardedList.at(t.program.exprSpan(items), 2);
+    try std.testing.expectEqual(own, GuardedList.at(t.program.exprSpan(items), 0));
+    try std.testing.expect(second != constant);
+    try std.testing.expect(third != constant);
+    try std.testing.expect(second != third);
+    try std.testing.expectEqualDeep(t.program.getExpr(seven).data, t.program.getExpr(GuardedList.at(t.program.exprSpan(t.program.getExpr(second).data.tuple), 1)).data);
 }

@@ -18756,11 +18756,12 @@ Lifting keeps the form: it rewrites callable expressions in place and adds no
 statements. Monotype restores each compile-time constant once and names that
 one expression wherever the constant is read, so a body can reach an
 expression or a statement that an earlier parent already holds. Lifting
-records each function whose rewrite reaches one, and once lifting has
-finished it gives that function a structural copy of its own body
-(`monotype_lifted/body_copy.zig`); the earlier parent keeps the original, and
-every other body stays exactly as Monotype emitted it. Debug builds then
-verify the form on every lifted body (`monotype_lifted/sequenced.zig`).
+records each place its rewrite reaches one, and once lifting has finished it
+gives that parent a structural copy of the shared expression alone
+(`monotype_lifted/body_copy.zig`): the first parent keeps the original, each
+later one gets a copy, and every other expression stays exactly as Monotype
+emitted it. Debug builds then verify the form on every lifted body
+(`monotype_lifted/sequenced.zig`).
 
 ### Monotype Specialization
 
@@ -20287,11 +20288,11 @@ Callable lifting rewrites the expression variants whose callable meaning changes
 
 Monotype's bodies arrive operand-sequenced (Operand Sequencing), and these
 rewrites keep them so: a callable expression is replaced where it stands, and
-the capture operands lifting adds are locals. A function whose body reaches a
-subtree an earlier parent holds takes a structural copy of its body, which
-gives every expression with expressions inside it one parent. Debug builds
-verify the sequenced form of every lifted body before the program leaves
-lifting.
+the capture operands lifting adds are locals. A parent that names an
+expression an earlier parent already holds takes a structural copy of that
+expression, which gives every expression with expressions inside it one
+parent. Debug builds verify the sequenced form of every lifted body before
+the program leaves lifting.
 
 This is a representation-sharing rule, not a license for later stages to accept
 pre-lift callable forms. After lifting, a valid lifted program has no reachable
