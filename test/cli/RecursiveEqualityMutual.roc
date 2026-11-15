@@ -18,4 +18,4 @@ make = |value| Link(Back(Leaf(value)))
 
 expect Expr.Link(Tail.Back(Expr.Leaf("a"))) == make("a")
 expect make("a") != make("b")
-expect Link(Back(Leaf("a"))).is_eq(make("a"))
+expect Link(Back(Leaf("a"))) == make("a")

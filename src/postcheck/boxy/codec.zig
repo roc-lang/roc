@@ -1418,7 +1418,7 @@ const Gen = struct {
     /// The inputs of the family's workers: the descriptors of its types,
     /// which this worker's are.
     fn familyInputs(self: *Gen) Allocator.Error![]Body.Word {
-        return try self.b.descInputWords(0, self.b.var_descs.len);
+        return try self.b.descInputWords(0, self.b.scopeCounts().descs);
     }
 
     /// Renamed name `index` of the family's names.
@@ -1462,7 +1462,7 @@ const Gen = struct {
         const params = try b.allocator.alloc(LocalId, worker.params.len + @intFromBool(has_table));
         if (has_table) {
             params[worker.params.len] = try b.closedLocal(.opaque_ptr);
-            try b.beginTable(params[worker.params.len], 0);
+            try b.beginTable(params[worker.params.len]);
         }
         for (params[0..worker.params.len], worker.params) |*param, ty| param.* = try b.localOf(ty, .param);
         const ret_layout = try self.resultLayout(worker.ret);
@@ -1509,7 +1509,7 @@ const Gen = struct {
                 try b.emitEntry(.{ .assign_struct = .{ .target = capture.*, .fields = LIR.LocalSpan.empty(), .next = undefined } });
             }
         }
-        if (has_table) try b.beginTable(start.captures[worker.capture_types.len], 0);
+        if (has_table) try b.beginTable(start.captures[worker.capture_types.len]);
         return try self.finishErasedStart(worker, start);
     }
 
@@ -1520,6 +1520,7 @@ const Gen = struct {
         const b = self.b;
         b.entry_hole = try b.newHole();
         const capture_ptr = try b.closedLocal(.opaque_ptr);
+        _ = try b.beginReuseArg(.none);
         const start: Builder.ErasedStart = .{
             .entry = b.entry_hole,
             .body_start = undefined,
@@ -1559,10 +1560,13 @@ const Gen = struct {
         var proc_args: std.ArrayList(LocalId) = .empty;
         defer proc_args.deinit(b.allocator);
         if (frame.record) |record| try proc_args.append(b.allocator, record);
+        const reuse = b.reuse_arg orelse invariant("an erased codec worker finished without its reuse argument");
         try proc_args.append(b.allocator, frame.start.capture_ptr);
+        try proc_args.append(b.allocator, reuse);
         try b.finishProc(frame.start.entry, frame.body_start, proc_args.items, frame.ret_layout);
         const proc = b.store.getProcSpecPtr(b.currentWorker().proc);
         proc.erased_capture_arg = .of(frame.start.capture_ptr);
+        proc.erased_reuse_arg = .of(reuse);
         proc.abi = .erased_record;
     }
 

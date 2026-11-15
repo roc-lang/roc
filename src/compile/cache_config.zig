@@ -386,6 +386,23 @@ pub const Constants = struct {
     /// 192: literal argument roots record their edge owner as their own root
     ///      source and hold no expression.
     /// 193: combines the two independent 192 entries.
+    /// 193: a `return` in its function's result position canonicalizes to its
+    ///      operand rather than to a return node.
+    /// 193: on top of the 192 entry layout, uncommitted record and tag tails
+    ///      replace per-use structure, checked variables record uncommitted
+    ///      record tails, type stores list no widening field names, quantified
+    ///      record tails are restricted at every use, record pattern tails are
+    ///      marked, nominal declarations record padding, method requirements on
+    ///      open rows are held on the row variable for the whole record or tag
+    ///      union, and snapshots record which value a requirement is about.
+    /// 194: combines the two independent 193 entries.
+    /// 194: a Boxy lambda's type table refers to its creator's table instead
+    ///      of repeating its creator's inputs, in needs lists, stored function
+    ///      recipes and compiler-only function metadata.
+    /// 194: combines the two independent 193 entries.
+    /// 195: combines the three independent 194 entries.
+    /// 194: checked artifacts index their compile-time roots by pattern.
+    /// 196: combines the 194 entry above with the 195 entry.
     /// 194: two independent entries. A type descriptor is stored as a 16-byte
     ///      row: one word of kind, flags, a flex's literal marker, two
     ///      generalization marks that are always clear in a stored row and a
@@ -396,7 +413,9 @@ pub const Constants = struct {
     ///      range's start. And checked artifacts index their compile-time
     ///      roots by pattern.
     /// 195: combines the two independent 194 entries.
-    pub const CACHE_VERSION = 195;
+    /// 197: combines the 196 entry with the 195 entry above, and a stored
+    ///      descriptor's word packs its flags by kind.
+    pub const CACHE_VERSION = 197;
 };
 
 /// Configuration for the Roc cache system.

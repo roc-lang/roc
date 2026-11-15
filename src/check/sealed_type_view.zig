@@ -142,6 +142,20 @@ pub const SealedTypeView = struct {
         return &self.env.types;
     }
 
+    /// Whether `var_` is an uncommitted tag tail a scheme quantified: the
+    /// empty tag union inference closed a row with, still carrying
+    /// `DescriptorFlags.uncommitted_tag_tail` after the module-end commit
+    /// cleared every unquantified one (design.md "Uncommitted Tag Tails").
+    /// `payload` reads it as the empty tag union it is.
+    pub fn uncommittedTagTail(self: SealedTypeView, var_: Var) bool {
+        const resolved = self.typeStore().resolveVar(var_);
+        if (!resolved.desc.flags.uncommitted_tag_tail or resolved.desc.flags.empty_tag_union_is_default) return false;
+        return switch (resolved.desc.content) {
+            .structure => |flat| flat == .empty_tag_union,
+            .flex, .rigid, .alias, .field_presence, .err => false,
+        };
+    }
+
     fn nameRow(self: SealedTypeView, ident: Ident.Idx) SealedNameRow {
         const index: usize = ident.idx;
         if (index >= self.names.len) invariant("a sealed checked type named an identifier publication never interned", .{});
@@ -232,7 +246,8 @@ pub const SealedTypeView = struct {
         }
         // The checker marks an otherwise-unresolved identity it closed to
         // `[]`; it renders as a variable carrying `[]` only as its row default.
-        if (word.flags.empty_tag_union_is_default) return .{ .flex = .{ .row_default = .empty_tag_union } };
+        const flags = word.flags();
+        if (flags.empty_tag_union_is_default) return .{ .flex = .{ .row_default = .empty_tag_union } };
         switch (word.kind) {
             .err => return .err,
             .field_presence => return .{ .field_kind = switch (type_store.fieldPresenceAt(desc_idx)) {
@@ -241,14 +256,19 @@ pub const SealedTypeView = struct {
             } },
             .flex => {
                 const flex = type_store.flexAt(desc_idx);
-                const variable_facts = checked_artifact.flexVariableFacts(env, flex, word.flags.bounded_row_ext);
+                const variable_facts = checked_artifact.flexVariableFacts(env, flex, flags.bounded_row_ext);
                 return .{ .flex = .{
                     .name = if (flex.name) |name| checked_artifact.checkedVariableNameText(env, name) else null,
                     .constraints = .{ .sealed = .{ .constraints = type_store.sliceStaticDispatchConstraints(flex.constraints), .view = self } },
                     .numeric_default_phase = variable_facts.numeric_default_phase,
                     .row_default = self.rowDefault(var_, .{ .flex = flex }),
                     .row_default_discharges_constraints = variable_facts.row_default_discharges_constraints,
-                    .bounded_row_ext = variable_facts.bounded_row_ext,
+                    .row_tail = if (variable_facts.bounded_row_ext)
+                        .bounded
+                    else if (flags.uncommitted_record_tail)
+                        .uncommitted_record
+                    else
+                        .ordinary,
                 } };
             },
             .rigid => {
@@ -260,7 +280,7 @@ pub const SealedTypeView = struct {
                     .numeric_default_phase = variable_facts.numeric_default_phase,
                     .row_default = self.rowDefault(var_, .{ .rigid = rigid }),
                     .row_default_discharges_constraints = variable_facts.row_default_discharges_constraints,
-                    .bounded_row_ext = variable_facts.bounded_row_ext,
+                    .row_tail = if (variable_facts.bounded_row_ext) .bounded else .ordinary,
                 } };
             },
             .alias => {
@@ -588,7 +608,7 @@ const ReachWalker = struct {
         if (!var_facts.reached) {
             var_facts.reached = true;
             if (self.newly_reached) |list| try list.append(allocator, resolved.var_);
-            if (!resolved.word.flags.empty_tag_union_is_default) try self.pending.append(allocator, resolved.var_);
+            if (!resolved.word.flags().empty_tag_union_is_default) try self.pending.append(allocator, resolved.var_);
         }
         switch (tail orelse return) {
             .empty_record => var_facts.record_tail = true,

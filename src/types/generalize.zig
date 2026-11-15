@@ -56,7 +56,17 @@ const Var = @import("types.zig").Var;
 const Rank = @import("types.zig").Rank;
 const DescStoreIdx = @import("store.zig").DescStoreIdx;
 const RecordField = @import("types.zig").RecordField;
-const UseAbsorbers = @import("use_absorbers.zig").UseAbsorbers;
+const types = @import("types.zig");
+
+/// Whether a class is an uncommitted record tail or an uncommitted tag tail
+/// (design.md "Uncommitted Record Tails", "Uncommitted Tag Tails").
+pub fn isUncommittedTail(desc: types.Descriptor) bool {
+    return switch (desc.content) {
+        .flex => desc.flags.uncommitted_record_tail,
+        .structure => |flat| flat == .empty_tag_union and desc.flags.uncommitted_tag_tail,
+        .rigid, .alias, .field_presence, .err => false,
+    };
+}
 
 /// The descriptor a rank frame settles once its children have reported.
 const RankFill = struct {
@@ -132,9 +142,13 @@ const RankedVar = struct {
     /// The checked representative of the var's class.
     var_: Var,
     /// The class's descriptor. A pass merges no classes, so the descriptor
-    /// names the class for the whole pass.
+    /// names the class for the whole pass, unless the caller committed
+    /// tails between `adjust` and `quantify`, which resolves the var again.
     desc_idx: DescStoreIdx,
     rank: Rank,
+    /// Whether `var_` is its class's checked representative: always when
+    /// queued, and for as long as `desc_idx` names its class.
+    is_root: bool = true,
 
     fn lessThan(_: void, a: RankedVar, b: RankedVar) bool {
         return @backingInt(a.rank) < @backingInt(b.rank);
@@ -166,15 +180,14 @@ pub const Generalizer = struct {
     rank_frames: std.ArrayList(RankFrame),
     /// Settled child ranks, consumed by the frame that requested them.
     pending_ranks: std.ArrayList(Rank),
-    /// What the module being checked can change anonymous structure into,
-    /// or null when every liftable class is copied per use.
-    use_absorbers: ?UseAbsorberQuery = null,
-
-    /// What `Generalizer.use_absorbers` reads structure's names through.
-    pub const UseAbsorberQuery = struct {
-        absorbers: *UseAbsorbers,
-        idents: *const base.Ident.Store,
-    };
+    /// The uncommitted record tails the last `adjust` left at the rank it
+    /// generalizes (design.md "Uncommitted Record Tails"). The caller commits
+    /// those its binding may not quantify before `quantify`; the rest are
+    /// quantified like any other variable the pass owns.
+    owned_tails: std.ArrayListUnmanaged(Var) = .empty,
+    /// How many of `tmp_vars` start below the rank the last `adjust`
+    /// generalizes: they come first (`groupByRank`).
+    below_rank_count: usize = 0,
 
     const Self = @This();
 
@@ -187,12 +200,6 @@ pub const Generalizer = struct {
             .rank_frames = .empty,
             .pending_ranks = .empty,
         };
-    }
-
-    /// Whether a class this pass leaves ungeneralized is per-use structure.
-    fn copiedPerUse(self: *Self, desc_idx: DescStoreIdx) std.mem.Allocator.Error!bool {
-        const query = self.use_absorbers orelse return self.store.wordAt(desc_idx).liftsIntoNominal();
-        return query.absorbers.copiedPerUse(self.gpa, self.store, query.idents, desc_idx);
     }
 
     /// Orders `tmp_vars` by starting rank, keeping each rank's vars in the
@@ -224,11 +231,13 @@ pub const Generalizer = struct {
     /// Reset the state of the generalizer
     pub fn reset(self: *Self) void {
         self.tmp_vars.clearRetainingCapacity();
+        self.owned_tails.clearRetainingCapacity();
     }
 
     pub fn deinit(self: *Self, _: std.mem.Allocator) void {
         self.tmp_vars.deinit(self.gpa);
         self.at_rank_vars.deinit(self.gpa);
+        self.owned_tails.deinit(self.gpa);
         self.rank_frames.deinit(self.gpa);
         self.pending_ranks.deinit(self.gpa);
     }
@@ -264,7 +273,26 @@ pub const Generalizer = struct {
     /// ## Parameters
     /// - `var_pool`: The main variable pool tracking all vars by rank
     /// - `rank_to_generalize`: The rank level to generalize (must be var_pool.current_rank)
-    pub fn generalize(self: *Self, _: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
+    pub fn generalize(self: *Self, gpa: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
+        _ = gpa;
+        try self.adjustMarked(var_pool, rank_to_generalize);
+        try self.quantify(var_pool, rank_to_generalize, false);
+    }
+
+    /// The first half of `generalize`: adjust the ranks of the vars at
+    /// `rank_to_generalize`, and list in `owned_tails` the uncommitted record
+    /// tails the pass would quantify. The caller may unify between this and
+    /// `quantify`, so no class is left marked (`Descriptor.Word`).
+    pub fn adjust(self: *Self, _: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
+        try self.adjustMarked(var_pool, rank_to_generalize);
+        for (self.tmp_vars.items) |ranked| {
+            if (self.store.wordAt(ranked.desc_idx).marked()) self.store.clearGeneralizationMarks(ranked.desc_idx);
+        }
+    }
+
+    /// `adjust`, leaving the classes it generalizes and the ones whose rank
+    /// it adjusted marked for `quantify`.
+    fn adjustMarked(self: *Self, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
         if (rank_to_generalize == Rank.generalized) return;
 
         std.debug.assert(var_pool.current_rank == rank_to_generalize);
@@ -304,7 +332,7 @@ pub const Generalizer = struct {
         }
 
         // Group the vars by their starting rank, keeping each group's order.
-        const current_start = self.groupByRank(rank_to_generalize);
+        self.below_rank_count = self.groupByRank(rank_to_generalize);
 
         // Adjust ranks to maintain invariant: ranks never increase going deeper.
         // Process from lowest to highest rank so that lower ranks are finalized first,
@@ -313,15 +341,57 @@ pub const Generalizer = struct {
             _ = try self.adjustRank(ranked.desc_idx, ranked.rank);
         }
 
-        // Each queued var is its class's checked representative and the pass
-        // merged no classes, so each still is, and names the descriptor it
-        // was queued with.
-        if (std.debug.runtime_safety) {
-            for (self.tmp_vars.items) |ranked| {
-                const resolved = self.store.resolveVarWord(ranked.var_);
-                std.debug.assert(resolved.is_root and resolved.desc_idx == ranked.desc_idx);
-            }
+        self.debugAssertQueuedDescriptors();
+
+        for (self.tmp_vars.items) |ranked| {
+            const word = self.store.wordAt(ranked.desc_idx);
+            if (word.kind != .flex or !word.flags().uncommitted_record_tail) continue;
+            if (@backingInt(word.rank) != rank_to_generalize_int) continue;
+            try self.owned_tails.append(self.gpa, ranked.var_);
         }
+    }
+
+    /// Each queued var is its class's checked representative and names the
+    /// descriptor it was queued with: nothing has merged classes since.
+    fn debugAssertQueuedDescriptors(self: *const Self) void {
+        if (!std.debug.runtime_safety) return;
+        for (self.tmp_vars.items) |ranked| {
+            const resolved = self.store.resolveVarWord(ranked.var_);
+            std.debug.assert(ranked.is_root and resolved.is_root and resolved.desc_idx == ranked.desc_idx);
+        }
+    }
+
+    /// The second half of `generalize`: quantify the vars `adjust` left at
+    /// `rank_to_generalize` and return the escaped ones to their pools. When
+    /// the caller committed tails `adjust` listed (`committed_tails`), ranks
+    /// are adjusted again first, so structure that held them alone escapes
+    /// the quantification. Otherwise the caller has merged no classes since
+    /// `adjust`, and each queued var still names the descriptor it was
+    /// queued with.
+    pub fn quantify(self: *Self, var_pool: *VarPool, rank_to_generalize: Rank, committed_tails: bool) std.mem.Allocator.Error!void {
+        if (rank_to_generalize == Rank.generalized) return;
+        const rank_to_generalize_int = @backingInt(rank_to_generalize);
+        if (committed_tails) {
+            // Committing a tail merges classes, so each queued var is
+            // resolved again. `adjust` left no class marked: mark again the
+            // classes this pass generalizes, and adjust every rank again
+            // from there.
+            for (self.tmp_vars.items) |*ranked| {
+                const resolved = self.store.resolveVarWord(ranked.var_);
+                ranked.desc_idx = resolved.desc_idx;
+                ranked.is_root = resolved.is_root;
+                self.store.markGeneralizingIf(resolved.desc_idx, resolved.word.rank != .generalized);
+            }
+            errdefer for (self.tmp_vars.items) |ranked| {
+                self.store.clearGeneralizationMarks(ranked.desc_idx);
+            };
+            for (self.tmp_vars.items) |ranked| {
+                _ = try self.adjustRank(ranked.desc_idx, ranked.rank);
+            }
+        } else {
+            self.debugAssertQueuedDescriptors();
+        }
+        const current_start = self.below_rank_count;
 
         // Move variables from lower ranks (generalized through rank_to_generalize-1) back to main pool.
         // These are vars that were initially at rank_to_generalize but had their ranks
@@ -329,7 +399,7 @@ pub const Generalizer = struct {
         for (self.tmp_vars.items[0..current_start]) |ranked| {
             const word = self.store.wordAt(ranked.desc_idx);
             if (word.marked()) self.store.clearGeneralizationMarks(ranked.desc_idx);
-            try var_pool.addVarToRank(ranked.var_, word.rank);
+            if (ranked.is_root) try var_pool.addVarToRank(ranked.var_, word.rank);
         }
 
         // Process variables still at rank_to_generalize after adjustment.
@@ -337,6 +407,7 @@ pub const Generalizer = struct {
         for (self.tmp_vars.items[current_start..]) |ranked| {
             const word = self.store.wordAt(ranked.desc_idx);
             if (word.marked()) self.store.clearGeneralizationMarks(ranked.desc_idx);
+            if (!ranked.is_root) continue;
             const rank_int = @backingInt(word.rank);
             // Adjustment only lowers ranks; a rank above the one being
             // generalized means a reducer broke the invariant (see line ~122).
@@ -344,13 +415,6 @@ pub const Generalizer = struct {
             if (rank_int < rank_to_generalize_int) {
                 // Escaped var, so move it to the right pool.
                 try var_pool.addVarToRank(ranked.var_, word.rank);
-                // Anonymous structure made in this scope is copied by
-                // every use even though no variable in it is quantified:
-                // a use may lift it into a nominal type (design.md
-                // "Anonymous Structure Is Copied Per Use").
-                if (try self.copiedPerUse(ranked.desc_idx)) {
-                    try self.store.markPerUseStructure(ranked.desc_idx);
-                }
             } else {
                 // Safe to generalize
                 try self.store.setDescRank(ranked.desc_idx, Rank.generalized);
@@ -517,9 +581,11 @@ pub const Generalizer = struct {
             // into. An error sits at group_rank too.
             .flex, .rigid, .err => return try self.settledRank(desc_idx, group_rank),
             // A settled presence marker is ground (an unresolved presence
-            // is an ordinary flex/rigid var), and empty records and tag
-            // unions never need to be generalized.
-            .field_presence, .empty_record, .empty_tag_union => return try self.settledRank(desc_idx, .outermost),
+            // is an ordinary flex/rigid var). An uncommitted tag tail
+            // generalizes like a variable, so every use of the binding
+            // owns its copy (design.md "Uncommitted Tag Tails"). Every
+            // other empty record or tag union is ground.
+            .field_presence, .empty_record, .empty_tag_union => return try self.settledRank(desc_idx, if (word.flags().uncommitted_tag_tail) group_rank else .outermost),
             // THEORY: we don't need to descend into the backing type. Everything
             // in the alias RHS is either a reference to an arg (already visited
             // via the args below) or a concrete type (which resolves to
