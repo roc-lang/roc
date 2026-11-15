@@ -5366,7 +5366,7 @@ pub const InstGraph = struct {
     /// Whether every unresolved part of a type is a cell that relation freeze
     /// closes to a default the cell itself declares: an undetermined
     /// field-kind cell, or a variable carrying a row default and no numeric
-    /// default. The checker publishes an implicitly open row that nothing
+    /// default. Checking outputs an implicitly open row that nothing
     /// widened as such a variable, so a type no specialization input reaches
     /// can still hold one.
     pub fn typeIsSpecializationChoiceDefaultable(self: *InstGraph, root: NodeId) Allocator.Error!bool {
