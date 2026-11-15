@@ -10434,8 +10434,19 @@ A checked type variable carries no public structure of its own, so one related
 to a generated-private named representation other than an iterator (such as a
 codec method's unannotated `FieldNames` parameter, constrained only by the
 methods it calls) denotes that representation itself, as a checked variable
-related to an imported generated iterator does. A generated iterator's
-variable takes the iterator's public interface instead.
+related to an imported generated iterator does. The same holds for an interface
+parameter standing for such a variable's substitution cell, as when that
+parameter passes through an unannotated generic helper. Body lowering relates
+an expression's checked type to a known Monotype that carries generated-private
+evidence through this same opaque relation, just as it relates a checked
+interface to a type cell carrying such evidence; any other known Monotype
+unifies. Joining the variable never
+collapses two different representations. The checker gives the variable one
+type, and a codec representation's generated backing is built only from its
+named type's arguments and never changes afterwards, so every representation
+one variable meets is the same type. A generated iterator's variable takes the
+iterator's public interface instead, because representation selection may
+still join a live iterator's representation or force it dynamic.
 
 Match lowering likewise relates each checked pattern interface to the exact
 scrutinee node without merging a generated-private root into that public

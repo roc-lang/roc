@@ -28677,7 +28677,11 @@ const BodyContext = struct {
     }
 
     /// Constrain a checked type to a Monotype: instantiate the checked type
-    /// into the graph and unify with the (linked or imported) Monotype node.
+    /// into the graph and relate it to the (linked or imported) Monotype node.
+    /// A Monotype carrying generated-private representation evidence is the
+    /// private side of an opaque interface relation, exactly as a type cell
+    /// carrying it is in `constrainCheckedInterfaceToCell`; any other
+    /// Monotype unifies.
     fn constrainTypeToMono(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
@@ -28685,7 +28689,13 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
-        try self.graph.unify(try self.instNode(checked_ty), try self.graph.importMono(mono_ty));
+        const checked_node = try self.instNode(checked_ty);
+        const mono_node = try self.graph.importMono(mono_ty);
+        if (try self.graph.containsGeneratedPrivate(mono_node)) {
+            try self.graph.relateOpaqueInterface(checked_node, mono_node);
+        } else {
+            try self.graph.unify(checked_node, mono_node);
+        }
     }
 
     fn requireClosedCheckedType(
@@ -51935,6 +51945,19 @@ const BodyContext = struct {
         return runtime_boundary;
     }
 
+    /// The produced field of an inline (required or defaulted) constructor
+    /// field whose child supplied a distinct witness slot. An inline field's
+    /// runtime slot is its source value, so the witness slot is both.
+    fn inlineFieldWithWitnessSlot(field: InstField, witness_slot: NodeId) InstField {
+        return .{
+            .name = field.name,
+            .ty = witness_slot,
+            .value_ty = if (field.value_ty != .none) .of(witness_slot) else .none,
+            .kind = field.kind,
+            .default = field.default,
+        };
+    }
+
     /// What one constructor child contributes to its container's value
     /// witness.
     const ConstructorChildWitness = struct {
@@ -53559,13 +53582,7 @@ const BodyContext = struct {
                     "record graph update child differed without explicit representation evidence",
                 );
                 if (witness.requires_witness) requires_distinct_witness = true;
-                produced_fields[index] = .{
-                    .name = field.name,
-                    .ty = witness.slot,
-                    .value_ty = field.value_ty,
-                    .kind = field.kind,
-                    .default = field.default,
-                };
+                produced_fields[index] = inlineFieldWithWitnessSlot(field, witness.slot);
             }
             const produced_node = if (requires_distinct_witness) blk: {
                 const witness_fields = try self.graph.arena().dupe(InstField, produced_fields);
@@ -53658,13 +53675,7 @@ const BodyContext = struct {
                     "record graph constructor child differed without explicit representation evidence",
                 );
                 if (witness.requires_witness) requires_distinct_witness = true;
-                produced_fields[index] = .{
-                    .name = field.name,
-                    .ty = witness.slot,
-                    .value_ty = field.value_ty,
-                    .kind = field.kind,
-                    .default = field.default,
-                };
+                produced_fields[index] = inlineFieldWithWitnessSlot(field, witness.slot);
                 break :blk pre;
             } else if (base_expr) |base_value| blk: {
                 // Record update copies unmentioned slots verbatim—for an

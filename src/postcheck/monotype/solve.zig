@@ -5956,6 +5956,7 @@ pub const InstGraph = struct {
         const public_content = try self.rootContent(public_node);
         const private_content = try self.rootContent(private_node);
         if (isGeneratedPrivateRootContent(public_content) and isGeneratedPrivateRootContent(private_content)) {
+            if (std.debug.runtime_safety) assertSameGeneratedCodecRepresentation(public_content, private_content);
             try self.unifyAtRowWidth(public_node, private_node, pair.row_width);
             return;
         }
@@ -6360,27 +6361,53 @@ pub const InstGraph = struct {
         }
     }
 
-    /// A checked type variable states no public structure of its own: the
-    /// checker solved it at this use to the type the request supplies, such
-    /// as a codec method's unannotated parameter whose only constraint is a
-    /// method the request's type provides. Related to a generated-private
-    /// named representation (other than an iterator, whose public interface
-    /// relation is defined above), the variable therefore denotes that
-    /// representation itself, exactly as it would denote an imported
-    /// generated iterator.
+    /// A public variable states no structure of its own: a checked variable
+    /// the checker solved at this use to the type the request supplies (such
+    /// as a codec method's unannotated parameter constrained only by the
+    /// methods it calls), or an interface parameter standing for such a
+    /// variable's substitution cell. Related to a generated-private named
+    /// representation other than an iterator (a codec protocol argument such
+    /// as `FieldNames`, `FieldName` or `ParseTagUnionSpec`), the variable
+    /// denotes that representation itself, exactly as it would denote an
+    /// imported generated iterator; body lowering then relates the variable's
+    /// expressions to the representation's finished Monotype by ordinary
+    /// unification.
+    ///
+    /// Joining the variable cannot collapse two different representations.
+    /// The checker gives the variable one type, so every representation it
+    /// meets has that one named type at unified arguments, and a codec
+    /// representation's generated backing is built only from those arguments
+    /// and never changes afterwards (unlike an iterator's, which
+    /// representation selection may still join or force dynamic). Two such
+    /// representations are therefore equal, and their ordinary unification
+    /// is an identity; `assertSameGeneratedCodecRepresentation` checks the
+    /// declaration half of that, and unification checks the rest.
     fn resolvePublicVariableToGeneratedRepresentation(
         self: *InstGraph,
         public_node: NodeId,
         public_var: InstVariable,
         private_node: NodeId,
     ) Allocator.Error!void {
-        if (public_var.origin != .checked_variable) {
-            Common.invariant("generated-private representation relation received a non-checked public variable");
+        switch (public_var.origin) {
+            .checked_variable, .interface_parameter => {},
+            .row_extension, .placeholder => Common.invariant("generated-private representation relation received an unfinished or row public variable"),
         }
         if (public_var.numeric_default_phase != null or public_var.row_default != null) {
             Common.invariant("generated-private representation relation received a defaultable public variable");
         }
         try self.union_(private_node, public_node);
+    }
+
+    /// Two generated-private codec representations related to each other
+    /// name one declaration (see `resolvePublicVariableToGeneratedRepresentation`).
+    fn assertSameGeneratedCodecRepresentation(left: InstNode, right: InstNode) void {
+        const left_named = left.named;
+        const right_named = right.named;
+        if (left_named.generated_iterator != null or left_named.def.iterator_representation != .none) return;
+        if (right_named.generated_iterator != null or right_named.def.iterator_representation != .none) return;
+        if (left_named.kind != right_named.kind or !std.meta.eql(left_named.def, right_named.def)) {
+            Common.invariant("one relation joined generated-private codec representations of different named types");
+        }
     }
 
     fn resolvePublicVariableToImportedGeneratedIterator(
