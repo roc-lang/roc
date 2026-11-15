@@ -118,8 +118,8 @@ main! = |_| processNested([])
 (inferred-types
 	(defs
 		(patt (type "List(Try(Str, Error)) -> List(Str)"))
-		(patt (type "_arg -> List(Str)")))
+		(patt (type "_arg -> _ret")))
 	(expressions
 		(expr (type "List(Try(Str, Error)) -> List(Str)"))
-		(expr (type "_arg -> List(Str)"))))
+		(expr (type "_arg -> _ret"))))
 ~~~

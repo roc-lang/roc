@@ -3,4 +3,6 @@ Enc := [].{
 
     encode : Form -> Try(Str, [Unencodable])
     encode = |form| Ok(Json.to_str(form))
+
+    encode_any = |value| Ok(Json.to_str(value))
 }
