@@ -39903,54 +39903,6 @@ const BodyContext = struct {
         return requestLowerChild(self, checked_arg, .{ .sealed = ty });
     }
 
-    fn lowerPendingCallableEvalBindingValue(
-        self: *BodyContext,
-        view: ModuleView,
-        template: checked.CallableEvalTemplate,
-        root: checked.CompileTimeRoot,
-        mono_fn_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse
-            Common.invariant("callable eval template root had no checked entry wrapper");
-
-        const wrapper_fn_ty = try self.functionType(&.{}, mono_fn_ty);
-        const wrapper_template = self.builder.fnDefForTemplate(
-            view,
-            wrapper.template,
-            wrapper.checked_fn_root,
-            try view.types.rootKey(wrapper.checked_fn_root),
-            wrapper_fn_ty,
-        );
-
-        var body_ctx = try BodyContext.init(self.allocator, self.builder, view, wrapper.template, self.graph, self.draft);
-        defer body_ctx.deinit();
-        const entry_template = view.templates.get(wrapper.template.template);
-        const schema = templateSchemaIn(view, &entry_template);
-        const subst = try body_ctx.substitutionFromCheckedTypes(view, schema.scheme_vars);
-        body_ctx.evidence = rootEvidenceWithSubstitution(wrapper.template, schema, .{
-            .subst = subst,
-            .vector = self.restore_evidence.vector,
-        });
-        try body_ctx.seedSubstitution(schema, subst);
-        body_ctx.frozen_sealed_emission = self.frozen_sealed_emission;
-        body_ctx.frozen_type_finals = self.frozen_type_finals;
-        body_ctx.frozen_codec_calls = self.frozen_codec_calls;
-        body_ctx.frozen_field_defaults = self.frozen_field_defaults;
-        const root_fn_key = Ast.fnTemplateDigest(wrapper_template, self.typeStore(), self.nameStore());
-        body_ctx.owner_context_fn_key = root_fn_key;
-        body_ctx.current_fn_key = root_fn_key;
-        try body_ctx.constrainTypeToMono(wrapper.checked_fn_root, wrapper_fn_ty);
-        try body_ctx.constrainTypeToMono(template.checked_fn_root, mono_fn_ty);
-        try body_ctx.constrainKnownType(root.checked_type, mono_fn_ty);
-
-        return try body_ctx.lowerPendingCallableEvalRoot(
-            view,
-            template.root,
-            rootBodyExpr(view, root),
-            try body_ctx.activeNodeFromType(mono_fn_ty),
-        );
-    }
-
     fn lowerCallableEvalBindingValueAtNode(
         self: *BodyContext,
         view: ModuleView,
