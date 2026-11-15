@@ -6649,7 +6649,7 @@ const Pass = struct {
         // both versions continue into the same statements.
         var exits = std.ArrayList(BodyClone.LoopExit).empty;
         defer exits.deinit(self.allocator);
-        try BodyClone.shareLoopExits(self.store, join, &self.joins.next_join_point, self.allocator, &exits, &self.new_locals, .range_prove);
+        try BodyClone.shareLoopExits(self.store, join, proc_body, &self.joins.next_join_point, self.analysis, self.allocator, &exits, &self.new_locals, .range_prove);
 
         const copy_id = self.joins.freshJoinPoint();
         const guard_id = self.joins.freshJoinPoint();
