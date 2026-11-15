@@ -2026,19 +2026,10 @@ test "post-check lowerers define no helper twice with near-identical bodies" {
     // parameters, so any name defined twice with near-identical bodies is
     // either listed here, with its reason, or a copy to extract.
     const intended_per_scope = [_][]const u8{
-        // The const-restorer interface `runConstRestore` walks over: each
-        // scope's own expression store, id types, and node bookkeeping.
-        "constEmit",
-        "constNameStore",
-        "constTypeStore",
-        "finishConstRestoreLayer",
-        "finishConstRestoreData",
         // Each scope's emission primitives into its own expression store
-        // (`Ast.Program` for `Builder`, the body draft for `BodyContext`),
-        // and each store's record of a restored root read.
+        // (`Ast.Program` for `Builder`, the body draft for `BodyContext`).
         "localExpr",
         "bindPat",
-        "recordRestoredRootRead",
         // `AnyAll.Evaluation` leaf policies and the `EqDeriver` /
         // `HashDeriver` walker callbacks: one generic walk, one policy
         // struct per question.
