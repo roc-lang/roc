@@ -24516,6 +24516,14 @@ its existing value-flow edges once per candidate; validation and emission consum
 that classification. Tracked sources forward valid metadata, while sources
 entering the chain establish metadata for their actual allocation. A merged
 local's membership in the chain is not evidence about all of its definitions.
+A join parameter of the chain normally receives its metadata through added
+limit and flag parameters written beside each of its writes. A join
+parameter that some edge defines by direct assignment has no parameter write
+on that edge, so it is a merged local like any other value with several
+definitions: each definition, parameter write or assignment, sets the
+value's one shared limit local and one shared flag local. The promoted
+loop's own parameter is always a parameter in full, because loop versioning
+dispatches on its flag.
 A loop-parameter write that brings an outside list into the chain also prevents
 slack-based loop versioning: its new allocation may have less spare capacity
 than the loop head measured, even when that write measures fresh metadata.
@@ -24575,6 +24583,33 @@ versioned loop is not such a loop, and cloning it would double the emitted
 body for every level of nesting to remove one predictable branch per site;
 it keeps its flag-dispatched sets instead.
 
+The chain also follows the operations of an update that moves an item out
+of its slot and back in (`List.update`, below). `list_map_prepare_reuse`
+returns the list it consumed, so the limit and the flag pass through it;
+`list_move_out_unsafe` is a read; `list_map_write_unsafe` stores into the
+allocation it was given, and its contract is a uniquely owned non-slice
+list, so it leaves the flag at one and the limit unchanged. A transfer
+whose result has a use the pass does not model is itself an unmodeled use
+of its input: the chain ends at the input. A transfer through which a list
+entered a promoted chain is followed by that list's measurement and bounds
+the chain; no later chain of the same procedure flows through it.
+
+A `list_owned_unique` query on a carried value asks exactly what the
+value's ownership flag records, so it is a promotion site like an item
+overwrite: its chain threads the flag. The promoted body keeps the query
+as written. In the unique-only copy of a versioned loop, a query whose
+flag is known one is replaced by the constant one, and a switch on a local
+that only such a query defines is replaced by the arm that constant
+selects, so neither the query nor the copying arm remains in the hot loop.
+LIR initializes a local on every path to a read, which is why the query
+runs before any switch on its result within one pass through the body. The
+soundness argument is the one for overwrites: the flag is consulted only
+for the value it was computed for. A query on a value that a consuming use
+can split from another live use is not answered, and a query whose flag is
+measured inside the copy (a list entering the chain there) still asks.
+The pass recognizes these LIR operations wherever they occur; it never
+identifies a builtin by name.
+
 `List.clear` is its own low-level, `list_clear`, run by every backend as the
 `listClear` builtin: its result is never a slice and never shares an
 allocation, so unlike `list_sublist` its result is born unique, and a list
@@ -24603,7 +24638,8 @@ return to the copy, since consuming one iteration and its appends keeps the
 cover. Otherwise the body runs as promoted. A chain reaching several loops
 gives each its own bound and its own copy. The copy nests no other promoted
 loop, every append site in the body belongs to a checked chain, the chains
-carry only plain appends, no list enters a chain inside the loop, and no
+carry only plain appends (an ownership transfer, like an alias, hands its
+list on unchanged), no list enters a chain inside the loop, and no
 append site sits before the head test or inside a nested loop, where it
 would run more than once per iteration. A procedure call in the body is no
 obstacle: the copy removes a carried limit and a branch per append whether
