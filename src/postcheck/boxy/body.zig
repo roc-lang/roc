@@ -2455,11 +2455,13 @@ pub const Builder = struct {
         ret_layout: layout.Idx,
     };
 
-    pub fn beginErasedWorker(self: *Builder, field_layouts: []const layout.Idx) Allocator.Error!ErasedStart {
+    /// The worker's reuse argument holds an allocation of kind `reuse`
+    /// (`beginReuseArg`).
+    pub fn beginErasedWorker(self: *Builder, field_layouts: []const layout.Idx, reuse: ReuseKind) Allocator.Error!ErasedStart {
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
         const capture_ptr = try self.closedLocal(.opaque_ptr);
-        _ = try self.beginReuseArg(.none);
+        _ = try self.beginReuseArg(reuse);
         const captures = if (field_layouts.len == 0) try self.allocator.alloc(LocalId, 0) else try self.loadCaptures(capture_ptr, field_layouts);
         return .{
             .entry = entry,
@@ -2654,7 +2656,7 @@ pub const Builder = struct {
         // its descriptors, then its dictionaries, then its literal
         // arguments.
         const has_table = self.program.inputCount(self.worker_id) != 0;
-        var start = try self.beginErasedWorker(if (has_table) &.{.opaque_ptr} else &.{});
+        var start = try self.beginErasedWorker(if (has_table) &.{.opaque_ptr} else &.{}, .none);
         defer self.allocator.free(start.captures);
         if (has_table) try self.beginTable(start.captures[0], target_worker.dictionary_params.len);
         const inputs = try self.allInputWords();
@@ -2664,7 +2666,7 @@ pub const Builder = struct {
     /// A structural method over the one descriptor its dictionary captures.
     pub fn lowerStructuralMethod(self: *Builder, method: lower.StructuralMethod) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        var start = try self.beginErasedWorker(&.{.opaque_ptr});
+        var start = try self.beginErasedWorker(&.{.opaque_ptr}, .none);
         defer self.allocator.free(start.captures);
         try self.beginTable(start.captures[0], 0);
         try self.runErasedBody(&start, worker.params, worker.ret, .{ .structural = method });
@@ -2677,7 +2679,7 @@ pub const Builder = struct {
     /// payloads unchanged.
     pub fn lowerStructuralMap(self: *Builder, map: lower.StructuralMap) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        var start = try self.beginErasedWorker(&.{.opaque_ptr});
+        var start = try self.beginErasedWorker(&.{.opaque_ptr}, .none);
         defer self.allocator.free(start.captures);
         try self.beginTable(start.captures[0], 0);
         try self.runErasedBody(&start, worker.params, worker.ret, .{ .structural_map = map });
@@ -2729,7 +2731,7 @@ pub const Builder = struct {
     /// A crashing dictionary method: it crashes as the dispatch it stands
     /// for would.
     pub fn lowerCrashDictionary(self: *Builder, kind: lower.CrashDictionary) Allocator.Error!void {
-        const start = try self.beginErasedWorker(&.{});
+        const start = try self.beginErasedWorker(&.{}, .none);
         defer self.allocator.free(start.captures);
         self.var_descs = &.{};
         const body_start = try self.newHole();
@@ -2766,7 +2768,7 @@ pub const Builder = struct {
     /// arguments (`WorkerKey.callable_eval_entry`).
     pub fn lowerCallableEvalEntry(self: *Builder, binding: lower.CallableEvalBinding) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        var start = try self.beginErasedWorker(&.{});
+        var start = try self.beginErasedWorker(&.{}, .none);
         defer self.allocator.free(start.captures);
         self.var_descs = &.{};
         try self.runErasedBody(&start, worker.params, worker.ret, .{ .callable_eval = binding });
@@ -3143,9 +3145,13 @@ pub const Builder = struct {
                         if (callee_worker.params.len != 0 or callee_worker.dictionary_params.len != 0) invariant("a callable-eval entry wrapper takes arguments");
                         const bound = try self.relateVariables(callee_worker.ret, eval.ty, callee_worker.scheme_vars.len);
                         defer self.allocator.free(bound);
-                        const hidden = try self.allocator.alloc(Word, bound.len);
+                        const hidden = try self.allocator.alloc(Word, bound.len + callee_worker.literal_params);
                         defer self.allocator.free(hidden);
-                        for (bound, hidden) |ty, *desc| desc.* = try self.descWord(ty);
+                        for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
+                        // A read of the binding's value has no edge of its
+                        // own, so the wrapper's literal arguments derive
+                        // from this use's types.
+                        try self.derivedLiteralArgs(callee, bound, hidden[bound.len..]);
                         try self.finishCall(callee, hidden, bound, &.{}, try self.program.substitute(self.allocator, callee_worker.ret, bound), eval.ty);
                     },
                     .discarded, .expect => invariant("a callable-eval binding's root holds a value, which no expect or discarded root does"),
@@ -4313,7 +4319,7 @@ pub const Builder = struct {
     /// literal converted there.
     pub fn lowerLiteralThunkBody(self: *Builder, key: @FieldType(lower.WorkerKey, "literal_thunk")) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        const start = try self.beginErasedWorker(&.{});
+        const start = try self.beginErasedWorker(&.{}, .none);
         defer self.allocator.free(start.captures);
         self.var_descs = &.{};
         self.dict_locals = &.{};
@@ -4355,7 +4361,7 @@ pub const Builder = struct {
     /// the root's compile-time value slot (`pendingValueRead`).
     pub fn lowerRootSlotThunkBody(self: *Builder, key: @FieldType(lower.WorkerKey, "root_slot")) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        const start = try self.beginErasedWorker(&.{});
+        const start = try self.beginErasedWorker(&.{}, .none);
         defer self.allocator.free(start.captures);
         self.var_descs = &.{};
         self.dict_locals = &.{};
@@ -4468,7 +4474,12 @@ pub const Builder = struct {
                     invariant("a requirement edge names no solution of its module");
                 const callee = try self.program.templateRefWorker(self.view.view.checked_procedure_templates.templateRef(self.view.key, requirement.template));
                 const subst = self.view.view.static_dispatch_plans.site_substitutions.items()[solution.root_subst.start..][0..solution.root_subst.len];
-                const owned = try self.boundTypesAt(callee, subst, try self.convert(solution.solved_root));
+                const invoked = try self.convert(solution.solved_root);
+                const call_fn = switch (requirement.invokes) {
+                    .procedure => invoked,
+                    .entry_wrapper => try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = invoked, .effectful = false } }),
+                };
+                const owned = try self.boundTypesAt(callee, subst, call_fn);
                 defer self.allocator.free(owned);
                 const bound = try self.program.arena.allocator().dupe(TypeId, owned);
                 try self.enterDerivedFrame(callee, bound);

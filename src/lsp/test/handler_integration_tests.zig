@@ -332,6 +332,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "inlay hints show inferred types and skip annotated bindings", .run = inlayHintsShowInferredTypes },
     .{ .name = "inlay hints stay within the requested range and truncate long types", .run = inlayHintsRespectRangeAndLength },
     .{ .name = "inlay hints survive an out-of-range end line", .run = inlayHintsSurviveOutOfRangeEndLine },
+    .{ .name = "inlay hints show a reassigned var once", .run = inlayHintsShowReassignedVarOnce },
     .{ .name = "inlay hints carry the edit that writes their type down", .run = inlayHintsCarryTheirAnnotationEdit },
     .{ .name = "code actions annotate a binding with its inferred type", .run = codeActionsAnnotateInferredBinding },
     .{ .name = "code actions generate an expect test for a function", .run = codeActionsGenerateExpectTest },
@@ -2020,6 +2021,53 @@ pub fn inlayHintsSurviveOutOfRangeEndLine() integration_spec.SpecError!void {
     const hints = try response.result();
     try std.testing.expect(hints == .array);
     const label = try hintLabelAt(hints, 3, 8) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(": Str", label);
+}
+
+/// Verifies a reassigned var gets one hint, not one more per reassignment.
+/// Regression test for https://github.com/roc-lang/roc/issues/13060
+pub fn inlayHintsShowReassignedVarOnce() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "inlay_reassign.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\main = {{
+        \\    var $text = "r"
+        \\    $text = Str.concat($text, "o")
+        \\    $text = Str.concat($text, "c")
+        \\    $text
+        \\}}
+    , .{platform_path});
+    defer allocator.free(source);
+
+    // Only the block's lines, so `main`'s own hint is left out.
+    const request = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":{{"textDocument":{{"uri":"{s}"}},"range":{{"start":{{"line":3,"character":0}},"end":{{"line":6,"character":0}}}}}}}}
+    , .{fixture.uri});
+    defer allocator.free(request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{request});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const hints = try response.result();
+    try std.testing.expect(hints == .array);
+    try std.testing.expectEqual(@as(usize, 1), hints.array.items.len);
+    const label = try hintLabelAt(hints, 3, 13) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings(": Str", label);
 }
 
