@@ -6307,7 +6307,13 @@ lowering in its worker's workspace and never added to the checked module:
   (`RootSource.literal`, a `LiteralNode` naming a literal expression or a
   custom literal pattern; `CompileTimeRoot.literalNode`), it holds no
   expression, and lowering converts the literal's value through the
-  conversion plan keyed by the literal's node.
+  conversion plan keyed by the literal's node;
+- a literal argument root's body ("Literal Arguments"): the root's source is
+  the expression owning its edge (`RootSource.literal_argument`), which
+  locates the root for reports and which the root does not evaluate; it holds
+  no expression and no body nodes (`bodyParts` is empty), and lowering
+  converts its literal at the edge `CompileTimeRoot.literal_argument`
+  records.
 
 ### Forbidden Checked-Boundary Shapes
 
@@ -6614,6 +6620,23 @@ No candidate is recorded inside an ordinary top-level constant, because that
 enclosing root already evaluates and owns the destructure site. Validation uses
 the checked pattern compiler and compile-time evaluator; it never reinterprets
 source patterns separately.
+
+Only a requested root is evaluated, so only a requested root replaces its source
+occurrence. A root that receives no request (its checked type is not concrete,
+for example) replaces nothing, and an exhaustiveness site it would have
+validated is classified as if no root had been recorded. A site that runtime
+code can reach is decided statically even when it was classified for empirical
+validation, because runtime code can arrive there with any value of its type.
+Empirical validation decides only the sites that compile-time evaluation alone
+reaches.
+
+A requested callable binding root replaces its source occurrence too: runtime
+code reads the root's completed callable instead of computing it, so the
+destructure it extracts from, and every site its expression evaluates, runs
+only during the root's evaluation. The exception is a site inside a function
+body within that expression. The callable can hold that function, and runtime
+code that calls it reaches the site with any argument, so such a site stays
+classified by its enclosing procedure template.
 
 Local binding dependencies likewise remain candidates until their enclosing
 expression is either selected or rejected. A selected maximal parent owns the
@@ -9937,7 +9960,11 @@ substituted checked wrappers of `.wrappers` mode produce exactly this shape at
 every call site (a `Try` built on each arm and matched at once by the caller),
 as does the iterator-fusion clone of `.none`. A producer edge may release
 values it has finished with between building the tag and jumping; those
-releases are carried onto the redirected edge. An arm may release the union
+releases are carried onto the redirected edge. The join's body may begin with
+straight-line definitions that do not read the union, ahead of its match: an
+inlined call computes its other arguments there. They run whichever variant
+arrives, so each variant's continuation begins with its own copy of them,
+defining the same locals; nothing moves across a producer or an arm. An arm may release the union
 itself; the fused arm releases that variant's payload instead, or nothing when
 the variant owns nothing. A fused arm copies exactly the statements its
 variant rewrite changes, together with what copying them forces: their
@@ -13268,6 +13295,27 @@ probe's savepoint, a rollback undoes them and leaves the use unlinked, and
 the outermost commit registers them. Builds with runtime safety check that
 no instantiation copies a placeholder, and that by the end of checking every
 use not replayed is linked.
+
+Late-settled scheme requirements. A scheme-use record's pairs are its
+instantiation's substitution, so they must name every quantified variable
+of the scheme as published. A stored requirement whose receiver depends on
+an unannotated value of an enclosing scope (`weak = "a,b,c"` with
+`f = |g| weak.split_on(",").map(g)`) can settle after a use copied it. Its
+target instance then refines the scheme's type, which can let more of the
+scheme's relations settle, and each target instance those select adds its
+variables to the scheme (`map`'s result item above). The use's copies
+settle separately, on their own instances of the same method schemes, and
+the use's substitution does not yet name the new variables. When a stored
+requirement retires as settled after its scheme was copied, its callable is
+logged. Once solving ends, and only when that log is nonempty, every record
+that pairs a logged callable is extended. For each callable pair in the
+record whose original and copy both selected a target, the two target
+records instantiate one method scheme, so their pairs match one-to-one by
+method-scheme variable. Each variable of the original's instance is paired
+with the copy's variable for the same method-scheme variable, and the
+relations those instances derived are followed the same way. Builds with
+runtime safety check that each such original and copy selected the same
+method target. The regression test is the compile test "issue 13051".
 
 A generalization boundary captures its owned requirements before literal
 defaulting, then drains grounded copied requirements together with local codec
@@ -20257,7 +20305,10 @@ statement that consumes the result, so every path through a value-position join
 arrives by an explicit jump that tag-case fusion can see as a producer. A
 `match`, `if`, initialized-payload switch, or callable dispatch whose continuation
 is that jump delivers through the consumer rather than declaring a join of its
-own. A loop's `break`s all continue at the statement after the loop, so a join
+own. The join a `match` or `if` declares for its own result is a consumer in the
+same sense while its branches are lowered, so a `match` or `if` that ends one
+of those branches jumps to it directly; a branch that is itself a branch never
+adds a join that only forwards the result outward. A loop's `break`s all continue at the statement after the loop, so a join
 declared for one `break`'s value and another `break` may enter one LIR
 statement: LIR consumers treat such a statement as a merge of every edge into
 it, not as a body entered only through one join's jumps. These forms express
@@ -24627,6 +24678,20 @@ loop versioning; it cannot authorize an unconditional jump to the unique body.
 Shared metadata locals are needed only for merged definitions, and tracked
 edges retain their existing hot path. Debug validation checks that every planned
 definition emitted its metadata.
+
+A loop whose list parameter is also a procedure argument (the loop plain TCE
+makes of a tail-recursive procedure, whose join parameters are the
+procedure's own arguments) is entered by jumps that write nothing, since the
+argument already holds the incoming list. Promotion gives each such entry
+jump the same entry write as any outside list: the argument's unit is
+acquired through `list_map_prepare_reuse`, measured, and written back into
+the parameter beside its metadata, so the head never reads metadata the
+entry did not compute. The loop qualifies only when every back edge writes
+the parameter, because TCE omits identity writes and an unwritten back edge
+passes the head's list along through a use control-flow use ordering does
+not see; when no statement before the loop writes the parameter or feeds a
+chain edge from a carrier; and when no statement is reachable both before
+the loop and inside it.
 
 Versioning (a head that dispatches on the ownership flags to a unique-only
 copy of the loop body) is applied only to leaf loops: promoted loops whose

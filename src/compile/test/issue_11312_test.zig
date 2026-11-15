@@ -64,7 +64,13 @@ fn expectRecovery(source: []const u8, imported_source: ?[]const u8, blocked_expr
     var found_fine = false;
     const store = &artifact.moduleEnvConst().store;
     for (artifact.compile_time_roots.roots.items()) |root| {
-        const root_node = if (root.literalNode()) |literal| literal.node() else @backingInt(root.rootExpr());
+        const root_node: u32 = switch (root.source) {
+            .literal => |literal| literal.node(),
+            // A literal argument root converts its literal at its edge and
+            // evaluates no node of the module's bodies.
+            .literal_argument => continue,
+            .def, .expr, .statement, .required_binding, .hoisted => @backingInt(root.rootExpr()),
+        };
         const region = store.getNodeRegion(@fromBackingInt(root_node));
         const expr_source = module_source[region.start.offset..region.end.offset];
         if (std.mem.eql(u8, expr_source, blocked_expr)) {
