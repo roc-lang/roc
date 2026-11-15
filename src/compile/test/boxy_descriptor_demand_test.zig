@@ -59,7 +59,7 @@ const token_decl =
     \\
 ;
 
-fn expectFor(comptime body: []const u8, inspect: harness.LirInspectFn) !void {
+fn expectFor(comptime body: []const u8, inspect: harness.LirInspectFn) harness.LowerToLirHarnessError!void {
     for ([_]@import("base").target.TargetUsize{ .u32, .u64 }) |width| {
         try harness.expectLirInspectionWithOptions(token_decl ++ body, .{ .specialization_strategy = .boxy, .proc_debug_names = true, .target_usize = width }, inspect);
     }
@@ -157,7 +157,7 @@ fn methodsNodeCount(static_data: []const lir.Program.StaticDataExport) usize {
     return count;
 }
 
-fn findArtifact(coord: *Coordinator, views: []const check.CheckedArtifact.ImportedModuleView, name: []const u8) !*const check.CheckedArtifact.CheckedModuleArtifact {
+fn findArtifact(coord: *Coordinator, views: []const check.CheckedArtifact.ImportedModuleView, name: []const u8) error{TestUnexpectedResult}!*const check.CheckedArtifact.CheckedModuleArtifact {
     for (views) |view| {
         if (std.mem.eql(u8, view.module_env.module_name, name)) return coord.checkedArtifactByKey(view.key.digest()) orelse error.TestUnexpectedResult;
     }
