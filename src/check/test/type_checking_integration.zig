@@ -2762,7 +2762,7 @@ test "check type - lambda equality - a numeral argument is decided by relating i
     try test_env.assertTypeErrorTitles(&.{"Type Does Not Support Equality"});
 }
 
-test "check type - lambda equality - plus requirements at two types are a method conflict" {
+test "check type - lambda equality - plus operands at two types are a type mismatch" {
     var test_env = try TestEnv.init("Test",
         \\f = |args| {
         \\    n = List.len(args)
@@ -2777,7 +2777,7 @@ test "check type - lambda equality - plus requirements at two types are a method
     );
     defer test_env.deinit();
 
-    try test_env.assertTypeErrorTitles(&.{ "Type Does Not Support Equality", "Type Mismatch" });
+    try test_env.assertTypeErrorTitles(&.{ "Type Mismatch", "Type Does Not Support Equality" });
 }
 
 // anonymous type inequality (desugars to is_eq().not()) //
@@ -12619,7 +12619,7 @@ test "issue 13055: copied requirements that need different types for a weak lite
         \\a = f(3.U8)
         \\b = f(3.I64)
     ;
-    try checkTypesModule(source, .fail, "Missing Method");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 // Rejected side: no numeric type has the method the copy needs.
