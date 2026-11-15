@@ -629,6 +629,10 @@ const Unifier = struct {
     /// This allows error messages to point to the original expression rather than the resolved type.
     unresolved_a: ?Var,
     unresolved_b: ?Var,
+    /// The actual-side alias whose backing var the current pair relates. A
+    /// constraint deferred there reports at the alias's region (the user's
+    /// value), not the backing var's (wherever the alias was instantiated).
+    expanded_alias_b: ?Var,
     /// The checked record vars of the innermost record relation currently
     /// being unified. A row absorbed into an empty record names that empty row's
     /// var, which for a nested literal is the literal's internal extension var
@@ -667,6 +671,7 @@ const Unifier = struct {
             .nominal_record_mismatch_role = nominal_record_mismatch_role,
             .unresolved_a = null,
             .unresolved_b = null,
+            .expanded_alias_b = null,
             .enclosing_records = null,
             .construction_probe = construction_probe,
             .record_construction_var = record_construction_var,
@@ -759,6 +764,7 @@ const Unifier = struct {
     /// the "actual" type from the user's code, while a represents the "expected" type
     /// (e.g., from a function signature). When constraints aren't satisfied, we want
     /// to highlight where the user's code is, not the constraint's origin.
+    /// When b's alias was expanded, the alias (`expanded_alias_b`) is that code.
     /// NOTE: if flex-side dispatch constraints ever start FIRING mid-unify
     /// instead of deferring here, revisit `structurallyIncompatiblePair` (bottom
     /// of this module)—the defaulting pre-filter's soundness fence relies on
@@ -769,7 +775,7 @@ const Unifier = struct {
         constraints: StaticDispatchConstraint.SafeList.Range,
     ) std.mem.Allocator.Error!void {
         const dispatcher_var = self.unresolved_b orelse vars.b.var_;
-        return self.recordDeferredConstraintOn(dispatcher_var, constraints);
+        return self.appendDeferredConstraint(dispatcher_var, constraints, self.expanded_alias_b);
     }
 
     fn recordDeferredConstraintOn(
@@ -777,10 +783,20 @@ const Unifier = struct {
         dispatcher_var: Var,
         constraints: StaticDispatchConstraint.SafeList.Range,
     ) std.mem.Allocator.Error!void {
+        return self.appendDeferredConstraint(dispatcher_var, constraints, null);
+    }
+
+    fn appendDeferredConstraint(
+        self: *Self,
+        dispatcher_var: Var,
+        constraints: StaticDispatchConstraint.SafeList.Range,
+        region_var: ?Var,
+    ) std.mem.Allocator.Error!void {
         if (constraints.len() > 0) {
             _ = try self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
                 .var_ = dispatcher_var,
                 .constraints = constraints,
+                .region_var = region_var,
             });
         }
     }
@@ -880,6 +896,18 @@ const Unifier = struct {
         } });
     }
 
+    /// Relate `a` to the backing var of the actual side's alias, keeping the
+    /// alias (the outermost one, for an alias of an alias) as where constraints
+    /// deferred in that relation report.
+    fn unifyGuardedWithAliasBacking(self: *Self, vars: *const ResolvedVarDescs, backing_var: Var) Error!void {
+        try self.pushWorkFrame(.{ .mismatch_handler = .propagate });
+        try self.pushWorkFrame(.{ .guarded_pair = .{
+            .a = vars.a.var_,
+            .b = backing_var,
+            .expanded_alias_b = self.expanded_alias_b orelse self.unresolved_b orelse vars.b.var_,
+        } });
+    }
+
     fn scheduleRootPair(
         self: *Self,
         a_var: Var,
@@ -967,12 +995,8 @@ const Unifier = struct {
         switch (frame) {
             .mismatch_handler => {},
             .root_pair => |pair| try self.processRootPair(pair.a, pair.b, pair.relation),
-            .guarded_pair => |pair| try self.processGuardedPair(pair.a, pair.b),
-            .guard_handler => |handler| {
-                self.truncateVisited(handler.visited_vars_len);
-                self.unresolved_a = handler.saved_unresolved_a;
-                self.unresolved_b = handler.saved_unresolved_b;
-            },
+            .guarded_pair => |pair| try self.processGuardedPair(pair.a, pair.b, pair.expanded_alias_b),
+            .guard_handler => |handler| self.restoreGuard(handler),
             .restore_enclosing_records => |saved| self.enclosing_records = saved,
             .unify_vars => |vars| try self.unifyVars(&vars),
             .merge => |merge_frame| try self.merge(&merge_frame.vars, merge_frame.content),
@@ -987,7 +1011,7 @@ const Unifier = struct {
         if (relation == .nominal_constructor_backing and try self.constructorBackingWouldInverseLift(a_var, b_var)) {
             return error.TypeMismatch;
         }
-        try self.processGuardedPair(a_var, b_var);
+        try self.processGuardedPair(a_var, b_var, null);
     }
 
     /// The root constructor-backing rule, decided against the operands as they
@@ -1002,7 +1026,7 @@ const Unifier = struct {
         return constructorBackingIsAnonymous(self.types_store, expected) orelse error.TypeMismatch;
     }
 
-    fn processGuardedPair(self: *Self, a_var: Var, b_var: Var) Error!void {
+    fn processGuardedPair(self: *Self, a_var: Var, b_var: Var, expanded_alias_b: ?Var) Error!void {
         switch (self.types_store.checkVarsEquiv(a_var, b_var)) {
             .equiv => return,
             .not_equiv => |vars| {
@@ -1011,7 +1035,7 @@ const Unifier = struct {
                 if (vars.a.desc.flags.deferred_callable or vars.b.desc.flags.deferred_callable) {
                     try self.linkDeferredCallable(vars.a);
                     try self.linkDeferredCallable(vars.b);
-                    return self.processGuardedPair(a_var, b_var);
+                    return self.processGuardedPair(a_var, b_var, expanded_alias_b);
                 }
                 if (try self.isPairVisited(a_var, b_var)) {
                     return;
@@ -1021,19 +1045,25 @@ const Unifier = struct {
                 _ = try self.scratch.visited_vars.append(self.scratch.gpa, a_var);
                 _ = try self.scratch.visited_vars.append(self.scratch.gpa, b_var);
 
-                const saved_unresolved_a = self.unresolved_a;
-                const saved_unresolved_b = self.unresolved_b;
-                self.unresolved_a = a_var;
-                self.unresolved_b = b_var;
-
                 try self.pushWorkFrame(.{ .guard_handler = .{
                     .visited_vars_len = visited_vars_len,
-                    .saved_unresolved_a = saved_unresolved_a,
-                    .saved_unresolved_b = saved_unresolved_b,
+                    .saved_unresolved_a = self.unresolved_a,
+                    .saved_unresolved_b = self.unresolved_b,
+                    .saved_expanded_alias_b = self.expanded_alias_b,
                 } });
+                self.unresolved_a = a_var;
+                self.unresolved_b = b_var;
+                self.expanded_alias_b = expanded_alias_b;
                 try self.pushWorkFrame(.{ .unify_vars = vars });
             },
         }
+    }
+
+    fn restoreGuard(self: *Self, handler: GuardHandler) void {
+        self.truncateVisited(handler.visited_vars_len);
+        self.unresolved_a = handler.saved_unresolved_a;
+        self.unresolved_b = handler.saved_unresolved_b;
+        self.expanded_alias_b = handler.saved_expanded_alias_b;
     }
 
     /// How a handler absorbed a mismatch instead of propagating it.
@@ -1044,10 +1074,7 @@ const Unifier = struct {
         while (self.popWorkFrame(&frame)) {
             const frame_tag = std.meta.activeTag(frame);
             if (frame_tag == .guard_handler) {
-                const handler = frame.guard_handler;
-                self.truncateVisited(handler.visited_vars_len);
-                self.unresolved_a = handler.saved_unresolved_a;
-                self.unresolved_b = handler.saved_unresolved_b;
+                self.restoreGuard(frame.guard_handler);
             } else if (frame_tag == .restore_enclosing_records) {
                 self.enclosing_records = frame.restore_enclosing_records;
             } else if (frame_tag == .mismatch_handler) {
@@ -1301,7 +1328,7 @@ const Unifier = struct {
                 } else {
                     // Merge against backing var, so we don't loose static dispatch constraints
                     const backing_var = self.types_store.getAliasBackingVar(b_alias);
-                    try self.unifyGuarded(vars.a.var_, backing_var);
+                    try self.unifyGuardedWithAliasBacking(vars, backing_var);
                 }
             },
             .structure => {
@@ -4085,6 +4112,10 @@ fn mergeStaticDispatchConstraintMetadata(
 pub const DeferredConstraintCheck = struct {
     var_: Var,
     constraints: StaticDispatchConstraint.SafeList.Range,
+    /// Whose region a failure reports at, when not `var_`'s: the alias that
+    /// `var_` backs, since the backing var's region is where the alias was
+    /// instantiated rather than the value the constraint applies to.
+    region_var: ?Var = null,
     /// The expression whose instantiation created this obligation. Ordinary
     /// definition-site constraints have no owner and report at their provenance.
     failure_expr: StaticDispatchConstraint.Provenance.OptExprIdx = .none,
@@ -4162,6 +4193,14 @@ const SharedTagsAfterChildren = struct {
     ext: Var,
 };
 
+/// The unifier state a guarded pair saves, restored once its relation drains.
+const GuardHandler = struct {
+    visited_vars_len: u32,
+    saved_unresolved_a: ?Var,
+    saved_unresolved_b: ?Var,
+    saved_expanded_alias_b: ?Var,
+};
+
 const WorkFrame = union(enum) {
     mismatch_handler: MismatchHandling,
     root_pair: struct {
@@ -4172,12 +4211,9 @@ const WorkFrame = union(enum) {
     guarded_pair: struct {
         a: Var,
         b: Var,
+        expanded_alias_b: ?Var = null,
     },
-    guard_handler: struct {
-        visited_vars_len: u32,
-        saved_unresolved_a: ?Var,
-        saved_unresolved_b: ?Var,
-    },
+    guard_handler: GuardHandler,
     /// Restores the enclosing record pair once a record relation's scheduled
     /// children have drained. Pushed before those children so it pops after them.
     restore_enclosing_records: ?[2]Var,

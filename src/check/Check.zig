@@ -13227,6 +13227,11 @@ fn getRegionAt(self: *Self, target_var: Var) Region {
     return self.regions.get(@fromBackingInt(@intCast(@backingInt(target_var)))).*;
 }
 
+/// Where a deferred dispatch obligation's failures report.
+fn deferredConstraintRegion(self: *Self, deferred: DeferredConstraintCheck) Region {
+    return self.getRegionAt(deferred.region_var orelse deferred.var_);
+}
+
 // fresh vars //
 
 /// Create fresh flex var
@@ -45842,7 +45847,7 @@ fn reportDerivedCodecOpenRecord(
     const region = self.derivedCodecDiagnosticRegion(
         constraint,
         self.dispatchInstantiationExpr(constraint) orelse failure_expr,
-        self.getRegionAt(deferred.var_),
+        self.deferredConstraintRegion(deferred),
     );
     const snapshot = try self.snapshotVarForError(deferred.var_);
     _ = try self.problems.appendProblem(.{ .derived_codec_open_record = .{
@@ -53794,7 +53799,7 @@ inline fn processDeferredDispatchEntryRelations(
             );
 
             // Get some data about the nominal type
-            const region = self.getRegionAt(deferred_constraint.var_);
+            const region = self.deferredConstraintRegion(deferred_constraint);
 
             // Iterate over the constraints
             const constraints_range = deferred_constraint.constraints;
@@ -54114,7 +54119,7 @@ inline fn processDeferredDispatchEntryRelations(
                 "static dispatch alias",
             );
 
-            const region = self.getRegionAt(deferred_constraint.var_);
+            const region = self.deferredConstraintRegion(deferred_constraint);
             const constraints_range = deferred_constraint.constraints;
             const constraints_len = constraints_range.len();
             const constraints_start: usize = @backingInt(constraints_range.start);
@@ -54302,7 +54307,7 @@ inline fn processDeferredDispatchEntryRelations(
                     deferred_constraint,
                     constraint,
                     env,
-                    self.getRegionAt(deferred_constraint.var_),
+                    self.deferredConstraintRegion(deferred_constraint),
                     failure_expr,
                     is_numeric_default_pass,
                 )) {
