@@ -12225,6 +12225,67 @@ test "a field take assigned into a join result cell keeps a loop list unique" {
     try std.testing.expectEqual(@as(usize, 0), main_sets.?.checked);
 }
 
+// `put` returns its `Try` from nested branches. Binding that result before
+// matching on it, with the loop list as the `Err` arm's result, must send
+// each branch straight to the arm it selects: a `Try` rebuilt at a join would
+// keep the list alive across the `List.set` calls that consume it, and every
+// set would copy.
+test "a let-bound Try built in nested branches keeps a fallback loop list unique" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\put : List(U16), U64, U16 -> Try(List(U16), [OutOfBounds])
+        \\put = |list, index, value| {
+        \\    if index < List.len(list) {
+        \\        if value > 7 {
+        \\            Ok(List.set(list, index, value) ?? list)
+        \\        } else {
+        \\            Ok(List.set(list, index, 0) ?? list)
+        \\        }
+        \\    } else {
+        \\        Err(OutOfBounds)
+        \\    }
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    var $list = List.repeat(0.U16, 8)
+        \\    var $i = 0.U64
+        \\    while $i < n {
+        \\        result = put($list, $i, $i.to_u16_wrap())
+        \\        $list = match result {
+        \\            Ok(updated) => updated
+        \\            Err(_) => $list
+        \\        }
+        \\        $i = $i + 1
+        \\    }
+        \\    (List.get($list, 3) ?? 0).to_u64()
+        \\}
+    ;
+
+    var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+        .proc_debug_names = true,
+        .tag_reachability = true,
+    });
+    defer lowered.deinit(allocator);
+
+    const store = &lowered.lowered.lir_result.store;
+    var main_sets: ?ListSetCounts = null;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+        const name = store.procDebugName(proc_id) orelse continue;
+        if (!std.mem.eql(u8, name, "main")) continue;
+        if (store.getProcSpecImmediate(proc_id).body == .none) continue;
+        const sets = listSetCounts(store, proc_id);
+        var total = main_sets orelse ListSetCounts{};
+        total.checked += sets.checked;
+        total.check_free += sets.check_free;
+        main_sets = total;
+    }
+    try std.testing.expect(main_sets != null);
+    try std.testing.expect(main_sets.?.check_free >= 1);
+    try std.testing.expectEqual(@as(usize, 0), main_sets.?.checked);
+}
+
 // Repro for https://github.com/roc-lang/roc/issues/12420
 //
 // Each loop passes `at_pos`'s fresh, dying record result straight into `add`,
