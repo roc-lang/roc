@@ -184,6 +184,10 @@ pub const ReportBuilder = struct {
     /// explains that conflict at the context's region instead of comparing the
     /// operands, whose difference it would not show.
     method_conflict: ?MethodConflict = null,
+    /// When the current mismatch refused a use's record a field its function
+    /// built it without, the report explains that refusal, so the generic
+    /// missing-field hint is left out.
+    record_gained_field: bool = false,
     /// The current mismatch's root types and the pair inside them whose
     /// relation failed, so `makeMismatchReport` can describe that pair when
     /// the root types differ only somewhere inside.
@@ -251,6 +255,7 @@ pub const ReportBuilder = struct {
         self.typo_suggestions.clearRetainingCapacity();
         self.record_pattern_hint = null;
         self.method_conflict = null;
+        self.record_gained_field = false;
         self.mismatch_leaf = null;
     }
 
@@ -849,7 +854,11 @@ pub const ReportBuilder = struct {
 
     /// Render type comparison hints (arity mismatch, missing fields, typos, effect mismatch)
     fn renderDiffHints(self: *Self, report: *Report, hints: diff.HintList, had_static_hints: bool) Allocator.Error!void {
-        for (hints.slice(), 0..) |hint, i| {
+        var rendered: usize = 0;
+        for (hints.slice()) |hint| {
+            if (hint == .fields_missing and self.record_gained_field) continue;
+            const i = rendered;
+            rendered += 1;
             // Add spacing before first hint
             if (i == 0 and !had_static_hints) {
                 try report.document.addLineBreak();
@@ -1048,11 +1057,13 @@ pub const ReportBuilder = struct {
                     if (mismatch.leaf) |leaf| return self.buildInterpolationTieReport(tie, leaf);
                 }
                 self.method_conflict = mismatch.method_conflict;
+                self.record_gained_field = if (mismatch.record_tail_refusal) |refusal| refusal == .added_field else false;
                 if (mismatch.leaf) |leaf| self.mismatch_leaf = .{ .root = mismatch.types, .leaf = leaf };
                 var report = try self.buildTypeMismatchForContext(mismatch);
                 errdefer report.deinit();
                 try self.addStrConversionHint(&report, mismatch.str_conversion, false);
                 if (mismatch.host_fixed_row) try self.appendHostFixedRowHint(&report, mismatch.host_fixed_origin, mismatch.types.actual_snapshot);
+                if (mismatch.record_tail_refusal) |refusal| try self.appendRecordTailRefusal(&report, refusal);
                 return report;
             },
             .type_apply_mismatch_arities => |data| {
@@ -2806,13 +2817,134 @@ pub const ReportBuilder = struct {
                 .string_literal_region = data.string_literal_region,
                 .copied = data.copied,
             })) |report| return report;
-        } else if (data.row_extension_of) |row_extension| {
-            return self.buildRowExtensionMissingMethod(data, row_extension);
+        } else if (data.annotated_row) |annotated_row| {
+            return self.buildAnnotatedRowMissingMethod(data, annotated_row);
         }
 
         var report = try self.buildStaticDispatchMissingMethod(data);
         errdefer report.deinit();
         if (data.copied) |copied| try self.addCopiedRequirementNotes(&report, copied);
+        return report;
+    }
+
+    /// A method called on a record or tag union whose row ends in a row
+    /// variable an annotation names, whose `where` clause does not require it:
+    /// a caller can pass any type with these fields or tags, which need not
+    /// have the method.
+    fn buildAnnotatedRowMissingMethod(
+        self: *Self,
+        data: DispatcherDoesNotImplMethod,
+        annotated_row: DispatcherDoesNotImplMethod.AnnotatedRow,
+    ) Allocator.Error!Report {
+        const is_eq = data.method_name.eql(self.can_ir.idents.is_eq);
+        const is_hash = data.method_name.eql(self.can_ir.idents.to_hash);
+        var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
+        errdefer report.deinit();
+        const row_kind_text = switch (annotated_row.kind) {
+            .tag_union => "a tag union with",
+            .record => "a record with",
+        };
+        const ext_text = if (annotated_row.row_name) |name| blk: {
+            const text = try std.fmt.allocPrint(self.gpa, "..{s}", .{self.can_ir.getIdentText(name)});
+            defer self.gpa.free(text);
+            break :blk try report.addOwnedString(text);
+        } else "..";
+        if (is_eq or is_hash) {
+            try D.renderSliceInto(&.{
+                D.bytes(if (is_eq)
+                    "This equality check can't compare these values, because their type is"
+                else
+                    "These values can't be hashed, because their type is"),
+                D.bytes(row_kind_text),
+                D.bytes(ext_text).withAnnotation(.inline_code),
+                D.bytes("in it."),
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("This"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("method can't be called on this value, because its type is"),
+                D.bytes(row_kind_text),
+                D.bytes(ext_text).withAnnotation(.inline_code),
+                D.bytes("in it."),
+            }, self, &report, &report.headline);
+        }
+
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
+
+        const value_str = try report.addOwnedString(try self.getFormattedString(annotated_row.value_snapshot));
+        try D.renderSlice(&.{
+            D.bytes("The value's type is:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(value_str);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const others = switch (annotated_row.kind) {
+            .tag_union => "means a caller can pass any type that has these tags, such as a nominal type, and it doesn't necessarily have",
+            .record => "means a caller can pass any type that has these fields, such as a nominal type, and it doesn't necessarily have",
+        };
+        try D.renderSlice(&.{
+            D.bytes("The"),
+            D.bytes(ext_text).withAnnotation(.inline_code),
+            D.bytes(others),
+            D.bytes(switch (self.can_ir.getIdentText(data.method_name)[0]) {
+                'a', 'e', 'i', 'o', 'u' => "an",
+                else => "a",
+            }),
+            D.ident(data.method_name).withAnnotation(.inline_code),
+            D.bytes("method."),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const var_name = if (annotated_row.row_name) |name| self.can_ir.getIdentText(name) else "others";
+        const where_text: ?[]const u8 = if (is_eq or is_hash) blk: {
+            const text = if (is_eq)
+                try std.fmt.allocPrint(self.gpa, "where [{s}.is_eq : {s}, {s} -> Bool]", .{ var_name, var_name, var_name })
+            else
+                try std.fmt.allocPrint(self.gpa, "where [{s}.to_hash : {s}, Hasher -> Hasher]", .{ var_name, var_name });
+            defer self.gpa.free(text);
+            break :blk try report.addOwnedString(text);
+        } else null;
+        const where_word = D.bytes("where").withAnnotation(.inline_code);
+        if (annotated_row.row_name != null) {
+            const lead = [_]Doc{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("Require"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("on"),
+                D.bytes(var_name).withAnnotation(.inline_code),
+            };
+            if (where_text != null) {
+                try D.renderSlice(&(lead ++ [_]Doc{D.bytes("by adding this to the type annotation:")}), self, &report);
+            } else {
+                try D.renderSlice(&(lead ++ [_]Doc{ D.bytes("in the type annotation's"), where_word, D.bytes("clause.") }), self, &report);
+            }
+        } else {
+            const lead = [_]Doc{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("Give the"),
+                D.bytes("..").withAnnotation(.inline_code),
+                D.bytes("a name in the type annotation (for example"),
+                D.bytes("..others").withAnnotation(.inline_code),
+                D.bytes(") and require").withNoPrecedingSpace(),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("on it"),
+            };
+            if (where_text != null) {
+                try D.renderSlice(&(lead ++ [_]Doc{D.bytes("by adding this to the annotation:")}), self, &report);
+            } else {
+                try D.renderSlice(&(lead ++ [_]Doc{ D.bytes("in its"), where_word, D.bytes("clause.") }), self, &report);
+            }
+        }
+        if (where_text) |text| {
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addCodeBlock(text);
+        }
         return report;
     }
 
@@ -2861,104 +2993,6 @@ pub const ReportBuilder = struct {
             D.bytes("Hint:").withAnnotation(.emphasized),
             D.bytes("Giving that value a type annotation lets each call have its own type."),
         }, self, report);
-    }
-
-    /// A derived `is_eq`/`to_hash` over a record or tag union whose `..`
-    /// extension does not have the method: the extension stands for arbitrary
-    /// other tags or fields, which need not have it.
-    fn buildRowExtensionMissingMethod(
-        self: *Self,
-        data: DispatcherDoesNotImplMethod,
-        row_extension: DispatcherDoesNotImplMethod.RowExtension,
-    ) Allocator.Error!Report {
-        const is_eq = data.method_name.eql(self.can_ir.idents.is_eq);
-        var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
-        errdefer report.deinit();
-        const row_kind_text = switch (row_extension.kind) {
-            .tag_union => "a tag union with",
-            .record => "a record with",
-        };
-        try D.renderSliceInto(&.{
-            D.bytes(if (is_eq)
-                "This equality check can't compare these values, because their type is"
-            else
-                "These values can't be hashed, because their type is"),
-            D.bytes(row_kind_text),
-            D.bytes("..").withAnnotation(.inline_code),
-            D.bytes("in it."),
-        }, self, &report, &report.headline);
-
-        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
-
-        const row_str = try report.addOwnedString(try self.getFormattedString(row_extension.row_snapshot));
-        try D.renderSlice(&.{
-            D.bytes(if (is_eq) "The values being compared have this type:" else "The values being hashed have this type:"),
-        }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(row_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        const ext_text = if (row_extension.ext_name) |name| blk: {
-            const text = try std.fmt.allocPrint(self.gpa, "..{s}", .{self.can_ir.getIdentText(name)});
-            defer self.gpa.free(text);
-            break :blk try report.addOwnedString(text);
-        } else "..";
-        const others = switch (row_extension.kind) {
-            .tag_union => "tag union may have arbitrary other tags in addition to the ones written here, and those other tags don't necessarily have",
-            .record => "record may have arbitrary other fields in addition to the ones written here, and those other fields don't necessarily have",
-        };
-        try D.renderSlice(&.{
-            D.bytes("The"),
-            D.bytes(ext_text).withAnnotation(.inline_code),
-            D.bytes("means this"),
-            D.bytes(others),
-            D.bytes("an"),
-            D.ident(data.method_name).withAnnotation(.inline_code),
-            D.bytes("method."),
-        }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        const var_name = if (row_extension.ext_name) |name| self.can_ir.getIdentText(name) else "others";
-        const where_text = blk: {
-            const text = if (is_eq)
-                try std.fmt.allocPrint(self.gpa, "where [{s}.is_eq : {s}, {s} -> Bool]", .{ var_name, var_name, var_name })
-            else
-                try std.fmt.allocPrint(self.gpa, "where [{s}.to_hash : {s}, Hasher -> Hasher]", .{ var_name, var_name });
-            defer self.gpa.free(text);
-            break :blk try report.addOwnedString(text);
-        };
-        const verb = if (is_eq) "To compare them anyway," else "To hash them anyway,";
-        if (row_extension.ext_name != null) {
-            try D.renderSlice(&.{
-                D.bytes("Hint:").withAnnotation(.emphasized),
-                D.bytes(verb),
-                D.bytes("require"),
-                D.ident(data.method_name).withAnnotation(.inline_code),
-                D.bytes("on"),
-                D.bytes(var_name).withAnnotation(.inline_code),
-                D.bytes("by adding this to the type annotation:"),
-            }, self, &report);
-        } else {
-            try D.renderSlice(&.{
-                D.bytes("Hint:").withAnnotation(.emphasized),
-                D.bytes(verb),
-                D.bytes("give the"),
-                D.bytes("..").withAnnotation(.inline_code),
-                D.bytes("a name in the type annotation (for example"),
-                D.bytes("..others").withAnnotation(.inline_code),
-                D.bytes(") and require").withNoPrecedingSpace(),
-                D.ident(data.method_name).withAnnotation(.inline_code),
-                D.bytes("on it by adding this to the annotation:"),
-            }, self, &report);
-        }
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(where_text);
-
-        return report;
     }
 
     fn buildStaticDispatchMissingMethod(
@@ -5770,6 +5804,304 @@ pub const ReportBuilder = struct {
     /// A value whose tag row a host-boundary annotation wrote cannot be used
     /// as part of a wider union (design.md "Row Joins"): the hint says to
     /// write the value again, with the cases spelled out for its own tags.
+    /// Explain why a use's record could not become what the use asked for:
+    /// a use may close the record a function built or takes apart, or make
+    /// it a nominal type with exactly its fields stored the same way, and
+    /// nothing more (design.md "Uncommitted Record Tails").
+    fn appendRecordTailRefusal(self: *Self, report: *Report, refusal: problem_mod.RecordTailRefusal) Allocator.Error!void {
+        try report.document.addLineBreaks(2);
+        switch (refusal) {
+            .padded_nominal => |padded| {
+                const nominal = padded.nominal;
+                if (padded.taken_apart) {
+                    try D.renderSlice(&.{
+                        D.typeIdent(nominal).withAnnotation(.inline_code),
+                        D.bytes("has more (anonymous) fields than the record this function takes apart, making it incompatible."),
+                    }, self, report);
+                    try report.document.addLineBreaks(2);
+                    if (padded.omits_omittable_field) {
+                        try self.renderNominalPatternHint(report, nominal, "{s}.{{ ..., .. }}", true);
+                    } else {
+                        try self.renderNominalPatternHint(report, nominal, "{s}.{{ ... }}", false);
+                    }
+                } else {
+                    try D.renderSlice(&.{
+                        D.typeIdent(nominal).withAnnotation(.inline_code),
+                        D.bytes("has more (anonymous) fields than this, making it incompatible."),
+                    }, self, report);
+                    try report.document.addLineBreaks(2);
+                    try self.renderNominalConstructorHint(report, nominal, null);
+                }
+            },
+            .compared_plain => |nominal| {
+                try D.renderSlice(&.{
+                    D.bytes("The function that built this record compared or hashed it as a plain record, so it can't become"),
+                    D.typeIdent(nominal).withAnnotation(.inline_code),
+                    D.bytes(".").withNoPrecedingSpace(),
+                }, self, report);
+                try report.document.addLineBreaks(2);
+                const constructor = try std.fmt.allocPrint(self.gpa, "{s}.{{ ... }}", .{self.nominalDisplayName(nominal)});
+                defer self.gpa.free(constructor);
+                try D.renderSlice(&.{
+                    D.bytes("Hint:").withAnnotation(.emphasized),
+                    D.bytes("If you want"),
+                    D.typeIdent(nominal).withAnnotation(.inline_code),
+                    D.bytes(", you can write").withNoPrecedingSpace(),
+                    D.bytes(try report.addOwnedString(constructor)).withAnnotation(.inline_code),
+                    D.bytes("instead of"),
+                    D.bytes("{ ... }").withAnnotation(.inline_code),
+                    D.bytes("where this record is built, so the function compares it as"),
+                    D.typeIdent(nominal).withAnnotation(.inline_code),
+                    D.bytes(". You can also give the function that builds it a type annotation that says it's").withNoPrecedingSpace(),
+                    D.typeIdent(nominal).withAnnotation(.inline_code),
+                    D.bytes(".").withNoPrecedingSpace(),
+                }, self, report);
+            },
+            .compared_plain_tags => |nominal| {
+                try D.renderSlice(&.{
+                    D.bytes("The function that built this value compared or hashed it as a plain tag union, so it can't become"),
+                    D.typeIdent(nominal).withAnnotation(.inline_code),
+                    D.bytes(".").withNoPrecedingSpace(),
+                }, self, report);
+                try report.document.addLineBreaks(2);
+                const qualifier = try std.fmt.allocPrint(self.gpa, "{s}.", .{self.nominalDisplayName(nominal)});
+                defer self.gpa.free(qualifier);
+                try D.renderSlice(&.{
+                    D.bytes("Hint:").withAnnotation(.emphasized),
+                    D.bytes("If you want"),
+                    D.typeIdent(nominal).withAnnotation(.inline_code),
+                    D.bytes(", you can write its tags with"),
+                    D.bytes(try report.addOwnedString(qualifier)).withAnnotation(.inline_code),
+                    D.bytes("in front where this value is built, so the function compares it as"),
+                    D.typeIdent(nominal).withAnnotation(.inline_code),
+                    D.bytes(". You can also give the function that builds it a type annotation that says it's").withNoPrecedingSpace(),
+                    D.typeIdent(nominal).withAnnotation(.inline_code),
+                    D.bytes(".").withNoPrecedingSpace(),
+                }, self, report);
+            },
+            .added_field => |added| {
+                const field = added.field;
+                if (added.taken_apart) {
+                    try D.renderSlice(&.{
+                        D.bytes("This function takes apart a record that has no"),
+                        D.ident(field).withAnnotation(.inline_code),
+                        D.bytes("field, so it can't take a record that has one."),
+                    }, self, report);
+                    try report.document.addLineBreaks(2);
+                    if (added.nominal) |nominal| {
+                        try self.renderNominalPatternHint(report, nominal, "{s}.{{ ..., .. }}", true);
+                    } else {
+                        try D.renderSlice(&.{
+                            D.bytes("Hint:").withAnnotation(.emphasized),
+                            D.bytes("End the function's record pattern with"),
+                            D.bytes("..").withAnnotation(.inline_code),
+                            D.bytes("so it accepts records with more fields, or give the function a type annotation whose record has"),
+                            D.ident(field).withAnnotation(.inline_code),
+                            D.bytes(".").withNoPrecedingSpace(),
+                        }, self, report);
+                    }
+                } else {
+                    try D.renderSlice(&.{
+                        D.bytes("This record has no"),
+                        D.ident(field).withAnnotation(.inline_code),
+                        D.bytes("field. The function it came from built it without one, and a record can't gain fields after it's built."),
+                    }, self, report);
+                    try report.document.addLineBreaks(2);
+                    if (added.nominal) |nominal| {
+                        try self.renderNominalConstructorHint(report, nominal, field);
+                    } else {
+                        try D.renderSlice(&.{
+                            D.bytes("Hint:").withAnnotation(.emphasized),
+                            D.bytes("Add"),
+                            D.ident(field).withAnnotation(.inline_code),
+                            D.bytes("to the record where it's built. You can also give the function that builds it a type annotation whose record has"),
+                            D.ident(field).withAnnotation(.inline_code),
+                            D.bytes(".").withNoPrecedingSpace(),
+                        }, self, report);
+                    }
+                }
+            },
+            .plain_record => |plain_row| try self.renderPlainRowRefusal(report, plain_row, .record),
+            .plain_tag_union => |plain_row| try self.renderPlainRowRefusal(report, plain_row, .tag_union),
+        }
+    }
+
+    /// Why a nominal type and a committed plain record or tag union don't
+    /// relate, and the fixes that hold for this refusal: write the nominal in
+    /// the annotation that says the value is plain, and, for a record of a
+    /// nominal this module can build or take apart, convert between the two
+    /// with the nominal's record syntax (design.md "Uncommitted Record
+    /// Tails"). A nominal with anonymous fields is converted only by building
+    /// it, so that fix is offered only where the plain record is the value.
+    fn renderPlainRowRefusal(self: *Self, report: *Report, refusal: problem_mod.RecordTailRefusal.PlainRow, comptime row: enum { record, tag_union }) Allocator.Error!void {
+        const nominal = refusal.nominal;
+        const plain = switch (row) {
+            .record => "plain record",
+            .tag_union => "plain tag union",
+        };
+        const members = switch (row) {
+            .record => "fields",
+            .tag_union => "tags",
+        };
+        const row_type = switch (row) {
+            .record => "record type",
+            .tag_union => "tag union type",
+        };
+        const record_syntax = try std.fmt.allocPrint(self.gpa, "{s}.{{ ... }}", .{self.nominalDisplayName(nominal)});
+        defer self.gpa.free(record_syntax);
+        var docs: [24]D = undefined;
+        var len: usize = 0;
+        const anonymous_fields = [_]D{
+            D.bytes("anonymous"),
+            D.bytes("("),
+            D.bytes("_").withAnnotation(.inline_code).withNoPrecedingSpace(),
+            D.bytes(")").withNoPrecedingSpace(),
+            D.bytes("fields"),
+        };
+        switch (refusal.plain_side) {
+            .expected => {
+                docs[len] = D.typeIdent(nominal).withAnnotation(.inline_code);
+                len += 1;
+                if (refusal.nominal_padded) {
+                    docs[len] = D.bytes("is a nominal type with");
+                    len += 1;
+                    @memcpy(docs[len..][0..anonymous_fields.len], &anonymous_fields);
+                    len += anonymous_fields.len;
+                    docs[len] = D.bytes(", and a nominal type is never the same as a " ++ plain ++ ".").withNoPrecedingSpace();
+                    len += 1;
+                } else {
+                    docs[len] = D.bytes("is a nominal type, and a nominal type is never the same as a " ++ plain ++ ", even one with exactly its " ++ members ++ ".");
+                    len += 1;
+                }
+            },
+            .actual => {
+                docs[len] = D.bytes("A " ++ plain ++ " is never the same as a nominal type like");
+                docs[len + 1] = D.typeIdent(nominal).withAnnotation(.inline_code);
+                len += 2;
+                if (refusal.nominal_padded) {
+                    docs[len] = D.bytes(", which also has").withNoPrecedingSpace();
+                    len += 1;
+                    @memcpy(docs[len..][0..anonymous_fields.len], &anonymous_fields);
+                    len += anonymous_fields.len;
+                    docs[len] = D.bytes(".").withNoPrecedingSpace();
+                    len += 1;
+                } else {
+                    docs[len] = D.bytes(", even when it has exactly its " ++ members ++ ".").withNoPrecedingSpace();
+                    len += 1;
+                }
+            },
+        }
+        try D.renderSlice(docs[0..len], self, report);
+        try report.document.addLineBreaks(2);
+        len = 0;
+        const annotation_hint = [_]D{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("To use"),
+            D.typeIdent(nominal).withAnnotation(.inline_code),
+            D.bytes("here, write"),
+            D.typeIdent(nominal).withAnnotation(.inline_code),
+            D.bytes("instead of the " ++ row_type ++ " in the type annotation that says it's a " ++ plain ++ "."),
+        };
+        @memcpy(docs[0..annotation_hint.len], &annotation_hint);
+        len = annotation_hint.len;
+        const converts_both_ways = row == .record and !refusal.nominal_opaque and !refusal.nominal_padded;
+        const builds = row == .record and !refusal.nominal_opaque and refusal.nominal_padded and refusal.plain_side == .actual;
+        if (converts_both_ways) {
+            const syntax = try report.addOwnedString(record_syntax);
+            const conversion = [_]D{
+                D.bytes("You can also convert between"),
+                D.typeIdent(nominal).withAnnotation(.inline_code),
+                D.bytes("and a plain record with"),
+                D.bytes(syntax).withAnnotation(.inline_code),
+                D.bytes(": build a value of type").withNoPrecedingSpace(),
+                D.typeIdent(nominal).withAnnotation(.inline_code),
+                D.bytes("from a record's fields, or take one apart and build a record from its fields."),
+            };
+            @memcpy(docs[len..][0..conversion.len], &conversion);
+            len += conversion.len;
+        } else if (builds) {
+            const building = [_]D{
+                D.bytes("You can also build"),
+                D.typeIdent(nominal).withAnnotation(.inline_code),
+                D.bytes("from the record's fields with"),
+                D.bytes(try report.addOwnedString(record_syntax)).withAnnotation(.inline_code),
+                D.bytes(", which provides the anonymous fields automatically.").withNoPrecedingSpace(),
+            };
+            @memcpy(docs[len..][0..building.len], &building);
+            len += building.len;
+        }
+        try D.renderSlice(docs[0..len], self, report);
+    }
+
+    /// The text of a nominal type's name as the report shows it.
+    fn nominalDisplayName(self: *Self, nominal: Ident.Idx) []const u8 {
+        const mapped = self.import_mapping.get(nominal) orelse nominal;
+        return types_mod.TypeWriter.stripBuiltinQualification(self.can_ir.getIdent(mapped));
+    }
+
+    /// "If you want `Name`, you can write `Name.{ ... }` instead of
+    /// `{ ... }` where this record is built, since that provides `field` (or
+    /// the anonymous fields) automatically. You can also give the function
+    /// that builds it a type annotation that says it's `Name`."
+    fn renderNominalConstructorHint(self: *Self, report: *Report, nominal: Ident.Idx, field: ?Ident.Idx) Allocator.Error!void {
+        const constructor = try std.fmt.allocPrint(self.gpa, "{s}.{{ ... }}", .{self.nominalDisplayName(nominal)});
+        defer self.gpa.free(constructor);
+        const provided: D = if (field) |name| D.ident(name).withAnnotation(.inline_code) else D.bytes("the anonymous fields");
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("If you want"),
+            D.typeIdent(nominal).withAnnotation(.inline_code),
+            D.bytes(", you can write").withNoPrecedingSpace(),
+            D.bytes(try report.addOwnedString(constructor)).withAnnotation(.inline_code),
+            D.bytes("instead of"),
+            D.bytes("{ ... }").withAnnotation(.inline_code),
+            D.bytes("where this record is built, since that provides"),
+            provided,
+            D.bytes("automatically. You can also give the function that builds it a type annotation that says it's"),
+            D.typeIdent(nominal).withAnnotation(.inline_code),
+            D.bytes(".").withNoPrecedingSpace(),
+        }, self, report);
+    }
+
+    /// "If you want this function to take `Name`, you can write `pattern`
+    /// instead of `{ ... }` in its pattern (ending it with `..` to match the
+    /// fields it doesn't name, when `rest`). You can also give it a type
+    /// annotation that says it takes `Name`."
+    fn renderNominalPatternHint(self: *Self, report: *Report, nominal: Ident.Idx, comptime pattern_format: []const u8, rest: bool) Allocator.Error!void {
+        const pattern = try std.fmt.allocPrint(self.gpa, pattern_format, .{self.nominalDisplayName(nominal)});
+        defer self.gpa.free(pattern);
+        const name = try report.addOwnedString(pattern);
+        if (rest) {
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("If you want this function to take"),
+                D.typeIdent(nominal).withAnnotation(.inline_code),
+                D.bytes(", you can write").withNoPrecedingSpace(),
+                D.bytes(name).withAnnotation(.inline_code),
+                D.bytes("instead of"),
+                D.bytes("{ ... }").withAnnotation(.inline_code),
+                D.bytes("in its pattern, ending it with"),
+                D.bytes("..").withAnnotation(.inline_code),
+                D.bytes("to match the fields it doesn't name. You can also give it a type annotation that says it takes"),
+                D.typeIdent(nominal).withAnnotation(.inline_code),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("If you want this function to take"),
+                D.typeIdent(nominal).withAnnotation(.inline_code),
+                D.bytes(", you can write").withNoPrecedingSpace(),
+                D.bytes(name).withAnnotation(.inline_code),
+                D.bytes("instead of"),
+                D.bytes("{ ... }").withAnnotation(.inline_code),
+                D.bytes("in its pattern. You can also give it a type annotation that says it takes"),
+                D.typeIdent(nominal).withAnnotation(.inline_code),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, report);
+        }
+    }
+
     fn appendHostFixedRowHint(self: *Self, report: *Report, origin: ?Ident.Idx, actual: SnapshotContentIdx) Allocator.Error!void {
         try report.document.addLineBreaks(2);
         if (origin) |hosted_origin| {

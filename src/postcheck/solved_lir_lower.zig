@@ -553,7 +553,6 @@ const RuntimeSchemaRequest = struct {
 
 const CaptureSource = union(enum) {
     record: LIR.LocalId,
-    erased_ptr: LIR.LocalId,
 };
 
 const CaptureBinding = struct {
@@ -2865,18 +2864,15 @@ const Lowerer = struct {
 
                 try self.noteLocalSpan(self.result.store.getProcSpecImmediate(proc_id).args);
 
-                var capture_snapshot: ?LIR.LocalId = null;
+                // An erased procedure reads its capture record once, at entry,
+                // into a record its body reads like any other capture record.
+                var capture_record: ?LIR.LocalId = null;
                 if (spec.capture_ty.get()) |capture_ty| switch (spec.abi) {
                     .finite => {},
                     .erased => {
-                        const capture_ptr = GuardedList.at(proc_args, lifted_args.len);
-                        if (try self.erasedResultDemand(entry.ret) == .single_slot) {
-                            const snapshot = try self.addTemp(capture_ty);
-                            try self.bindCaptureRecord(spec.captures, capture_ty, .{ .record = snapshot });
-                            capture_snapshot = snapshot;
-                        } else {
-                            try self.bindCaptureRecord(spec.captures, capture_ty, .{ .erased_ptr = capture_ptr });
-                        }
+                        const record = try self.addTemp(capture_ty);
+                        try self.bindCaptureRecord(spec.captures, capture_ty, .{ .record = record });
+                        capture_record = record;
                     },
                 };
 
@@ -2887,10 +2883,10 @@ const Lowerer = struct {
                 if (self.return_forwarding_repeatable_depth != 0) {
                     Common.invariant("function lowering left a repeatable return-forwarding region active");
                 }
-                if (capture_snapshot) |snapshot| {
-                    body = try self.lowerAnchoredErasedCaptureLoadInto(
+                if (capture_record) |record| {
+                    body = try self.lowerErasedCaptureLoadInto(
                         where,
-                        snapshot,
+                        record,
                         GuardedList.at(proc_args, lifted_args.len),
                         GuardedList.at(proc_args, lifted_args.len + 1),
                         body,
@@ -3282,9 +3278,8 @@ const Lowerer = struct {
 
         const record_local = switch (capture.source) {
             .record => |local| local,
-            .erased_ptr => try self.addTemp(capture.record_ty),
         };
-        const assign = try self.assignTypedRefRead(
+        return try self.assignTypedRefRead(
             where,
             target,
             capture.ty,
@@ -3293,29 +3288,16 @@ const Lowerer = struct {
             LIR.RefOp.field(record_local, field_index),
             next,
         );
-        return switch (capture.source) {
-            .record => assign,
-            .erased_ptr => |ptr| try self.lowerErasedCaptureLoadInto(where, record_local, ptr, assign),
-        };
     }
 
-    fn lowerErasedCaptureLoadInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, ptr: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        return try self.result.store.addCFStmt(.{ .assign_low_level = .{
-            .target = target,
-            .op = .erased_capture_load,
-            .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.erased_capture_load.rcEffect()),
-            .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{ptr}),
-            .next = next,
-        } }, where.source());
-    }
-
-    /// Snapshot an erased frame's capture record before its callable
-    /// allocation can be consumed as a result destination. `owner` is an
-    /// ARC-only sequencing anchor: backends read capture bytes through `ptr`,
-    /// while the explicit owner operand keeps the allocation live through the
-    /// copy. `retain_result` then gives the snapshot independent ownership
-    /// before later statements may consume the owner.
-    fn lowerAnchoredErasedCaptureLoadInto(
+    /// Load an erased frame's capture record. Backends read the capture bytes
+    /// through `ptr`; `owner` is the frame's reuse argument, the allocation
+    /// those bytes live in whenever the caller transferred it. ARC reads the
+    /// record out of `owner` as `Box.unbox` reads a payload out of its box:
+    /// borrowing while `owner` stays live (a repack of the allocation as the
+    /// result), and otherwise taking the captures as `owner` dies at the
+    /// load, so the record is an owned container whose fields the body takes.
+    fn lowerErasedCaptureLoadInto(
         self: *Lowerer,
         where: LowerSite,
         target: LIR.LocalId,
@@ -3326,7 +3308,7 @@ const Lowerer = struct {
         return try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = .erased_capture_load,
-            .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.RcEffect.retainsResult()),
+            .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.erased_capture_load.rcEffect()),
             .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{ ptr, owner }),
             .next = next,
         } }, where.source());
@@ -6443,6 +6425,8 @@ const Lowerer = struct {
         scrutinee_ty: Type.TypeId = undefined,
         scrutinee_local: LIR.LocalId = undefined,
         done: ValueJoin = undefined,
+        /// The match declares `done` and has it on the consumer stack.
+        consumer_pushed: bool = false,
         /// Owns the decision tree and its emitter.
         arena: ?*base.SingleThreadArena = null,
         emitter: *match_tree.Compiler(MatchTreeCtx).Emitter = undefined,
@@ -6458,6 +6442,8 @@ const Lowerer = struct {
         /// Some branch falls through to the value join, so the join exists.
         joined: bool = false,
         done: ValueJoin = undefined,
+        /// The `if` declares `done` and has it on the consumer stack.
+        consumer_pushed: bool = false,
         current: LIR.CFStmtId = undefined,
         body: LIR.CFStmtId = undefined,
     };
@@ -6616,6 +6602,7 @@ const Lowerer = struct {
             return exprTask(where, target, body, result_ty, jump);
         }
         const branch_value = try self.addTemp(result_ty);
+        self.noteErasedOwnerDefinition(target, null);
         const initialize = try self.result.store.addCFStmt(.{ .set_local = .{
             .target = target,
             .value = branch_value,
@@ -6683,6 +6670,21 @@ const Lowerer = struct {
             .body = next,
             .remainder = remainder,
         } }, where.glue());
+    }
+
+    /// Make the join a value form declares the consumer its branches see, so a
+    /// form that ends a branch arrives at it too. Returns whether the join was
+    /// pushed; a join an enclosing form declared is already on the stack.
+    fn enterValueJoin(self: *Lowerer, done: ValueJoin, target: LIR.LocalId) Common.LowerError!bool {
+        if (done.declared) return false;
+        try self.value_consumers.append(self.allocator, .{ .join_id = done.id, .target = target });
+        return true;
+    }
+
+    /// Remove a value form's join from the consumer stack. Idempotent.
+    fn leaveValueJoin(self: *Lowerer, pushed: *bool) void {
+        if (pushed.*) _ = self.value_consumers.pop();
+        pushed.* = false;
     }
 
     /// True when `root` never hands a value to its consumer: every path
@@ -6901,7 +6903,9 @@ const Lowerer = struct {
             .match_ => |*task| {
                 if (task.arena) |arena| self.lane_scratch.releaseArena(arena);
                 task.arena = null;
+                self.leaveValueJoin(&task.consumer_pushed);
             },
+            .if_ => |*task| self.leaveValueJoin(&task.consumer_pushed),
             .block => |*task| {
                 var index = task.planned.items.len;
                 while (index != 0) {
@@ -6920,7 +6924,6 @@ const Lowerer = struct {
             },
             .expr,
             .stmt,
-            .if_,
             .payload_switch,
             .try_sequence,
             .try_record_sequence,
@@ -8579,24 +8582,21 @@ const Lowerer = struct {
             next
         else
             try self.assignTypedBoundary(where, target, result_ty, call_target, abi_ret_ty, next);
-        const reuse_closure = try self.erasedResultDemand(abi_ret_ty) == .single_slot;
         const call_stmt = try self.result.store.addCFStmt(.{ .assign_call_erased = .{
             .target = call_target,
             .data = try self.result.store.addStmtRow(LIR.ErasedCallData, .{
                 .closure = callee,
                 .args = try self.result.store.addLocalSpan(args.ids),
                 .arg_plan = try self.erasedCallArgsPlan(args.ids),
-                .reuse_closure = reuse_closure,
-                .reuse_source = if (reuse_closure) callee else null,
+                .reuse_source = callee,
+                .result_reuse = try self.erasedResultDemand(abi_ret_ty) == .single_slot,
             }),
             .next = after_call,
         } }, where.source());
-        if (reuse_closure) {
-            try self.erased_call_owner_uses.append(self.allocator, .{
-                .stmt = call_stmt,
-                .closure = callee,
-            });
-        }
+        try self.erased_call_owner_uses.append(self.allocator, .{
+            .stmt = call_stmt,
+            .closure = callee,
+        });
         return .{ .tail = try self.operandChain(where, args, arg_tys, .{ .expr = .{ .target = callee, .expr = callee_expr, .ty = callee_ty } }, call_stmt) };
     }
 
@@ -9034,6 +9034,7 @@ const Lowerer = struct {
         }
         const built = try MT.build(arena, ctx, scrutinee_ty, mt_branches);
         const emitter = try MT.Emitter.begin(arena, ctx, built, scrutinee_local, done.id);
+        const consumer_pushed = joined and try self.enterValueJoin(done, target);
         return .{ .tail = .{ .match_ = .{
             .where = where,
             .target = target,
@@ -9044,6 +9045,7 @@ const Lowerer = struct {
             .scrutinee_ty = scrutinee_ty,
             .scrutinee_local = scrutinee_local,
             .done = done,
+            .consumer_pushed = consumer_pushed,
             .arena = arena_state,
             .emitter = emitter,
         } } };
@@ -9067,6 +9069,7 @@ const Lowerer = struct {
                 .done => |branch_chain| {
                     if (task.arena) |arena| self.lane_scratch.releaseArena(arena);
                     task.arena = null;
+                    self.leaveValueJoin(&task.consumer_pushed);
                     frame.cursor = 1;
                     return .{ .call = exprTask(task.where, task.scrutinee_local, task.scrutinee, task.scrutinee_ty, branch_chain) };
                 },
@@ -9091,6 +9094,7 @@ const Lowerer = struct {
                 }
                 frame.index = GuardedList.borrowLen(branches);
                 frame.cursor = 1;
+                if (task.joined) task.consumer_pushed = try self.enterValueJoin(task.done, task.target);
                 return .{ .call = try self.valueBranchTask(task.where, task.target, task.final_else, task.result_ty, task.joined, task.done.id, task.next) };
             },
             // A lowered branch body; lower its condition before the switch.
@@ -9110,6 +9114,7 @@ const Lowerer = struct {
             frame.cursor = 2;
             return .{ .call = try self.valueBranchTask(task.where, task.target, branch.body, task.result_ty, task.joined, task.done.id, task.next) };
         }
+        self.leaveValueJoin(&task.consumer_pushed);
         if (!task.joined) return .{ .ret = task.current };
         return .{ .ret = try self.declareValueJoin(task.where, task.done, task.target, task.next, task.current) };
     }
@@ -10687,6 +10692,7 @@ const Lowerer = struct {
         }
         const err_payload_local = try self.addLocalForLayout(err_payload_layout);
         var jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_point.join_id } }, where.glue());
+        self.noteErasedOwnerDefinition(target_local, null);
         jump = try self.result.store.addCFStmt(.{ .set_local = .{
             .target = target_local,
             .value = err_payload_local,
@@ -12452,6 +12458,7 @@ const Lowerer = struct {
         while (i > 0) {
             i -= 1;
             const arg = args[i] orelse continue;
+            self.noteErasedOwnerDefinition(GuardedList.at(param_locals, i), null);
             current = try self.result.store.addCFStmt(.{ .set_local = .{
                 .target = GuardedList.at(param_locals, i),
                 .value = arg,

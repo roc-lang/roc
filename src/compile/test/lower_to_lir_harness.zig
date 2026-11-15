@@ -1296,12 +1296,14 @@ fn lowerAppPathToLir(
 
     if (opts.monotype_only) {
         var diagnostics: postcheck.Monotype.Lower.Diagnostics = .{};
+        const modules: postcheck.Common.CheckedModules = .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+        };
+        try modules.demandBodyIndexes();
         var mono = try postcheck.Monotype.Lower.run(
             gpa,
-            .{
-                .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
-                .imports = imports,
-            },
+            modules,
             .{ .requests = lir_roots },
             .{
                 .diagnostics = if (opts.monotype_diagnostics_out != null) &diagnostics else null,

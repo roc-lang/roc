@@ -512,6 +512,15 @@ pub const StructuralMap = struct { name: types.NameId, payload_index: u32, arity
 /// Names a worker by its index among the program's workers.
 pub const WorkerId = enum(u32) { _ };
 
+/// A record or tag union of a worker's signature whose row ends in a row
+/// variable or in a quantified uncommitted tail (`Worker.row_nodes`).
+pub const RowNode = struct {
+    /// Its descriptor's position among the worker's scheme variables.
+    index: u32,
+    /// The type as the worker's signature has it, over its variables.
+    ty: TypeId,
+};
+
 /// One worker: its procedure and the signature callers use.
 pub const Worker = struct {
     key: WorkerKey,
@@ -519,13 +528,25 @@ pub const Worker = struct {
     module: ModuleIndex,
     /// The checked scheme variables of the worker's scope, in hidden
     /// descriptor order. A template's sealed variables (design.md
-    /// "Sealed Result Rows") are omitted: they seal to the empty row.
+    /// "Sealed Result Rows") are omitted: they seal to the empty row. The
+    /// row nodes' positions follow the variables (`row_nodes`).
     scheme_vars: []const checked.CheckedTypeId,
     /// For a template worker: its scheme's kind variables.
     kinds: SchemeKinds = .{},
-    /// For a template worker: the position of each of `scheme_vars` in the
-    /// template's checked `scheme_vars`, which a use's substitution is
-    /// indexed by, and that checked list's length.
+    /// The records and tag unions of the worker's signature whose rows end in
+    /// a row variable or in a quantified uncommitted tail, each with the
+    /// scheme position of the hidden descriptor that describes it as a
+    /// whole, as the instantiation has it (a nominal type a caller supplied,
+    /// or the plain record or tag union): design.md "Methods On Open Rows".
+    /// The positions are the last of `scheme_vars`. A closed row node's
+    /// checked entry is the record or tag union itself, which the worker's
+    /// scope converts to its closed type marked with the position
+    /// (`Store.tailNode`); an open one's is its row variable's, so
+    /// conversion never names it. Only descriptors read either.
+    row_nodes: []const RowNode = &.{},
+    /// For a template worker: the position in the template's checked
+    /// `scheme_vars`, which a use's substitution is indexed by, of each of
+    /// `scheme_vars` before the row nodes, and that checked list's length.
     checked_slots: []const u32 = &.{},
     checked_scheme_count: u32 = 0,
     /// For a template worker lowered at `TemplateBinding.list_int`, and for
@@ -583,6 +604,9 @@ pub const Worker = struct {
     /// For a generalized local procedure: how many literal arguments of its
     /// own scope its argument record carries after its own dictionaries.
     own_literals: u32 = 0,
+    /// For a lambda worker: where its scope inputs are, fixed when it is
+    /// created from its creator's (`Program.inputLayout`).
+    lambda_layout: Tables.InputLayout = .{},
     /// For a worker with inputs (`Program.inputCount`), once lowered or
     /// imported: what each word of its type tables is (`tables.zig`).
     needs: ?Tables.Needs = null,
@@ -648,6 +672,22 @@ pub fn listIntTemplateWorkerIdentity(link_name: [32]u8, template: checked_names.
     hasher.update(&.{@backingInt(item)});
     return .{ .bytes = hasher.finalResult() };
 }
+
+/// The types a substitution binds variables to, by variable index: every
+/// variable below a length, or only some.
+pub const Bindings = union(enum) {
+    dense: []const TypeId,
+    sparse: *const Map,
+
+    pub const Map = collections.DenseMapUnmanaged(u32, TypeId);
+
+    pub fn get(self: Bindings, index: u32) ?TypeId {
+        return switch (self) {
+            .dense => |bound| if (index < bound.len) bound[index] else null,
+            .sparse => |map| map.get(index),
+        };
+    }
+};
 
 /// A scheme variable's related type, absent when no relation fixed it.
 pub const Related = collections.OptionalId(TypeId);
@@ -811,6 +851,13 @@ pub const Program = struct {
     workers: std.ArrayList(Worker) = .empty,
     worker_ids: std.AutoHashMapUnmanaged(WorkerKey, WorkerId) = .empty,
     worklist: std.ArrayList(WorkerId) = .empty,
+    /// The table holding or inheriting the scope inputs of each static
+    /// table asked about (`scopeOwnerTable`).
+    scope_owner_tables: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+    /// The type environment each worker's body converts its types in, one
+    /// per scope: a lambda whose scope adds no variable shares its
+    /// creator's (`scopeEnv`). By worker; null where not yet asked for.
+    scope_envs: std.ArrayList(?*const types.Env) = .empty,
     /// Each type's content digest (`typeContent`), once computed.
     type_contents: collections.DenseMapUnmanaged(TypeId, [32]u8) = .empty,
     /// The Builtin module, found on first use (`builtinModule`).
@@ -1352,6 +1399,8 @@ pub const Program = struct {
         self.modules.deinit();
         self.workers.deinit(self.allocator);
         self.worker_ids.deinit(self.allocator);
+        self.scope_owner_tables.deinit(self.allocator);
+        self.scope_envs.deinit(self.allocator);
         self.worklist.deinit(self.allocator);
         self.type_contents.deinit(self.allocator);
         if (self.list_methods) |*methods| methods.deinit(self.allocator);
@@ -1495,6 +1544,14 @@ pub const Program = struct {
             if (sealed_dispatcher) continue;
             try dictionary_params.append(self.arena.allocator(), @intCast(index));
         }
+        // Each record of the signature whose row ends in a sealed uncommitted
+        // record tail, and each tag union whose row ends in an uncommitted
+        // tag tail, is a row node (design.md "Methods On Open Rows"): it
+        // takes a scheme position after the variables, holding the checked
+        // record or tag union itself, so it converts to its closed type
+        // marked with that position.
+        const real_count = scheme_vars.items.len;
+        try self.appendClosedRowNodes(module_index, &template, evidence_params, checked_scheme_vars, sealed_slots, &scheme_vars);
         const bound = try self.arena.allocator().alloc(TypeId, scheme_vars.items.len);
         for (bound, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
         const env: types.Env = .{ .module = module_index, .vars = scheme_vars.items, .bound = bound };
@@ -1510,6 +1567,12 @@ pub const Program = struct {
         for (evidence_params, 0..) |param, index| {
             kind_roots[1 + 2 * index] = try self.converter().convert(module_index, param.callable_ty, env);
             kind_roots[2 + 2 * index] = try self.converter().convert(module_index, param.dispatcher_ty, env);
+        }
+        const row_nodes = try self.collectRowNodes(kind_roots, real_count, scheme_vars.items.len);
+        for (row_nodes) |node| {
+            if (self.store.tailNode(node.ty) != null) continue;
+            const row = self.rowVariableOf(node.ty);
+            try scheme_vars.append(self.arena.allocator(), scheme_vars.items[row]);
         }
         const kinds = try self.schemeKinds(kind_roots, scheme_vars.items.len);
 
@@ -1529,6 +1592,7 @@ pub const Program = struct {
             .module = module_index,
             .scheme_vars = scheme_vars.items,
             .kinds = kinds,
+            .row_nodes = row_nodes,
             .checked_slots = checked_slots.items,
             .checked_scheme_count = @intCast(checked_scheme_vars.len),
             .dictionary_params = dictionary_params.items,
@@ -1598,6 +1662,9 @@ pub const Program = struct {
         int_worker.params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args));
         int_worker.ret = signature.ret;
         int_worker.list_int = .{ .slot = slot, .item = item };
+        const int_nodes = try self.arena.allocator().alloc(RowNode, generic.row_nodes.len);
+        for (int_nodes, generic.row_nodes) |*node, generic_node| node.* = .{ .index = generic_node.index, .ty = try self.substitute(self.allocator, generic_node.ty, bound) };
+        int_worker.row_nodes = int_nodes;
         int_worker.queued = false;
         int_worker.lowered = generic.imported;
         int_worker.needs = null;
@@ -1705,6 +1772,270 @@ pub const Program = struct {
     /// template worker `id`: the sealed variables' entries are dropped, since
     /// the worker takes no descriptor for them. An empty substitution (a use
     /// checking recorded none for) stays empty.
+    /// The records and tag unions `roots` reach whose rows end in one of the
+    /// first `count` variables, in the order a walk first reaches them, each
+    /// given the next scheme position from `first_open`, and the closed row
+    /// nodes they reach at the positions they are marked with
+    /// (`Store.tailNode`, `Worker.row_nodes`).
+    fn collectRowNodes(self: *Program, roots: []const TypeId, count: usize, first_open: usize) Allocator.Error![]const RowNode {
+        var found: std.ArrayList(RowNode) = .empty;
+        var open: usize = 0;
+        var pending: std.ArrayList(TypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
+        defer seen.deinit(self.allocator);
+        var index = roots.len;
+        while (index > 0) {
+            index -= 1;
+            try pending.append(self.allocator, roots[index]);
+        }
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
+            const start = pending.items.len;
+            if (self.store.tailNode(ty)) |position| {
+                try found.append(self.arena.allocator(), .{ .index = position, .ty = ty });
+            }
+            switch (self.store.get(ty)) {
+                .record => |record| {
+                    if (record.ext.get()) |ext| if (self.store.get(ext) == .variable and self.store.get(ext).variable < count) {
+                        try found.append(self.arena.allocator(), .{ .index = @intCast(first_open + open), .ty = ty });
+                        open += 1;
+                    };
+                    for (self.store.fieldSpan(record.fields)) |field| try pending.append(self.allocator, field.ty);
+                },
+                .tag_union => |tag_union| {
+                    if (tag_union.ext) |ext| if (self.store.get(ext) == .variable and self.store.get(ext).variable < count) {
+                        try found.append(self.arena.allocator(), .{ .index = @intCast(first_open + open), .ty = ty });
+                        open += 1;
+                    };
+                    for (self.store.tagSpan(tag_union.tags)) |tag| try pending.appendSlice(self.allocator, self.store.span(tag.payloads));
+                },
+                .tuple => |items| try pending.appendSlice(self.allocator, self.store.span(items)),
+                .list => |elem| try pending.append(self.allocator, elem),
+                .box => |payload| try pending.append(self.allocator, payload),
+                .nominal => |nominal| try pending.appendSlice(self.allocator, self.store.nominalArgs(nominal)),
+                .function => |function| {
+                    try pending.appendSlice(self.allocator, self.store.span(function.args));
+                    try pending.append(self.allocator, function.ret);
+                },
+                .primitive, .empty_record, .variable => {},
+            }
+            std.mem.reverse(TypeId, pending.items[start..]);
+        }
+        return found.items;
+    }
+
+    /// Append to `scheme_vars` a position for each closed row node of
+    /// template `template`'s signature (its root and its evidence parameters'
+    /// types), in the order a walk first reaches them: each record whose row
+    /// ends in a sealed uncommitted record tail (`sealed_slots`), and each tag
+    /// union with a tag whose row ends in an uncommitted tag tail
+    /// (`CheckedTypeStoreView.uncommittedTagTail`). The position holds the
+    /// checked record or tag union itself, so the worker's scope converts it
+    /// to its closed type marked with the position (`Converter.tailNodeAt`).
+    /// A worker's hidden inputs stay a function of its checked signature: an
+    /// importing unit derives the same positions.
+    fn appendClosedRowNodes(
+        self: *Program,
+        module_index: ModuleIndex,
+        template: *const checked.CheckedProcedureTemplate,
+        evidence_params: []const static_dispatch.EvidenceParamRecord,
+        checked_scheme_vars: []const checked.CheckedTypeId,
+        sealed_slots: []const u32,
+        scheme_vars: *std.ArrayList(checked.CheckedTypeId),
+    ) Allocator.Error!void {
+        const view = self.module(module_index);
+        const types_view = view.types();
+        var sealed_tails: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer sealed_tails.deinit(self.allocator);
+        for (sealed_slots) |slot| {
+            const variable = checked_scheme_vars[slot];
+            switch (types_view.payload(variable)) {
+                .flex => |flex| if (flex.row_tail == .uncommitted_record) try sealed_tails.append(self.allocator, variable),
+                .pending, .err, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union, .field_kind => {},
+            }
+        }
+        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        defer seen.deinit(self.allocator);
+        var index = evidence_params.len;
+        while (index > 0) {
+            index -= 1;
+            try pending.append(self.allocator, evidence_params[index].dispatcher_ty);
+            try pending.append(self.allocator, evidence_params[index].callable_ty);
+        }
+        try pending.append(self.allocator, template.checked_fn_root);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
+            if (self.converter().platformIdentity(module_index, ty) != null) continue;
+            const start = pending.items.len;
+            switch (types_view.payload(ty)) {
+                .alias => |alias| try pending.append(self.allocator, alias.backing),
+                .record => |record| {
+                    var fields = record.fields;
+                    var current = record.ext;
+                    while (true) {
+                        for (0..fields.len()) |field_index| try pending.append(self.allocator, fields.get(field_index).ty);
+                        fields = .empty;
+                        switch (types_view.payload(current)) {
+                            .alias => |alias| current = alias.backing,
+                            .record => |ext_record| {
+                                fields = ext_record.fields;
+                                current = ext_record.ext;
+                            },
+                            .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union, .field_kind => break,
+                        }
+                    }
+                    if (std.mem.findScalar(checked.CheckedTypeId, sealed_tails.items, current) != null and
+                        std.mem.findScalar(checked.CheckedTypeId, scheme_vars.items, ty) == null)
+                    {
+                        try scheme_vars.append(self.arena.allocator(), ty);
+                    }
+                },
+                .tag_union => |tag_union| {
+                    var tags = tag_union.tags;
+                    var current = tag_union.ext;
+                    var tag_count: usize = 0;
+                    while (true) {
+                        tag_count += tags.len();
+                        for (0..tags.len()) |tag_index| try pending.appendSlice(self.allocator, tags.get(tag_index).args);
+                        tags = .empty;
+                        switch (types_view.payload(current)) {
+                            .alias => |alias| current = alias.backing,
+                            .tag_union => |ext_union| {
+                                tags = ext_union.tags;
+                                current = ext_union.ext;
+                            },
+                            .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .record, .empty_tag_union, .field_kind => break,
+                        }
+                    }
+                    if (tag_count != 0 and types_view.uncommittedTagTail(current) and
+                        std.mem.findScalar(checked.CheckedTypeId, scheme_vars.items, ty) == null)
+                    {
+                        try scheme_vars.append(self.arena.allocator(), ty);
+                    }
+                },
+                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .function => |function| {
+                    try pending.appendSlice(self.allocator, function.args);
+                    try pending.append(self.allocator, function.ret);
+                },
+                .nominal => |nominal| try pending.appendSlice(self.allocator, nominal.args),
+                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union, .field_kind => {},
+            }
+            // Children are visited in the order they were listed.
+            std.mem.reverse(checked.CheckedTypeId, pending.items[start..]);
+        }
+    }
+
+    /// Whether checked type `root` of `module_index` holds a tag union with
+    /// a tag whose row ends in an uncommitted tag tail
+    /// (`CheckedTypeStoreView.uncommittedTagTail`). A binding that
+    /// quantifies one is a scheme even when its scheme has no variable: each
+    /// use copies the union, which may lift into a nominal type there
+    /// (design.md "Uncommitted Tag Tails").
+    pub fn holdsUncommittedTagTail(self: *Program, module_index: ModuleIndex, root: checked.CheckedTypeId) Allocator.Error!bool {
+        const types_view = self.module(module_index).types();
+        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        defer seen.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
+            switch (types_view.payload(ty)) {
+                .alias => |alias| try pending.append(self.allocator, alias.backing),
+                .record => |record| {
+                    for (0..record.fields.len()) |index| try pending.append(self.allocator, record.fields.get(index).ty);
+                    try pending.append(self.allocator, record.ext);
+                },
+                .tag_union => |tag_union| {
+                    var tags = tag_union.tags;
+                    var current = tag_union.ext;
+                    var tag_count: usize = 0;
+                    while (true) {
+                        tag_count += tags.len();
+                        for (0..tags.len()) |index| try pending.appendSlice(self.allocator, tags.get(index).args);
+                        tags = .empty;
+                        switch (types_view.payload(current)) {
+                            .alias => |alias| current = alias.backing,
+                            .tag_union => |ext_union| {
+                                tags = ext_union.tags;
+                                current = ext_union.ext;
+                            },
+                            .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .record, .empty_tag_union, .field_kind => break,
+                        }
+                    }
+                    if (tag_count != 0 and types_view.uncommittedTagTail(current)) return true;
+                },
+                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .function => |function| {
+                    try pending.appendSlice(self.allocator, function.args);
+                    try pending.append(self.allocator, function.ret);
+                },
+                .nominal => |nominal| try pending.appendSlice(self.allocator, nominal.args),
+                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union, .field_kind => {},
+            }
+        }
+        return false;
+    }
+
+    /// The scheme position of the row variable a row node's row ends in.
+    fn rowVariableOf(self: *Program, node: TypeId) u32 {
+        const ext = switch (self.store.get(node)) {
+            .record => |record| record.ext.get().?,
+            .tag_union => |tag_union| tag_union.ext.?,
+            .primitive, .empty_record, .tuple, .list, .box, .nominal, .function, .variable => unreachable, // `collectRowNodes` keeps only records and tag unions
+        };
+        return self.store.get(ext).variable;
+    }
+
+    /// Give each row node of worker `id` its binding in `bound`: the type at
+    /// its position in the use's actual type where a relation captured one
+    /// (`captured`, by row node), otherwise the node with the use's other
+    /// variables substituted, the plain record or tag union.
+    pub fn fillRowNodes(self: *Program, id: WorkerId, bound: []TypeId, captured: ?[]const Related) Allocator.Error!void {
+        const target = self.worker(id).*;
+        for (target.row_nodes, 0..) |node, position| {
+            if (captured) |relation| {
+                if (relation[position].get()) |actual| {
+                    bound[node.index] = actual;
+                    continue;
+                }
+            }
+            bound[node.index] = try self.plainValue(node.ty, bound);
+        }
+        // Bool, primitive or builtin nominal, is the tag union `[False,
+        // True]`, whose tags a body builds by position.
+        for (target.row_nodes) |node| {
+            if (self.store.get(node.ty) != .tag_union) continue;
+            const is_bool = switch (self.store.get(bound[node.index])) {
+                .primitive => |primitive| primitive == .bool,
+                .nominal => |nominal| nominal.builtin == .bool,
+                .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => false,
+            };
+            if (is_bool) bound[node.index] = try self.boolUnion();
+        }
+    }
+
+    /// `ty` with each of worker `id`'s row nodes read as its whole-value
+    /// variable, for a descriptor of it (`Worker.row_nodes`).
+    pub fn rowNodesAsVariables(self: *Program, id: WorkerId, ty: TypeId) Allocator.Error!TypeId {
+        const target = self.worker(id).*;
+        if (target.row_nodes.len == 0) return ty;
+        const identity = try self.allocator.alloc(TypeId, target.scheme_vars.len);
+        defer self.allocator.free(identity);
+        for (identity, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
+        return try self.rewriteTypeWithRowNodes(self.allocator, ty, .{ .dense = identity }, null, target.row_nodes, .keep);
+    }
+
+    /// A type of worker `id`'s signature at the instantiation `bound`, its
+    /// row nodes at their whole values (`Worker.row_nodes`).
+    pub fn signatureAt(self: *Program, id: WorkerId, ty: TypeId, bound: []const TypeId) Allocator.Error!TypeId {
+        return try self.substitute(self.allocator, try self.rowNodesAsVariables(id, ty), bound);
+    }
+
     pub fn keptSubstitution(self: *Program, id: WorkerId, subst: []const checked.CheckedTypeId) Allocator.Error![]const checked.CheckedTypeId {
         const target = self.worker(id).*;
         if (subst.len == 0 or target.key != .template) return subst;
@@ -1778,6 +2109,7 @@ pub const Program = struct {
             .proc = proc,
             .module = outer_worker.module,
             .scheme_vars = scheme_vars,
+            .row_nodes = outer_worker.row_nodes,
             .list_int = outer_worker.list_int,
             .dictionary_params = &.{},
             .params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args)),
@@ -1794,6 +2126,20 @@ pub const Program = struct {
             .lowered = imported,
             .queued = imported,
         });
+        // The lambda's scope extends its creator's, which it reads through
+        // its creator's table when the creator has one.
+        const created = &self.workers.items[@backingInt(id)];
+        var counts: Tables.InputCounts = .{ .descs = @intCast(created.scheme_vars.len) };
+        for (created.dict_scopes) |dicts| counts.dicts += @intCast(dicts.len);
+        for (created.literal_scopes) |literals| counts.literals += @intCast(literals.len);
+        const creator = self.inputLayout(outer);
+        const inherited = creator.scopeCounts();
+        if (inherited.descs > counts.descs or inherited.dicts > counts.dicts or inherited.literals > counts.literals) invariant("a lambda's scope does not extend its creator's");
+        created.lambda_layout = .{
+            .scope_table = creator.inputCount() != 0,
+            .inherited = inherited,
+            .own = .{ .descs = counts.descs - inherited.descs, .dicts = counts.dicts - inherited.dicts, .literals = counts.literals - inherited.literals },
+        };
         try self.worker_ids.put(self.allocator, key, id);
         if (!imported) try self.worklist.append(self.allocator, id);
         return id;
@@ -1817,6 +2163,13 @@ pub const Program = struct {
     /// related as an open tag row's remainder: the actual row's tags the open
     /// row does not name (design.md "Row Joins", `.boxy`).
     pub fn relateVariablesRows(self: *Program, allocator: Allocator, roots: []const [2]TypeId, count: usize, row_vars: ?[]bool) Allocator.Error![]Related {
+        return try self.relateVariablesCapturing(allocator, roots, count, row_vars, &.{}, null);
+    }
+
+    /// `relateVariablesRows`, also recording in `captured` the actual type
+    /// at each of `row_nodes`' positions, as a whole: a nominal type stays
+    /// that nominal type (`Worker.row_nodes`).
+    pub fn relateVariablesCapturing(self: *Program, allocator: Allocator, roots: []const [2]TypeId, count: usize, row_vars: ?[]bool, row_nodes: []const RowNode, captured: ?[]Related) Allocator.Error![]Related {
         const store = &self.store;
         const bound = try allocator.alloc(Related, count);
         defer allocator.free(bound);
@@ -1825,6 +2178,10 @@ pub const Program = struct {
         defer pending.deinit(allocator);
         try pending.appendSlice(allocator, roots);
         while (pending.pop()) |pair| {
+            if (captured) |out| for (row_nodes, out) |node, *slot| {
+                if (node.ty != pair[0] or slot.* != .none) continue;
+                slot.* = .some(pair[1]);
+            };
             const formal = store.get(pair[0]);
             if (formal == .variable) {
                 bound[formal.variable] = .some(pair[1]);
@@ -2051,13 +2408,80 @@ pub const Program = struct {
     /// `ty` with each variable `i` replaced by `bound[i]`. A row whose
     /// remainder becomes a row takes that row's tags.
     pub fn substitute(self: *Program, allocator: Allocator, root: TypeId, bound: []const TypeId) Allocator.Error!TypeId {
-        return try self.rewriteType(allocator, root, bound, null);
+        return try self.rewriteType(allocator, root, .{ .dense = bound }, null);
+    }
+
+    /// `substitute` with the variables bound by `bindings`.
+    pub fn substituteIn(self: *Program, allocator: Allocator, root: TypeId, bindings: Bindings) Allocator.Error!TypeId {
+        return try self.rewriteType(allocator, root, bindings, null);
+    }
+
+    /// `substituteRepresentation` with the variables bound by `bindings`.
+    pub fn substituteRepresentationIn(self: *Program, allocator: Allocator, root: TypeId, bindings: Bindings) Allocator.Error!TypeId {
+        return try self.rewriteType(allocator, root, bindings, try self.anyFunction());
+    }
+
+    /// The variables a type mentions, as nodes or as fields' kinds, with
+    /// the types walked to find them.
+    pub const TypeVariables = struct {
+        seen: collections.DenseMapUnmanaged(TypeId, void) = .empty,
+        found: collections.DenseMapUnmanaged(u32, void) = .empty,
+        /// In the order first found.
+        list: std.ArrayList(u32) = .empty,
+
+        pub fn deinit(self: *TypeVariables, allocator: Allocator) void {
+            self.seen.deinit(allocator);
+            self.found.deinit(allocator);
+            self.list.deinit(allocator);
+        }
+
+        fn add(self: *TypeVariables, allocator: Allocator, index: u32) Allocator.Error!void {
+            if ((try self.found.getOrPut(allocator, index)).found_existing) return;
+            try self.list.append(allocator, index);
+        }
+    };
+
+    /// Add to `out` each variable `root` mentions. With `representation`, a
+    /// function type's arguments and result are not walked: its values are
+    /// erased callables whatever they are (`substituteRepresentation`).
+    pub fn appendTypeVariables(self: *Program, allocator: Allocator, root: TypeId, representation: bool, out: *TypeVariables) Allocator.Error!void {
+        var stack: std.ArrayList(TypeId) = .empty;
+        defer stack.deinit(allocator);
+        try stack.append(allocator, root);
+        while (stack.pop()) |ty| {
+            if ((try out.seen.getOrPut(allocator, ty)).found_existing) continue;
+            if (self.store.isVariableFree(ty)) continue;
+            switch (self.store.get(ty)) {
+                .record => |record| {
+                    for (self.store.fieldSpan(record.fields)) |field| {
+                        try stack.append(allocator, field.ty);
+                        if (field.kind == .variable_slot) try out.add(allocator, field.slot_variable);
+                    }
+                    if (record.ext.get()) |ext| try stack.append(allocator, ext);
+                    for (self.store.paddingTypes(record)) |padding| try stack.append(allocator, padding);
+                },
+                .tuple => |items| try stack.appendSlice(allocator, self.store.span(items)),
+                .tag_union => |tag_union| {
+                    for (self.store.tagSpan(tag_union.tags)) |tag| try stack.appendSlice(allocator, self.store.span(tag.payloads));
+                    if (tag_union.ext) |ext| try stack.append(allocator, ext);
+                },
+                .list => |elem| try stack.append(allocator, elem),
+                .box => |payload| try stack.append(allocator, payload),
+                .nominal => |nominal| try stack.appendSlice(allocator, self.store.nominalArgs(nominal)),
+                .function => |function| if (!representation) {
+                    try stack.appendSlice(allocator, self.store.span(function.args));
+                    try stack.append(allocator, function.ret);
+                },
+                .variable => |index| try out.add(allocator, index),
+                .primitive, .empty_record => {},
+            }
+        }
     }
 
     /// `substitute` over `representationVariables`, for a type only its
     /// representation matters for: each function type becomes `anyFunction`.
     pub fn substituteRepresentation(self: *Program, allocator: Allocator, root: TypeId, bound: []const TypeId) Allocator.Error!TypeId {
-        return try self.rewriteType(allocator, root, bound, try self.anyFunction());
+        return try self.rewriteType(allocator, root, .{ .dense = bound }, try self.anyFunction());
     }
 
     /// A function type, standing for any function value, which is an erased
@@ -2086,7 +2510,24 @@ pub const Program = struct {
         }
     }
 
-    fn rewriteType(self: *Program, allocator: Allocator, root: TypeId, bound: []const TypeId, function_as: ?TypeId) Allocator.Error!TypeId {
+    fn rewriteType(self: *Program, allocator: Allocator, root: TypeId, bound: Bindings, function_as: ?TypeId) Allocator.Error!TypeId {
+        return try self.rewriteTypeWithRowNodes(allocator, root, bound, function_as, &.{}, .keep);
+    }
+
+    /// `ty` of worker `id`'s scope at the instantiation `bound`, each closed
+    /// row node in it the plain record or tag union it marks
+    /// (`Store.tailNode`): the whole value of a use that relates nothing to
+    /// the node.
+    pub fn plainValue(self: *Program, ty: TypeId, bound: []const TypeId) Allocator.Error!TypeId {
+        return try self.rewriteTypeWithRowNodes(self.allocator, ty, .{ .dense = bound }, null, &.{}, .strip);
+    }
+
+    /// Whether a rewritten closed row node keeps its position
+    /// (`Store.tailNode`).
+    const TailNodes = enum { keep, strip };
+
+    /// `rewriteType`, reading each of `row_nodes` as its variable.
+    fn rewriteTypeWithRowNodes(self: *Program, allocator: Allocator, root: TypeId, bound: Bindings, function_as: ?TypeId, row_nodes: []const RowNode, tail_nodes: TailNodes) Allocator.Error!TypeId {
         var done: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty;
         defer done.deinit(allocator);
         const Frame = struct { ty: TypeId, expanded: bool };
@@ -2097,6 +2538,13 @@ pub const Program = struct {
             if (done.contains(frame.ty)) continue;
             const node = self.store.get(frame.ty);
             if (!frame.expanded) {
+                const row_node = for (row_nodes) |candidate| {
+                    if (candidate.ty == frame.ty) break candidate;
+                } else null;
+                if (row_node) |whole| {
+                    try done.put(allocator, frame.ty, try self.store.variable(whole.index));
+                    continue;
+                }
                 try stack.append(allocator, .{ .ty = frame.ty, .expanded = true });
                 switch (node) {
                     .record => |record| {
@@ -2122,7 +2570,7 @@ pub const Program = struct {
             }
             const result: TypeId = switch (node) {
                 .primitive, .empty_record => frame.ty,
-                .variable => |index| if (index < bound.len) bound[index] else invariant("a substituted type names a variable past its bindings"),
+                .variable => |index| bound.get(index) orelse invariant("a substituted type names a variable past its bindings"),
                 .list => |elem| try self.store.intern(.{ .list = done.get(elem).? }),
                 .box => |payload| try self.store.intern(.{ .box = done.get(payload).? }),
                 .tuple => |items| blk: {
@@ -2151,8 +2599,8 @@ pub const Program = struct {
                     for (self.store.fieldSpan(record.fields)) |field| {
                         const ty = done.get(field.ty).?;
                         if (field.kind == .variable_slot) {
-                            if (field.slot_variable >= bound.len) invariant("a substituted field kind names a variable past its bindings");
-                            try fields.append(allocator, self.store.instantiatedField(field.name, ty, bound[field.slot_variable]));
+                            const slot_ty = bound.get(field.slot_variable) orelse invariant("a substituted field kind names a variable past its bindings");
+                            try fields.append(allocator, self.store.instantiatedField(field.name, ty, slot_ty));
                         } else {
                             var substituted = field;
                             substituted.ty = ty;
@@ -2187,8 +2635,12 @@ pub const Program = struct {
                             .declared = .{ .padding = padding, .entries = self.store.declaredEntries(declared) },
                         } });
                     }
-                    if (fields.items.len == 0 and ext == null) break :blk try self.store.emptyRecord();
-                    break :blk try self.store.intern(.{ .record = .{ .fields = fields.items, .ext = ext } });
+                    const tail_node: ?u32 = switch (tail_nodes) {
+                        .keep => self.store.tailNode(frame.ty),
+                        .strip => null,
+                    };
+                    if (fields.items.len == 0 and ext == null and tail_node == null) break :blk try self.store.emptyRecord();
+                    break :blk try self.store.intern(.{ .record = .{ .fields = fields.items, .ext = ext, .tail_node = tail_node } });
                 },
                 .tag_union => |tag_union| blk: {
                     var tags: std.ArrayList(types.TagInput) = .empty;
@@ -2222,7 +2674,10 @@ pub const Program = struct {
                             return s.nameLessThan(a.name, b.name);
                         }
                     }.lessThan);
-                    break :blk try self.store.intern(.{ .tag_union = .{ .tags = tags.items, .ext = ext } });
+                    break :blk try self.store.intern(.{ .tag_union = .{ .tags = tags.items, .ext = ext, .tail_node = switch (tail_nodes) {
+                        .keep => self.store.tailNode(frame.ty),
+                        .strip => null,
+                    } } });
                 },
             };
             try done.put(allocator, frame.ty, result);
@@ -2557,11 +3012,15 @@ pub const Program = struct {
     pub fn instantiateTarget(self: *Program, target: WorkerId, formal: TypeId, actual: TypeId) Allocator.Error!TargetInstance {
         const target_worker = self.worker(target).*;
         const count = target_worker.scheme_vars.len;
-        const related = try self.relateVariablesPartial(self.allocator, &.{.{ formal, actual }}, count);
+        const captured = try self.allocator.alloc(Related, target_worker.row_nodes.len);
+        defer self.allocator.free(captured);
+        @memset(captured, .none);
+        const related = try self.relateVariablesCapturing(self.allocator, &.{.{ formal, actual }}, count, null, target_worker.row_nodes, captured);
         defer self.allocator.free(related);
         try self.relateThroughTargetRequirements(target, related);
         const bound = try self.arena.allocator().alloc(TypeId, count);
         for (related, bound, target_worker.scheme_vars) |ty, *slot, variable| slot.* = ty.get() orelse try self.converter().sealedScheme(target_worker.module, variable);
+        try self.fillRowNodes(target, bound, captured);
         try self.resolveKindSlots(target_worker.kinds, bound);
         return try self.targetRequirements(target, bound);
     }
@@ -3283,10 +3742,13 @@ pub const Program = struct {
 
     /// Where two types of one value differ: nowhere; only in the tags of
     /// rows, one widening the other along the coercion's reach (design.md
-    /// "Sealed Result Rows"); in the memory order of a record, one being the
-    /// record a padded nominal lifts it into (design.md "Nominal Record Field
-    /// Order"); or inside the function type the value has.
-    pub const StorageDifference = enum { none, rows, record_order, function };
+    /// "Sealed Result Rows"); or inside the function type the value has.
+    pub const StorageDifference = enum { none, rows, function };
+
+    /// A padded nominal reaches a generic body as the whole value it is,
+    /// described by its own descriptor (`Worker.row_nodes`), so no value is
+    /// ever stored in two record orders within data.
+    const record_order_in_data = "one value is stored in two record orders, though a padded nominal reaches a generic body as the whole value it is";
 
     /// A function value inside data is outside every row widening's reach
     /// (design.md "Row Coercion Primitive"), so both types of the value store
@@ -3331,7 +3793,7 @@ pub const Program = struct {
                     try pending.append(self.allocator, .{ .from = pair.from, .to = try self.converter().backing(pair.to), .place = pair.place });
                 } else if (paddedAgainstEmpty(from, to)) {
                     switch (pair.place) {
-                        .data => result = .record_order,
+                        .data => invariant(record_order_in_data),
                         .root_function, .signature_data => return .function,
                         .nested_function => invariant(nested_function_storage),
                     }
@@ -3342,10 +3804,8 @@ pub const Program = struct {
             const inner: Place = if (pair.place == .root_function) .signature_data else pair.place;
             switch (from) {
                 .record => |record| {
-                    // A closed record widened with omitted optional fields
-                    // needs their presence slots even when field order agrees.
-                    if (!store.sameRecordOrder(record, to.record) or (record.ext == .none and to.record.ext == .none and record.fields.len != to.record.fields.len)) switch (pair.place) {
-                        .data => result = .record_order,
+                    if (!store.sameRecordOrder(record, to.record)) switch (pair.place) {
+                        .data => invariant(record_order_in_data),
                         .root_function, .signature_data => return .function,
                         .nested_function => invariant(nested_function_storage),
                     };
@@ -3585,30 +4045,84 @@ pub const Program = struct {
         const words = try self.allocator.alloc(StaticDescs.CaptureWord, needs.wordCount());
         defer self.allocator.free(words);
         @memcpy(words[0..needs.input_count], unfilled.inputs);
-        var evaluation = Tables.Evaluation.init(self, .{ .needs = &needs }, unfilled.inputs, needs.desc_count);
+        var evaluation = Tables.Evaluation.init(self, .{ .needs = &needs }, unfilled.inputs, self.inputLayout(unfilled.worker), .{ .table = unfilled.reserved.node });
         defer evaluation.deinit();
         for (words[needs.input_count..], needs.slots) |*slot_word, recipe| slot_word.* = try evaluation.word(recipe);
         try self.static_descs.fillTable(unfilled, words);
     }
 
-    /// How many input words lead worker `id`'s tables: its variables'
-    /// descriptors, its dictionaries, then its literal arguments, the hidden
-    /// words its callers supply. A worker with inputs takes the address of
-    /// its type table as its one hidden argument (`tables.zig`).
+    /// The environment worker `id`'s body converts its checked types in:
+    /// each of its scope's variables bound to its `variable` node, except an
+    /// integer list worker's item variable, bound to its integer type
+    /// (design.md "Pre-Specialized Integer List Workers"). Its variables are
+    /// indexed, so a conversion's lookups do not scan the scope, and a lambda
+    /// whose scope adds no variable shares its creator's environment, so the
+    /// conversions they make are remembered once (`types.Store.scheme_memo`).
+    pub fn scopeEnv(self: *Program, id: WorkerId) Allocator.Error!*const types.Env {
+        if (self.scopeEnvOf(id)) |known| return known;
+        var sharing: std.ArrayList(WorkerId) = .empty;
+        defer sharing.deinit(self.allocator);
+        var current = id;
+        const env = while (true) {
+            if (self.scopeEnvOf(current)) |known| break known;
+            const target = self.worker(current).*;
+            switch (target.key) {
+                .lambda => |key| {
+                    const outer = self.worker(key.outer).*;
+                    if (outer.module == target.module and outer.scheme_vars.ptr == target.scheme_vars.ptr and outer.scheme_vars.len == target.scheme_vars.len and std.meta.eql(outer.list_int, target.list_int)) {
+                        try sharing.append(self.allocator, current);
+                        current = key.outer;
+                        continue;
+                    }
+                },
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => {},
+            }
+            const arena = self.arena.allocator();
+            const bound = try arena.alloc(TypeId, target.scheme_vars.len);
+            for (bound, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
+            if (target.list_int) |list_int| bound[list_int.slot] = try self.store.primitive(list_int.item.primitive());
+            const positions = try arena.create(types.VarPositions);
+            positions.* = try types.VarPositions.init(arena, target.scheme_vars);
+            const built = try arena.create(types.Env);
+            built.* = .{ .module = target.module, .vars = target.scheme_vars, .bound = bound, .positions = positions };
+            try self.putScopeEnv(current, built);
+            break built;
+        };
+        for (sharing.items) |shared| try self.putScopeEnv(shared, env);
+        return env;
+    }
+
+    fn scopeEnvOf(self: *const Program, id: WorkerId) ?*const types.Env {
+        const index = @backingInt(id);
+        return if (index < self.scope_envs.items.len) self.scope_envs.items[index] else null;
+    }
+
+    fn putScopeEnv(self: *Program, id: WorkerId, env: *const types.Env) Allocator.Error!void {
+        const index = @backingInt(id);
+        if (index >= self.scope_envs.items.len) try self.scope_envs.appendNTimes(self.allocator, null, index + 1 - self.scope_envs.items.len);
+        self.scope_envs.items[index] = env;
+    }
+
+    /// How many input words lead worker `id`'s tables (`Tables.InputLayout`).
+    /// A worker with inputs takes the address of its type table as its one
+    /// hidden argument (`tables.zig`).
     pub fn inputCount(self: *Program, id: WorkerId) u32 {
+        return self.inputLayout(id).inputCount();
+    }
+
+    /// Where worker `id`'s scope inputs are: the descriptors of its
+    /// variables, its dictionaries, then its literal arguments. A lambda
+    /// worker's scope extends its creator's, whose inputs it reads through
+    /// its creator's table (`Tables.InputLayout`).
+    pub fn inputLayout(self: *Program, id: WorkerId) Tables.InputLayout {
         const target = self.worker(id).*;
         return switch (target.key) {
-            .template => @intCast(target.scheme_vars.len + target.dictionary_params.len + target.literal_params),
-            .lambda => blk: {
-                var count: u32 = @intCast(target.scheme_vars.len);
-                for (target.dict_scopes) |scope| count += @intCast(scope.len);
-                for (target.literal_scopes) |scope| count += @intCast(scope.len);
-                break :blk count;
-            },
-            .adapter, .codec, .default => @intCast(target.scheme_vars.len),
-            .method_entry => |entry_target| self.inputCount(entry_target),
-            .structural, .structural_map => target.structural_descs,
-            .literal_thunk, .root_slot, .root, .static_data, .crash_dictionary, .convert, .callable_eval_entry => 0,
+            .template => Tables.InputLayout.flat(.{ .descs = @intCast(target.scheme_vars.len), .dicts = @intCast(target.dictionary_params.len), .literals = target.literal_params }),
+            .lambda => target.lambda_layout,
+            .adapter, .codec, .default => Tables.InputLayout.flat(.{ .descs = @intCast(target.scheme_vars.len) }),
+            .method_entry => |entry_target| self.inputLayout(entry_target),
+            .structural, .structural_map => Tables.InputLayout.flat(.{ .descs = target.structural_descs }),
+            .literal_thunk, .root_slot, .root, .static_data, .crash_dictionary, .convert, .callable_eval_entry => .{},
         };
     }
 
@@ -3620,14 +4134,64 @@ pub const Program = struct {
         return target.key == .lambda and target.own_descs + target.own_dicts + target.own_literals != 0;
     }
 
-    /// How many of worker `id`'s inputs are its variables' descriptors.
+    /// How many of worker `id`'s scope inputs are its variables'
+    /// descriptors.
     pub fn descCount(self: *Program, id: WorkerId) u32 {
-        const target = self.worker(id).*;
-        return switch (target.key) {
-            .template, .lambda, .adapter, .codec, .default => @intCast(target.scheme_vars.len),
-            .method_entry => |entry_target| self.descCount(entry_target),
-            .structural, .structural_map => target.structural_descs,
-            .literal_thunk, .root_slot, .root, .static_data, .crash_dictionary, .convert, .callable_eval_entry => 0,
+        return self.inputLayout(id).scopeCounts().descs;
+    }
+
+    /// The word of scope input `index` of the worker whose table is the
+    /// static table `table`, read through the tables of its chain of
+    /// creators (`Tables.InputLayout`).
+    pub fn inheritedWord(self: *Program, table: u32, index: u32) Allocator.Error!StaticDescs.CaptureWord {
+        var node = try self.scopeOwnerTable(table);
+        var at = index;
+        while (true) {
+            const record = self.static_descs.tableRecord(node);
+            switch (self.inputLayout(record.worker).locate(at)) {
+                .input => |input| return record.inputs[input],
+                .inherited => |inherited| {
+                    node = try self.scopeOwnerTable(creatorTableOf(record));
+                    at = inherited;
+                },
+            }
+        }
+    }
+
+    /// The table `levels` steps up the chain of creators of the static
+    /// table `table`, whose own table is step zero.
+    pub fn ancestorTable(self: *Program, table: u32, levels: u32) Allocator.Error!StaticDescs.CaptureWord {
+        var node = table;
+        for (0..levels) |_| node = creatorTableOf(self.static_descs.tableRecord(node));
+        return .{ .table = node };
+    }
+
+    /// The first table of `table`'s chain of creators, itself included,
+    /// whose worker's scope is not its creator's scope unchanged
+    /// (`Tables.InputLayout.passesThrough`): the table that holds or
+    /// inherits its scope's inputs. Each table's is found once.
+    fn scopeOwnerTable(self: *Program, table: u32) Allocator.Error!u32 {
+        if (self.scope_owner_tables.get(table)) |known| return known;
+        var pending: std.ArrayList(u32) = .empty;
+        defer pending.deinit(self.allocator);
+        var node = table;
+        const owner = while (true) {
+            if (self.scope_owner_tables.get(node)) |known| break known;
+            const record = self.static_descs.tableRecord(node);
+            if (!self.inputLayout(record.worker).passesThrough()) break node;
+            try pending.append(self.allocator, node);
+            node = creatorTableOf(record);
+        };
+        try self.scope_owner_tables.put(self.allocator, table, owner);
+        for (pending.items) |passed| try self.scope_owner_tables.put(self.allocator, passed, owner);
+        return owner;
+    }
+
+    fn creatorTableOf(record: StaticDescs.UnfilledTable) u32 {
+        if (record.inputs.len == 0) invariant("a table inheriting its creator's scope has no inputs");
+        return switch (record.inputs[0]) {
+            .table => |node| node,
+            .desc, .scoped_desc, .callable, .node, .zero, .int => invariant("a lambda table's first input is not its creator's table"),
         };
     }
 };

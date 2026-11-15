@@ -178,6 +178,9 @@ const TaskContext = struct {
     /// the task runs only to verify that the phases indeed rewrite nothing,
     /// and never commits.
     verify_only: bool = false,
+    /// Static data reads the compile-time value guards will guard; see
+    /// `runSegmentTimed`.
+    guarded_reads: ?*const std.DynamicBitSetUnmanaged = null,
     shard: ?LirStore = null,
     failed: bool = false,
     completed: bool = false,
@@ -256,7 +259,7 @@ const TaskContext = struct {
                 }
                 next_join.* = joins.next_join_point;
             },
-            .prune_join_params => try PruneJoinParams.runProc(shard, self.proc, scratch_allocator),
+            .prune_join_params => try PruneJoinParams.runProc(shard, self.proc, scratch_allocator, self.guarded_reads),
             .scalarize => try ScalarizeJoins.runProcWithScratch(shard, self.layouts, self.proc, try laneScratch(ScalarizeJoins.LaneScratch, lane)),
             .loop_append => try LoopAppendPromote.runProcInLane(shard, self.layouts, self.proc, try laneScratch(LoopAppendPromote.LaneScratch, lane), analysis.?),
             .range => {
@@ -303,7 +306,7 @@ pub fn run(
     executor: ?TaskExecutor.Executor,
     metrics: ?*ParallelMetrics,
 ) Allocator.Error!void {
-    return runSegmentTimed(allocator, store, layouts, &.{phase}, executor, metrics, null);
+    return runSegmentTimed(allocator, store, layouts, &.{phase}, executor, metrics, null, null);
 }
 
 /// `run`, recording the phase's durations and procedure counts in `timing`
@@ -317,7 +320,7 @@ pub fn runTimed(
     metrics: ?*ParallelMetrics,
     timing: ?*Timing,
 ) Allocator.Error!void {
-    return runSegmentTimed(allocator, store, layouts, &.{phase}, executor, metrics, timing);
+    return runSegmentTimed(allocator, store, layouts, &.{phase}, executor, metrics, timing, null);
 }
 
 /// Apply a segment of phases in order: one task per procedure clones it once,
@@ -326,6 +329,11 @@ pub fn runTimed(
 /// of several phases holds only `fusible` ones, so each phase reads exactly
 /// what the ordered commit of the phase before it would have left. No
 /// callback can observe another procedure's output.
+///
+/// `guarded_reads`, for a segment holding `prune_join_params` in a program
+/// that reads compile-time values, holds each static data slot whose reads
+/// `comptime_value_guards.insert` will guard: such a read fails when the
+/// value's evaluation failed, so it is never a pure definition to delete.
 pub fn runSegmentTimed(
     allocator: Allocator,
     store: *LirStore,
@@ -334,6 +342,7 @@ pub fn runSegmentTimed(
     executor: ?TaskExecutor.Executor,
     metrics: ?*ParallelMetrics,
     timing: ?*Timing,
+    guarded_reads: ?*const std.DynamicBitSetUnmanaged,
 ) Allocator.Error!void {
     std.debug.assert(phases.len != 0);
     if (phases.len > 1) for (phases) |phase| std.debug.assert(fusible(phase));
@@ -377,6 +386,7 @@ pub fn runSegmentTimed(
             .proc = proc,
             .verify_only = !admitted,
             .timing = timing,
+            .guarded_reads = guarded_reads,
         });
     }
     if (timing) |active| active.prepare_ns[leader] +|= active.since(segment_started);

@@ -2193,7 +2193,7 @@ fn runProcedurePass(
     phase: ProcPasses.Phase,
     timing: ?*ProcPasses.Timing,
 ) Allocator.Error!void {
-    try runProcedureSegment(allocator, result, target, &.{phase}, timing);
+    try runProcedureSegment(allocator, result, target, &.{phase}, timing, null);
 }
 
 fn runProcedureSegment(
@@ -2202,6 +2202,7 @@ fn runProcedureSegment(
     target: TargetConfig,
     phases: []const ProcPasses.Phase,
     timing: ?*ProcPasses.Timing,
+    guarded_reads: ?*const std.DynamicBitSetUnmanaged,
 ) Allocator.Error!void {
     if (phases.len == 0) return;
     try ProcPasses.runSegmentTimed(
@@ -2212,6 +2213,7 @@ fn runProcedureSegment(
         target.post_check_executor,
         target.lir_pass_parallel_metrics_out,
         timing,
+        guarded_reads,
     );
 }
 
@@ -2229,9 +2231,15 @@ const PendingSegment = struct {
     }
 
     fn flush(self: *PendingSegment, allocator: Allocator, result: *LirProgram.Result, target: TargetConfig, timing: ?*ProcPasses.Timing) Allocator.Error!void {
+        return self.flushGuarded(allocator, result, target, timing, null);
+    }
+
+    /// Flush a segment whose `prune_join_params` phase keeps the reads of
+    /// `guarded_reads` (`ProcPasses.runSegmentTimed`).
+    fn flushGuarded(self: *PendingSegment, allocator: Allocator, result: *LirProgram.Result, target: TargetConfig, timing: ?*ProcPasses.Timing, guarded_reads: ?*const std.DynamicBitSetUnmanaged) Allocator.Error!void {
         const len = self.len;
         self.len = 0;
-        try runProcedureSegment(allocator, result, target, self.phases[0..len], timing);
+        try runProcedureSegment(allocator, result, target, self.phases[0..len], timing, guarded_reads);
     }
 };
 
@@ -2254,24 +2262,9 @@ fn finishLoweredOutput(
         if (pass_target.lir_pass_parallel_metrics_out) |metrics| timing.addLirPassParallel(metrics.*);
     };
 
-    // A `.boxy` body's owned erased calls name their closure as their
-    // ownership source; the allocation's root is reached through the
-    // representation-transparent aliases lowering emitted (design.md
-    // "Destination-Passing Results and Allocation Reuse").
     var proc_pass_detail: ?ProcPasses.Timing = if (Timing.detailOf(target.timing)) |timing| .{ .std_io = timing.std_io } else null;
     defer if (proc_pass_detail) |*detail| target.timing.?.addProcPasses(detail);
     const pass_timing: ?*ProcPasses.Timing = if (proc_pass_detail) |*detail| detail else null;
-    var erased_owner_scope = PassStepScope.begin(target.timing, .erased_owner);
-    if (target.specialization_strategy != .lss) {
-        const store = &lowered.lir_result.store;
-        var scratch = ErasedOwner.Scratch.init(allocator);
-        defer scratch.deinit();
-        for (0..store.procSpecCount()) |index| {
-            const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
-            try ErasedOwner.resolveProcReuseSources(&scratch, store, &lowered.lir_result.layouts, proc_id);
-        }
-    }
-    erased_owner_scope.end();
     // Consecutive fusible phases share one task per procedure
     // (`PendingSegment`); each other phase, and each whole-program step,
     // ends the segment before it.
@@ -2306,9 +2299,17 @@ fn finishLoweredOutput(
     // its own parameter, so pruning can remove it.
     segment.add(.scalarize);
     segment.add(.prune_join_params);
-    // Loop append promotion reads the bodies of the procedures a loop
-    // calls, so it runs after every procedure's earlier phases committed.
-    try segment.flush(allocator, &lowered.lir_result, pass_target, pass_timing);
+    {
+        // A read of a compile-time value whose evaluation can fail is guarded
+        // after ARC, so pruning keeps it even when nothing reads its value.
+        // The slots are a function of the program's static data alone, which
+        // no phase of the segment changes.
+        var guarded_reads = try @import("comptime_value_guards.zig").guardedSlots(allocator, &lowered.lir_result, if (frozen.*) |*data| data else null);
+        defer if (guarded_reads) |*set| set.deinit(allocator);
+        // Loop append promotion reads the bodies of the procedures a loop
+        // calls, so it runs after every procedure's earlier phases committed.
+        try segment.flushGuarded(allocator, &lowered.lir_result, pass_target, pass_timing, if (guarded_reads) |*set| set else null);
+    }
     if (target.promote_loop_appends.enabled()) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .loop_append, pass_timing);
     }
@@ -2336,6 +2337,22 @@ fn finishLoweredOutput(
         try ReachableProcs.run(&lowered.lir_result);
     }
     reachable_scope.end();
+    // Every erased call names the allocation root its closure's unit belongs
+    // to, reached through the representation-transparent aliases of the
+    // final body: rewrites above (inlining, join forwarding and pruning) can
+    // change those aliases, so the roots are resolved once they have all run
+    // (design.md "Destination-Passing Results and Allocation Reuse").
+    var erased_owner_scope = PassStepScope.begin(target.timing, .erased_owner);
+    {
+        const store = &lowered.lir_result.store;
+        var scratch = ErasedOwner.Scratch.init(allocator);
+        defer scratch.deinit();
+        for (0..store.procSpecCount()) |index| {
+            const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
+            try ErasedOwner.resolveProcReuseSources(&scratch, store, &lowered.lir_result.layouts, proc_id);
+        }
+    }
+    erased_owner_scope.end();
     lir_passes_timing_scope.end();
 
     var arc_timing_scope = PipelineStageScope.begin(target.timing, .arc);

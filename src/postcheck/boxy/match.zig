@@ -568,7 +568,7 @@ pub const Ctx = struct {
         return try self.b.endBackward(start, next);
     }
 
-    pub fn readTagPayload(self: Ctx, dest: LIR.LocalId, _: types.TypeId, source: LIR.LocalId, variant: layout.VariantIndex, index: u32, _: bool, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+    pub fn readTagPayload(self: Ctx, dest: LIR.LocalId, _: types.TypeId, source: LIR.LocalId, variant: layout.VariantIndex, index: u32, single: bool, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         const union_ty = try self.b.structuralType(self.occType(source));
         const start = try self.b.beginBackward();
         if (try self.b.closed(union_ty)) {
@@ -582,7 +582,7 @@ pub const Ctx = struct {
                 try self.b.readTagPayloadInto(dest, source, union_ty, variant, payloads, index);
             }
         } else {
-            try self.b.emitDyn(dest, .{ .tag_payload_addr = .{ .base = source, .desc = try self.b.descOf(union_ty), .payload_index = index } });
+            try self.b.emitDyn(dest, .{ .tag_payload_addr = .{ .base = source, .desc = try self.b.descOf(union_ty), .payload_index = index, .whole = single and self.b.holdsRefcounted(dest) } });
         }
         return try self.b.endBackward(start, next);
     }

@@ -80,7 +80,13 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      the v69-v71 changes.
 /// v73: procedure debug names are a column parallel to procedure specs.
 /// v74: procedure shapes are 32 bits and record owned erased calls.
-pub const FORMAT_VERSION: u32 = 74;
+/// v73: erased calls carry `result_reuse`, `erased_capture_load_borrowed`
+///      renumbers later LowLevel ops, RC reasons name dead-lender reads,
+///      procedure shapes widen to 32 bits, and dynamic tag payload reads
+///      carry `whole`.
+/// v75: combines the v73 and v74 changes above; procedure shapes record
+///      every erased call.
+pub const FORMAT_VERSION: u32 = 75;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
