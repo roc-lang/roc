@@ -111,12 +111,12 @@ EndOfFile,
 			(e-lambda
 				(args
 					(p-assign (ident "y")))
-				(e-call (constraint-fn-var 284)
+				(e-call (constraint-fn-var 280)
 					(e-lookup-local
 						(p-assign (ident "fac")))
 					(e-lookup-local
 						(p-assign (ident "y"))))))
-		(e-call (constraint-fn-var 299)
+		(e-call (constraint-fn-var 291)
 			(e-lookup-local
 				(p-assign (ident "helper")))
 			(e-lookup-local
