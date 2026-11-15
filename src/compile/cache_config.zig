@@ -384,7 +384,11 @@ pub const Constants = struct {
     ///      marked, nominal declarations record padding, method requirements on
     ///      open rows are held on the row variable for the whole record or tag
     ///      union, and snapshots record which value a requirement is about.
-    pub const CACHE_VERSION = 193;
+    /// 194: on top of 193, procedure templates record whether their scheme
+    ///      holds an uncommitted tag tail and list their signature's closed
+    ///      row nodes, and generalized local scopes record whether their
+    ///      scheme holds an uncommitted tag tail.
+    pub const CACHE_VERSION = 194;
 };
 
 /// Configuration for the Roc cache system.

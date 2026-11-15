@@ -5723,6 +5723,28 @@ union of its signature with a tag whose row ends in one is a row node instead
 as each use has it, so printing it renders the nominal type a use lifted it
 into in both lowering modes.
 
+Checked-module output records which schemes hold such a tail. The walk that
+publishes a scheme (its identity variables and evidence parameters) visits
+every node of the scheme's type, so it notes an uncommitted tag tail as it
+passes one; each procedure template and each generalized local scope records
+the result (`CheckedProcedureTemplate.uncommitted_tag_tail`,
+`DispatchRefScope.holds_uncommitted_tag_tail`). A template with no scheme of
+its own (an entry wrapper of an expression, statement, hoisted or literal
+root) records that instead (`TemplateTagTail.no_scheme`), since no scheme
+walk speaks for its signature. A template that holds one, that has no
+scheme of its own, or that seals an uncommitted record tail (Sealed Result
+Rows), has its signature walked once more at publication for its closed row
+nodes, in the order Boxy gives them scheme positions
+(`CheckedProcedureTemplate.closed_row_nodes`, by `ClosedRowNodeWalk`); no
+other template's signature is walked for them. Boxy reads the list, and an
+importing unit reads the imported artifact's list, so both derive a worker's
+hidden inputs from the same checked data, and the Boxy interface digest
+hashes the list's length beside the scheme's variable count. A scheme alias
+whose scheme has no variable but holds an uncommitted tag tail is lowered at
+each use, as a generalized alias is, since each use copies the union and may
+lift it; Boxy reads that from its scope's flag. Debug builds check both
+against a walk of the checked type.
+
 The accepted and rejected sides of both tails are pinned by
 `src/check/test/uncommitted_record_tail_test.zig` (literal, `{}`, and
 pattern tails; lifts of results, callback arguments, returned functions'
@@ -12992,7 +13014,10 @@ whole value as the use has it: the nominal type a caller supplied, or the
 plain record or tag union. The last two are closed rows, so they are row nodes
 whatever the body does with them: a worker's hidden inputs stay a function of
 its checked signature alone, which importing and defining units read alike,
-and no analysis of a body decides them. A closed row node stores its values
+and no analysis of a body decides them. Checking publishes each template's
+closed row nodes in the order they take positions
+(`CheckedProcedureTemplate.closed_row_nodes`), and Boxy reads that list
+rather than searching the signature. A closed row node stores its values
 exactly as the plain record or tag union does: its scheme position holds the
 checked record or tag union itself, which the worker's scope converts to its
 closed type marked with the position (`Store.tailNode`, a distinct type only
@@ -15597,8 +15622,9 @@ A worker's hidden inputs are, in order:
 - one descriptor per quantified variable of its scheme, in the scheme's
   checked `scheme_vars` order (a field kind variable's describes the field's
   slot, Field Kinds), then one per row node of its signature (Methods On
-  Open Rows), the closed ones first, each describing the whole value of a
-  record or tag union as the use has it;
+  Open Rows), the closed ones first in the checked `closed_row_nodes` order,
+  each describing the whole value of a record or tag union as the use has
+  it;
 - one dictionary per evidence parameter of its scheme, in the checked
   `evidence_params` order the checker records;
 - one literal argument per literal requirement of its scheme, in the checked
@@ -15695,7 +15721,9 @@ the record, so every instantiation stores whatever holds the tail as the
 sealed worker does, wherever the tail sits in the worker's interface, and no
 use converts a value crossing the worker's boundary. Sealing the tail leaves
 its record a row node of the worker's signature (Methods On Open Rows): the
-record's descriptor, not the tail's, is the hidden input.
+record's descriptor, not the tail's, is the hidden input. Checking lists
+that record among the template's closed row nodes
+(`CheckedProcedureTemplate.closed_row_nodes`, Uncommitted Tag Tails).
 
 Checked-module output computes all of a template's sealed slots together. It first
 collects the bounded candidates, then traverses its current immutable checked

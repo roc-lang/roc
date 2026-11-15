@@ -4844,6 +4844,9 @@ pub const Builder = struct {
     /// each row node of that procedure takes the type at its position there
     /// (design.md "Procedure Aliases").
     fn lowerAliasUse(self: *Builder, expr_id: ExprId, local: checked.LocalProcedureBinding, use_ty: TypeId) Allocator.Error!void {
+        if (base.dev_diagnostics.isSet(.trace_boxy_work)) {
+            std.debug.print("boxy-work: alias use module={d} alias={d} type={d}\n", .{ @backingInt(self.module), @backingInt(local.expr), @backingInt(use_ty) });
+        }
         const scope_id = local.dispatch_scope orelse invariant("an alias without a generalized scheme is bound where it is declared");
         const scheme = try self.localScheme(scope_id);
         const outer_count = self.env.vars.len;
@@ -9910,11 +9913,14 @@ pub const Builder = struct {
                 // each use lowers its right-hand side at the use's
                 // instantiation (`lowerAliasUse`). A scheme with no variable
                 // is generalized too when the alias's type holds an
-                // uncommitted tag tail, which each use copies and may lift.
+                // uncommitted tag tail, which each use copies and may lift
+                // (`DispatchRefScope.holds_uncommitted_tag_tail`).
                 if (self.bodies().binder(decl.pattern).is_scheme_alias) {
                     if (try self.program.localScope(self.module, decl.expr)) |scope_id| {
                         const scheme = try self.localScheme(scope_id);
-                        if (!scheme.isEmpty() or try self.program.holdsUncommittedTagTail(self.module, self.bodies().exprType(decl.expr))) return;
+                        const scope = self.view.view.checked_procedure_templates.dispatch_scopes.items()[@backingInt(scope_id)];
+                        if (std.debug.runtime_safety) std.debug.assert(scope.holds_uncommitted_tag_tail == try self.program.holdsUncommittedTagTail(self.module, self.bodies().exprType(decl.expr)));
+                        if (!scheme.isEmpty() or scope.holds_uncommitted_tag_tail) return;
                     }
                 }
                 // A value that diverges binds nothing.
