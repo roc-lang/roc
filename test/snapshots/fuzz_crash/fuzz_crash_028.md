@@ -2143,7 +2143,7 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Red]")
+			(text "[Blue, Red, ..d] where [d.is_eq : d, d -> Bool]")
 			(annotation-end)))
 	(report
 		(severity runtime_error)
@@ -2194,7 +2194,7 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Red]")
+			(text "[Blue, Red, ..d] where [d.is_eq : d, d -> Bool]")
 			(annotation-end)
 			(line-break)
 			(line-break)

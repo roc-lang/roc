@@ -145,7 +145,7 @@ pub const Scratch = struct {
 
 /// Set every owned erased call's reuse source in `proc_id`'s body to the
 /// ownership unit its closure resolves to. Only a body whose shapes record
-/// an owned erased call (`erased_reuse_call`) holds one.
+/// an erased call (`erased_call`) holds one.
 pub fn resolveProcReuseSources(
     scratch: *Scratch,
     store: *LirStore,
@@ -154,11 +154,11 @@ pub fn resolveProcReuseSources(
 ) Allocator.Error!void {
     const proc = store.getProcSpecImmediate(proc_id);
     const body = proc.body.get() orelse return;
-    const has_calls = proc.shapes.erased_reuse_call;
+    const has_calls = proc.shapes.erased_call;
     if (!has_calls and builtin.mode != .debug) return;
     try collectOwnedCalls(scratch, store, layouts, proc.args, body);
     if (!has_calls) {
-        if (scratch.calls.items.len != 0) base.invariant("{s}", .{"a procedure whose shapes exclude owned erased calls contains one"});
+        if (scratch.calls.items.len != 0) base.invariant("{s}", .{"a procedure whose shapes exclude erased calls contains one"});
         return;
     }
     const calls = &scratch.calls;

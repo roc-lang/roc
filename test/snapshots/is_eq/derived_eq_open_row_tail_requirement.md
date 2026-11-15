@@ -124,7 +124,7 @@ checks = (same(Yes(1), Yes(1)), is_nope(Yes(2)), value == None)
 			(e-if
 				(if-branches
 					(if-branch
-						(e-structural-eq (negated "false")
+						(e-method-eq (negated "false")
 							(lhs
 								(e-lookup-local
 									(p-assign (ident "a"))))
@@ -134,7 +134,7 @@ checks = (same(Yes(1), Yes(1)), is_nope(Yes(2)), value == None)
 							(e-tag (name "False")))))
 				(if-else
 					(e-block
-						(e-structural-eq (negated "false")
+						(e-method-eq (negated "false")
 							(lhs
 								(e-lookup-local
 									(p-assign (ident "a"))))
@@ -146,7 +146,7 @@ checks = (same(Yes(1), Yes(1)), is_nope(Yes(2)), value == None)
 		(e-lambda
 			(args
 				(p-assign (ident "v")))
-			(e-structural-eq (negated "false")
+			(e-method-eq (negated "false")
 				(lhs
 					(e-lookup-local
 						(p-assign (ident "v"))))

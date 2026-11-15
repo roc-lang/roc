@@ -2823,19 +2823,14 @@ fn CheckedTypeVariableOf(comptime Constraints: type) type {
         constraints: Constraints = if (Constraints == CheckedConstraints) .empty else &.{},
         numeric_default_phase: ?NumericDefaultPhase = null,
         row_default: ?RowDefault = null,
-        /// A variable whose every constraint is an `is_eq` or `to_hash`: the
-        /// obligations deriving those methods over an open row give its tail.
-        /// Closing the row satisfies them, so a flex tail still seals to its row
-        /// default (design.md "Derived Equality And Hashing Over Open Rows"), and
+        /// A variable whose every constraint is an `is_eq` or `to_hash` closing
+        /// its row decides against the plain type, so a flex tail still seals
+        /// to its row default (design.md "Methods On Open Rows"), and
         /// a result row ending in the variable may still be determined by its
         /// request (design.md "Closed Result Rows At Template Boundaries").
         row_default_discharges_constraints: bool = false,
-        /// An implicitly opened row of an annotated definition that the
-        /// annotation bounds (design.md "Polarity"): the definition's body can
-        /// never add a tag to the row, only an instantiation of the definition
-        /// can. `.boxy` seals such a scheme variable to the empty row (design.md
-        /// "Sealed Result Rows").
-        bounded_row_ext: bool = false,
+        /// What kind of row tail the variable is (`RowTail`).
+        row_tail: RowTail = .ordinary,
 
         /// A build form owning a copy of this read form's constraints.
         pub fn toBuild(self: Self, allocator: Allocator) Allocator.Error!CheckedTypeVariableBuild {
@@ -2845,7 +2840,7 @@ fn CheckedTypeVariableOf(comptime Constraints: type) type {
                 .numeric_default_phase = self.numeric_default_phase,
                 .row_default = self.row_default,
                 .row_default_discharges_constraints = self.row_default_discharges_constraints,
-                .bounded_row_ext = self.bounded_row_ext,
+                .row_tail = self.row_tail,
             };
         }
     };
@@ -3608,7 +3603,24 @@ pub const StoredTypeVariable = struct {
     numeric_default_phase: collections.OptionalEnum(NumericDefaultPhase) = .none,
     row_default: collections.OptionalEnum(RowDefault) = .none,
     row_default_discharges_constraints: bool = false,
-    bounded_row_ext: bool = false,
+    row_tail: RowTail = .ordinary,
+};
+
+/// What kind of row tail a checked type variable is.
+pub const RowTail = enum(u8) {
+    /// Any other variable.
+    ordinary,
+    /// An implicitly opened row of an annotated definition that the
+    /// annotation bounds (design.md "Polarity"): the definition's body can
+    /// never add a tag to the row, only an instantiation of the definition
+    /// can. `.boxy` seals such a scheme variable to the empty row (design.md
+    /// "Sealed Result Rows").
+    bounded,
+    /// An uncommitted record tail (design.md "Uncommitted Record Tails"):
+    /// every instantiation commits it to the empty record or makes its record
+    /// a nominal type stored the same way, so `.boxy` seals it to the empty
+    /// record (design.md "Sealed Result Rows").
+    uncommitted_record,
 };
 
 /// POD form of `CheckedAliasType`: `args` is a range into `type_id_pool`.
@@ -3865,6 +3877,17 @@ pub const CheckedTypeStoreView = struct {
         const index = type_ids.synthesizedIndex(id);
         if (index >= self.stored_payloads.len) checkedArtifactInvariant("synthesized checked type id is out of range", .{});
         return index;
+    }
+
+    /// Whether `id` is an uncommitted tag tail a scheme quantified, which
+    /// `payload` reads as the empty tag union (design.md "Uncommitted Tag
+    /// Tails"). Type keys ignore the mark, so specializations never split on
+    /// it; `.boxy` reads it to give a worker a row node for each tag union of
+    /// its signature that ends in one. A synthesized type is composed of
+    /// sealed children and never is such a tail itself.
+    pub fn uncommittedTagTail(self: *const CheckedTypeStoreView, id: CheckedTypeId) bool {
+        if (type_ids.isSynthesized(id)) return false;
+        return self.sealedView().uncommittedTagTail(type_ids.asVar(id));
     }
 
     /// Materialize the public read-form payload for `id`. Slice fields alias the
@@ -4511,7 +4534,7 @@ fn checkedTypeVariableAlphaStep(
 
     if (left.numeric_default_phase != right.numeric_default_phase or
         left.row_default != right.row_default or
-        left.bounded_row_ext != right.bounded_row_ext or
+        left.row_tail != right.row_tail or
         left.constraints.len() != right.constraints.len())
     {
         return false;
@@ -6110,7 +6133,7 @@ fn cloneCheckedTypeBuildVariable(
         .numeric_default_phase = variable.numeric_default_phase,
         .row_default = variable.row_default,
         .row_default_discharges_constraints = variable.row_default_discharges_constraints,
-        .bounded_row_ext = variable.bounded_row_ext,
+        .row_tail = variable.row_tail,
     };
 }
 
@@ -14420,7 +14443,7 @@ const EvidencePass = struct {
                     }
                     param.path = .{ .last = parent, .len = param.path.len + 1 };
                 },
-                .scheme_requirement, .constraint_callable, .use_site_only, .explicit_default, .erased_row_remainder => {},
+                .scheme_requirement, .constraint_callable, .use_site_only, .explicit_default, .open_row_value, .row_remainder => {},
             }
             try self.evidence_params_pool.append(self.allocator, param);
         }
@@ -14935,7 +14958,8 @@ const EvidencePass = struct {
                             checkedArtifactInvariant("constraint-callable evidence source type was not published", .{}),
                     } };
                 },
-                .erased_row_remainder => .erased_row_remainder,
+                .open_row_value => .open_row_value,
+                .row_remainder => .row_remainder,
                 .scheme_requirement => .scheme_requirement,
             };
             const published_path: static_dispatch.EvidencePath = switch (source) {
@@ -14943,7 +14967,7 @@ const EvidencePass = struct {
                     .last = try self.publishPathNode(path_nodes, param.path_node),
                     .len = param.path_len,
                 },
-                .scheme_requirement, .use_site_only, .explicit_default, .erased_row_remainder => .{},
+                .scheme_requirement, .use_site_only, .explicit_default, .open_row_value, .row_remainder => .{},
             };
             const contract_start: u32 = @intCast(self.evidence_param_callables.items.len);
             for (param.callable_contracts) |contract| {
@@ -14953,7 +14977,7 @@ const EvidencePass = struct {
             try self.evidence_params_pool.append(self.allocator, .{
                 .callable_contracts = .{ .start = contract_start, .len = @intCast(param.callable_contracts.len) },
                 .method = try self.names.internMethodIdent(idents, param.constraint.fn_name),
-                .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
+                .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, if (source == .open_row_value) self.openRowValueOf(param.constraint) orelse param.dispatcher_var else param.dispatcher_var) orelse
                     checkedArtifactInvariant("checked evidence parameter dispatcher type was not published", .{}),
                 .callable_ty = self.checked_types.rootForSourceVar(self.module, param.constraint.fn_var) orelse
                     checkedArtifactInvariant("checked evidence parameter callable type was not published", .{}),
@@ -15148,6 +15172,15 @@ const EvidencePass = struct {
             const k = candidate.param;
             const param = params[k];
             if (try self.names.internMethodIdent(idents, param.constraint.fn_name) != method) continue;
+            // A row variable holds one requirement per record or tag union
+            // ending in it; the relation's own value names which.
+            if (param.constraint.receiver == .open_row_value) {
+                if (constraint_fn_var) |fn_var| {
+                    const stated = self.openRowValueOf(param.constraint) orelse continue;
+                    const called = self.openRowValueOfCallable(fn_var) orelse continue;
+                    if (self.types.resolveVar(stated).var_ != self.types.resolveVar(called).var_) continue;
+                }
+            }
             if (same_method_fallback == null) same_method_fallback = @intCast(k);
             if (constraint_fn_root) |fn_root| {
                 if (self.types.resolveVar(param.constraint.fn_var).var_ != fn_root) {
@@ -15488,7 +15521,16 @@ const EvidencePass = struct {
                     dispatcher_var = self.types.getAliasBackingVar(alias);
                     continue :redirect;
                 },
-                .structure => {
+                .structure => |flat| {
+                    // A record or tag union whose row ends in a row variable
+                    // is answered by what each use supplies: its row variable
+                    // holds the requirement (design.md "Methods On Open Rows").
+                    switch (flat) {
+                        .record, .tag_union => if (self.openRowOfStructure(resolved.var_)) |row| {
+                            return self.resolveVarObligation(row, method, structural_kind, constraint_fn_var, chain, policy);
+                        },
+                        .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => {},
+                    }
                     if (try self.methodOwnerForSourceContent(resolved.var_)) |owner| {
                         if (self.lookupMethodTargetAcrossViews(owner, method)) |found| {
                             return switch (found) {
@@ -15772,7 +15814,7 @@ const EvidencePass = struct {
             switch (param.source) {
                 .scheme_callable => if (param.path.len == 0) return false,
                 .constraint_callable, .use_site_only => {},
-                .scheme_requirement, .explicit_default, .erased_row_remainder => return false,
+                .scheme_requirement, .explicit_default, .open_row_value, .row_remainder => return false,
             }
         }
         return true;
@@ -16376,6 +16418,46 @@ const EvidencePass = struct {
         return evidence;
     }
 
+    /// The record or tag union a requirement a row variable holds is about:
+    /// its method's first argument.
+    fn openRowValueOf(self: *EvidencePass, constraint: types.StaticDispatchConstraint) ?Var {
+        return self.openRowValueOfCallable(constraint.fn_var);
+    }
+
+    /// The value a method callable is called on: its first argument; null
+    /// for an erroneous signature.
+    fn openRowValueOfCallable(self: *EvidencePass, fn_var: Var) ?Var {
+        const func = self.types.resolveThroughAliases(fn_var).desc.content.unwrapFunc() orelse return null;
+        const args = self.types.sliceVars(func.args);
+        if (args.len == 0) return null;
+        return args[0];
+    }
+
+    /// The row variable a record's or tag union's row ends in, when that row
+    /// is still open: a rigid, or a flex that is not an uncommitted record
+    /// tail or an annotation's implicitly opened row.
+    fn openRowOfStructure(self: *EvidencePass, var_: Var) ?Var {
+        var current = var_;
+        var first = true;
+        var guard = types.debug.IterationGuard.init("openRowOfStructure");
+        while (true) {
+            guard.tick();
+            const resolved = self.types.resolveVar(current);
+            switch (resolved.desc.content) {
+                .alias => |alias| current = self.types.getAliasBackingVar(alias),
+                .structure => |flat| switch (flat) {
+                    .record => |record| current = record.ext,
+                    .tag_union => |tag_union| current = tag_union.ext,
+                    .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => return null,
+                },
+                .rigid => return if (first) null else resolved.var_,
+                .flex => return if (first or resolved.desc.flags.uncommitted_record_tail or resolved.desc.flags.bounded_row_ext) null else resolved.var_,
+                .err, .field_presence => return null,
+            }
+            first = false;
+        }
+    }
+
     fn evidenceContextForRecordParam(
         self: *EvidencePass,
         pairs: []const ModuleEnv.SchemeUsePair,
@@ -16390,6 +16472,13 @@ const EvidencePass = struct {
         // callable it copies, so an unpaired callable is shared with the use,
         // exactly like an unpaired receiver.
         const fresh_fn = self.pairForResolved(pairs, fn_root) orelse param.constraint.fn_var;
+        // A requirement a row variable holds is about the record or tag union
+        // that row ends: at this use, the value its method's copy is called on
+        // (design.md "Methods On Open Rows").
+        if (param.constraint.receiver == .open_row_value) {
+            const func = self.types.resolveThroughAliases(fresh_fn).desc.content.unwrapFunc() orelse unreachable; // a requirement's method variable is a function type
+            return try self.evidenceContext(param, self.types.sliceVars(func.args)[0], fresh_fn);
+        }
         return try self.evidenceContext(param, fresh_dispatcher, fresh_fn);
     }
 
@@ -16729,7 +16818,7 @@ const EvidencePass = struct {
         param: EvidenceParam,
     ) Allocator.Error!static_dispatch.CheckedEvidence {
         if (try self.evidenceForRecordParam(pairs, param, .defer_resolution)) |evidence| return evidence;
-        if (param.path_len == 0 or param.source == .constraint_callable or param.source == .erased_row_remainder) {
+        if (param.path_len == 0 or param.source == .constraint_callable or param.source == .open_row_value or param.source == .row_remainder) {
             return (try self.evidenceForRecordParam(pairs, param, .commit)).?;
         }
         const dispatcher_root = self.types.resolveVar(param.dispatcher_var).var_;
@@ -16934,7 +17023,7 @@ test "procedure evidence schema positively classifies callable paths and pathles
 
     var pathless_params = params;
     pathless_params[1].path = .{};
-    pathless_params[1].source = .erased_row_remainder;
+    pathless_params[1].source = .row_remainder;
     const pathless_table = CheckedProcedureTemplateTable{
         .evidence_params_pool = .fromBorrowedSlice(pathless_params[0..]),
     };
@@ -17558,12 +17647,20 @@ const CheckedTemplateRefCollector = struct {
                 for (run.args) |arg| try self.pushChild(.{ .expr = arg });
                 self.endChildren(children);
             },
+            // A runtime error's `evaluated` operands run before it crashes,
+            // so lowering reads their value refs, plans, and evidence like
+            // those of any other subexpression (design.md "Erroneous Call
+            // Operand Retirement").
+            .runtime_error => |runtime_error| {
+                const children = self.beginChildren();
+                for (runtime_error.evaluated) |operand| try self.pushChild(.{ .expr = operand });
+                self.endChildren(children);
+            },
             .str_segment,
             .bytes_literal,
             .empty_list,
             .empty_record,
             .zero_argument_tag,
-            .runtime_error,
             .crash,
             .ellipsis,
             .anno_only,
@@ -25705,6 +25802,14 @@ fn publishSealedSlots(allocator: Allocator, checked_types: CheckedTypeStoreView,
     templates.sealed_slots_pool = .fromOwnedSlice(try slots.toOwnedSlice(allocator));
 }
 
+/// Whether a scheme variable is an uncommitted record tail that may seal.
+fn recordTailCandidate(payload: CheckedTypePayload) bool {
+    return switch (payload) {
+        .flex => |flex| flex.row_tail == .uncommitted_record and flex.row_default == .empty_record and payload.variableSealsToRowDefault(),
+        .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+    };
+}
+
 /// Hidden callable interfaces can exchange rows absent from the nominal's
 /// visible type arguments, so argument occurrences prevent result sealing.
 fn nominalHidesCallableInterface(nominal: CheckedNominalType) bool {
@@ -25725,6 +25830,9 @@ const SealedSchemeSlots = struct {
     allocator: Allocator,
     types: CheckedTypeStoreView,
     candidates: collections.DenseMapUnmanaged(CheckedTypeId, bool) = .empty,
+    /// Uncommitted record tails (`RowTail.uncommitted_record`)
+    /// still eligible to seal.
+    record_candidates: collections.DenseMapUnmanaged(CheckedTypeId, bool) = .empty,
     seen: collections.DenseMapUnmanaged(CheckedTypeId, u8) = .empty,
     pending: std.ArrayList(Step) = .empty,
     expanded: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
@@ -25738,6 +25846,7 @@ const SealedSchemeSlots = struct {
 
     fn deinit(self: *SealedSchemeSlots) void {
         self.candidates.deinit(self.allocator);
+        self.record_candidates.deinit(self.allocator);
         self.seen.deinit(self.allocator);
         self.pending.deinit(self.allocator);
     }
@@ -25749,6 +25858,24 @@ const SealedSchemeSlots = struct {
         evidence_params: []const static_dispatch.EvidenceParamRecord,
         slots: *std.ArrayList(u32),
     ) Allocator.Error!void {
+        try self.sealTagRows(variables, fn_root, evidence_params);
+        try self.sealRecordTails(variables);
+        // The maps record facts about variables, not slot numbers. Retain
+        // original order and every slot even when two slots name one variable.
+        for (variables, 0..) |variable, slot| {
+            const sealed = (self.candidates.get(variable) orelse false) or (self.record_candidates.get(variable) orelse false);
+            if (sealed) try slots.append(self.allocator, @intCast(slot));
+        }
+    }
+
+    /// Decide which bounded tag-row tails seal: those only the result's
+    /// coercion reach holds.
+    fn sealTagRows(
+        self: *SealedSchemeSlots,
+        variables: []const CheckedTypeId,
+        fn_root: CheckedTypeId,
+        evidence_params: []const static_dispatch.EvidenceParamRecord,
+    ) Allocator.Error!void {
         self.candidates.clearRetainingCapacity();
         self.seen.clearRetainingCapacity();
         self.pending.clearRetainingCapacity();
@@ -25756,7 +25883,7 @@ const SealedSchemeSlots = struct {
         for (variables) |variable| {
             const payload = self.types.payload(variable);
             const bounded = switch (payload) {
-                .flex => |flex| flex.bounded_row_ext and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
+                .flex => |flex| flex.row_tail == .bounded and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
                 .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
             };
             if (bounded) try self.candidates.put(self.allocator, variable, true);
@@ -25768,7 +25895,10 @@ const SealedSchemeSlots = struct {
         const signature = while (true) switch (self.types.payload(root)) {
             .alias => |alias| root = alias.backing,
             .function => |found| break found,
-            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return,
+            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => {
+                self.candidates.clearRetainingCapacity();
+                return;
+            },
         };
         // LIFO: inspect arguments, then evidence, before walking the result.
         // A small external occurrence can disqualify every candidate without
@@ -25792,7 +25922,10 @@ const SealedSchemeSlots = struct {
             switch (step.mode) {
                 .argument, .ordinary => {
                     if (step.mode == .argument) switch (payload) {
-                        .nominal => |nominal| if (nominalHidesCallableInterface(nominal)) return,
+                        .nominal => |nominal| if (nominalHidesCallableInterface(nominal)) {
+                            self.candidates.clearRetainingCapacity();
+                            return;
+                        },
                         .alias, .record, .tuple, .tag_union, .function, .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
                     };
                     try self.pushChildren(payload, step.mode);
@@ -25817,10 +25950,17 @@ const SealedSchemeSlots = struct {
                 },
             }
         }
-        // The map records facts about variables, not slot numbers. Retain
-        // original order and every slot even when two slots name one variable.
-        for (variables, 0..) |variable, slot| {
-            if (self.candidates.get(variable) orelse false) try slots.append(self.allocator, @intCast(slot));
+    }
+
+    /// Decide which uncommitted record tails seal (design.md "Sealed Result
+    /// Rows"): every one whose row default is the empty record and whose
+    /// constraints closing the row discharges. A use can only close such a
+    /// tail or make its record a nominal type stored exactly like it, so no
+    /// instantiation changes the representation of anything the tail is in.
+    fn sealRecordTails(self: *SealedSchemeSlots, variables: []const CheckedTypeId) Allocator.Error!void {
+        self.record_candidates.clearRetainingCapacity();
+        for (variables) |variable| {
+            if (recordTailCandidate(self.types.payload(variable))) try self.record_candidates.put(self.allocator, variable, true);
         }
     }
 
@@ -25893,8 +26033,9 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
     /// it involves.
     pub fn sealed(self: *SealedSchemeVarWalk, variable: CheckedTypeId, fn_root: CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord) Allocator.Error!bool {
         const payload = self.types.payload(variable);
+        if (recordTailCandidate(payload)) return true;
         const bounded = switch (payload) {
-            .flex => |flex| flex.bounded_row_ext and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
+            .flex => |flex| flex.row_tail == .bounded and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
             .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
         };
         if (!bounded) return false;
@@ -27190,6 +27331,21 @@ fn publishCheckedExhaustivenessSites(
     const obligations = bodies.env.exhaustiveness_obligations.items();
     const sites = try allocator.alloc(CheckedExhaustivenessSite, obligations.len);
     errdefer allocator.free(sites);
+    if (obligations.len == 0) return CheckedExhaustivenessSiteTable.fromOwnedSites(allocator, sites);
+
+    const node_count = bodies.env.store.nodes.len();
+    const any_pattern_site = for (obligations) |obligation| switch (obligation.source) {
+        .destructure_pattern => break true,
+        .match_expr => {},
+    } else false;
+    var template_owners = try CheckedTreeOwners.init(allocator, node_count, any_pattern_site);
+    defer template_owners.deinit(allocator);
+    try claimTemplateTrees(allocator, bodies, templates, &template_owners);
+    var root_owners = try CheckedTreeOwners.init(allocator, node_count, any_pattern_site);
+    defer root_owners.deinit(allocator);
+    try claimReplacingRootTrees(allocator, bodies, compile_time_roots, root_requests, &root_owners);
+    const root_pairing = try rootRequestPairing(allocator, compile_time_roots, root_requests);
+    defer allocator.free(root_pairing);
 
     for (obligations, sites, 0..) |obligation, *site, index| {
         const id: CheckedExhaustivenessSiteId = @fromBackingInt(@intCast(index));
@@ -27225,12 +27381,18 @@ fn publishCheckedExhaustivenessSites(
             continue;
         }
 
-        const needle: CheckedBodyNeedle = switch (obligation.source) {
-            .match_expr => |source_expr| .{ .expr = source_expr },
-            .destructure_pattern => |source_pattern| .{ .pattern = source_pattern },
+        const source_node: u32 = switch (obligation.source) {
+            .match_expr => |source_expr| @backingInt(source_expr),
+            .destructure_pattern => |source_pattern| @backingInt(source_pattern),
         };
-        const owner_template = try exhaustivenessOwnerTemplateForSource(allocator, bodies, owner_artifact, templates, needle);
-        const replacing_root = try exhaustivenessReplacingRootForSource(allocator, bodies, compile_time_roots, needle);
+        const owner_template: ?canonical.ProcedureTemplateRef = if (template_owners.owner(source_node)) |template_index| blk: {
+            const template = templates.templates.items()[template_index];
+            break :blk .{ .artifact = owner_artifact, .proc_base = template.proc_base, .template = template.template_id };
+        } else null;
+        const replacing_root: ?CompileTimeRoot = if (root_owners.owner(source_node)) |root_index|
+            compile_time_roots.roots.items()[root_index]
+        else
+            null;
         const policy: ExhaustivenessResolutionPolicy = if (replacing_root) |root|
             .{ .compile_time_replaced_by_root = root.id }
         else if (owner_template) |template_ref|
@@ -27246,12 +27408,9 @@ fn publishCheckedExhaustivenessSites(
             .empirical => .compile_time_only,
             .static => .runtime_reachable,
         };
-        const requires_pairing = if (replacing_root) |root| blk: {
-            for (root_requests.requests.items()) |request| {
-                if (request.compile_time_root.get() == root.id) break :blk request.requires_pairing;
-            }
-            break :blk false;
-        } else if (owner_template) |template| blk: {
+        const requires_pairing = if (replacing_root) |root|
+            root_pairing[@backingInt(root.id)] == .required
+        else if (owner_template) |template| blk: {
             const template_index = reachability.localTemplateIndex(template).?;
             break :blk reachability.pairing_templates[template_index] and !reachability.runtime_templates[template_index];
         } else false;
@@ -27276,223 +27435,293 @@ fn publishCheckedExhaustivenessSites(
     return CheckedExhaustivenessSiteTable.fromOwnedSites(allocator, sites);
 }
 
-/// What a checked body search looks for.
-const CheckedBodyNeedle = union(enum) {
-    expr: CIR.Expr.Idx,
-    pattern: CIR.Pattern.Idx,
-};
+/// For every node of the checked trees claimed so far, the first claimant
+/// whose tree holds it. Each claim walks only the nodes no earlier claim
+/// walked as far, so claiming every tree of a module visits each node at most
+/// twice: once outside function bodies and once entering them.
+const CheckedTreeOwners = struct {
+    /// Per CIR node, its owner, or `unowned`.
+    node_owners: []u32,
+    /// Per CIR node, whether a claim has walked it and everything below it.
+    walked: std.DynamicBitSetUnmanaged,
+    /// Per CIR node, whether a claim that skips function bodies has walked
+    /// it and everything below it outside function bodies. Sized on the
+    /// first such claim.
+    walked_outside_functions: std.DynamicBitSetUnmanaged = .{},
+    /// Whether claims walk patterns. Only a destructure's site is a pattern,
+    /// so a module with none never asks for a pattern's owner.
+    patterns: bool,
+    pending: std.ArrayList(Node) = .empty,
 
-/// Whether `needle` occurs within the checked expression tree rooted at
-/// `root`. Nested lambdas' bodies are searched; promoted procedures' bodies
-/// are their own templates'. Nodes wait on an explicit stack, so body
-/// nesting never becomes native call depth.
-fn checkedExprContains(
-    allocator: Allocator,
-    bodies: CheckedBodies,
-    root: CIR.Expr.Idx,
-    needle: CheckedBodyNeedle,
-) Allocator.Error!bool {
+    const unowned = std.math.maxInt(u32);
+
     const Node = union(enum) {
         expr: CIR.Expr.Idx,
         statement: CIR.Statement.Idx,
         pattern: CIR.Pattern.Idx,
     };
-    const patterns = needle == .pattern;
-    var pending: std.ArrayList(Node) = .empty;
-    defer pending.deinit(allocator);
-    try pending.append(allocator, .{ .expr = root });
-    while (pending.pop()) |node| switch (node) {
-        .expr => |expr_id| {
-            if (needle == .expr and needle.expr == expr_id) return true;
-            switch (bodies.exprData(expr_id)) {
-                .str => |segments| if (!bodies.quoteIsCustom(@backingInt(expr_id))) for (segments) |segment| try pending.append(allocator, .{ .expr = segment }),
-                .list, .tuple => |items| for (items) |item| try pending.append(allocator, .{ .expr = item }),
-                .match_ => |match| {
-                    try pending.append(allocator, .{ .expr = match.cond });
-                    for (match.branches) |branch_idx| {
-                        const branch = bodies.matchBranch(branch_idx);
-                        if (patterns) {
-                            for (branch.patterns) |branch_pattern| try pending.append(allocator, .{ .pattern = bodies.matchBranchPattern(branch_pattern).pattern });
+
+    fn init(allocator: Allocator, node_count: usize, patterns: bool) Allocator.Error!CheckedTreeOwners {
+        const node_owners = try allocator.alloc(u32, node_count);
+        errdefer allocator.free(node_owners);
+        @memset(node_owners, unowned);
+        return .{ .node_owners = node_owners, .walked = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count), .patterns = patterns };
+    }
+
+    fn deinit(self: *CheckedTreeOwners, allocator: Allocator) void {
+        self.pending.deinit(allocator);
+        self.walked.deinit(allocator);
+        self.walked_outside_functions.deinit(allocator);
+        allocator.free(self.node_owners);
+    }
+
+    /// The claimant that owns node `raw`, or null when no claimed tree holds it.
+    fn owner(self: *const CheckedTreeOwners, raw: u32) ?u32 {
+        const claimant = self.node_owners[raw];
+        return if (claimant == unowned) null else claimant;
+    }
+
+    /// Give `claimant` node `raw` alone, unless it has an owner. The node is
+    /// not walked: a later claim whose tree holds it still walks below it.
+    fn claimNode(self: *CheckedTreeOwners, raw: u32, claimant: u32) void {
+        if (self.node_owners[raw] == unowned) self.node_owners[raw] = claimant;
+    }
+
+    /// Whether `raw` is new to a claim that walks `function_bodies` as
+    /// given; marks it walked that far and gives it to `claimant` unless it
+    /// has an owner.
+    fn enter(self: *CheckedTreeOwners, raw: u32, claimant: u32, function_bodies: FunctionBodySearch) bool {
+        if (self.walked.isSet(raw)) return false;
+        switch (function_bodies) {
+            .enter => self.walked.set(raw),
+            .skip => {
+                if (self.walked_outside_functions.isSet(raw)) return false;
+                self.walked_outside_functions.set(raw);
+            },
+        }
+        if (self.node_owners[raw] == unowned) self.node_owners[raw] = claimant;
+        return true;
+    }
+
+    /// Give `claimant` every node of the checked expression tree rooted at
+    /// `root` that has no owner. `function_bodies` selects whether nested
+    /// lambdas' bodies are walked; promoted procedures' bodies are their own
+    /// templates'. A node an earlier claim walked at least as far is not
+    /// walked again: that claim walked everything below it.
+    /// Nodes wait on an explicit stack, so body nesting never becomes native
+    /// call depth.
+    fn claim(self: *CheckedTreeOwners, allocator: Allocator, bodies: CheckedBodies, root: CIR.Expr.Idx, claimant: u32, function_bodies: FunctionBodySearch) Allocator.Error!void {
+        if (function_bodies == .skip and self.walked_outside_functions.bit_length == 0) {
+            try self.walked_outside_functions.resize(allocator, self.node_owners.len, false);
+        }
+        self.pending.clearRetainingCapacity();
+        try self.pending.append(allocator, .{ .expr = root });
+        while (self.pending.pop()) |node| switch (node) {
+            .expr => |expr_id| {
+                if (!self.enter(@backingInt(expr_id), claimant, function_bodies)) continue;
+                switch (bodies.exprData(expr_id)) {
+                    .str => |segments| if (!bodies.quoteIsCustom(@backingInt(expr_id))) for (segments) |segment| try self.pending.append(allocator, .{ .expr = segment }),
+                    .list, .tuple => |items| for (items) |item| try self.pending.append(allocator, .{ .expr = item }),
+                    .match_ => |match| {
+                        try self.pending.append(allocator, .{ .expr = match.cond });
+                        for (match.branches) |branch_idx| {
+                            const branch = bodies.matchBranch(branch_idx);
+                            if (self.patterns) for (branch.patterns) |branch_pattern| try self.pending.append(allocator, .{ .pattern = bodies.matchBranchPattern(branch_pattern).pattern });
+                            if (branch.guard) |guard| try self.pending.append(allocator, .{ .expr = guard });
+                            try self.pending.append(allocator, .{ .expr = branch.value });
                         }
-                        if (branch.guard) |guard| try pending.append(allocator, .{ .expr = guard });
-                        try pending.append(allocator, .{ .expr = branch.value });
-                    }
+                    },
+                    .if_ => |if_| {
+                        for (if_.branches) |branch_idx| {
+                            const branch = bodies.ifBranch(branch_idx);
+                            try self.pending.append(allocator, .{ .expr = branch.cond });
+                            try self.pending.append(allocator, .{ .expr = branch.body });
+                        }
+                        try self.pending.append(allocator, .{ .expr = if_.final_else });
+                    },
+                    .call => |call| {
+                        try self.pending.append(allocator, .{ .expr = call.func });
+                        for (call.args) |arg| try self.pending.append(allocator, .{ .expr = arg });
+                    },
+                    .record => |record| {
+                        if (record.ext) |ext| try self.pending.append(allocator, .{ .expr = ext });
+                        for (record.fields) |field| try self.pending.append(allocator, .{ .expr = bodies.recordFieldValue(field) });
+                    },
+                    .block => |block| {
+                        for (block.statements) |statement| try self.pending.append(allocator, .{ .statement = statement });
+                        try self.pending.append(allocator, .{ .expr = block.final_expr });
+                    },
+                    .tag => |tag| for (tag.args) |arg| try self.pending.append(allocator, .{ .expr = arg }),
+                    .nominal => |nominal| try self.pending.append(allocator, .{ .expr = nominal.backing_expr }),
+                    .closure => |closure| try self.pending.append(allocator, .{ .expr = closure.lambda }),
+                    .lambda => |lambda| switch (function_bodies) {
+                        .enter => {
+                            if (self.patterns) for (lambda.args) |arg| try self.pending.append(allocator, .{ .pattern = arg });
+                            try self.pending.append(allocator, .{ .expr = lambda.body });
+                        },
+                        .skip => {},
+                    },
+                    .binop => |binop| {
+                        try self.pending.append(allocator, .{ .expr = binop.lhs });
+                        try self.pending.append(allocator, .{ .expr = binop.rhs });
+                    },
+                    .unary_minus, .dbg, .expect => |child| try self.pending.append(allocator, .{ .expr = child }),
+                    .tuple_access => |access| try self.pending.append(allocator, .{ .expr = access.tuple }),
+                    .field_access => |field| try self.pending.append(allocator, .{ .expr = field.receiver }),
+                    .interpolation => |interpolation| {
+                        try self.pending.append(allocator, .{ .expr = interpolation.first });
+                        for (interpolation.parts) |part| try self.pending.append(allocator, .{ .expr = part });
+                    },
+                    .structural_eq => |eq| {
+                        try self.pending.append(allocator, .{ .expr = eq.lhs });
+                        try self.pending.append(allocator, .{ .expr = eq.rhs });
+                    },
+                    .structural_hash => |h| {
+                        try self.pending.append(allocator, .{ .expr = h.value });
+                        try self.pending.append(allocator, .{ .expr = h.hasher });
+                    },
+                    .expect_err => |expect_err| try self.pending.append(allocator, .{ .expr = expect_err.expr }),
+                    .return_ => |ret| try self.pending.append(allocator, .{ .expr = ret.expr }),
+                    .for_ => |for_| {
+                        if (self.patterns) try self.pending.append(allocator, .{ .pattern = for_.pattern });
+                        try self.pending.append(allocator, .{ .expr = for_.expr });
+                        try self.pending.append(allocator, .{ .expr = for_.body });
+                    },
+                    .run_low_level => |run| for (run.args) |arg| try self.pending.append(allocator, .{ .expr = arg }),
+                    .hosted_lambda => |hosted| switch (function_bodies) {
+                        .enter => if (self.patterns) for (hosted.args) |arg| try self.pending.append(allocator, .{ .pattern = arg }),
+                        .skip => {},
+                    },
+                    .numeral,
+                    .str_segment,
+                    .bytes_literal,
+                    .lookup_local,
+                    .lookup_external,
+                    .lookup_required,
+                    .empty_list,
+                    .empty_record,
+                    .zero_argument_tag,
+                    .dispatch_call,
+                    .method_eq,
+                    .type_dispatch_call,
+                    .runtime_error,
+                    .crash,
+                    .break_,
+                    .ellipsis,
+                    .anno_only,
+                    => {},
+                }
+            },
+            .statement => |statement_id| if (self.enter(@backingInt(statement_id), claimant, function_bodies)) switch (bodies.statementData(statement_id)) {
+                .decl => |decl| {
+                    if (self.patterns) try self.pending.append(allocator, .{ .pattern = decl.pattern });
+                    try self.pending.append(allocator, .{ .expr = decl.expr });
                 },
-                .if_ => |if_| {
-                    for (if_.branches) |branch_idx| {
-                        const branch = bodies.ifBranch(branch_idx);
-                        try pending.append(allocator, .{ .expr = branch.cond });
-                        try pending.append(allocator, .{ .expr = branch.body });
-                    }
-                    try pending.append(allocator, .{ .expr = if_.final_else });
+                // The promoted procedure's lambda is its own template's body.
+                .promoted_proc => |promoted| if (self.patterns) try self.pending.append(allocator, .{ .pattern = promoted.pattern }),
+                .var_ => |var_| {
+                    if (self.patterns) try self.pending.append(allocator, .{ .pattern = var_.pattern });
+                    try self.pending.append(allocator, .{ .expr = var_.expr });
                 },
-                .call => |call| {
-                    try pending.append(allocator, .{ .expr = call.func });
-                    for (call.args) |arg| try pending.append(allocator, .{ .expr = arg });
+                .var_uninitialized => |var_| if (self.patterns) try self.pending.append(allocator, .{ .pattern = var_.pattern }),
+                .reassign => |reassign| {
+                    if (self.patterns) try self.pending.append(allocator, .{ .pattern = reassign.pattern });
+                    try self.pending.append(allocator, .{ .expr = reassign.expr });
                 },
-                .record => |record| {
-                    if (record.ext) |ext| try pending.append(allocator, .{ .expr = ext });
-                    for (record.fields) |field| try pending.append(allocator, .{ .expr = bodies.recordFieldValue(field) });
-                },
-                .block => |block| {
-                    for (block.statements) |statement| try pending.append(allocator, .{ .statement = statement });
-                    try pending.append(allocator, .{ .expr = block.final_expr });
-                },
-                .tag => |tag| for (tag.args) |arg| try pending.append(allocator, .{ .expr = arg }),
-                .nominal => |nominal| try pending.append(allocator, .{ .expr = nominal.backing_expr }),
-                .closure => |closure| try pending.append(allocator, .{ .expr = closure.lambda }),
-                .lambda => |lambda| {
-                    if (patterns) for (lambda.args) |arg| try pending.append(allocator, .{ .pattern = arg });
-                    try pending.append(allocator, .{ .expr = lambda.body });
-                },
-                .binop => |binop| {
-                    try pending.append(allocator, .{ .expr = binop.lhs });
-                    try pending.append(allocator, .{ .expr = binop.rhs });
-                },
-                .unary_minus, .dbg, .expect => |child| try pending.append(allocator, .{ .expr = child }),
-                .tuple_access => |access| try pending.append(allocator, .{ .expr = access.tuple }),
-                .field_access => |field| try pending.append(allocator, .{ .expr = field.receiver }),
-                .interpolation => |interpolation| {
-                    try pending.append(allocator, .{ .expr = interpolation.first });
-                    for (interpolation.parts) |part| try pending.append(allocator, .{ .expr = part });
-                },
-                .structural_eq => |eq| {
-                    try pending.append(allocator, .{ .expr = eq.lhs });
-                    try pending.append(allocator, .{ .expr = eq.rhs });
-                },
-                .structural_hash => |h| {
-                    try pending.append(allocator, .{ .expr = h.value });
-                    try pending.append(allocator, .{ .expr = h.hasher });
-                },
-                .expect_err => |expect_err| try pending.append(allocator, .{ .expr = expect_err.expr }),
-                .return_ => |ret| try pending.append(allocator, .{ .expr = ret.expr }),
+                .dbg, .expr, .expect => |expr| try self.pending.append(allocator, .{ .expr = expr }),
                 .for_ => |for_| {
-                    if (patterns) try pending.append(allocator, .{ .pattern = for_.pattern });
-                    try pending.append(allocator, .{ .expr = for_.expr });
-                    try pending.append(allocator, .{ .expr = for_.body });
+                    if (self.patterns) try self.pending.append(allocator, .{ .pattern = for_.pattern });
+                    try self.pending.append(allocator, .{ .expr = for_.expr });
+                    try self.pending.append(allocator, .{ .expr = for_.body });
                 },
-                .run_low_level => |run| for (run.args) |arg| try pending.append(allocator, .{ .expr = arg }),
-                .hosted_lambda => |hosted| if (patterns) for (hosted.args) |arg| try pending.append(allocator, .{ .pattern = arg }),
-                .numeral,
-                .str_segment,
-                .bytes_literal,
-                .lookup_local,
-                .lookup_external,
-                .lookup_required,
-                .empty_list,
-                .empty_record,
-                .zero_argument_tag,
-                .dispatch_call,
-                .method_eq,
-                .type_dispatch_call,
-                .runtime_error,
+                .while_, .infinite_loop, .breakable_loop => |loop| {
+                    try self.pending.append(allocator, .{ .expr = loop.cond });
+                    try self.pending.append(allocator, .{ .expr = loop.body });
+                },
+                .return_ => |ret| try self.pending.append(allocator, .{ .expr = ret.expr }),
                 .crash,
                 .break_,
-                .ellipsis,
-                .anno_only,
-                => {},
-            }
-        },
-        .statement => |statement_id| switch (bodies.statementData(statement_id)) {
-            .decl => |decl| {
-                if (patterns) try pending.append(allocator, .{ .pattern = decl.pattern });
-                try pending.append(allocator, .{ .expr = decl.expr });
-            },
-            // The promoted procedure's lambda is its own template's body.
-            .promoted_proc => |promoted| if (patterns) try pending.append(allocator, .{ .pattern = promoted.pattern }),
-            .var_ => |var_| {
-                if (patterns) try pending.append(allocator, .{ .pattern = var_.pattern });
-                try pending.append(allocator, .{ .expr = var_.expr });
-            },
-            .var_uninitialized => |var_| if (patterns) try pending.append(allocator, .{ .pattern = var_.pattern }),
-            .reassign => |reassign| {
-                if (patterns) try pending.append(allocator, .{ .pattern = reassign.pattern });
-                try pending.append(allocator, .{ .expr = reassign.expr });
-            },
-            .dbg, .expr, .expect => |expr| try pending.append(allocator, .{ .expr = expr }),
-            .for_ => |for_| {
-                if (patterns) try pending.append(allocator, .{ .pattern = for_.pattern });
-                try pending.append(allocator, .{ .expr = for_.expr });
-                try pending.append(allocator, .{ .expr = for_.body });
-            },
-            .while_, .infinite_loop, .breakable_loop => |loop| {
-                try pending.append(allocator, .{ .expr = loop.cond });
-                try pending.append(allocator, .{ .expr = loop.body });
-            },
-            .return_ => |ret| try pending.append(allocator, .{ .expr = ret.expr }),
-            .crash,
-            .break_,
-            .rejected_method_decl,
-            .import_,
-            .alias_decl,
-            .where_alias_decl,
-            .nominal_decl,
-            .type_anno,
-            .type_var_alias,
-            .runtime_error,
-            => {},
-        },
-        .pattern => |pattern_id| {
-            if (needle.pattern == pattern_id) return true;
-            switch (bodies.patternData(pattern_id)) {
-                .as => |as| try pending.append(allocator, .{ .pattern = as.pattern }),
-                .applied_tag => |tag| for (tag.args) |arg| try pending.append(allocator, .{ .pattern = arg }),
-                .nominal => |nominal| try pending.append(allocator, .{ .pattern = nominal.backing_pattern }),
-                .record_destructure => |destructs| for (destructs) |destruct| {
-                    try pending.append(allocator, .{ .pattern = bodies.recordDestructPattern(destruct) });
-                },
-                .list => |list| {
-                    for (list.patterns) |child| try pending.append(allocator, .{ .pattern = child });
-                    if (list.rest) |rest| if (rest.pattern) |rest_pattern| try pending.append(allocator, .{ .pattern = rest_pattern });
-                },
-                .tuple => |items| for (items) |item| try pending.append(allocator, .{ .pattern = item }),
-                .str_interpolation => |str| {
-                    var offset: u32 = 0;
-                    while (offset < str.steps.span.len) : (offset += 1) {
-                        if (bodies.strPatternStep(str.steps, offset).capture) |capture| try pending.append(allocator, .{ .pattern = capture });
-                    }
-                },
-                .assign,
-                .numeral_literal,
-                .str_literal,
-                .underscore,
+                .rejected_method_decl,
+                .import_,
+                .alias_decl,
+                .where_alias_decl,
+                .nominal_decl,
+                .type_anno,
+                .type_var_alias,
                 .runtime_error,
                 => {},
-            }
-        },
-    };
-    return false;
-}
+            },
+            .pattern => |pattern_id| {
+                if (!self.enter(@backingInt(pattern_id), claimant, function_bodies)) continue;
+                switch (bodies.patternData(pattern_id)) {
+                    .as => |as| try self.pending.append(allocator, .{ .pattern = as.pattern }),
+                    .applied_tag => |tag| for (tag.args) |arg| try self.pending.append(allocator, .{ .pattern = arg }),
+                    .nominal => |nominal| try self.pending.append(allocator, .{ .pattern = nominal.backing_pattern }),
+                    .record_destructure => |destructs| for (destructs) |destruct| {
+                        try self.pending.append(allocator, .{ .pattern = bodies.recordDestructPattern(destruct) });
+                    },
+                    .list => |list| {
+                        for (list.patterns) |child| try self.pending.append(allocator, .{ .pattern = child });
+                        if (list.rest) |rest| if (rest.pattern) |rest_pattern| try self.pending.append(allocator, .{ .pattern = rest_pattern });
+                    },
+                    .tuple => |items| for (items) |item| try self.pending.append(allocator, .{ .pattern = item }),
+                    .str_interpolation => |str| {
+                        var offset: u32 = 0;
+                        while (offset < str.steps.span.len) : (offset += 1) {
+                            if (bodies.strPatternStep(str.steps, offset).capture) |capture| try self.pending.append(allocator, .{ .pattern = capture });
+                        }
+                    },
+                    .assign,
+                    .numeral_literal,
+                    .str_literal,
+                    .underscore,
+                    .runtime_error,
+                    => {},
+                }
+            },
+        };
+    }
+};
 
-fn exhaustivenessOwnerTemplateForSource(
+/// Claim every checked procedure template's body for the template, by its
+/// index in `templates`, in table order.
+fn claimTemplateTrees(
     allocator: Allocator,
     bodies: CheckedBodies,
-    owner_artifact: canonical.ArtifactRef,
     templates: *const CheckedProcedureTemplateTable,
-    needle: CheckedBodyNeedle,
-) Allocator.Error!?canonical.ProcedureTemplateRef {
-    for (templates.templates.items()) |template| {
+    owners: *CheckedTreeOwners,
+) Allocator.Error!void {
+    for (templates.templates.items(), 0..) |template, index| {
         const root = switch (template.body) {
             .checked_body => |root| root,
             .intrinsic_wrapper, .entry_wrapper, .unimplemented => continue,
         };
-        if (try checkedExprContains(allocator, bodies, root, needle)) return .{
-            .artifact = owner_artifact,
-            .proc_base = template.proc_base,
-            .template = template.template_id,
-        };
+        try owners.claim(allocator, bodies, root, @intCast(index), .enter);
     }
-    return null;
 }
 
-fn exhaustivenessReplacingRootForSource(
+/// Claim, for each requested compile-time root that replaces source
+/// occurrences, by its index in the root table and in table order, the
+/// checked trees its evaluation contains (`compileTimeRootSourceReplacement`).
+fn claimReplacingRootTrees(
     allocator: Allocator,
     bodies: CheckedBodies,
     compile_time_roots: *const CompileTimeRootTable,
-    needle: CheckedBodyNeedle,
-) Allocator.Error!?CompileTimeRoot {
-    for (compile_time_roots.roots.items()) |root| {
-        if (!compileTimeRootReplacesSourceOccurrence(root.kind)) continue;
+    root_requests: *const RootRequestTable,
+    owners: *CheckedTreeOwners,
+) Allocator.Error!void {
+    var requested_roots = try requestedCompileTimeRoots(allocator, compile_time_roots, root_requests);
+    defer requested_roots.deinit(allocator);
+    for (compile_time_roots.roots.items(), 0..) |root, index| {
+        const claimant: u32 = @intCast(index);
+        const function_bodies: FunctionBodySearch = switch (compileTimeRootSourceReplacement(root.kind)) {
+            .none => continue,
+            .whole_expression => .enter,
+            .outside_function_bodies => .skip,
+        };
+        // Only a requested root is ever evaluated. A root with no request
+        // replaces nothing: its source occurrence runs where it stands.
+        if (!requested_roots.isSet(@backingInt(root.id))) continue;
         // A literal conversion converts literal data and contains no site.
         if (root.literalConversionKind() != null) continue;
         if (root.hoisted_body) |body| switch (body) {
@@ -27502,26 +27731,81 @@ fn exhaustivenessReplacingRootForSource(
                     .pattern_validation => |validation| .{ validation.base_expr, validation.scrutinee_pattern },
                     .expr, .pattern_error, .valueless_binding => unreachable, // the enclosing prong matches only pattern_extraction and pattern_validation
                 };
-                if (needle == .pattern and needle.pattern == exact_pattern) return root;
-
                 // Pattern roots evaluate both their match of the base
                 // expression against the pattern and the base expression
-                // itself. The exact-pattern check above owns the former;
+                // itself. The pattern node alone stands for the former;
                 // sites contained by the base expression belong to the
                 // latter.
-                if (try checkedExprContains(allocator, bodies, base_expr, needle)) return root;
+                owners.claimNode(@backingInt(exact_pattern), claimant);
+                try owners.claim(allocator, bodies, base_expr, claimant, function_bodies);
                 continue;
             },
             // A rejected destructure binder's root crashes and contains no site.
             .pattern_error => continue,
             .expr, .valueless_binding => {},
         };
-        if (try checkedExprContains(allocator, bodies, root.rootExpr(), needle)) return root;
+        try owners.claim(allocator, bodies, root.rootExpr(), claimant, function_bodies);
     }
-    return null;
 }
 
-fn compileTimeRootReplacesSourceOccurrence(kind: CompileTimeRootKind) bool {
+/// The compile-time roots a root request evaluates, by root id.
+fn requestedCompileTimeRoots(
+    allocator: Allocator,
+    compile_time_roots: *const CompileTimeRootTable,
+    root_requests: *const RootRequestTable,
+) Allocator.Error!std.DynamicBitSetUnmanaged {
+    var requested = try std.DynamicBitSetUnmanaged.initEmpty(allocator, compile_time_roots.roots.items().len);
+    for (root_requests.requests.items()) |request| {
+        if (request.abi != .compile_time) continue;
+        const root = request.compile_time_root.get() orelse continue;
+        requested.set(@backingInt(root));
+    }
+    return requested;
+}
+
+/// Whether the first request for a compile-time root requires pairing.
+const RootRequestPairing = enum(u8) { unrequested, not_required, required };
+
+/// Per compile-time root, by root id, what its first root request says
+/// about pairing.
+fn rootRequestPairing(
+    allocator: Allocator,
+    compile_time_roots: *const CompileTimeRootTable,
+    root_requests: *const RootRequestTable,
+) Allocator.Error![]RootRequestPairing {
+    const pairing = try allocator.alloc(RootRequestPairing, compile_time_roots.roots.items().len);
+    @memset(pairing, .unrequested);
+    for (root_requests.requests.items()) |request| {
+        const root = request.compile_time_root.get() orelse continue;
+        const slot = &pairing[@backingInt(root)];
+        if (slot.* == .unrequested) slot.* = if (request.requires_pairing) .required else .not_required;
+    }
+    return pairing;
+}
+
+/// Which nested function bodies a checked tree claim walks.
+const FunctionBodySearch = enum {
+    /// Nested lambdas' arguments and bodies are walked.
+    enter,
+    /// Nested lambdas' arguments and bodies are not walked: they run
+    /// wherever their function is called, not where the lambda stands.
+    skip,
+};
+
+/// Which source occurrences within a requested root's expression run only
+/// during that root's evaluation, so that the root replaces them.
+const SourceReplacement = enum {
+    /// The root replaces no source occurrence.
+    none,
+    /// Every occurrence within the root's expression.
+    whole_expression,
+    /// Every occurrence within the root's expression except those inside a
+    /// function body. The root's value is a callable, and the function
+    /// bodies it holds run wherever runtime code calls it.
+    outside_function_bodies,
+};
+
+fn compileTimeRootSourceReplacement(kind: CompileTimeRootKind) SourceReplacement {
     return switch (kind) {
         .constant,
         .hoisted_constant,
@@ -27529,11 +27813,12 @@ fn compileTimeRootReplacesSourceOccurrence(kind: CompileTimeRootKind) bool {
         .numeral_conversion,
         .quote_conversion,
         .repl_expr,
-        => true,
-        .callable_binding,
-        .expect,
-        .literal_argument,
-        => false,
+        => .whole_expression,
+        .callable_binding => .outside_function_bodies,
+        .expect => .none,
+        // A literal argument root has no body expression: it converts
+        // literal data and contains no source occurrence.
+        .literal_argument => .none,
     };
 }
 
@@ -31983,6 +32268,35 @@ pub const CheckedModuleArtifact = struct {
     /// reported here at the boundary (in debug builds, where `verifyComplete`
     /// runs)—not a lowering panic. Returns the first failure found, or
     /// null when the artifact is total.
+    /// Whether an evidence parameter's dispatcher is the scheme variable in
+    /// its slot: that variable itself, or for a requirement a row variable
+    /// holds, the record or tag union whose row ends in it, or the variable
+    /// itself when a row's composition left the value as that variable
+    /// (design.md "Methods On Open Rows").
+    fn evidenceParamDispatchesSlot(types_view: CheckedTypeStoreView, param: static_dispatch.EvidenceParamRecord, slot_ty: CheckedTypeId) bool {
+        if (param.dispatcher_ty == slot_ty) return true;
+        if (param.source != .open_row_value) return false;
+        var current = param.dispatcher_ty;
+        while (true) {
+            switch (types_view.payload(current)) {
+                .alias => |alias| current = alias.backing,
+                .record => |record| current = record.ext,
+                .tag_union => |tag_union| current = tag_union.ext,
+                .pending,
+                .err,
+                .flex,
+                .rigid,
+                .tuple,
+                .nominal,
+                .function,
+                .empty_record,
+                .empty_tag_union,
+                .field_kind,
+                => return current == slot_ty,
+            }
+        }
+    }
+
     pub fn validateDispatchEvidence(self: *const CheckedModuleArtifact) Allocator.Error!?DispatchEvidenceFailure {
         const table = &self.static_dispatch_plans;
         const type_view = self.typesView();
@@ -32363,7 +32677,7 @@ pub const CheckedModuleArtifact = struct {
                 if (param.source == .scheme_requirement or slot >= template.scheme_vars.len) {
                     return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(i), .method = param.method };
                 }
-                if (templates.scheme_vars_pool.items()[template.scheme_vars.start + slot] != param.dispatcher_ty) {
+                if (!evidenceParamDispatchesSlot(self.typesView(), param, templates.scheme_vars_pool.items()[template.scheme_vars.start + slot])) {
                     return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(i), .method = param.method };
                 }
             }
@@ -32561,7 +32875,7 @@ pub const CheckedModuleArtifact = struct {
                 const source_root = switch (param.source) {
                     .scheme_callable => template.checked_fn_root,
                     .constraint_callable => |source| source.callable_ty,
-                    .scheme_requirement, .use_site_only, .explicit_default, .erased_row_remainder => {
+                    .scheme_requirement, .use_site_only, .explicit_default, .open_row_value, .row_remainder => {
                         if (param.path.len != 0) {
                             return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = template.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
                         }
@@ -32586,7 +32900,7 @@ pub const CheckedModuleArtifact = struct {
                 const source_root = switch (param.source) {
                     .scheme_callable => scope.scheme_root,
                     .constraint_callable => |source| source.callable_ty,
-                    .scheme_requirement, .use_site_only, .explicit_default, .erased_row_remainder => {
+                    .scheme_requirement, .use_site_only, .explicit_default, .open_row_value, .row_remainder => {
                         if (param.path.len != 0) return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = scope.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
                         continue;
                     },
@@ -32605,7 +32919,7 @@ pub const CheckedModuleArtifact = struct {
                     return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(scope_index), .method = param.method };
                 };
                 if (param.source == .scheme_requirement or slot >= scope.scheme_vars.len or
-                    templates.scheme_vars_pool.items()[scope.scheme_vars.start + slot] != param.dispatcher_ty)
+                    !evidenceParamDispatchesSlot(self.typesView(), param, templates.scheme_vars_pool.items()[scope.scheme_vars.start + slot]))
                 {
                     return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(scope_index), .method = param.method };
                 }
@@ -33869,7 +34183,7 @@ const CheckedTypeStoreImportProjector = struct {
             .numeric_default_phase = variable.numeric_default_phase,
             .row_default = variable.row_default,
             .row_default_discharges_constraints = variable.row_default_discharges_constraints,
-            .bounded_row_ext = variable.bounded_row_ext,
+            .row_tail = variable.row_tail,
         };
     }
 
@@ -38676,7 +38990,7 @@ const SealedSlotsFixture = struct {
     }
 
     fn variable(self: *SealedSlotsFixture) Allocator.Error!CheckedTypeId {
-        return self.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union } });
+        return self.add(.{ .flex = .{ .row_tail = .bounded, .row_default = .empty_tag_union } });
     }
 
     fn function(self: *SealedSlotsFixture, args: []const CheckedTypeId, ret: CheckedTypeId) Allocator.Error!CheckedTypeId {
@@ -38763,14 +39077,14 @@ test "sealed slot batching preserves bounded eligibility and duplicate slot orde
     const unit = try f.add(.empty_record);
     const a = try f.variable();
     const b = try f.variable();
-    const rigid = try f.add(.{ .rigid = .{ .bounded_row_ext = true, .row_default = .empty_tag_union } });
+    const rigid = try f.add(.{ .rigid = .{ .row_tail = .bounded, .row_default = .empty_tag_union } });
     const unbounded = try f.add(.{ .flex = .{ .row_default = .empty_tag_union } });
-    const record_row = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_record } });
-    const numeric = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union, .numeric_default_phase = .mono_specialization } });
+    const record_row = try f.add(.{ .flex = .{ .row_tail = .bounded, .row_default = .empty_record } });
+    const numeric = try f.add(.{ .flex = .{ .row_tail = .bounded, .row_default = .empty_tag_union, .numeric_default_phase = .mono_specialization } });
     const callable = try f.function(&.{unit}, unit);
     const constraints = [_]CheckedStaticDispatchConstraint{.{ .fn_name = try f.names.internMethodName("apply"), .fn_ty = callable, .origin = .method_call }};
-    const constrained = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union, .constraints = try SealedSlotsFixture.allocator.dupe(CheckedStaticDispatchConstraint, &constraints) } });
-    const discharged = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union, .row_default_discharges_constraints = true, .constraints = try SealedSlotsFixture.allocator.dupe(CheckedStaticDispatchConstraint, &constraints) } });
+    const constrained = try f.add(.{ .flex = .{ .row_tail = .bounded, .row_default = .empty_tag_union, .constraints = try SealedSlotsFixture.allocator.dupe(CheckedStaticDispatchConstraint, &constraints) } });
+    const discharged = try f.add(.{ .flex = .{ .row_tail = .bounded, .row_default = .empty_tag_union, .row_default_discharges_constraints = true, .constraints = try SealedSlotsFixture.allocator.dupe(CheckedStaticDispatchConstraint, &constraints) } });
     const variables = [_]CheckedTypeId{ b, a, b, rigid, unbounded, record_row, numeric, constrained, discharged };
     try f.expectSlots(&variables, callable, &.{}, &.{ 0, 1, 2, 8 });
     try f.expectSlots(&variables, try f.function(&.{a}, unit), &.{}, &.{ 0, 2, 8 });

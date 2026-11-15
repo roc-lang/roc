@@ -935,7 +935,7 @@ const Solver = struct {
 };
 
 fn inferenceRcEffect(solver: *const Solver, op: anytype, declared: anytype) @TypeOf(declared) {
-    if (!solver.consume_dead_boxes and op == .box_unbox) return op.arcBorrowedResultVariant().?.rcEffect();
+    if (!solver.consume_dead_boxes and op.deadLenderArg() != null) return op.arcBorrowedResultVariant().?.rcEffect();
     return op.arcInferenceRcEffect(declared);
 }
 
@@ -1735,7 +1735,7 @@ fn computeOutcomeRestitution(
                         }
                     },
                     .assign_low_level => |assign| {
-                        const effect = if (!consume_dead_boxes and assign.op == .box_unbox)
+                        const effect = if (!consume_dead_boxes and assign.op.deadLenderArg() != null)
                             assign.op.arcBorrowedResultVariant().?.rcEffect()
                         else
                             assign.op.arcInferenceRcEffect(store.stmtRow(assign.rc_effect));
@@ -2935,15 +2935,12 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
         },
         .assign_call_erased => |assign_stmt| {
             const assign = store.stmtRow(assign_stmt.data);
-            if (!LIR.erasedCallReuseFieldsMatch(assign)) {
-                solveInvariant("erased call reuse flag and ownership source disagreed");
-            }
+            if (assign.reuse_closure) solveInvariant("erased call was marked transferring before ARC");
             try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
-            if (assign.reuse_source) |reuse_source| {
-                try solver.binding_facts.append(allocator, .{ .demand = reuse_source });
-            } else {
-                try solver.binding_facts.append(allocator, .{ .demand = assign.closure });
-            }
+            // A call that can repack its closure's allocation as its result
+            // demands the closure's unit. Any other call transfers the unit
+            // only when it dies there anyway, and otherwise borrows it.
+            if (assign.result_reuse) try solver.binding_facts.append(allocator, .{ .demand = LIR.erasedCallOwner(assign) });
             const args = store.getLocalSpan(assign.args);
             for (0..GuardedList.borrowLen(args)) |index| {
                 const arg = GuardedList.at(args, index);
@@ -2952,8 +2949,8 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             }
             try liftVisibilitySeed(solver, assign.closure);
             try liftVisibilitySeed(solver, assign_stmt.target);
-            if (assign.reuse_source) |reuse_source| {
-                try solver.unique_facts.append(allocator, .{ .consume = .{ .local = reuse_source, .stmt = current } });
+            if (assign.result_reuse) {
+                try solver.unique_facts.append(allocator, .{ .consume = .{ .local = LIR.erasedCallOwner(assign), .stmt = current } });
             } else {
                 try solver.unique_facts.append(allocator, .{ .destroy = assign.closure });
             }
@@ -2974,7 +2971,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
         .assign_low_level => |assign| {
             const rc_effect = inferenceRcEffect(solver, assign.op, store.stmtRow(assign.rc_effect));
             const args = store.getLocalSpan(assign.args);
-            if (assign.op.arcBorrowedResultVariant() != null and assign.op != .box_unbox) {
+            if (assign.op.arcBorrowedResultVariant() != null and assign.op.deadLenderArg() == null) {
                 const consumed = store.stmtRow(assign.rc_effect).consume_args;
                 for (0..@min(GuardedList.borrowLen(args), 64)) |position| {
                     if ((consumed & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
@@ -3274,21 +3271,17 @@ fn liftDynStmtFacts(solver: *Solver, current: LIR.CFStmtId, target: ?LIR.LocalId
         .call_erased => {
             const defined = target orelse solveInvariant("ARC dyn erased call had no target");
             const call = op.call_erased;
-            if (!LIR.erasedCallReuseFieldsMatch(call)) {
-                solveInvariant("erased call reuse flag and ownership source disagreed");
-            }
+            if (call.reuse_closure) solveInvariant("erased call was marked transferring before ARC");
             try solver.binding_facts.append(allocator, .{ .fresh = defined });
-            if (call.reuse_source) |reuse_source| {
-                try solver.binding_facts.append(allocator, .{ .demand = reuse_source });
-            }
+            if (call.result_reuse) try solver.binding_facts.append(allocator, .{ .demand = LIR.erasedCallOwner(call) });
             if (call.args) |args| {
                 try solver.binding_facts.append(allocator, .{ .demand = args });
                 try liftVisibilitySeed(solver, args);
             }
             try liftVisibilitySeed(solver, call.closure);
             try liftVisibilitySeed(solver, defined);
-            if (call.reuse_source) |reuse_source| {
-                try solver.unique_facts.append(allocator, .{ .consume = .{ .local = reuse_source, .stmt = current } });
+            if (call.result_reuse) {
+                try solver.unique_facts.append(allocator, .{ .consume = .{ .local = LIR.erasedCallOwner(call), .stmt = current } });
             } else {
                 try solver.unique_facts.append(allocator, .{ .destroy = call.closure });
             }
@@ -3993,9 +3986,11 @@ const ConsumeAt = struct {
     stmt: u32,
 };
 
-/// One transfer edge (alias definition or join-parameter initialization)
-/// whose target is foreign when the source is used again after `stmt`.
-const EdgeCheck = struct { source: LIR.LocalId, stmt: u32, target: u32 };
+/// One transfer edge (alias definition or join-parameter initialization),
+/// checked against one member `source` of the edge's source place. When that
+/// member is used again after `stmt`, the target is foreign and `origin`,
+/// the edge's source, holds a second reference.
+const EdgeCheck = struct { source: LIR.LocalId, stmt: u32, target: u32, origin: u32 };
 
 /// The ownership place of every analyzed local: its liveness group, the
 /// leader together with every borrowed local anchored on it. Each member
@@ -4067,7 +4062,7 @@ const OwnershipPlaces = struct {
         var single: [1]u32 = undefined;
         for (self.membersOf(source, &single)) |member| {
             if (member == target) continue;
-            try checks.append(allocator, .{ .source = @fromBackingInt(@intCast(index_to_local[member])), .stmt = stmt, .target = target });
+            try checks.append(allocator, .{ .source = @fromBackingInt(@intCast(index_to_local[member])), .stmt = stmt, .target = target, .origin = source });
         }
     }
 };
@@ -4080,7 +4075,7 @@ fn settleEdgeChecks(order: *UseOrder, checks: []EdgeCheck, ctx: anytype) SolveEr
         }
     }.lessThan);
     for (checks) |check| {
-        if (try order.usesAfter(check.stmt, check.source)) ctx.dead(check.target);
+        if (try order.usesAfter(check.stmt, check.source)) ctx.dead(check.target, check.origin);
     }
 }
 
@@ -5124,7 +5119,7 @@ const UniquenessComponentTask = struct {
             const node = self.store.getCFStmtImmediate(stmt);
             if (node.* == .assign_low_level) {
                 const assign = node.assign_low_level;
-                const effect = if (!self.consume_dead_boxes and assign.op == .box_unbox)
+                const effect = if (!self.consume_dead_boxes and assign.op.deadLenderArg() != null)
                     assign.op.arcBorrowedResultVariant().?.rcEffect()
                 else
                     assign.op.arcInferenceRcEffect(self.store.stmtRow(assign.rc_effect));
@@ -5517,7 +5512,7 @@ fn settleUniquenessOracle(
                 const node = store.getCFStmtImmediate(stmt);
                 if (node.* == .assign_low_level) {
                     const assign = node.assign_low_level;
-                    const rc_effect = if (!consume_dead_boxes and assign.op == .box_unbox)
+                    const rc_effect = if (!consume_dead_boxes and assign.op.deadLenderArg() != null)
                         assign.op.arcBorrowedResultVariant().?.rcEffect()
                     else
                         assign.op.arcInferenceRcEffect(store.stmtRow(assign.rc_effect));
@@ -5993,8 +5988,8 @@ fn computeUniquenessDetailed(
                 const assign = store.stmtRow(assign_stmt.data);
                 marks.trackDef(&has_def, &multi_def, assign_stmt.target);
                 marks.destroy(&foreign_def, assign_stmt.target);
-                if (assign.reuse_source) |reuse_source| {
-                    try marks.consumeAt(allocator, &consumes, reuse_source, @intCast(stmt_index));
+                if (assign.result_reuse) {
+                    try marks.consumeAt(allocator, &consumes, LIR.erasedCallOwner(assign), @intCast(stmt_index));
                 } else {
                     marks.destroy(&destroyed, assign.closure);
                 }
@@ -6043,7 +6038,7 @@ fn computeUniquenessDetailed(
                 }
             },
             .assign_low_level => |assign| {
-                const rc_effect = if (!consume_dead_boxes and assign.op == .box_unbox)
+                const rc_effect = if (!consume_dead_boxes and assign.op.deadLenderArg() != null)
                     assign.op.arcBorrowedResultVariant().?.rcEffect()
                 else
                     assign.op.arcInferenceRcEffect(store.stmtRow(assign.rc_effect));
@@ -6453,12 +6448,24 @@ fn computeUniquenessDetailed(
         for (join_incoming.items, join_incoming_stmts.items) |incoming, stmt| {
             try places.appendEdgeChecks(allocator, &checks, index_to_local, incoming.source, stmt, incoming.target);
         }
+        // A rejected edge leaves the target holding a retained reference to
+        // the source's allocation, so the source (through any view chain,
+        // its viewed root) gains a second holder as well.
         try settleEdgeChecks(order, checks.items, struct {
             foreign: *std.bit_set.DynamicBitSetUnmanaged,
-            fn dead(ctx: @This(), target: u32) void {
+            destroyed: *std.bit_set.DynamicBitSetUnmanaged,
+            view_source: []const OptionalU32,
+            fn dead(ctx: @This(), target: u32, origin: u32) void {
                 ctx.foreign.set(target);
+                var root = origin;
+                var steps: usize = 0;
+                while (ctx.view_source[root].get()) |source| : (steps += 1) {
+                    root = source;
+                    if (steps > ctx.view_source.len) solveInvariant("ARC uniqueness view chain contained a cycle");
+                }
+                ctx.destroyed.set(root);
             }
-        }{ .foreign = &foreign_def });
+        }{ .foreign = &foreign_def, .destroyed = &destroyed, .view_source = view_source });
     }
     if (workspace) |cached| {
         try cached.consumption.apply(cached.allocator, order, consumes.items, index_to_local, &destroyed);

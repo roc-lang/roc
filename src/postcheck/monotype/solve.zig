@@ -7761,6 +7761,15 @@ pub const InstGraph = struct {
             try pushPair(pending, self.allocator, backing_node, other, row_width);
             return;
         }
+        // A record of no fields over the backing's own node is that backing:
+        // `{ ..row }` is `row`. Relating a copy of it to the backing would make
+        // the backing its own extension.
+        if (other_content == .record and other_content.record.fields.len == 0 and
+            self.find(other_content.record.ext) == self.find(backing_node))
+        {
+            try self.union_(named_node, other);
+            return;
+        }
         const moved = try self.newNode(other_content);
         try self.union_(named_node, other);
         try pushPair(pending, self.allocator, backing_node, moved, row_width);

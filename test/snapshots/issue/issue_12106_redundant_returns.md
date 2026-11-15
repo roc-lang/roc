@@ -338,9 +338,8 @@ expect fizz_buzz(1) == "other"
 											(e-literal (string "negative")))))))
 						(if-else
 							(e-empty_record))))
-				(e-return
-					(e-string
-						(e-literal (string "non-negative"))))))
+				(e-string
+					(e-literal (string "non-negative")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))
@@ -365,9 +364,8 @@ expect fizz_buzz(1) == "other"
 								(rhs
 									(e-num (value "0"))))
 							(e-block
-								(e-return
-									(e-string
-										(e-literal (string "fizzbuzz"))))))
+								(e-string
+									(e-literal (string "fizzbuzz")))))
 						(if-branch
 							(e-method-eq (negated "false")
 								(lhs
@@ -380,9 +378,8 @@ expect fizz_buzz(1) == "other"
 								(rhs
 									(e-num (value "0"))))
 							(e-block
-								(e-return
-									(e-string
-										(e-literal (string "fizz"))))))
+								(e-string
+									(e-literal (string "fizz")))))
 						(if-branch
 							(e-method-eq (negated "false")
 								(lhs
@@ -395,14 +392,12 @@ expect fizz_buzz(1) == "other"
 								(rhs
 									(e-num (value "0"))))
 							(e-block
-								(e-return
-									(e-string
-										(e-literal (string "buzz")))))))
+								(e-string
+									(e-literal (string "buzz"))))))
 					(if-else
 						(e-block
-							(e-return
-								(e-string
-									(e-literal (string "other")))))))))
+							(e-string
+								(e-literal (string "other"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))
@@ -414,9 +409,8 @@ expect fizz_buzz(1) == "other"
 				(p-assign (ident "n")))
 			(e-block
 				(e-block
-					(e-return
-						(e-lookup-local
-							(p-assign (ident "n")))))))
+					(e-lookup-local
+						(p-assign (ident "n"))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))

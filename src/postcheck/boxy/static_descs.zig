@@ -84,6 +84,9 @@ pub const StaticDescs = struct {
     /// Producer records for immutable capture edges, retained only by programs
     /// that store function values. Export indices never leave this producer.
     captured_callables: std.AutoHashMapUnmanaged(ExportIndex, CapturedCallable) = .empty,
+    /// Each reserved table's position in `unfilled_tables`, by its node,
+    /// which a table read through its creator's table names
+    /// (`tableRecord`) as a stored function's capture edge does.
     captured_tables: std.AutoHashMapUnmanaged(ExportIndex, u32) = .empty,
     captured_records: std.ArrayList(CapturedRecord) = .empty,
     /// The procedure each static callable enters, from its reservation on.
@@ -470,13 +473,19 @@ pub const StaticDescs = struct {
         const owned_inputs = try self.allocator.dupe(CaptureWord, inputs);
         errdefer self.allocator.free(owned_inputs);
         try self.unfilled_tables.ensureUnusedCapacity(self.allocator, 1);
-        if (self.table_identities) try self.captured_tables.ensureUnusedCapacity(self.allocator, 1);
+        try self.captured_tables.ensureUnusedCapacity(self.allocator, 1);
         const owned_key = try self.allocator.dupe(u8, key.items);
         errdefer self.allocator.free(owned_key);
         try self.tables.put(self.allocator, owned_key, reserved);
         self.unfilled_tables.appendAssumeCapacity(.{ .worker = worker, .inputs = owned_inputs, .reserved = reserved, .index = @intCast(self.unfilled_tables.items.len) });
-        if (self.table_identities) self.captured_tables.putAssumeCapacity(reserved.node, @intCast(self.unfilled_tables.items.len - 1));
+        self.captured_tables.putAssumeCapacity(reserved.node, @intCast(self.unfilled_tables.items.len - 1));
         return reserved;
+    }
+
+    /// The worker and inputs of the table at node `node`.
+    pub fn tableRecord(self: *const StaticDescs, node: ExportIndex) UnfilledTable {
+        const ordinal = self.captured_tables.get(node) orelse types.invariant("a table word names no reserved table");
+        return self.unfilled_tables.items[ordinal];
     }
 
     /// The oldest reserved table not yet handed out for filling, or null.
@@ -838,7 +847,7 @@ pub const StaticDescs = struct {
                     self.extra_nodes += 1;
                     adapted_node.* = try self.staticCallableOf(owner, 16 + self.extra_nodes, program_.worker(adapter).proc, words.items);
                 },
-                .rows, .record_order => types.invariant("two callable types of a dictionary differ outside the signature of the function it is"),
+                .rows => types.invariant("two callable types of a dictionary differ outside the signature of the function it is"),
             }
         }
         for (tree, 0..) |node, position| {

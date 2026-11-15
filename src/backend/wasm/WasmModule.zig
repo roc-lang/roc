@@ -1249,17 +1249,24 @@ pub fn addStaticDataExports(self: *Self, exports: []const StaticDataExport) Stat
 
     for (exports, 0..) |data_export, i| {
         segment_indices[i] = @intCast(self.data_segments.items.len);
+        // Each export is its own segment, named `<prefix>.<symbol>`, so a
+        // relocatable link keeps it a separate input segment that
+        // `--gc-sections` drops when nothing references it, and the final
+        // link merges the survivors into one standard output segment per
+        // prefix instead of one active segment per export.
+        //
         // Linear memory starts zeroed, so an export whose bytes are all zero
         // and that no relocation writes into needs no bytes in the binary:
         // its segment is marked zero-fill through the name every wasm
-        // object uses for that, which survives linking, and is left out of
-        // the data section when the memory is known to start zeroed.
-        const segment_name = if (isZeroFillExport(data_export)) blk: {
-            const name = try std.fmt.allocPrint(self.allocator, ".bss.{s}", .{data_export.symbol_name});
-            errdefer self.allocator.free(name);
-            try self.owned_segment_names.append(self.allocator, name);
-            break :blk name;
-        } else data_export.symbol_name;
+        // object uses for that, `.bss.`, which survives linking, and is left
+        // out of the data section when the memory is known to start zeroed.
+        // Every other export is immutable and is `.rodata.`.
+        const segment_prefix = if (isZeroFillExport(data_export)) ".bss." else ".rodata.";
+        const segment_name = try std.mem.concat(self.allocator, u8, &.{ segment_prefix, data_export.symbol_name });
+        {
+            errdefer self.allocator.free(segment_name);
+            try self.owned_segment_names.append(self.allocator, segment_name);
+        }
         _ = try self.addDataSegmentWithInfo(
             data_export.bytes,
             @max(data_export.alignment, 1),
@@ -6921,7 +6928,7 @@ test "all-zero static exports without relocations become zero-fill segments" {
     try std.testing.expect(module.data_segments.items[0].zero_fill);
     try std.testing.expectEqualStrings(".bss.table", module.data_segments.items[0].name.?);
     try std.testing.expect(!module.data_segments.items[1].zero_fill);
-    try std.testing.expectEqualStrings("descriptor", module.data_segments.items[1].name.?);
+    try std.testing.expectEqualStrings(".rodata.descriptor", module.data_segments.items[1].name.?);
     try std.testing.expect(!module.data_segments.items[2].zero_fill);
     // The zero-fill segment still owns its address range: the following
     // segments are placed after it.
@@ -6986,6 +6993,75 @@ test "addStaticDataExports defines forward data symbols used by code relocations
     try module.resolveCodeRelocations();
     const expected_addr: i32 = @intCast(module.data_segments.items[sym.index].offset + 2);
     try std.testing.expectEqual(expected_addr, decodePaddedI32(module.code_bytes.items[1..6]));
+}
+
+// https://github.com/roc-lang/roc/issues/13029
+// wasm-ld merges input data segments into one output segment by name prefix
+// (`.rodata.`, `.data.`, `.bss.`), and an active output segment costs a
+// header in the final data section. Every static data segment a relocatable
+// object carries is therefore named so that wasm-ld places it in a standard
+// output segment, rather than giving each constant a segment of its own.
+test "static data segments are named for wasm-ld's standard output segments" {
+    const allocator = std.testing.allocator;
+    const exports = [_]StaticDataExport{
+        .{ .symbol_name = "roc__d0", .bytes = &.{ 1, 2, 3, 4 }, .alignment = 4, .is_exported = false },
+        .{
+            .symbol_name = "roc__d1",
+            .bytes = &.{ 0, 0, 0, 0, 5, 0, 0, 0 },
+            .alignment = 4,
+            .is_exported = false,
+            .relocations = &.{.{ .offset = 0, .target_symbol_name = "roc__d0" }},
+        },
+        .{ .symbol_name = "roc__c_0123456789abcdef", .bytes = &.{ 6, 7, 8 }, .alignment = 1, .is_exported = false, .content_named = true },
+        .{ .symbol_name = "roc__d2", .bytes = &(@as([16]u8, @splat(0))), .alignment = 8, .is_exported = false },
+    };
+    var static_module = try Self.staticDataModule(allocator, &exports);
+    defer static_module.deinit();
+
+    const encoded = try static_module.encodeRelocatable(allocator);
+    defer allocator.free(encoded);
+    var parsed = try Self.preload(allocator, encoded, .relocatable_for_merge);
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(exports.len, parsed.data_segments.items.len);
+    for (parsed.data_segments.items) |segment| {
+        const name = segment.name.?;
+        const merged = for ([_][]const u8{ ".rodata", ".data", ".bss" }) |output| {
+            if (std.mem.eql(u8, name, output)) break true;
+            if (std.mem.startsWith(u8, name, output) and name.len > output.len and name[output.len] == '.') break true;
+        } else false;
+        if (!merged) {
+            std.debug.print("static data segment `{s}` has a name wasm-ld does not merge into a standard output segment\n", .{name});
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+// A relocatable link joins input segments that share a name, and
+// `--gc-sections` can only drop whole input segments. Each static data
+// symbol's segment therefore carries a name no other segment has, built from
+// the symbol, so a constant nothing references is still dropped on its own.
+test "static data segments keep one distinct name per symbol" {
+    const allocator = std.testing.allocator;
+    const exports = [_]StaticDataExport{
+        .{ .symbol_name = "roc__d0", .bytes = &.{ 1, 2, 3, 4 }, .alignment = 4, .is_exported = false },
+        .{ .symbol_name = "roc__d1", .bytes = &.{ 5, 6, 7, 8 }, .alignment = 4, .is_exported = false },
+        .{ .symbol_name = "roc__d2", .bytes = &(@as([8]u8, @splat(0))), .alignment = 8, .is_exported = false },
+        .{ .symbol_name = "roc__d3", .bytes = &(@as([8]u8, @splat(0))), .alignment = 8, .is_exported = false },
+    };
+    const expected = [_][]const u8{ ".rodata.roc__d0", ".rodata.roc__d1", ".bss.roc__d2", ".bss.roc__d3" };
+    var static_module = try Self.staticDataModule(allocator, &exports);
+    defer static_module.deinit();
+
+    const encoded = try static_module.encodeRelocatable(allocator);
+    defer allocator.free(encoded);
+    var parsed = try Self.preload(allocator, encoded, .relocatable_for_merge);
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(expected.len, parsed.data_segments.items.len);
+    for (expected, parsed.data_segments.items) |name, segment| {
+        try std.testing.expectEqualStrings(name, segment.name.?);
+    }
 }
 
 test "mergeModuleForObject resolves undefined static data symbols" {
