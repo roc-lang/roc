@@ -21659,9 +21659,56 @@ fn publishLiteralArgumentRoots(
     }.get;
     var formals = std.ArrayListUnmanaged(CheckedTypeId).empty;
     defer formals.deinit(allocator);
+    // The edges instantiating each of this module's scopes, so an edge is
+    // revisited only when its callee's literal requirements grow.
+    var callers = std.AutoHashMapUnmanaged(ScopeKey, std.ArrayListUnmanaged(u32)).empty;
+    defer {
+        var it = callers.valueIterator();
+        while (it.next()) |list| list.deinit(allocator);
+        callers.deinit(allocator);
+    }
+    for (edges.items, 0..) |edge, edge_index| {
+        const key: ScopeKey = switch (edge.callee) {
+            .template => |tref| if (tref.artifact.eql(owner_artifact)) .{ .template = @backingInt(tref.template), .scope = null } else continue,
+            .scope => |id| .{ .template = rawScopeOwner(&scope_owners, @backingInt(id)), .scope = @backingInt(id) },
+        };
+        const entry = try callers.getOrPut(allocator, key);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(allocator, @intCast(edge_index));
+    }
+    // Edges are visited in rounds, each in edge order: an edge whose callee
+    // grows is revisited later in the same round when it comes after the
+    // edge that grew it, and in the next round otherwise. The first round
+    // visits every edge.
+    const EdgeOrder = struct {
+        fn order(_: void, a: u32, b: u32) std.math.Order {
+            return std.math.order(a, b);
+        }
+    };
+    var this_round = std.PriorityQueue(u32, void, EdgeOrder.order).empty;
+    defer this_round.deinit(allocator);
+    var next_round = std.ArrayListUnmanaged(u32).empty;
+    defer next_round.deinit(allocator);
+    var in_this_round = try std.DynamicBitSetUnmanaged.initFull(allocator, edges.items.len);
+    defer in_this_round.deinit(allocator);
+    var in_next_round = try std.DynamicBitSetUnmanaged.initEmpty(allocator, edges.items.len);
+    defer in_next_round.deinit(allocator);
+    for (0..edges.items.len) |edge_index| try this_round.push(allocator, @intCast(edge_index));
     while (true) {
-        var changed = false;
-        for (edges.items, edge_args.items) |edge, *args| {
+        const edge_index = this_round.pop() orelse {
+            if (next_round.items.len == 0) break;
+            for (next_round.items) |next| {
+                in_next_round.unset(next);
+                in_this_round.set(next);
+                try this_round.push(allocator, next);
+            }
+            next_round.clearRetainingCapacity();
+            continue;
+        };
+        in_this_round.unset(edge_index);
+        {
+            const edge = edges.items[edge_index];
+            const args = &edge_args.items[edge_index];
             const callee = resolveCallee(edge.callee, owner_artifact, templates, &scope_owners, &scope_states, import_views) orelse continue;
             if (args.items.len >= callee.obligations.len) continue;
             if (edge.subst.len != 0 and edge.subst.len != callee.vars.len) checkedArtifactInvariant("an edge's substitution differs from its callee's scheme", .{});
@@ -21724,13 +21771,22 @@ fn publishLiteralArgumentRoots(
                     if (!slot.found_existing) {
                         slot.value_ptr.* = @intCast(state.value_ptr.list.items.len);
                         try state.value_ptr.list.append(allocator, .{ .site = obligation.site, .ty = ty, .edge = edge.key, .callee_requirement = j });
+                        if (callers.get(scope_key)) |grown| for (grown.items) |caller| {
+                            if (caller > edge_index) {
+                                if (in_this_round.isSet(caller)) continue;
+                                in_this_round.set(caller);
+                                try this_round.push(allocator, caller);
+                            } else {
+                                if (in_next_round.isSet(caller)) continue;
+                                in_next_round.set(caller);
+                                try next_round.append(allocator, caller);
+                            }
+                        };
                     }
                     try args.append(allocator, .{ .forwarded = slot.value_ptr.* });
                 }
-                changed = true;
             }
         }
-        if (!changed) break;
     }
 
     // The literal requirement pools.
