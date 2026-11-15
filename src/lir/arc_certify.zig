@@ -5777,19 +5777,19 @@ const Certifier = struct {
                 },
                 .assign_call_erased => |assign_stmt| {
                     const assign = self.store.stmtRow(assign_stmt.data);
-                    if (!LIR.erasedCallReuseFieldsMatch(assign)) {
-                        return self.fail("erased call reuse flag and ownership source disagreed", .{});
+                    if (assign.reuse_closure and assign.deferred) {
+                        return self.fail("deferred erased call transferred its closure", .{});
                     }
                     const closure_value = try self.requireLive(&state, assign.closure);
+                    const owner = LIR.erasedCallOwner(assign);
+                    const owner_value = try self.requireLive(&state, owner);
                     // A deferred call keeps one reference to its closure
                     // until whoever makes the call releases it.
                     if (assign.deferred) try self.consumeUnit(&state, closure_value, assign.closure);
-                    const reuse_value = if (assign.reuse_source) |reuse_source|
-                        try self.requireLive(&state, reuse_source)
-                    else
-                        no_value;
+                    // A transferring call moves one unit of its closure's
+                    // allocation into the callee; any other call borrows it.
                     try self.applyCall(&state, assign_stmt.target, arc_sig.RcSig.all_owned, assign.args, assign_stmt.next);
-                    if (assign.reuse_source) |reuse_source| try self.consumeUnit(&state, reuse_value, reuse_source);
+                    if (assign.reuse_closure) try self.consumeUnit(&state, owner_value, owner);
                     cursor = assign_stmt.next;
                 },
                 .assign_packed_erased_fn => |assign_stmt| {
@@ -6632,8 +6632,8 @@ const Certifier = struct {
     }
 
     fn applyLowLevel(self: *Certifier, state: *State, assign: anytype) CertifyError!void {
-        if (assign.op == .box_unbox) {
-            return self.fail("post-ARC LIR retained a consuming Box.unbox instead of explicit RC statements", .{});
+        if (assign.op.deadLenderArg() != null) {
+            return self.fail("post-ARC LIR retained a consuming {s} instead of explicit RC statements", .{@tagName(assign.op)});
         }
         const arg_locals = self.store.getLocalSpan(assign.args);
 
@@ -6803,6 +6803,13 @@ const Certifier = struct {
                     return;
                 }
                 try self.bindSameValue(state, defined, source);
+                // A whole tag payload carries its union's unit, and its own
+                // layout or product shape describes that unit's contents on
+                // this path: field reads through the value use that shape.
+                if (op == .tag_payload_addr) {
+                    const value = state.valueOf(defined);
+                    if (value != no_value) self.values.items[value].origin = defined;
+                }
             },
             .construct => try self.applyAggregate(state, target.?, self.dyn_operands.items),
             .borrow_operands => {
@@ -6811,14 +6818,14 @@ const Certifier = struct {
             },
             .call_erased => {
                 const call = op.call_erased;
-                if (!LIR.erasedCallReuseFieldsMatch(call)) return self.fail("erased call reuse flag and ownership source disagreed", .{});
-                // An owned call transfers one unit of its closure to the
+                // A transferring call moves one unit of its closure to the
                 // callee, and a deferred call keeps one reference to its
                 // closure until whoever makes the call transfers or
-                // releases it.
-                if (call.reuse_source) |reuse_source| {
-                    const reuse_value = try self.requireLive(state, reuse_source);
-                    if (self.isRc(reuse_source)) try self.consumeUnit(state, reuse_value, reuse_source);
+                // releases it. Any other call borrows its closure.
+                const owner = LIR.erasedCallOwner(call);
+                const owner_value = try self.requireLive(state, owner);
+                if (call.reuse_closure) {
+                    if (self.isRc(owner)) try self.consumeUnit(state, owner_value, owner);
                 } else if (call.deferred and self.isRc(call.closure)) try self.consumeUnit(state, state.valueOf(call.closure), call.closure);
                 if (call.args) |args| {
                     if (self.isRc(args)) try self.consumeUnit(state, state.valueOf(args), args);
@@ -7427,54 +7434,51 @@ test "certify accepts owned binding released once" {
     try f.certify();
 }
 
-test "certify rejects inconsistent erased call reuse fields" {
-    {
-        var f = try CertifyTest.init(testing.allocator);
-        defer f.deinit();
-        const erased_callable = try f.layouts.insertErasedCallable();
-        const closure = try f.local(erased_callable);
-        const result = try f.local(erased_callable);
-        const ret = try f.ret(result);
-        const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
-        const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
-            .target = result,
-            .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
-                .closure = closure,
-                .args = LIR.LocalSpan.empty(),
-                .arg_plan = arg_plan,
-                .reuse_closure = true,
-                .reuse_source = null,
-            }),
-            .next = ret,
-        } }, .test_fixture);
-        _ = try f.addProc(&.{closure}, body, erased_callable);
-        try testing.expectError(error.Certification, f.certify());
-        try testing.expect(std.mem.find(u8, f.diag.message(), "reuse flag and ownership source disagreed") != null);
-    }
+test "certify rejects a deferred erased call that transfers its closure" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const closure = try f.local(erased_callable);
+    const result = try f.local(erased_callable);
+    const ret = try f.ret(result);
+    const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
+    const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = result,
+        .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+            .closure = closure,
+            .args = LIR.LocalSpan.empty(),
+            .arg_plan = arg_plan,
+            .reuse_closure = true,
+            .deferred = true,
+        }),
+        .next = ret,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{closure}, body, erased_callable);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "deferred erased call transferred its closure") != null);
+}
 
-    {
-        var f = try CertifyTest.init(testing.allocator);
-        defer f.deinit();
-        const erased_callable = try f.layouts.insertErasedCallable();
-        const closure = try f.local(erased_callable);
-        const result = try f.local(erased_callable);
-        const ret = try f.ret(result);
-        const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
-        const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
-            .target = result,
-            .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
-                .closure = closure,
-                .args = LIR.LocalSpan.empty(),
-                .arg_plan = arg_plan,
-                .reuse_closure = false,
-                .reuse_source = closure,
-            }),
-            .next = ret,
-        } }, .test_fixture);
-        _ = try f.addProc(&.{closure}, body, erased_callable);
-        try testing.expectError(error.Certification, f.certify());
-        try testing.expect(std.mem.find(u8, f.diag.message(), "reuse flag and ownership source disagreed") != null);
-    }
+test "certify keeps a borrowed erased call's closure with its caller" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const closure = try f.local(erased_callable);
+    const result = try f.local(erased_callable);
+    const ret = try f.ret(result);
+    const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
+    // The call borrows the owned closure parameter, which is never released.
+    const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = result,
+        .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+            .closure = closure,
+            .args = LIR.LocalSpan.empty(),
+            .arg_plan = arg_plan,
+            .reuse_source = closure,
+        }),
+        .next = ret,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{closure}, body, erased_callable);
+    try testing.expectError(error.Certification, f.certify());
 }
 
 test "certify accepts erased call reuse from a transparent outer owner" {
@@ -10552,7 +10556,30 @@ test "certify rejects consuming Box.unbox after the ARC boundary" {
     _ = try f.addProc(&.{boxed}, body, .str);
 
     try testing.expectError(error.Certification, f.certify());
-    try testing.expect(std.mem.find(u8, f.diag.message(), "post-ARC LIR retained a consuming Box.unbox") != null);
+    try testing.expect(std.mem.find(u8, f.diag.message(), "post-ARC LIR retained a consuming box_unbox") != null);
+}
+
+test "certify rejects a consuming capture load after the ARC boundary" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const captures = try f.layouts.putStructFields(&[_]layout_mod.StructField{.{ .index = 0, .layout = .str }});
+    const capture_ptr = try f.local(.opaque_ptr);
+    const owner = try f.local(erased_callable);
+    const record = try f.local(captures);
+    const ret = try f.ret(record);
+    const body = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = record,
+        .op = .erased_capture_load,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.erased_capture_load.rcEffect()),
+        .args = try f.store.addLocalSpan(&.{ capture_ptr, owner }),
+        .next = ret,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{ capture_ptr, owner }, body, captures);
+
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "post-ARC LIR retained a consuming erased_capture_load") != null);
 }
 
 const FrameNestShape = enum {

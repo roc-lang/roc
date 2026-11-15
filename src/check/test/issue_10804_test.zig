@@ -366,11 +366,11 @@ test "issue 10804: an optional field inside a nested derived codec checks" {
 test "issue 10804: an imported type's derived encoder_for still validates its components" {
     const source_a =
         \\Data := [Url(Str)]
-        \\Chart :: { data : Data }.{
+        \\A :: { data : Data }.{
         \\  encoder_for : _
+        \\  make : Str -> A
+        \\  make = |url| { data: Data.Url(url) }
         \\}
-        \\make : Str -> Chart
-        \\make = |url| { data: Data.Url(url) }
     ;
     var test_env_a = try TestEnv.init("A", source_a);
     defer test_env_a.deinit();
