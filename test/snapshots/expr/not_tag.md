@@ -17,26 +17,15 @@ TYPE MISMATCH - not_tag.md:1:3:1:7
 		(title "Type Mismatch")
 		(region (start 1 3) (end 1 7))
 		(headline
-			(reflow "This")
+			(reflow "The")
 			(reflow " ")
-			(annotated code "!")
+			(reflow "first")
 			(reflow " ")
-			(reflow "operand is a tag union, so it must be a")
-			(reflow " ")
-			(annotated code "Bool")
-			(reflow " ")
-			(reflow "– either")
-			(reflow " ")
-			(annotated code "True")
-			(reflow " ")
-			(reflow "or")
-			(reflow " ")
-			(annotated code "False")
-			(reflow "."))
+			(reflow "argument being passed to this function has the wrong type."))
 		(document
 			(source-region (file "not_tag.md") (start 1 3) (end 1 7) (annotation error) (line-text "!(C(2))"))
 			(line-break)
-			(reflow "It is:")
+			(reflow "This argument has the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -45,11 +34,17 @@ TYPE MISMATCH - not_tag.md:1:3:1:7
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "But I need this to be a")
+			(reflow "But the function needs the")
 			(reflow " ")
-			(annotated code "Bool")
+			(reflow "first")
 			(reflow " ")
-			(reflow "value."))))
+			(reflow "argument to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Bool")
+			(annotation-end))))
 ~~~
 # TOKENS
 ~~~zig
@@ -70,12 +65,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dispatch-call (method "not") (constraint-fn-var 218)
-	(receiver
-		(e-tag (name "C")
-			(args
-				(e-num (value "2")))))
-	(args))
+(e-call
+	(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18876") (target-def "18876"))
+	(e-tag (name "C")
+		(args
+			(e-num (value "2")))))
 ~~~
 # TYPES
 ~~~clojure

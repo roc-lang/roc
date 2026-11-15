@@ -55,7 +55,7 @@ x = {
 ~~~
 # EXPECTED
 EXPECTED PACKAGE PATH - multiline_string_complex.md:4:6:4:17
-MISSING METHOD - multiline_string_complex.md:40:6:40:8
+TYPE MISMATCH - multiline_string_complex.md:40:6:40:8
 MISSING METHOD - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
 ~~~clojure
@@ -88,34 +88,20 @@ MISSING METHOD - multiline_string_complex.md:37:3:37:4
 			(source-region (file "multiline_string_complex.md") (start 4 6) (end 4 17) (annotation error) (line-text "\t\tx: \\\\Multiline"))))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 40 6) (end 40 8))
 		(headline
-			(reflow "This string's type never resolved to a concrete type, so it has no")
-			(reflow " ")
-			(annotated code "not")
-			(reflow " ")
-			(reflow "method."))
+			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
 			(source-region (file "multiline_string_complex.md") (start 40 6) (end 40 8) (annotation error) (line-text "\te: !\\\\"))
 			(line-break)
-			(reflow "Its type needs all of these:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "f where [f.not : f -> f]")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "None of the built-in string types")
-			(reflow " ")
-			(reflow "have a method named")
-			(reflow " ")
-			(annotated code "not")
-			(reflow ".")))
+			(text "Bool")
+			(annotation-end)))
 	(report
 		(severity runtime_error)
 		(title "Missing Method")
@@ -319,7 +305,7 @@ x = {
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "value1"))))
-			(e-interpolation (constraint-fn-var 294) (dispatcher-var 15)
+			(e-interpolation (constraint-fn-var 295) (dispatcher-var 15)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -335,7 +321,7 @@ With multiple lines
 				(p-assign (ident "#interp_1"))
 				(e-lookup-local
 					(p-assign (ident "value2"))))
-			(e-interpolation (constraint-fn-var 332) (dispatcher-var 25)
+			(e-interpolation (constraint-fn-var 333) (dispatcher-var 25)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -368,8 +354,9 @@ With multiple lines
 						(e-num (value "0"))
 						(e-string)))
 				(field (name "e")
-					(e-runtime-error (tag "erroneous_value_expr")
-						(e-string))))))
+					(e-call (constraint-fn-var 412)
+						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18876") (target-def "18876"))
+						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(d-let
 		(p-assign (ident "x"))
 		(e-block
@@ -385,13 +372,13 @@ With multiple lines
 		(patt (type "Str"))
 		(patt (type "Str"))
 		(patt (type "Str"))
-		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Dec, e: Str }"))
+		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Dec, e: Bool }"))
 		(patt (type "Str")))
 	(expressions
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
-		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Dec, e: Str }"))
+		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Dec, e: Bool }"))
 		(expr (type "Str"))))
 ~~~

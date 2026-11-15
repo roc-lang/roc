@@ -52,14 +52,12 @@ NO CHANGE
 		(e-nominal-external
 			(builtin)
 			(e-tag (name "False")))
-		(e-dispatch-call (method "not") (constraint-fn-var 246)
-			(receiver
-				(e-tag (name "True")))
-			(args))
-		(e-dispatch-call (method "not") (constraint-fn-var 249)
-			(receiver
-				(e-tag (name "False")))
-			(args))
+		(e-call (constraint-fn-var 257)
+			(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18876") (target-def "18876"))
+			(e-tag (name "True")))
+		(e-call (constraint-fn-var 262)
+			(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18876") (target-def "18876"))
+			(e-tag (name "False")))
 		(e-if
 			(if-branches
 				(if-branch
@@ -72,18 +70,16 @@ NO CHANGE
 		(e-if
 			(if-branches
 				(if-branch
-					(e-dispatch-call (method "not") (constraint-fn-var 266)
-						(receiver
-							(e-tag (name "True")))
-						(args))
+					(e-call (constraint-fn-var 279)
+						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18876") (target-def "18876"))
+						(e-tag (name "True")))
 					(e-nominal-external
 						(builtin)
 						(e-tag (name "True")))))
 			(if-else
-				(e-dispatch-call (method "not") (constraint-fn-var 280)
-					(receiver
-						(e-tag (name "True")))
-					(args))))))
+				(e-call (constraint-fn-var 290)
+					(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18876") (target-def "18876"))
+					(e-tag (name "True")))))))
 ~~~
 # TYPES
 ~~~clojure

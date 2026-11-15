@@ -3869,15 +3869,20 @@ compiler-owned builtin scope before source declarations are introduced. If that
 proof stops being local and obvious, the initialization path must use the same
 type-binding API.
 
-Logical negation `!expr` canonicalizes to `e_unary_not`, as `-expr`
-canonicalizes to `e_unary_minus`. Checking relates it like `expr.not()` with
-type `a -> a`: a `not` static-dispatch constraint on the operand, published as
-an `e_dispatch_call` whose surface origin is `unary_not`. A structural
-tag-union operand resolves at the builtin `Bool` (Solver-Mutating Rewrites,
-Logical Negation Of Tag Literals); no other operand is related to `Bool`.
-Later stages consume the checked dispatch plan. On `Bool` it selects
-`Bool.not`, whose provided low-level is `bool_not`, so Monotype lowers it to
-that low-level directly.
+Logical negation `!expr` desugars in `Can` to an ordinary call to the
+compiler-owned `Bool.not`, with type `Bool -> Bool`. It does not introduce a
+static-dispatch constraint on the operand. Source declarations shadowing `Bool`
+do not change this target; within Builtin.roc the call refers to its local
+`Bool.not` definition. Checking and later stages consume the ordinary call.
+
+`!` is deliberately not sugar for a `not` method, unlike unary `-` and
+`negate`. A tag literal such as `True` has a structural tag-union type, and
+structural types have no methods, so a dispatching `!` would reject
+`done = False` followed by `!done` unless the checker carried a rule that
+resolves a negated tag literal at `Bool`. Fixing the operand at `Bool` needs no
+such rule: `!done` unifies `done` with `Bool` like any other call argument. A
+type that wants a complement operation exposes a `not` method, and callers
+write `x.not()`.
 
 Result suffix desugaring has a separate owner inside `Can`. The suffix forms
 `expr?`, `expr ? handler`, and `expr ?? default` all lower to a match over the
@@ -10461,9 +10466,9 @@ consumes it, and a list in it is copied each iteration. The rewrite is exact:
   consists of local aliases, discriminant reads, field reads, literals,
   descriptor-free struct builds,
   `bool_not` of a known two-variant tag (which selects the other variant; `!`
-  on a `Bool` dispatches to `Bool.not`, which is the `bool_not` low-level, so
-  `while !$done` tests this), join declarations, and writes of the next join's
-  parameters before its jump, until one body reaches a switch whose condition is a known discriminant of
+  is `Bool.not`, which is the `bool_not` low-level, so `while !$done` tests
+  this), join declarations, and writes of the next join's parameters before
+  its jump, until one body reaches a switch whose condition is a known discriminant of
   a tag built on the edge (directly or through a tag bound once), and whose
   selected arm is a bare jump to a parameterless join or code that runs in
   place (which the rewrite moves into the body of a fresh parameterless join
@@ -11322,51 +11327,6 @@ expected context still needs two incompatible `read` methods on one
 parameter, and an arity mismatch against the expected function type is the
 ordinary mismatch.
 
-### Logical Negation Of Tag Literals
-
-`!x` is sugar for `x.not()` (`a -> a`), so its operand needs a `not` method.
-A tag literal such as `True` has a structural tag-union type, and structural
-types have no methods. Without a rule, `done = False` followed by `!done` would
-be rejected unless something else related `done` to `Bool`. The rule: a unary
-`!`'s `not` relation whose operand is still a structural tag union when the
-operand's generalization boundary is reached relates that operand to the
-builtin `Bool` by ordinary unification (`resolveTagLiteralNegations`), and
-its `not` then dispatches to `Bool.not`.
-
-Until then the relation is held, like a relation on a flex receiver
-(`tagLiteralNegationOperand` in the deferred-dispatch drain), so anything that
-relates the operand to a type before its boundary decides it: an `if` or
-`while` condition, an `and`/`or` operand, an annotation, or a call argument.
-The outcome therefore does not depend on the order in which checking relates
-those. The boundary is the last point at which the operand's type can still
-change: generalization cannot publish a structural receiver with an unmet
-`not` requirement, so the rule decides it there, before the boundary relates
-or captures the definition's other pending requirements (Methods On Open
-Rows), so a negated tag literal never becomes a requirement on its row
-variable. Type finalization applies the rule to every operand no boundary
-reached (for example a REPL expression).
-
-The rule reads only explicit data: the constraint's origin
-(`desugared_unaryop`), its method name (`not`), and the `unary_not` surface
-origin of the dispatch its introducing expression published, whose
-constraint function variable is the relation's own. A copy that
-instantiating a scheme makes of that relation, a `not` requirement from a
-`where` clause, and a written `x.not()` call never take this path. A function
-inferred from `|x| !x` therefore has the type `a -> a where [a.not : a -> a]`,
-exactly as if that type were written, and calling it on a tag literal is the
-ordinary missing-method report. The other outcomes are the ordinary ones: a
-nominal operand dispatches to its own `not` (a type without one is a missing
-method), and a tag union with tags `Bool` lacks is a mismatch against `Bool`,
-reported for the operand (`logical_negation_operand` context).
-
-Pinned by the `check type - unary not` tests in
-`src/check/test/type_checking_integration.zig`. Accepted: a nominal type's own
-`not`; `!True == False`; `!` on an unannotated binding, on a `var`, inside
-`.map`, nested `!!x`, and on a method result of type `Bool`; an annotation
-pinning a tag-literal operand to a nominal type with `not`. Rejected: `!"hi"`
-is a missing method, `![Foo]`'s operand is a mismatch against `Bool`, and a
-generic `|x| !x` applied to a tag literal is a missing method.
-
 ### Unquantified Literal Type Parameters Default To `[]`
 
 A custom literal's conversion is a dispatch on the literal's own type
@@ -11385,8 +11345,8 @@ module's open rows (`commitUncommittedTails`, `decideOpenRowsAtModuleEnd`,
 Methods On Open Rows), so no row that a commitment or an open-row requirement
 still decides is a candidate, and before the dispatch work those commitments
 create is drained, which it joins without a round of its own. A variable
-carrying a requirement, a row holder's or a negated tag literal's (Logical
-Negation Of Tag Literals) among them, is never a candidate. The literal's
+carrying a requirement, a row holder's among them, is never a candidate. The
+literal's
 conversion is then closed: it gets its own conversion root
 (Literal Arguments), and the definition's entry wrapper is called with no
 literal argument to supply.
@@ -15417,11 +15377,6 @@ Other solved-graph mutations:
   empty tag union, at the weak-value default commitment point after
   `commitUncommittedTails` and `decideOpenRowsAtModuleEnd`; it introduces
   no redirect rule and writes nothing outside unification.
-- `resolveTagLiteralNegations`—policy: Logical Negation Of Tag Literals
-  (above). A probe of whether a held unary `!` relation's operand is a
-  structural tag union at its generalization boundary gates an ordinary
-  unification of that operand with the builtin `Bool`. It writes nothing
-  outside unification and introduces no redirect rule.
 - `seedLambdaParamsFromContext`—policy: Lambda Parameters Seeded From
   Context (above). A probe of whether the expected context names a type
   constructor gates an ordinary unification of a skeleton over an

@@ -479,7 +479,6 @@ pub const ModuleIndex = struct {
                     try self.mark(.{ .expr = binop.rhs }, id);
                 },
                 .e_unary_minus => |unary| try self.mark(.{ .expr = unary.expr }, id),
-                .e_unary_not => |unary| try self.mark(.{ .expr = unary.expr }, id),
                 .e_field_access => |field| try self.mark(.{ .expr = field.receiver }, id),
                 inline .e_method_call, .e_dispatch_call => |call| {
                     try self.mark(.{ .expr = call.receiver }, id);

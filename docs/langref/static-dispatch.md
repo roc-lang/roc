@@ -74,7 +74,7 @@ Here are all the method names that the language or the builtins use:
 | `range_exclusive_from : T, T -> Range(T)`, `range_inclusive_from : T, T -> Range(T)` | `Range.iter_rev` | The type's ranges can be reversed exactly. |
 | `range_iter` | `Range.iter`, `Range.iter_rev` | The type's ranges can be iterated. |
 | `range_len_if_known` | Numeric range constructors, `Range.step_by` | The type can say how many numbers are in a range (when that fits in a `U64`). |
-| `negate`, `not` | Unary `-`, unary `!` | The type has a negation or complement operation. |
+| `negate` | Unary `-` | The type has a negation operation. |
 | `from_numeral : Numeral -> Try(T, [InvalidNumeral(Str)])` | Number literals | You want number literals to work as values of the type. |
 | `from_quote : Str -> Try(T, [BadQuotedBytes(Str)])` | String literals | You want string literals to work as values of the type. |
 | `from_interpolation : List(Str) -> Try((Iter(item) -> T), [InvalidInterpolation(Str)])` | String literals with interpolation | You want interpolated string literals to work as values of the type. |

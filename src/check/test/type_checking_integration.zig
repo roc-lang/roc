@@ -4501,8 +4501,8 @@ test "check type - unary not" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
-test "check type - unary not infers a where clause for a generic operand" {
-    try checkTypesModule("negate = |value| !value", .{ .pass = .last_def }, "a -> a where [a.not : a -> a]");
+test "check type - unary not infers Bool argument" {
+    try checkTypesModule("negate = |value| !value", .{ .pass = .last_def }, "Bool -> Bool");
 }
 
 test "check type - unary not mutable boolean in loop" {
@@ -4523,164 +4523,22 @@ test "check type - unary not mutable boolean in loop" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
-test "check type - unary not on a type without not is a missing method" {
+test "check type - unary not mismatch" {
     const source =
         \\x = !"Hello"
-    ;
-    try checkTypesModule(source, .fail, "Missing Method");
-}
-
-test "check type - unary not on a nominal type without not is a missing method" {
-    const source =
-        \\Plain := [On, Off]
-        \\
-        \\p : Plain
-        \\p = Plain.On
-        \\
-        \\result = !p
-    ;
-    try checkTypesModule(source, .fail, "Missing Method");
-}
-
-test "check type - unary not on a tag literal resolves at Bool" {
-    try checkTypesModule("x = !True", .{ .pass = .last_def }, "Bool");
-}
-
-test "check type - unary not on a tag literal compared with a tag" {
-    try checkTypesModule("x = !True == False", .{ .pass = .last_def }, "Bool");
-}
-
-test "check type - unary not twice on a tag literal" {
-    try checkTypesModule("x = !!True", .{ .pass = .last_def }, "Bool");
-}
-
-test "check type - unary not on an unannotated tag binding in an if" {
-    const source =
-        \\go : U64 -> U64
-        \\go = |n| {
-        \\    var $done = False
-        \\    if n > 3 { $done = True }
-        \\    if !$done { n } else { 0 }
-        \\}
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "U64 -> U64");
-}
-
-test "check type - unary not on an unannotated tag binding returned unrelated" {
-    const source =
-        \\flip = |_| {
-        \\    done = False
-        \\    !done
-        \\}
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Bool");
-}
-
-test "check type - unary not in a while condition" {
-    const source =
-        \\count : List(U64) -> U64
-        \\count = |items| {
-        \\    var $done = False
-        \\    var $n = 0
-        \\    var $rest = items
-        \\    while !$done {
-        \\        match $rest.first() {
-        \\            Ok(x) => {
-        \\                $n = $n + x
-        \\                $rest = $rest.drop_first(1)
-        \\            }
-        \\            Err(_) => { $done = True }
-        \\        }
-        \\    }
-        \\    $n
-        \\}
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "List(U64) -> U64");
-}
-
-test "check type - unary not on and operands" {
-    try checkTypesModule("x = !True and !False", .{ .pass = .last_def }, "Bool");
-}
-
-test "check type - unary not inside map" {
-    try checkTypesModule("x = [True, False].map(|f| !f)", .{ .pass = .last_def }, "List(Bool)");
-}
-
-test "check type - unary not on a method result" {
-    try checkTypesModule("x = ![1.U8, 2].is_empty()", .{ .pass = .last_def }, "Bool");
-}
-
-test "check type - unary not on a tag union with other tags is a mismatch against Bool" {
-    const source =
-        \\x = !Foo
     ;
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - unary not of a generic function applied to a tag literal is a missing method" {
+test "check type - unary not rejects custom not method" {
     const source =
-        \\negate = |value| !value
-        \\x = negate(True)
-    ;
-    try checkTypesModule(source, .fail, "Missing Method");
-}
-
-test "check type - unary not on a tag literal an annotation pins to a nominal type" {
-    const source =
-        \\Switch := [On, Off].{
-        \\    not : Switch -> Switch
-        \\    not = |s| match s {
-        \\        On => Off
-        \\        Off => On
-        \\    }
+        \\Custom := [Value].{
+        \\    not : Custom -> Custom
+        \\    not = |value| value
         \\}
-        \\
-        \\result : Switch
-        \\result = !On
+        \\result = !Custom.Value
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Switch");
-}
-
-test "check type - unary not on a local tag binding a later annotation pins" {
-    const source =
-        \\Switch := [On, Off].{
-        \\    not : Switch -> Switch
-        \\    not = |s| match s {
-        \\        On => Off
-        \\        Off => On
-        \\    }
-        \\}
-        \\
-        \\result = |_| {
-        \\    v = On
-        \\    flipped = !v
-        \\    pinned : Switch
-        \\    pinned = flipped
-        \\    pinned
-        \\}
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Switch");
-}
-
-// Repro for https://github.com/roc-lang/roc/issues/13001: `!x` is sugar for
-// `x.not()`, so it dispatches to the operand type's `not` method, the same way
-// `-x` dispatches to `negate`.
-test "check type - unary not dispatches to a nominal type's not method" {
-    const source =
-        \\Switch := [On, Off].{
-        \\    not : Switch -> Switch
-        \\    not = |s| match s {
-        \\        On => Off
-        \\        Off => On
-        \\    }
-        \\}
-        \\
-        \\s : Switch
-        \\s = Switch.On
-        \\
-        \\result = !s
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Switch");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 // unary minus

@@ -1303,7 +1303,6 @@ fn countMatchExprRoots(test_env: *const TestEnv) usize {
             .e_nominal_external,
             .e_binop,
             .e_unary_minus,
-            .e_unary_not,
             .e_field_access,
             .e_interpolation,
             .e_structural_eq,
