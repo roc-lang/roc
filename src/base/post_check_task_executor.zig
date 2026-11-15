@@ -574,7 +574,9 @@ fn OrderedRun(comptime Ctx: type) type {
                 while (session.tryReceive()) |_| {}
                 const claimable = @min(self.chunks.len, committed + self.window) -| self.next_claim.load(.monotonic);
                 while (session.outstanding < claimable and session.canSubmit()) {
-                    session.submit(.{ .id = 0, .context = self, .run = drainTask }) catch |err| return err;
+                    // Task ids count the run's submissions, so observers can
+                    // tell its drain tasks apart.
+                    session.submit(.{ .id = @intCast(self.tasks), .context = self, .run = drainTask }) catch |err| return err;
                     self.tasks += 1;
                 }
                 self.awaited.store(committed, .seq_cst);
@@ -826,7 +828,7 @@ pub const ThreadedTestExecutor = struct {
     submit_limit: usize = std.math.maxInt(usize),
     submitted: usize = 0,
 
-    pub fn start(self: *ThreadedTestExecutor, thread_count: usize) !void {
+    pub fn start(self: *ThreadedTestExecutor, thread_count: usize) (std.mem.Allocator.Error || std.Thread.SpawnError)!void {
         self.lanes = try std.testing.allocator.alloc(LaneState, thread_count + 1);
         for (self.lanes) |*lane| lane.* = LaneState.init(std.testing.allocator);
         self.threads = try std.testing.allocator.alloc(std.Thread, thread_count);
@@ -945,7 +947,7 @@ const OrderedTestItems = struct {
     cancel_commit: ?usize = null,
     lanes_seen: std.atomic.Value(u64) = .init(0),
 
-    fn init(count: usize) !OrderedTestItems {
+    fn init(count: usize) std.mem.Allocator.Error!OrderedTestItems {
         const runs = try std.testing.allocator.alloc(std.atomic.Value(u32), count);
         for (runs) |*run| run.* = .init(0);
         return .{ .runs = runs };

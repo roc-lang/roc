@@ -17161,7 +17161,7 @@ its program builds exactly the modules the root sees.
 Every unit and program build is given the post-check executor, whichever thread
 runs it: a session may be opened on any thread, a running task included, and a
 thread waiting in a session runs that session's queued tasks itself, so the
-parallel waves of a unit's ARC and native code generation spread over the pool
+ordered runs of a unit's ARC and native code generation spread over the pool
 from a worker as they do from the coordinating thread, and the evaluating
 thread, waiting for the next unit or program, builds queued ones itself. A
 compilation that does not link its program (`roc check`) builds the modules
@@ -29213,20 +29213,23 @@ its imports' objects and the wait for a worker. The steps are summed over
 units, and the ten slowest units by their own work, with the Builtin
 module's unit always, are printed one per row.
 
-The LIR passes report each procedure-local phase's elapsed time,
-preparation, summed worker time, idle worker capacity and ordered commit,
-with procedures visited and changed, and each whole-program step before ARC
-and after it. Summed worker time comes from one slot per task
-(`post_check_task_executor.TimedTasks`) or per lane, folded by the
-coordinator after the barrier, so no two lanes write one counter. Idle
-capacity is each parallel section's elapsed time times the executor's
-worker count, less the summed worker time.
+The LIR passes report each segment's elapsed time, preparation, idle worker
+capacity and ordered commit under its first phase, each phase's summed worker
+time with the procedures it visited and the procedures it was the first of
+its segment to change, and each whole-program step before ARC and after it.
+Summed worker time comes from one slot per task
+(`post_check_task_executor.TimedTasks`) or per lane
+(`post_check_task_executor.OrderedTiming`), folded by the owner after the
+last completion, so no two lanes write one counter. Idle capacity is each
+parallel section's elapsed time times the executor's worker count, less the
+summed worker time.
 
 ARC reports its serial steps, each parallel step's elapsed time and summed
-worker time, and idle worker capacity.
+worker time, among them the tasks that each prepare, plan and emit one
+procedure, and idle worker capacity.
 
 A module unit's native code generation reports backend setup, procedure
-setup, waves, worker setup, stack planning with emission, fragment
+setup, the ordered runs, worker setup, stack planning with emission, fragment
 extraction, idle workers, fragment commit, symbolic reference resolution,
 entrypoints, the steps lifting code into pieces, image composition, DWARF,
 object encoding and the unit image, with the bytes of code, objects,

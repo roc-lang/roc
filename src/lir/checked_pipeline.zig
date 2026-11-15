@@ -797,10 +797,10 @@ pub const ArcTiming = Arc.Timing;
 /// itemizes, summed over units.
 pub const CodegenStep = enum {
     backend_setup,
-    /// Indexing the unit's data and procedures before the first wave.
+    /// Indexing the unit's data and procedures before the first run.
     procedure_setup,
-    /// Elapsed time of the procedure waves.
-    procedure_waves,
+    /// Elapsed time of the ordered runs that compile and append procedures.
+    procedure_runs,
     /// Worker code generator setup, summed over lanes.
     procedure_worker_setup,
     /// Stack planning and instruction emission, summed over lanes.

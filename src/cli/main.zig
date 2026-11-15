@@ -19224,7 +19224,7 @@ fn codegenStepLabel(step: lir.CheckedPipeline.CodegenStep) []const u8 {
     return switch (step) {
         .backend_setup => "Backend Setup",
         .procedure_setup => "Procedure Setup",
-        .procedure_waves => "Procedure Waves",
+        .procedure_runs => "Procedure Runs",
         .procedure_worker_setup => "Worker Setup (summed)",
         .procedure_emit => "Stack Plan + Emission (summed)",
         .procedure_extract => "Fragment Extraction (summed)",
