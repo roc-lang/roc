@@ -107,6 +107,11 @@ const Checked = struct {
 
 /// Check (and, given a runtime target, prepare to build) an echo-platform app.
 fn checkApp(allocator: std.mem.Allocator, app: []const u8, extra: []const SourceFile, runtime: ?lir.CheckedPipeline.TargetConfig) CheckAppError!Checked {
+    return checkAppUnder(allocator, app, extra, runtime, .lss);
+}
+
+/// `checkApp` with the compile-time evaluator of `strategy`.
+fn checkAppUnder(allocator: std.mem.Allocator, app: []const u8, extra: []const SourceFile, runtime: ?lir.CheckedPipeline.TargetConfig, strategy: base.SpecializationStrategy) CheckAppError!Checked {
     const io = std.testing.io;
     var tmp_dir = std.testing.tmpDir(.{});
     errdefer tmp_dir.cleanup();
@@ -136,6 +141,7 @@ fn checkApp(allocator: std.mem.Allocator, app: []const u8, extra: []const Source
     );
     errdefer coord.deinit();
     coord.enable_hosted_transform = true;
+    coord.specialization_strategy = strategy;
     var arena = base.SingleThreadArena.init(allocator);
     errdefer arena.deinit();
     try coord.start();
@@ -396,9 +402,176 @@ test "checking reports a recursive generic conversion's rejection reached throug
     try checked.expectErrors(true);
 }
 
+/// A quote-converting type with a parameter its values never mention, whose
+/// conversion rejects the literal `"bad"`.
+const sql_type =
+    \\Sql(a) := { text : Str }.{
+    \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+    \\    from_quote = |raw| if raw == "bad" Err(BadQuotedBytes("rejected")) else Ok(Sql.{ text: raw })
+    \\    text : Sql(a) -> Str
+    \\    text = |sql| sql.text
+    \\}
+    \\wrap : Sql(a) -> Sql(a)
+    \\wrap = |sql| sql
+;
+
+const app_header =
+    \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+    \\import pf.Echo
+;
+
+/// The literal's type keeps a variable of `main!`'s own scheme, which the
+/// platform's requirement does not fix.
+fn sqlInMainResultApp(comptime literal: []const u8) []const u8 {
+    return app_header ++ "\n" ++ sql_type ++ "\n" ++
+        \\main! = |args| {
+        \\    if args.len() > 5 {
+        \\        return Err(Bad(wrap("
+    ++ literal ++
+        \\")))
+        \\    }
+        \\    Echo.line!("ran")
+        \\    Ok({})
+        \\}
+    ;
+}
+
+/// As `sqlInMainResultApp`, with `main!` an exact alias of the procedure.
+fn sqlInAliasedMainApp(comptime literal: []const u8) []const u8 {
+    return app_header ++ "\n" ++ sql_type ++ "\n" ++
+        \\run! = |args| {
+        \\    if args.len() > 5 {
+        \\        return Err(Bad(wrap("
+    ++ literal ++
+        \\")))
+        \\    }
+        \\    Echo.line!("ran")
+        \\    Ok({})
+        \\}
+        \\main! = run!
+    ;
+}
+
+/// As `sqlInAliasedMainApp`, with `main!` a computed value.
+fn sqlInComputedMainApp(comptime literal: []const u8) []const u8 {
+    return app_header ++ "\n" ++ sql_type ++ "\n" ++
+        \\run! = |args| {
+        \\    if args.len() > 5 {
+        \\        return Err(Bad(wrap("
+    ++ literal ++
+        \\")))
+        \\    }
+        \\    Echo.line!("ran")
+        \\    Ok({})
+        \\}
+        \\main! = {
+        \\    f = run!
+        \\    f
+        \\}
+    ;
+}
+
+/// The literal is a requirement of `helper`'s scheme, and the use's copy of
+/// the variable is related to nothing else in the program.
+fn sqlInHelperApp(comptime literal: []const u8) []const u8 {
+    return app_header ++ "\n" ++ sql_type ++ "\n" ++
+        \\helper = |{}| wrap("
+    ++ literal ++
+        \\")
+        \\main! = |_args| {
+        \\    x = helper({})
+        \\    Echo.line!(x.text())
+        \\    Ok({})
+        \\}
+    ;
+}
+
+/// As `sqlInHelperApp`, with a generalized local function.
+fn sqlInLocalHelperApp(comptime literal: []const u8) []const u8 {
+    return app_header ++ "\n" ++ sql_type ++ "\n" ++
+        \\main! = |_args| {
+        \\    helper = |{}| wrap("
+    ++ literal ++
+        \\")
+        \\    x = helper({})
+        \\    Echo.line!(x.text())
+        \\    Ok({})
+        \\}
+    ;
+}
+
+/// As `sqlInHelperApp`, with the function stored in a top-level value.
+fn sqlInStoredHelperApp(comptime literal: []const u8) []const u8 {
+    return app_header ++ "\n" ++ sql_type ++ "\n" ++
+        \\helper = |{}| wrap("
+    ++ literal ++
+        \\")
+        \\stored = { f: helper }
+        \\main! = |_args| {
+        \\    x = (stored.f)({})
+        \\    Echo.line!(x.text())
+        \\    Ok({})
+        \\}
+    ;
+}
+
+/// As `sqlInHelperApp`, with the call made by a top-level value.
+fn sqlInTopLevelCallApp(comptime literal: []const u8) []const u8 {
+    return app_header ++ "\n" ++ sql_type ++ "\n" ++
+        \\helper = |{}| wrap("
+    ++ literal ++
+        \\")
+        \\top = helper({})
+        \\main! = |_args| {
+        \\    Echo.line!(top.text())
+        \\    Ok({})
+        \\}
+    ;
+}
+
+fn expectLiteralOutcomeUnderBothStrategies(comptime app: fn (comptime []const u8) []const u8) (CheckAppError || error{ SkipZigTest, TestUnexpectedResult })!void {
+    if (is_freestanding) return error.SkipZigTest;
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var accepted = try checkAppUnder(std.testing.allocator, app("good"), &.{}, null, strategy);
+        defer accepted.deinit();
+        try accepted.expectErrors(false);
+        var rejected = try checkAppUnder(std.testing.allocator, app("bad"), &.{}, null, strategy);
+        defer rejected.deinit();
+        try rejected.expectErrors(true);
+    }
+}
+
+test "issue 13054: a conversion at a variable the platform's requirement does not fix is checked under both strategies" {
+    try expectLiteralOutcomeUnderBothStrategies(sqlInMainResultApp);
+}
+
+test "issue 13054: a conversion in a procedure the platform invokes through an alias is checked under both strategies" {
+    try expectLiteralOutcomeUnderBothStrategies(sqlInAliasedMainApp);
+}
+
+test "issue 13054: a conversion in a procedure the platform invokes through a computed value is checked under both strategies" {
+    try expectLiteralOutcomeUnderBothStrategies(sqlInComputedMainApp);
+}
+
+test "issue 13054: a conversion at a use's variable nothing fixes is checked under both strategies" {
+    try expectLiteralOutcomeUnderBothStrategies(sqlInHelperApp);
+}
+
+test "issue 13054: a local function's conversion at a use's variable nothing fixes is checked under both strategies" {
+    try expectLiteralOutcomeUnderBothStrategies(sqlInLocalHelperApp);
+}
+
+test "issue 13054: a stored function's conversion at a variable nothing fixes is checked under both strategies" {
+    try expectLiteralOutcomeUnderBothStrategies(sqlInStoredHelperApp);
+}
+
+test "issue 13054: a top-level call's conversion at a variable nothing fixes is checked under both strategies" {
+    try expectLiteralOutcomeUnderBothStrategies(sqlInTopLevelCallApp);
+}
+
 /// A quote-converting type with a parameter its conversion never fixes,
 /// whose conversion rejects the literal `"bad"`.
-const sql_type =
+const decided_sql_type =
     \\Sql(a) := { text : Str }.{
     \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
     \\    from_quote = |text| if text == "bad" Err(BadQuotedBytes("bad is not sql")) else Ok(Sql.{ text: text })
@@ -413,7 +586,7 @@ fn decidedLiteralApp(comptime literal: []const u8) []const u8 {
     return
     \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
     \\import pf.Echo
-    ++ "\n" ++ sql_type ++ "\n" ++
+    ++ "\n" ++ decided_sql_type ++ "\n" ++
         \\describe : Sql(a) -> Str
         \\describe = |sql| sql.show()
         \\helper : U64 -> Str
@@ -468,7 +641,7 @@ fn decidedLiteralArgumentApp(comptime literal: []const u8) []const u8 {
     return
     \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
     \\import pf.Echo
-    ++ "\n" ++ sql_type ++ "\n" ++
+    ++ "\n" ++ decided_sql_type ++ "\n" ++
         \\make : U64 -> Sql(a)
         \\make = |_n| "
     ++ literal ++

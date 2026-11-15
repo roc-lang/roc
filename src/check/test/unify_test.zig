@@ -937,6 +937,158 @@ test "unify - alias (concrete backing) with rigid (fail, other way)" {
     try std.testing.expectEqual(false, result.isAccepted());
 }
 
+test "unify - two uses of one alias whose arguments are one class merge into the second use" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const arg = try types.freshFromContent(Content{ .structure = .empty_record });
+
+    const a_backing_var = try types.freshFromContent(try env.mkTuple(&[_]Var{arg}));
+    const a_alias = try env.mkAlias("Alias", a_backing_var, &[_]Var{arg});
+    const a = try types.freshFromContent(a_alias);
+
+    const b_backing_var = try types.freshFromContent(try env.mkTuple(&[_]Var{arg}));
+    const b_alias = try env.mkAlias("Alias", b_backing_var, &[_]Var{arg});
+    const b = try types.freshFromContent(b_alias);
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expectEqual(b, types.resolveVar(a).var_);
+    try std.testing.expectEqual(b_alias, types.resolveVar(b).desc.content);
+    // The two backings are related as well.
+    try std.testing.expectEqual(b_backing_var, types.resolveVar(a_backing_var).var_);
+}
+
+test "unify - two uses of one alias over one backing merge into the second use" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const backing_var = try types.freshFromContent(Content{ .structure = .empty_record });
+    const a_alias = try env.mkAlias("Alias", backing_var, &[_]Var{});
+    const a = try types.freshFromContent(a_alias);
+    const b_alias = try env.mkAlias("Alias", backing_var, &[_]Var{});
+    const b = try types.freshFromContent(b_alias);
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expectEqual(b, types.resolveVar(a).var_);
+    try std.testing.expectEqual(b_alias, types.resolveVar(b).desc.content);
+}
+
+test "unify - two uses of one alias relate their arguments before they merge" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const a_arg = try types.fresh();
+    const a_backing_var = try types.freshFromContent(try env.mkTuple(&[_]Var{a_arg}));
+    const a_alias = try env.mkAlias("Alias", a_backing_var, &[_]Var{a_arg});
+    const a = try types.freshFromContent(a_alias);
+
+    const b_arg = try types.freshFromContent(Content{ .structure = .empty_record });
+    const b_backing_var = try types.freshFromContent(try env.mkTuple(&[_]Var{b_arg}));
+    const b_alias = try env.mkAlias("Alias", b_backing_var, &[_]Var{b_arg});
+    const b = try types.freshFromContent(b_alias);
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expectEqual(b_arg, types.resolveVar(a_arg).var_);
+    try std.testing.expectEqual(b, types.resolveVar(a).var_);
+    try std.testing.expectEqual(b_alias, types.resolveVar(b).desc.content);
+    try std.testing.expectEqual(b_backing_var, types.resolveVar(a_backing_var).var_);
+}
+
+test "unify - two uses of one alias with a mismatched argument do not unify" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const a_arg = try types.freshFromContent(Content{ .structure = .empty_record });
+    const a_backing_var = try types.freshFromContent(try env.mkTuple(&[_]Var{a_arg}));
+    const a = try types.freshFromContent(try env.mkAlias("Alias", a_backing_var, &[_]Var{a_arg}));
+
+    const b_arg = try types.freshFromContent(try env.mkTuple(&[_]Var{a_arg}));
+    const b_backing_var = try types.freshFromContent(try env.mkTuple(&[_]Var{b_arg}));
+    const b = try types.freshFromContent(try env.mkAlias("Alias", b_backing_var, &[_]Var{b_arg}));
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(false, result.isAccepted());
+}
+
+test "unify - an alias of an alias relates to a structure through both backings" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const inner_backing_var = try types.fresh();
+    const inner = try types.freshFromContent(try env.mkAlias("Inner", inner_backing_var, &[_]Var{}));
+    const outer_alias = try env.mkAlias("Outer", inner, &[_]Var{});
+    const a = try types.freshFromContent(outer_alias);
+    const b = try types.freshFromContent(Content{ .structure = .empty_record });
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    // Both aliases stay as they are, and the innermost backing is the
+    // structure's class.
+    try std.testing.expectEqual(outer_alias, types.resolveVar(a).desc.content);
+    try std.testing.expect(types.resolveVar(inner).desc.content == .alias);
+    try std.testing.expectEqual(b, types.resolveVar(inner_backing_var).var_);
+}
+
+test "unify - an alias backed by itself relates to a structure without looping" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const a = try types.fresh();
+    try types.setRootVarContent(a, try env.mkAlias("Loop", a, &[_]Var{}));
+    const b = try types.freshFromContent(Content{ .structure = .empty_record });
+
+    const result = try env.unify(a, b);
+
+    // The alias leads only back to the pair already being related, so there
+    // is nothing further to relate.
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expect(types.resolveVar(a).desc.content == .alias);
+    try std.testing.expect(types.resolveVar(a).var_ != types.resolveVar(b).var_);
+}
+
+test "unify - an uncommitted record tail meeting an alias relates to the alias's backing" {
+    for (0..2) |order| {
+        var env = try TestEnv.init(std.testing.allocator);
+        defer env.deinit();
+        const types = &env.module_env.types;
+
+        const backing = try types.freshFromContent(Content{ .structure = .empty_record });
+        const alias = try types.freshFromContent(try env.mkAlias("Unit", backing, &[_]Var{}));
+        const tail = try types.fresh();
+        try types.markUncommittedRecordTail(tail, false);
+
+        const result = if (order == 0) try env.unify(tail, alias) else try env.unify(alias, tail);
+
+        try std.testing.expectEqual(.unified, result);
+        // The tail commits to the empty record the alias is backed by. It
+        // does not become the alias.
+        try std.testing.expectEqual(types.resolveVar(backing).var_, types.resolveVar(tail).var_);
+        try std.testing.expectEqual(Content{ .structure = .empty_record }, types.resolveVar(tail).desc.content);
+        try std.testing.expect(!types.resolveVar(tail).desc.flags.uncommitted_record_tail);
+        try std.testing.expect(types.resolveVar(alias).desc.content == .alias);
+    }
+}
+
 // unification - structure/flex_vars //
 
 test "unify - a is builtin and b is flex_var" {
@@ -1421,6 +1573,63 @@ test "unify - two empty nominal types" {
     const result = try env.unify(nominal_var1, nominal_var2);
 
     // Should fail because they're different nominal types
+    try std.testing.expectEqual(false, result.isAccepted());
+}
+
+test "unify - two applications of one nominal whose arguments are one class merge into the second" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const arg = try types.freshFromContent(Content{ .structure = .empty_record });
+    const backing_var = try types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const a = try types.freshFromContent(try env.mkNominalType("Wrapper", backing_var, &[_]Var{arg}));
+    const b_nominal = try env.mkNominalType("Wrapper", backing_var, &[_]Var{arg});
+    const b = try types.freshFromContent(b_nominal);
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expectEqual(b, types.resolveVar(a).var_);
+    try std.testing.expectEqual(b_nominal, types.resolveVar(b).desc.content);
+}
+
+test "unify - two applications of one nominal relate their arguments before they merge" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const backing_var = try types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const a_arg = try types.fresh();
+    const a = try types.freshFromContent(try env.mkNominalType("Wrapper", backing_var, &[_]Var{a_arg}));
+    const b_arg = try types.freshFromContent(Content{ .structure = .empty_record });
+    const b_nominal = try env.mkNominalType("Wrapper", backing_var, &[_]Var{b_arg});
+    const b = try types.freshFromContent(b_nominal);
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expectEqual(b_arg, types.resolveVar(a_arg).var_);
+    try std.testing.expectEqual(b, types.resolveVar(a).var_);
+    try std.testing.expectEqual(b_nominal, types.resolveVar(b).desc.content);
+}
+
+test "unify - two applications of one nominal with a mismatched argument do not unify" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const backing_var = try types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const a_arg = try types.freshFromContent(Content{ .structure = .empty_record });
+    const a = try types.freshFromContent(try env.mkNominalType("Wrapper", backing_var, &[_]Var{a_arg}));
+    const b_arg = try types.freshFromContent(try env.mkTuple(&[_]Var{a_arg}));
+    const b = try types.freshFromContent(try env.mkNominalType("Wrapper", backing_var, &[_]Var{b_arg}));
+
+    const result = try env.unify(a, b);
+
     try std.testing.expectEqual(false, result.isAccepted());
 }
 
@@ -2334,6 +2543,122 @@ test "unify - open tag extends closed (fail)" {
     try std.testing.expectEqual(false, result.isAccepted());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
     try std.testing.expectEqual(Content.err, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - tag unions with the same tags relate their payloads and merge" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const a_payload = try types.fresh();
+    const a_row = try env.mkTagUnionClosed(&[_]Tag{ try env.mkTag("A", &[_]Var{a_payload}), try env.mkTag("B", &[_]Var{}) });
+    const a = try types.freshFromContent(a_row.content);
+    const b_payload = try types.freshFromContent(Content{ .structure = .empty_record });
+    const b_row = try env.mkTagUnionClosed(&[_]Tag{ try env.mkTag("A", &[_]Var{b_payload}), try env.mkTag("B", &[_]Var{}) });
+    const b = try types.freshFromContent(b_row.content);
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expectEqual(b, types.resolveVar(a).var_);
+    try std.testing.expectEqual(b_payload, types.resolveVar(a_payload).var_);
+    try std.testing.expectEqual(types.resolveVar(b_row.tag_union.ext).var_, types.resolveVar(a_row.tag_union.ext).var_);
+    const merged = types.resolveVar(b).desc.content.structure.tag_union;
+    try std.testing.expectEqual(@as(u32, 2), merged.tags.count);
+    try std.testing.expectEqualStrings("A", env.module_env.getIdentStore().getText(types.getTagAt(merged.tags, 0).name));
+    try std.testing.expectEqualStrings("B", env.module_env.getIdentStore().getText(types.getTagAt(merged.tags, 1).name));
+    try std.testing.expectEqual(b_payload, types.resolveVar(types.getVarAt(types.getTagAt(merged.tags, 0).args, 0)).var_);
+}
+
+test "unify - tag unions with the same tags over the same payloads and extension merge" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const payload = try types.freshFromContent(Content{ .structure = .empty_record });
+    const ext = try types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const a_row = try env.mkTagUnion(&[_]Tag{ try env.mkTag("A", &[_]Var{payload}), try env.mkTag("B", &[_]Var{}) }, ext);
+    const a = try types.freshFromContent(a_row.content);
+    const b_row = try env.mkTagUnion(&[_]Tag{ try env.mkTag("A", &[_]Var{payload}), try env.mkTag("B", &[_]Var{}) }, ext);
+    const b = try types.freshFromContent(b_row.content);
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expectEqual(b, types.resolveVar(a).var_);
+    const merged = types.resolveVar(b).desc.content.structure.tag_union;
+    try std.testing.expectEqual(ext, merged.ext);
+    try std.testing.expectEqual(@as(u32, 2), merged.tags.count);
+    try std.testing.expectEqualStrings("A", env.module_env.getIdentStore().getText(types.getTagAt(merged.tags, 0).name));
+    try std.testing.expectEqualStrings("B", env.module_env.getIdentStore().getText(types.getTagAt(merged.tags, 1).name));
+    try std.testing.expectEqual(payload, types.getVarAt(types.getTagAt(merged.tags, 0).args, 0));
+}
+
+test "unify - tag unions that store the same tags out of name order merge into an ordered row" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const a_row = try env.mkTagUnionClosed(&[_]Tag{ try env.mkTag("B", &[_]Var{}), try env.mkTag("A", &[_]Var{}) });
+    const a = try types.freshFromContent(a_row.content);
+    const b_row = try env.mkTagUnionClosed(&[_]Tag{ try env.mkTag("B", &[_]Var{}), try env.mkTag("A", &[_]Var{}) });
+    const b = try types.freshFromContent(b_row.content);
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expectEqual(b, types.resolveVar(a).var_);
+    const merged = types.resolveVar(b).desc.content.structure.tag_union;
+    try std.testing.expectEqual(@as(u32, 2), merged.tags.count);
+    try std.testing.expectEqualStrings("A", env.module_env.getIdentStore().getText(types.getTagAt(merged.tags, 0).name));
+    try std.testing.expectEqualStrings("B", env.module_env.getIdentStore().getText(types.getTagAt(merged.tags, 1).name));
+}
+
+test "unify - tag unions with the same tags commit an uncommitted tag tail that meets a committed one" {
+    for (0..2) |order| {
+        var env = try TestEnv.init(std.testing.allocator);
+        defer env.deinit();
+        const types = &env.module_env.types;
+
+        const committed_ext = try types.freshFromContent(Content{ .structure = .empty_tag_union });
+        const committed = try types.freshFromContent((try env.mkTagUnion(&[_]Tag{try env.mkTag("A", &[_]Var{})}, committed_ext)).content);
+        const uncommitted_ext = try types.freshFromContent(Content{ .structure = .empty_tag_union });
+        try types.markUncommittedTagTail(uncommitted_ext);
+        const uncommitted = try types.freshFromContent((try env.mkTagUnion(&[_]Tag{try env.mkTag("A", &[_]Var{})}, uncommitted_ext)).content);
+
+        const result = if (order == 0) try env.unify(committed, uncommitted) else try env.unify(uncommitted, committed);
+
+        try std.testing.expectEqual(.unified, result);
+        try std.testing.expectEqual(types.resolveVar(committed).var_, types.resolveVar(uncommitted).var_);
+        // The two tails are one class, and it is committed.
+        try std.testing.expectEqual(types.resolveVar(committed_ext).var_, types.resolveVar(uncommitted_ext).var_);
+        const merged = types.resolveVar(committed).desc.content.structure.tag_union;
+        const merged_ext = types.resolveVar(merged.ext);
+        try std.testing.expectEqual(Content{ .structure = .empty_tag_union }, merged_ext.desc.content);
+        try std.testing.expect(!merged_ext.desc.flags.uncommitted_tag_tail);
+    }
+}
+
+test "unify - tag unions with the same tags over two uncommitted tag tails keep an uncommitted tail" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const a_ext = try types.freshFromContent(Content{ .structure = .empty_tag_union });
+    try types.markUncommittedTagTail(a_ext);
+    const a = try types.freshFromContent((try env.mkTagUnion(&[_]Tag{try env.mkTag("A", &[_]Var{})}, a_ext)).content);
+    const b_ext = try types.freshFromContent(Content{ .structure = .empty_tag_union });
+    try types.markUncommittedTagTail(b_ext);
+    const b = try types.freshFromContent((try env.mkTagUnion(&[_]Tag{try env.mkTag("A", &[_]Var{})}, b_ext)).content);
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    const merged = types.resolveVar(b).desc.content.structure.tag_union;
+    try std.testing.expect(types.resolveVar(merged.ext).desc.flags.uncommitted_tag_tail);
 }
 
 test "unify - closed tag union extends open" {

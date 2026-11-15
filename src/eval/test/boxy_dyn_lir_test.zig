@@ -142,6 +142,7 @@ const Builder = struct {
         join_points: []const LIR.JoinPoint = &.{},
         abi: LIR.ProcAbi = .roc,
         erased_capture_arg: ?LocalId = null,
+        erased_reuse_arg: ?LocalId = null,
         tail_group: ?LIR.TailGroupId = null,
         uses_pending_cell: bool = false,
     }) TestError!LirProcSpecId {
@@ -158,6 +159,7 @@ const Builder = struct {
             .dyn_result = .of(options.dyn_result),
             .abi = options.abi,
             .erased_capture_arg = .of(options.erased_capture_arg),
+            .erased_reuse_arg = .of(options.erased_reuse_arg),
             .tail_group = .of(options.tail_group),
             .uses_pending_cell = options.uses_pending_cell,
         }, .none);
@@ -516,6 +518,25 @@ const Builder = struct {
             }),
             .next = next,
         } }, .test_fixture);
+    }
+
+    /// An erased-record worker: `args`, then the capture pointer and the
+    /// reuse argument the erased ABI passes after it (design.md
+    /// "Destination-Passing Results and Allocation Reuse"). Its entry reads
+    /// the capture word into `table` with the reuse argument as the read's
+    /// owner, as post-ARC LIR does while that argument is live. The worker
+    /// repacks no allocation, so it then releases the reuse argument: the
+    /// closure's unit when the caller transferred it, null otherwise.
+    fn erasedWorker(self: *Builder, args: LocalId, table: LocalId, result: LocalId, body: CFStmtId) TestError!LirProcSpecId {
+        const capture = try self.local(.opaque_ptr);
+        const reuse = try self.local(try self.layouts.insertErasedCallable());
+        const entry = try self.lowLevel(table, .erased_capture_load_borrowed, &.{ capture, reuse }, false, try self.decref(reuse, body));
+        return self.proc(&.{ args, capture, reuse }, entry, self.dynamic, .{
+            .dyn_result = result,
+            .abi = .erased_record,
+            .erased_capture_arg = capture,
+            .erased_reuse_arg = reuse,
+        });
     }
 
     fn span(self: *Builder, locals: []const LocalId) TestError!LIR.LocalSpan {
@@ -1298,17 +1319,18 @@ test "issue 12889: the dev backend writes a list item without a list operation r
 
 /// A caller of `\(x) -> x`, a worker over a type variable whose type table
 /// is its one capture: the table's words describe the variable and the
-/// worker's argument record.
-fn buildDictionaryProgram(b: *Builder) TestError!LirProcSpecId {
-    const capture = try b.local(.opaque_ptr);
+/// worker's argument record. A transferring call moves the closure's unit
+/// into the worker as its reuse argument; otherwise the call borrows the
+/// closure, passes a null reuse argument, and the caller releases it.
+fn buildDictionaryProgram(b: *Builder, transfer: bool) TestError!LirProcSpecId {
     const table = try b.local(.opaque_ptr);
     const elem_desc = try b.local(.opaque_ptr);
     const args_desc = try b.local(.opaque_ptr);
     const args = try b.dynLocal(args_desc, .param);
     const x = try b.dynLocal(elem_desc, .view);
     const result = try b.dynLocal(elem_desc, .result);
-    const worker_body = try b.lowLevel(table, .erased_capture_load, &.{capture}, false, try b.dyn(elem_desc, .{ .table_entry = .{ .table = table, .index = 0 } }, try b.dyn(args_desc, .{ .table_entry = .{ .table = table, .index = 1 } }, try b.dyn(x, .{ .field_addr = .{ .base = args, .desc = args_desc, .field_index = .{ .immediate = 0 } } }, try b.ret(x)))));
-    const worker = try b.proc(&.{ args, capture }, worker_body, b.dynamic, .{ .dyn_result = result, .abi = .erased_record, .erased_capture_arg = capture });
+    const worker_body = try b.dyn(elem_desc, .{ .table_entry = .{ .table = table, .index = 0 } }, try b.dyn(args_desc, .{ .table_entry = .{ .table = table, .index = 1 } }, try b.dyn(x, .{ .field_addr = .{ .base = args, .desc = args_desc, .field_index = .{ .immediate = 0 } } }, try b.ret(x))));
+    const worker = try b.erasedWorker(args, table, result, worker_body);
 
     const record_layout = try b.layouts.putTuple(&.{b.layouts.getLayout(.i64)});
     const int_table = try b.local(.opaque_ptr);
@@ -1317,28 +1339,33 @@ fn buildDictionaryProgram(b: *Builder) TestError!LirProcSpecId {
     const record = try b.local(record_layout);
     const out = try b.local(.i64);
     const int_desc = boxy.desc.scalarDesc(.i64);
-    const call = try b.dyn(out, .{ .call_erased = .{ .closure = closure, .args = record } }, try b.decref(closure, try b.ret(out)));
+    const after = if (transfer) try b.ret(out) else try b.decref(closure, try b.ret(out));
+    const call = try b.dyn(out, .{ .call_erased = .{ .closure = closure, .args = record, .reuse_closure = transfer } }, after);
     const body = try b.static(int_table, .{ .table = &.{ int_desc, b.descs.args(&.{int_desc}) } }, try b.packClosure(closure, worker, int_table, try b.int(value, 31337, try b.store.addCFStmt(.{ .assign_struct = .{ .target = record, .fields = try b.span(&.{value}), .next = call } }, .test_fixture))));
     return b.proc(&.{}, body, .i64, .{});
 }
 
 test "boxy interpreter: a closure over a type table called through the erased record ABI" {
-    var b = try Builder.init(.native);
-    defer b.deinit();
-    const caller = try buildDictionaryProgram(&b);
+    for ([_]bool{ false, true }) |transfer| {
+        var b = try Builder.init(.native);
+        defer b.deinit();
+        const caller = try buildDictionaryProgram(&b, transfer);
 
-    var run: Run = undefined;
-    try run.init(&b);
-    defer run.deinit();
-    try std.testing.expectEqual(@as(i64, 31337), (try run.eval(caller, .i64)).value.read(i64));
-    try std.testing.expectEqual(@as(i64, 31337), (try run.eval(caller, .i64)).value.read(i64));
-    try run.env.checkForLeaks();
+        var run: Run = undefined;
+        try run.init(&b);
+        defer run.deinit();
+        try std.testing.expectEqual(@as(i64, 31337), (try run.eval(caller, .i64)).value.read(i64));
+        try std.testing.expectEqual(@as(i64, 31337), (try run.eval(caller, .i64)).value.read(i64));
+        try run.env.checkForLeaks();
+    }
 }
 
 test "boxy wasm: a closure over a type table called through the erased record ABI" {
-    var b = try Builder.init(.u32);
-    defer b.deinit();
-    try expectWasmInt(&b, try buildDictionaryProgram(&b), .i64, 31337);
+    for ([_]bool{ false, true }) |transfer| {
+        var b = try Builder.init(.u32);
+        defer b.deinit();
+        try expectWasmInt(&b, try buildDictionaryProgram(&b, transfer), .i64, 31337);
+    }
 }
 
 const TailProgram = struct {
@@ -1469,7 +1496,6 @@ test "boxy wasm dynamic returns preserve a heap string in either result storage"
 /// direct owned parameter and the original record/view, caller reuse, and
 /// the deferred runtime's copy out of the caller's frame.
 fn buildUnaryArgumentProgram(b: *Builder, dynamic: bool, reuse: bool, deferred: bool, direct_entry: bool) TestError!LirProcSpecId {
-    const capture = try b.local(.opaque_ptr);
     const table = try b.local(.opaque_ptr);
     const elem_desc = try b.local(.opaque_ptr);
     const args_desc = try b.local(.opaque_ptr);
@@ -1477,8 +1503,8 @@ fn buildUnaryArgumentProgram(b: *Builder, dynamic: bool, reuse: bool, deferred: 
     const x = if (direct_entry) args else try b.dynLocal(elem_desc, .view);
     const result = try b.dynLocal(elem_desc, .result);
     const use_arg = if (direct_entry) try b.ret(x) else try b.dyn(args_desc, .{ .table_entry = .{ .table = table, .index = 1 } }, try b.dyn(x, .{ .field_addr = .{ .base = args, .desc = args_desc, .field_index = .{ .immediate = 0 } } }, try b.ret(x)));
-    const worker_body = try b.lowLevel(table, .erased_capture_load, &.{capture}, false, try b.dyn(elem_desc, .{ .table_entry = .{ .table = table, .index = 0 } }, use_arg));
-    const worker = try b.proc(&.{ args, capture }, worker_body, b.dynamic, .{ .dyn_result = result, .abi = .erased_record, .erased_capture_arg = capture });
+    const worker_body = try b.dyn(elem_desc, .{ .table_entry = .{ .table = table, .index = 0 } }, use_arg);
+    const worker = try b.erasedWorker(args, table, result, worker_body);
 
     const desc = try b.local(.opaque_ptr);
     const desc_table = try b.local(.opaque_ptr);
@@ -1489,12 +1515,15 @@ fn buildUnaryArgumentProgram(b: *Builder, dynamic: bool, reuse: bool, deferred: 
     const arg = if (dynamic) try b.dynLocal(desc, .frame) else joined;
     const out = try b.local(.str);
     const final = if (reuse) try b.local(.str) else out;
-    // A deferred call owns one reference to the closure until it is driven.
-    var next = if (deferred) try b.ret(final) else try b.decref(closure, try b.ret(final));
+    // The closure dies at the call, which moves its unit into the worker as
+    // the reuse argument; a deferred call's pending record carries the unit
+    // until the call is driven.
+    var next = try b.ret(final);
     if (reuse) next = try b.lowLevel(final, .str_concat, &.{ out, joined }, false, try b.decref(joined, next));
     next = try b.dyn(out, .{ .call_erased = .{
         .closure = closure,
         .args = arg,
+        .reuse_closure = true,
         .deferred = deferred,
         .drive = if (deferred) .always else .none,
     } }, next);

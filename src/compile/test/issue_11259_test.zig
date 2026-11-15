@@ -19,7 +19,7 @@ test "issue 11259: typed string literal with an ill-typed from_quote reports rat
         .data =
         \\Tag := [Tag(Str)].{
         \\    from_quote : Str -> Try(Tag, [BadQuotedBytes(Str)])
-        \\    from_quote = !|str| Ok(Tag(str))
+        \\    from_quote = Bool.not(|str| Ok(Tag(str)))
         \\}
         \\
         \\single = "Roc".Tag
@@ -56,7 +56,7 @@ test "issue 11259: typed string literal with an ill-typed from_quote reports rat
 const rejected_quote_method =
     \\Tag := [Tag(Str)].{
     \\    from_quote : Str -> Try(Tag, [BadQuotedBytes(Str)])
-    \\    from_quote = !|str| Ok(Tag(str))
+    \\    from_quote = Bool.not(|str| Ok(Tag(str)))
     \\}
     \\
 ;
@@ -99,7 +99,7 @@ test "issue 11259: a rejected numeral conversion preserves independent constants
     try expectConversionRecovery(
         \\Tag := [Tag(U64)].{
         \\    from_numeral : Numeral -> Try(Tag, [InvalidNumeral(Str)])
-        \\    from_numeral = !|_| Ok(Tag(0))
+        \\    from_numeral = Bool.not(|_| Ok(Tag(0)))
         \\}
         \\bad = 1.Tag
         \\good = 123.U64

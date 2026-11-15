@@ -34,18 +34,20 @@ test "issue 12734: boxy descriptors survive ARC and static data compaction as im
     , .{ .specialization_strategy = .boxy }, expectTableReads);
 }
 
-fn staticCallables(exports: []const lir.Program.StaticDataExport) usize {
+/// How many erased callables the program's bodies build at run time.
+fn closureConstructions(store: *const lir.LirStore) usize {
     var count: usize = 0;
-    for (exports) |item| {
-        for (item.relocations) |relocation| {
-            if (relocation.callable_capture_offset != .none) count += 1;
-        }
+    for (0..store.cfStmtCount()) |i| {
+        const stmt = store.getCFStmt(@fromBackingInt(@intCast(i)));
+        if (stmt == .dyn and store.stmtRow(stmt.dyn.data) == .closure) count += 1;
     }
     return count;
 }
 
 fn expectClosedDictionariesStatic(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLirHarnessError!void {
-    try std.testing.expect(staticCallables(lowered.frozen_static_data.?.exports) > 0);
+    // The program declares no function value, so any erased callable a body
+    // built would be a dictionary composed at run time.
+    try std.testing.expectEqual(@as(usize, 0), closureConstructions(&lowered.lir_result.store));
 }
 
 fn expectOpenDictionaryFromTable(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLirHarnessError!void {

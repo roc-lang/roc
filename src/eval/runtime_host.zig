@@ -584,6 +584,91 @@ test "RuntimeHostEnv records crash payload and termination, then leaves through 
     }
 }
 
+const CrashingCallback = struct {
+    ops: *RocOps,
+    /// The callback returns normally when this is false, so it is not
+    /// `noreturn` and the guarded body is free to tail-call it.
+    should_crash: bool,
+    /// Set just before crashing, so the test can tell the callback ran.
+    entered: bool = false,
+    returned: bool = false,
+    inputs: [6]u64 = .{ 1, 2, 3, 4, 5, 6 },
+    sum: u64 = 0,
+
+    /// Keeps several values live across calls, so its frame saves many
+    /// callee-saved registers and fills a large scratch buffer. Both overwrite
+    /// the stack the guarded body returns through if the body's frame is gone
+    /// by the time `roc_crashed` longjmps back to it.
+    noinline fn run(self: *CrashingCallback) void {
+        const a = self.inputs[0];
+        const b = self.inputs[1];
+        const c = self.inputs[2];
+        const d = self.inputs[3];
+        const e = self.inputs[4];
+        const f = self.inputs[5];
+        fillScratch();
+        self.entered = true;
+        if (self.should_crash) self.ops.crash("boom from a guarded callback");
+        fillScratch();
+        self.sum = a *% b +% c *% d +% e *% f;
+        self.returned = true;
+    }
+
+    noinline fn fillScratch() void {
+        var scratch: [4096]u8 = undefined;
+        const volatile_scratch: *volatile [4096]u8 = &scratch;
+        for (volatile_scratch) |*byte| byte.* = 0xAA;
+    }
+};
+
+test "CrashBoundary.run recovers from a crash raised through roc_ops by the guarded callback" {
+    // The boundary's guarded body calls `setjmp` and then the callback. If the
+    // callback were tail-called, the frame `setjmp` saved would be gone by the
+    // time `roc_crashed` longjmps back, and optimized builds would crash here.
+    var env = RuntimeHostEnv.init(std.testing.allocator);
+    defer env.deinit();
+
+    var outer_buf: JmpBuf = undefined;
+
+    // Crashing and returning runs alternate through the same boundary type.
+    const crash_plan = [_]bool{ true, false, true, true, false };
+    for (crash_plan) |should_crash| {
+        env.resetObservation();
+        env.active_jmp_buf = &outer_buf;
+
+        var callback: CrashingCallback = .{ .ops = env.get_ops(), .should_crash = should_crash };
+        var crash_boundary = env.enterCrashBoundary();
+        // A failed check below must still unregister the boundary's
+        // thread-wide stack overflow recovery before later tests run.
+        errdefer crash_boundary.deinit();
+        const jumped = try crash_boundary.run(CrashingCallback, &callback, CrashingCallback.run);
+
+        try std.testing.expect(callback.entered);
+        try std.testing.expectEqual(env.get_ops(), callback.ops);
+        try std.testing.expectEqual(&env, crash_boundary.env);
+        try std.testing.expectEqual(@as(?*JmpBuf, &outer_buf), crash_boundary.prev_jmp_buf);
+        if (should_crash) {
+            try std.testing.expect(jumped != 0);
+            try std.testing.expect(!callback.returned);
+            try std.testing.expectEqual(Termination.crashed, env.terminationState());
+            switch (env.crashState()) {
+                .did_not_crash => return error.TestUnexpectedResult,
+                .crashed => |msg| try std.testing.expectEqualStrings("boom from a guarded callback", msg),
+            }
+        } else {
+            try std.testing.expectEqual(@as(c_int, 0), jumped);
+            try std.testing.expect(callback.returned);
+            try std.testing.expectEqual(@as(u64, 44), callback.sum);
+            try std.testing.expectEqual(Termination.returned, env.terminationState());
+            try std.testing.expectEqual(CrashState.did_not_crash, env.crashState());
+        }
+
+        crash_boundary.deinit();
+        try std.testing.expectEqual(@as(?*JmpBuf, &outer_buf), env.active_jmp_buf);
+        try std.testing.expect(!crash_boundary.recovery_registered);
+    }
+}
+
 test "RuntimeHostEnv records and snapshots structured effects in order" {
     var env = RuntimeHostEnv.init(std.testing.allocator);
     defer env.deinit();

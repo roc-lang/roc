@@ -386,6 +386,9 @@ pub const RcReason = enum(u8) {
     /// `ArcPlanStep.pre_release_extra` (`releaseTailCallerFrame`): owned state
     /// of a frame that a tail call replaces.
     tail_call_frame,
+    /// `ArcPlanStep.pre_release_extra` (`wholeMoveResidual`): the fields of a
+    /// retained aggregate that nothing reads after the call it is moved into.
+    moved_aggregate_dead_fields,
     /// The allocation a consuming dead-lender read takes its result out of:
     /// the box of a consuming unbox, the reuse argument of a consuming
     /// capture load.
@@ -982,9 +985,9 @@ pub const ProcAbi = enum {
     /// procedure has at most one explicit argument, the packed argument
     /// record itself (a closed struct, or a `param` dynamic local whose
     /// address is the `args` pointer), its capture pointer in
-    /// `erased_capture_arg`, and its result written to the `ret` pointer (a
-    /// `dyn_result` local when the result is dynamic). It takes no reuse
-    /// input and writes no `out_desc`.
+    /// `erased_capture_arg`, its reuse input in `erased_reuse_arg`, and its
+    /// result written to the `ret` pointer (a `dyn_result` local when the
+    /// result is dynamic). It writes no `out_desc`.
     erased_record,
 };
 
@@ -1435,11 +1438,10 @@ pub const DynOp = union(enum) {
     /// Payload `payload_index` of the active tag in `base`, selected by its
     /// stored discriminant. The producer has established that this tag holds
     /// the target's payload type (a matched arm or a known constructor).
-    /// `whole` is set when that payload is its tag's only payload: the
-    /// active tag's refcounted contents are then exactly the payload's, so
-    /// the read carries `base`'s whole ownership unit, as a same-value alias
-    /// does (design.md "Resources Over Layouts").
-    tag_payload_addr: struct { base: LocalId, desc: LocalId, payload_index: u32, whole: bool = false },
+    /// The only payload of a tag whose payload can hold refcounted data is
+    /// read by `assign_ref` `tag_payload_struct` instead, an
+    /// ownership-complete projection (design.md "Resources Over Layouts").
+    tag_payload_addr: struct { base: LocalId, desc: LocalId, payload_index: u32 },
     /// Build the record or tuple `desc` describes from `fields`, given in
     /// semantic index order.
     record: struct { desc: LocalId, fields: LocalSpan },
