@@ -18984,6 +18984,7 @@ fn boxyStepLabel(step: lir.CheckedPipeline.BoxyTiming.Step) []const u8 {
         .seed_workers => "Unit Worker Seeding",
         .roots => "Root Workers",
         .bodies => "Worker Bodies",
+        .demand => "Descriptor Demand",
         .tables => "Type Table Filling",
         .requests => "Layout + Static Data Requests",
         .export_needs => "Export Needs Encoding",
