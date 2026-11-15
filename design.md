@@ -2578,7 +2578,11 @@ reached only through a plan that selects it. A node's reach flags are its
 own and those of every node it reaches.
 
 A specialization can register a literal root only when the reach flags of
-its template, the types of its request, and its dispatch evidence include
+its template, the literal requirements of its template's own scheme (a
+conversion at a variable the request leaves unfixed, as in a platform's call
+of `main!` whose error type mentions `Sql(a)`, registers its root in the
+specialization itself), the types of its request, and its dispatch evidence
+include
 *strict*, or a dependent kind together with the custom type of that kind:
 every body it would lower is reached from its template, every type a
 dependent conversion is instantiated at is named by the request or by a
@@ -15385,6 +15389,58 @@ a local function's variable fixed by its enclosing receiver is monomorphic`
 and `issue 12970: a relation on an enclosing item fixes the local
 function's other variables`.
 
+### Pending Requirement Copies In Literal Defaulting
+
+A use of a generalized function copies each requirement the function's scheme
+holds (Pending Dispatch Requirements In Type Schemes, above). When the
+requirement's receiver is an enclosing weak value, the receiver stays shared
+and the copy is detached from its descriptor:
+
+```roc
+weak = 5
+f = |g| [weak.to_str().repeat(2)].map(g)
+lengths = f(|s| s.count_utf8_bytes())
+selves = f(|s| s)
+```
+
+Each use of `f` holds its own copy of `weak.to_str : weak -> r` and of
+`r.repeat : r, 2 -> s`, with a fresh `r`, `2` and `s`. A use made by a
+top-level value or an `expect` has no generalization boundary to quantify
+those variables, so they are still open when the module's literals default.
+
+For literal defaulting, a pending copy is a requirement of its receiver,
+exactly as if the use had written the method call on the receiver itself:
+
+- A literal that is the receiver of a pending copy is a driver, and its
+  default must satisfy the copy: the single-literal numeral probe, the quote
+  and interpolation default's validation, and the group probe each verify
+  every copy on the literal after its attached requirements. The copies are
+  also part of the boundary leak check that decides a `LITERAL DEFAULTED`
+  warning.
+- The callable of a pending copy belongs to the defaulting component that
+  owns its receiver, whether the receiver is a gathered literal or a
+  variable a component's signatures reach, and so does the callable of any
+  copy on a variable reached that way. A literal in that callable is
+  therefore a passive of the component and waits for the method the default
+  selects instead of taking its own head default in the same round.
+
+Each defaulting round indexes the pending copies by receiver once, and only
+when a copy is pending; a round with none pays one length check. The rule
+changes which programs typecheck: the program above is accepted with
+`weak : Dec` and each `2 : U64`, and `f = |x| weak + x` used as `f(3.U8)`
+gives `weak : U8` as `weak + 3.U8` does. Without it the copy's literal
+commits `Dec` before `Str.repeat` is selected, and the `plus` copy is never
+consulted.
+
+The accepted side is pinned by `issue 13055: method on a weak top-level number
+used through a function called twice`, `issue 13055: method on a weak
+top-level interpolation used through a function called twice` and `issue
+13055: a use's copied requirement chooses the weak literal's type` in
+`type_checking_integration.zig`. The rejected side is pinned by `issue 13055:
+copied requirements that need different types for a weak literal are
+rejected` and `issue 13055: a copied requirement no default satisfies is
+rejected`.
+
 ### Rewrite Inventory
 
 - `finishAliasDeclarationParameters`—mechanism: completes an in-progress
@@ -15694,7 +15750,10 @@ Other solved-graph mutations:
   is a type the program never chose, so each failing validation against it
   rewinds its own unification: the diagnostic is reported and the relation
   rejected without retyping anything reachable through the relation's
-  argument graph.
+  argument graph. A pending use copy of a scheme requirement counts among
+  its receiver's requirements in the partition and in every probe
+  (`candidateSatisfiesReceiverCopies`, `joinReceiverCopyFootprints`): Pending
+  Requirement Copies In Literal Defaulting (above).
 - `captureSchemeDispatchRequirements` /
   `Instantiator.instantiateStaticDispatchConstraint(force_root_copy = true)`—policy: Pending Dispatch
   Requirements In Type Schemes (above). Capturing records no solved-graph
@@ -16834,8 +16893,9 @@ strategy).
   `.direct_parametric`), recording the literal (`LiteralSite`: module,
   expression, kind) and its type over the scheme's variables; and one per
   literal requirement of every scheme the body instantiates at an open type (an
-  *edge*: a dispatch edge's evidence node, a procedure use, a generalized
-  local function's use or construction), recording the type after the edge's
+  *edge*: a dispatch edge's evidence node, a procedure use, a use of a
+  constant (which instantiates the scheme of the constant's entry wrapper), a
+  generalized local function's use or construction), recording the type after the edge's
   substitution, the edge, and the callee's literal requirement index. Literal requirements are
   computed to a fixpoint over the module's schemes and deduplicated by
   literal, type key, and the type's variables, so a recursive call at the same
@@ -16848,8 +16908,15 @@ strategy).
   forwarded: the value is one of the enclosing scheme's own literal
   arguments (`.forwarded`). An instantiation at a type mentioning a variable
   that no scheme around the edge quantifies (a use's copy that nothing relates
-  to the program, as in `_ = local` for a generalized local function nothing
-  calls) is fixed by no use, so nothing reads its value (`.unbound`). A
+  to the program, as in `x = helper({})` where `helper : {} -> Sql(a)` and
+  nothing fixes `a`) is fixed
+  by no use, so the variable seals and the edge is where the literal's type
+  stops changing: it is a *sealed* root (`LiteralArgumentRoot.sealed`), a
+  validate-only `literal_argument` root at the sealed type. Its conversion
+  cannot depend on the variable, which no value of the program has, so
+  compile-time evaluation runs it once and reports its rejection, and the
+  runtime program converts the literal through the root's wrapper. A sealed
+  root is always requested, although its type is not concrete. A
   template's `literal_argument_demand` lists the
   roots its edges read, so compile-time evaluation orders them before any
   evaluation of the template.
@@ -16899,6 +16966,8 @@ strategy).
   specialization converting a literal whose node's type is closed restores
   the value of the root whose type's Monotype is that type
   (`restoredLiteralArgument`) instead of registering a literal root. A
+  sealed root's type is closed in no specialization, so the index holds
+  none. A
   specialization converting a literal at the type of a validate-only root,
   which stores no value, converts the literal in place, as a runtime program
   does where it needs the value, and registers no literal root either
@@ -16946,11 +17015,10 @@ frame's types are its environment.
 A body reads a
 literal of its own scheme by calling the argument (`lowerInstanceLiteral`); a
 call passes the callee's literal arguments from the edge's
-(`fillLiteralArgs`): a root's thunk or one of the caller's own arguments. An
-`.unbound` argument, and each literal argument of a generalized lambda whose
-construction checking recorded no instantiation for (no use instantiated it,
-so nothing calls it), is a crash dictionary nothing reads, as a `from_scheme`
-dictionary is. A
+(`fillLiteralArgs`): a root's thunk or one of the caller's own arguments.
+Each literal argument of a generalized lambda whose construction checking
+recorded no instantiation for (no use instantiated it, so nothing calls it)
+is a crash dictionary nothing reads, as a `from_scheme` dictionary is. A
 generalized local function's own literal requirements travel with its dictionaries:
 per call for a local procedure, in its captures for any other generalized
 lambda; a nested lambda captures the enclosing scopes' literal arguments as
@@ -17798,11 +17866,16 @@ its type, under either strategy: as a literal argument root of the
 instantiating module where checking recorded the instantiation, which both
 strategies evaluate, and otherwise as a literal root of the specialization
 under `.lss` or a literal thunk under `.boxy`. A `.boxy` compile-time program converts its literals exactly as a
-runtime program does, through its literal arguments and dictionaries, so the
-evaluator runs no discovery pass and no literal table exists: a literal
-rejection, a conversion's effects, and a dormant-code diagnostic are the
-same under both strategies because the same conversions run at the same
-types.
+runtime program does, through its literal arguments and dictionaries, and no
+literal table exists. A literal thunk runs only when the program does, so
+the conversions checking recorded no instantiation for are validated by the
+same discovery pass under both strategies: once its own roots are complete,
+a `.boxy` finalization plans the program's discovery roots and specializes
+and evaluates those the demand analysis keeps (`discoverLiteralRoots`),
+exactly as `roc check` does, and stores nothing from them. A
+literal rejection, a conversion's effects, and a dormant-code diagnostic are
+therefore the same under both strategies because the same conversions run at
+the same types.
 
 ### Strategy Equivalence Tests
 

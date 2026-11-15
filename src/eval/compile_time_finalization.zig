@@ -2075,6 +2075,7 @@ fn finalizeProgramBoxy(
         if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
         try entry.module.const_store.verifyComplete();
     }
+    try discoverLiteralRoots(allocator, modules, lowering_modules, program_roots, options, &debug_events);
     const runtime_positions = try runtimeRootPositions(allocator, program_roots, runtime_roots, false);
     var positions_owned = true;
     errdefer if (positions_owned) allocator.free(runtime_positions);
@@ -2096,6 +2097,36 @@ fn finalizeProgramBoxy(
         .runtime_prepared = null,
         .runtime_positions = runtime_positions,
     };
+}
+
+/// Report the literal rejections of a `.boxy` program's conversions that no
+/// `literal_argument` root runs: those at an instantiation checking records
+/// no edge for, which the runtime program converts through a literal thunk
+/// (design.md "Demand-Driven Compile-Time Specialization"). The program roots
+/// are discovery roots exactly as under `.lss`, so a program none of whose
+/// roots can register a literal root specializes nothing, and one that can
+/// specializes what `roc check` specializes; the runtime program still
+/// lowers from the checked modules.
+fn discoverLiteralRoots(
+    allocator: Allocator,
+    modules: []const ProgramModule,
+    lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
+    unfiltered_program_roots: lir.CheckedPipeline.RootRequestSet,
+    unfiltered_options: Options,
+    debug_events: *DebugEvents,
+) FinalizeError!void {
+    const root_key = lowering_modules.root.module.key.digest();
+    const program_roots = try solvedRootRequests(allocator, modules, root_key, unfiltered_program_roots);
+    defer freeSolvedRootRequests(allocator, program_roots, unfiltered_program_roots);
+    var options = unfiltered_options;
+    options.strategy = .lss;
+    options.discovery_roots = try solvedRootRequests(allocator, modules, root_key, unfiltered_options.discovery_roots);
+    defer freeSolvedRootRequests(allocator, options.discovery_roots, unfiltered_options.discovery_roots);
+    var plan = try planRoots(allocator, modules, lowering_modules, program_roots, options.discovery_roots, false, options.timing);
+    defer plan.deinit(allocator);
+    if (plan.requests.items.len == plan.discovery_start) return;
+    var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, &plan, null, options, debug_events, options.validate_every_comptime_root);
+    specialized.deinit();
 }
 
 /// Evaluate the pending roots `roots` with the `.boxy` evaluator: each

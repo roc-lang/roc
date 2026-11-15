@@ -4103,7 +4103,6 @@ pub const Builder = struct {
                 return switch (edge.args[index]) {
                     .root => |root| try self.composeRootThunk(root),
                     .forwarded => |forwarded| try self.scopeLiteral(.{ .depth = 0, .index = forwarded }),
-                    .unbound => try self.unreadLiteralArg(),
                 };
             },
         }
@@ -4151,12 +4150,11 @@ pub const Builder = struct {
         return switch (source) {
             .root => |root| try self.rootThunk(root),
             .forwarded => |index| try self.scopeLiteral(.{ .depth = 0, .index = index }),
-            .unbound => try self.unreadLiteralArg(),
         };
     }
 
-    /// The literal argument of an instantiation no use fixes: like a
-    /// `from_scheme` dictionary, a crash nothing reads.
+    /// The literal argument of a generalized lambda no use instantiated:
+    /// like a `from_scheme` dictionary, a crash nothing reads.
     fn unreadLiteralArg(self: *Builder) Allocator.Error!Word {
         return try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .unreachable_value), &.{});
     }
@@ -4506,7 +4504,25 @@ pub const Builder = struct {
                             defer self.allocator.free(instance.hidden);
                             return try self.enterWorkerFrame(callee, instance, edge);
                         },
-                        .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_const, .platform_required_declaration, .platform_required_checked_error => invariant("a literal argument's edge uses no procedure"),
+                        // A use of a constant instantiates its entry
+                        // procedure's scheme, as a read of its value does.
+                        inline .top_level_const, .imported_const, .selected_hoisted_const => |ref, tag| {
+                            const use = if (tag == .selected_hoisted_const) ref.const_use else ref;
+                            const owner = self.program.moduleByKey(use.const_ref.artifact);
+                            const eval = switch (owner.view.const_templates.get(use.const_ref).state) {
+                                .eval_template => |eval| eval,
+                                .reserved, .stored_const, .unimplemented => invariant("a literal argument's edge uses a constant with no entry procedure"),
+                            };
+                            const callee = try self.program.templateRefWorker(eval.entry_template);
+                            const read_ty = try self.exprType(expr);
+                            const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = read_ty, .effectful = false } });
+                            self.chain_frame = true;
+                            defer self.chain_frame = false;
+                            const instance = try self.callInstanceAt(callee, self.siteSubstitution(expr), self.view.view.static_dispatch_plans.siteEvidence(expr) orelse &.{}, fn_ty, edge);
+                            defer self.allocator.free(instance.hidden);
+                            return try self.enterWorkerFrame(callee, instance, edge);
+                        },
+                        .local_param, .local_value, .local_mutable_version, .pattern_binder, .platform_required_const, .platform_required_declaration, .platform_required_checked_error => invariant("a literal argument's edge uses no procedure"),
                     }
                 }
                 // A generalized local function's construction: the scope

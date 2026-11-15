@@ -21111,8 +21111,10 @@ fn literalRequirementTypeIsBound(
 /// that instantiates a scheme (a dispatch edge, a procedure use, a
 /// generalized local function's use or construction) instantiates each of
 /// the callee's literal requirements at the edge's substitution: a closed type gets
-/// a root of this module converting the literal at that type, an open one
-/// becomes an literal requirement of the scope the edge is in, forwarded in turn.
+/// a root of this module converting the literal at that type, a type whose
+/// variables no scheme around the edge quantifies gets a sealed root, and any
+/// other open one becomes an literal requirement of the scope the edge is in,
+/// forwarded in turn.
 /// Literal requirements are computed to a fixpoint over this module's schemes;
 /// imported schemes' literal requirements come published with their artifacts.
 fn publishLiteralArgumentRoots(
@@ -21281,6 +21283,7 @@ fn publishLiteralArgumentRoots(
         composed_substs: std.ArrayListUnmanaged([]const CheckedTypeId) = .empty,
         callable_eval_templates: *const CallableEvalTemplateTable,
         entry_wrappers: *const EntryWrapperTable,
+        roots: *const CompileTimeRootTable,
         templates: *const CheckedProcedureTemplateTable,
         store: *CheckedTypeStore,
         names: *canonical.CanonicalNameStore,
@@ -21528,16 +21531,34 @@ fn publishLiteralArgumentRoots(
             while (self.stack.pop()) |id| try self.nodes(id, scope, expr);
         }
 
-        /// The template a procedure value reference instantiates.
+        /// The entry wrapper of a constant's root, whose scheme a use of
+        /// the constant instantiates.
+        fn templateOfConstUse(self: *@This(), use: ConstUseTemplate) ?canonical.ProcedureTemplateRef {
+            var root_table: *const CompileTimeRootTable = self.roots;
+            var wrapper_table: *const EntryWrapperTable = self.entry_wrappers;
+            if (!use.const_ref.artifact.eql(self.owner)) {
+                const view = self.import_views.viewForKey(use.const_ref.artifact) orelse return null;
+                root_table = view.compile_time_roots;
+                wrapper_table = view.entry_wrappers;
+            }
+            const root = switch (use.const_ref.owner) {
+                .hoisted_root => |hoisted| hoisted.root,
+                .top_level_binding => |top_level| root_table.lookupIdByPattern(top_level.pattern) orelse return null,
+            };
+            return (wrapper_table.lookupByRoot(root) orelse return null).template;
+        }
+
         /// The template whose scheme a value reference instantiates: the
-        /// procedure's, or an exact procedure alias's entry wrapper, whose
-        /// scheme is the alias's. A use of a computed callable instantiates
-        /// nothing.
+        /// procedure's, an exact procedure alias's entry wrapper, whose
+        /// scheme is the alias's, or a constant's entry wrapper. A use of a
+        /// computed callable instantiates nothing.
         fn templateOfValueRef(self: *@This(), ref: ResolvedValueRef) ?canonical.ProcedureTemplateRef {
             const use: ProcedureUseTemplate = switch (ref) {
                 .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| use,
                 .platform_required_proc => |required| required.procedure,
-                .hosted_proc, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_const, .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .platform_required_declaration, .platform_required_checked_error => return null,
+                .top_level_const, .imported_const => |const_use| return self.templateOfConstUse(const_use),
+                .selected_hoisted_const => |selected| return self.templateOfConstUse(selected.const_use),
+                .hosted_proc, .platform_required_const, .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .platform_required_declaration, .platform_required_checked_error => return null,
             };
             var alias_view: ?ImportedModuleView = null;
             const body: ProcedureBindingBody = switch (use.binding) {
@@ -21609,6 +21630,7 @@ fn publishLiteralArgumentRoots(
         .edge_templates = &edge_templates,
         .callable_eval_templates = callable_eval_templates,
         .entry_wrappers = wrappers,
+        .roots = roots,
         .templates = templates,
         .store = store,
         .names = names,
@@ -21680,7 +21702,7 @@ fn publishLiteralArgumentRoots(
     }
 
     // Instantiation of each edge's callee literal requirements, to a fixpoint.
-    const ArgBuild = union(enum) { root: u32, forwarded: u32, unbound };
+    const ArgBuild = union(enum) { root: u32, forwarded: u32 };
     var edge_args = std.ArrayListUnmanaged(std.ArrayListUnmanaged(ArgBuild)).empty;
     defer {
         for (edge_args.items) |*list| list.deinit(allocator);
@@ -21688,7 +21710,7 @@ fn publishLiteralArgumentRoots(
     }
     try edge_args.resize(allocator, edges.items.len);
     for (edge_args.items) |*list| list.* = .empty;
-    const NewRoot = struct { site: LiteralSite, ty: CheckedTypeId, edge: LiteralEdge, callee_requirement: u32, validate_only: bool, owner_expr: CIR.Expr.Idx };
+    const NewRoot = struct { site: LiteralSite, ty: CheckedTypeId, edge: LiteralEdge, callee_requirement: u32, validate_only: bool, sealed: bool, owner_expr: CIR.Expr.Idx };
     var new_roots = std.ArrayListUnmanaged(NewRoot).empty;
     defer new_roots.deinit(allocator);
     var root_index = std.AutoHashMapUnmanaged(ObligationKey, u32).empty;
@@ -21787,7 +21809,12 @@ fn publishLiteralArgumentRoots(
                 const projected = if (projector) |p| try p.project(obligation.ty) else obligation.ty;
                 const ty = if (substitution) |*s| try store.cloneCheckedTypeRootSubstituting(allocator, projected, s) else projected;
                 const key: ObligationKey = .{ .site = obligation.site, .ty = try literalRequirementTypeIdentity(store, &identity_orderer, ty) };
-                if (!try store.rootContainsIdentityVariables(ty)) {
+                // A variable no scheme around the edge quantifies is fixed
+                // by no use, so it seals: the edge converts the literal at
+                // the sealed type.
+                const closed = !try store.rootContainsIdentityVariables(ty);
+                const sealed = !closed and if (edge.scope) |scope| !try literalRequirementTypeIsBound(store, &identity_orderer, templates, scope, ty) else true;
+                if (closed or sealed) {
                     const slot = try root_index.getOrPut(allocator, key);
                     if (!slot.found_existing) {
                         slot.value_ptr.* = @intCast(new_roots.items.len);
@@ -21796,7 +21823,8 @@ fn publishLiteralArgumentRoots(
                             .ty = ty,
                             .edge = edge.key,
                             .callee_requirement = j,
-                            .validate_only = !obligation.site.carriesValue() or try checkedTypeHoldsFunction(allocator, store.view(), owner_artifact, import_views, ty),
+                            .validate_only = sealed or !obligation.site.carriesValue() or try checkedTypeHoldsFunction(allocator, store.view(), owner_artifact, import_views, ty),
+                            .sealed = sealed,
                             .owner_expr = edge.owner_expr,
                         });
                         if (base.dev_diagnostics.isSet(.trace_boxy_work)) {
@@ -21809,10 +21837,6 @@ fn publishLiteralArgumentRoots(
                         }
                     }
                     try args.append(allocator, .{ .root = slot.value_ptr.* });
-                } else if (edge.scope != null and !try literalRequirementTypeIsBound(store, &identity_orderer, templates, edge.scope.?, ty)) {
-                    // No use fixes a variable no scheme around the edge
-                    // quantifies, so nothing converts this literal.
-                    try args.append(allocator, .unbound);
                 } else {
                     const scope_key = edge.scope orelse checkedArtifactInvariant("a defaulted field expression instantiates a literal obligation at an open type", .{});
                     const state = try scope_states.getOrPut(allocator, scope_key);
@@ -21885,6 +21909,7 @@ fn publishLiteralArgumentRoots(
                     .edge = new_root.edge,
                     .callee_requirement = new_root.callee_requirement,
                     .validate_only = new_root.validate_only,
+                    .sealed = new_root.sealed,
                 },
             });
         }
@@ -21938,7 +21963,6 @@ fn publishLiteralArgumentRoots(
                 try pool.append(allocator, switch (arg) {
                     .root => |ordinal| .{ .root = @fromBackingInt(@intCast(@as(u32, @intCast(first_root + ordinal)))) },
                     .forwarded => |index| .{ .forwarded = index },
-                    .unbound => .unbound,
                 });
                 if (arg == .root) {
                     const id: ComptimeRootId = @fromBackingInt(@intCast(@as(u32, @intCast(first_root + arg.root))));
@@ -24276,12 +24300,6 @@ pub const LiteralRequirement = struct {
 pub const LiteralArgSource = union(enum(u8)) {
     root: ComptimeRootId,
     forwarded: u32,
-    /// The instantiated literal's type mentions a variable that no scheme
-    /// around the edge quantifies: a use's copy of a variable nothing relates
-    /// to the program, such as `_ = local` taking a generalized local function
-    /// that nothing calls. No use fixes that variable, so nothing reads the
-    /// argument.
-    unbound,
 };
 
 /// The literal arguments of one edge, in the instantiated scheme's
@@ -24295,15 +24313,21 @@ pub const LiteralEdgeEntry = struct {
 
 /// What a `literal_argument` root converts: the literal requirement
 /// `callee_requirement` of the scheme this module's `edge` instantiates, at
-/// the closed type `ty`. A validate-only root (its value is an interpolation
-/// assembler, or holds a function) is evaluated for its outcome and stores
-/// no value; its wrapper, called at runtime, converts the literal.
+/// the type `ty`, which is closed unless the root is sealed. A validate-only
+/// root (its value is an interpolation assembler, or holds a function, or the
+/// root is sealed) is evaluated for its outcome and stores no value; its
+/// wrapper, called at runtime, converts the literal.
 pub const LiteralArgumentRoot = struct {
     site: LiteralSite,
     ty: CheckedTypeId,
     edge: LiteralEdge,
     callee_requirement: u32,
     validate_only: bool,
+    /// The root's type mentions a variable that no scheme around its edge
+    /// quantifies, so no use fixes it and it seals: `helper({})` where
+    /// `helper : {} -> Sql(a)` and nothing relates the result's `a` to the
+    /// program. A sealed root is validate-only.
+    sealed: bool,
 };
 
 /// The two literal-conversion root kinds, as a payload-free classification
@@ -24813,6 +24837,12 @@ fn publishCompileTimeRootRequestEligibility(
     defer callable.deinit();
     for (roots) |*root| {
         base.dev_diagnostics.countTestWork(.checked_root_eligibility_queries, 1);
+        // A sealed literal argument root is evaluated for its outcome at a
+        // type whose variables no use fixes, and stores no value.
+        if (root.literal_argument) |argument| if (argument.sealed) {
+            root.request_eligibility = .eligible;
+            continue;
+        };
         const producer_callable_type_is_fixed = switch (root.kind) {
             .callable_binding => true,
             .constant => switch (root.source) {
@@ -26398,10 +26428,10 @@ fn verifyCompileTimeRootPayloadMatchesKind(root: CompileTimeRoot, payload: Compi
             .pending, .fn_value, .discarded, .expect, .runtime => false,
         },
         // A literal argument holding a function value (an interpolation's
-        // assembler) is stored as one.
+        // assembler) is stored as one; a validate-only one stores nothing.
         .literal_argument => switch (payload) {
-            .const_node, .fn_value, .unevaluated => true,
-            .pending, .discarded, .expect, .runtime => false,
+            .const_node, .fn_value, .discarded, .unevaluated => true,
+            .pending, .expect, .runtime => false,
         },
     };
     if (matches) return;
