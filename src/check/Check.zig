@@ -4567,7 +4567,9 @@ pub fn init(
 ) std.mem.Allocator.Error!Self {
     const mutable_cir = @constCast(cir);
     try preflightForTypeChecking(mutable_cir);
-    return initAssumePrepared(
+    var checker: Self = undefined;
+    try initAssumePrepared(
+        &checker,
         gpa,
         types,
         mutable_cir,
@@ -4576,6 +4578,7 @@ pub fn init(
         auto_imported_types,
         builtin_ctx,
     );
+    return checker;
 }
 
 /// Init type solver with an explicit semantic owner set for imported public APIs.
@@ -4591,7 +4594,9 @@ pub fn initWithOwnerModules(
 ) std.mem.Allocator.Error!Self {
     const mutable_cir = @constCast(cir);
     try preflightForTypeChecking(mutable_cir);
-    return initAssumePrepared(
+    var checker: Self = undefined;
+    try initAssumePrepared(
+        &checker,
         gpa,
         types,
         mutable_cir,
@@ -4600,6 +4605,7 @@ pub fn initWithOwnerModules(
         auto_imported_types,
         builtin_ctx,
     );
+    return checker;
 }
 
 /// Preflight module state required by type-checking.
@@ -4644,7 +4650,9 @@ fn initNodeSlots(
     return slots;
 }
 
+/// Initialize `self` in place.
 fn initAssumePrepared(
+    self: *Self,
     gpa: std.mem.Allocator,
     types: *types_mod.Store,
     cir: *ModuleEnv,
@@ -4652,7 +4660,7 @@ fn initAssumePrepared(
     owner_modules: []const *const ModuleEnv,
     auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
     builtin_ctx: BuiltinContext,
-) std.mem.Allocator.Error!Self {
+) std.mem.Allocator.Error!void {
     // Finalize this module's deep content identity before any unification: the
     // unifier only ever compares precomputed identities. Idempotent—the
     // coordinator already finalized coordinator-driven modules (it needs the
@@ -4791,7 +4799,7 @@ fn initAssumePrepared(
         entry.value_ptr.* = @intCast(record_idx);
     }
 
-    const self: Self = .{
+    self.* = .{
         .gpa = gpa,
         .types = types,
         .nominal_dependencies = exhaustive.SharedNominalDependencies.init(gpa, types),
@@ -4871,8 +4879,6 @@ fn initAssumePrepared(
         .function_effect_resolution = effect_solver.Solver.init(gpa),
         .where_method_use_record_by_fn_var = rehydrated_where_method_uses,
     };
-
-    return self;
 }
 
 /// Call this after Check has been stored at its final location to set up the import_mapping pointer.
