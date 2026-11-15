@@ -78,7 +78,7 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      encode absence as zero.
 /// v72: the string literal store carries its dedup table, combined with
 ///      the v69-v71 changes.
-pub const FORMAT_VERSION: u32 = 72;
+pub const FORMAT_VERSION: u32 = 73;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -289,7 +289,7 @@ pub const LirStoreImage = extern struct {
             .body_coordinator = null,
             .body_prefix = std.mem.zeroes(LirStore.BodyPrefix),
             .proc_locs = try guardedListFromRef(base.SourceLoc, "LirStore.proc_locs", base_ptr, image_size, self.proc_locs),
-            .proc_debug_names = try guardedListFromRef(LirStore.ProcDebugName, "LirStore.proc_debug_names", base_ptr, image_size, self.proc_debug_names),
+            .proc_debug_names = try guardedListFromRef(base.StringLiteral.Idx, "LirStore.proc_debug_names", base_ptr, image_size, self.proc_debug_names),
             .local_names = try guardedListFromRef(u32, "LirStore.local_names", base_ptr, image_size, self.local_names),
         };
     }
