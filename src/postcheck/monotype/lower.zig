@@ -6319,8 +6319,8 @@ const Builder = struct {
     /// Stored conversions by `Ast.fnEvidenceBucket`, each checked for exact
     /// equality before reuse.
     const_evidence_by_content: std.AutoHashMap(u64, StoredConstFnEvidence),
-    /// The checked edge each stored codec edge resolves to inside its
-    /// storing module's import closure (`storedCodecEdge`).
+    /// The checked edge each stored codec edge resolves to among the
+    /// modules its storing module's values come from (`storedCodecEdge`).
     stored_codec_edges: std.AutoHashMapUnmanaged(StoredCodecEdgeKey, CheckedSpecStructuralEvidence) = .empty,
     /// Site evidence derived where it cannot depend on the lowering context
     /// (`BodyContext.deriveSiteEvidenceVector`).
@@ -12348,12 +12348,16 @@ const Builder = struct {
     }
 
     /// The checked edge a codec edge of a function stored in `store_view`'s
-    /// `ConstStore` names: the first module of `store_view`'s reflexive
-    /// import closure, in breadth-first direct-import order, that holds a
-    /// contract with the edge's content and checked roots with its
-    /// dispatcher and callable keys, at its first such contract. The stored
-    /// function was lowered from bodies that closure reaches, so one of its
-    /// modules recorded the contract.
+    /// `ConstStore` names: the first module that holds a contract with the
+    /// edge's content and checked roots with its dispatcher and callable
+    /// keys, at its first such contract, among the modules whose bodies
+    /// `store_view`'s stored values can come from. Those are, breadth first,
+    /// `store_view`, then each module's direct imports in order, and after
+    /// the lowering root's imports its platform relation modules, since a
+    /// platform's constant can hold a value its app supplied for a
+    /// requirement (design.md "Structural Serialization Methods"). The
+    /// stored function was lowered from bodies those modules hold, so one of
+    /// them recorded the contract.
     fn storedCodecEdge(
         self: *Builder,
         store_view: ModuleView,
@@ -12368,6 +12372,7 @@ const Builder = struct {
         defer pending.deinit(self.allocator);
         try reached.put(self.allocator, store_view.key.bytes, {});
         try pending.append(self.allocator, store_view);
+        const root_key = self.rootModuleView().key.bytes;
         var next: usize = 0;
         const edge: CheckedSpecStructuralEvidence = while (next < pending.items.len) : (next += 1) {
             const view = pending.items[next];
@@ -12376,7 +12381,14 @@ const Builder = struct {
                 if ((try reached.getOrPut(self.allocator, imported.bytes)).found_existing) continue;
                 try pending.append(self.allocator, self.moduleForKeyBytes(imported.bytes) orelse continue);
             }
-        } else Common.invariant("a stored codec edge's contract was not held by its storing module's import closure");
+            if (moduleBytesEqual(view.key.bytes, root_key)) {
+                for (0..self.modules.root.relation_modules.len) |index| {
+                    const relation = self.relationModuleView(index);
+                    if ((try reached.getOrPut(self.allocator, relation.key.bytes)).found_existing) continue;
+                    try pending.append(self.allocator, relation);
+                }
+            }
+        } else Common.invariant("a stored codec edge's contract was not held by a module its storing module's values come from");
         try self.stored_codec_edges.put(self.allocator, key, edge);
         return edge;
     }
@@ -39352,10 +39364,11 @@ const BodyContext = struct {
             .stored_const => |stored| try self.storedConstRootMonoType(self.view, stored, entry.checked_type),
             // Dispatch requires one concrete specialization type for this
             // selected const use. A generalized field whose presence has no
-            // other evidence takes the declared required default in an
-            // immutable view; the relation below then applies that exact
-            // choice to the live const-use graph before any body emits.
-            .eval_template => try self.graph.specializationTypeViewForNode(
+            // other evidence takes the declared required default, and a row
+            // tail nothing widened takes its row default, in an immutable
+            // view; the relation below then applies that exact choice to
+            // the live const-use graph before any body emits.
+            .eval_template => try self.graph.specializationChoiceTypeViewForNode(
                 try self.instNode(entry.checked_type),
             ),
             .reserved => Common.invariant("reserved hoisted const template reached Monotype type selection"),

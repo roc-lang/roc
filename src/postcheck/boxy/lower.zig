@@ -3592,7 +3592,9 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
 
     _ = try program.modules.add(checked.importedView(input.modules.root.module));
     for (input.modules.imports) |view| _ = try program.modules.add(view);
-    for (input.modules.root.relation_modules) |view| _ = try program.modules.add(view);
+    for (input.modules.root.relation_modules) |view| {
+        try program.modules.relations.append(allocator, try program.modules.add(view));
+    }
     program.body_indexed = try allocator.alloc(bool, program.modules.views.items.len);
     @memset(program.body_indexed, false);
     base.dev_diagnostics.countTestWork(.boxy_body_index_available_modules, program.modules.views.items.len);
