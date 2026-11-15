@@ -5498,30 +5498,21 @@ const Inserter = struct {
     /// argument's ownership place in the current emission, so the place is
     /// still live at the statement even though no later statement uses it.
     /// Field takes give their targets places of their own, so two takes of
-    /// different fields of one container never share. A place lies on its
-    /// local's solved borrow chain, which ends at the solved leader, so only
-    /// operands with the same leader can share one.
+    /// different fields of one container never share. A solved leader is no
+    /// proxy for a place: a borrowed local can lead its own liveness group
+    /// while its place follows its borrow source to a container another
+    /// operand also borrows from, so every operand's place is compared.
     fn groupSharesOtherOperand(
         self: *const Inserter,
         locals: anytype,
         position: usize,
         local: LIR.LocalId,
     ) bool {
-        const leader = self.solution.leaderOf(local);
-        var place: ?LIR.LocalId = null;
+        const local_place = self.ownershipPlaceLeader(local);
         for (0..GuardedList.borrowLen(locals)) |j| {
             if (j == position) continue;
             const other = GuardedList.at(locals, j);
-            if (other == local) return true;
-            if (self.solution.leaderOf(other) != leader) {
-                if (builtin.mode == .debug and self.ownershipPlaceLeader(other) == self.ownershipPlaceLeader(local)) {
-                    arcInvariant("ARC ownership place left its solved borrow leader");
-                }
-                continue;
-            }
-            const local_place = place orelse self.ownershipPlaceLeader(local);
-            place = local_place;
-            if (self.ownershipPlaceLeader(other) == local_place) return true;
+            if (other == local or self.ownershipPlaceLeader(other) == local_place) return true;
         }
         return false;
     }
