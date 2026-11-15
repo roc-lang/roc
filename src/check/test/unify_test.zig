@@ -1066,6 +1066,29 @@ test "unify - an alias backed by itself relates to a structure without looping" 
     try std.testing.expect(types.resolveVar(a).var_ != types.resolveVar(b).var_);
 }
 
+test "unify - an uncommitted record tail meeting an alias relates to the alias's backing" {
+    for (0..2) |order| {
+        var env = try TestEnv.init(std.testing.allocator);
+        defer env.deinit();
+        const types = &env.module_env.types;
+
+        const backing = try types.freshFromContent(Content{ .structure = .empty_record });
+        const alias = try types.freshFromContent(try env.mkAlias("Unit", backing, &[_]Var{}));
+        const tail = try types.fresh();
+        try types.markUncommittedRecordTail(tail, false);
+
+        const result = if (order == 0) try env.unify(tail, alias) else try env.unify(alias, tail);
+
+        try std.testing.expectEqual(.unified, result);
+        // The tail commits to the empty record the alias is backed by. It
+        // does not become the alias.
+        try std.testing.expectEqual(types.resolveVar(backing).var_, types.resolveVar(tail).var_);
+        try std.testing.expectEqual(Content{ .structure = .empty_record }, types.resolveVar(tail).desc.content);
+        try std.testing.expect(!types.resolveVar(tail).desc.flags.uncommitted_record_tail);
+        try std.testing.expect(types.resolveVar(alias).desc.content == .alias);
+    }
+}
+
 // unification - structure/flex_vars //
 
 test "unify - a is builtin and b is flex_var" {
@@ -2592,6 +2615,50 @@ test "unify - tag unions that store the same tags out of name order merge into a
     try std.testing.expectEqual(@as(u32, 2), merged.tags.count);
     try std.testing.expectEqualStrings("A", env.module_env.getIdentStore().getText(types.getTagAt(merged.tags, 0).name));
     try std.testing.expectEqualStrings("B", env.module_env.getIdentStore().getText(types.getTagAt(merged.tags, 1).name));
+}
+
+test "unify - tag unions with the same tags commit an uncommitted tag tail that meets a committed one" {
+    for (0..2) |order| {
+        var env = try TestEnv.init(std.testing.allocator);
+        defer env.deinit();
+        const types = &env.module_env.types;
+
+        const committed_ext = try types.freshFromContent(Content{ .structure = .empty_tag_union });
+        const committed = try types.freshFromContent((try env.mkTagUnion(&[_]Tag{try env.mkTag("A", &[_]Var{})}, committed_ext)).content);
+        const uncommitted_ext = try types.freshFromContent(Content{ .structure = .empty_tag_union });
+        try types.markUncommittedTagTail(uncommitted_ext);
+        const uncommitted = try types.freshFromContent((try env.mkTagUnion(&[_]Tag{try env.mkTag("A", &[_]Var{})}, uncommitted_ext)).content);
+
+        const result = if (order == 0) try env.unify(committed, uncommitted) else try env.unify(uncommitted, committed);
+
+        try std.testing.expectEqual(.unified, result);
+        try std.testing.expectEqual(types.resolveVar(committed).var_, types.resolveVar(uncommitted).var_);
+        // The two tails are one class, and it is committed.
+        try std.testing.expectEqual(types.resolveVar(committed_ext).var_, types.resolveVar(uncommitted_ext).var_);
+        const merged = types.resolveVar(committed).desc.content.structure.tag_union;
+        const merged_ext = types.resolveVar(merged.ext);
+        try std.testing.expectEqual(Content{ .structure = .empty_tag_union }, merged_ext.desc.content);
+        try std.testing.expect(!merged_ext.desc.flags.uncommitted_tag_tail);
+    }
+}
+
+test "unify - tag unions with the same tags over two uncommitted tag tails keep an uncommitted tail" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const a_ext = try types.freshFromContent(Content{ .structure = .empty_tag_union });
+    try types.markUncommittedTagTail(a_ext);
+    const a = try types.freshFromContent((try env.mkTagUnion(&[_]Tag{try env.mkTag("A", &[_]Var{})}, a_ext)).content);
+    const b_ext = try types.freshFromContent(Content{ .structure = .empty_tag_union });
+    try types.markUncommittedTagTail(b_ext);
+    const b = try types.freshFromContent((try env.mkTagUnion(&[_]Tag{try env.mkTag("A", &[_]Var{})}, b_ext)).content);
+
+    const result = try env.unify(a, b);
+
+    try std.testing.expectEqual(.unified, result);
+    const merged = types.resolveVar(b).desc.content.structure.tag_union;
+    try std.testing.expect(types.resolveVar(merged.ext).desc.flags.uncommitted_tag_tail);
 }
 
 test "unify - closed tag union extends open" {
