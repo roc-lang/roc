@@ -6383,6 +6383,17 @@ const Lowerer = struct {
         /// arguments, as a capture record would be, and bound to the
         /// callee's capture locals instead of being packed into one.
         capture_values: []Lifted.ExprId = &.{},
+        /// The capture record `capture_arg` holds, when the call builds it
+        /// itself, next to the call statement. Every operand of such a
+        /// record is a plain local read (`operandIsPlainLocalRead`), so
+        /// building it after the arguments reads the same values, and the
+        /// record is not live across an argument's branching.
+        capture_record: ?struct {
+            captures: CaptureSpanId,
+            /// Borrowed from the lifted program.
+            operands: []const Lifted.CaptureOperand,
+            ty: Type.TypeId,
+        } = null,
         /// The capture value types, then the argument types.
         arg_tys: []Type.TypeId = &.{},
         lowered: ?LoweredExprLocals = null,
@@ -8289,6 +8300,23 @@ const Lowerer = struct {
         task.capture_ty = self.fn_entries.items[@backingInt(task.target_fn)].spec.capture_ty.get() orelse
             Common.invariant("capturing direct call target had no capture record type");
         task.capture_local = try self.addTemp(task.capture_ty);
+        var plain_captures = true;
+        for (task.capture_operands) |operand| {
+            if (!self.operandIsPlainLocalRead(operand.value)) plain_captures = false;
+        }
+        if (plain_captures) {
+            return .{ .tail = .{ .known_call = .{
+                .where = task.where,
+                .target = task.target,
+                .result_ty = task.result_ty,
+                .callee = task.target_fn,
+                .args = args,
+                .capture_arg = task.capture_local,
+                .is_cold = task.is_cold,
+                .next = task.next,
+                .capture_record = .{ .captures = task.captures, .operands = task.capture_operands, .ty = task.capture_ty },
+            } } };
+        }
         frame.cursor = 1;
         return .{ .call = .{ .known_call = .{
             .where = task.where,
@@ -8331,6 +8359,10 @@ const Lowerer = struct {
     }
 
     fn stepKnownCall(self: *Lowerer, frame: *LowerFrame, task: *KnownCallTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        // The capture record is built; the arguments are lowered ahead of it.
+        if (frame.cursor == 2) {
+            return .{ .tail = try self.operandChain(task.where, task.lowered.?, task.arg_tys, null, input.?) };
+        }
         if (frame.cursor == 1) {
             const lowered = task.lowered.?;
             const start = task.substituted_start.?;
@@ -8445,6 +8477,11 @@ const Lowerer = struct {
             }),
             .next = after_call,
         } }, where.source());
+        if (task.capture_record) |record| {
+            const capture_local = task.capture_arg orelse Common.invariant("a call that builds its capture record had no capture argument");
+            frame.cursor = 2;
+            return .{ .call = try self.captureRecordTask(where, capture_local, record.captures, record.operands, record.ty, current) };
+        }
         return .{ .tail = try self.operandChain(where, lowered, task.arg_tys, null, current) };
     }
 

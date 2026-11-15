@@ -9915,11 +9915,7 @@ substituted checked wrappers of `.wrappers` mode produce exactly this shape at
 every call site (a `Try` built on each arm and matched at once by the caller),
 as does the iterator-fusion clone of `.none`. A producer edge may release
 values it has finished with between building the tag and jumping; those
-releases are carried onto the redirected edge. The join's body may begin with
-straight-line definitions that do not read the union, ahead of its match: an
-inlined call computes its other arguments there. They run whichever variant
-arrives, so each variant's continuation begins with its own copy of them,
-defining the same locals; nothing moves across a producer or an arm. An arm may release the union
+releases are carried onto the redirected edge. An arm may release the union
 itself; the fused arm releases that variant's payload instead, or nothing when
 the variant owns nothing. A fused arm copies exactly the statements its
 variant rewrite changes, together with what copying them forces: their
@@ -10460,6 +10456,11 @@ structural boundary wraps them around the result. Roc also preserves GHC's
 important distinction between purity and speculatability: knowing that an
 expression has no language-level effect does not prove that evaluating it early
 or not at all preserves strict source evaluation behavior.
+
+A direct call's arguments are one such sequence. When a later argument's clone
+produces strict bindings, they are placed ahead of the call, so every earlier
+argument's own work is first named in the chain at its position; left in the
+argument list it would run after them.
 
 This strict chain is the ordering proof. SpecConstr does not count effectful
 expressions, record emission windows, recover ordering from expression ids, or
@@ -20201,7 +20202,10 @@ statement that consumes the result, so every path through a value-position join
 arrives by an explicit jump that tag-case fusion can see as a producer. A
 `match`, `if`, initialized-payload switch, or callable dispatch whose continuation
 is that jump delivers through the consumer rather than declaring a join of its
-own. A jump from a join point's remainder that supplies one tag union builds
+own. A direct call whose capture operands are all plain local reads builds its
+capture record next to the call statement, after its arguments: the record
+reads the same values there, and is not live across an argument that
+branches. A jump from a join point's remainder that supplies one tag union builds
 it in the parameter itself, as a value join's branches do, rather than in a
 temporary copied into the parameter; the parameters are in scope only in the
 body, so that argument cannot read them. The join a `match` or `if` declares for its own result is a consumer in the
