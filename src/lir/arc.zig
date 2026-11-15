@@ -17445,7 +17445,7 @@ test "RC a field passed out of a record nested in a dying record is taken once, 
     const caller = try f.addProc(&.{}, caller_body, .i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     try testing.expect((try f.directCallTo(caller, result)).proc != update);
