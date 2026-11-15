@@ -15246,9 +15246,9 @@ test "methods on open rows - the requirement is written on the row variable for 
         \\     , b.is_eq : b, b -> Bool]
         },
         .{ .def = "read_foo", .expected =
-        \\{ id: a, ..b }, { id: d, ..e } -> f
-        \\  where [a.plus : a, d -> a
-        \\     , b.foo : b, { id: d, ..e } -> f]
+        \\{ id: a, ..b }, { id: a, ..d } -> e
+        \\  where [a.plus : a, a -> a
+        \\     , b.foo : b, { id: a, ..d } -> e]
         },
         .{ .def = "is_red", .expected =
         \\[Red, ..a] -> Bool where [a.is_eq : a, a -> Bool]
