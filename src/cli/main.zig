@@ -19124,9 +19124,10 @@ fn recordChunkedBreakdown(reporter: *progress.Reporter, name: []const u8, contin
     }
 }
 
-/// Detailed LIR pass timing: each procedure-local phase's elapsed time,
-/// preparation, summed worker time, idle worker capacity, and commit, then
-/// the whole-program steps before ARC and after it.
+/// Detailed LIR pass timing: each segment's elapsed time, preparation, idle
+/// worker capacity and commit under its first phase, each phase's summed
+/// worker time and procedure counts, then the whole-program steps before ARC
+/// and after it.
 fn recordLirPassDetail(reporter: *progress.Reporter, snapshot: lir.CheckedPipeline.TimingSnapshot, comptime prefix: []const u8) void {
     const Pipeline = lir.CheckedPipeline;
     const phases = @typeInfo(Pipeline.LirPassPhase).@"enum".field_names;
@@ -19137,16 +19138,19 @@ fn recordLirPassDetail(reporter: *progress.Reporter, snapshot: lir.CheckedPipeli
     inline for (phases) |name| {
         const phase = @field(Pipeline.LirPassPhase, name);
         const wall = snapshot.procPass(.wall, phase);
+        const worker = snapshot.procPass(.worker, phase);
         if (wall != 0) {
-            const worker = snapshot.procPass(.worker, phase);
-            rows[len..][0..5].* = .{
+            rows[len..][0..4].* = .{
                 .{ .name = name, .ns = wall },
                 .{ .name = name ++ ": prepare", .ns = snapshot.procPass(.prepare, phase) },
-                .{ .name = name ++ ": workers", .ns = worker },
-                .{ .name = name ++ ": idle workers", .ns = snapshot.procPass(.capacity, phase) -| worker },
+                .{ .name = name ++ ": idle workers", .ns = snapshot.procPass(.capacity, phase) -| snapshot.procPass(.segment_worker, phase) },
                 .{ .name = name ++ ": commit", .ns = snapshot.procPass(.commit, phase) },
             };
-            len += 5;
+            len += 4;
+        }
+        if (wall != 0 or worker != 0) {
+            rows[len] = .{ .name = name ++ ": workers", .ns = worker };
+            len += 1;
             counters[counter_len..][0..2].* = .{
                 .{ .name = name ++ " procedures visited", .count = snapshot.procPass(.visited, phase) },
                 .{ .name = name ++ " procedures changed", .count = snapshot.procPass(.changed, phase) },
@@ -19198,6 +19202,8 @@ fn arcStepLabel(step: lir.CheckedPipeline.ArcTiming.Step) []const u8 {
         .emission_workers => "Emission Workers",
         .shard_append => "Shard Append",
         .certify => "Certification",
+        .procedure_tasks => "Procedure Tasks",
+        .procedure_task_workers => "Procedure Task Workers",
         .parallel_capacity => "Idle Workers",
     };
 }
@@ -19209,7 +19215,8 @@ fn recordArcDetail(reporter: *progress.Reporter, snapshot: lir.CheckedPipeline.T
     var rows: [ArcTiming.step_count]progress.SubTiming = undefined;
     const workers = snapshot.arc_steps_ns[@backingInt(ArcTiming.Step.source_prep_workers)] +|
         snapshot.arc_steps_ns[@backingInt(ArcTiming.Step.planning_workers)] +|
-        snapshot.arc_steps_ns[@backingInt(ArcTiming.Step.emission_workers)];
+        snapshot.arc_steps_ns[@backingInt(ArcTiming.Step.emission_workers)] +|
+        snapshot.arc_steps_ns[@backingInt(ArcTiming.Step.procedure_task_workers)];
     inline for (@typeInfo(ArcTiming.Step).@"enum".field_names, 0..) |name, index| {
         const step = @field(ArcTiming.Step, name);
         const ns = snapshot.arc_steps_ns[index];
@@ -19224,7 +19231,7 @@ fn codegenStepLabel(step: lir.CheckedPipeline.CodegenStep) []const u8 {
     return switch (step) {
         .backend_setup => "Backend Setup",
         .procedure_setup => "Procedure Setup",
-        .procedure_waves => "Procedure Waves",
+        .procedure_runs => "Procedure Runs",
         .procedure_worker_setup => "Worker Setup (summed)",
         .procedure_emit => "Stack Plan + Emission (summed)",
         .procedure_extract => "Fragment Extraction (summed)",

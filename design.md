@@ -17170,7 +17170,7 @@ its program builds exactly the modules the root sees.
 Every unit and program build is given the post-check executor, whichever thread
 runs it: a session may be opened on any thread, a running task included, and a
 thread waiting in a session runs that session's queued tasks itself, so the
-parallel waves of a unit's ARC and native code generation spread over the pool
+ordered runs of a unit's ARC and native code generation spread over the pool
 from a worker as they do from the coordinating thread, and the evaluating
 thread, waiting for the next unit or program, builds queued ones itself. A
 compilation that does not link its program (`roc check`) builds the modules
@@ -17546,6 +17546,49 @@ size, or runtime performance are allowed.
 
 
 ## Shared Post-Check Model
+
+### Ordered Runs
+
+Native dev code generation, ARC and the procedure-local LIR passes run their
+per-procedure work as ordered runs on the post-check executor
+(`post_check_task_executor.runOrdered`). A run's owner splits its items into
+chunks of consecutive items by a scheduling weight, a procedure's frame size:
+each chunk carries at least a minimum weight, and a run has about sixteen
+chunks per worker, so many short procedures share one claim and a heavy
+procedure late in the run leaves the other lanes little to wait for. The
+owner submits drain tasks, at most one per worker. A drain task claims chunks
+from one shared counter, never more than a window of four chunks per worker
+past the oldest uncommitted chunk, and runs every item of each chunk it
+claims, so a lane goes from one chunk to the next without returning to the
+executor and the results waiting for their commit are bounded by the window.
+
+The owner commits items in index order, each as soon as it and every item
+before it have run, while lanes keep running later chunks. It waits only by
+receiving a completion of its session: the lane that finishes the chunk the
+owner is waiting for ends its drain task, and that completion wakes the owner,
+so no thread polls or sleeps. A drain task the owner runs itself while it waits
+ends after one chunk, so the owner gets back to committing. Commit order is
+item order for every worker count, chunking and completion order, and the
+weights decide only which lane runs an item and when, so a run's output depends
+only on its items. The first error, from an item or a commit, stops every
+further claim; items already claimed finish, nothing further commits, and the
+owner returns the error once it has received every task. Without an executor,
+the items run and commit in order on one sequential lane through the same
+callbacks.
+
+Each lane lends every item it runs one scratch arena, registered in the lane's
+state and reset after each item to a single retained chunk of at most
+`lane_scratch_retain_limit` (4 MiB), so a lane's steady-state items allocate
+nothing from the backing allocator and idle scratch is bounded per lane.
+
+A commit runs while lanes run later items, so it may change nothing an item
+reads. Native code generation commits in the run: lanes read only the frozen
+program and their own generators, and the owner appends each fragment to the
+destination. ARC and the LIR passes commit after their runs, since their
+commits append to the store every item reads: ARC appends a wave's shards in
+owner order after the wave ("ARC Borrow Inference"), and a segment of LIR pass
+phases commits in procedure order after its run ("Procedure-Local LIR
+Rewrites").
 
 ### Value Rules
 
@@ -22140,11 +22183,27 @@ proving decides a switch or a checked-arithmetic operation, and equally a
 comparison of unsigned integers with no branch beside it and the count of a
 SIMD concat-shift, so each of those four shapes admits a body to it. Debug
 builds also run every phase on the procedures its shapes excluded and fail if
-one of them would be rewritten.
+one of them would be rewritten; within a segment, each phase the shapes
+exclude is checked on every procedure no earlier phase of the segment changed.
 
-The same patch boundary applies with one worker. Every phase finishes its
-callbacks before committing in procedure order, so neither input visibility
-nor output identity depends on worker count or completion order. Each commit
+Phases run in segments. Consecutive phases that read no other procedure's
+body, allocate no fresh join identities, and prepare no layouts from an earlier
+phase's output (branch expectation, TRMC, join scalarization and join-parameter
+pruning, `ProcPasses.fusible`) form one segment; every other phase, and every
+whole-program step such as single-use inlining, is a segment boundary. A
+segment clones each procedure once, runs each of its phases the procedure's
+shapes admit on that one shard, checking admission against the shapes the
+shard has gained, and commits once: each phase therefore reads exactly what
+the commit of the phase before it would have left, and the output is the
+output of running the phases one at a time. Loop append promotion reads the
+bodies of the procedures a loop calls, so it starts a segment of its own after
+every procedure's earlier phases committed.
+
+The same patch boundary applies with one worker. A segment with workers is
+one ordered run ("Ordered Runs") whose items rewrite and whose own commit does
+nothing; every segment finishes its callbacks before committing in procedure
+order, so neither input visibility nor output identity depends on worker count
+or completion order. Each commit
 relocates appended references in both patched rows and procedure metadata.
 Fusion workers keep a procedure's full fixed point in one task. The coordinator
 inventories the old join-ID domain once; each task allocates fresh identities
@@ -23892,6 +23951,27 @@ the same schedule with or without workers, so worker count and completion order
 cannot change variant symbols or emitted LIR. Submission or callback failure
 drains accepted work before freeing its owners; insertion failure discards the
 entire result rather than replaying work against a partially emitted store.
+
+Without uniqueness proofs, as in dev builds and compile-time evaluation, and
+when every statement belongs to exactly one procedure's statement list,
+nothing a procedure's planning or emission reads depends on another
+procedure's source preparation: a complete projection read is decided by the
+one source procedure whose statement list holds it, and an emission consults
+only its own source's decisions. (Procedures may share an ownership-neutral
+body; a statement two of them share takes the decision of the last source to
+decide it, so such a program uses the phased schedule below.) Procedure facts are recorded before
+the first wave, and each wave of owners is one ordered run ("Ordered Runs")
+whose task prepares a base owner's source, plans the owner, and emits it when
+its plan requests no variant. A variant reads its base procedure's prepared
+source, so a wave holds base owners or variants, never both, and every base
+wave precedes every variant wave. The wave then reserves its variants in owner
+order, emits the owners whose plans requested any in a second run, and
+appends every shard in owner order. A shard emitted before the wave's
+reservations names the shorter procedure prefix it was cloned from; appending
+relocates it exactly like one emitted after them. Proving uniqueness settles
+against every source's prepared projections, so that schedule prepares every
+source before any wave and plans, reserves and emits each wave in three
+executor round trips.
 
 A build without optional mode specialization suppresses general cost-only
 demand vectors, but it does not force every call to the solved base `RcSig`.
@@ -29206,20 +29286,23 @@ its imports' objects and the wait for a worker. The steps are summed over
 units, and the ten slowest units by their own work, with the Builtin
 module's unit always, are printed one per row.
 
-The LIR passes report each procedure-local phase's elapsed time,
-preparation, summed worker time, idle worker capacity and ordered commit,
-with procedures visited and changed, and each whole-program step before ARC
-and after it. Summed worker time comes from one slot per task
-(`post_check_task_executor.TimedTasks`) or per lane, folded by the
-coordinator after the barrier, so no two lanes write one counter. Idle
-capacity is each parallel section's elapsed time times the executor's
-worker count, less the summed worker time.
+The LIR passes report each segment's elapsed time, preparation, idle worker
+capacity and ordered commit under its first phase, each phase's summed worker
+time with the procedures it visited and the procedures it was the first of
+its segment to change, and each whole-program step before ARC and after it.
+Summed worker time comes from one slot per task
+(`post_check_task_executor.TimedTasks`) or per lane
+(`post_check_task_executor.OrderedTiming`), folded by the owner after the
+last completion, so no two lanes write one counter. Idle capacity is each
+parallel section's elapsed time times the executor's worker count, less the
+summed worker time.
 
 ARC reports its serial steps, each parallel step's elapsed time and summed
-worker time, and idle worker capacity.
+worker time, among them the tasks that each prepare, plan and emit one
+procedure, and idle worker capacity.
 
 A module unit's native code generation reports backend setup, procedure
-setup, waves, worker setup, stack planning with emission, fragment
+setup, the ordered runs, worker setup, stack planning with emission, fragment
 extraction, idle workers, fragment commit, symbolic reference resolution,
 entrypoints, the steps lifting code into pieces, image composition, DWARF,
 object encoding and the unit image, with the bytes of code, objects,
