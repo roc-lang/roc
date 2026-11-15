@@ -381,6 +381,35 @@ test "issue 11801: concrete dispatch replay accepts a scheme row whose field kin
     try std.testing.expect(env.checker.dispatch_replayed_edges.items.len >= 2);
 }
 
+test "issue 11801: concrete dispatch replay covers a receiver whose type a default chose" {
+    // Each receiver is a literal that nothing but its default gives a type.
+    // The first call makes the binding replayable, the second becomes the
+    // source, and the rest replay it: a replay shares an instance whose
+    // relation to an equal callable already succeeded, so it cannot reject
+    // the default.
+    for ([_][]const u8{
+        \\a = "ab".count_utf8_bytes()
+        \\b = "cd".count_utf8_bytes()
+        \\c = "ef".count_utf8_bytes()
+        \\d = "gh".count_utf8_bytes()
+        \\e = "ij".count_utf8_bytes()
+        \\f = "kl".count_utf8_bytes()
+        ,
+        \\a = 1.5.to_str()
+        \\b = 2.5.to_str()
+        \\c = 3.5.to_str()
+        \\d = 4.5.to_str()
+        \\e = 5.5.to_str()
+        \\f = 6.5.to_str()
+        ,
+    }) |source| {
+        var env = try TestEnv.init("Test", source);
+        defer env.deinit();
+        try env.assertNoErrors();
+        try std.testing.expect(env.checker.dispatch_replayed_edges.items.len >= 2);
+    }
+}
+
 test "issue 11801: a type error in one replayed use leaves the uses sharing its instance intact" {
     // The uses of `mk` differ in their unused argument's type, so each
     // settles its own copy of `mk`'s `pair_with` requirement. `first` makes

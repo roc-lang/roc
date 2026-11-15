@@ -215,7 +215,7 @@ test "Custom number type without negate: unary minus fails" {
     try test_env.assertOneTypeError("Missing Method");
 }
 
-test "Custom type with from_numeral and heterogeneous plus: literal + literal works" {
+test "An operator cannot call a plus whose second parameter is another type" {
     const source =
         \\  MyNum := [Blah].{
         \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
@@ -232,14 +232,12 @@ test "Custom type with from_numeral and heterogeneous plus: literal + literal wo
     var test_env = try TestEnv.init("MyNum", source);
     defer test_env.deinit();
 
-    // Type-checks: the annotation pins the lhs literal to MyNum, and the binop
-    // dispatch constraint against MyNum.plus pins the rhs literal to I64. Eagerly
-    // unifying the two literal operands (assuming literal + literal must be
-    // homogeneous) would wrongly force rhs = MyNum.
-    try test_env.assertNoErrors();
+    // The annotation makes both operands and the result `MyNum`, so `+`
+    // needs `plus : MyNum, MyNum -> MyNum`.
+    try test_env.assertOneTypeError("Type Mismatch");
 }
 
-test "Custom type with heterogeneous times: Duration * I64 works" {
+test "A method with mixed parameter types is called by name" {
     const source =
         \\Duration := { seconds: I64 }.{
         \\    times : Duration, I64 -> Duration
@@ -250,17 +248,16 @@ test "Custom type with heterogeneous times: Duration * I64 works" {
         \\my_duration = { seconds: 60 }
         \\
         \\result : Duration
-        \\result = my_duration * 5
+        \\result = my_duration.times(5)
     ;
 
     var test_env = try TestEnv.init("Duration", source);
     defer test_env.deinit();
 
-    // Should type-check successfully - Duration.times accepts Duration and I64
     try test_env.assertNoErrors();
 }
 
-test "Custom type with heterogeneous times: Duration * I64 variable works" {
+test "An operator's operands must be one type: Duration * I64 is a mismatch" {
     const source =
         \\Duration := { seconds: I64 }.{
         \\    times : Duration, I64 -> Duration
@@ -280,15 +277,35 @@ test "Custom type with heterogeneous times: Duration * I64 variable works" {
     var test_env = try TestEnv.init("Duration", source);
     defer test_env.deinit();
 
-    // Type-checks. The rhs is a CONCRETE builtin numeric (I64) but the
-    // lhs/dispatcher is a user nominal: eagerly unifying the operands (assuming
-    // homogeneity because one side is builtin-numeric) would wrongly force
-    // Duration = I64. The dispatch constraint
-    // `Duration.times : Duration, I64 -> Duration` must resolve this instead.
-    try test_env.assertNoErrors();
+    try test_env.assertOneTypeError("Type Mismatch");
 }
 
-test "Flex lambda param plus concrete I64 rhs stays polymorphic" {
+test "A mismatching operator use leaves the method's other uses intact" {
+    const source =
+        \\Duration := { seconds: I64 }.{
+        \\    times : Duration, I64 -> Duration
+        \\    times = |d, n| { seconds: d.seconds * n }
+        \\}
+        \\
+        \\my_duration : Duration
+        \\my_duration = { seconds: 60 }
+        \\
+        \\longer : Duration
+        \\longer = my_duration.times(5)
+        \\
+        \\result : Duration
+        \\result = my_duration * my_duration
+    ;
+
+    var test_env = try TestEnv.init("Duration", source);
+    defer test_env.deinit();
+
+    // `*` needs `times : Duration, Duration -> Duration`. Its rejection is
+    // this use's alone: `longer` still calls the method the type declares.
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "An operator's known operand decides the other operand" {
     const source =
         \\my_i64 : I64
         \\my_i64 = 7
@@ -297,17 +314,13 @@ test "Flex lambda param plus concrete I64 rhs stays polymorphic" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    // The concrete builtin rhs must NOT eagerly pin the flex lhs (the dispatcher
-    // could be any nominal with `plus : a, I64 -> a`); `f` keeps the dispatch
-    // constraint instead of collapsing to `I64 -> I64`.
-    try test_env.assertDefType("f", "a -> a where [a.plus : a, I64 -> a]");
+    try test_env.assertDefType("f", "I64 -> I64");
 }
 
 test "Discarded unpinned arithmetic specialization validates the default method type" {
     const source =
         \\run = || {
-        \\    my_u64 = 7.U64
-        \\    f = |x| x + my_u64
+        \\    f = |x| x + x.absent()
         \\    _ = (f, |x| Str.inspect(x))
         \\    {}
         \\}
@@ -315,10 +328,10 @@ test "Discarded unpinned arithmetic specialization validates the default method 
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    // The bare use materializes the default for f's arithmetic receiver, whose
-    // `plus` cannot discharge the `a, U64 -> a` constraint, so checking owns
-    // the diagnostic instead of publishing incompatible dispatch evidence.
-    // Nothing determines that receiver, so it is reported as undetermined.
+    // The bare use materializes the default for f's arithmetic operand, which
+    // has no `absent` method, so checking owns the diagnostic instead of
+    // publishing incompatible dispatch evidence. Nothing determines that
+    // operand, so it is reported as undetermined.
     try test_env.assertOneTypeError("Missing Method");
 }
 

@@ -109,7 +109,9 @@ main! = |_| processNested([])
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-runtime-error (tag "erroneous_value_expr")))))
+			(e-call (constraint-fn-var 263)
+				(e-runtime-error (tag "erroneous_value_expr"))
+				(e-empty_list)))))
 ~~~
 # TYPES
 ~~~clojure

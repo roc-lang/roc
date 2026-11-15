@@ -4743,14 +4743,14 @@ pub const Coordinator = struct {
     /// is by construction the key the probe missed on.
     fn canonicalizedModuleCacheKey(
         self: *const Coordinator,
-        source: []const u8,
+        source_digest: base.SourceDigest,
         module_name: []const u8,
         module_role: ModuleEnv.ModuleRole,
         validation: can.Can.Validation,
         is_entry_module: bool,
     ) [32]u8 {
         return cache_key_mod.canonicalizedModuleCacheKey(.{
-            .source = source,
+            .source_digest = source_digest,
             .module_basename = base.module_path.getModuleBasename(module_name),
             .is_entry_module = is_entry_module,
             .module_role = module_role,
@@ -5204,6 +5204,12 @@ pub const Coordinator = struct {
             cached_env.deinit();
             module_alloc.destroy(cached_env);
         };
+        // The cached env is installed over `source`, whose digest the entry's
+        // key hashed. An entry that records another digest is corrupt.
+        if (!cached_env.source_digest.eql(current_env.source_digest)) {
+            manager.stats.recordInvalidation();
+            return false;
+        }
 
         // Restore the environment's runtime interner and method tables for
         // import checking and diagnostics. The checked columns remain frozen.
@@ -7314,6 +7320,13 @@ pub const Coordinator = struct {
             manager.rejectEntry(.canonicalized, .canonicalized, cache_key, entries_dir, cache_data.stamp, "its module environment fails validation", .{});
             return .{ .delivered_then_missed = delivered };
         };
+        // The entry records the digest of the source it was built from, and
+        // the key that named it hashes this read's digest. An entry whose
+        // record disagrees is corrupt.
+        if (!std.mem.eql(u8, &serialized.source_digest, &source_read.digest.bytes)) {
+            manager.rejectEntry(.canonicalized, .canonicalized, cache_key, entries_dir, cache_data.stamp, "its recorded source digest differs from the source's", .{});
+            return .{ .delivered_then_missed = delivered };
+        }
 
         const env = try module_alloc.create(ModuleEnv);
         env.* = serialized.deserializeInPlace(
@@ -7334,7 +7347,6 @@ pub const Coordinator = struct {
             module_alloc.destroy(env);
         };
         std.debug.assert(env.module_role == task.module_role);
-
         // Read this module's `import "path" as name` file imports, exactly as
         // the canonicalize task does on a miss, so the module's source-input
         // identity is complete before the checked-module cache is probed.
@@ -7443,8 +7455,13 @@ pub const Coordinator = struct {
     fn executeParseFallible(self: *Coordinator, task: ParseTask, task_allocs: WorkerTaskAllocators) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!WorkerResult {
         var parse_timer = startStageTimer(self.roc_ctx.std_io);
 
+        // The source is digested where it is read: here, or by the build
+        // environment that read and parsed it ahead of this task. That digest
+        // is the module's only hash of its source text; the key below, the
+        // env, and every later identity read it.
         const source_read: SourceRead = if (task.discovered) |discovered| .{
             .source = @constCast(discovered.module_env.common.source),
+            .digest = discovered.module_env.source_digest,
             .file_state = discovered.source_file_state,
         } else try self.readModuleSourceForParse(task.path, task_allocs.module);
         const src = source_read.source;
@@ -7455,7 +7472,7 @@ pub const Coordinator = struct {
         // stamp in the entry. A hit checks that stamp, then skips parsing and
         // canonicalization entirely.
         const canonicalized_key = self.canonicalizedModuleCacheKey(
-            src,
+            source_read.digest,
             task.module_name,
             task.module_role,
             task.validation,
@@ -7484,14 +7501,14 @@ pub const Coordinator = struct {
         const parsed = if (task.discovered) |discovered|
             adoptDiscoveredParse(task, discovered, display_module_name)
         else
-            try parseModuleSource(task, task_allocs, src, display_module_name);
+            try parseModuleSource(task, task_allocs, src, source_read.digest, display_module_name);
         const env = parsed.env;
         const parse_ast = parsed.ast;
         errdefer destroyModuleEnvAndSource(env);
         errdefer parse_ast.deinit();
 
         if (self.cache_manager) |manager| {
-            try @import("source_inventory.zig").publishAst(task_allocs.scratch, manager, parse_ast);
+            try @import("source_inventory.zig").publishAst(task_allocs.scratch, manager, parse_ast, source_read.digest);
         }
 
         // The result payloads outlive this task, so they use the result
@@ -7577,11 +7594,13 @@ pub const Coordinator = struct {
         ast: *AST,
     };
 
-    /// Parse `src`, which this takes ownership of, into a new environment.
+    /// Parse `src`, which this takes ownership of and whose digest is
+    /// `source_digest`, into a new environment.
     fn parseModuleSource(
         task: ParseTask,
         task_allocs: WorkerTaskAllocators,
         src: []u8,
+        source_digest: base.SourceDigest,
         display_module_name: []const u8,
     ) Allocator.Error!ParsedModule {
         // Create ModuleEnv using the long-lived module allocator.
@@ -7601,7 +7620,7 @@ pub const Coordinator = struct {
             }
         }
 
-        env.* = try ModuleEnv.init(module_alloc, src);
+        env.* = try ModuleEnv.initWithSourceDigest(module_alloc, src, source_digest);
         env_initialized = true;
         try env.initCIRFields(display_module_name);
         env.module_role = task.module_role;
@@ -7927,43 +7946,31 @@ pub const Coordinator = struct {
         };
     }
 
-    /// Read module source using the Io abstraction.
+    /// One module's source as read for its parse task.
     const SourceRead = struct {
+        /// The file's bytes with line endings normalized.
         source: []u8,
+        /// The digest of `source`, taken by whoever read the bytes.
+        digest: base.SourceDigest,
         file_state: ?watch_inputs.State,
     };
 
+    /// Read a module's source using the Io abstraction, normalize its line
+    /// endings, and digest it. This is where a module the coordinator reads
+    /// has its source hashed; watch mode's file state is the digest of the
+    /// bytes as read, which is the same hash unless normalization rewrote
+    /// them.
     fn readModuleSourceForParse(self: *Coordinator, path: []const u8, module_alloc: Allocator) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!SourceRead {
-        if (!self.track_watch_inputs) {
-            return .{
-                .source = try self.readModuleSource(path, module_alloc),
-                .file_state = null,
-            };
-        }
-
-        return try self.readModuleSourceWithState(path, module_alloc);
-    }
-
-    fn readModuleSource(self: *Coordinator, path: []const u8, module_alloc: Allocator) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })![]u8 {
         const data = try self.roc_ctx.readFile(path, module_alloc);
-        errdefer module_alloc.free(data);
-
-        // Normalize line endings
-        return base.source_utils.normalizeLineEndingsRealloc(module_alloc, data);
-    }
-
-    fn readModuleSourceWithState(self: *Coordinator, path: []const u8, module_alloc: Allocator) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!SourceRead {
-        const data = try self.roc_ctx.readFile(path, module_alloc);
-        const file_state: watch_inputs.State = .{ .hash = watch_inputs.hashBytes(data) };
-
-        const source = base.source_utils.normalizeLineEndingsRealloc(module_alloc, data) catch |err| {
+        const digested = base.source_utils.normalizeAndDigest(module_alloc, data, self.track_watch_inputs) catch |err| {
             module_alloc.free(data);
             return err;
         };
 
         return .{
-            .source = source,
-            .file_state = file_state,
+            .source = digested.source,
+            .digest = digested.digest,
+            .file_state = if (digested.file_digest) |file_digest| watch_inputs.fileState(file_digest) else null,
         };
     }
 
@@ -11988,7 +11995,7 @@ test "Coordinator package creation" {
     try std.testing.expectEqualStrings(app_identity, retrieved.?.name);
 }
 
-test "Coordinator readModuleSource hashes raw CRLF source bytes" {
+test "Coordinator source read digests the normalized source and, for watch mode, the raw file bytes" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -12017,15 +12024,27 @@ test "Coordinator readModuleSource hashes raw CRLF source bytes" {
     defer coord.deinit();
     coord.setWatchInputTracking(true);
 
-    const read = try coord.readModuleSourceWithState(main_path, allocator);
+    const read = try coord.readModuleSourceForParse(main_path, allocator);
     defer allocator.free(read.source);
 
     try testing.expectEqualStrings("main = 1\n", read.source);
-    const expected_hash = watch_inputs.hashBytes(source);
+    var expected_source_digest: [32]u8 = undefined;
+    std.crypto.hash.Blake3.hash("main = 1\n", &expected_source_digest, .{});
+    try testing.expectEqualSlices(u8, &expected_source_digest, &read.digest.bytes);
+
+    var expected_file_digest: [32]u8 = undefined;
+    std.crypto.hash.Blake3.hash(source, &expected_file_digest, .{});
     switch (read.file_state orelse return error.ExpectedWatchInputState) {
-        .hash => |hash| try testing.expectEqualSlices(u8, &expected_hash, &hash),
+        .hash => |hash| try testing.expectEqualSlices(u8, &expected_file_digest, &hash),
         .missing, .unreadable => try testing.expect(false),
     }
+
+    // Outside watch mode only the normalized source is digested.
+    coord.setWatchInputTracking(false);
+    const untracked = try coord.readModuleSourceForParse(main_path, allocator);
+    defer allocator.free(untracked.source);
+    try testing.expectEqualSlices(u8, &expected_source_digest, &untracked.digest.bytes);
+    try testing.expect(untracked.file_state == null);
 }
 
 test "Coordinator module creation" {

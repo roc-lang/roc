@@ -84,6 +84,9 @@ pub const StaticDescs = struct {
     /// Producer records for immutable capture edges, retained only by programs
     /// that store function values. Export indices never leave this producer.
     captured_callables: std.AutoHashMapUnmanaged(ExportIndex, CapturedCallable) = .empty,
+    /// Each reserved table's position in `unfilled_tables`, by its node,
+    /// which a table read through its creator's table names
+    /// (`tableRecord`) as a stored function's capture edge does.
     captured_tables: std.AutoHashMapUnmanaged(ExportIndex, u32) = .empty,
     captured_records: std.ArrayList(CapturedRecord) = .empty,
     /// The procedure each static callable enters, from its reservation on.
@@ -233,6 +236,10 @@ pub const StaticDescs = struct {
     pub fn wordSlot(self: *StaticDescs, word: CaptureWord) Allocator.Error!LIR.StaticDataId {
         if (self.word_slots.get(word)) |known| return known;
         const slot = try self.addSlot();
+        // A callable word is an erased callable, and every read of its slot
+        // has that layout: the one that takes the word and any later read
+        // of a stored value the callable is (`Builder.staticRead`).
+        if (word == .callable) self.result.static_data_values.items[@backingInt(slot)].layout_idx = try self.result.layouts.insertErasedCallable();
         const slot_export = try self.addExport(try LirProgram.staticDataSymbolName(self.allocator, slot), self.ptrSize(), self.ptrSize(), slot);
         if (try self.wordTarget(word)) |target| {
             try self.setRelocations(slot_export, &.{.{ .offset = 0, .target = target.node, .addend = target.addend }});
@@ -490,13 +497,19 @@ pub const StaticDescs = struct {
         const owned_inputs = try self.allocator.dupe(CaptureWord, inputs);
         errdefer self.allocator.free(owned_inputs);
         try self.unfilled_tables.ensureUnusedCapacity(self.allocator, 1);
-        if (self.table_identities) try self.captured_tables.ensureUnusedCapacity(self.allocator, 1);
+        try self.captured_tables.ensureUnusedCapacity(self.allocator, 1);
         const owned_key = try self.allocator.dupe(u8, key.items);
         errdefer self.allocator.free(owned_key);
         try self.tables.put(self.allocator, owned_key, reserved);
         self.unfilled_tables.appendAssumeCapacity(.{ .worker = worker, .inputs = owned_inputs, .reserved = reserved, .index = @intCast(self.unfilled_tables.items.len) });
-        if (self.table_identities) self.captured_tables.putAssumeCapacity(reserved.node, @intCast(self.unfilled_tables.items.len - 1));
+        self.captured_tables.putAssumeCapacity(reserved.node, @intCast(self.unfilled_tables.items.len - 1));
         return reserved;
+    }
+
+    /// The worker and inputs of the table at node `node`.
+    pub fn tableRecord(self: *const StaticDescs, node: ExportIndex) UnfilledTable {
+        const ordinal = self.captured_tables.get(node) orelse types.invariant("a table word names no reserved table");
+        return self.unfilled_tables.items[ordinal];
     }
 
     /// The oldest reserved table not yet handed out for filling, or null.

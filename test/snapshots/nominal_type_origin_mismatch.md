@@ -116,7 +116,10 @@ main =
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-call (constraint-fn-var 239)
+			(e-runtime-error (tag "erroneous_value_expr"))
+			(e-string
+				(e-literal (string "not a person")))))
 	(s-import (mod "Data")
 		(exposes
 			(exposed (name "Person") (wildcard false)))))

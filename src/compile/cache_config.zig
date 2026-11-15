@@ -370,13 +370,22 @@ pub const Constants = struct {
     /// 187: CIR external nominal construction and pattern nodes record which
     ///      index space their module refers to, and a reserved-module-name
     ///      diagnostic node is added.
+    /// 188: a serialized module env records the BLAKE3 digest of its source,
+    ///      and module identities, cache keys and file-dependency content
+    ///      hashes are computed from source digests; a flex variable records
+    ///      whether it is a deferred literal's type. Includes the 187 changes.
     /// 189: checked artifacts store their type, scheme, blob and proc-base
     ///      interning tables; combines with the independent 187 entry change.
     /// 190: type tags record whether they are in their row only because `match`
     ///      branch patterns asked for them.
+    /// 191: includes both the 188 changes (source digests, deferred-literal
+    ///      flex variables) and the 190 changes (pattern-only type tags).
     /// 191: combines the independent 189 and 190 entry changes.
+    /// 192: combines the two independent 191 entries, so it includes the 188,
+    ///      189 and 190 changes.
     /// 192: literal argument roots record their edge owner as their own root
     ///      source and hold no expression.
+    /// 193: combines the two independent 192 entries.
     /// 193: a `return` in its function's result position canonicalizes to its
     ///      operand rather than to a return node.
     /// 193: on top of the 192 entry layout, uncommitted record and tag tails
@@ -387,7 +396,12 @@ pub const Constants = struct {
     ///      open rows are held on the row variable for the whole record or tag
     ///      union, and snapshots record which value a requirement is about.
     /// 194: combines the two independent 193 entries.
-    pub const CACHE_VERSION = 194;
+    /// 194: a Boxy lambda's type table refers to its creator's table instead
+    ///      of repeating its creator's inputs, in needs lists, stored function
+    ///      recipes and compiler-only function metadata.
+    /// 194: combines the two independent 193 entries.
+    /// 195: combines the three independent 194 entries.
+    pub const CACHE_VERSION = 195;
 };
 
 /// Configuration for the Roc cache system.

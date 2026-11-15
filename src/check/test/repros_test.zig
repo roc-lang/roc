@@ -371,7 +371,7 @@ test "check - repro - issue 9693 - polymorphic helper method constraints are not
         \\
         \\char_value = |char, index| {
         \\    if char >= '0' and char <= '9' {
-        \\        Ok((10 - index) * (char - '0').to_u64())
+        \\        Ok((10.U64 - index) * (char - '0').to_u64())
         \\    } else {
         \\        Err(BadChar)
         \\    }

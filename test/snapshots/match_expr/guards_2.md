@@ -117,12 +117,12 @@ describe = |value| match value {
 								(e-block
 									(s-let
 										(p-assign (ident "#interp_0"))
-										(e-dispatch-call (method "to_str") (constraint-fn-var 299)
+										(e-dispatch-call (method "to_str") (constraint-fn-var 286)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "first"))))
 											(args)))
-									(e-interpolation (constraint-fn-var 322) (dispatcher-var 26)
+									(e-interpolation
 										(first
 											(e-literal (string "long list starting with ")))
 										(parts
@@ -130,7 +130,7 @@ describe = |value| match value {
 												(p-assign (ident "#interp_0")))
 											(e-literal (string ""))))))
 							(guard
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 289)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 281)
 									(receiver
 										(e-call (constraint-fn-var 280)
 											(e-lookup-external
@@ -150,12 +150,12 @@ describe = |value| match value {
 								(e-block
 									(s-let
 										(p-assign (ident "#interp_1"))
-										(e-dispatch-call (method "to_str") (constraint-fn-var 357)
+										(e-dispatch-call (method "to_str") (constraint-fn-var 300)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "x"))))
 											(args)))
-									(e-interpolation (constraint-fn-var 377) (dispatcher-var 43)
+									(e-interpolation
 										(first
 											(e-literal (string "pair of equal values: ")))
 										(parts
