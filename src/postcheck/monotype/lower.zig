@@ -64561,8 +64561,13 @@ const BodyContext = struct {
         value_node: NodeId,
     ) Allocator.Error!void {
         const list = self.view.bodies.pattern(request.pattern).data.list;
-        const value = request.value;
         const value_cell = request.value_cell;
+        // The list is read by its length check and by each item and rest
+        // read, so a list that is not already a local read binds to one.
+        const list_local: ?DraftLocalId = if (self.draft.exprs.items[@backingInt(request.value)].data == .local)
+            null
+        else
+            try self.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
         const elem_node = try self.graph.listElementNode(value_node);
         const elem_cell = DraftTypeCell.fromGraphNode(elem_node);
         const values = try self.allocator.alloc(DraftExprId, list.patterns.len);
@@ -64576,14 +64581,14 @@ const BodyContext = struct {
         }
         for (pending_per_item) |*pending| pending.* = .empty;
         const u64_ty = try self.primitiveType(.u64);
-        const needs_len = if (list.rest) |rest| rest.index < list.patterns.len or rest.pattern != null else false;
-        const len = if (needs_len) try self.lowLevelExpr(.list_len, &.{value}, u64_ty) else null;
 
         for (list.patterns, 0..) |pattern_id, index| {
+            const counts_from_end = if (list.rest) |rest| index >= rest.index else false;
+            const len = if (counts_from_end) try self.lowLevelExpr(.list_len, &.{try self.listPatternListRead(request.value, list_local, value_cell)}, u64_ty) else null;
             const item_index = try self.listPatternItemIndex(index, list.patterns.len, list.rest, len, u64_ty);
             values[index] = try self.addExprWithTypeCell(elem_cell, .{ .low_level = .{
                 .op = .list_get_unsafe,
-                .args = try self.addExprSpan(&.{ value, item_index }),
+                .args = try self.addExprSpan(&.{ try self.listPatternListRead(request.value, list_local, value_cell), item_index }),
             } });
             patterns[index] = try self.lowerPatternPlanPlaceholderAtNode(pattern_id, elem_node, &pending_per_item[index]);
         }
@@ -64594,14 +64599,14 @@ const BodyContext = struct {
         defer rest_pending.deinit(self.allocator);
         if (list.rest) |rest| {
             if (rest.pattern) |rest_pattern| {
-                const list_len = len orelse try self.lowLevelExpr(.list_len, &.{value}, u64_ty);
+                const list_len = try self.lowLevelExpr(.list_len, &.{try self.listPatternListRead(request.value, list_local, value_cell)}, u64_ty);
                 const fixed_count = try self.intLiteralExpr(list.patterns.len, u64_ty);
                 const rest_len = try self.lowLevelExpr(.num_minus, &.{ list_len, fixed_count }, u64_ty);
                 const rest_start = try self.intLiteralExpr(rest.index, u64_ty);
                 const range = try self.sublistRangeExpr(rest_start, rest_len, u64_ty);
                 rest_value = try self.addExprWithTypeCell(value_cell, .{ .low_level = .{
                     .op = .list_sublist,
-                    .args = try self.addExprSpan(&.{ value, range }),
+                    .args = try self.addExprSpan(&.{ try self.listPatternListRead(request.value, list_local, value_cell), range }),
                 } });
                 rest_pat = try self.lowerPatternPlanPlaceholderAtNode(rest_pattern, value_node, &rest_pending);
             }
@@ -64630,7 +64635,20 @@ const BodyContext = struct {
                 .pat = patterns[fixed_index],
             } });
         }
-        try materialize_run.steps.append(self.allocator, .{ .list_cond = .{ .value = value, .pattern = request.pattern } });
+        try materialize_run.steps.append(self.allocator, .{ .list_cond = .{
+            .value = try self.listPatternListRead(request.value, list_local, value_cell),
+            .pattern = request.pattern,
+        } });
+        if (list_local) |local| {
+            try materialize_run.steps.append(self.allocator, .{ .let_value = .{ .local = local, .value = request.value, .cell = value_cell } });
+        }
+    }
+
+    /// One read of a list a list pattern destructures: its local when it
+    /// binds to one, else the list's own local read.
+    fn listPatternListRead(self: *BodyContext, value: DraftExprId, list_local: ?DraftLocalId, value_cell: DraftTypeCell) Allocator.Error!DraftExprId {
+        const local = list_local orelse return value;
+        return try self.addExprWithTypeCell(value_cell, .{ .local = local });
     }
 
     fn prepareRecordRestPatternBinding(
