@@ -13653,6 +13653,7 @@ fn collectExpectBindingPatterns(
                 try stack.append(allocator, binop.rhs);
             },
             .e_unary_minus => |unary| try stack.append(allocator, unary.expr),
+            .e_unary_not => |unary| try stack.append(allocator, unary.expr),
             .e_field_access => |field| try stack.append(allocator, field.receiver),
             inline .e_method_call, .e_dispatch_call => |call| {
                 try stack.append(allocator, call.receiver);

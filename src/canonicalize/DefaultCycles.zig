@@ -356,6 +356,7 @@ const Pass = struct {
                     .e_zero_argument_tag,
                     .e_binop,
                     .e_unary_minus,
+                    .e_unary_not,
                     .e_field_access,
                     .e_method_call,
                     .e_dispatch_call,
@@ -493,6 +494,7 @@ const Pass = struct {
                     try self.walk.append(self.gpa, eq.rhs);
                 },
                 .e_unary_minus => |unop| try self.walk.append(self.gpa, unop.expr),
+                .e_unary_not => |unop| try self.walk.append(self.gpa, unop.expr),
                 .e_block => |block| {
                     for (self.env.store.sliceStatements(block.stmts)) |stmt_idx| {
                         try self.appendStmtExprs(stmt_idx);

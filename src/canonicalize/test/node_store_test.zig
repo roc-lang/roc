@@ -450,6 +450,9 @@ test "NodeStore round trip - Expressions" {
         .e_unary_minus = CIR.Expr.UnaryMinus.init(rand_idx(CIR.Expr.Idx)),
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_unary_not = CIR.Expr.UnaryNot.init(rand_idx(CIR.Expr.Idx)),
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_field_access = .{
             .receiver = rand_idx(CIR.Expr.Idx),
             .segments = .{
@@ -1733,7 +1736,7 @@ test "NodeStore round trip - Pattern" {
 test "SurfaceOrigin encode/decode round-trips" {
     const SurfaceOrigin = CIR.Expr.SurfaceOrigin;
     // Every unit form.
-    const unit_origins = [_]SurfaceOrigin{ .method_call, .unary_minus };
+    const unit_origins = [_]SurfaceOrigin{ .method_call, .unary_minus, .unary_not };
     for (unit_origins) |origin| {
         try testing.expectEqual(
             origin,

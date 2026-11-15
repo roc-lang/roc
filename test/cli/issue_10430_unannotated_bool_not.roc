@@ -1,5 +1,5 @@
-# Repro for https://github.com/roc-lang/roc/issues/10430: logical negation
-# infers Bool for an unannotated tag without requiring a `not` method.
+# Repro for https://github.com/roc-lang/roc/issues/10430: logical negation of
+# an unannotated tag binding resolves the tag union at Bool and calls Bool.not.
 go : U64 -> U64
 go = |n| {
 	done = False

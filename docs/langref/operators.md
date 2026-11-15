@@ -197,6 +197,42 @@ expression. Also note that `|>` groups before binary operators like `+`, so `1 +
 
 `!x` is sugar for `x.not()`. The operand and result have the same type.
 
+On a [`Bool`](../Bool), `!x` calls `Bool.not`, so `!True` is `False`. On your own type, it calls
+that type's `not` method:
+
+```roc
+Switch := [On, Off].{
+	not : Switch -> Switch
+	not = |s| match s {
+		On => Off
+		Off => On
+	}
+}
+
+s : Switch
+s = Switch.On
+
+flipped = !s # Switch.Off
+```
+
+Tags like `True` and `False` don't have a type that has methods until something
+decides which [nominal tag union](tag-unions#nominal-tag-unions) they belong to. So when
+the operand of `!` is a tag union and nothing else decides its type (no annotation, `if`
+condition, or function argument, for example), it's a `Bool`. That's why this works even
+though nothing says `done` is a `Bool`:
+
+```roc
+done = False
+keep_going = !done # True
+```
+
+This only happens where the `!` is written. A function like `flip = |x| !x` has the type
+`a -> a where [a.not : a -> a]`, so `flip(True)` gives an error at compile time, because the tag
+union `[True]` has no `not` method. Writing `flip(Bool.True)` works.
+
+These also give an error at compile time: `!Foo`, because `Bool` has no `Foo` tag, and `!"hi"`,
+because `Str` has no `not` method.
+
 ## Unary Postfix Operators
 
 ### `?` (unwrap if `Ok`; early `return` if `Err`)
