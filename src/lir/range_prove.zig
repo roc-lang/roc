@@ -1290,6 +1290,30 @@ const RootBounds = struct {
     hi: i128,
     lo_assumed: u64,
     hi_assumed: u64,
+    /// The relaxation step of `boundSumRoots` that last moved each bound.
+    lo_moved: u32 = 0,
+    hi_moved: u32 = 0,
+};
+
+/// A path fact `a <= b + c` between two roots of a sum closure, each named
+/// by its position in the closure.
+const ClosureFact = struct {
+    a: u32,
+    b: u32,
+    c: i128,
+    assumed: u64,
+    /// The relaxation step that last relaxed this fact.
+    relaxed: u32 = 0,
+};
+
+/// A sum being refreshed, its root and operands named by their positions in
+/// the closure.
+const ClosureSum = struct {
+    root: u32,
+    a: u32,
+    b: u32,
+    /// The relaxation step that last relaxed this sum.
+    relaxed: u32 = 0,
 };
 
 /// Saved path-environment entry for backtracking.
@@ -1817,8 +1841,18 @@ const Pass = struct {
     /// Counts the changes to the path's facts (a fact added outside a
     /// refresh, or the path rewound) that can date a sum's stated facts.
     fact_epoch: u32 = 1,
-    /// Per root in the sums' closure, its bounds from `boundSumRoots`.
-    root_bounds: collections.DenseMap(NodeId, RootBounds),
+    /// Per root in the sums' closure, its position in the closure, which
+    /// indexes `query_queue` and `closure_bounds`.
+    closure_positions: collections.DenseMap(NodeId, u32),
+    /// Per closure position, the root's bounds from `boundSumRoots`.
+    closure_bounds: std.ArrayList(RootBounds) = .empty,
+    /// The path facts between closure roots, in the order gathered, and the
+    /// sums of `refresh_set`, in its order.
+    closure_facts: std.ArrayList(ClosureFact) = .empty,
+    closure_sums: std.ArrayList(ClosureSum) = .empty,
+    /// Debug builds only: the closure's bounds relaxed without skipping, to
+    /// check `closure_bounds` against.
+    closure_check: std.ArrayList(RootBounds) = .empty,
     /// Per path fact, whether `boundSumRoots` has gathered it.
     edge_gathered: std.ArrayList(bool),
     /// Whether the last `relaxFrom` reached a root `sum_heads` lists.
@@ -2022,7 +2056,7 @@ const Pass = struct {
             .sum_heads = .{},
             .refresh_set = .empty,
             .refresh_marks = .empty,
-            .root_bounds = collections.DenseMap(NodeId, RootBounds).init(allocator),
+            .closure_positions = collections.DenseMap(NodeId, u32).init(allocator),
             .edge_gathered = .empty,
             .sums = .empty,
             .path_value_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
@@ -2108,7 +2142,10 @@ const Pass = struct {
         self.refresh_set.clearRetainingCapacity();
         self.refresh_stamp = 0;
         self.fact_epoch = 1;
-        self.root_bounds.clearRetainingCapacity();
+        self.closure_positions.clearRetainingCapacity();
+        self.closure_bounds.clearRetainingCapacity();
+        self.closure_facts.clearRetainingCapacity();
+        self.closure_sums.clearRetainingCapacity();
         self.edge_gathered.clearRetainingCapacity();
         self.reached_sum_end = false;
         self.refreshing_sums = false;
@@ -2189,7 +2226,11 @@ const Pass = struct {
         self.sum_heads.deinit(self.allocator);
         self.refresh_set.deinit(self.allocator);
         self.refresh_marks.deinit(self.allocator);
-        self.root_bounds.deinit();
+        self.closure_positions.deinit();
+        self.closure_bounds.deinit(self.allocator);
+        self.closure_facts.deinit(self.allocator);
+        self.closure_sums.deinit(self.allocator);
+        self.closure_check.deinit(self.allocator);
         self.edge_gathered.deinit(self.allocator);
         self.sums.deinit(self.allocator);
         self.path_value_roots.deinit();
@@ -2479,10 +2520,10 @@ const Pass = struct {
         self.refreshing_sums = true;
         defer self.refreshing_sums = false;
         try self.boundSumRoots();
-        for (self.refresh_set.items) |index| {
+        for (self.refresh_set.items, self.closure_sums.items) |index, in_closure| {
             const sum = &self.sums.items[index];
-            const a = self.root_bounds.get(sum.a).?;
-            const b = self.root_bounds.get(sum.b).?;
+            const a = self.closure_bounds.items[in_closure.a];
+            const b = self.closure_bounds.items[in_closure.b];
             _ = try self.addFactOnce(.{ .a = sum.a, .b = sum.root, .c = -b.lo, .origin = .meet, .assumed = b.lo_assumed });
             _ = try self.addFactOnce(.{ .a = sum.b, .b = sum.root, .c = -a.lo, .origin = .meet, .assumed = a.lo_assumed });
             _ = try self.addFactOnce(.{ .a = sum.root, .b = sum.a, .c = b.hi, .origin = .meet, .assumed = b.hi_assumed });
@@ -2529,8 +2570,8 @@ const Pass = struct {
     }
 
     /// Tightest constant bounds of the `refresh_set` sums' roots, their
-    /// operands, and the roots those rest on, into `root_bounds`. The roots
-    /// are the closure of the sums' roots over the fact links in both
+    /// operands, and the roots those rest on, into `closure_bounds`. The
+    /// roots are the closure of the sums' roots over the fact links in both
     /// directions, each
     /// fact relaxed both ways: from `a <= b + c`, `a`'s ceiling is at most
     /// `b`'s plus `c` and `b`'s floor at least `a`'s less `c`. A constant
@@ -2540,19 +2581,30 @@ const Pass = struct {
     /// nothing moves, at most `query_visit_cap` times, which ends it on a
     /// negative cycle. Each bound carries the assumptions of the facts
     /// that produced it.
+    ///
+    /// The closure's roots are numbered as they are gathered, and its facts
+    /// and sums name their roots by those numbers, so a relaxation reads and
+    /// writes rows of `closure_bounds` directly. Every relaxation is a
+    /// numbered step, and each bound records the step that last moved it. A
+    /// fact or sum none of whose inputs moved since its own last step would
+    /// find the bounds it left and move nothing, so a pass relaxes only the
+    /// others, in the same order as a pass that relaxed them all.
     fn boundSumRoots(self: *Pass) ResourceError!void {
-        self.root_bounds.clearRetainingCapacity();
+        self.closure_positions.clearRetainingCapacity();
+        self.closure_bounds.clearRetainingCapacity();
+        self.closure_facts.clearRetainingCapacity();
+        self.closure_sums.clearRetainingCapacity();
         self.query_queue.clearRetainingCapacity();
-        self.query_edges.clearRetainingCapacity();
         self.edge_gathered.clearRetainingCapacity();
         try self.edge_gathered.appendNTimes(self.allocator, false, self.facts.items.len);
         for (self.refresh_set.items) |index| {
             const sum = self.sums.items[index];
-            for ([_]NodeId{ sum.root, sum.a, sum.b }) |root| {
-                if (try self.ensureRootBounds(root)) try self.query_queue.append(self.allocator, root);
-            }
+            const root = try self.closurePosition(sum.root);
+            const a = try self.closurePosition(sum.a);
+            const b = try self.closurePosition(sum.b);
+            try self.closure_sums.append(self.allocator, .{ .root = root, .a = a, .b = b });
         }
-        var next: usize = 0;
+        var next: u32 = 0;
         while (next < self.query_queue.items.len) : (next += 1) {
             const node = self.query_queue.items[next];
             const own = self.nodes.items[node];
@@ -2566,113 +2618,178 @@ const Pass = struct {
                 while (cursor.get()) |fact_index| {
                     const fact = self.facts.items[fact_index];
                     const link = self.fact_links.items[fact_index];
-                    const other = switch (direction) {
+                    const other = try self.closurePosition(switch (direction) {
                         .forward => fact.b,
                         .backward => fact.a,
-                    };
+                    });
                     cursor = switch (direction) {
                         .forward => link.fwd_prev,
                         .backward => link.bwd_prev,
                     };
-                    if (try self.ensureRootBounds(other)) try self.query_queue.append(self.allocator, other);
                     // A fact between two closure roots is met from both
                     // ends and gathered once.
                     if (!self.edge_gathered.items[fact_index]) {
                         self.edge_gathered.items[fact_index] = true;
-                        try self.query_edges.append(self.allocator, fact_index);
+                        try self.closure_facts.append(self.allocator, switch (direction) {
+                            .forward => .{ .a = next, .b = other, .c = fact.c, .assumed = fact.assumed },
+                            .backward => .{ .a = other, .b = next, .c = fact.c, .assumed = fact.assumed },
+                        });
                     }
                 }
             }
         }
+        if (builtin.mode == .debug) {
+            self.closure_check.clearRetainingCapacity();
+            try self.closure_check.appendSlice(self.allocator, self.closure_bounds.items);
+        }
+        const bounds = self.closure_bounds.items;
+        var step: u32 = 0;
         var passes: usize = 0;
         var changed = true;
         while (changed and passes < query_visit_cap) : (passes += 1) {
             changed = false;
-            for (self.query_edges.items) |index| {
-                const fact = self.facts.items[index];
-                const b_bounds = self.root_bounds.get(fact.b).?;
-                const a_bounds = self.root_bounds.get(fact.a).?;
+            for (self.closure_facts.items) |*fact| {
+                // The ceiling step writes only `a`'s ceiling and the floor
+                // step reads only floors, so both read the rows in place.
+                const a = &bounds[fact.a];
+                const b = &bounds[fact.b];
+                if (b.hi_moved < fact.relaxed and a.lo_moved < fact.relaxed) continue;
+                step += 1;
+                fact.relaxed = step;
+                const hi_through = clampSlack(b.hi + fact.c);
+                if (hi_through < a.hi) {
+                    a.hi = hi_through;
+                    a.hi_assumed = b.hi_assumed | fact.assumed;
+                    a.hi_moved = step;
+                    changed = true;
+                }
+                const lo_through = clampSlack(a.lo - fact.c);
+                if (lo_through > b.lo) {
+                    b.lo = lo_through;
+                    b.lo_assumed = a.lo_assumed | fact.assumed;
+                    b.lo_moved = step;
+                    changed = true;
+                }
+            }
+            for (self.closure_sums.items) |*sum| {
+                var inputs_moved = false;
+                for ([_]u32{ sum.root, sum.a, sum.b }) |position| {
+                    if (bounds[position].hi_moved >= sum.relaxed or bounds[position].lo_moved >= sum.relaxed) inputs_moved = true;
+                }
+                if (!inputs_moved) continue;
+                step += 1;
+                sum.relaxed = step;
+                if (relaxSum(bounds, sum.*, step)) changed = true;
+            }
+        }
+        if (builtin.mode == .debug) self.assertClosureBounds();
+    }
+
+    /// Debug builds only: relaxing every fact and every sum on every pass
+    /// reaches the bounds, and the assumptions behind them, that skipping
+    /// the settled ones reached.
+    fn assertClosureBounds(self: *Pass) void {
+        const bounds = self.closure_check.items;
+        var passes: usize = 0;
+        var changed = true;
+        while (changed and passes < query_visit_cap) : (passes += 1) {
+            changed = false;
+            for (self.closure_facts.items) |fact| {
+                const a_bounds = bounds[fact.a];
+                const b_bounds = bounds[fact.b];
                 const hi_through = clampSlack(b_bounds.hi + fact.c);
                 if (hi_through < a_bounds.hi) {
-                    const a = self.root_bounds.getPtr(fact.a).?;
-                    a.hi = hi_through;
-                    a.hi_assumed = b_bounds.hi_assumed | fact.assumed;
+                    bounds[fact.a].hi = hi_through;
+                    bounds[fact.a].hi_assumed = b_bounds.hi_assumed | fact.assumed;
                     changed = true;
                 }
                 const lo_through = clampSlack(a_bounds.lo - fact.c);
                 if (lo_through > b_bounds.lo) {
-                    const b = self.root_bounds.getPtr(fact.b).?;
-                    b.lo = lo_through;
-                    b.lo_assumed = a_bounds.lo_assumed | fact.assumed;
+                    bounds[fact.b].lo = lo_through;
+                    bounds[fact.b].lo_assumed = a_bounds.lo_assumed | fact.assumed;
                     changed = true;
                 }
             }
-            for (self.refresh_set.items) |index| {
-                if (try self.relaxSum(self.sums.items[index])) changed = true;
+            for (self.closure_sums.items) |sum| {
+                if (relaxSum(bounds, sum, 0)) changed = true;
             }
+        }
+        for (bounds, self.closure_bounds.items) |expected, actual| {
+            std.debug.assert(expected.lo == actual.lo and expected.hi == actual.hi);
+            std.debug.assert(expected.lo_assumed == actual.lo_assumed and expected.hi_assumed == actual.hi_assumed);
         }
     }
 
-    /// Relax one sum's relations between its root and operands; whether a
-    /// bound moved.
-    fn relaxSum(self: *Pass, sum: SumRoot) ResourceError!bool {
-        const a = self.root_bounds.get(sum.a).?;
-        const b = self.root_bounds.get(sum.b).?;
-        const root = self.root_bounds.get(sum.root).?;
+    /// Relax one sum's relations between its root and operands at
+    /// relaxation step `step`; whether a bound moved.
+    fn relaxSum(bounds: []RootBounds, sum: ClosureSum, step: u32) bool {
+        const a = bounds[sum.a];
+        const b = bounds[sum.b];
+        const root = bounds[sum.root];
         var moved = false;
         const root_hi = clampSlack(a.hi + b.hi);
         if (root_hi < root.hi) {
-            const r = self.root_bounds.getPtr(sum.root).?;
+            const r = &bounds[sum.root];
             r.hi = root_hi;
             r.hi_assumed = a.hi_assumed | b.hi_assumed;
+            r.hi_moved = step;
             moved = true;
         }
         const root_lo = clampSlack(a.lo + b.lo);
         if (root_lo > root.lo) {
-            const r = self.root_bounds.getPtr(sum.root).?;
+            const r = &bounds[sum.root];
             r.lo = root_lo;
             r.lo_assumed = a.lo_assumed | b.lo_assumed;
+            r.lo_moved = step;
             moved = true;
         }
-        const after = self.root_bounds.get(sum.root).?;
+        const after = bounds[sum.root];
         const a_hi = clampSlack(after.hi - b.lo);
         if (a_hi < a.hi) {
-            const p = self.root_bounds.getPtr(sum.a).?;
+            const p = &bounds[sum.a];
             p.hi = a_hi;
             p.hi_assumed = after.hi_assumed | b.lo_assumed;
+            p.hi_moved = step;
             moved = true;
         }
         const b_hi = clampSlack(after.hi - a.lo);
         if (b_hi < b.hi) {
-            const p = self.root_bounds.getPtr(sum.b).?;
+            const p = &bounds[sum.b];
             p.hi = b_hi;
             p.hi_assumed = after.hi_assumed | a.lo_assumed;
+            p.hi_moved = step;
             moved = true;
         }
         const a_lo = clampSlack(after.lo - b.hi);
         if (a_lo > a.lo) {
-            const p = self.root_bounds.getPtr(sum.a).?;
+            const p = &bounds[sum.a];
             p.lo = a_lo;
             p.lo_assumed = after.lo_assumed | b.hi_assumed;
+            p.lo_moved = step;
             moved = true;
         }
         const b_lo = clampSlack(after.lo - a.hi);
         if (b_lo > b.lo) {
-            const p = self.root_bounds.getPtr(sum.b).?;
+            const p = &bounds[sum.b];
             p.lo = b_lo;
             p.lo_assumed = after.lo_assumed | a.hi_assumed;
+            p.lo_moved = step;
             moved = true;
         }
         return moved;
     }
 
-    /// Enter a root into the closure at its own window; whether it was new.
-    fn ensureRootBounds(self: *Pass, root: NodeId) ResourceError!bool {
-        const gop = try self.root_bounds.getOrPut(root);
-        if (gop.found_existing) return false;
-        const node = self.nodes.items[root];
-        gop.value_ptr.* = .{ .lo = node.lo, .hi = node.hi, .lo_assumed = 0, .hi_assumed = 0 };
-        return true;
+    /// A root's position in the sum closure, entering it at its own window
+    /// when it is new.
+    fn closurePosition(self: *Pass, root: NodeId) ResourceError!u32 {
+        const gop = try self.closure_positions.getOrPut(root);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = @intCast(self.query_queue.items.len);
+            try self.query_queue.append(self.allocator, root);
+            const node = self.nodes.items[root];
+            try self.closure_bounds.append(self.allocator, .{ .lo = node.lo, .hi = node.hi, .lo_assumed = 0, .hi_assumed = 0 });
+        }
+        return gop.value_ptr.*;
     }
 
     /// Fact form of `value(a) <= value(b) + k`, normalized to roots. The
@@ -4938,7 +5055,7 @@ const Pass = struct {
                 const stored = self.loop_bounds.getPtr(join_id, key) orelse blk: {
                     // A parameter nothing bounds yet persists nothing.
                     const met = meet orelse continue;
-                    if (this_round.upper_len == 0 and this_round.lower_len == 0 and !self.hasLenCandidates(met)) continue;
+                    if (this_round.upper_len == 0 and this_round.lower_len == 0 and !self.hasLenCandidates(join_id, met)) continue;
                     const slot = try self.loop_bounds.getOrPut(join_id, key);
                     slot.value_ptr.* = .{};
                     break :blk slot.value_ptr;
@@ -4949,22 +5066,30 @@ const Pass = struct {
                 // The invariant list carries forward, admitting new length
                 // candidates as pending. A base that already failed
                 // verification stays listed as dead rather than re-admitted.
-                if (meet) |met| self.admitLenCandidates(met, stored);
+                if (meet) |met| self.admitLenCandidates(join_id, met, stored);
             }
         }
     }
 
-    /// Admit the bounds some captured edge proves for a parameter as pending
-    /// invariants of its loop, into `stored`, whose invariant list has room
-    /// for `meet_bound_cap`; back edges have not re-derived a candidate
-    /// yet, so the bounds every edge proves would miss it. A constant bound
-    /// below one is what any length already satisfies, as is a bound slack
-    /// enough to hold for any pair of values; assuming either would cost a
-    /// round for nothing.
-    fn admitLenCandidates(self: *Pass, meet: *const EnvMeet, stored: *LoopBounds) void {
+    /// Admit the bounds some captured edge proves for a parameter of loop
+    /// `join_id` as pending invariants of that loop, into `stored`, whose
+    /// invariant list has room for `meet_bound_cap`; back edges have not
+    /// re-derived a candidate yet, so the bounds every edge proves would
+    /// miss it. A constant bound below one is what any length already
+    /// satisfies, as is a bound slack enough to hold for any pair of values;
+    /// assuming either would cost a round for nothing.
+    ///
+    /// So would a bound against a local the loop's cycle defines, unless
+    /// that local is a parameter of the loop. A back edge proves such a
+    /// bound against the value the pass it ends gave the local, and where
+    /// the next pass begins the local has not been given that pass's value
+    /// yet: the head has nothing to state the bound against, and no entry
+    /// edge has a value of the local to prove it for. A parameter of the
+    /// loop has its value for the pass where the pass begins.
+    fn admitLenCandidates(self: *Pass, join_id: JoinPointId, meet: *const EnvMeet, stored: *LoopBounds) void {
         const is_int = trackedIntMax(self.localLayout(meet.local)) != null;
         for (self.candidateBounds(meet)) |bound| {
-            const candidate = self.lenCandidate(bound) orelse continue;
+            const candidate = self.lenCandidate(join_id, bound) orelse continue;
             var known = false;
             for (stored.len_items[0..stored.len_count]) |item| {
                 if (sameLenBase(candidate.base, item.base)) {
@@ -4993,19 +5118,22 @@ const Pass = struct {
     }
 
     /// One of `candidateBounds` in round-stable form, or null when it is
-    /// not worth assuming.
-    fn lenCandidate(self: *const Pass, bound: MeetBound) ?struct { base: StableBase, c: i128 } {
+    /// not worth assuming of a parameter of loop `join_id`.
+    fn lenCandidate(self: *const Pass, join_id: JoinPointId, bound: MeetBound) ?struct { base: StableBase, c: i128 } {
         const candidate = self.lenStable(bound) orelse return null;
-        if (candidate.base == .constant and candidate.c >= 0) return null;
+        switch (candidate.base) {
+            .constant => if (candidate.c >= 0) return null,
+            .len_of, .value_of => |local| if (self.joinAssigns(join_id, local) and !self.isJoinParam(join_id, local)) return null,
+        }
         if (candidate.c >= std.math.maxInt(i64)) return null;
         return .{ .base = candidate.base, .c = candidate.c };
     }
 
     /// Whether `admitLenCandidates` would admit an invariant for a parameter
     /// that has none yet.
-    fn hasLenCandidates(self: *const Pass, meet: *const EnvMeet) bool {
+    fn hasLenCandidates(self: *const Pass, join_id: JoinPointId, meet: *const EnvMeet) bool {
         for (self.candidateBounds(meet)) |bound| {
-            if (self.lenCandidate(bound) != null) return true;
+            if (self.lenCandidate(join_id, bound) != null) return true;
         }
         return false;
     }
