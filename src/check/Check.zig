@@ -22158,10 +22158,18 @@ fn predeclareAnnotationSchemeHelp(
 
     // The scope's pool holds only the generation's classes until the scheme
     // is copied below.
+    const generation_recorded_shared = self.retainable_generation_shared_roots.items.len != 0;
     const retained: ?VarRange = if (generation_only_built_types and shared_vars.items.len == 0)
         try self.retainGenerationVars(env, generation_pool_start)
     else
         null;
+    // A retained generation's own classes take their rank from the body
+    // that takes them over, so this scope has nothing to generalize in
+    // them. What the generation recorded for later references to read is
+    // not retained and settles with this scope.
+    if (retained != null and !generation_recorded_shared) {
+        env.var_pool.shrinkRank(env.rank(), generation_pool_start);
+    }
 
     const scheme_var = if (shared_vars.items.len > 0)
         try self.instantiateVarOrphanSharingVars(
@@ -22325,11 +22333,7 @@ fn takeOverRetainedAnnotation(self: *Self, annotation_idx: CIR.Annotation.Idx, e
 
     const rank = env.rank();
     for (retained.slice(self.retained_annotation_vars.items)) |var_| {
-        const resolved = self.types.resolveVar(var_);
-        // Nothing has related to these classes since their scope left them
-        // generalized or, when variable-free, at the outermost rank.
-        std.debug.assert(resolved.desc.rank == .generalized or resolved.desc.rank == .outermost or resolved.desc.rank == rank);
-        try self.types.setDescRank(resolved.desc_idx, rank);
+        try self.types.setDescRank(self.types.resolveVar(var_).desc_idx, rank);
         try env.var_pool.addVarToRank(var_, rank);
     }
     return true;

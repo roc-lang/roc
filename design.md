@@ -5447,9 +5447,11 @@ type declared in a function body. The pre-pass leaves such a generation in
 the annotation's nodes and records the classes it made for itself: all of
 its classes except the instances and ground subtrees that later references
 to the same declaration read (Polarity, below), which generating the
-annotation again would read rather than make. When the body's frame begins,
-those classes take the frame's rank and join its pool, which is the state
-generating the annotation there would have left. A body checked inside a
+annotation again would read rather than make. The pre-pass's own scope
+generalizes only the scheme and whatever the generation recorded for later
+references; the retained classes are not its to quantify. When the body's
+frame begins, those classes take the frame's rank and join its pool, which
+is the state generating the annotation there would have left. A body checked inside a
 local function generates its annotation itself, since its type variable
 lookups mark that function, and so does every body checked once anything in
 the module is erroneous: a mismatch may have made a shared instance or ground
