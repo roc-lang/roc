@@ -1435,11 +1435,10 @@ pub const DynOp = union(enum) {
     /// Payload `payload_index` of the active tag in `base`, selected by its
     /// stored discriminant. The producer has established that this tag holds
     /// the target's payload type (a matched arm or a known constructor).
-    /// `whole` is set when that payload is its tag's only payload: the
-    /// active tag's refcounted contents are then exactly the payload's, so
-    /// the read carries `base`'s whole ownership unit, as a same-value alias
-    /// does (design.md "Resources Over Layouts").
-    tag_payload_addr: struct { base: LocalId, desc: LocalId, payload_index: u32, whole: bool = false },
+    /// The only payload of a tag whose payload can hold refcounted data is
+    /// read by `assign_ref` `tag_payload_struct` instead, an
+    /// ownership-complete projection (design.md "Resources Over Layouts").
+    tag_payload_addr: struct { base: LocalId, desc: LocalId, payload_index: u32 },
     /// Build the record or tuple `desc` describes from `fields`, given in
     /// semantic index order.
     record: struct { desc: LocalId, fields: LocalSpan },

@@ -582,7 +582,7 @@ pub const Ctx = struct {
                 try self.b.readTagPayloadInto(dest, source, union_ty, variant, payloads, index);
             }
         } else {
-            try self.b.emitDyn(dest, .{ .tag_payload_addr = .{ .base = source, .desc = try self.b.descOf(union_ty), .payload_index = index, .whole = single and self.b.holdsRefcounted(dest) } });
+            try self.b.readDynamicTagPayloadInto(dest, source, try self.b.descOf(union_ty), variant, index, single);
         }
         return try self.b.endBackward(start, next);
     }
@@ -787,13 +787,9 @@ pub const Ctx = struct {
 
     pub fn bindPatternLocal(self: Ctx, binder: BinderId, _: types.TypeId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         const local = self.state.binder_locals.get(binder) orelse invariant("a pattern binder has no local");
-        if (self.b.store.localDyn(local)) |dyn| {
-            return try self.b.store.addCFStmt(.{ .dyn = .{
-                .target = local,
-                .data = try self.b.store.addStmtRow(LIR.DynOp, .{ .copy = .{ .src = source, .desc = dyn.desc } }),
-                .next = next,
-            } }, self.b.origin(.source));
-        }
+        // A dynamic binder's `ref.local` copies the matched value's bytes by
+        // its descriptor, and is the pure same-value alias ARC follows from a
+        // payload projection to its uses.
         return try self.b.store.addCFStmt(.{ .assign_ref = .{ .target = local, .op = LIR.RefOp.local(source), .next = next } }, self.b.origin(.source));
     }
 

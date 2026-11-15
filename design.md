@@ -16494,9 +16494,11 @@ body is ordinary LIR with a dynamic island per variable-typed value.
 Pattern matching in a generic body follows the same statements: a tag pattern
 on a dynamic union compares the read discriminant with the tag's
 discriminant (an immediate or a `tag_index` table word), then addresses the
-payload by its index; a record pattern addresses fields by checked field
-index or a `field_index` table word; a bound binder of variable type is a
-dynamic local written with `dyn_copy`.
+payload by its index, or reads a tag's only payload as a complete projection
+("Resources Over Layouts"); a record pattern addresses fields by checked
+field index or a `field_index` table word; a bound binder of variable type is
+a dynamic local written by a `ref.local` of the matched value, which backends
+copy with the binder's descriptor as they do `dyn_copy`.
 
 #### Coercion Plans
 
@@ -22893,22 +22895,36 @@ from runtime descriptors. A dynamic field occupies one ownership slot;
 a concrete struct field expands into its concrete slots. An open row or an
 unknown type has no enumerated product shape and remains opaque.
 
-A dynamic tag union's payload read (`dyn.tag_payload_addr`) of a tag with
-exactly one payload, into a local whose layout can hold refcounted data, is
-marked `whole` by Boxy lowering, which knows the tag's payload count from its
-checked type. On every path that reads it, that
-payload's refcounted contents are exactly the union's, so the read is an
-ownership alias of the union, as a `copy` is: it carries the union's one
-unit, ownership demands flow through it to the union, and a dying union's
-payload moves into a consumer without a retain. A `Dict`, `Set` or other
-single-tag nominal handed to a call that mutates its payload is therefore
-moved, not shared. A payload of a tag with several payloads is a component
-borrowed from the union. The union's unit has no enumerated shape, so field
-takes and complete projections never address it through a whole payload:
-a read of a whole payload's field is a borrow (dismantling needs a container
-whose unit has the shape its reads address), and the certifier, which binds
-the payload to the union's value, describes that value by the payload's
-shape on the path that read it.
+A dynamic tag union has no enumerated shape, but each of its payload reads
+names the variant it reads: the read sits under the arm that matched the tag,
+or follows the constructor that built it. Boxy lowering, which knows the tag's
+payload count from its checked type, reads the only payload of a tag, into a
+local whose layout can hold refcounted data, as an `assign_ref`
+`tag_payload_struct` of the dynamic union into independent frame storage
+(backends copy it with the union's descriptor as `dyn.tag_payload_addr` of
+payload 0), and binds a pattern's dynamic binder to it by `ref.local`. On the
+path that reads it, that payload holds every refcounted byte of the union, so
+the read is an ownership-complete projection exactly as a closed union's
+payload read is: ARC solves it as a borrow of the union, a dying union's unit
+moves into the payload where the payload is owned, and the payload, a product
+of the variant's own explicit shape, takes its fields and releases its
+residual fields as any projected container does. The residual of each arm is
+therefore that variant's remaining payload fields, released through the arm's
+own payload, and needs no runtime discriminant: a union whose unit moved into
+one arm's payload holds nothing on that path, and a path that read no payload
+releases the union whole. `Dict.insert` overwriting a present key thus takes
+the entry list out of the lookup's dying `Found` result instead of retaining
+it for the list update to copy. Because the payload is all of the union's
+refcounted contents, an ownership demand on it is a demand on the union's
+unit, as on a same-value alias (`BindingFact.complete_projection`): a `Dict`,
+`Set` or other single-tag nominal parameter whose payload is handed to a call
+that consumes it is owned by its procedure's base signature, which is what a
+caller in another emission unit adapts to. A payload of a tag with several
+payloads is a component borrowed from the union (`dyn.tag_payload_addr`):
+none of them is the variant's whole contents, so none can carry the union's
+unit, and such a union is released whole. The certifier models a dynamic
+value without a product shape as one claim, which a complete payload
+projection spends.
 
 An erased argument product's recorded slot boundaries are authoritative for
 both the start and width of each field read. Its non-owning prefix and scalar
@@ -23077,8 +23093,12 @@ generates constraints per statement:
   result flow to every input consumed by the ordinary operation. These are
   explicit ownership-flow edges, separate from same-value alias edges: slicing
   changes a list descriptor. Returned slices also demand this transfer, through
-  pure aliases, so lending a unique parameter and retaining its result cannot
-  discard the buffer's reserved capacity. Multi-bound results select ownership
+  pure aliases and through every join parameter a returned value is written
+  from (each alias write into the parameter names one more source to follow),
+  so lending a unique parameter and retaining its result cannot discard the
+  buffer's reserved capacity or keep alive the items a slice drops: a rest
+  pattern or `List.sublist` returned from a `match` or `if` arm transfers its
+  input exactly as one returned directly does. Multi-bound results select ownership
   and demand their consumed inputs too. Read-only slices can still select the
   borrowing operation and keep their lender live. Parameter demands and these
   edges settle together with direct-call demands, including across wrappers.
@@ -23139,7 +23159,9 @@ Ownership demands propagate transitively through pure same-value aliases
 source, so the chain's single unit moves link by link to the consuming
 occurrence instead of the alias paying a retain while the source's unit is
 separately released. Payload reads do not propagate demands; borrowing the
-container is exactly the win there.
+container is exactly the win there. The one payload read that does is a
+dynamic tag union's complete payload projection ("Resources Over Layouts"),
+which holds all of the union's refcounted contents.
 
 The solver runs three equation groups to their least fixed points, in order,
 following the paper's Figure 8 adapted to LIR vocabulary:
@@ -25426,6 +25448,16 @@ clearing one allocates the capacity its descriptor records (Static Lists And
 Strings Keep Their Capacity); a sublist of one never does, because a view
 reserves nothing.
 
+A list pattern's rest (`[first, .. as rest, last]`) is one `list_sublist` of
+the matched list, `{ start: front, len: len - (front + back) }`, under both
+strategies, and its fixed items are `list_get_unsafe` reads. As one sublist it
+has `listSublist`'s outcomes: a rest from index zero of a unique list shrinks
+it in place and releases the items behind it, any other rest is a seamless
+slice, and a rest of a list that stays live is a borrowed view
+(`list_sublist_borrowed`) with no reference count traffic. A rest returned
+from its arm transfers the matched list's ownership through the arm's value
+join, as a returned slice does ("Constraints Per Statement Form").
+
 An append-only promoted loop versions on its slack instead. The fill limit
 answers whether the next append fits; a bound on the loop's remaining
 iterations answers whether every remaining append does, once. The bound is
@@ -26311,10 +26343,7 @@ also releases the items a reusable list drops; the call is cheap next to the
 per-item releases it may make. The split is by whether the list layout marks
 its items refcounted, never by anything the lowering guesses. Zero-sized
 items have no bytes to slice, so their sublist is the window length alone.
-`list_take_first` and `list_take_last`, which a list rest pattern lowers to,
-are `list_sublist` over the first `count` items and over the items from
-`len -| count`, as every backend computes those windows for `listSublist`,
-and the Wasm backend lowers them exactly as it lowers `list_sublist`.
+A list rest pattern is a `list_sublist` like any other, with these outcomes.
 `list_release_excess_capacity` is not inline: it calls
 `listReleaseExcessCapacity`, since the allocation and copy it may make cost
 far more than the call.
