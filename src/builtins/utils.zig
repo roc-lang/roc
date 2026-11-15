@@ -336,7 +336,7 @@ pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicit
     if (RC_TYPE == .none) return;
 
     // Ensure that the refcount is not whole program lifetime.
-    const refcount: isize = ptr_to_refcount.*;
+    const refcount: isize = loadRefcount(ptr_to_refcount, atomicity);
 
     // Debug-only assertions to catch refcount bugs early.
     if (builtin.mode == .debug) {
@@ -591,22 +591,41 @@ inline fn free_ptr_to_refcount(
     roc_ops.dealloc(allocation_ptr, allocation_alignment);
 }
 
-inline fn decref_ptr_to_refcount(
-    refcount_ptr: [*]isize,
-    element_alignment: u32,
-    elements_refcounted: bool,
+/// Reads a count for an update that follows. A count other threads may update
+/// is read atomically; the value only selects the static-data and debug paths,
+/// so it needs no ordering against those updates.
+inline fn loadRefcount(refcount_ptr: *const isize, atomicity: RcAtomicity) isize {
+    return switch (atomicity) {
+        .single_thread => refcount_ptr.*,
+        .atomic => @atomicLoad(isize, refcount_ptr, .monotonic),
+    };
+}
+
+/// Releases one reference and reports whether it was the last one.
+///
+/// Every release path decides that an allocation is dying from this result and
+/// from nothing else. A count read ahead of the decrement cannot answer that
+/// question for a shared allocation: two threads holding the last two
+/// references both read 2, and neither tears the allocation down.
+///
+/// When this returns true the caller owns the allocation exclusively. It
+/// releases whatever the allocation holds and then frees it with
+/// `freeRcPtrC` or `freeDataPtrC`; until then the count stays at zero.
+///
+/// The atomic decrement both releases and acquires. Releasing orders this
+/// thread's earlier accesses to the allocation before the teardown performed
+/// by whichever thread releases last, and acquiring is what lets that last
+/// thread rely on the order.
+inline fn release_ptr_to_refcount(
+    refcount_ptr: *isize,
     atomicity: RcAtomicity,
     roc_ops: *RocOps,
     comptime site: DebugRefcountTracker.Site,
-) void {
-    if (RC_TYPE == .none) return;
-
-    // Due to RC alignment tmust take into account pointer size.
-    const ptr_width = @sizeOf(usize);
-    const alignment = @max(ptr_width, element_alignment);
+) bool {
+    if (RC_TYPE == .none) return false;
 
     // Ensure that the refcount is not whole program lifetime.
-    const refcount: isize = refcount_ptr[0];
+    const refcount: isize = loadRefcount(refcount_ptr, atomicity);
 
     // Debug-only assertions to catch refcount bugs early.
     // Use roc_ops.crash() instead of @panic for WASM compatibility.
@@ -629,21 +648,55 @@ inline fn decref_ptr_to_refcount(
         DebugRefcountTracker.onDecref(@intFromPtr(refcount_ptr), site);
     }
 
-    if (!rcConstant(refcount)) {
-        switch (atomicity) {
-            .single_thread => {
-                refcount_ptr[0] = refcount -% 1;
-                if (refcount == 1) {
-                    free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted, roc_ops);
-                }
-            },
-            .atomic => {
-                const last = @atomicRmw(isize, &refcount_ptr[0], .Sub, 1, .monotonic);
-                if (last == 1) {
-                    free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted, roc_ops);
-                }
-            },
+    if (rcConstant(refcount)) return false;
+
+    switch (atomicity) {
+        .single_thread => {
+            refcount_ptr.* = refcount -% 1;
+            return refcount == 1;
+        },
+        .atomic => return @atomicRmw(isize, refcount_ptr, .Sub, 1, .acq_rel) == 1,
+    }
+}
+
+/// Releases one reference through a pointer to the count itself, and reports
+/// whether it was the last one. See `release_ptr_to_refcount` for what the
+/// caller owes when it was.
+pub fn releaseRcPtr(refcount_ptr: *isize, atomicity: RcAtomicity, roc_ops: *RocOps) bool {
+    return release_ptr_to_refcount(refcount_ptr, atomicity, roc_ops, .decref_rc_ptr);
+}
+
+/// Releases one reference through a data pointer, and reports whether it was
+/// the last one. Handles tag bits in the pointer; a null pointer holds no
+/// reference. See `release_ptr_to_refcount` for what the caller owes when it
+/// was the last one.
+pub fn releaseDataPtr(bytes_or_null: ?[*]u8, atomicity: RcAtomicity, roc_ops: *RocOps) bool {
+    const bytes = bytes_or_null orelse return false;
+
+    const unmasked_ptr = @intFromPtr(bytes) & ~DATA_PTR_TAG_MASK;
+    if (unmasked_ptr == 0) return false;
+
+    // Verify alignment before @ptrFromInt
+    if (comptime builtin.mode == .debug) {
+        if (unmasked_ptr % @alignOf(isize) != 0) {
+            roc_ops.crash("releaseDataPtr: unmasked pointer is not aligned");
         }
+    }
+
+    const rc_ptr: *isize = @ptrFromInt(unmasked_ptr - @sizeOf(usize));
+    return release_ptr_to_refcount(rc_ptr, atomicity, roc_ops, .decref_data_ptr);
+}
+
+inline fn decref_ptr_to_refcount(
+    refcount_ptr: [*]isize,
+    element_alignment: u32,
+    elements_refcounted: bool,
+    atomicity: RcAtomicity,
+    roc_ops: *RocOps,
+    comptime site: DebugRefcountTracker.Site,
+) void {
+    if (release_ptr_to_refcount(&refcount_ptr[0], atomicity, roc_ops, site)) {
+        free_ptr_to_refcount(refcount_ptr, element_alignment, elements_refcounted, roc_ops);
     }
 }
 
@@ -662,9 +715,16 @@ pub fn isUnique(
 
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(masked_ptr));
 
-    const refcount = (isizes - 1)[0];
+    return rcUnique(loadRefcountForUniqueness(&(isizes - 1)[0]));
+}
 
-    return rcUnique(refcount);
+/// Reads a count to decide whether its allocation is uniquely owned. Another
+/// thread holding a reference may be decrementing the count during this
+/// read, so the read is atomic. It needs no ordering: a result of one means
+/// no other thread holds a reference, and that decrement's release ordering
+/// has already placed the other thread's accesses before it.
+pub inline fn loadRefcountForUniqueness(refcount_ptr: *const isize) isize {
+    return @atomicLoad(isize, refcount_ptr, .monotonic);
 }
 
 /// Checks if a reference count value indicates a unique reference (equals 1)

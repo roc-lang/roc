@@ -636,7 +636,7 @@ OpenCurly,
 NamedUnderscore,OpColon,StringStart,StringPart,StringEnd,Comma,
 LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
 UpperIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
-LowerIdent,OpUnaryMinus,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
+LowerIdent,OpBinaryMinus,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
 LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
 LowerIdent,OpaqueName,OpColon,StringStart,StringPart,StringEnd,Comma,
 CloseCurly,
@@ -661,8 +661,8 @@ EndOfFile,
 		(e-string
 			(e-string-part (raw "pascal")))
 		(e-malformed (reason "expr_unexpected_token"))
-		(e-ident (raw "kebab"))
-		(unary "-"
+		(e-binop (op "-")
+			(e-ident (raw "kebab"))
 			(e-ident (raw "case")))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-string
@@ -710,9 +710,8 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-expr
-		(e-unary-minus
+		(e-binop (op "sub")
+			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-runtime-error (tag "ident_not_in_scope"))))
 	(s-expr
 		(e-runtime-error (tag "expr_syntax_error")))

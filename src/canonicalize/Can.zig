@@ -1803,26 +1803,6 @@ fn activeDeclEntryIsDefiningItem(self: *Self, binding: ActiveDeclBinding, ident:
     return self.isDefiningBoundVar(pattern_idx);
 }
 
-fn annoOnlyDeclsResolveAsValues(self: *const Self) bool {
-    return self.env.module_kind == .hosted or
-        self.env.module_kind == .platform or
-        self.env.module_role == .builtin;
-}
-
-fn valueDeclKindResolvesAsValue(self: *const Self, kind: AST.DeclIndex.DeclKind) bool {
-    return switch (kind) {
-        .value, .var_decl => true,
-        .value_anno, .var_anno => self.annoOnlyDeclsResolveAsValues(),
-        .type_alias,
-        .nominal,
-        .@"opaque",
-        .where_alias,
-        .import,
-        .file_import,
-        => false,
-    };
-}
-
 fn forwardVisibleValueDecl(
     self: *const Self,
     parser_scope: AST.DeclIndex.Scope,
@@ -1837,7 +1817,7 @@ fn forwardVisibleValueDecl(
         switch (decl.kind) {
             .value, .var_decl => return decl_idx,
             .value_anno, .var_anno => {
-                if (self.annoOnlyDeclsResolveAsValues() and decl.paired_decl == .none and annotation_only == null) {
+                if (decl.paired_decl == .none and annotation_only == null) {
                     annotation_only = decl_idx;
                 }
             },
@@ -2236,12 +2216,7 @@ fn associatedValueExists(
     self: *const Self,
     key: AST.DeclIndex.AssocValue,
 ) bool {
-    var iter = self.parse_ir.decl_index.assocValueDecls(key.owner, key.item).iter();
-    while (iter.next()) |decl_idx| {
-        const decl = self.parse_ir.decl_index.decls.items[@backingInt(decl_idx)];
-        if (self.valueDeclKindResolvesAsValue(decl.kind)) return true;
-    }
-    return false;
+    return self.parse_ir.decl_index.hasAssocValueDecl(key.owner, key.item);
 }
 
 fn associatedOwnerIsModuleVisible(

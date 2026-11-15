@@ -440,22 +440,13 @@ pub const LayoutRuntime = struct {
             },
             inline .list_decref, .list_free => |list_plan| {
                 const rl = valueToRocList(val);
-                const has_child = list_plan.child != null;
-                const alloc_ptr = rl.getAllocationDataPtr(self.roc_ops);
-                // Before freeing the list, decref all child elements (mirrors RocList.decref logic)
+                // Mirrors RocList.decref: the elements are released only by
+                // the release that took the list's count to zero.
+                if (!rl.releaseAllocation(atomicity, self.roc_ops)) return;
                 if (list_plan.child) |child_key| {
-                    if (rl.isUnique(self.roc_ops)) {
-                        self.decrefListElements(hooks, rl, list_plan, child_key, count, atomicity);
-                    }
+                    self.decrefListElements(hooks, rl, list_plan, child_key, count, atomicity);
                 }
-                builtins.utils.decref(
-                    alloc_ptr,
-                    rl.capacity_or_alloc_ptr,
-                    @intCast(list_plan.elem_alignment),
-                    has_child,
-                    atomicity,
-                    self.roc_ops,
-                );
+                rl.freeAllocation(@intCast(list_plan.elem_alignment), list_plan.child != null, self.roc_ops);
             },
             .box_incref => {
                 const alloc_ptr = val.read(?[*]u8);
@@ -464,17 +455,14 @@ pub const LayoutRuntime = struct {
             .box_decref => |box_plan| {
                 const alloc_ptr = val.read(?[*]u8);
                 const has_child = box_plan.child != null;
+                if (!utils.releaseDataPtr(alloc_ptr, atomicity, self.roc_ops)) return;
                 if (box_plan.child) |child_key| {
-                    if (alloc_ptr != null and builtins.utils.isUnique(alloc_ptr, self.roc_ops)) {
-                        const data_ptr = self.readBoxedDataPointer(val) orelse {
-                            utils.decrefDataPtr(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, atomicity, self.roc_ops);
-                            return;
-                        };
+                    if (self.readBoxedDataPointer(val)) |data_ptr| {
                         const child_val = Value{ .ptr = data_ptr };
                         self.performRcPlan(hooks, hooks.rcPlanFor(child_key), child_val, count, atomicity);
                     }
                 }
-                utils.decrefDataPtr(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, atomicity, self.roc_ops);
+                utils.freeDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, self.roc_ops);
             },
             .box_free => |box_plan| {
                 const alloc_ptr = val.read(?[*]u8);
@@ -497,12 +485,12 @@ pub const LayoutRuntime = struct {
             },
             .erased_callable_decref => {
                 const alloc_ptr = val.read(?[*]u8);
-                self.performErasedCallableFinalDropIfUnique(alloc_ptr, .decref, count);
-                builtins.utils.decrefDataPtr(
+                if (!utils.releaseDataPtr(alloc_ptr, atomicity, self.roc_ops)) return;
+                self.performErasedCallableFinalDrop(alloc_ptr, .decref, count);
+                utils.freeDataPtrC(
                     alloc_ptr,
                     builtins.erased_callable.payload_alignment,
                     builtins.erased_callable.allocation_has_refcounted_children,
-                    atomicity,
                     self.roc_ops,
                 );
             },
@@ -574,17 +562,6 @@ pub const LayoutRuntime = struct {
                 self.performRcPlan(hooks, child_plan, element_val, count, atomicity);
             }
         }
-    }
-
-    pub fn performErasedCallableFinalDropIfUnique(
-        self: *const LayoutRuntime,
-        data_ptr: ?[*]u8,
-        op: layout_mod.RcOp,
-        count: u32,
-    ) void {
-        if (data_ptr == null) return;
-        if (!builtins.utils.isUnique(data_ptr, self.roc_ops)) return;
-        self.performErasedCallableFinalDrop(data_ptr, op, count);
     }
 
     pub fn performErasedCallableFinalDrop(

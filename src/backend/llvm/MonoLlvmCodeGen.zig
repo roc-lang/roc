@@ -11850,7 +11850,9 @@ pub const MonoLlvmCodeGen = struct {
             const alloc_ptr = wip.cast(.inttoptr, alloc_int, try self.ptrType(), "") catch return error.OutOfMemory;
             const rc_offset = builtins.utils.targetRefcountOffset(self.targetWordSize());
             const rc_ptr = try self.offsetPtrValue(alloc_ptr, builder.intValue(usize_ty, rc_offset) catch return error.OutOfMemory);
-            const rc = try self.loadUsize(rc_ptr);
+            // Atomic like the builtins' uniqueness read: another thread
+            // holding a reference may be decrementing this count.
+            const rc = wip.loadAtomic(.normal, usize_ty, rc_ptr, .system, .monotonic, self.targetPointerAlignment(), "") catch return error.OutOfMemory;
             const rc_is_one = wip.icmp(.eq, rc, one, "") catch return error.OutOfMemory;
             _ = wip.brCond(rc_is_one, fast_block, slow_block, .then_likely) catch return error.OutOfMemory;
         }

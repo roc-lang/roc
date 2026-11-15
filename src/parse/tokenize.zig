@@ -1459,15 +1459,15 @@ pub const Tokenizer = struct {
                                 try self.pushTokenNormalHere(gpa, tag, start);
                             }
                         } else {
-                            // Look at what follows the minus to determine if it's unary.
-                            // A minus before `...` follows the same rule as a minus before
-                            // a number: `x-...` is subtraction, while `-...` is negation.
-                            const negates_triple_dot = n == '.' and
-                                self.cursor.peekAt(2) == '.' and
-                                self.cursor.peekAt(3) == '.' and
-                                (sp or !(if (self.lastTokenTag()) |prev| prev.canEndExpression() else false));
+                            // A minus is unary when an expression starts right after it and
+                            // it does not continue a preceding expression. This is the same
+                            // rule as a minus before a number: `x-y`, `x-$y`, and `x-...` are
+                            // subtraction, while `-y`, `-$y`, and `-...` are negation.
+                            const starts_operand = canFollowUnaryMinus(n) or
+                                (n == '.' and self.cursor.peekAt(2) == '.' and self.cursor.peekAt(3) == '.');
+                            const prev_can_end_expr = if (self.lastTokenTag()) |prev| prev.canEndExpression() else false;
                             self.cursor.pos += 1;
-                            const tokenType: Token.Tag = if (canFollowUnaryMinus(n) or negates_triple_dot) .OpUnaryMinus else .OpBinaryMinus;
+                            const tokenType: Token.Tag = if (starts_operand and (sp or !prev_can_end_expr)) .OpUnaryMinus else .OpBinaryMinus;
                             try self.pushTokenNormalHere(gpa, tokenType, start);
                         }
                     } else {
@@ -1799,8 +1799,8 @@ pub const Tokenizer = struct {
     /// Determines if a character can follow a unary minus (i.e., can start an expression)
     fn canFollowUnaryMinus(c: u8) bool {
         return switch (c) {
-            // Identifiers
-            'a'...'z', 'A'...'Z', '_' => true,
+            // Identifiers, including `$` names of `var`s
+            'a'...'z', 'A'...'Z', '_', '$' => true,
             // Parentheses for grouped expressions
             '(' => true,
             // Unicode characters that might start identifiers
@@ -2584,6 +2584,12 @@ test "tokenizer" {
     try testTokenization(gpa, "_ident", &[_]Token.Tag{.NamedUnderscore});
     try testTokenization(gpa, "3...4", &[_]Token.Tag{ .Int, .TripleDot, .Int });
     try testTokenization(gpa, "-...", &[_]Token.Tag{ .OpUnaryMinus, .TripleDot });
+    try testTokenization(gpa, "-$n", &[_]Token.Tag{ .OpUnaryMinus, .LowerIdent });
+    try testTokenization(gpa, "a = -$n", &[_]Token.Tag{ .LowerIdent, .OpAssign, .OpUnaryMinus, .LowerIdent });
+    try testTokenization(gpa, "a-$n", &[_]Token.Tag{ .LowerIdent, .OpBinaryMinus, .LowerIdent });
+    try testTokenization(gpa, "$n-a", &[_]Token.Tag{ .LowerIdent, .OpBinaryMinus, .LowerIdent });
+    try testTokenization(gpa, "a-b", &[_]Token.Tag{ .LowerIdent, .OpBinaryMinus, .LowerIdent });
+    try testTokenization(gpa, "a - -$n", &[_]Token.Tag{ .LowerIdent, .OpBinaryMinus, .OpUnaryMinus, .LowerIdent });
     try testTokenization(gpa, "a -...", &[_]Token.Tag{ .LowerIdent, .OpUnaryMinus, .TripleDot });
     try testTokenization(gpa, "a-...", &[_]Token.Tag{ .LowerIdent, .OpBinaryMinus, .TripleDot });
     try testTokenization(gpa, "...-...", &[_]Token.Tag{ .TripleDot, .OpBinaryMinus, .TripleDot });

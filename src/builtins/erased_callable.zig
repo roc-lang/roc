@@ -230,15 +230,13 @@ pub fn incref(data_ptr: ?[*]u8, amount: isize, roc_ops: *RocOps) callconv(.c) vo
 
 /// Decrement the outer refcount, running `on_drop` if this was the final ref.
 pub fn decref(data_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
-    if (data_ptr) |ptr| {
-        if (utils.isUnique(ptr, roc_ops)) {
-            const payload = payloadPtr(ptr);
-            if (payload.on_drop) |on_drop| {
-                on_drop(capturePtr(ptr), roc_ops);
-            }
-        }
-    }
-    utils.decrefDataPtrC(data_ptr, payload_alignment, allocation_has_refcounted_children, roc_ops);
+    decrefWithAtomicity(data_ptr, .atomic, roc_ops);
+}
+
+/// Decrement the outer refcount using the given count-update atomicity,
+/// running `on_drop` if this was the final ref.
+pub fn decrefWithAtomicity(data_ptr: ?[*]u8, atomicity: utils.RcAtomicity, roc_ops: *RocOps) void {
+    if (utils.releaseDataPtr(data_ptr, atomicity, roc_ops)) free(data_ptr, roc_ops);
 }
 
 /// Run final-drop logic and free the boxed-erased-callable allocation.
