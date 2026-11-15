@@ -98,6 +98,8 @@ pub const Writer = struct {
     checked: ?CheckedValues = null,
     /// Scratch for a checked string's bytes.
     checked_text: std.ArrayList(u8) = .empty,
+    /// Scratch for a checked record's field values in plan order.
+    checked_components: std.ArrayList(CIR.Expr.Idx) = .empty,
     erased_callable_resolver: ErasedCallableResolver,
     boxy_functions: ?BoxyFunctions = null,
     product_plans: std.AutoHashMap(ProductPlanKey, ?lir.PackedData.Plan),
@@ -210,6 +212,7 @@ pub const Writer = struct {
         self.product_plans.deinit();
         self.product_eligibility.deinit();
         self.checked_text.deinit(self.allocator);
+        self.checked_components.deinit(self.allocator);
         self.stored_values.deinit();
     }
 
@@ -513,7 +516,7 @@ pub const Writer = struct {
                         try self.appendTagPayloadRequests(children, selected.payloads, payload_layout, tag_base.value);
                         break :name selected.name;
                     },
-                    .checked => |expr| try self.appendCheckedTagRequests(children, variants, layout_idx, expr),
+                    .checked => |expr| try self.appendCheckedTagRequests(children, request.plan, variants, layout_idx, expr),
                 };
                 break :blk .{ .tag = .{ .node = node, .name = name } };
             },
@@ -1053,10 +1056,12 @@ pub const Writer = struct {
                     if (components.len == 0 or layout_value.tag == .zst) continue;
                     if (layout_value.tag != .struct_) writerInvariant("a product's layout is not a struct");
                     const struct_idx = layout_value.getStruct().idx;
-                    for (components, 0..) |component, component_index| try pending.append(self.allocator, .{
+                    const parts = try self.checkedComponents(leaf.plan, leaf.expr, components.len);
+                    try pending.ensureUnusedCapacity(self.allocator, components.len);
+                    for (components, parts, 0..) |component, part, component_index| pending.appendAssumeCapacity(.{
                         .plan = component,
                         .layout_idx = self.program.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(component_index)),
-                        .expr = self.checkedComponent(leaf.plan, leaf.expr, component_index),
+                        .expr = part,
                         .offset = leaf.offset + self.program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, @intCast(component_index)),
                     });
                 },
@@ -1066,21 +1071,27 @@ pub const Writer = struct {
         return memory;
     }
 
-    /// Component `index` of value-form tuple or record `expr` of plan
-    /// `plan`: a tuple's item, or the record field the plan's component
-    /// `index` stores, found by name.
-    fn checkedComponent(self: *const Writer, plan: LirProgram.ConstPlanId, expr: CIR.Expr.Idx, index: usize) CIR.Expr.Idx {
+    /// The parts of value-form tuple or record `expr` in the order plan
+    /// `plan` stores its components: a tuple's items, or a record's field
+    /// values, each placed at the component the schema gives its label. The
+    /// slice is valid until the next call.
+    fn checkedComponents(self: *Writer, plan: LirProgram.ConstPlanId, expr: CIR.Expr.Idx, count: usize) Allocator.Error![]const CIR.Expr.Idx {
         const values = self.checkedValues();
         const bodies = values.bodies;
         const data = bodies.exprData(expr);
-        if (data == .tuple) return data.tuple[index];
+        if (data == .tuple) {
+            if (data.tuple.len != count) writerInvariant("a value-form tuple does not have its plan's components");
+            return data.tuple;
+        }
         if (data != .record) writerInvariant("a value-form product is not a tuple or record");
-        const name = values.schema.recordFields(plan).name(index);
+        if (data.record.fields.len != count) writerInvariant("a value-form record does not have its plan's components");
+        try self.checked_components.resize(self.allocator, count);
         for (data.record.fields) |field_idx| {
             const field = bodies.recordField(field_idx);
-            if (std.mem.eql(u8, bodies.names.recordFieldLabelText(field.label), name)) return field.value;
+            const component = try values.schema.recordComponent(plan, bodies.names.recordFieldLabelText(field.label));
+            self.checked_components.items[component] = field.value;
         }
-        writerInvariant("a value-form record has no field its type stores");
+        return self.checked_components.items;
     }
 
     /// The component requests of value-form tuple or record `expr`, as
@@ -1097,11 +1108,12 @@ pub const Writer = struct {
         while (layout_value.tag == .box) layout_value = self.program.layouts.getLayout(layout_value.getIdx());
         const zero_sized = layout_value.tag == .zst or layout_value.tag == .box_of_zst;
         if (!zero_sized and layout_value.tag != .struct_) writerInvariant("struct const plan had non-struct layout");
+        const parts = try self.checkedComponents(plan, expr, plans.len);
         try out.ensureUnusedCapacity(self.allocator, plans.len);
-        for (plans, 0..) |component, index| out.appendAssumeCapacity(.{
+        for (plans, parts, 0..) |component, part, index| out.appendAssumeCapacity(.{
             .plan = component,
             .layout_idx = if (zero_sized) .zst else self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, @intCast(index)),
-            .value = .{ .checked = self.checkedComponent(plan, expr, index) },
+            .value = .{ .checked = part },
         });
     }
 
@@ -1111,11 +1123,13 @@ pub const Writer = struct {
     fn appendCheckedTagRequests(
         self: *Writer,
         out: *std.ArrayList(ValueRequest),
+        union_plan: LirProgram.ConstPlanId,
         variants: []const LirProgram.ConstTagVariant,
         layout_idx: layout.Idx,
         expr: CIR.Expr.Idx,
     ) Allocator.Error![]const u8 {
-        const bodies = self.checkedValues().bodies;
+        const values = self.checkedValues();
+        const bodies = values.bodies;
         const data = bodies.exprData(expr);
         const name: []const u8, const args: []const CIR.Expr.Idx = if (data == .tag)
             .{ bodies.names.tagLabelText(bodies.tagLabel(data.tag.name)), data.tag.args }
@@ -1123,9 +1137,8 @@ pub const Writer = struct {
             .{ bodies.names.tagLabelText(bodies.tagLabel(data.zero_argument_tag.name)), &.{} }
         else
             writerInvariant("a value-form tag union value is not a tag");
-        const selected = for (variants) |variant| {
-            if (variant.payloads.len == args.len and std.mem.eql(u8, variant.name, name)) break variant;
-        } else writerInvariant("a value-form tag is not a variant of its type");
+        const selected = variants[try values.schema.tagVariant(union_plan, name)];
+        if (selected.payloads.len != args.len) writerInvariant("a value-form tag does not have its variant's payloads");
         if (args.len == 0) return selected.name;
         const base_layout = self.program.layouts.getLayout(layout_idx);
         const tag_layout: layout.Idx = switch (base_layout.tag) {
