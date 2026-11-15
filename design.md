@@ -21923,6 +21923,136 @@ proves non-strict strict, so a counter tested against its limit with `!=` is
 known to lie strictly inside it. `bool_not` of a modeled comparison carries the
 complementary comparison, which is how `!=` reaches the prover.
 
+A loop rebinds a local only by assigning it something else. A parameter that
+every back edge sets to its own value, directly or through single-assignment
+aliases defined on the loop's cycle, holds its entry value on every pass:
+each alias reads the parameter after the pass began, when by induction it
+still held that value. Such a parameter is not assigned by the loop, so the
+orderings its entry edges carry about it hold throughout the loop, as they do
+for a local the loop never mentions on the left of an assignment. A
+tail-recursive procedure's pass-through arguments are the case in hand: the
+limit a recursive walk compares its index against is a parameter of the loop
+the walk becomes.
+
+### Hoisted length tests
+
+Everything above proves a check from a branch the procedure already has. A
+loop that walks a list by an index it stops at a literal, a local, or another
+list's length has no such branch: the index is tested against the list's own
+length on every pass because nothing relates the stopping bound to that
+length. The prover supplies the branch. When its rounds reach their fixpoint
+with a comparison on a loop's cycle still undecided, and one length test made
+where the loop is entered would decide it, the loop is guarded:
+
+```text
+join loop(params) { body }            join loop(params) { body }
+in remainder                    =>    in join guard() {
+                                             if base <= len(list) + c {
+                                                 join copy(params) { body' } in jump copy
+                                             } else {
+                                                 jump loop
+                                             }
+                                         } in remainder[jump loop := jump guard]
+```
+
+Every entry to the loop goes through the guard, which makes the test once. It
+enters a copy of the loop when the test holds and the loop as it was when it
+does not. Back edges of the copy return to the copy and back edges of the
+loop return to the loop, so neither asks again. The copy declares the loop's
+parameters and shares every local that is read or written outside the body;
+locals that live entirely inside the body are fresh in the copy. The guard
+sits in the loop's remainder, so every join the body jumps out to is still in
+scope for the copy. Loop append promotion versions its loops with the same
+split of locals (`body_clone.renamableBodyLocals`), and the plain copy here is
+`body_clone.cloneLoop`. That pass dispatches at the loop's head on every
+pass, because the ownership it dispatches on can change between passes; a
+length that cannot drop needs asking once.
+
+Guarding removes no check. The guard reads a length and a value and
+branches, and the copy is the body statement for statement, so whichever arm
+runs, the procedure computes what it computed before, out-of-bounds indices
+included. The checks leave the copy in the proof rounds that follow, which
+start over on the guarded procedure and find the test's holding edge on the
+copy's entry like any other branch. The length lower bound that edge states
+becomes a loop invariant of the copy by the induction above, and the copy's
+comparison folds from it. The qualifying rule below therefore decides only
+where a copy is worth emitting: a rule that admitted too much would cost
+code size, never correctness.
+
+A loop is guarded when all of the following hold.
+
+- A comparison on the loop's cycle is undecided at the fixpoint and is an
+  ordering, `x <= y + m` in the prover's form for either of its outcomes.
+- The path's orderings where the comparison stands give `x <= base + c1` and
+  `len(list) <= y + c2`. Then `base <= len(list) + (m - c1 - c2)` decides
+  the comparison, and it is the weakest test of that base against that list
+  that does, because difference constraints compose only along such a chain.
+- `base` is a literal, an integer local, or the length of a list a local
+  holds, and the local holds one value from the loop's entry to its exit. A
+  base bounds `x` through orderings that branches and definitions
+  established. The range of `x`'s type is not a base, so an index that is
+  merely a `U8` does not ask whether the list has 256 items.
+- `list` is a local holding one list from the loop's entry to its exit, or a
+  parameter of the loop none of whose back edges passes a list the prover
+  cannot show to be at least as long as the one the pass began with. An
+  in-place write (`list_set`, `list_set_in_place_unsafe`,
+  `list_map_write_unsafe`) keeps the length term, `list_map_prepare_reuse`
+  keeps the value, and an append adds one, so loops that overwrite or grow
+  the list qualify. A back edge that passes a list of unrelated length (a
+  drop, a sublist, a call's result) disqualifies the parameter.
+- The test is not already decided where the comparison stands. A test whose
+  two sides are one value, or whose failure the path's orderings prove, is
+  never asked: a pass that reaches the comparison would never run in the
+  copy.
+- The guard can read both sides where the loop is entered. Each is a local
+  that no statement in the loop's body defines, or a parameter of the loop
+  that the loop does not assign; a single-assignment alias defined in the
+  body stands for its source. Each is also a local a statement on the loop's
+  cycle reads. LIR initializes a local on every path to a read and every
+  entry reaches the cycle, so such a local is initialized at every entry,
+  and it is live there, so the guard's read does not keep a list alive past
+  what would have been its last use. The path's orderings often relate the
+  comparison to lists the procedure is finished with by the time the loop
+  runs (the argument an earlier write consumed, say); measuring one of those
+  would take away the uniqueness that write relies on, so they are never
+  measured. A local an `init_uninitialized` statement defines and a dynamic
+  local are never read by a guard, and a length some `list_len` read through
+  an item descriptor is never measured by one.
+- The loop encloses no other loop, and is neither a guarded loop nor a
+  guard's copy. A statement is therefore copied at most once by this step,
+  whatever the nesting, and the copy is spent on the innermost loop, where a
+  check runs most often. A check on the cycle of an outer loop but outside
+  its inner loops stays checked.
+- The loop's join has no retained locals and no maybe-uninitialized
+  parameters, which a second declaration of the join would have to restate.
+
+Tests for one loop are conjoined: the copy runs only when every one holds.
+Comparisons that ask for the same base against the same list ask for the
+tightest of their tests, which decides all of them. A base that is a
+narrower unsigned integer is widened for the comparison; a nonzero offset is
+applied to the length, after a test that the length covers it when it is
+subtracted.
+
+The rule predicts that the copy loses a comparison, and the proof rounds
+decide. The prover's walks and persisted lists are bounded, so in a large
+procedure an ordering the rule counted on can fail to reach the comparison.
+A hoisted test's failing edge states nothing to the prover, so the loop
+itself is proved exactly as it was before the guard; at the next fixpoint
+its copy therefore holds fewer ordering comparisons exactly when the test
+decided one. A guard whose copy holds as many as its loop is withdrawn: the
+loop's entries return to the loop, the guard and the copy become
+unreachable, and the loop is not guarded again. Every rewrite outside the
+copy was proved from orderings that hold on the path through the loop as
+written, so it stands without the guard.
+
+The copy is the loop join's whole body. Where a loop's exit runs on inside
+that body (a `while` in the middle of a procedure, whose join body continues
+into the statements after the loop), the copy holds those statements too.
+
+Which loops are guarded depends only on the procedure: the demands are
+collected in the fixpoint round, sorted by loop, list and base, and applied
+in that order.
+
 ### Saturating results and the other integer operations in the prover
 
 A saturating operation is an overflow predicate whose true arm yields a

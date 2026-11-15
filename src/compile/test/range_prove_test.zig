@@ -619,7 +619,12 @@ test "the lazy matchfinder's search proves every chain read against its entry gu
         countSearchShape,
     );
     try std.testing.expect(search_shape.found);
-    try std.testing.expectEqual(@as(usize, 4), search_shape.get_unsafe);
+    // The chain walk makes a four-byte read whose bounds test nothing
+    // before the loop decides. A test of the current position against the
+    // input's length where the walk is entered decides it, which guards a
+    // copy of the walk, so the walk's two chain reads appear in both
+    // versions.
+    try std.testing.expectEqual(@as(usize, 6), search_shape.get_unsafe);
     // Only the two entry guards and the two loop conditions compare with
     // `<`; every chain read's bounds test is proven away.
     try std.testing.expectEqual(@as(usize, 4), search_shape.is_lt);
@@ -1017,8 +1022,10 @@ test "the deflate fastloop proves every refill guard" {
     try std.testing.expect(counted.found_decode_proc);
     // The one surviving greater-than comparison is the match-offset
     // validation, which tests decoded data and must stay. Every refill
-    // bounds test proved against the 24-byte margin.
-    try std.testing.expectEqual(@as(usize, 1), counted.is_gt);
+    // bounds test proved against the 24-byte margin. The fastloop's table
+    // reads are tested once where it is entered, which guards a copy of
+    // it, so the validation appears in both versions.
+    try std.testing.expectEqual(@as(usize, 2), counted.is_gt);
 }
 
 fn countRealShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
@@ -1565,11 +1572,15 @@ test "a length invariant survives an inner loop that never touches the table" {
         countMarkedShape,
     );
     try std.testing.expect(marked_shape.found);
-    try std.testing.expectEqual(@as(usize, 2), marked_shape.get_unsafe);
-    // Three `<` tests remain: the entry guard, the inner loop's head, and
-    // the `lens` read's bounds test. The read one back from the end of the
-    // table proved.
-    try std.testing.expectEqual(@as(usize, 3), marked_shape.is_lt);
+    // The inner loop stops at a literal, so a test of `lens` against it
+    // guards a copy of that loop that reads `lens` unchecked. The inner
+    // join's body runs on into the rest of the outer pass, so the copy
+    // holds the table's read as well: each read appears twice.
+    try std.testing.expectEqual(@as(usize, 4), marked_shape.get_unsafe);
+    // Four `<` tests remain: the entry guard, the inner loop's head in
+    // both versions, and the `lens` read's bounds test in the loop as
+    // written. The read one back from the end of the table proved.
+    try std.testing.expectEqual(@as(usize, 4), marked_shape.is_lt);
 }
 
 // A guard on `pos + span` against the length, with `span` known to be at
@@ -2132,4 +2143,301 @@ test "a guard on one sum bounds a read whose index sums values each bounded by o
     );
     try std.testing.expect(marked_shape.found);
     try std.testing.expectEqual(unproven.is_lt - 1, marked_shape.is_lt);
+}
+
+const HoistShape = struct {
+    found: bool = false,
+    /// Loop heads and bounds tests.
+    is_lt: usize = 0,
+    is_gte: usize = 0,
+    /// Hoisted length tests: nothing else in these programs lowers to `<=`.
+    is_lte: usize = 0,
+    get_unsafe: usize = 0,
+};
+
+var hoist_shape: HoistShape = .{};
+
+/// Count the comparisons and unchecked reads of the one proc that xors,
+/// which each program below does in the loop under test.
+fn countHoistShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    hoist_shape = .{};
+    const gpa = std.testing.allocator;
+    const buf = try gpa.alloc(u8, 1 << 22);
+    defer gpa.free(buf);
+    for (0..store.getProcSpecs().len) |index| {
+        var writer = std.Io.Writer.fixed(buf);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
+        const text = writer.buffered();
+        if (std.mem.count(u8, text, "num_bitwise_xor(") == 0) continue;
+        if (std.c.getenv("RANGE_PROVE_DUMP") != null) std.debug.print("\n===== hoist proc =====\n{s}\n", .{text});
+        hoist_shape = .{
+            .found = true,
+            .is_lt = std.mem.count(u8, text, "num_is_lt("),
+            .is_gte = std.mem.count(u8, text, "num_is_gte("),
+            .is_lte = std.mem.count(u8, text, "num_is_lte("),
+            .get_unsafe = std.mem.count(u8, text, "list_get_unsafe("),
+        };
+        return;
+    }
+}
+
+/// The shape of `walk` after range proving an app that calls it twice, so
+/// it stays a procedure of its own.
+fn hoistShape(comptime walk: []const u8, comptime call: []const u8) (harness.LowerToLirHarnessError || error{TestExpectedTrue})!HoistShape {
+    try harness.expectLirInspectionWithOptions(
+        walk ++
+            "\nmain! : List(Str) => Try({}, [Exit(I8), ..])\n" ++
+            "main! = |args| {\n" ++
+            "    bytes = Str.to_utf8(Str.join_with(args, \",\"))\n" ++
+            "    n = List.len(args)\n" ++
+            "    echo!(Str.inspect((" ++ call ++ ", " ++ call ++ ")))\n" ++
+            "    Ok({})\n" ++
+            "}\n",
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countHoistShape,
+    );
+    try std.testing.expect(hoist_shape.found);
+    return hoist_shape;
+}
+
+// The loop stops at `limit`, which nothing relates to the list's length, so
+// the read tests its index on every pass. One test of `limit` against the
+// length where the loop is entered decides that test for the whole loop.
+test "a read stopped at a local bound is tested once where its loop is entered" {
+    const shape = try hoistShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $acc = 0.U8
+        \\    while $i < limit {
+        \\        $acc = $acc.bitwise_xor(List.get(list, $i) ?? 7)
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, n)");
+    // The guard's one test, and the loop twice.
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 2), shape.get_unsafe);
+    // The loop keeps its head and its bounds test; the copy keeps only its
+    // head.
+    try std.testing.expectEqual(@as(usize, 3), shape.is_lt);
+}
+
+// The list is a parameter of the loop: every pass replaces it with the
+// result of an overwrite, which keeps its length, so the bound the entry
+// test states still holds on every later pass.
+test "a carried list its loop only overwrites keeps the bound its entry test states" {
+    const shape = try hoistShape(
+        \\walk : List(U8), U64 -> List(U8)
+        \\walk = |list, start| {
+        \\    var $i = start
+        \\    var $out = list
+        \\    while $i < 16 {
+        \\        $out = match List.get($out, $i) {
+        \\            Ok(old) => List.set($out, $i, old.bitwise_xor(1)) ?? $out
+        \\            Err(_) => $out
+        \\        }
+        \\        $i = $i.plus_wrap(3)
+        \\    }
+        \\    $out
+        \\}
+        \\
+    , "walk(bytes, n)");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    // Loop append promotion already runs this loop in two versions, one
+    // for a list it owns, and the guard copies the owned one. All three
+    // keep their head; only the two that are not the guard's copy keep the
+    // read's bounds test, which also covers the write.
+    try std.testing.expectEqual(@as(usize, 5), shape.is_lt);
+}
+
+// A tail-recursive walk's limit is an argument every recursive call passes
+// along unchanged, so it is a parameter of the loop that the loop never
+// rebinds, and the entry test may read it.
+test "a tail-recursive walk's pass-through limit is a bound its entry test reads" {
+    const shape = try hoistShape(
+        \\walk : List(U8), U64, U64 -> List(U8)
+        \\walk = |list, i, limit| {
+        \\    if i >= limit {
+        \\        list
+        \\    } else {
+        \\        next = match List.get(list, i) {
+        \\            Ok(old) => List.set(list, i, old.bitwise_xor(1)) ?? list
+        \\            Err(_) => list
+        \\        }
+        \\        walk(next, i.plus_wrap(2), limit)
+        \\    }
+        \\}
+        \\
+    , "walk(bytes, 0, n)");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    // The head of each of the three versions (see the test above).
+    try std.testing.expectEqual(@as(usize, 3), shape.is_gte);
+    // The two versions that are not the guard's copy keep the bounds test.
+    try std.testing.expectEqual(@as(usize, 2), shape.is_lt);
+}
+
+// Two lists walked by one index that stops at the first one's length: the
+// second list's read asks whether it is at least as long as the first.
+test "a second list read at the first one's index is tested against the first one's length" {
+    const shape = try hoistShape(
+        \\walk : List(U8), List(U8) -> U8
+        \\walk = |xs, ys| {
+        \\    count = List.len(xs)
+        \\    var $i = 0.U64
+        \\    var $acc = 0.U8
+        \\    while $i < count {
+        \\        $acc = $acc.bitwise_xor(List.get(xs, $i) ?? 1).bitwise_xor(List.get(ys, $i) ?? 2)
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, List.repeat(3.U8, n))");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 4), shape.get_unsafe);
+    // `xs` is read unchecked in both versions; only the loop itself tests
+    // the read of `ys`.
+    try std.testing.expectEqual(@as(usize, 3), shape.is_lt);
+}
+
+// An append makes the carried list one longer, so a lower bound on its
+// length survives the pass and the read keeps its entry test.
+test "a carried list its loop appends to keeps the bound its entry test states" {
+    const shape = try hoistShape(
+        \\walk : List(U8), U64 -> List(U8)
+        \\walk = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $out = list
+        \\    while $i < limit {
+        \\        $out = List.append($out, (List.get($out, $i) ?? 9).bitwise_xor(1))
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    $out
+        \\}
+        \\
+    , "walk(bytes, n)");
+    // The append's own capacity test in the loop and in its copy, and the
+    // guard's test.
+    try std.testing.expectEqual(@as(usize, 3), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 2), shape.get_unsafe);
+    // Both heads, and the loop's bounds test.
+    try std.testing.expectEqual(@as(usize, 3), shape.is_lt);
+}
+
+// Dropping an item shortens the carried list, so a bound that held where
+// the loop was entered says nothing about a later pass: no test is hoisted
+// and the loop is not copied.
+test "a carried list its loop shortens asks for no entry test" {
+    const shape = try hoistShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $rest = list
+        \\    var $acc = 0.U8
+        \\    while $i < limit {
+        \\        $acc = $acc.bitwise_xor(List.get($rest, $i) ?? 7)
+        \\        $rest = List.drop_last($rest, 1)
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, n)");
+    // The one `<=` is the drop's own.
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.get_unsafe);
+    try std.testing.expectEqual(@as(usize, 2), shape.is_lt);
+}
+
+// The loop lowers its own bound, so the bound where the loop is entered is
+// not the one a later pass compares against.
+test "a bound its loop rebinds asks for no entry test" {
+    const shape = try hoistShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, start| {
+        \\    var $i = 0.U64
+        \\    var $limit = start
+        \\    var $acc = 0.U8
+        \\    while $i < $limit {
+        \\        $acc = $acc.bitwise_xor(List.get(list, $i) ?? 7)
+        \\        $limit = $limit.shr_zf_wrap($acc.bitwise_and(1))
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, n)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.get_unsafe);
+}
+
+// Nothing in the loop compares against a length, so no test would remove
+// anything and the loop is emitted once.
+test "a loop with no indexed check is not copied" {
+    const shape = try hoistShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $acc = List.len(list).to_u8_wrap()
+        \\    while $i < limit {
+        \\        $acc = $acc.bitwise_xor($i.to_u8_wrap())
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, n)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lt);
+}
+
+// The loop already stops at the list's own length, which decides the read:
+// there is nothing left for an entry test to decide.
+test "a loop stopped at its list's own length is not copied" {
+    const shape = try hoistShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, start| {
+        \\    var $i = start
+        \\    var $acc = 0.U8
+        \\    while $i < List.len(list) {
+        \\        $acc = $acc.bitwise_xor(List.get(list, $i) ?? 7)
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, n)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.get_unsafe);
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lt);
+}
+
+// Only a loop that encloses no other loop is copied: the inner loop's read
+// is tested where the inner loop is entered, and the outer loop's own read
+// stays checked.
+test "a loop that encloses another is not copied and the inner one is" {
+    const shape = try hoistShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $acc = 0.U8
+        \\    while $i < limit {
+        \\        $acc = $acc.bitwise_xor(List.get(list, $i) ?? 7)
+        \\        var $j = 0.U64
+        \\        while $j < limit {
+        \\            $acc = $acc.bitwise_xor(List.get(list, $j) ?? 5)
+        \\            $j = $j.plus_wrap(1)
+        \\        }
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, n)");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    // The outer read once, the inner read in the inner loop and its copy.
+    try std.testing.expectEqual(@as(usize, 3), shape.get_unsafe);
 }

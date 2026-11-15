@@ -9,6 +9,11 @@
 //! prove rewrite soundness, and the frame-local deduplication helpers.
 //! Scratch is indexed only by encountered identities and can be owned by a
 //! procedure task independently of the store receiving its cloned output.
+//!
+//! The passes that emit a second version of a loop share its treatment of
+//! locals here: `renamableBodyLocals` names the locals a copy of a loop's body
+//! may make its own, and `cloneLoop` is the plain copy, a join over the same
+//! parameters whose back edges return to the copy.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -941,6 +946,158 @@ pub const ReachableStmts = struct {
         return null;
     }
 };
+
+/// Body-local definitions a copy of a loop body may rename: locals defined
+/// only inside the body and read only there, so the copy's stores and loads
+/// never share a slot with the original's. Every other local, the loop's
+/// parameters included, is shared by both versions of the loop.
+pub fn renamableBodyLocals(store: *LirStore, body: CFStmtId, proc_body: CFStmtId, scratch: *AnalysisScratch, allocator: Allocator) Allocator.Error!collections.DenseMap(LocalId, void) {
+    var body_reads = try countReachableReadsWithScratch(store, body, scratch);
+    defer body_reads.deinit();
+    var body_defs = try countReachableDefsWithScratch(store, body, scratch);
+    defer body_defs.deinit();
+    var proc_reads = try countReachableReadsWithScratch(store, proc_body, scratch);
+    defer proc_reads.deinit();
+    var proc_defs = try countReachableDefsWithScratch(store, proc_body, scratch);
+    defer proc_defs.deinit();
+    var renamable = collections.DenseMap(LocalId, void).init(allocator);
+    errdefer renamable.deinit();
+    var defs = body_defs.counts.iterator();
+    while (defs.next()) |entry| {
+        const local = entry.key_ptr.*;
+        if (entry.value_ptr.* > 0 and
+            entry.value_ptr.* == proc_defs.get(local) and
+            body_reads.get(local) == proc_reads.get(local))
+        {
+            try renamable.put(local, {});
+        }
+    }
+    return renamable;
+}
+
+/// Clones a loop's body into a second version of that loop. Joins the body
+/// declares get fresh identities, every jump back to the loop goes to the
+/// copy instead, and a jump to a join that encloses the loop keeps its
+/// target, so the copy may be placed anywhere those joins are in scope.
+pub const LoopCopyRewriter = struct {
+    loop_id: LIR.JoinPointId,
+    copy_id: LIR.JoinPointId,
+    renamable: *const collections.DenseMap(LocalId, void),
+    join_map: collections.DenseMap(LIR.JoinPointId, LIR.JoinPointId),
+    next_join_point: *u32,
+
+    pub fn preserveLocal(self: *LoopCopyRewriter, local: LocalId) bool {
+        return !self.renamable.contains(local);
+    }
+
+    pub fn cloneRet(_: *LoopCopyRewriter, cloner: anytype, value: LocalId, origin: LIR.StmtOrigin) Allocator.Error!CFStmtId {
+        return try cloner.store.addCFStmt(.{ .ret = .{ .value = try cloner.mapLocal(value) } }, origin);
+    }
+
+    pub fn interceptStmt(self: *LoopCopyRewriter, cloner: anytype, _: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) Allocator.Error!Intercept {
+        switch (stmt) {
+            .join => |s| {
+                const fresh: LIR.JoinPointId = @fromBackingInt(@intCast(self.next_join_point.*));
+                self.next_join_point.* += 1;
+                try self.join_map.put(s.id, fresh);
+                return Intercept.two(s.body, s.remainder);
+            },
+            .jump => |s| {
+                const target = if (s.target == self.loop_id) self.copy_id else (self.join_map.get(s.target) orelse s.target);
+                return .{ .done = try cloner.store.addCFStmt(.{ .jump = .{ .target = target } }, origin) };
+            },
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .dyn,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .ret,
+            .crash,
+            => return .none,
+        }
+    }
+
+    pub fn finishIntercept(
+        self: *LoopCopyRewriter,
+        cloner: anytype,
+        _: CFStmtId,
+        stmt: LIR.CFStmt,
+        origin: LIR.StmtOrigin,
+        cloned: []const CFStmtId,
+    ) Allocator.Error!CFStmtId {
+        const s = switch (stmt) {
+            .join => |join| join,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .dyn, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash => unreachable, // interceptStmt returns children only for join
+        };
+        return try cloner.store.addCFStmt(.{ .join = .{
+            .id = self.join_map.get(s.id).?,
+            .params = try cloner.mapLocalSpan(s.params),
+            .body = cloned[0],
+            .remainder = cloned[1],
+            .extra = try cloner.mapJoinExtra(s.extra),
+        } }, origin);
+    }
+};
+
+/// A second version of the loop `join` declares, as a join `copy_id` over
+/// the same parameter locals whose body is a copy of the loop's and whose
+/// remainder enters it. The locals the copy made are appended to
+/// `new_locals`. The caller places the result where every join the loop's
+/// body jumps out to is in scope.
+pub fn cloneLoop(
+    store: *LirStore,
+    join: @FieldType(LIR.CFStmt, "join"),
+    copy_id: LIR.JoinPointId,
+    proc_body: CFStmtId,
+    next_join_point: *u32,
+    scratch: *AnalysisScratch,
+    allocator: Allocator,
+    new_locals: *std.ArrayList(LocalId),
+    origin: LIR.StmtOrigin,
+) Allocator.Error!CFStmtId {
+    var renamable = try renamableBodyLocals(store, join.body, proc_body, scratch, allocator);
+    defer renamable.deinit();
+    var cloner = try BodyCloner(LoopCopyRewriter).initWithAllocator(store, .{
+        .loop_id = join.id,
+        .copy_id = copy_id,
+        .renamable = &renamable,
+        .join_map = collections.DenseMap(LIR.JoinPointId, LIR.JoinPointId).init(allocator),
+        .next_join_point = next_join_point,
+    }, allocator);
+    defer cloner.deinit();
+    defer cloner.rewriter.join_map.deinit();
+    const body_copy = try cloner.cloneStmt(join.body);
+    try new_locals.appendSlice(allocator, cloner.new_locals.items);
+    const enter = try store.addCFStmt(.{ .jump = .{ .target = copy_id } }, origin);
+    return try store.addCFStmt(.{ .join = .{
+        .id = copy_id,
+        .params = join.params,
+        .body = body_copy,
+        .remainder = enter,
+    } }, origin);
+}
 
 /// Like `collectReachableDefinitions`, with independently owned scratch.
 pub fn collectReachableDefinitionsWithAllocator(store: *LirStore, body: CFStmtId, allocator: Allocator) Allocator.Error!ReadCounts {

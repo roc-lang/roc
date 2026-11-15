@@ -15014,3 +15014,140 @@ test "sealed result rows: an annotated result row is a static worker and widenin
     }
     try runtime_env.checkForLeaks();
 }
+
+/// The number of length tests range proving hoisted to loop entries: each
+/// reads its list's length in a statement the prover made.
+fn hoistedLengthTestCount(lowered: *const lir.CheckedPipeline.LoweredProgram) usize {
+    const store = &lowered.lir_result.store;
+    var count: usize = 0;
+    for (store.getCFStmts(), 0..) |stmt, index| {
+        if (stmt != .assign_low_level) continue;
+        if (stmt.assign_low_level.op != .list_len) continue;
+        const id: LIR.CFStmtId = @fromBackingInt(@as(u32, @intCast(index)));
+        if (store.stmtOrigin(id).kind == .range_prove) count += 1;
+    }
+    return count;
+}
+
+test "range proving: loops guarded by a hoisted length test observe what the unguarded loops do" {
+    // Each walk stops at a bound that is not its list's length, and `show`
+    // runs each on lists shorter than the bound, exactly as long, longer,
+    // and empty, so both the guarded copy and the loop as written run, and
+    // every out-of-bounds index takes its miss arm. `grow` appends to the
+    // list it reads and `shrink` drops from it.
+    const source =
+        \\mark : List(U8), U64, U64 -> List(U8)
+        \\mark = |list, start, step| {
+        \\    var $i = start
+        \\    var $out = list
+        \\    while $i < 16 {
+        \\        $out = match List.get($out, $i) {
+        \\            Ok(old) => List.set($out, $i, old.bitwise_or(128)) ?? $out
+        \\            Err(_) => List.append($out, 255)
+        \\        }
+        \\        $i = $i.plus_wrap(step)
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\bump : List(U64), U64, U64 -> List(U64)
+        \\bump = |list, i, limit| {
+        \\    if i >= limit {
+        \\        list
+        \\    } else {
+        \\        next = match List.get(list, i) {
+        \\            Ok(old) => List.set(list, i, old + 1) ?? list
+        \\            Err(_) => list
+        \\        }
+        \\        bump(next, i + 1, limit)
+        \\    }
+        \\}
+        \\
+        \\sum : List(U64), U64 -> U64
+        \\sum = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $total = 0.U64
+        \\    while $i < limit {
+        \\        $total = $total + (List.get(list, $i) ?? 1000)
+        \\        $i = $i + 1
+        \\    }
+        \\    $total
+        \\}
+        \\
+        \\dot : List(U64), List(U64) -> U64
+        \\dot = |xs, ys| {
+        \\    count = List.len(xs)
+        \\    var $i = 0.U64
+        \\    var $total = 0.U64
+        \\    while $i < count {
+        \\        $total = $total + (List.get(xs, $i) ?? 0) * (List.get(ys, $i) ?? 7)
+        \\        $i = $i + 1
+        \\    }
+        \\    $total
+        \\}
+        \\
+        \\grow : List(U64), U64 -> List(U64)
+        \\grow = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $out = list
+        \\    while $i < limit {
+        \\        $out = List.append($out, (List.get($out, $i) ?? 500) + 1)
+        \\        $i = $i + 1
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\shrink : List(U64), U64 -> U64
+        \\shrink = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $rest = list
+        \\    var $total = 0.U64
+        \\    while $i < limit {
+        \\        $total = $total + (List.get($rest, $i) ?? 100)
+        \\        $rest = List.drop_last($rest, 1)
+        \\        $i = $i + 1
+        \\    }
+        \\    $total
+        \\}
+        \\
+        \\show : U64 -> U64
+        \\show = |extra| {
+        \\    dbg mark(List.repeat(1.U8, 10 + extra), 0, 3)
+        \\    dbg mark(List.repeat(1.U8, extra), 1, 7)
+        \\    dbg mark(List.repeat(1.U8, 4 + extra), 40, 7)
+        \\    dbg bump(List.repeat(5.U64, 3 + extra), 0, 6)
+        \\    dbg bump(List.repeat(5.U64, extra), 2, 6)
+        \\    dbg sum(List.repeat(2.U64, 3 + extra), 5)
+        \\    dbg sum(List.repeat(2.U64, extra), 5)
+        \\    dbg dot(List.repeat(3.U64, 5 + extra), List.repeat(2.U64, 3 + extra * 2))
+        \\    dbg dot(List.repeat(3.U64, extra), List.repeat(2.U64, extra))
+        \\    dbg grow(List.repeat(9.U64, 2 + extra), 6)
+        \\    dbg grow(List.repeat(9.U64, extra), 3)
+        \\    dbg shrink(List.repeat(4.U64, 3 + extra), 5)
+        \\    extra
+        \\}
+        \\
+        \\main : U64
+        \\main = show(0) + show(2) + show(3) + show(6) + show(16)
+    ;
+    const allocator = std.testing.allocator;
+
+    var plain = try lowerModuleWithOptions(allocator, source, .wrappers, .{});
+    defer plain.deinit(allocator);
+    var proved = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .prove_ranges = true });
+    defer proved.deinit(allocator);
+
+    // `mark`, `bump`, `sum`, `dot` and `grow` each have a loop a length test
+    // guards; `shrink` shortens its list, so its loop has none.
+    try std.testing.expectEqual(@as(usize, 0), hoistedLengthTestCount(&plain.lowered));
+    try std.testing.expectEqual(@as(usize, 5), hoistedLengthTestCount(&proved.lowered));
+
+    var plain_run = try runLoweredWithHostEvents(allocator, &plain.lowered);
+    defer plain_run.deinit(allocator);
+    var proved_run = try runLoweredWithHostEvents(allocator, &proved.lowered);
+    defer proved_run.deinit(allocator);
+
+    try std.testing.expectEqual(eval.RuntimeHostEnv.Termination.returned, proved_run.termination);
+    try std.testing.expectEqual(@as(usize, 60), proved_run.events.len);
+    try expectRecordedRunsEqual(plain_run, proved_run);
+}
