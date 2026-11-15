@@ -71,6 +71,9 @@ pub const Var = enum {
     /// readable name a lowering of the process recorded (`notePerfName`),
     /// otherwise by symbol.
     perf_map,
+    /// Print one line of deterministic range prover work counters per
+    /// procedure the prover walks.
+    range_prove_stats,
 
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
@@ -95,6 +98,7 @@ pub const Var = enum {
             .dump_wasm_unit_images => "ROC_DUMP_WASM_UNIT_IMAGES",
             .storage_work => "ROC_STORAGE_WORK",
             .perf_map => "ROC_PERF_MAP",
+            .range_prove_stats => "ROC_RANGE_PROVE_STATS",
         };
     }
 };

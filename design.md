@@ -28622,6 +28622,12 @@ and installation phases under the same diagnostic.
 The specialization, evaluation, runtime LIR, ARC, static-data and native test
 execution producers increment their own counters. This variable uses the same developer-only gate.
 
+`ROC_RANGE_PROVE_STATS` prints one line of deterministic work counters for
+each procedure the range prover walks: its proof rounds and restarts, the
+regions and statements it walked, its slack walks, and the sum refreshes with
+the size of their closures and the relaxations they ran. The counters measure
+how much work a procedure cost the prover and change nothing it proves.
+
 `ROC_PROFILE_ALLOCATIONS` attributes native test-root allocations on Linux x64.
 Each root owns its diagnostic table, aggregating allocation and reallocation
 calls and requested bytes by the first sixteen native return addresses. The

@@ -101,6 +101,7 @@
 
 const std = @import("std");
 const invariant = @import("base").invariant;
+const dev_diagnostics = @import("base").dev_diagnostics;
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const collections = @import("collections");
@@ -207,6 +208,59 @@ pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, pr
     defer pass.release();
     try pass.transformProc(proc_id);
 }
+
+/// Deterministic work counters for one procedure (`ROC_RANGE_PROVE_STATS`).
+/// Selected at compile time, so a compiler that does not read developer
+/// diagnostics carries none of it.
+const Stats = if (!dev_diagnostics.available) struct {
+    inline fn add(_: *@This(), comptime _: Counter, _: usize) void {}
+    fn report(_: *@This(), _: *const LirStore, _: LIR.LirProcSpecId) void {}
+} else struct {
+    counts: [@typeInfo(Counter).@"enum".field_names.len]u64 = @splat(0),
+
+    inline fn add(self: *@This(), comptime counter: Counter, amount: usize) void {
+        self.counts[@backingInt(counter)] += amount;
+    }
+
+    fn report(self: *@This(), store: *const LirStore, proc_id: LIR.LirProcSpecId) void {
+        defer self.counts = @splat(0);
+        if (!dev_diagnostics.isSet(.range_prove_stats)) return;
+        std.debug.print("range-prove-stats: p{d} {s}", .{ @backingInt(proc_id), store.procDebugName(proc_id) orelse "?" });
+        inline for (@typeInfo(Counter).@"enum".field_names, 0..) |name, index| {
+            std.debug.print(" {s}={d}", .{ name, self.counts[index] });
+        }
+        std.debug.print("\n", .{});
+    }
+};
+
+/// What `Stats` counts.
+const Counter = enum {
+    /// Proof rounds, and the rounds among them that threaded Bool joins
+    /// instead of walking.
+    rounds,
+    thread_rounds,
+    /// Times the proof started over after guarding or withdrawing a guard.
+    restarts,
+    /// Regions walked and statements modeled.
+    regions,
+    statements,
+    /// Slack walks, and the roots they took off their worklists.
+    walks,
+    walk_roots,
+    /// Sum refreshes, the sums they stated, the roots and facts their
+    /// closures gathered, and the fact and sum relaxations they ran.
+    refreshes,
+    refresh_sums,
+    closure_roots,
+    closure_facts,
+    closure_relaxations,
+    /// The passes those closures ran, and the closures that stopped at the
+    /// pass cap with bounds still moving.
+    closure_passes,
+    closure_capped,
+    /// Undecided ordering comparisons examined for a hoisted length test.
+    demand_queries,
+};
 
 /// One pending statement of `scanJoinNesting`, with the join whose body
 /// lexically contains it.
@@ -2005,6 +2059,7 @@ const Pass = struct {
     /// Pending assumptions seeded so far this round.
     assumption_count: u8 = 0,
     rewrites: u32,
+    stats: Stats = .{},
     // Debug-only certification state; unused (and empty) in release builds.
     proof_records: std.ArrayList(ProofRecord),
     proof_facts: std.ArrayList(Fact),
@@ -2519,6 +2574,8 @@ const Pass = struct {
     fn refreshSums(self: *Pass) ResourceError!void {
         self.refreshing_sums = true;
         defer self.refreshing_sums = false;
+        self.stats.add(.refreshes, 1);
+        self.stats.add(.refresh_sums, self.refresh_set.items.len);
         try self.boundSumRoots();
         for (self.refresh_set.items, self.closure_sums.items) |index, in_closure| {
             const sum = &self.sums.items[index];
@@ -2638,6 +2695,8 @@ const Pass = struct {
                 }
             }
         }
+        self.stats.add(.closure_roots, self.query_queue.items.len);
+        self.stats.add(.closure_facts, self.closure_facts.items.len);
         if (builtin.mode == .debug) {
             self.closure_check.clearRetainingCapacity();
             try self.closure_check.appendSlice(self.allocator, self.closure_bounds.items);
@@ -2656,6 +2715,7 @@ const Pass = struct {
                 if (b.hi_moved < fact.relaxed and a.lo_moved < fact.relaxed) continue;
                 step += 1;
                 fact.relaxed = step;
+                self.stats.add(.closure_relaxations, 1);
                 const hi_through = clampSlack(b.hi + fact.c);
                 if (hi_through < a.hi) {
                     a.hi = hi_through;
@@ -2679,9 +2739,12 @@ const Pass = struct {
                 if (!inputs_moved) continue;
                 step += 1;
                 sum.relaxed = step;
+                self.stats.add(.closure_relaxations, 1);
                 if (relaxSum(bounds, sum.*, step)) changed = true;
             }
         }
+        self.stats.add(.closure_passes, passes);
+        if (changed) self.stats.add(.closure_capped, 1);
         if (builtin.mode == .debug) self.assertClosureBounds();
     }
 
@@ -2882,7 +2945,9 @@ const Pass = struct {
         try self.query_best.put(start, .{ .c = 0, .queued = true });
         try self.query_queue.append(self.allocator, start);
         self.reached_sum_end = self.isSumEnd(start);
+        self.stats.add(.walks, 1);
         var next: usize = 0;
+        defer self.stats.add(.walk_roots, next);
         while (next < self.query_queue.items.len) : (next += 1) {
             const node = self.query_queue.items[next];
             const acc = self.query_best.getPtr(node).?;
@@ -5786,15 +5851,19 @@ const Pass = struct {
         // is revived once per epoch, which only those steps open.
         var persisted_size: usize = 0;
         var first = true;
+        defer self.stats.report(self.store, proc_id);
         while (true) {
             self.resetRound();
             try self.prescanProc(proc);
             if (first) try self.reserveMergeStorage();
             first = false;
+            self.stats.add(.rounds, 1);
             // Threading restructures control flow, so a round that threads
             // stops there and the next round re-derives the graph facts.
             self.seeds_grew = false;
-            if (try self.threadBoolJoins(proc.body.get().?) == 0) {
+            if (try self.threadBoolJoins(proc.body.get().?) != 0) {
+                self.stats.add(.thread_rounds, 1);
+            } else {
                 try self.walkRegions(proc.body.get().?);
                 try self.certifyRound(proc.body.get().?);
                 try self.persistLoopBounds();
@@ -5807,6 +5876,7 @@ const Pass = struct {
                 const withdrew = try self.settleGuards();
                 const guarded = try self.hoistLengthTests(proc.body.get().?);
                 if (!withdrew and !guarded) break;
+                self.stats.add(.restarts, 1);
                 self.freePersisted();
                 self.loop_bounds.clearRetainingCapacity();
                 self.loop_facts.clearRetainingCapacity();
@@ -6103,6 +6173,7 @@ const Pass = struct {
     /// that would decide it either way.
     fn noteHoistDemands(self: *Pass, stmt: CFStmtId, op: PredOp, a: NodeId, b: NodeId) ResourceError!void {
         const join_id = self.hoistLoopOf(stmt) orelse return;
+        self.stats.add(.demand_queries, 1);
         // The claim that makes the comparison hold, then the one that makes
         // it fail, each as `x <= y + m`.
         const claims: [2]struct { x: NodeId, y: NodeId, m: i128 } = switch (op) {
@@ -6574,6 +6645,7 @@ const Pass = struct {
     }
 
     fn walkRegion(self: *Pass, head: CFStmtId) ResourceError!void {
+        self.stats.add(.regions, 1);
         while (self.frames.pop()) |frame| {
             try self.rewindTo(frame.facts_len, frame.no_overflow_facts_len, frame.undo_len);
             if (frame.edge_fact) |fact| switch (fact) {
@@ -6594,6 +6666,7 @@ const Pass = struct {
                     break :walk;
                 }
                 if (self.visited.contains(current)) break :walk;
+                self.stats.add(.statements, 1);
                 self.grantStatementNodes(self.store.getCFStmtImmediate(current).*);
 
                 switch (self.store.getCFStmtImmediate(current).*) {
