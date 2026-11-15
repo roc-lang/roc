@@ -37366,7 +37366,7 @@ const BodyContext = struct {
                 .fn_value, .expect, .runtime => Common.invariant("an interpolation conversion root stored a value"),
             };
         }
-        const candidates = self.builder.literalArgumentRootIndex().rootsOf(.{ .module = self.view.key.bytes, .node = node, .kind = .interpolation });
+        const candidates = self.builder.literalArgumentRootIndex().storedRootsOf(.{ .module = self.view.key.bytes, .node = node, .kind = .interpolation });
         if (candidates.len == 0) return null;
         if (!try self.graph.typeIsResolved(task.request_fn)) return null;
         const ty = try self.activeTypeFromNode(task.request_fn);
