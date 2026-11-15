@@ -615,21 +615,36 @@ fn fromEntry(unit: Unit, module_name: []const u8, restored_entry: object_cache.E
 }
 
 /// `unit`'s object, lowered and compiled whatever the cache or the
-/// compiler's embedded entries hold, and its cache entry encoded exactly as
-/// `restoreOrBuild` files it: how the compiler's build makes an embedded
+/// compiler's embedded entries hold, and its cache entries encoded exactly as
+/// `restoreOrBuild` files them: how the compiler's build makes an embedded
 /// entry (src/build/builtin_unit.zig). The unit wants no pieces, so that
-/// its image is built without a cache. The caller owns both.
-pub fn buildEntry(unit: Unit) BuildError!struct { built: Built, bytes: []u8 } {
+/// its image is built without a cache; `bytes` is the entry filed under its
+/// key, and for a target with native unit images `pieces_bytes` is the entry
+/// a link that composes pieces files under its pieces key, from the same
+/// build. The caller owns all three.
+pub fn buildEntry(unit: Unit) BuildError!struct { built: Built, bytes: []u8, pieces_bytes: ?[]u8 } {
     std.debug.assert(!unit.want_pieces);
     const module_name = unit.artifact.canonical_names.moduleNameText(unit.artifact.module_identity.module_name);
     const built = try build(unit, module_name);
     errdefer built.deinit(unit.gpa);
+    const bytes = try encodeEntryBytes(unit, built);
+    errdefer unit.gpa.free(bytes);
+    const pieces_bytes: ?[]u8 = if (imageKind(unit.target) == .native) pieces: {
+        var pieces_unit = unit;
+        pieces_unit.want_pieces = true;
+        break :pieces try encodeEntryBytes(pieces_unit, built);
+    } else null;
+    return .{ .built = built, .bytes = bytes, .pieces_bytes = pieces_bytes };
+}
+
+/// `encodeEntry`'s entry in one buffer, owned by the caller.
+fn encodeEntryBytes(unit: Unit, built: Built) Allocator.Error![]u8 {
     const encoded = try encodeEntry(unit, built);
     defer encoded.deinit(unit.gpa);
     const bytes = try unit.gpa.alloc(u8, encoded.len());
     @memcpy(bytes[0..encoded.head.len], encoded.head);
     @memcpy(bytes[encoded.head.len..], encoded.image);
-    return .{ .built = built, .bytes = bytes };
+    return bytes;
 }
 
 /// The cache entry of `built`, `unit`'s freshly built object, encoded, with

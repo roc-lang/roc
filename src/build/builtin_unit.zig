@@ -155,7 +155,14 @@ fn builtinUnitTable(gpa: std.mem.Allocator, io: std.Io, target: RocTarget) MainE
     const result = try boxy_unit.buildEntry(unit);
     defer result.built.deinit(gpa);
     defer gpa.free(result.bytes);
-    return try embedded_units.encode(gpa, build_options.compiler_artifact_hash, &.{try builtin_unit.module()}, &.{.{ .input = input, .entry = result.bytes }});
+    defer if (result.pieces_bytes) |bytes| gpa.free(bytes);
+    // The entry every image-reading command files, and the one a link that
+    // composes pieces files under the unit's pieces key.
+    var units: [2]embedded_units.Unit = undefined;
+    units[0] = .{ .input = input, .entry = result.bytes };
+    if (result.pieces_bytes) |bytes| units[1] = .{ .input = input, .pieces = true, .entry = bytes };
+    const count: usize = if (result.pieces_bytes != null) 2 else 1;
+    return try embedded_units.encode(gpa, build_options.compiler_artifact_hash, &.{try builtin_unit.module()}, units[0..count]);
 }
 
 /// Build the Builtin's unit for `target` through the run-time path into a
@@ -201,6 +208,34 @@ fn verify(gpa: std.mem.Allocator, io: std.Io, roc_ctx: compile.CoreCtx, table_pa
         return error.EmbeddedEntryDiffers;
     }
 
+    // The entry a link that composes pieces files, under the pieces key, on
+    // a target with native unit images.
+    if (boxy_unit.imageKind(target) == .native) {
+        const pieces_key = object_cache.piecesKey(key);
+        const embedded_pieces = units.find(pieces_key) orelse {
+            std.log.err("the table holds no entry for the Builtin unit's pieces key", .{});
+            return error.EmbeddedEntryDiffers;
+        };
+        var pieces_unit = builtin_unit.unit(gpa, key);
+        pieces_unit.cache_manager = &manager;
+        pieces_unit.want_pieces = true;
+        const built_pieces = try boxy_unit.restoreOrBuild(pieces_unit);
+        defer built_pieces.deinit(gpa);
+        if (built_pieces.restored or built_pieces.pieces == null) {
+            std.log.err("the run-time path did not build the Builtin unit's pieces into the verification cache", .{});
+            return error.EmbeddedEntryDiffers;
+        }
+        const filed_pieces = manager.loadFamilyBytes(.boxy_object, pieces_key.bytes, object_cache.scope) orelse {
+            std.log.err("the run-time path filed no pieces entry for the Builtin unit", .{});
+            return error.EmbeddedEntryDiffers;
+        };
+        defer manager.allocator.free(filed_pieces.bytes);
+        if (!std.mem.eql(u8, filed_pieces.bytes, embedded_pieces)) {
+            std.log.err("the embedded Builtin pieces entry ({d} bytes) differs from the entry the run-time path filed ({d} bytes)", .{ embedded_pieces.len, filed_pieces.bytes.len });
+            return error.EmbeddedEntryDiffers;
+        }
+    }
+
     const module = try builtin_unit.module();
     const digests = units.moduleDigests(module.artifact, module.link_name) orelse {
         std.log.err("the table holds no digests for the Builtin under its link name", .{});
@@ -227,5 +262,16 @@ fn verify(gpa: std.mem.Allocator, io: std.Io, roc_ctx: compile.CoreCtx, table_pa
     if (!served.restored or !std.mem.eql(u8, &served.exports_digest, &built.exports_digest) or served.image == null or served.image.?.owner != .embedded) {
         std.log.err("the table does not serve the Builtin unit's key", .{});
         return error.EmbeddedEntryDiffers;
+    }
+    if (boxy_unit.imageKind(target) == .native) {
+        var served_pieces_unit = builtin_unit.unit(gpa, key);
+        served_pieces_unit.embedded = units;
+        served_pieces_unit.want_pieces = true;
+        const served_pieces = try boxy_unit.restoreOrBuild(served_pieces_unit);
+        defer served_pieces.deinit(gpa);
+        if (!served_pieces.restored or served_pieces.pieces == null or served_pieces.image == null or served_pieces.image.?.owner != .embedded) {
+            std.log.err("the table does not serve the Builtin unit's pieces key", .{});
+            return error.EmbeddedEntryDiffers;
+        }
     }
 }

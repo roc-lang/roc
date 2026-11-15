@@ -17611,7 +17611,7 @@ compiler (`compile.boxy_embedded_units`), so a compiler that embeds it never
 lowers or compiles it for that key, with a cold cache, a warm one, or
 `--no-cache`.
 
-Exactly one entry is embedded: the Builtin's ordinary unit for the target
+One unit is embedded: the Builtin's ordinary unit for the target
 the compiler runs on at its default CPU level
 (`RocTarget.fromStdTarget` of the compiler's own target), at dev opt with
 inline expects compiled in, with no run image, no expect sites and no wasm
@@ -17619,8 +17619,13 @@ stack checks, under the Builtin's stable link name. That is the unit
 compile-time evaluation links against (`lowering_policy.compileTimeObjectLowering`)
 and the unit a native dev `roc build` or `roc run`, and a `roc test` whose
 Builtin unit needs no expect sites (the Builtin has no expects), links,
-since all of them key it identically. A compiler target without a dev
-backend embeds nothing.
+since all of them key it identically. On a target with native unit images
+it is embedded as two entries from one build: the entry holding its image,
+under its key, and the entry holding its pieces and image, under its pieces
+key (`boxy_object_cache.piecesKey`), which a link that composes pieces
+(an `Archive` output) restores (Unit Pieces And Whole-Program Dead Code).
+The table records the pieces entry with the same key input and a flag. A
+compiler target without a dev backend embeds nothing.
 
 Selection is by key, never by a description of the unit. The table records
 each entry's `KeyInput` (the Builtin's `objectInput`, the target and opt
@@ -17666,7 +17671,8 @@ pair (another Builtin, or the Builtin named by content) hashes as usual.
 `zig build run-test-builtin-unit` builds the unit through `restoreOrBuild`
 into an empty cache, with the tool compiled as the compiler is (its target,
 its optimize mode), and requires the filed entry to be byte-identical to
-the Debug tool's table entry, the table to serve its key, and the embedded
+the Debug tool's table entry, the table to serve its key, and likewise for
+the entry it files under its pieces key, and the embedded
 digests to be the ones hashing the Builtin gives. MiniCI runs it in
 ReleaseSafe, so it compares a Debug build's unit with an optimized build's;
 a compiler for a target the build machine cannot run is not verified.
