@@ -19868,8 +19868,10 @@ statement is the declaration and whose value is the name's
 relates the name's type to the use's type. A variable the name's type does
 not mention stays a variable of that context, the lookup resolves its
 requirements there as any lookup does, the declaration itself computes
-nothing, and a closure that reads such a name does not capture it.
-`test/cli/ImportedGenericLocalAlias.roc` runs both forms.
+nothing, and a closure that reads such a name does not capture it. Each use
+instantiates the name's type, so the specialization-interface relation table
+records no equality between a use of one of those names and the name's own
+type. `test/cli/ImportedGenericLocalAlias.roc` runs both forms.
 
 A call through a forwarding alias is a direct call. Monotype enters the
 alias's scope with the call's use-site evidence and substitution, and requests

@@ -13445,6 +13445,10 @@ fn sealCheckedProcedureTemplateRefs(
                 .local_mutable_version,
                 .pattern_binder,
                 => |binding| {
+                    // A name a destructuring scheme alias binds is
+                    // generalized: each use instantiates its type, so no
+                    // equality relates a use to the name.
+                    if (bodies.index().destructuredAliasDecl(binding.binder) != null) continue;
                     try collector.specialization_relations.append(allocator, .{
                         .scope = use_scope,
                         .data = .{ .type_equality = .{

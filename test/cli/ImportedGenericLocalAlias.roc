@@ -45,8 +45,16 @@ destructured_twice = {
     (twice("ab"), twice([1.U8, 2]))
 }
 
+# A name a destructuring binds, called at two types in a function, one of
+# them the type of the function's argument.
+generic_twice = |x| {
+    (twice, _) = ImportedGenericLocalAliasDep.doubling
+    (twice(x), twice([1.U8, 2]))
+}
+
 expect destructured == "hi!"
 expect whole == ("abab", [1, 2, 1, 2])
 expect captured == "cd!"
 expect generic("gh") == "gh!"
 expect destructured_twice == ("abab", [1, 2, 1, 2])
+expect generic_twice("ab") == ("abab", [1, 2, 1, 2])
