@@ -191,18 +191,18 @@ NO CHANGE
 									(e-empty_record))))
 						(e-empty_record)))
 				(s-expr
-					(e-call (constraint-fn-var 383)
+					(e-call (constraint-fn-var 388)
 						(e-lookup-local
 							(p-assign (ident "echo!")))
 						(e-block
 							(s-let
 								(p-assign (ident "#interp_0"))
-								(e-dispatch-call (method "to_str") (constraint-fn-var 345)
+								(e-dispatch-call (method "to_str") (constraint-fn-var 350)
 									(receiver
 										(e-lookup-local
 											(p-var-assign (ident "$busy_count"))))
 									(args)))
-							(e-interpolation (constraint-fn-var 360) (dispatcher-var 58)
+							(e-interpolation (constraint-fn-var 365) (dispatcher-var 58)
 								(first
 									(e-literal (string "busy for ")))
 								(parts

@@ -275,16 +275,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 361)
-				(e-runtime-error (tag "erroneous_value_expr"))
-				(e-tag (name "Ok")
-					(args
-						(e-list
-							(elems
-								(e-tag (name "Some")
-									(args
-										(e-num (value "42"))))
-								(e-tag (name "None")))))))))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(s-alias-decl
 		(ty-header (name "ComplexType")
 			(ty-args

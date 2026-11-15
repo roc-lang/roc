@@ -166,7 +166,7 @@ expect f(["a"]) == "x"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 332)
+				(e-call (constraint-fn-var 328)
 					(e-runtime-error (tag "erroneous_value_expr"))
 					(e-list
 						(elems
