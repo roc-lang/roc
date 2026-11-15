@@ -22168,8 +22168,15 @@ fn predeclareAnnotationSchemeHelp(
     try self.linkDeferredUsesFrom(env.rank());
     try self.generalizeRank(env, &.{scheme_var});
     // Problems raised here are discarded below; the annotation's own check
-    // reports them against the def.
-    try self.deduplicateGeneralizedDispatchRequirements(scheme_var, null, env);
+    // reports them against the def. A retained generation wrote no `where`
+    // requirement and copied none, and every row it built was validated as
+    // it was generated, so its scheme has no requirement to deduplicate and
+    // no row to normalize.
+    if (retained != null) {
+        try self.debugAssertNothingToDeduplicate(scheme_var);
+    } else {
+        try self.deduplicateGeneralizedDispatchRequirements(scheme_var, null, env);
+    }
     try self.publishBindingScheme(scheme_var);
     env.var_pool.popRank();
 
@@ -22204,6 +22211,30 @@ fn predeclareAnnotationSchemeHelp(
         try self.hole_shared_schemes.put(self.gpa, scheme_var, .{ .start = start, .len = len });
     }
     return .{ .scheme_var = scheme_var, .shares_holes = live_holes.items.len > 0, .retained = retained };
+}
+
+/// Debug builds verify that `deduplicateGeneralizedDispatchRequirements`
+/// would leave `scheme_var`, the scheme of a retained generation, as it is:
+/// no row repeats a label, no identity holds two requirements, and the
+/// scheme holds none.
+fn debugAssertNothingToDeduplicate(self: *Self, scheme_var: Var) Allocator.Error!void {
+    if (builtin.mode != .debug) return;
+    self.canonical_key_writer.setReportDuplicateRows(true);
+    defer self.canonical_key_writer.setReportDuplicateRows(false);
+    const identity_vars = try self.canonical_key_writer.identityVarsFromVarIgnoringConstraints(scheme_var);
+    defer self.gpa.free(identity_vars);
+    if (self.canonical_key_writer.takeDuplicateRow() != null) {
+        base.invariant("type checker invariant violated: a retained annotation generation built a row that repeats a label", .{});
+    }
+    for (identity_vars) |identity_var| {
+        const constraints = contentConstraintRange(self.types.resolveVar(identity_var).desc.content) orelse continue;
+        if (constraints.len() > 1) {
+            base.invariant("type checker invariant violated: a retained annotation generation built an identity with {d} requirements", .{constraints.len()});
+        }
+    }
+    if (self.typeSchemeIndexForRoot(scheme_var) != null) {
+        base.invariant("type checker invariant violated: the scheme of a retained annotation generation holds requirements", .{});
+    }
 }
 
 /// Record the classes that the annotation generation which just ran in

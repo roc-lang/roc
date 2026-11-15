@@ -5459,6 +5459,11 @@ is discarded where it was made: the pre-pass resets the annotation's nodes
 and drops the generation's diagnostics, and the body's own generation
 reports them.
 
+The scheme copied from a generation that only built types holds no method
+requirement, and every row in it was validated as it was generated, so the
+pre-pass has nothing to deduplicate or normalize in it and does not look
+(`Check.debugAssertNothingToDeduplicate` holds that in Debug builds).
+
 An annotation with `_` holes cannot be predeclared module-wide: a hole's type
 is inferred from its body, so quantifying it into a standalone scheme would
 hand every use an unconstrained variable the body never committed to. When
