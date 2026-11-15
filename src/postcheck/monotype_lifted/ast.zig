@@ -1580,30 +1580,29 @@ pub const Program = struct {
         defer allocator.free(edge_starts);
         var edges = std.ArrayList(u32).empty;
         defer edges.deinit(allocator);
-        const Collector = struct {
-            program: *const Program,
-            allocator: std.mem.Allocator,
-            edges: *std.ArrayList(u32),
-
-            pub fn enterExpr(collector: @This(), expr_id: ExprId) std.mem.Allocator.Error!ExprWalk {
-                const data = collector.program.getExpr(expr_id).data;
-                if (data == .fn_ref) try collector.edges.append(collector.allocator, @backingInt(data.fn_ref.fn_id));
-                if (data == .call_proc) switch (data.call_proc.callee) {
-                    .lifted => |callee| try collector.edges.append(collector.allocator, @backingInt(callee)),
-                    .func => Common.invariant("unlifted call target reached Monotype Lifted binding groups"),
-                };
-                return .descend;
-            }
-
-            pub fn exitExpr(_: @This(), _: ExprId) std.mem.Allocator.Error!void {}
-        };
+        // One work stack serves every body. Which functions a body names does
+        // not depend on the order its positions are visited in.
+        var pending = std.ArrayList(ExprChild).empty;
+        defer pending.deinit(allocator);
         for (0..fn_count) |raw| {
             edge_starts[raw] = std.math.cast(u32, edges.items.len) orelse return error.OutOfMemory;
             const fn_id: FnId = @fromBackingInt(@intCast(raw));
             switch (self.getFn(fn_id).body) {
-                .roc => |body_expr| try walkExprs(allocator, self, .{ .expr = body_expr }, Collector{ .program = self, .allocator = allocator, .edges = &edges }),
+                .roc => |body_expr| try pending.append(allocator, .{ .expr = body_expr }),
                 .hosted => {},
             }
+            while (pending.pop()) |child| switch (child) {
+                .stmt => |stmt_id| try appendStmtChildren(allocator, self, stmt_id, &pending),
+                .expr => |expr_id| {
+                    const data = self.getExpr(expr_id).data;
+                    if (data == .fn_ref) try edges.append(allocator, @backingInt(data.fn_ref.fn_id));
+                    if (data == .call_proc) switch (data.call_proc.callee) {
+                        .lifted => |callee| try edges.append(allocator, @backingInt(callee)),
+                        .func => Common.invariant("unlifted call target reached Monotype Lifted binding groups"),
+                    };
+                    try appendChildren(allocator, self, expr_id, &pending);
+                },
+            };
         }
         edge_starts[fn_count] = std.math.cast(u32, edges.items.len) orelse return error.OutOfMemory;
 
