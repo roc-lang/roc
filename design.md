@@ -22147,11 +22147,27 @@ proving decides a switch or a checked-arithmetic operation, and equally a
 comparison of unsigned integers with no branch beside it and the count of a
 SIMD concat-shift, so each of those four shapes admits a body to it. Debug
 builds also run every phase on the procedures its shapes excluded and fail if
-one of them would be rewritten.
+one of them would be rewritten; within a segment, each phase the shapes
+exclude is checked on every procedure no earlier phase of the segment changed.
 
-The same patch boundary applies with one worker. Every phase finishes its
-callbacks before committing in procedure order, so neither input visibility
-nor output identity depends on worker count or completion order. Each commit
+Phases run in segments. Consecutive phases that read no other procedure's
+body, allocate no fresh join identities, and prepare no layouts from an earlier
+phase's output (branch expectation, TRMC, join scalarization and join-parameter
+pruning, `ProcPasses.fusible`) form one segment; every other phase, and every
+whole-program step such as single-use inlining, is a segment boundary. A
+segment clones each procedure once, runs each of its phases the procedure's
+shapes admit on that one shard, checking admission against the shapes the
+shard has gained, and commits once: each phase therefore reads exactly what
+the commit of the phase before it would have left, and the output is the
+output of running the phases one at a time. Loop append promotion reads the
+bodies of the procedures a loop calls, so it starts a segment of its own after
+every procedure's earlier phases committed.
+
+The same patch boundary applies with one worker. A segment with workers is
+one ordered run ("Ordered Runs") whose items rewrite and whose own commit does
+nothing; every segment finishes its callbacks before committing in procedure
+order, so neither input visibility nor output identity depends on worker count
+or completion order. Each commit
 relocates appended references in both patched rows and procedure metadata.
 Fusion workers keep a procedure's full fixed point in one task. The coordinator
 inventories the old join-ID domain once; each task allocates fresh identities

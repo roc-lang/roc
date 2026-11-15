@@ -457,8 +457,9 @@ pub const Timing = struct {
     /// Fold one lowering's procedure-local phase measures.
     pub fn addProcPasses(self: *Timing, passes: *const ProcPasses.Timing) void {
         const columns = [proc_pass_measure_count]*const [ProcPasses.phase_count]u64{
-            &passes.wall_ns,     &passes.prepare_ns, &passes.rewrite_ns, &passes.worker_ns,
-            &passes.capacity_ns, &passes.commit_ns,  &passes.visited,    &passes.changed,
+            &passes.wall_ns,     &passes.prepare_ns,        &passes.rewrite_ns, &passes.worker_ns,
+            &passes.capacity_ns, &passes.segment_worker_ns, &passes.commit_ns,  &passes.visited,
+            &passes.changed,
         };
         for (&self.proc_passes, columns) |*row, values| {
             for (row, values) |*counter, value| counter.add(value);
@@ -807,7 +808,7 @@ pub const CodegenStep = enum {
     procedure_emit,
     /// Fragment extraction, summed over lanes.
     procedure_extract,
-    /// Worker capacity over the waves that no procedure used.
+    /// Worker capacity over the runs that no procedure used.
     procedure_idle,
     /// Appending fragments to the unit's code, in order.
     procedure_commit,
@@ -888,7 +889,7 @@ pub const pass_step_count = @typeInfo(PassStep).@"enum".field_names.len;
 
 /// A per-phase measure of the procedure-local LIR phases
 /// (`ProcPasses.Timing`).
-pub const ProcPassMeasure = enum { wall, prepare, rewrite, worker, capacity, commit, visited, changed };
+pub const ProcPassMeasure = enum { wall, prepare, rewrite, worker, capacity, segment_worker, commit, visited, changed };
 
 /// The number of `ProcPassMeasure` members.
 pub const proc_pass_measure_count = @typeInfo(ProcPassMeasure).@"enum".field_names.len;
@@ -2192,16 +2193,47 @@ fn runProcedurePass(
     phase: ProcPasses.Phase,
     timing: ?*ProcPasses.Timing,
 ) Allocator.Error!void {
-    try ProcPasses.runTimed(
+    try runProcedureSegment(allocator, result, target, &.{phase}, timing);
+}
+
+fn runProcedureSegment(
+    allocator: Allocator,
+    result: *LirProgram.Result,
+    target: TargetConfig,
+    phases: []const ProcPasses.Phase,
+    timing: ?*ProcPasses.Timing,
+) Allocator.Error!void {
+    if (phases.len == 0) return;
+    try ProcPasses.runSegmentTimed(
         allocator,
         &result.store,
         &result.layouts,
-        phase,
+        phases,
         target.post_check_executor,
         target.lir_pass_parallel_metrics_out,
         timing,
     );
 }
+
+/// Fusible procedure-local phases gathered into one segment until a phase
+/// that cannot share its procedures' tasks, or a whole-program step, comes
+/// next (`ProcPasses.fusible`).
+const PendingSegment = struct {
+    phases: [ProcPasses.phase_count]ProcPasses.Phase = undefined,
+    len: usize = 0,
+
+    fn add(self: *PendingSegment, phase: ProcPasses.Phase) void {
+        std.debug.assert(ProcPasses.fusible(phase));
+        self.phases[self.len] = phase;
+        self.len += 1;
+    }
+
+    fn flush(self: *PendingSegment, allocator: Allocator, result: *LirProgram.Result, target: TargetConfig, timing: ?*ProcPasses.Timing) Allocator.Error!void {
+        const len = self.len;
+        self.len = 0;
+        try runProcedureSegment(allocator, result, target, self.phases[0..len], timing);
+    }
+};
 
 fn finishLoweredOutput(
     allocator: Allocator,
@@ -2240,15 +2272,20 @@ fn finishLoweredOutput(
         }
     }
     erased_owner_scope.end();
+    // Consecutive fusible phases share one task per procedure
+    // (`PendingSegment`); each other phase, and each whole-program step,
+    // ends the segment before it.
+    var segment: PendingSegment = .{};
     // Branch expectations are read off the lowered switches before any
     // rewrite reshapes them.
-    if (target.reads_branch_expectations) try runProcedurePass(allocator, &lowered.lir_result, pass_target, .branch_expectation, pass_timing);
+    if (target.reads_branch_expectations) segment.add(.branch_expectation);
     // TRMC/TCE must rewrite recursive procs before ARC insertion: it deletes
     // calls and changes allocation sites, and ARC panics on pre-existing RC
     // statements (see src/lir/trmc.zig).
-    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .trmc, pass_timing);
+    segment.add(.trmc);
     if (target.specialization_strategy == .lss) {
         if (target.inline_mode == .none) {
+            try segment.flush(allocator, &lowered.lir_result, pass_target, pass_timing);
             var single_use_scope = PassStepScope.begin(target.timing, .single_use_inline);
             try SingleUseInline.run(&lowered.lir_result);
             single_use_scope.end();
@@ -2259,6 +2296,7 @@ fn finishLoweredOutput(
         // wrappers substituted at their call sites in `.wrappers`, whose
         // `Try` results the caller matches immediately.
         if (target.fuse_tag_cases) {
+            try segment.flush(allocator, &lowered.lir_result, pass_target, pass_timing);
             try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion, pass_timing);
         }
     }
@@ -2266,8 +2304,11 @@ fn finishLoweredOutput(
     // value alive past any consuming call on the entry path. Scalarization
     // first gives each variable carried out of a construct with its result
     // its own parameter, so pruning can remove it.
-    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .scalarize, pass_timing);
-    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .prune_join_params, pass_timing);
+    segment.add(.scalarize);
+    segment.add(.prune_join_params);
+    // Loop append promotion reads the bodies of the procedures a loop
+    // calls, so it runs after every procedure's earlier phases committed.
+    try segment.flush(allocator, &lowered.lir_result, pass_target, pass_timing);
     if (target.promote_loop_appends.enabled()) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .loop_append, pass_timing);
     }
