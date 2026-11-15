@@ -36,6 +36,12 @@
 //!   (`verifyErasedBoundaries`) and require each callable it reaches to be
 //!   erased.
 //!
+//! The solved classes do not depend on the order bodies are visited in
+//! (`BodyOrder`). Unification is order-independent, so every shortcut that
+//! relates types without unifying their structure must be exact: linking two
+//! unexpanded leaves (`leavesExpandAlike`) or a leaf and an instance
+//! (`canLinkUntouchedLeafToInstance`) stands for unifying their expansions.
+//!
 //! Definitions are output in `FnId` order. No consumer reads them in
 //! dependency order: Lambda Mono and LIR lowering reach functions only through
 //! explicit `FnId` and symbol references.
@@ -259,10 +265,29 @@ pub const WorkCounters = struct {
     ordered_members: u64 = 0,
 };
 
+/// The order in which a solve visits function bodies.
+pub const BodyOrder = enum {
+    /// One binding group at a time, callee groups first: the pipeline's
+    /// order.
+    binding_groups,
+    /// Ascending `FnId`. Solving is order-independent, so this solves to
+    /// the same classes; tests compare the two.
+    fn_ids,
+};
+
 /// Solve lambda-set relationships in a lifted Monotype program.
 pub fn run(
     allocator: Allocator,
     lifted: Lifted.Program,
+) Common.LowerError!Ast.Program {
+    return runInOrder(allocator, lifted, .binding_groups);
+}
+
+/// `run`, visiting function bodies in `order`.
+pub fn runInOrder(
+    allocator: Allocator,
+    lifted: Lifted.Program,
+    order: BodyOrder,
 ) Common.LowerError!Ast.Program {
     // `Ast.Program.init` cannot fail and takes ownership of `lifted`, so
     // `program.deinit()` is the only cleanup a later error needs.
@@ -270,12 +295,13 @@ pub fn run(
     errdefer program.deinit();
     program.binding_groups = try program.lifted.bindingGroups(allocator);
 
-    var row_joined = try findRowJoinedTypes(allocator, &program);
+    var row_joined = try findRowJoinedTypes(allocator, &program, order);
     var solver = Solver.init(allocator, &program) catch |err| {
         row_joined.deinit(allocator);
         return err;
     };
     defer solver.deinit();
+    solver.body_order = order;
     solver.setRowJoined(row_joined);
     var counters: WorkCounters = .{};
     if (diagnostics.isSet(.lambda_solve_stats)) solver.counters = &counters;
@@ -306,10 +332,11 @@ pub fn run(
 /// both sides of every unification whose two types were instantiated from
 /// different Monotypes. Sharing a clone only adds relations, so every pair
 /// of different Monotypes the real solve relates, the analysis relates too.
-fn findRowJoinedTypes(allocator: Allocator, program: *Ast.Program) Common.LowerError!std.DynamicBitSetUnmanaged {
+fn findRowJoinedTypes(allocator: Allocator, program: *Ast.Program, order: BodyOrder) Common.LowerError!std.DynamicBitSetUnmanaged {
     var found = blk: {
         var analysis = try Solver.init(allocator, program);
         defer analysis.deinit();
+        analysis.body_order = order;
         analysis.join_sides = try std.DynamicBitSetUnmanaged.initEmpty(allocator, analysis.lifted.types.types.len);
         try analysis.solveBodies();
         var sides = analysis.join_sides.?;
@@ -475,6 +502,7 @@ const Solver = struct {
     /// forced-dynamic iterators: every type before it was scanned when an
     /// earlier group finished.
     group_erasure_scan_start: usize = 0,
+    body_order: BodyOrder = .binding_groups,
     /// The one type every read of a declared compile-time root shares at a
     /// Monotype type other than the root's own, so each such type unifies
     /// with the root's return once however many reads name it.
@@ -717,6 +745,11 @@ const Solver = struct {
         self.countWork(.functions, self.lifted.fns.len);
         const groups = self.program.binding_groups;
         if (groups.fns.len != self.lifted.fns.len) Common.invariant("Lambda Solved binding groups did not cover every lifted function");
+        if (self.body_order == .fn_ids) {
+            for (self.lifted.fns, 0..) |fn_, index| try self.solveFn(@fromBackingInt(@intCast(@as(u32, @intCast(index)))), fn_);
+            if (self.join_sides == null) try self.finishBindingGroup(groups.fns);
+            return;
+        }
         for (0..groups.count()) |group_index| {
             const group = groups.group(group_index);
             for (group) |fn_id| try self.solveFn(fn_id, self.lifted.fns[@backingInt(fn_id)]);
@@ -3476,7 +3509,9 @@ const Solver = struct {
 
         const raw_left = self.program.types.get(a);
         const raw_right = self.program.types.get(b);
-        if (raw_left == .mono and raw_right == .mono and raw_left.mono.id == raw_right.mono.id) {
+        if (raw_left == .mono and raw_right == .mono and raw_left.mono.id == raw_right.mono.id and
+            self.leavesExpandAlike(a, raw_left.mono, b, raw_right.mono))
+        {
             self.retireContextLeaf(raw_right.mono);
             self.program.types.setLink(b, a);
             return;
@@ -3812,6 +3847,23 @@ const Solver = struct {
         self.retireContextLeaf(leaf_content.mono);
         self.program.types.setLink(leaf_root, other_root);
         return true;
+    }
+
+    /// Whether two unexpanded leaves of one Monotype would expand to the same
+    /// graph, so linking them is the unification of their expansions. A
+    /// leaf's expansion reads its clone context (a cycle's back-references
+    /// reach that context's registered nodes) and its inherited argument
+    /// scope. Two leaves that differ in either expand to graphs tied to
+    /// different nodes, and only unifying those expansions relates those
+    /// nodes; linking one leaf to the other would drop that relation, so
+    /// which nodes end up related would depend on whether the leaves met
+    /// before or after one of them expanded.
+    fn leavesExpandAlike(self: *const Solver, a: Type.TypeVarId, left: MonoLeaf, b: Type.TypeVarId, right: MonoLeaf) bool {
+        if (left.ctx != right.ctx) return false;
+        const left_scope = self.leaf_arg_scopes.get(a);
+        const right_scope = self.leaf_arg_scopes.get(b);
+        if ((left_scope == null) != (right_scope == null)) return false;
+        return left_scope == null or left_scope.? == right_scope.?;
     }
 
     fn leafOriginIs(self: *const Solver, ty: Type.TypeVarId, id: MonoType.TypeId) bool {
@@ -7266,7 +7318,7 @@ test "lambda solved Try sequences join forwarded error payloads with their resul
             program.binding_groups = try program.lifted.bindingGroups(allocator);
             var solver = try Solver.init(allocator, &program);
             defer solver.deinit();
-            solver.setRowJoined(try findRowJoinedTypes(allocator, &program));
+            solver.setRowJoined(try findRowJoinedTypes(allocator, &program, .binding_groups));
             try solver.solve();
             const input_payloads = try solver.tagPayloadsSpanFor(solver.inferredExpr(input), err, narrow_try);
             const output_payloads = try solver.tagPayloadsSpanFor(solver.inferredExpr(sequence), err, narrow_try);

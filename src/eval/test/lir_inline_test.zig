@@ -15048,6 +15048,21 @@ const LambdaSetCensus = struct {
 /// selects in the pipeline: call-pattern cloning for `.wrappers`, iterator
 /// fusion only for `.none`.
 fn lambdaSolvedSetCensus(source: []const u8, inline_mode: lir.CheckedPipeline.InlineMode) TestError!LambdaSetCensus {
+    return lambdaSolvedSetCensusInOrder(source, inline_mode, .binding_groups, null);
+}
+
+/// `lambdaSolvedSetCensus`, solving bodies in `order`. With `classes`, also
+/// appends a description of how the solved lambda-set classes partition the
+/// callable slots that the function and local types reach: a walk of those
+/// types in a fixed order that numbers each class when it first meets it
+/// and writes that number (and, the first time, the class's members) at
+/// every meeting. Two solves with the same partition write the same words.
+fn lambdaSolvedSetCensusInOrder(
+    source: []const u8,
+    inline_mode: lir.CheckedPipeline.InlineMode,
+    order: postcheck.LambdaSolved.Solve.BodyOrder,
+    classes: ?*std.ArrayList(u32),
+) TestError!LambdaSetCensus {
     const allocator = std.testing.allocator;
     var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
@@ -15091,7 +15106,7 @@ fn lambdaSolvedSetCensus(source: []const u8, inline_mode: lir.CheckedPipeline.In
         procedure_usage.deinit();
     }
 
-    var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
+    var solved = try postcheck.LambdaSolved.Solve.runInOrder(allocator, lifted, order);
     lifted_owned = false;
     lifted = undefined;
     defer solved.deinit();
@@ -15181,6 +15196,75 @@ fn lambdaSolvedSetCensus(source: []const u8, inline_mode: lir.CheckedPipeline.In
             }
         } else false;
         if (contains_itself) census.self_containing_sets += 1;
+    }
+
+    if (classes) |out| {
+        var class_ids = collections.DenseMap(SolvedType.TypeVarId, u32).init(allocator);
+        defer class_ids.deinit();
+        var walked = collections.DenseMap(SolvedType.TypeVarId, void).init(allocator);
+        defer walked.deinit();
+        var stack: std.ArrayList(SolvedType.TypeVarId) = .empty;
+        defer stack.deinit(allocator);
+        var children: std.ArrayList(SolvedType.TypeVarId) = .empty;
+        defer children.deinit(allocator);
+        for ([_][]const SolvedType.TypeVarId{ solved.fn_tys.items, solved.local_tys.items }) |table| {
+            for (table) |table_ty| {
+                try stack.append(allocator, table_ty);
+                while (stack.pop()) |next| {
+                    const root = types.root(next);
+                    children.clearRetainingCapacity();
+                    switch (types.get(root)) {
+                        .lambda_set => |members| {
+                            const entry = try class_ids.getOrPut(root);
+                            if (entry.found_existing) {
+                                try out.append(allocator, entry.value_ptr.*);
+                                continue;
+                            }
+                            entry.value_ptr.* = @intCast(class_ids.count() - 1);
+                            try out.append(allocator, entry.value_ptr.*);
+                            try out.append(allocator, @intCast(members.count()));
+                            for (types.memberSpan(members)) |member| {
+                                try out.append(allocator, @backingInt(member.lambda));
+                                for (types.captureSpan(member.captures)) |capture| try children.append(allocator, capture.ty);
+                            }
+                        },
+                        .record => |fields| {
+                            if ((try walked.getOrPut(root)).found_existing) continue;
+                            for (types.fieldSpan(fields)) |field| try children.append(allocator, field.ty);
+                        },
+                        .tuple => |items| {
+                            if ((try walked.getOrPut(root)).found_existing) continue;
+                            try children.appendSlice(allocator, types.span(items));
+                        },
+                        .tag_union => |tags| {
+                            if ((try walked.getOrPut(root)).found_existing) continue;
+                            for (types.tagSpan(tags)) |tag| try children.appendSlice(allocator, types.span(tag.payloads));
+                        },
+                        .list, .box => |elem| {
+                            if ((try walked.getOrPut(root)).found_existing) continue;
+                            try children.append(allocator, elem);
+                        },
+                        .named => |named| {
+                            if ((try walked.getOrPut(root)).found_existing) continue;
+                            try children.appendSlice(allocator, types.span(named.args));
+                            if (named.backing.get()) |backing| try children.append(allocator, backing.ty);
+                        },
+                        .func => |func| {
+                            if ((try walked.getOrPut(root)).found_existing) continue;
+                            try children.appendSlice(allocator, types.span(func.args));
+                            try children.append(allocator, func.callable);
+                            try children.append(allocator, func.ret);
+                        },
+                        .link, .unbound, .forall, .primitive, .erased, .zst, .hole, .mono => {},
+                    }
+                    var index = children.items.len;
+                    while (index > 0) {
+                        index -= 1;
+                        try stack.append(allocator, children.items[index]);
+                    }
+                }
+            }
+        }
     }
     return census;
 }
@@ -15303,8 +15387,8 @@ const user_iter_chain_main =
 // adapters, every iterator value of the chain reaches the one `MyIter.next`,
 // so their step closures share one lambda set, which then contains itself
 // through the captured upstream iterator and is boxed. Direct adapters fuse
-// at `.none`; after `.wrappers` call-pattern cloning, one set holds two
-// members, though none contains itself.
+// at `.none`; after `.wrappers` call-pattern cloning, three sets hold two
+// members each, though none contains itself.
 test "MyIter lambda sets: map keep_if chain consumed at once" {
     try expectUserIterCases(&.{
         .{
@@ -15319,7 +15403,7 @@ test "MyIter lambda sets: map keep_if chain consumed at once" {
             .source = my_iter_direct ++ user_iter_chain_main,
             .dbg = "27",
             .none = user_iter_fused,
-            .wrappers = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
+            .wrappers = .{ .multi_member_sets = 3, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
         },
     });
 }
@@ -15413,8 +15497,8 @@ test "MyIter lambda sets: callback from iterator to iterator" {
 // code. The fields are two occurrences of one Monotype in one record type,
 // and nothing relates their values, so their step sets stay apart: neither
 // holds the other chain's step closure. Its target is `user_iter_fused` at
-// both modes; after `.wrappers` call-pattern cloning one set holds two
-// members, though none contains itself.
+// both modes; after `.wrappers` call-pattern cloning two sets hold two
+// members each, though none contains itself.
 test "MyIter lambda sets: two chains in one record" {
     try expectUserIterCases(&.{.{
         .name = "record fields",
@@ -15445,8 +15529,34 @@ test "MyIter lambda sets: two chains in one record" {
         ,
         .dbg = "27",
         .none = user_iter_fused,
-        .wrappers = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
+        .wrappers = .{ .multi_member_sets = 2, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
     }});
+}
+
+// Solving is order-independent: visiting the bodies in `FnId` order solves
+// every program above to the same lambda-set classes as the pipeline's
+// binding-group order.
+test "MyIter lambda sets: body order does not change the solved classes" {
+    const allocator = std.testing.allocator;
+    const sources = [_][]const u8{
+        my_iter_with_next ++ user_iter_chain_main,
+        my_iter_direct ++ user_iter_chain_main,
+        my_iter_with_next ++ user_iter_two_sites_main,
+        my_iter_direct ++ user_iter_two_sites_main,
+        my_iter_with_next ++ user_iter_callback_main,
+        my_iter_direct ++ user_iter_callback_main,
+    };
+    for (sources) |source| {
+        inline for (.{ lir.CheckedPipeline.InlineMode.none, lir.CheckedPipeline.InlineMode.wrappers }) |mode| {
+            var by_groups: std.ArrayList(u32) = .empty;
+            defer by_groups.deinit(allocator);
+            var by_fn_ids: std.ArrayList(u32) = .empty;
+            defer by_fn_ids.deinit(allocator);
+            _ = try lambdaSolvedSetCensusInOrder(source, mode, .binding_groups, &by_groups);
+            _ = try lambdaSolvedSetCensusInOrder(source, mode, .fn_ids, &by_fn_ids);
+            try std.testing.expectEqualSlices(u32, by_groups.items, by_fn_ids.items);
+        }
+    }
 }
 
 // (d) A chain that grows by one `map` per loop iteration has no bound on its

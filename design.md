@@ -20681,12 +20681,19 @@ lifted program's explicit references, which SpecConstr may still rewrite
 after lifting, so Lambda Solved computes them as its first step from the
 program it consumes and records them on its output program
 (`Ast.Program.binding_groups`) for every later consumer. Every reference
-still unifies with the one registered type. The order in which merges meet
+still unifies with the one registered type, and solving is order-independent:
+the solved classes do not depend on the order bodies are visited in
+(`Solve.BodyOrder`; tests solve programs in both binding-group and `FnId`
+order and compare their classes), and the order in which merges meet
 lambda-set members does not reach any consumer, since the final member order
-is canonical (below). The solved classes themselves are not independent of
-the order bodies are solved in: the `MyIter` tests in `lir_inline_test.zig`
-pin two programs whose classes differ between `FnId` order and binding-group
-order, with the same LIR.
+is canonical (below). Every shortcut that relates types without unifying
+their structure must keep this: two unexpanded leaves of one Monotype are
+linked directly only when they lie in one clone context and inherit one
+argument scope (`Solver.leavesExpandAlike`), because a leaf's expansion ties
+its parts to its context's and scope's nodes, and linking leaves that differ
+there would drop the relation their expansions' unification makes between
+those nodes. Whether that relation was made would then depend on whether the
+two leaves met before or after one of them expanded.
 
 Monotype specialization
 shares one `FnId` among every call site that reaches a callable at the same
