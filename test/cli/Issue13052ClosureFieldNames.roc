@@ -6,6 +6,8 @@ Issue13052ClosureFieldNames :: [].{}
 ## `FieldNames` and `FieldName` types, which denote the compiler-generated
 ## representations the captured values carry. The expectations decode a
 ## record and a nested record.
+## The format renames every field, and a field only matches under its
+## renamed name, so the names read back are the generated ones.
 
 Error : [Bad(U64), MissingRequiredField(Str)]
 
@@ -19,7 +21,7 @@ same = |x| x
 find_in = |ns, idx| {
 	var $i = 0
 	for f in ns.iter() {
-		if $i == idx {
+		if $i == idx and f.name().ends_with("!") {
 			return Ok(f)
 		}
 		$i = $i + 1
@@ -31,7 +33,7 @@ Format := [Default].{
 	missing_field : Format, Str -> Error
 	missing_field = |_, name| MissingRequiredField(name)
 
-	rename_field = |_, name| name
+	rename_field = |_, name| name.concat("!")
 
 	parse_u64 : Format, State -> Try({ value : U64, rest : State }, Error)
 	parse_u64 = |_, state|

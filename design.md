@@ -9697,7 +9697,7 @@ dedicated `selectGeneratedPrivateRepresentation` capability before lowering
 the dispatch. The capability exists only during relation production, requires
 an explicitly directed public-to-private edge, and rejects every class that
 contains an imported finished Monotype. Ordinary graph unification rejects the
-same edge. This preserves producer selection for branch results without making
+same edge, except for a codec representation (below). This preserves producer selection for branch results without making
 public/private merging—or reopening a durable Monotype—available as a general
 unification behavior. If the requested public interface is already a finished
 Monotype, the producer relates its distinct private result to that immutable
@@ -9803,22 +9803,40 @@ the use lifted it into. When that nominal carries generated-private evidence,
 the public structure relates to the nominal's structural backing through the
 opaque relation, so every generated-private node stays distinct from its
 public counterpart, and the public class then takes the request's nominal.
-A checked type variable carries no public structure of its own, so one related
-to a generated-private named representation other than an iterator (such as a
-codec method's unannotated `FieldNames` parameter, constrained only by the
-methods it calls) denotes that representation itself, as a checked variable
-related to an imported generated iterator does. The same holds for an interface
-parameter standing for such a variable's substitution cell, as when that
-parameter passes through an unannotated generic helper. Body lowering relates
-an expression's checked type to a known Monotype that carries generated-private
-evidence through this same opaque relation, just as it relates a checked
-interface to a type cell carrying such evidence; any other known Monotype
-unifies. Joining the variable never
-collapses two different representations. The checker gives the variable one
-type, and a codec representation's generated backing is built only from its
-named type's arguments and never changes afterwards, so every representation
-one variable meets is the same type. A generated iterator's variable takes the
-iterator's public interface instead, because representation selection may
+A codec representation is the generated-private `FieldNames`, `FieldName` or
+`ParseTagUnionSpec` value a derived parser builds for a format's methods. It
+is the only runtime representation of its named type at its arguments: no
+value of the type has the declared public backing as its layout, and a
+`FieldNames` or `ParseTagUnionSpec` consumer reads the renamed field names
+from the generated backing. Every type that denotes such a value therefore
+takes the representation:
+
+- A checked type variable carries no public structure of its own, so one
+  related to a codec representation (such as a codec method's unannotated
+  `FieldNames` parameter, constrained only by the methods it calls) denotes
+  that representation itself, as a checked variable related to an imported
+  generated iterator does. The same holds for an interface parameter standing
+  for such a variable's substitution cell, as when that parameter passes
+  through an unannotated generic helper.
+- The representation's own checked-public named type denotes it too: the
+  `FieldNames(shape)` a codec contract substitutes for that parameter's
+  variable, the parameter's annotation, the type the checker infers for a
+  `ParseTagUnionSpec.parse` argument, or the type a body instantiates for a
+  list item, a tag payload, a helper's result or a captured binder that holds
+  the value. The opaque relation relates the two types' arguments and the
+  public class takes the representation, and ordinary unification joins the
+  two the same way. Ordinary unification still rejects every other
+  public/private edge.
+
+Body lowering relates an expression's checked type to a known Monotype that
+carries generated-private evidence through the opaque relation, just as it
+relates a checked interface to a type cell carrying such evidence; any other
+known Monotype unifies. Joining never collapses two different
+representations. The checker gives the variable or public type one type, and
+a codec representation's generated backing is built only from its named
+type's arguments and never changes afterwards, so every representation it
+meets is the same type. A generated iterator's variable and public type keep
+the iterator's public interface instead, because representation selection may
 still join a live iterator's representation or force it dynamic.
 
 Match lowering likewise relates each checked pattern interface to the exact
@@ -9851,14 +9869,6 @@ At a forced-dynamic relation, Lambda Solved always unifies the public item type.
 A minted peer also joins its generated-private backing into the dynamic backing;
 an ordinary public peer has no private representation authority, so its backing
 is not merged or reinterpreted.
-
-A codec representation (a generated-private `FieldNames`, `FieldName` or
-`ParseTagUnionSpec`) is the only runtime representation of its named type at
-its arguments, and its declared public backing is never a value's layout. When
-Lambda Solved unification or the public-to-generated walk meets a checked-public
-view of the same named type, it relates the two by their type arguments alone
-and the representation wins; the declared public backing corresponds to nothing
-in the generated backing and is not related to it.
 
 Lambda Solved transfers callable evidence across a public-to-generated relation
 with a separate structure-preserving walk. That walk validates corresponding
@@ -18039,13 +18049,7 @@ context shared by every nested context it creates. Each nested context forks
 those relations and joins every variable node the base instantiated with its
 own evidence's answer for that variable, which places it in exactly the class
 that relating the binders in the nested context would have; the relations
-themselves are not rebuilt per nested context. When a binder's
-value carries generated-private evidence and the evidence's answer is the
-checked-public interface its specialization substitutes for the variable (a
-generic body capturing a parameter that holds a minted iterator or a codec
-representation), the answer relates to the variable node through the opaque
-interface relation, exactly as relating the binder in the nested context
-would have.
+themselves are not rebuilt per nested context.
 
 The nested-site walk records each site's runtime captures: the binders of
 enclosing frames whose values the site needs, which are its source captures

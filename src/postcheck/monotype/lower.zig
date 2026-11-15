@@ -25722,17 +25722,9 @@ const BodyContext = struct {
         // A variable the base relations instantiated holds the base's node,
         // which the child's evidence may answer differently; the child's
         // answer joins its class, exactly as relating the binders in the
-        // child would have joined them. A binder's value may carry
-        // generated-private evidence its variable's checked-public answer
-        // only interfaces, and relating the binder in the child would have
-        // related the two through the opaque interface relation.
+        // child would have joined them.
         for (relation_base.variables.items) |instantiated| {
-            const bound = try child.enclosingVariableNode(instantiated.checked_ty) orelse continue;
-            if (try child.graph.containsGeneratedPrivate(instantiated.node) and !try child.graph.containsGeneratedPrivate(bound)) {
-                try child.graph.relateOpaqueInterface(bound, instantiated.node);
-            } else {
-                try child.graph.unify(instantiated.node, bound);
-            }
+            if (try child.enclosingVariableNode(instantiated.checked_ty)) |bound| try child.graph.unify(instantiated.node, bound);
         }
         return child;
     }
@@ -71834,7 +71826,7 @@ test "request component relation follows root authority before nested private ev
         .named_type = inner_named_type,
         .def = inner_def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .some(.{
             .node = try graph.newNode(.empty_record),
@@ -71846,7 +71838,7 @@ test "request component relation follows root authority before nested private ev
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().dupe(NodeId, &.{private_arg}),
         .backing = .some(.{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only }),
     }));
@@ -71854,7 +71846,7 @@ test "request component relation follows root authority before nested private ev
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().dupe(NodeId, &.{private_arg}),
         .backing = .some(.{
             .node = try graph.newNode(.empty_record),
@@ -71893,7 +71885,7 @@ test "request component relation descends through matching private-bearing conta
         .named_type = inner_named_type,
         .def = inner_def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .some(.{
             .node = try graph.newNode(.empty_record),
@@ -71905,7 +71897,7 @@ test "request component relation descends through matching private-bearing conta
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().dupe(NodeId, &.{shared_private_arg}),
         .backing = .some(.{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only }),
     }));
@@ -71913,7 +71905,7 @@ test "request component relation descends through matching private-bearing conta
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().dupe(NodeId, &.{shared_private_arg}),
         .backing = .some(.{
             .node = try graph.newNode(.empty_record),
@@ -71958,7 +71950,7 @@ test "checked-to-mono relation preserves generated-private evidence inside a com
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .some(.{ .node = checked_backing, .use = .runtime_layout_only }),
     }));
@@ -71966,7 +71958,7 @@ test "checked-to-mono relation preserves generated-private evidence inside a com
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .some(.{
             .node = mono_backing,
