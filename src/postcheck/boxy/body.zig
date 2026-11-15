@@ -6272,7 +6272,7 @@ pub const Builder = struct {
             if (cursor >= evidence.nodes.len) invariant("stored evidence ended before its declared vector length");
             const node = evidence.nodes[cursor];
             cursor += 1;
-            const contracts = evidence.callableContracts(node);
+            const contracts = evidence.trailingTrees(node);
             if (contracts != 0) try open.append(self.allocator, contracts);
             switch (node) {
                 .target => |target| switch (evidence.target(target).nested) {
@@ -6356,7 +6356,9 @@ pub const Builder = struct {
                 if (parent) |owner_index| try parsed.items[owner_index].children.append(self.allocator, index);
                 if (is_root) try roots.append(self.allocator, index);
             }
-            const contracts = evidence.callableContracts(node);
+            // A structural entry's forwarded evidence trees follow its
+            // contracts and, like them, carry no evidence parameter.
+            const contracts = evidence.trailingTrees(node);
             if (contracts != 0) try open.append(self.allocator, .{ .remaining = contracts, .owner = null, .contracts = true });
             switch (node) {
                 .target => |target| switch (evidence.target(target).nested) {

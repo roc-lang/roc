@@ -11803,6 +11803,77 @@ fn recordWhereMethodUse(
     self.scratch_evidence_pairs.clearRetainingCapacity();
 }
 
+/// The callable one use of a rigid variable's where-method relates to that
+/// method's declared signature through. Each use instantiates the signature (design.md "Polarity"): its
+/// output rows are fresh for this use, everything else is shared. A scheme's
+/// own where-clause requirement meeting itself (the relation IS the signature,
+/// re-checked at a boundary) is not a use: it stays the identity relation it
+/// always was, or every pass would mint a fresh copy and the drain would never
+/// settle. A whole-method hole (`a.render : _`) has no signature structure to
+/// copy, nor does any other leaf—a signature written as a bare type variable
+/// resolves to a `.rigid`, an erroneous annotation to `.err`. The predicate
+/// mirrors `Instantiator`'s own share-leaf test exactly, polarity marker and
+/// all: the instantiator shares such a root instead of copying it, so
+/// `instantiateWhereMethodForUse` leaves `var_map` empty and
+/// `recordWhereMethodUse` has no callable copy to record. A `#polarity` marker
+/// root is the one leaf the instantiator does copy, so it stays on the
+/// instantiate path.
+fn whereMethodUseCallable(
+    self: *Self,
+    signature_var: Var,
+    use: StaticDispatchConstraint,
+    env: *Env,
+) Allocator.Error!Var {
+    const signature_resolved = self.types.resolveVar(signature_var);
+    const same_root = signature_resolved.var_ == self.types.resolveVar(use.fn_var).var_;
+    const signature_is_polarity_marker = switch (signature_resolved.desc.content) {
+        .rigid => |sig_rigid| sig_rigid.name.eql(self.cir.idents.polarity_var),
+        .flex, .alias, .field_presence, .structure, .err => false,
+    };
+    const signature_is_shared_leaf = !signature_is_polarity_marker and
+        switch (signature_resolved.desc.content) {
+            .alias, .structure => false,
+            .flex, .rigid, .field_presence, .err => true,
+        };
+    const use_fn_var = if (same_root or signature_is_shared_leaf)
+        signature_var
+    else blk: {
+        if (self.existingWhereMethodUse(signature_var, use.fn_var)) |existing| {
+            break :blk existing;
+        }
+        const instantiated = try self.instantiateWhereMethodForUse(
+            signature_var,
+            env,
+            self.getRegionAt(use.fn_var),
+        );
+        try self.recordWhereMethodUse(signature_var, use);
+        break :blk instantiated;
+    };
+    return use_fn_var;
+}
+
+/// The body provably forces this where-clause method: a body use matched it
+/// and unified successfully. Mark the rigid scheme's matching where-clause
+/// `body_required` so a later unpinnable instantiation of this scheme is
+/// reported as ambiguous rather than silently lowering to an ownerless
+/// dispatch, and stamp its provenance with the use that forced it, so
+/// instantiated copies point at a concrete dispatch use. An existing
+/// introducing expression is kept. The backing slice is fetched here: the
+/// relation may have appended to (and reallocated) the constraint store, but it
+/// only grows it, so the rigid range indices stay valid.
+fn markWhereClauseBodyRequired(self: *Self, rigid: types_mod.Rigid, use: StaticDispatchConstraint) void {
+    const rc_start: usize = @backingInt(rigid.constraints.start);
+    const backing = self.types.static_dispatch_constraints.items();
+    for (rc_start..rc_start + rigid.constraints.len()) |i| {
+        if (backing[i].origin == .where_clause and backing[i].fn_name.eql(use.fn_name)) {
+            backing[i].origin.where_clause.body_required = true;
+            if (backing[i].provenance.intro_expr == .none) {
+                backing[i].provenance.intro_expr = use.provenance.intro_expr;
+            }
+        }
+    }
+}
+
 /// Return the already-minted copy for a body dispatch revisited by the
 /// constraint fixpoint. One raw body callable denotes one body-dispatch use, so a
 /// revisit must reuse its recorded copy rather than append a second edge.
@@ -45163,12 +45234,40 @@ fn laterUseCanRefine(self: *Self, var_: Var) bool {
     };
 }
 
-fn refinableVarsIntersect(self: *Self, a: *const collections.DenseMap(Var, void), b: *const collections.DenseMap(Var, void)) bool {
-    const small = if (a.count() <= b.count()) a else b;
-    const large = if (a.count() <= b.count()) b else a;
-    var iter = small.constKeyIterator();
+/// Whether a use can still refine an input of a generated codec relation
+/// that escapes through the definition's interface (`laterUseCanRefine`). A type variable
+/// of the signature whose where clause declares the relation's codec method
+/// is a leaf the derivation reads through that declared requirement
+/// (`validateDerivedCodecVariable`), and each specialization supplies its
+/// evidence, so a use substituting it leaves the derivation as it is. Nor can
+/// a use refine the requirement's own declared signature, which each use
+/// instantiates and checks against the where clause.
+fn codecRelationVarsIntersect(
+    self: *Self,
+    relation: *const collections.DenseMap(Var, void),
+    interface: *const collections.DenseMap(Var, void),
+    method: Ident.Idx,
+) Allocator.Error!bool {
+    var declared = collections.DenseMap(Var, void).init(self.gpa);
+    defer declared.deinit();
+    var keys = relation.constKeyIterator();
+    while (keys.next()) |var_| {
+        switch (self.types.resolveVar(var_).desc.content) {
+            .rigid => |rigid| if (self.rigidCodecRequirement(rigid, method)) |requirement| {
+                try self.collectReachableVars(requirement.fn_var, &declared);
+            },
+            .flex, .alias, .structure, .field_presence, .err => {},
+        }
+    }
+    var iter = relation.constKeyIterator();
     while (iter.next()) |var_| {
-        if (large.contains(var_) and self.laterUseCanRefine(var_)) return true;
+        if (!interface.contains(var_) or !self.laterUseCanRefine(var_)) continue;
+        switch (self.types.resolveVar(var_).desc.content) {
+            .rigid => |rigid| if (self.rigidCodecRequirement(rigid, method) != null) continue,
+            .flex, .alias, .structure, .field_presence, .err => {},
+        }
+        if (declared.contains(var_)) continue;
+        return true;
     }
     return false;
 }
@@ -45205,7 +45304,11 @@ fn codecInputsAreSettledAtBoundary(
     while (iter.next()) |var_| {
         const resolved = self.types.resolveVar(var_.*);
         switch (resolved.desc.content) {
-            .flex, .rigid, .err => return false,
+            .flex, .err => return false,
+            // A signature variable whose where clause declares this codec
+            // method is read through that requirement, which settles it
+            // (`validateDerivedCodecVariable`).
+            .rigid => |rigid| if (self.rigidCodecRequirement(rigid, constraint.fn_name) == null) return false,
             .structure => |flat| switch (flat) {
                 // Even a closed anonymous value can acquire nominal identity
                 // through an enclosing scope, including an empty record.
@@ -45306,13 +45409,13 @@ fn captureSchemeDispatchRequirements(
                         // A use can still refine an input that escapes through
                         // the interface, so such a relation also belongs to the
                         // scheme, for each use to validate at its own types.
-                        if (!self.refinableVarsIntersect(&codec_relation_vars, &interface_vars)) break :blk false;
+                        if (!try self.codecRelationVarsIntersect(&codec_relation_vars, &interface_vars, candidate.constraint.fn_name)) break :blk false;
                     }
                 }
                 // Unsettled codec inputs need the complete relation, including
                 // an escaping error row after the success shape was erased.
                 try self.collectReachableVars(candidate.constraint.fn_var, &codec_relation_vars);
-                if (self.refinableVarsIntersect(&codec_relation_vars, &interface_vars)) break :blk true;
+                if (try self.codecRelationVarsIntersect(&codec_relation_vars, &interface_vars, candidate.constraint.fn_name)) break :blk true;
                 // A refinable input owned by an enclosing scope is refined by
                 // that scope's uses rather than this boundary's, so the
                 // relation escapes exactly as an outer-rank ordinary receiver
@@ -53143,62 +53246,7 @@ inline fn processDeferredDispatchEntryRelations(
                 else
                     self.ident_to_var_map.get(constraint.fn_name);
                 if (matched_rigid_var) |rigid_var| {
-                    // Each USE instantiates the where-method signature
-                    // (design.md "Polarity"): its output rows are fresh
-                    // for this use, everything else is shared. A scheme's
-                    // own where-clause requirement meeting itself here
-                    // (the deferred relation IS the signature, re-checked
-                    // at a boundary) is not a use: it stays the identity
-                    // relation it always was, or every pass would mint a
-                    // fresh copy and the drain would never settle.
-                    const signature_resolved = self.types.resolveVar(rigid_var);
-                    const same_root = signature_resolved.var_ == self.types.resolveVar(constraint.fn_var).var_;
-                    // A whole-method hole (`a.render : _`) has no
-                    // signature structure to copy: its shape is inferred
-                    // from the body's uses and shared by all of them. Nor
-                    // does any other LEAF—a signature written as a bare
-                    // type variable resolves to a `.rigid`, an erroneous
-                    // annotation to `.err`. The predicate must mirror
-                    // `Instantiator`'s own share-leaf test
-                    // (`types/instantiate.zig:733-740`) exactly, polarity
-                    // marker and all: the instantiator SHARES such a root
-                    // instead of copying it, so `instantiateWhereMethodForUse`
-                    // leaves `var_map` empty and `recordWhereMethodUse`
-                    // has no callable copy to record (it panics). A
-                    // `#polarity` marker root is the one leaf the
-                    // instantiator does copy, so it must stay on the
-                    // instantiate path—sharing it would silently drop
-                    // the per-use deferral it stands for.
-                    const signature_is_polarity_marker = switch (signature_resolved.desc.content) {
-                        .rigid => |sig_rigid| sig_rigid.name.eql(self.cir.idents.polarity_var),
-                        .flex, .alias, .field_presence, .structure, .err => false,
-                    };
-                    const signature_is_shared_leaf = !signature_is_polarity_marker and
-                        switch (signature_resolved.desc.content) {
-                            .alias, .structure => false,
-                            .flex, .rigid, .field_presence, .err => true,
-                        };
-                    const use_fn_var = if (same_root or signature_is_shared_leaf)
-                        rigid_var
-                    else blk: {
-                        if (self.existingWhereMethodUse(rigid_var, constraint.fn_var)) |existing| {
-                            break :blk existing;
-                        }
-                        const instantiated = try self.instantiateWhereMethodForUse(
-                            rigid_var,
-                            env,
-                            self.getRegionAt(constraint.fn_var),
-                        );
-                        try self.recordWhereMethodUse(rigid_var, constraint);
-                        break :blk instantiated;
-                    };
-
-                    // Unify the actual function var against the inferred var
-                    //
-                    // TODO: For better error messages, we should check if these
-                    // types are functions, unify each arg, etc. This should look
-                    // similar to e_call
-                    const result = try self.unify(use_fn_var, constraint.fn_var, env);
+                    const result = try self.unify(try self.whereMethodUseCallable(rigid_var, constraint, env), constraint.fn_var, env);
                     if (result.isEstablished()) {
                         // The where-clause signature has decided the item
                         // type, so each part is now checked against it.
@@ -53207,31 +53255,7 @@ inline fn processDeferredDispatchEntryRelations(
                         }
                         try self.recordSuccessfulStaticDispatch(constraint);
 
-                        // The body provably forces this where-clause method: a
-                        // body dispatch matched it and unified successfully. Mark
-                        // the rigid scheme's matching where-clause `body_required`
-                        // so a later unpinnable instantiation of this scheme is
-                        // reported as ambiguous rather than silently lowering to an
-                        // ownerless dispatch. Re-fetch the backing slice: the unify
-                        // above may have appended to (and reallocated) the
-                        // constraint store, but it only grows it, so the rigid
-                        // range indices stay valid.
-                        const rc_start: usize = @backingInt(rigid.constraints.start);
-                        const rc_len: usize = rigid.constraints.len();
-                        const backing = self.types.static_dispatch_constraints.items();
-                        for (rc_start..rc_start + rc_len) |i| {
-                            if (backing[i].origin == .where_clause and backing[i].fn_name.eql(constraint.fn_name)) {
-                                backing[i].origin.where_clause.body_required = true;
-                                // Stamp the where-clause constraint's provenance with the
-                                // body dispatch that forced it, so instantiated copies point
-                                // at a concrete dispatch use (what the old side table's
-                                // cross-unification linking supplied). Only adopt a real
-                                // introducing expression; never clobber an existing one.
-                                if (backing[i].provenance.intro_expr == .none) {
-                                    backing[i].provenance.intro_expr = constraint.provenance.intro_expr;
-                                }
-                            }
-                        }
+                        self.markWhereClauseBodyRequired(rigid, constraint);
                     } else {
                         if (result.isProblem()) {
                             try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
@@ -55088,7 +55112,8 @@ fn expandDerivedParseQuery(
             .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
             .err => .supported,
             .flex => .unresolved,
-            .rigid, .field_presence => .unsupported,
+            .rigid => |rigid| if (self.rigidCodecRequirement(rigid, self.cir.idents.parser_for) != null) .supported else .unsupported,
+            .field_presence => .unsupported,
         },
         .field => |var_| return switch (self.types.resolveThroughAliases(var_).desc.content) {
             .structure => |structure| switch (structure) {
@@ -55101,7 +55126,8 @@ fn expandDerivedParseQuery(
             .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
             .err => .supported,
             .flex => .unresolved,
-            .rigid, .field_presence => .unsupported,
+            .rigid => |rigid| if (self.rigidCodecRequirement(rigid, self.cir.idents.parser_for) != null) .supported else .unsupported,
+            .field_presence => .unsupported,
         },
         // A row still open on a flex var can gain fields, and the parser
         // derivation needs the exact field set, so report it unresolved and
@@ -55915,6 +55941,17 @@ const DerivedSupport = enum {
     unresolved,
 };
 
+/// The requirement for codec method `method` a type variable of the
+/// enclosing definition declares in its where clause. A derived codec writes or
+/// reads such a variable's values through that requirement, whose evidence
+/// each specialization of the definition supplies.
+fn rigidCodecRequirement(self: *const Self, rigid: types_mod.Rigid, method: Ident.Idx) ?StaticDispatchConstraint {
+    for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+        if (constraint.origin == .where_clause and constraint.fn_name.eql(method)) return constraint;
+    }
+    return null;
+}
+
 fn derivedSupportFromBool(value: bool) DerivedSupport {
     return if (value) .supported else .unsupported;
 }
@@ -55994,7 +56031,8 @@ fn expandDerivedEncodeQuery(
             .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
             .err => .supported,
             .flex => .unresolved,
-            .rigid, .field_presence => .unsupported,
+            .rigid => |rigid| if (self.rigidCodecRequirement(rigid, self.cir.idents.encoder_for) != null) .supported else .unsupported,
+            .field_presence => .unsupported,
         },
         .record_field => |var_| {
             const written = if (try self.missingTryInfoForVar(var_)) |info| info.ok_var else var_;
@@ -61554,7 +61592,20 @@ fn stepDerivedParse(
                 // on it belongs to that application and is discharged where the
                 // application is concrete. Anywhere else the shape gate has already
                 // decided such a variable, so reaching one here is unsupported.
-                .flex, .rigid => .{ .done = if (walk.nominal_backing_depth > 0) .ok else .unsupported },
+                .flex => .{ .done = if (walk.nominal_backing_depth > 0) .ok else .unsupported },
+                // Outside a backing, a type variable the enclosing definition
+                // constrains is read through its declared `parser_for`.
+                .rigid => .{
+                    .done = if (walk.nominal_backing_depth > 0) .ok else blk: {
+                        // Every occurrence of the variable is read by the one
+                        // validated call on it.
+                        if ((try walk.visited.getOrPut(resolved.var_)).found_existing) break :blk .ok;
+                        const expected_ret = try self.freshParseResultTryVar(task.var_, inputs.state_var, inputs.err_var, inputs.env, inputs.region);
+                        const expected_runtime_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{inputs.state_var}, expected_ret), inputs.env, inputs.region);
+                        const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{inputs.encoding_var}, expected_runtime_fn), inputs.env, inputs.region);
+                        break :blk try self.validateDerivedCodecVariable(task.var_, self.cir.idents.parser_for, expected_fn, inputs.constraint, inputs.env, inputs.failure_expr);
+                    },
+                },
                 .field_presence => .{ .done = .unsupported },
             };
         },
@@ -61982,6 +62033,57 @@ fn stepDerivedParseNominal(
     return try self.finishDerivedParseNominal(&frame.nominal, nominal_var);
 }
 
+/// A type variable of the enclosing definition that a derived codec reaches
+/// outside any nominal backing. Its values are written or read through the
+/// requirement for `method` its where clause declares: the leaf's expected
+/// callable relates to that declared signature exactly as a body dispatch on
+/// the variable does, and the generated call names the variable, so
+/// publication forwards it to the enclosing definition's evidence parameter.
+/// A variable that declares no such requirement cannot be derived, and one
+/// whose declared signature is not this codec's is reported as missing the
+/// method.
+fn validateDerivedCodecVariable(
+    self: *Self,
+    var_: Var,
+    method: Ident.Idx,
+    expected_fn: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    failure_expr: ?CIR.Expr.Idx,
+) Allocator.Error!DerivedParseValidation {
+    const rigid = self.types.resolveVar(var_).desc.content.rigid;
+    const declared = self.rigidCodecRequirement(rigid, method) orelse return .unsupported;
+    var use = constraint;
+    use.fn_name = method;
+    use.fn_var = expected_fn;
+    const use_callable = try self.whereMethodUseCallable(declared.fn_var, use, env);
+    switch (try self.runUnify(use_callable, expected_fn, env, .{ .on_mismatch = .write_no_report })) {
+        .unified => {},
+        .suppressed_by_error => return .reported_error,
+        .mismatch => return try self.reportDerivedParseMissingMethodAt(var_, method, constraint, env, failure_expr),
+        .problem => unreachable, // a `.write_no_report` relation records no problem of its own
+    }
+    // A private instance of a parked relation validates a copy of the
+    // definition's variable; the call forwards to the definition's own one,
+    // whose where clause the enclosing evidence chain answers for.
+    const source = self.codecInstanceSource(var_);
+    self.markWhereClauseBodyRequired(self.types.resolveVar(source).desc.content.rigid, use);
+    try self.recordGeneratedCodecCall(method, source, expected_fn, expected_fn, var_);
+    return .ok;
+}
+
+/// The template variable a private codec instance's copy `var_` stands for
+/// (`finalCodecRelationInstance`), or `var_` outside such an instance.
+fn codecInstanceSource(self: *Self, var_: Var) Var {
+    const frame = self.active_codec_derivation_frame orelse return var_;
+    const copies = self.codec_derivation_frames.items[frame].instance_copies;
+    const root = self.types.resolveVar(var_).var_;
+    for (self.final_codec_instance_copy_pairs.items[copies.start..][0..copies.len]) |pair| {
+        if (self.types.resolveVar(pair.copy).var_ == root) return pair.source;
+    }
+    return var_;
+}
+
 fn finishDerivedParseNominal(
     self: *Self,
     nominal: *const NominalCodecFrame,
@@ -62314,7 +62416,18 @@ fn stepDerivedEncode(
                 // See `stepDerivedParse`: a variable inside a derived codec's
                 // backing shape is a formal whose obligation belongs to the
                 // application that substitutes for it.
-                .flex, .rigid => .{ .done = if (walk.nominal_backing_depth > 0) .ok else .unsupported },
+                .flex => .{ .done = if (walk.nominal_backing_depth > 0) .ok else .unsupported },
+                .rigid => .{
+                    .done = if (walk.nominal_backing_depth > 0) .ok else blk: {
+                        // Every occurrence of the variable is written by the one
+                        // validated call on it.
+                        if ((try walk.visited.getOrPut(resolved.var_)).found_existing) break :blk .ok;
+                        const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
+                        const expected_runtime_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ var_, state_var }, expected_ret), env, region);
+                        const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{encoding_var}, expected_runtime_fn), env, region);
+                        break :blk try self.validateDerivedCodecVariable(var_, self.cir.idents.encoder_for, expected_fn, constraint, env, null);
+                    },
+                },
                 .field_presence => .{ .done = .unsupported },
             };
         },
