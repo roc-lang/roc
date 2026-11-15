@@ -25005,7 +25005,7 @@ pub const CompileTimeRoot = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(CompileTimeRoot) == 152);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(CompileTimeRoot) == 156);
 }
 
 /// One literal's conversion root (`CompileTimeRootTable.literal_conversions`).
