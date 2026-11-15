@@ -23363,35 +23363,22 @@ pass skips its walk and only commits `may_leave_pending` as false for every
 procedure. A Debug compiler walks anyway and asserts that it finds no deferred
 call and no procedure that may leave one.
 
-A call's result may be converted to another representation before it is
-returned, by statements after the call. The pass marks a direct call or a
-deferred call `returns_pending` when its value reaches the return through
-conversions alone and the only reference counts adjusted on the way are that
-value's own. If a call is still pending once the statement has run its drive,
-the procedure returns at once without a value, and nothing it owns is left
-behind. It records, on the pending call, the layout it returns and how its
-last skipped conversion describes the value: by a descriptor the procedure
-already holds at that point, or by the descriptor the value arrives with. Each procedure that returns early
-replaces the record of the one before, so the record names the conversion
-nearest whoever makes the call.
+A statement hands its pending call up only when its result is returned as it
+is: nothing but reference-count statements, ARC's residual-release
+projections, and jumps into a join body separates the call from the `ret` of
+its target (`returnOf`). Those statements read no value the pending call
+needs, since a pending call owns its closure and every argument, so the
+procedure runs them and returns with its result slot holding no value. A call
+whose result anything else reads, a conversion to another representation
+included, is marked `always`: its procedure runs every pending call there and
+reads the last one's result.
 
-Whoever makes a pending call makes it exactly as its statement wrote it, in
-that statement's layout and with its result descriptor, so the callee needs
-nothing a call from that statement would not. When the call returns a value
-rather than leaving another call pending, that value is converted the way the
-procedures that returned early would have converted it: by the conversion
-recorded on that call, then by the one recorded on the first call of the
-chain, which is the one skipped on the way out to this caller. Skipping the
-conversions in between is sound because each only changes how the same value
-is represented. The erased-call runtime converts what a callee it
-invoked returns to the layout and result descriptor of the site that called
-it; when that callee leaves a call pending instead, the runtime records this
-boundary conversion on the pending call too, and applies it after the call's
-own conversion and before the chain's first. A value that comes back from a
-later call in the chain is stored as the first call's statement stores it
-(its site layout and result descriptor) before the chain's first conversion
-applies, since the in-between conversions it skipped end at that site. The caller's own result descriptor applies last, as it would
-have to the value its callee returned.
+Whoever makes a pending call passes the result storage of its own statement,
+and every call of the chain writes that storage. Each procedure that handed a
+call up returns its callee's result unchanged, so every call of a chain
+returns the one representation the driving statement reads. Nothing about a
+result's representation is recorded on a pending call, and no conversion is
+skipped or replayed.
 
 A `.boxy` erased call through a dynamic function value (`call_erased`) is
 deferred and driven the same way. Its packed argument record is copied into
@@ -23401,8 +23388,8 @@ both sides share.
 
 Backends follow these marks and nothing else: a deferred call becomes a call
 to the runtime's record function, a drive becomes a call to its drive
-function, and `returns_pending` becomes a query of the pending record
-followed by a return. Pending state belongs exclusively to the waiter's
+function, and a statement that hands its call up emits nothing for the mark.
+Pending state belongs exclusively to the waiter's
 frame, including its argument packet. Packets of at most 32 bytes occupy
 inline byte storage in the cell; larger packets occupy an exact-sized host
 allocation. Backends obtain the cell's target-width byte size and alignment
