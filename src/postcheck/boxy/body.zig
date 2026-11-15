@@ -4075,8 +4075,43 @@ pub const Builder = struct {
     }
 
     /// Literal argument `index` of `scope`, the frame at `position` of
-    /// `alias_scopes`, whose frames below it are in place.
+    /// `alias_scopes`, whose frames below it are in place. A frame whose edge
+    /// forwards a literal argument of the frame below it holds that frame's,
+    /// so a chain of such frames is followed down to the frame that composes
+    /// it.
     fn scopeFrameLiteral(self: *Builder, scope: AliasScope, position: usize, index: u32) Allocator.Error!Word {
+        var at_scope = scope;
+        var at = position;
+        var at_index = index;
+        while (self.forwardedFrameLiteral(at_scope, at, at_index)) |below| {
+            at = below.position;
+            at_index = below.index;
+            at_scope = self.alias_scopes.items[at];
+        }
+        return try self.composeFrameLiteral(at_scope, at, at_index);
+    }
+
+    /// The frame and literal argument that literal argument `index` of
+    /// `scope`, the frame at `position`, is, when its edge forwards one of
+    /// the frame below it in the current chain.
+    fn forwardedFrameLiteral(self: *const Builder, scope: AliasScope, position: usize, index: u32) ?struct { position: usize, index: u32 } {
+        const deferred = scope.deferred orelse return null;
+        const edge = switch (deferred) {
+            .edge => |edge| edge,
+            .thunks => return null,
+        };
+        if (index >= scope.literal_requirements.len) invariant("an edge named a literal argument its scope does not have");
+        const forwarded = switch (edge.args[index]) {
+            .forwarded => |forwarded| forwarded,
+            .root, .unbound => return null,
+        };
+        if (position <= (self.foreign_scopes orelse 0)) return null;
+        return .{ .position = position - 1, .index = forwarded };
+    }
+
+    /// Literal argument `index` of `scope`, the frame at `position`, in the
+    /// scope holding the frame's edge when it is deferred.
+    fn composeFrameLiteral(self: *Builder, scope: AliasScope, position: usize, index: u32) Allocator.Error!Word {
         const deferred = scope.deferred orelse {
             if (index >= scope.literals.len) invariant("an edge named a literal argument its scope does not have");
             return scope.literals[index];
@@ -7892,24 +7927,62 @@ pub const Builder = struct {
 
     /// Dictionary parameter `param` of the frame at `position` of
     /// `alias_scopes`. A literal chain frame's is composed at its first read,
-    /// in the scope that holds the frame's edge.
+    /// in the scope that holds the frame's edge. A frame whose edge passes on
+    /// a dictionary of a frame below it (`forwardedFrameParam`) holds that
+    /// frame's dictionary, so a chain of such frames, one per scheme a literal
+    /// is forwarded through, is followed down to the frame that composes it.
     fn frameDictionary(self: *Builder, position: usize, param: u32) Allocator.Error!Word {
-        const scope = self.alias_scopes.items[position];
-        const slot = std.mem.findScalar(u32, scope.params, param) orelse invariant("evidence named a dictionary parameter its alias scope does not have");
-        if (scope.declaration) |declaration| if (declaration.dicts[slot] == null) {
-            // Only a requirement naming a type the callee's body declares
-            // (a captured codec requirement whose format is a local type)
-            // composes a dictionary that reaches the callee's local
-            // procedures, so only such a slot is ever being built while one
-            // is. A local procedure's own scheme names a declaring slot only
-            // through a requirement on one of the callee's quantified
-            // variables, which the callee's annotation states outside its
-            // body and so cannot name a type its body declares; a captured
-            // requirement on a structural receiver resolves structurally.
-            invariant("a local procedure's own scheme names a declaration context's dictionary while it is built");
+        var forwarding = std.ArrayList(*?Word).empty;
+        defer forwarding.deinit(self.allocator);
+        var at = position;
+        var at_param = param;
+        const dictionary = while (true) {
+            const scope = self.alias_scopes.items[at];
+            const slot = std.mem.findScalar(u32, scope.params, at_param) orelse invariant("evidence named a dictionary parameter its alias scope does not have");
+            if (scope.declaration) |declaration| if (declaration.dicts[slot] == null) {
+                // Only a requirement naming a type the callee's body declares
+                // (a captured codec requirement whose format is a local type)
+                // composes a dictionary that reaches the callee's local
+                // procedures, so only such a slot is ever being built while one
+                // is. A local procedure's own scheme names a declaring slot only
+                // through a requirement on one of the callee's quantified
+                // variables, which the callee's annotation states outside its
+                // body and so cannot name a type its body declares; a captured
+                // requirement on a structural receiver resolves structurally.
+                invariant("a local procedure's own scheme names a declaration context's dictionary while it is built");
+            };
+            const deferred = scope.deferred_dicts orelse break scope.dicts[slot];
+            if (deferred.composed[slot]) |composed| break composed;
+            const below = forwardedFrameParam(deferred, at_param) orelse break try self.composeFrameDictionary(at, at_param, slot);
+            try forwarding.append(self.allocator, &deferred.composed[slot]);
+            at = below.position;
+            at_param = below.param;
         };
-        const deferred = scope.deferred_dicts orelse return scope.dicts[slot];
-        if (deferred.composed[slot]) |dictionary| return dictionary;
+        for (forwarding.items) |composed| composed.* = dictionary;
+        return dictionary;
+    }
+
+    /// The frame and parameter a literal chain frame's dictionary parameter
+    /// `param` is, when the frame's edge passes it a dictionary of a frame
+    /// below the edge unchanged: evidence naming a scope of the chain. Null
+    /// for any other evidence, and for a scope of the worker's own, which no
+    /// frame holds.
+    fn forwardedFrameParam(deferred: DeferredDictionaries, param: u32) ?struct { position: usize, param: u32 } {
+        if (param >= deferred.evidence.len) return null;
+        const index = switch (deferred.evidence[param].resolution) {
+            .constraint => |constraint| constraint.index,
+            .direct, .structural, .from_scheme, .from_callable, .checked_error, .unreachable_value => return null,
+        };
+        if (deferred.foreign_scopes) |first| {
+            if (index.depth >= deferred.frames - first) invariant("a literal chain read evidence of a scope it never entered");
+        } else if (index.depth >= deferred.frames) return null;
+        return .{ .position = deferred.frames - 1 - index.depth, .param = index.index };
+    }
+
+    /// Compose dictionary `slot` (parameter `param`) of the literal chain
+    /// frame at `position`, in the scope that holds the frame's edge.
+    fn composeFrameDictionary(self: *Builder, position: usize, param: u32, slot: usize) Allocator.Error!Word {
+        const deferred = self.alias_scopes.items[position].deferred_dicts.?;
         if (deferred.declaring) |declaring| if (self.frameDeclaration(deferred.composed) == null) {
             return try self.frameDeclarationDictionary(position, declaring, deferred, slot);
         };
