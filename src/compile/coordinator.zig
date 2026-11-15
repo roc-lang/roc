@@ -10717,9 +10717,10 @@ const helper_module_source =
     \\}
 ;
 
-/// Write an app that reads `Hooks.hooks`, a record constant `Hooks` declares
-/// without importing `Lib`, either at `Lib.Options` (a nominal whose backing
-/// the record matches, so the read lifts) or at the record's own type.
+/// Write an app that calls `Hooks.hooks`, a function `Hooks` declares without
+/// importing `Lib` and whose result is a record literal, either at
+/// `Lib.Options` (a nominal whose backing the record matches, so the call's
+/// copy of the result lifts) or at the record's own type.
 fn writeLiftedConstFixture(
     tmp_dir: *std.testing.TmpDir,
     sub_dir: []const u8,
@@ -10741,7 +10742,7 @@ fn writeLiftedConstFixture(
             \\import Hooks
             \\
             \\main! = |_args| {
-            \\    Echo.line!(Lib.buffer(Hooks.hooks).to_str())
+            \\    Echo.line!(Lib.buffer(Hooks.hooks({})).to_str())
             \\    Ok({})
             \\}
             ,
@@ -10753,15 +10754,14 @@ fn writeLiftedConstFixture(
             \\import Hooks
             \\
             \\main! = |_args| {
-            \\    Echo.line!(Lib.buffer({ size: Hooks.hooks.size }).to_str())
+            \\    Echo.line!(Lib.buffer({ size: Hooks.hooks({}).size }).to_str())
             \\    Ok({})
             \\}
             ,
         } },
         .{ .rel = "app/Hooks.roc", .data =
         \\Hooks := [].{
-        \\    hooks : { size : U64 }
-        \\    hooks = { size: 1 }
+        \\    hooks = |_| { size: 1.U64 }
         \\}
         },
         .{ .rel = "app/Lib.roc", .data = lib_source },

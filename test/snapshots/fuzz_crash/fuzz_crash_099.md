@@ -234,7 +234,7 @@ main! = |_args| {
 										(capture (ident "b")))
 									(e-lambda
 										(args)
-										(e-dispatch-call (method "plus") (constraint-fn-var 372)
+										(e-dispatch-call (method "plus") (constraint-fn-var 361)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "a"))))

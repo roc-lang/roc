@@ -148,18 +148,44 @@ pub const DescriptorFlags = packed struct(u16) {
     /// into must have exactly this row. A copy of the row is the same host
     /// row, so instantiation carries the flag.
     host_fixed_row: bool = false,
-    /// An anonymous record or tag union (empty ones included) that a
-    /// generalization boundary found was made in its own scope without being
-    /// generalized: every part of it is ground or belongs to an enclosing
-    /// scope. Each use of the binding still gets its own copy, because a use
-    /// can lift the structure into a nominal type whose backing matches, and
-    /// the lift rewrites the class it reaches (design.md "Anonymous Structure
-    /// Is Copied Per Use"). The rank is untouched: the class is not
-    /// polymorphic, only refinable. A copy is a fresh class at its use's
-    /// rank, so instantiation does not carry the flag, and a merge keeps it
-    /// only when both sides had it.
-    per_use_structure: bool = false,
-    _padding: u6 = 0,
+    /// A record row extension that still stands for "this record, possibly
+    /// lifted into a nominal type or given optional or defaulted fields it
+    /// omits": a record construction's or record pattern's tail (design.md
+    /// "Uncommitted Record Tails"). Meaningful only on a flex class; it never
+    /// stands for a required or undetermined field and never relates to a
+    /// rigid. Copies carry it, and a merge keeps it while the class is a flex.
+    uncommitted_record_tail: bool = false,
+    /// The class holds a copy instantiation made of an uncommitted record
+    /// tail: the record of a use of a binding that quantified the tail. Such
+    /// a class commits, or lets its record lift into a nominal type whose
+    /// backing has exactly the record's fields and is stored like it, and
+    /// absorbs no field (design.md "Uncommitted Record Tails"). Copies carry
+    /// it, and a merge keeps it while the class is a flex.
+    uncommitted_copy: bool = false,
+    /// The class is an uncommitted record tail a record pattern minted, met
+    /// by no tail a construction minted: the record is one its binding takes
+    /// apart rather than builds. Only a diagnostic about the record reads it
+    /// (design.md "Uncommitted Record Tails"). Copies carry it.
+    record_pattern_tail: bool = false,
+    /// An empty record or tag union an uncommitted tail committed to because
+    /// its binding compared or hashed the record or tag union it ends, as a
+    /// plain one (design.md "Methods On Open Rows"). Only the report of a use
+    /// that makes it a nominal type reads it. Copies carry it.
+    compared_plain: bool = false,
+    /// A tag union an annotation or type declaration wrote. Annotated
+    /// structure never lifts into a nominal type, whatever its row's tail
+    /// (design.md "Uncommitted Record Tails"). Copies carry it and a merge
+    /// keeps it if either side had it.
+    annotation_tag_union: bool = false,
+    /// An empty tag union that closes an inferred tag row: checking closed it
+    /// (an exhaustive match, a closed tag pattern), no annotation did. The
+    /// row is closed for every purpose, but its union may still lift into a
+    /// nominal type whose backing fits, and the class generalizes like a
+    /// variable so each use of a binding owns its copy (design.md
+    /// "Uncommitted Tag Tails"). Copies carry it; a merge keeps it unless the
+    /// other side is an empty tag union without it.
+    uncommitted_tag_tail: bool = false,
+    _padding: u1 = 0,
 
     /// The flags a copy of this class carries: those that describe its type.
     /// The others record what happened to this class itself—a rejection, a
@@ -173,6 +199,12 @@ pub const DescriptorFlags = packed struct(u16) {
             .empty_tag_union_is_default = self.empty_tag_union_is_default,
             .nominal_backing_structure = self.nominal_backing_structure,
             .host_fixed_row = self.host_fixed_row,
+            .uncommitted_record_tail = self.uncommitted_record_tail,
+            .uncommitted_copy = self.uncommitted_copy,
+            .record_pattern_tail = self.record_pattern_tail,
+            .compared_plain = self.compared_plain,
+            .annotation_tag_union = self.annotation_tag_union,
+            .uncommitted_tag_tail = self.uncommitted_tag_tail,
         };
     }
 
@@ -191,24 +223,6 @@ pub const Descriptor = struct {
     content: Content,
     rank: Rank,
     flags: DescriptorFlags = .{},
-
-    /// Whether unification can lift this class into a nominal type whose
-    /// backing matches, rewriting it to that nominal: an anonymous record or
-    /// tag union, empty ones included, other than structure written in an
-    /// opened nominal backing, which never lifts (design.md "Declared Backing
-    /// Structure"). Such a class can change while staying free of type
-    /// variables, so sharing it shares that change (design.md "Anonymous
-    /// Structure Is Copied Per Use").
-    pub fn liftsIntoNominal(self: Descriptor) bool {
-        if (self.flags.nominal_backing_structure) return false;
-        return switch (self.content) {
-            .structure => |flat_type| switch (flat_type) {
-                .record, .tag_union, .empty_record, .empty_tag_union => true,
-                .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => false,
-            },
-            .flex, .rigid, .alias, .field_presence, .err => false,
-        };
-    }
 };
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".
@@ -779,7 +793,12 @@ pub const NominalDecl = struct {
         /// How many trailing formals are context variables. Only a
         /// declaration in a function body has any.
         context_len: u16 = 0,
-        _unused: u15 = 0,
+        /// The declaration's record backing has unnamed fields, so its
+        /// values are stored in declared order with padding rather than like
+        /// the record of its named fields (design.md "Nominal Record Field
+        /// Order").
+        padded: bool = false,
+        _unused: u14 = 0,
     };
 
     /// How many of the declaration's formals it declares itself, before its
@@ -1185,6 +1204,8 @@ pub const StaticDispatchConstraint = struct {
     /// literal). Kind-specific flags (binop negation, literal kind) live
     /// *inside* the variant, so they can't exist without or apart from it.
     origin: Origin,
+    /// Which value the method is called on.
+    receiver: Receiver = .holder,
     /// A numeric literal conversion's facts in the owning type store's
     /// `numeral_infos`; present exactly when `origin` is the `numeral`
     /// literal kind. Like the interpolation part range, it is relative to the
@@ -1319,6 +1340,18 @@ pub const StaticDispatchConstraint = struct {
     };
 
     /// Tracks where a static dispatch constraint originated from
+    /// Which value a static-dispatch constraint dispatches on.
+    pub const Receiver = enum(u8) {
+        /// The variable that holds the constraint.
+        holder,
+        /// The record or tag union whose row ends in the row variable that
+        /// holds the constraint: the first argument of `fn_var` (design.md
+        /// "Methods On Open Rows"). The row variable carries the requirement
+        /// through generalization, instantiation, and import copying, and the
+        /// requirement is decided against that value once its type is known.
+        open_row_value,
+    };
+
     pub const Origin = union(enum) {
         /// From binary operator desugaring (e.g., +, -, *). `negated` is true when
         /// the source operator was `!=` rather than `==`.

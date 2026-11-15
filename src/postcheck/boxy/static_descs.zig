@@ -888,7 +888,7 @@ pub const StaticDescs = struct {
                     self.extra_nodes += 1;
                     adapted_node.* = try self.staticCallableOf(owner, 16 + self.extra_nodes, program_.worker(adapter).proc, words.items);
                 },
-                .rows, .record_order => types.invariant("two callable types of a dictionary differ outside the signature of the function it is"),
+                .rows => types.invariant("two callable types of a dictionary differ outside the signature of the function it is"),
             }
         }
         for (tree, 0..) |node, position| {
