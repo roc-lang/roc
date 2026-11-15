@@ -54,6 +54,27 @@
 //! persists for later rounds only ever weakens once admitted (see "Persisted
 //! state lattice"), so the rounds reach that fixpoint without a cap.
 //!
+//! A loop rebinds a value only by assigning it something else: a parameter
+//! every back edge passes along as it arrived keeps its entry value, and the
+//! entry edges' facts about it hold throughout the loop like those about any
+//! local the loop leaves alone.
+//!
+//! Some checks no branch in the procedure implies. A loop that walks a list
+//! by an index it stops at a literal, a local, or another list's length
+//! tests that index against the list's own length on every pass. When the
+//! proof rounds reach their fixpoint with such a comparison undecided, and
+//! one length test made where the loop is entered would decide it, the pass
+//! makes that test there: the loop's entries go through a guard that runs a
+//! copy of the loop when the test holds and the loop itself when it does
+//! not (see "Hoisted length tests"). That step removes nothing. It adds a
+//! branch, and the rounds that follow prove the copy's checks from that
+//! branch's edge exactly as they prove any other, so the failure mode of a
+//! guard that proves nothing is a copy with its checks intact, never
+//! unsoundness. A loop is guarded only when the facts at its undecided
+//! comparison compose with the test into a proof, only when it encloses no
+//! other loop, and at most once, so the pass copies a statement at most
+//! once and only where the copy loses a check.
+//!
 //! Only fixed-width unsigned integers up to 64 bits participate. List lengths
 //! are modeled as opaque terms keyed by the list value they measure, so
 //! repeated `list_len` reads of the same unmodified list unify; appending one
@@ -1335,6 +1356,58 @@ const FactLink = struct {
 /// Bound on synthesized upper bounds per met local.
 const meet_bound_cap: usize = 6;
 
+/// What a hoisted length test compares a list's length against.
+const HoistBase = union(enum) {
+    /// A literal, folded into the test's slack.
+    constant,
+    /// An integer local that holds one value from the loop's entry to its
+    /// exit.
+    local: LocalId,
+    /// The length of the list a local holds from the loop's entry to its
+    /// exit.
+    length: LocalId,
+};
+
+/// A length test that, made once where a loop is entered, decides a
+/// comparison the loop makes on every pass: `base <= len(list) + c`, where
+/// a constant base stands for zero. See "Hoisted length tests".
+const HoistDemand = struct {
+    join: JoinPointId,
+    /// The local whose list the test measures where the loop is entered.
+    list: LocalId,
+    /// The list is a parameter the loop rebinds, so the test holds on every
+    /// pass only when no back edge passes a shorter list.
+    carried: bool,
+    base: HoistBase,
+    c: i128,
+};
+
+/// A guard the proof rounds have yet to confirm: see "Hoisted length tests".
+const GuardTrial = struct {
+    loop_id: JoinPointId,
+    guard_id: JoinPointId,
+    /// The join statements of the loop and of its copy.
+    loop_stmt: CFStmtId,
+    copy_stmt: CFStmtId,
+    /// The loop's remainder before the guard wrapped it.
+    remainder: CFStmtId,
+};
+
+/// Bound on the length tests one proof round collects.
+const hoist_demand_cap: usize = 64;
+/// Bound on the lists or the bases one comparison's demands pair up.
+const hoist_term_cap: usize = 8;
+/// The largest distance between a local base and the length it is tested
+/// against: the test adds or subtracts it, and a length is below `2^63`.
+const hoist_offset_cap: i128 = 1 << 32;
+
+/// A list whose length bounds one side of an undecided comparison:
+/// `value(root) <= side + c`, where `root` is the length's term.
+const HoistLength = struct { list: LocalId, carried: bool, root: NodeId, c: i128 };
+/// A value that bounds the other side: `side <= value(root) + c`, where
+/// `root` is the base's value.
+const HoistValue = struct { base: HoistBase, root: NodeId, c: i128 };
+
 /// A merge bound in round-stable form: node ids die at every round reset,
 /// so bounds that must cross rounds are keyed by what the roots denote.
 const StableBase = union(enum) {
@@ -1766,6 +1839,46 @@ const Pass = struct {
     /// The merge head whose region is currently being walked; captures into
     /// it from within are its own back or interior edges.
     current_region: ?CFStmtId,
+    /// The statement that defines each `ref.local` alias `alias_of` lists.
+    alias_defs: collections.DenseMap(LocalId, CFStmtId),
+    /// Locals some `init_uninitialized` statement defines: reading one is
+    /// only valid where its initialization condition holds.
+    uninit_locals: collections.DenseMap(LocalId, void),
+    /// The innermost loop whose cycle each statement lies on.
+    cycle_of: collections.DenseMap(CFStmtId, JoinPointId),
+    /// Joins whose body encloses a loop.
+    enclosing_loops: collections.DenseMap(JoinPointId, void),
+    /// (local, loop join) pairs where a statement in the join's body defines
+    /// the local, and the pairs where a statement on the join's cycle reads
+    /// it, computed for the joins in `body_locals_ready`.
+    body_defined: PairMap(LocalId, void),
+    cycle_read: PairMap(LocalId, void),
+    body_locals_ready: collections.DenseMap(JoinPointId, void),
+    /// Per root, the integer local most recently bound to exactly that
+    /// root's value, and per length term, the list local a `list_len` most
+    /// recently read it from. A root's value or a term's length may have
+    /// many names; these are the ones nearest the statement being walked,
+    /// re-checked against the path's bindings wherever they are used.
+    exact_ints: collections.DenseMap(NodeId, LocalId),
+    len_readers: collections.DenseMap(NodeId, LocalId),
+    /// (loop join, list parameter) pairs where some back edge this round
+    /// passed a list not proved at least as long as the one the pass began
+    /// with.
+    shrinking_params: PairMap(JoinPointId, void),
+    /// Length terms some `list_len` read through an element descriptor.
+    dyn_len_terms: collections.DenseMap(NodeId, void),
+    /// The length tests this round's undecided comparisons ask for.
+    hoist_demands: std.ArrayList(HoistDemand) = .empty,
+    /// Loops a length test already guards, and the copies it guards: each is
+    /// versioned at most once per procedure.
+    hoisted_joins: collections.DenseMap(JoinPointId, void),
+    /// Locals the procedure's hoisted tests and loop copies made.
+    new_locals: std.ArrayList(LocalId) = .empty,
+    /// The switches of the procedure's hoisted tests. Their failing edge
+    /// states nothing.
+    guard_switches: collections.DenseMap(CFStmtId, void),
+    /// Guards made at the last fixpoint, to be confirmed at the next.
+    guard_trials: std.ArrayList(GuardTrial) = .empty,
     /// Innermost join whose body lexically contains each statement. A jump to
     /// a loop head from a region inside that loop's body is a back edge even
     /// when a nested join's region lies between; only jumps from outside the
@@ -1917,6 +2030,19 @@ const Pass = struct {
             .join_assigned = PairMap(LocalId, void).init(allocator),
             .back_jumps = collections.DenseMap(JoinPointId, u32).init(allocator),
             .current_region = null,
+            .alias_defs = collections.DenseMap(LocalId, CFStmtId).init(allocator),
+            .uninit_locals = collections.DenseMap(LocalId, void).init(allocator),
+            .cycle_of = collections.DenseMap(CFStmtId, JoinPointId).init(allocator),
+            .enclosing_loops = collections.DenseMap(JoinPointId, void).init(allocator),
+            .body_defined = PairMap(LocalId, void).init(allocator),
+            .cycle_read = PairMap(LocalId, void).init(allocator),
+            .exact_ints = collections.DenseMap(NodeId, LocalId).init(allocator),
+            .len_readers = collections.DenseMap(NodeId, LocalId).init(allocator),
+            .body_locals_ready = collections.DenseMap(JoinPointId, void).init(allocator),
+            .shrinking_params = PairMap(JoinPointId, void).init(allocator),
+            .dyn_len_terms = collections.DenseMap(NodeId, void).init(allocator),
+            .hoisted_joins = collections.DenseMap(JoinPointId, void).init(allocator),
+            .guard_switches = collections.DenseMap(CFStmtId, void).init(allocator),
             .enclosing_join = collections.DenseMap(CFStmtId, JoinPointId).init(allocator),
             .join_parent = collections.DenseMap(JoinPointId, JoinPointId).init(allocator),
             .seeds_grew = false,
@@ -1989,6 +2115,10 @@ const Pass = struct {
         self.current_region = null;
         self.seeds_grew = false;
         self.progress_epoch = 0;
+        self.hoisted_joins.clearRetainingCapacity();
+        self.new_locals.clearRetainingCapacity();
+        self.guard_switches.clearRetainingCapacity();
+        self.guard_trials.clearRetainingCapacity();
         self.loop_scan.release(self.allocator);
         self.query_best.clearRetainingCapacity();
         self.query_queue.clearRetainingCapacity();
@@ -2066,6 +2196,22 @@ const Pass = struct {
         self.path_len_roots.deinit();
         self.join_assigned.deinit();
         self.back_jumps.deinit();
+        self.alias_defs.deinit();
+        self.uninit_locals.deinit();
+        self.cycle_of.deinit();
+        self.enclosing_loops.deinit();
+        self.body_defined.deinit();
+        self.cycle_read.deinit();
+        self.exact_ints.deinit();
+        self.len_readers.deinit();
+        self.body_locals_ready.deinit();
+        self.shrinking_params.deinit();
+        self.dyn_len_terms.deinit();
+        self.hoist_demands.deinit(self.allocator);
+        self.hoisted_joins.deinit();
+        self.new_locals.deinit(self.allocator);
+        self.guard_switches.deinit();
+        self.guard_trials.deinit(self.allocator);
         self.enclosing_join.deinit();
         self.join_parent.deinit();
         self.scratch.deinit(self.allocator);
@@ -2137,6 +2283,18 @@ const Pass = struct {
         self.join_parent.clearRetainingCapacity();
         self.join_assigned.clearRetainingCapacity();
         self.back_jumps.clearRetainingCapacity();
+        self.alias_defs.clearRetainingCapacity();
+        self.uninit_locals.clearRetainingCapacity();
+        self.cycle_of.clearRetainingCapacity();
+        self.enclosing_loops.clearRetainingCapacity();
+        self.body_defined.clearRetainingCapacity();
+        self.cycle_read.clearRetainingCapacity();
+        self.exact_ints.clearRetainingCapacity();
+        self.len_readers.clearRetainingCapacity();
+        self.body_locals_ready.clearRetainingCapacity();
+        self.shrinking_params.clearRetainingCapacity();
+        self.dyn_len_terms.clearRetainingCapacity();
+        self.hoist_demands.clearRetainingCapacity();
         self.len_roots.clearRetainingCapacity();
         self.value_roots.clearRetainingCapacity();
         self.scratch.clearRetainingCapacity();
@@ -2893,6 +3051,10 @@ const Pass = struct {
     }
 
     fn bind(self: *Pass, local: LocalId, binding: Binding) ResourceError!void {
+        if (trackedIntMax(self.localLayout(local)) != null) {
+            const node = self.nodes.items[binding.node];
+            if (node.off_lo == 0 and node.off_hi == 0) try self.exact_ints.put(node.root, local);
+        }
         if (self.isSingleAssign(local)) {
             // A single-assignment integer local bound to a root names that
             // root's value in round-stable form, wherever the root came
@@ -3063,7 +3225,11 @@ const Pass = struct {
             try seen.put(current, {});
             const stmt = self.store.getCFStmt(current);
             switch (stmt) {
-                .assign_ref => |s| if (s.op.kind == .local) try self.alias_of.put(s.target, s.op.source),
+                .assign_ref => |s| if (s.op.kind == .local) {
+                    try self.alias_of.put(s.target, s.op.source);
+                    try self.alias_defs.put(s.target, current);
+                },
+                .init_uninitialized => |s| try self.uninit_locals.put(s.target, {}),
                 inline .store_struct, .store_tag => |s| try self.bumpAssign(s.dest),
                 .join => |s| {
                     try self.join_stmts.put(s.id, current);
@@ -3089,7 +3255,6 @@ const Pass = struct {
                         }
                     }
                 },
-                .init_uninitialized,
                 .assign_literal,
                 .assign_call,
                 .assign_call_erased,
@@ -3125,6 +3290,15 @@ const Pass = struct {
         if (self.body_joins.count() != 0) try self.buildLoopScan(proc.body.get().?);
         var loop_it = self.body_joins.iterator();
         while (loop_it.next()) |kv| try self.scanLoopAssigned(kv.value_ptr.*, kv.key_ptr.*);
+        var back_it = self.back_jumps.iterator();
+        while (back_it.next()) |kv| {
+            if (kv.value_ptr.* == 0) continue;
+            var outer = self.join_parent.get(kv.key_ptr.*);
+            while (outer) |join_id| {
+                if ((try self.enclosing_loops.getOrPut(join_id)).found_existing) break;
+                outer = self.join_parent.get(join_id);
+            }
+        }
     }
 
     /// Lowering may let a join body be a statement another path also arrives
@@ -3576,11 +3750,36 @@ const Pass = struct {
                 .crash,
                 => {},
             }
+            const innermost = try self.cycle_of.getOrPut(scan.stmts.items[node]);
+            if (!innermost.found_existing or scan.encloses(innermost.value_ptr.*, join_id)) innermost.value_ptr.* = join_id;
             if (BodyClone.definedTarget(stmt.*)) |local| {
+                if (stmt.* == .set_local and self.copiesOnCycle(local, stmt.set_local.value)) continue;
                 try self.join_assigned.put(local, @backingInt(join_id), {});
             }
         }
         try self.back_jumps.put(join_id, back);
+    }
+
+    /// Whether `value` holds what `local` held earlier in the pass through
+    /// the loop being scanned: it is `local`, or reaches it through
+    /// single-assignment `ref.local` aliases defined on the loop's cycle.
+    /// Setting a local to such a value leaves it as it was, and a local
+    /// whose every definition on the cycle is such a set holds its entry
+    /// value on every pass: each alias reads it after the pass began, when
+    /// by induction it still held that value.
+    fn copiesOnCycle(self: *const Pass, local: LocalId, value: LocalId) bool {
+        const scan = &self.loop_scan;
+        var current = value;
+        var steps: usize = 0;
+        while (current != local) : (steps += 1) {
+            if (steps == scan.stmts.items.len) return false;
+            if (!self.isSingleAssign(current)) return false;
+            const def = self.alias_defs.get(current) orelse return false;
+            const def_node = scan.index_of.get(def) orelse return false;
+            if (!scan.mark.contains(def_node)) return false;
+            current = self.alias_of.get(current) orelse return false;
+        }
+        return true;
     }
 
     /// Jumps into a loop join from outside its cycle.
@@ -3779,6 +3978,9 @@ const Pass = struct {
     /// keeps a common root with a widened offset window.
     fn captureMergeEdge(self: *Pass, head: CFStmtId) ResourceError!void {
         if (self.shared_join_bodies.contains(head)) return;
+        if (self.body_joins.get(head)) |join_id| {
+            if (!self.edgeEntersLoop(head)) try self.noteCarriedLengths(join_id);
+        }
         const entry = try self.merge_states.getOrPut(head);
         if (!entry.found_existing) {
             entry.value_ptr.* = .{ .live = true, .captures = 0, .facts = .empty, .stable = .{}, .env = .empty, .entry_captures = 0, .entry_stable = .{} };
@@ -4160,6 +4362,18 @@ const Pass = struct {
                     if (self.entryEdgesComplete(join_id, st)) {
                         try self.seedEnvFromMeet(st, join_id);
                         try self.seedStableFacts(&st.entry_stable);
+                        // A parameter the loop never assigns was just bound
+                        // to its entry value.
+                        if (self.join_stmts.get(join_id)) |join_stmt| {
+                            const params = self.store.getLocalSpan(self.store.getCFStmtImmediate(join_stmt).join.params);
+                            for (0..GuardedList.borrowLen(params)) |i| {
+                                const param = GuardedList.at(params, i);
+                                if (self.joinAssigns(join_id, param)) continue;
+                                const binding = self.lookup(param) orelse continue;
+                                try self.seeded_param_roots.put(join_id, @backingInt(param), binding.node);
+                                try self.seeded_param_root_set.put(self.rootOf(binding.node), {});
+                            }
+                        }
                     }
                 }
                 return;
@@ -5431,6 +5645,10 @@ const Pass = struct {
         self.loop_facts.clearRetainingCapacity();
         self.merge_facts.clearRetainingCapacity();
         self.merge_env.clearRetainingCapacity();
+        self.hoisted_joins.clearRetainingCapacity();
+        self.new_locals.clearRetainingCapacity();
+        self.guard_switches.clearRetainingCapacity();
+        self.guard_trials.clearRetainingCapacity();
         try self.reserveScratch();
         // Rounds run until one neither rewrites, adds to the persisted
         // state, nor defers a rewrite. Each of those is a one-way step the
@@ -5454,9 +5672,624 @@ const Pass = struct {
                 try self.persistLoopBounds();
                 self.resolvePendingInvariants();
             }
-            if (self.rewrites == 0 and !self.seeds_grew and !self.deferred_rewrites) return;
+            if (self.rewrites == 0 and !self.seeds_grew and !self.deferred_rewrites) {
+                // The fixpoint's undecided comparisons are the ones no fact
+                // in the procedure decides; guarding a loop adds a fact, so
+                // the proof starts over on the guarded procedure.
+                const withdrew = try self.settleGuards();
+                const guarded = try self.hoistLengthTests(proc.body.get().?);
+                if (!withdrew and !guarded) break;
+                self.freePersisted();
+                self.loop_bounds.clearRetainingCapacity();
+                self.loop_facts.clearRetainingCapacity();
+                self.merge_facts.clearRetainingCapacity();
+                self.merge_env.clearRetainingCapacity();
+                self.progress_epoch = 0;
+                persisted_size = 0;
+                continue;
+            }
             self.assertRoundProgress(&persisted_size);
         }
+        if (self.new_locals.items.len == 0) return;
+        const frame = self.store.getLocalSpan(self.store.getProcSpecImmediate(proc_id).frame_locals);
+        var combined = std.ArrayList(LocalId).empty;
+        defer combined.deinit(self.allocator);
+        try combined.ensureTotalCapacityPrecise(self.allocator, GuardedList.borrowLen(frame) + self.new_locals.items.len);
+        for (0..GuardedList.borrowLen(frame)) |i| combined.appendAssumeCapacity(GuardedList.at(frame, i));
+        combined.appendSliceAssumeCapacity(self.new_locals.items);
+        const frame_span = try self.store.addLocalSpan(combined.items);
+        self.store.getProcSpecPtr(proc_id).frame_locals = frame_span;
+    }
+
+    // Hoisted length tests
+    //
+    // A loop that walks a list by an index it stops at some bound other
+    // than the list's own length checks the index against the length on
+    // every pass, because no branch in the procedure relates the bound to
+    // the length. Asking once, where the loop is entered, whether the bound
+    // fits the length gives the prover the branch it lacks: the loop's
+    // remainder becomes a guard that makes the test and enters a copy of
+    // the loop when it holds and the loop itself when it does not.
+    //
+    // ```text
+    // join loop(params) { body }                join loop(params) { body }
+    // in remainder                      =>      in join guard() {
+    //                                                 if base <= len(list) + c {
+    //                                                     join copy(params) { body' } in jump copy
+    //                                                 } else {
+    //                                                     jump loop
+    //                                                 }
+    //                                              } in remainder[jump loop := jump guard]
+    // ```
+    //
+    // The guard only branches, on a length it reads and a value it reads,
+    // and the copy is the loop's body statement for statement, so the
+    // procedure computes what it computed before whichever arm runs. No
+    // check is removed here: the next proof rounds find the test's holding
+    // edge on the copy's entry like any other branch, and remove from the
+    // copy exactly the checks that edge proves.
+    //
+    // A loop is guarded only when the test decides a comparison on its
+    // cycle that the procedure's facts leave undecided at the fixpoint:
+    //
+    // - The comparison needs `x <= y + m`. The facts where it stands give
+    //   `x <= base + c1` and `len(list) <= y + c2`, so `base <= len(list) +
+    //   (m - c1 - c2)` decides it. Difference constraints compose only
+    //   along such a chain, so this is the weakest test of that base
+    //   against that list which decides the comparison.
+    // - `base` is a literal, or an integer local holding one value from the
+    //   loop's entry to its exit. It bounds `x` through the facts of the
+    //   path, which come from branches and definitions; the range of `x`'s
+    //   type alone is not a base.
+    // - `list` is a local holding one list from the loop's entry to its
+    //   exit, or a parameter of the loop none of whose back edges passes a
+    //   list the prover cannot show to be at least as long as the one the
+    //   pass began with. A length that never drops keeps a lower bound it
+    //   once had, which is the induction the prover's length invariants run
+    //   on the copy.
+    // - Both are read where the loop is entered: each is a local no
+    //   statement in the loop's body defines, or a parameter of the loop,
+    //   which every entry edge has written. Each is also a local the loop's
+    //   cycle reads, so it is initialized and live where the guard reads
+    //   it: a list a fact merely relates to the comparison, which the
+    //   procedure is finished with by then, is not measured.
+    // - The loop encloses no other loop and is neither a guarded loop nor a
+    //   guard's copy, so the pass copies a statement at most once.
+    //
+    // Tests for one loop are conjoined: the copy runs only when all hold.
+    // Two comparisons asking for the same base against the same list ask
+    // for the tighter of their tests, which decides both.
+    //
+    // The rule above predicts that the copy loses a comparison; the proof
+    // rounds decide. The prover's walks are bounded, so a fact the rule
+    // counted on can fail to reach the comparison in a large procedure. At
+    // the next fixpoint a guard whose copy holds as many ordering
+    // comparisons as its loop is withdrawn (`settleGuards`), and the loop
+    // is not guarded again. A hoisted test's failing edge states nothing,
+    // so the loop itself is proved exactly as it was before the guard, and
+    // withdrawing the guard leaves a procedure every remaining rewrite was
+    // proved for.
+
+    /// The loop a comparison at `stmt` may ask a length test of: the
+    /// innermost loop whose cycle holds the statement, when that loop can
+    /// be guarded.
+    fn hoistLoopOf(self: *const Pass, stmt: CFStmtId) ?JoinPointId {
+        const join_id = self.cycle_of.get(stmt) orelse return null;
+        if (self.hoisted_joins.contains(join_id)) return null;
+        if (self.enclosing_loops.contains(join_id)) return null;
+        if (self.entryJumpCount(join_id) == 0) return null;
+        const join_stmt = self.join_stmts.get(join_id) orelse return null;
+        const join = self.store.getCFStmtImmediate(join_stmt).join;
+        if (self.shared_join_bodies.contains(join.body)) return null;
+        // The copy declares the loop's parameters again and nothing else.
+        const extra = self.store.stmtRowOrDefault(join.extra);
+        if (!extra.retained.isEmpty() or !extra.maybe_uninitialized_params.isEmpty()) return null;
+        return join_id;
+    }
+
+    fn isListLocal(self: *const Pass, local: LocalId) bool {
+        return self.layouts.getLayout(self.localLayout(local)).tag == .list;
+    }
+
+    fn isJoinParam(self: *const Pass, join_id: JoinPointId, local: LocalId) bool {
+        const join_stmt = self.join_stmts.get(join_id) orelse return false;
+        const params = self.store.getLocalSpan(self.store.getCFStmtImmediate(join_stmt).join.params);
+        for (0..GuardedList.borrowLen(params)) |i| {
+            if (GuardedList.at(params, i) == local) return true;
+        }
+        return false;
+    }
+
+    /// A back edge is being captured into loop `join_id`: note each list
+    /// parameter it passes a list not proved at least as long as the one
+    /// this pass through the body began with.
+    fn noteCarriedLengths(self: *Pass, join_id: JoinPointId) ResourceError!void {
+        if (self.hoisted_joins.contains(join_id) or self.enclosing_loops.contains(join_id)) return;
+        const join_stmt = self.join_stmts.get(join_id) orelse return;
+        const params = self.store.getLocalSpan(self.store.getCFStmtImmediate(join_stmt).join.params);
+        for (0..GuardedList.borrowLen(params)) |i| {
+            const param = GuardedList.at(params, i);
+            if (!self.isListLocal(param)) continue;
+            if (self.shrinking_params.contains(join_id, @backingInt(param))) continue;
+            if (!try self.carriesLength(join_id, param)) try self.shrinking_params.put(join_id, @backingInt(param), {});
+        }
+    }
+
+    fn carriesLength(self: *Pass, join_id: JoinPointId, param: LocalId) ResourceError!bool {
+        const began = self.seeded_param_roots.get(join_id, @backingInt(param)) orelse return false;
+        const arriving = self.lookup(param) orelse return false;
+        if (self.rootOf(arriving.node) == self.rootOf(began)) return true;
+        const began_len = self.len_terms.get(self.rootOf(began)) orelse return false;
+        const arriving_len = self.len_terms.get(self.rootOf(arriving.node)) orelse return false;
+        const assumed = self.proof_assumed;
+        defer self.proof_assumed = assumed;
+        return try self.proveLe(began_len, arriving_len, 0) and self.query_used == 0;
+    }
+
+    /// Record which locals the statements in loop `join_id`'s body define,
+    /// and which the statements on its cycle read. The loop encloses no
+    /// other loop, so its cycle is the statements whose innermost cycle is
+    /// its own.
+    fn ensureBodyLocals(self: *Pass, join_id: JoinPointId) ResourceError!void {
+        if ((try self.body_locals_ready.getOrPut(join_id)).found_existing) return;
+        const join_stmt = self.join_stmts.get(join_id) orelse return;
+        const body = self.store.getCFStmtImmediate(join_stmt).join.body;
+        {
+            var defs = try BodyClone.countReachableDefsWithScratch(self.store, body, self.analysis);
+            defer defs.deinit();
+            var it = defs.counts.iterator();
+            while (it.next()) |entry| {
+                if (entry.value_ptr.* != 0) try self.body_defined.put(entry.key_ptr.*, @backingInt(join_id), {});
+            }
+        }
+        const CycleReads = struct {
+            pass: *Pass,
+            join: u32,
+            failure: ?ResourceError = null,
+
+            fn note(reads: *@This(), local: LocalId) void {
+                reads.pass.cycle_read.put(local, reads.join, {}) catch |err| {
+                    reads.failure = err;
+                };
+            }
+        };
+        var reads = CycleReads{ .pass = self, .join = @backingInt(join_id) };
+        var walk = try BodyClone.ReachableStmts.initWithScratch(self.store, body, self.analysis);
+        defer walk.deinit();
+        while (try walk.next()) |stmt| {
+            const innermost = self.cycle_of.get(stmt) orelse continue;
+            if (innermost != join_id) continue;
+            BodyClone.forEachStmtRead(self.store, self.store.getCFStmt(stmt), &reads, CycleReads.note);
+            if (reads.failure) |err| return err;
+        }
+    }
+
+    /// A local that, read where loop `join_id` is entered, holds the value
+    /// `local` holds wherever the loop's cycle reads it; null when there is
+    /// none. A local nothing in the body defines is its own answer, as is a
+    /// parameter the loop never assigns. A single-assignment alias defined
+    /// in the body reads its source during the pass, so the source answers
+    /// for it.
+    ///
+    /// The answer is a local the loop's cycle reads. LIR initializes a
+    /// local on every path to a read, and every entry reaches the cycle, so
+    /// the local is initialized at every entry. It is also live there, so a
+    /// read at the entry does not keep its value alive past a use that
+    /// would otherwise have been its last.
+    fn loopEntryLocal(self: *Pass, join_id: JoinPointId, local: LocalId) ResourceError!?LocalId {
+        try self.ensureBodyLocals(join_id);
+        var current = local;
+        var steps: usize = 0;
+        while (self.body_defined.contains(current, @backingInt(join_id))) : (steps += 1) {
+            if (self.isJoinParam(join_id, current)) {
+                if (self.joinAssigns(join_id, current)) return null;
+                break;
+            }
+            if (steps == self.alias_of.count() or !self.isSingleAssign(current)) return null;
+            current = self.alias_of.get(current) orelse return null;
+        }
+        if (!self.cycle_read.contains(current, @backingInt(join_id))) return null;
+        // A local behind an initialization condition, or one whose value
+        // needs a descriptor, is not the guard's to read.
+        if (self.uninit_locals.contains(current)) return null;
+        if (self.store.getLocal(current).dyn != null) return null;
+        return current;
+    }
+
+    /// Whether the list `local` holds on the current path has length term
+    /// `term`.
+    fn measures(self: *const Pass, local: LocalId, term: NodeId) bool {
+        const binding = self.lookup(local) orelse return false;
+        const have = self.len_terms.get(self.rootOf(binding.node)) orelse return false;
+        return have == term;
+    }
+
+    /// Whether `local` holds exactly `root`'s value on the current path.
+    fn holdsExactly(self: *const Pass, local: LocalId, root: NodeId) bool {
+        const binding = self.lookup(local) orelse return false;
+        const node = self.nodes.items[binding.node];
+        return node.root == root and node.off_lo == 0 and node.off_hi == 0;
+    }
+
+    /// The list whose length `root` is throughout loop `join_id`, when the
+    /// loop's entry can measure it.
+    fn hoistLengthOf(self: *Pass, join_id: JoinPointId, root: NodeId) ResourceError!?struct { list: LocalId, carried: bool } {
+        if (self.dyn_len_terms.contains(root)) return null;
+        // The names the term goes by: the local it was last read from, and
+        // the local it was first read from.
+        const names = [_]?LocalId{ self.len_readers.get(root), self.len_roots.get(root), self.path_len_roots.get(root) };
+        for (names) |name| {
+            const local = name orelse continue;
+            if (!self.measures(local, root)) continue;
+            if (try self.loopEntryLocal(join_id, local)) |entry| return .{ .list = entry, .carried = false };
+        }
+        // The length of the list a parameter held when this pass began.
+        const join_stmt = self.join_stmts.get(join_id) orelse return null;
+        const params = self.store.getLocalSpan(self.store.getCFStmtImmediate(join_stmt).join.params);
+        for (0..GuardedList.borrowLen(params)) |i| {
+            const param = GuardedList.at(params, i);
+            if (!self.isListLocal(param)) continue;
+            const began = self.seeded_param_roots.get(join_id, @backingInt(param)) orelse continue;
+            const term = self.len_terms.get(self.rootOf(began)) orelse continue;
+            if (term != root) continue;
+            try self.ensureBodyLocals(join_id);
+            if (!self.cycle_read.contains(param, @backingInt(join_id))) return null;
+            if (self.uninit_locals.contains(param) or self.store.getLocal(param).dyn != null) return null;
+            return .{ .list = param, .carried = self.joinAssigns(join_id, param) };
+        }
+        return null;
+    }
+
+    /// The integer local whose value `root` is throughout loop `join_id`,
+    /// when the loop's entry can read it.
+    fn hoistValueOf(self: *Pass, join_id: JoinPointId, root: NodeId) ResourceError!?LocalId {
+        const names = [_]?LocalId{ self.exact_ints.get(root), self.value_roots.get(root), self.path_value_roots.get(root) };
+        for (names) |name| {
+            const local = name orelse continue;
+            if (!self.holdsExactly(local, root)) continue;
+            if (try self.loopEntryLocal(join_id, local)) |entry| return entry;
+        }
+        const join_stmt = self.join_stmts.get(join_id) orelse return null;
+        const params = self.store.getLocalSpan(self.store.getCFStmtImmediate(join_stmt).join.params);
+        for (0..GuardedList.borrowLen(params)) |i| {
+            const param = GuardedList.at(params, i);
+            if (!self.holdsExactly(param, root)) continue;
+            if (try self.loopEntryLocal(join_id, param)) |entry| return entry;
+        }
+        return null;
+    }
+
+    /// An ordering comparison no fact decides: collect the length tests
+    /// that would decide it either way.
+    fn noteHoistDemands(self: *Pass, stmt: CFStmtId, op: PredOp, a: NodeId, b: NodeId) ResourceError!void {
+        const join_id = self.hoistLoopOf(stmt) orelse return;
+        // The claim that makes the comparison hold, then the one that makes
+        // it fail, each as `x <= y + m`.
+        const claims: [2]struct { x: NodeId, y: NodeId, m: i128 } = switch (op) {
+            .lt => .{ .{ .x = a, .y = b, .m = -1 }, .{ .x = b, .y = a, .m = 0 } },
+            .lte => .{ .{ .x = a, .y = b, .m = 0 }, .{ .x = b, .y = a, .m = -1 } },
+            .gt => .{ .{ .x = b, .y = a, .m = -1 }, .{ .x = a, .y = b, .m = 0 } },
+            .gte => .{ .{ .x = b, .y = a, .m = 0 }, .{ .x = a, .y = b, .m = -1 } },
+            .eq, .ne => return,
+        };
+        const used = self.query_used;
+        defer self.query_used = used;
+        for (claims) |claim| try self.noteClaimDemands(join_id, claim.x, claim.y, claim.m);
+    }
+
+    fn noteClaimDemands(self: *Pass, join_id: JoinPointId, x_id: NodeId, y_id: NodeId, m: i128) ResourceError!void {
+        // Lengths at or below `y`: `root <= y.root + c` puts the length at
+        // most `c - y.off_lo` above `y`.
+        const y = self.nodes.items[y_id];
+        var lengths: [hoist_term_cap]HoistLength = undefined;
+        var lengths_len: usize = 0;
+        try self.relaxFresh(y.root, .backward);
+        {
+            var it = self.query_best.iterator();
+            while (it.next()) |entry| {
+                const term = (try self.hoistLengthOf(join_id, entry.key_ptr.*)) orelse continue;
+                const found: HoistLength = .{ .list = term.list, .carried = term.carried, .root = entry.key_ptr.*, .c = entry.value_ptr.c - y.off_lo };
+                for (lengths[0..lengths_len]) |*have| {
+                    if (have.list == found.list and have.carried == found.carried) {
+                        if (found.c < have.c) have.* = found;
+                        break;
+                    }
+                } else if (lengths_len < hoist_term_cap) {
+                    lengths[lengths_len] = found;
+                    lengths_len += 1;
+                }
+            }
+        }
+        if (lengths_len == 0) return;
+
+        // Values at or above `x`: `x.root <= root + c` puts `x` at most
+        // `c + x.off_hi` above the value. A literal's value folds into the
+        // slack, so every literal is the one constant base.
+        const x = self.nodes.items[x_id];
+        var values: [hoist_term_cap]HoistValue = undefined;
+        var values_len: usize = 0;
+        try self.relaxFresh(x.root, .forward);
+        {
+            var it = self.query_best.iterator();
+            while (it.next()) |entry| {
+                const root = self.nodes.items[entry.key_ptr.*];
+                const c = entry.value_ptr.c + x.off_hi;
+                const base: HoistBase = base: {
+                    if (root.lo == root.hi) break :base .constant;
+                    if (try self.hoistValueOf(join_id, entry.key_ptr.*)) |local| break :base .{ .local = local };
+                    const term = (try self.hoistLengthOf(join_id, entry.key_ptr.*)) orelse continue;
+                    if (term.carried) continue;
+                    break :base .{ .length = term.list };
+                };
+                const found: HoistValue = .{ .base = base, .root = entry.key_ptr.*, .c = c };
+                for (values[0..values_len]) |*have| {
+                    if (std.meta.eql(have.base, found.base)) {
+                        if (self.nodes.items[found.root].lo + found.c < self.nodes.items[have.root].lo + have.c) have.* = found;
+                        break;
+                    }
+                } else if (values_len < hoist_term_cap) {
+                    values[values_len] = found;
+                    values_len += 1;
+                }
+            }
+        }
+
+        for (lengths[0..lengths_len]) |length| {
+            for (values[0..values_len]) |value| {
+                // `value(value.root) <= value(length.root) + c` is the test.
+                // One both of whose sides are the same value is decided
+                // already, as is one the path's facts refute: a pass that
+                // reaches this comparison then never runs in the copy.
+                if (value.root == length.root) continue;
+                const c = clampSlack(m - value.c - length.c);
+                if (try self.proveLeQuery(length.root, value.root, -c - 1)) continue;
+                try self.addHoistDemand(.{
+                    .join = join_id,
+                    .list = length.list,
+                    .carried = length.carried,
+                    .base = value.base,
+                    .c = if (value.base == .constant) c - self.nodes.items[value.root].lo else c,
+                });
+            }
+        }
+    }
+
+    fn addHoistDemand(self: *Pass, demand: HoistDemand) ResourceError!void {
+        switch (demand.base) {
+            // A length of zero or less is no test, and no list is `2^63`
+            // long.
+            .constant => if (demand.c >= 0 or -demand.c > std.math.maxInt(i64)) return,
+            .local => |local| {
+                if (demand.c > hoist_offset_cap or -demand.c > hoist_offset_cap) return;
+                switch (self.localLayout(local)) {
+                    .u8, .u16, .u32, .u64 => {},
+                    .bool, .str, .i8, .i16, .i32, .i64, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return,
+                    _ => return,
+                }
+            },
+            .length => if (demand.c > hoist_offset_cap or -demand.c > hoist_offset_cap) return,
+        }
+        for (self.hoist_demands.items) |*have| {
+            if (have.join == demand.join and have.list == demand.list and have.carried == demand.carried and std.meta.eql(have.base, demand.base)) {
+                have.c = @min(have.c, demand.c);
+                return;
+            }
+        }
+        if (self.hoist_demands.items.len == hoist_demand_cap) return;
+        try self.hoist_demands.append(self.allocator, demand);
+    }
+
+    fn hoistBaseOrder(base: HoistBase) u64 {
+        return switch (base) {
+            .constant => 0,
+            .local => |local| (@as(u64, @backingInt(local)) << 1) + 1,
+            .length => |list| (@as(u64, @backingInt(list)) << 1) + 2,
+        };
+    }
+
+    fn hoistDemandBefore(_: void, a: HoistDemand, b: HoistDemand) bool {
+        if (a.join != b.join) return @backingInt(a.join) < @backingInt(b.join);
+        if (a.list != b.list) return @backingInt(a.list) < @backingInt(b.list);
+        return hoistBaseOrder(a.base) < hoistBaseOrder(b.base);
+    }
+
+    /// Guard every loop the round's demands qualify. Returns whether any
+    /// loop was guarded.
+    fn hoistLengthTests(self: *Pass, proc_body: CFStmtId) ResourceError!bool {
+        // A carried list some back edge may shorten keeps no bound.
+        var kept: usize = 0;
+        for (self.hoist_demands.items) |demand| {
+            if (demand.carried and self.shrinking_params.contains(demand.join, @backingInt(demand.list))) continue;
+            self.hoist_demands.items[kept] = demand;
+            kept += 1;
+        }
+        self.hoist_demands.shrinkRetainingCapacity(kept);
+        if (kept == 0) return false;
+        // One demand per (loop, list, base), so the order is total.
+        std.mem.sortUnstable(HoistDemand, self.hoist_demands.items, {}, hoistDemandBefore);
+        var start: usize = 0;
+        while (start < kept) {
+            var end = start + 1;
+            while (end < kept and self.hoist_demands.items[end].join == self.hoist_demands.items[start].join) end += 1;
+            try self.guardLoop(proc_body, self.hoist_demands.items[start..end]);
+            start = end;
+        }
+        self.hoist_demands.clearRetainingCapacity();
+        return true;
+    }
+
+    fn hoistLocal(self: *Pass, layout_idx: layout_mod.Idx) ResourceError!LocalId {
+        const local = try self.store.addLocal(.{ .layout_idx = layout_idx });
+        try self.new_locals.append(self.allocator, local);
+        return local;
+    }
+
+    fn hoistLiteral(self: *Pass, target: LocalId, value: i128, next: CFStmtId, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
+        return try self.store.addCFStmt(.{ .assign_literal = .{
+            .target = target,
+            .value = .{ .i128_literal = try self.store.addStmtRow(LIR.I128Literal, .{ .value = value, .layout_idx = .u64 }) },
+            .next = next,
+        } }, origin);
+    }
+
+    fn hoistSwitch(self: *Pass, cond: LocalId, holds: CFStmtId, loop_id: JoinPointId, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
+        const fails = try self.store.addCFStmt(.{ .jump = .{ .target = loop_id } }, origin);
+        const branches = try self.store.addCFSwitchBranches(&.{.{ .value = 1, .body = holds }});
+        const test_switch = try self.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = cond,
+            .branches = branches,
+            .default_branch = fails,
+            .continuation = null,
+        } }, origin);
+        try self.guard_switches.put(test_switch, {});
+        return test_switch;
+    }
+
+    /// The statements of one length test: continue at `holds` when
+    /// `base <= len(list) + c` and enter the loop itself otherwise.
+    fn emitLengthTest(self: *Pass, test_demand: HoistDemand, holds: CFStmtId, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
+        const len = try self.hoistLocal(.u64);
+        const fits = try self.hoistLocal(.bool);
+        var head = try self.hoistSwitch(fits, holds, test_demand.join, origin);
+        // The base as a `U64` local, and the statement that makes it one.
+        const Wide = struct { local: LocalId, op: ?LIR.LowLevel, source: LocalId };
+        const wide: ?Wide = switch (test_demand.base) {
+            .constant => null,
+            .local => |base| switch (self.localLayout(base)) {
+                .u8 => .{ .local = try self.hoistLocal(.u64), .op = .u8_to_u64, .source = base },
+                .u16 => .{ .local = try self.hoistLocal(.u64), .op = .u16_to_u64, .source = base },
+                .u32 => .{ .local = try self.hoistLocal(.u64), .op = .u32_to_u64, .source = base },
+                .u64 => .{ .local = base, .op = null, .source = base },
+                .bool, .str, .i8, .i16, .i32, .i64, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => unreachable, // addHoistDemand admits only unsigned bases up to 64 bits
+                _ => unreachable, // addHoistDemand admits only unsigned bases up to 64 bits
+            },
+            .length => |list| .{ .local = try self.hoistLocal(.u64), .op = .list_len, .source = list },
+        };
+        if (wide) |base| {
+            if (test_demand.c == 0) {
+                head = try self.store.addLowLevelStmt(fits, .num_is_lte, &.{ base.local, len }, head, origin);
+            } else if (test_demand.c > 0) {
+                // `base <= len + c`: a length is below `2^63` and `c` is
+                // small, so the sum is exact.
+                const slack = try self.hoistLocal(.u64);
+                const reach = try self.hoistLocal(.u64);
+                head = try self.store.addLowLevelStmt(fits, .num_is_lte, &.{ base.local, reach }, head, origin);
+                head = try self.store.addLowLevelStmt(reach, .num_int_add_wrap, &.{ len, slack }, head, origin);
+                head = try self.hoistLiteral(slack, test_demand.c, head, origin);
+            } else {
+                // `base + n <= len`: `n <= len` is tested first, so
+                // `len - n` is exact.
+                const margin = try self.hoistLocal(.u64);
+                const room = try self.hoistLocal(.u64);
+                const has_margin = try self.hoistLocal(.bool);
+                head = try self.store.addLowLevelStmt(fits, .num_is_lte, &.{ base.local, room }, head, origin);
+                head = try self.store.addLowLevelStmt(room, .num_int_sub_wrap, &.{ len, margin }, head, origin);
+                head = try self.hoistSwitch(has_margin, head, test_demand.join, origin);
+                head = try self.store.addLowLevelStmt(has_margin, .num_is_lte, &.{ margin, len }, head, origin);
+                head = try self.hoistLiteral(margin, -test_demand.c, head, origin);
+            }
+            if (base.op) |op| head = try self.store.addLowLevelStmt(base.local, op, &.{base.source}, head, origin);
+        } else {
+            const least = try self.hoistLocal(.u64);
+            head = try self.store.addLowLevelStmt(fits, .num_is_lte, &.{ least, len }, head, origin);
+            head = try self.hoistLiteral(least, -test_demand.c, head, origin);
+        }
+        return try self.store.addLowLevelStmt(len, .list_len, &.{test_demand.list}, head, origin);
+    }
+
+    /// Guard one loop with `tests`, all of which name it: see "Hoisted
+    /// length tests".
+    fn guardLoop(self: *Pass, proc_body: CFStmtId, tests: []const HoistDemand) ResourceError!void {
+        const loop_id = tests[0].join;
+        const join_stmt = self.join_stmts.get(loop_id).?;
+        const join = self.store.getCFStmtImmediate(join_stmt).join;
+        var origin = self.store.stmtOrigin(join_stmt);
+        origin.kind = .range_prove;
+
+        const copy_id = self.joins.freshJoinPoint();
+        const guard_id = self.joins.freshJoinPoint();
+        const copy_stmt = try BodyClone.cloneLoop(self.store, join, copy_id, proc_body, &self.joins.next_join_point, self.analysis, self.allocator, &self.new_locals, origin);
+        var head = copy_stmt;
+        var index = tests.len;
+        while (index > 0) {
+            index -= 1;
+            head = try self.emitLengthTest(tests[index], head, origin);
+        }
+
+        // Every jump to the loop from its remainder is an entry.
+        self.scratch.clearRetainingCapacity();
+        {
+            var walk = try BodyClone.ReachableStmts.initWithScratch(self.store, join.remainder, self.analysis);
+            defer walk.deinit();
+            while (try walk.next()) |stmt| {
+                const cf = self.store.getCFStmtImmediate(stmt);
+                if (cf.* == .jump and cf.jump.target == loop_id) try self.scratch.append(self.allocator, stmt);
+            }
+        }
+        for (self.scratch.items) |stmt| self.store.getCFStmtPtr(stmt).jump.target = guard_id;
+        self.scratch.clearRetainingCapacity();
+
+        const guard = try self.store.addCFStmt(.{ .join = .{
+            .id = guard_id,
+            .params = try self.store.addLocalSpan(&.{}),
+            .body = head,
+            .remainder = join.remainder,
+        } }, origin);
+        self.store.getCFStmtPtr(join_stmt).join.remainder = guard;
+        try self.hoisted_joins.put(loop_id, {});
+        try self.hoisted_joins.put(copy_id, {});
+        try self.guard_trials.append(self.allocator, .{
+            .loop_id = loop_id,
+            .guard_id = guard_id,
+            .loop_stmt = join_stmt,
+            .copy_stmt = copy_stmt,
+            .remainder = join.remainder,
+        });
+    }
+
+    /// The ordering comparisons left in a loop body.
+    fn orderingComparisons(self: *Pass, body: CFStmtId) ResourceError!usize {
+        var count: usize = 0;
+        var walk = try BodyClone.ReachableStmts.initWithScratch(self.store, body, self.analysis);
+        defer walk.deinit();
+        while (try walk.next()) |stmt| {
+            const cf = self.store.getCFStmtImmediate(stmt);
+            if (cf.* != .assign_low_level) continue;
+            const op = cf.assign_low_level.op;
+            if (op == .num_is_lt or op == .num_is_lte or op == .num_is_gt or op == .num_is_gte) count += 1;
+        }
+        return count;
+    }
+
+    /// Confirm the guards made at the last fixpoint now that the rounds
+    /// since have proved what they can from them. The loop is proved as it
+    /// was before its guard, so its copy holds fewer ordering comparisons
+    /// exactly when the guard's test decided one. A guard whose copy lost
+    /// none is withdrawn: the loop's entries return to the loop, which
+    /// leaves the guard and the copy unreachable. Returns whether any
+    /// guard was withdrawn.
+    fn settleGuards(self: *Pass) ResourceError!bool {
+        var withdrew = false;
+        for (self.guard_trials.items) |trial| {
+            const loop_body = self.store.getCFStmtImmediate(trial.loop_stmt).join.body;
+            const copy_body = self.store.getCFStmtImmediate(trial.copy_stmt).join.body;
+            if (try self.orderingComparisons(copy_body) < try self.orderingComparisons(loop_body)) continue;
+            self.scratch.clearRetainingCapacity();
+            {
+                var walk = try BodyClone.ReachableStmts.initWithScratch(self.store, trial.remainder, self.analysis);
+                defer walk.deinit();
+                while (try walk.next()) |stmt| {
+                    const cf = self.store.getCFStmtImmediate(stmt);
+                    if (cf.* == .jump and cf.jump.target == trial.guard_id) try self.scratch.append(self.allocator, stmt);
+                }
+            }
+            for (self.scratch.items) |stmt| self.store.getCFStmtPtr(stmt).jump.target = trial.loop_id;
+            self.scratch.clearRetainingCapacity();
+            self.store.getCFStmtPtr(trial.loop_stmt).join.remainder = trial.remainder;
+            withdrew = true;
+        }
+        self.guard_trials.clearRetainingCapacity();
+        return withdrew;
     }
 
     /// Debug builds only: a round that asks for another made one of the
@@ -5710,8 +6543,11 @@ const Pass = struct {
         const branches = self.store.getCFSwitchBranches(s.branches);
         const branch_count = GuardedList.borrowLen(branches);
 
+        // A hoisted test's failing edge enters the loop as written and
+        // states nothing, so that loop is proved exactly as it was before
+        // the guard and the guard can be withdrawn.
         var default_fact: ?EdgeFact = null;
-        if (binding != null and cond_is_bool and branch_count == 1) {
+        if (binding != null and cond_is_bool and branch_count == 1 and !self.guard_switches.contains(switch_stmt)) {
             const only = GuardedList.at(branches, 0);
             if (only.value == 1) {
                 default_fact = self.boolEdgeFact(binding.?, false, switch_stmt, s.default_branch);
@@ -5929,12 +6765,17 @@ const Pass = struct {
                 if (arg_count == 1) {
                     const list_local = GuardedList.at(args, 0);
                     const root = self.rootOf(try self.valueOf(list_local));
+                    const reads_desc = self.store.stmtRowOrDefault(s.extra).dyn_elem_desc;
                     if (self.len_terms.get(root)) |len_node| {
+                        if (reads_desc) try self.dyn_len_terms.put(self.rootOf(len_node), {});
+                        try self.len_readers.put(len_node, list_local);
                         try self.bind(s.target, .{ .node = len_node });
                         return;
                     }
                     // List lengths fit a signed 64-bit count.
                     const len_node = try self.freshRoot(0, std.math.maxInt(i64));
+                    if (reads_desc) try self.dyn_len_terms.put(len_node, {});
+                    try self.len_readers.put(len_node, list_local);
                     try self.len_terms.put(root, len_node);
                     if (self.isSingleAssign(list_local)) {
                         try self.len_roots.put(len_node, self.stableLocalOf(list_local));
@@ -6658,6 +7499,7 @@ const Pass = struct {
             return;
         }
 
+        if (!holds and !fails) try self.noteHoistDemands(stmt, op, a, b);
         const bool_node = try self.freshRoot(0, 1);
         try self.bind(s.target, .{ .node = bool_node, .pred = .{ .op = op, .a = a, .b = b } });
     }

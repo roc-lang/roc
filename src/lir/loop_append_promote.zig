@@ -3087,33 +3087,6 @@ const Pass = struct {
         return ends;
     }
 
-    /// Body-local definitions the copy of a loop body may rename: locals
-    /// defined only inside the body and read only there, so the copy's
-    /// stores and loads never share a slot with the original's.
-    fn renamableBodyLocals(self: *Pass, body: CFStmtId, proc_body: CFStmtId) ResourceError!collections.DenseMap(LocalId, void) {
-        var body_reads = try body_clone.countReachableReadsWithScratch(self.store, body, self.analysis);
-        defer body_reads.deinit();
-        var body_defs = try body_clone.countReachableDefsWithScratch(self.store, body, self.analysis);
-        defer body_defs.deinit();
-        var proc_reads = try body_clone.countReachableReadsWithScratch(self.store, proc_body, self.analysis);
-        defer proc_reads.deinit();
-        var proc_defs = try body_clone.countReachableDefsWithScratch(self.store, proc_body, self.analysis);
-        defer proc_defs.deinit();
-        var renamable = collections.DenseMap(LocalId, void).init(self.allocator);
-        errdefer renamable.deinit();
-        var defs = body_defs.counts.iterator();
-        while (defs.next()) |entry| {
-            const local = entry.key_ptr.*;
-            if (entry.value_ptr.* > 0 and
-                entry.value_ptr.* == proc_defs.get(local) and
-                body_reads.get(local) == proc_reads.get(local))
-            {
-                try renamable.put(local, {});
-            }
-        }
-        return renamable;
-    }
-
     /// Version every promoted loop whose remaining iterations a counter
     /// parameter bounds: the head compares each chain's remaining slack
     /// against the appends the rest of the loop can perform and, when every
@@ -3477,7 +3450,7 @@ const Pass = struct {
         const join = self.store.getCFStmtImmediate(loop_stmt).join;
         const chains = self.slack_loops.get(loop_stmt).?.chains.items;
 
-        var renamable = try self.renamableBodyLocals(join.body, proc_body);
+        var renamable = try body_clone.renamableBodyLocals(self.store, join.body, proc_body, self.analysis, allocator);
         defer renamable.deinit();
 
         const fast_id: LIR.JoinPointId = @fromBackingInt(@intCast(max_join_id.*));
@@ -3699,26 +3672,8 @@ const Pass = struct {
         // The copy gets fresh locals for values that live entirely inside the
         // body, so its stores and loads never share a slot with the cold
         // arm's calls; everything else, the parameters included, is shared.
-        var body_reads = try body_clone.countReachableReadsWithScratch(self.store, join.body, self.analysis);
-        defer body_reads.deinit();
-        var body_defs = try body_clone.countReachableDefsWithScratch(self.store, join.body, self.analysis);
-        defer body_defs.deinit();
-        var proc_reads = try body_clone.countReachableReadsWithScratch(self.store, proc_body, self.analysis);
-        defer proc_reads.deinit();
-        var proc_defs = try body_clone.countReachableDefsWithScratch(self.store, proc_body, self.analysis);
-        defer proc_defs.deinit();
-        var renamable = collections.DenseMap(LocalId, void).init(allocator);
+        var renamable = try body_clone.renamableBodyLocals(self.store, join.body, proc_body, self.analysis, allocator);
         defer renamable.deinit();
-        var defs = body_defs.counts.iterator();
-        while (defs.next()) |entry| {
-            const local = entry.key_ptr.*;
-            if (entry.value_ptr.* > 0 and
-                entry.value_ptr.* == proc_defs.get(local) and
-                body_reads.get(local) == proc_reads.get(local))
-            {
-                try renamable.put(local, {});
-            }
-        }
 
         const unique_id: LIR.JoinPointId = @fromBackingInt(@intCast(max_join_id.*));
         max_join_id.* += 1;
