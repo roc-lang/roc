@@ -273,7 +273,7 @@ pub const Generalizer = struct {
     /// ## Parameters
     /// - `var_pool`: The main variable pool tracking all vars by rank
     /// - `rank_to_generalize`: The rank level to generalize (must be var_pool.current_rank)
-    pub fn generalize(self: *Self, _: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
+    pub fn generalize(self: *Self, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
         try self.adjustMarked(var_pool, rank_to_generalize);
         try self.quantify(var_pool, rank_to_generalize, false);
     }
@@ -1059,14 +1059,14 @@ test "generalize - effect cycles inherit the enclosing traversal rank" {
         try pool.addVarToRank(result, inner);
         try pool.addVarToRank(independent, inner);
 
-        try gen.generalize(gpa, &pool, inner);
+        try gen.generalize(&pool, inner);
         try std.testing.expectEqual(outer, store.resolveVar(captured).desc.rank);
         try std.testing.expectEqual(outer, store.resolveVar(result).desc.rank);
         for (cycle) |node| try std.testing.expectEqual(outer, store.resolveVar(node).desc.rank);
         try std.testing.expectEqual(Rank.generalized, store.resolveVar(independent).desc.rank);
 
         pool.popRank();
-        try gen.generalize(gpa, &pool, outer);
+        try gen.generalize(&pool, outer);
         try std.testing.expectEqual(Rank.generalized, store.resolveVar(captured).desc.rank);
         try std.testing.expectEqual(Rank.generalized, store.resolveVar(result).desc.rank);
     }
@@ -1115,6 +1115,6 @@ test "generalize - adjusts a spine deeper than any native-stack budget" {
         try pool.addVarToRank(chain.items[i], rank);
     }
 
-    try gen.generalize(gpa, &pool, rank);
+    try gen.generalize(&pool, rank);
     try std.testing.expectEqual(Rank.generalized, store.resolveVar(current).desc.rank);
 }

@@ -2000,7 +2000,7 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: boolean false", .source = "False", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: unary not true", .source = "!True", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: unary not false", .source = "!False", .expected = .{ .inspect_str = "True" } },
-    .{ .name = "inspect: unary not inferred parameter", .source = "{ negate = |value| !value\n (negate(True), negate(False)) }", .expected = .{ .inspect_str = "(False, True)" } },
+    .{ .name = "unary not of an inferred generic function on tag literals is a problem", .source = "{ negate = |value| !value\n (negate(True), negate(False)) }", .expected = .problem },
     .{
         .name = "inspect: unary not mutable flag in loop issue 11157",
         .source =
