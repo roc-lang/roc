@@ -329,8 +329,8 @@ const AliasScope = struct {
     /// entered bind: each read composes the one it names.
     deferred_dicts: ?DeferredDictionaries = null,
     /// The declaration context `dicts` come from, for the scope a local
-    /// procedure's own scheme is resolved in when it is built from one: a
-    /// slot still being built holds a null word there.
+    /// procedure's own scheme is resolved in when it is built from one. No
+    /// evidence names a dictionary of such a scope (`frameDictionary`).
     declaration: ?*const Declaration = null,
     saved_env: types.Env,
 };
@@ -511,6 +511,9 @@ pub const Builder = struct {
     module: ModuleIndex,
     view: *const types.ModuleView,
     env: types.Env,
+    /// The worker's own scheme at this body's types, which `env` is until
+    /// the lowering enters another scope.
+    worker_env: types.Env,
     store: *LirStore,
     frame_locals: std.ArrayList(LocalId) = .empty,
     binders: collections.DenseMapUnmanaged(BinderId, LocalId) = .empty,
@@ -715,6 +718,7 @@ pub const Builder = struct {
             .module = worker.module,
             .view = program.module(worker.module),
             .env = .{ .module = worker.module, .vars = worker.scheme_vars, .bound = bound },
+            .worker_env = .{ .module = worker.module, .vars = worker.scheme_vars, .bound = bound },
             .store = &program.result.store,
             .tail_calls = lir_core.TailCallBuilder.init(program.allocator, worker.proc),
             .recipes = Tables.Recipes.init(program.allocator),
@@ -5171,9 +5175,9 @@ pub const Builder = struct {
         const per_call_worker = self.program.worker(scope.worker).*;
         const outer_count = declaring.scheme_vars.len;
         // Built from a declaration context, the procedure's types are read in
-        // its callee's scope, whose dictionaries the evidence of its scheme
-        // names, and its function value is a dictionary's method, an
-        // immortal composition.
+        // its callee's scope, and its function value is a dictionary's
+        // method, an immortal composition. The evidence of its scheme names
+        // no dictionary of that scope (`frameDictionary`).
         const saved_env = self.env;
         const saved_foreign = self.foreign_scopes;
         const saved_scopes = self.alias_scopes.items.len;
@@ -7386,7 +7390,7 @@ pub const Builder = struct {
                 .resolved => |resolution| switch (resolution) {
                     .structural => |structural| try self.composeDictionary(try self.program.structuralWorker(self.module, structural.method), &.{try self.descWord(structural.over)}),
                     .crash => |kind| try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, kind), &.{}),
-                    .scope_variable => |variable| try self.variableDictionary(variable, self.program.module(node.requirement.?.module).nameStore().methodNameText(node.requirement.?.method)),
+                    .scope_variable => |variable| try self.variableDictionary(variable, node.requirement.?),
                     .callable_eval => |entry| try self.composeDictionary(entry, &.{}),
                     .derived => invariant("a derived codec or map dictionary is resolved from a type alone, but checking records each with its plan at the dispatch it serves"),
                     .target => invariant("a dictionary's target requirement is not a resolved node"),
@@ -7418,18 +7422,28 @@ pub const Builder = struct {
         return try self.adaptDictionary(dictionary, try self.program.substitute(self.allocator, own_fn, target.instance.bound), callable);
     }
 
-    /// The dictionary this body's scopes hold for method `method_text` on
-    /// scope variable `index`.
-    fn variableDictionary(self: *Builder, index: u32, method_text: []const u8) Allocator.Error!Word {
+    /// The dictionary this body's scopes hold for `requirement`'s method on
+    /// scope variable `index`, as `requirement` calls it. The worker's scope
+    /// holds the dictionary at the interface its own requirement names, so
+    /// a requirement naming another storage of that signature (the wider
+    /// result row of a nominal override's or a target's own requirement)
+    /// takes it adapted, as evidence handing the dictionary on does
+    /// (`dictionaryOfAt`, design.md "Sealed Result Rows").
+    fn variableDictionary(self: *Builder, index: u32, requirement: lower.DictRequirement) Allocator.Error!Word {
         const worker = self.currentWorker().*;
         if (index >= worker.scheme_vars.len) invariant("a dispatcher variable is outside its worker's scope");
         const variable = worker.scheme_vars[index];
-        const names = self.view.nameStore();
+        const method_text = self.program.module(requirement.module).nameStore().methodNameText(requirement.method);
+        const names = self.program.module(worker.module).nameStore();
         var offset: usize = 0;
         for (worker.dict_scopes, worker.dict_scope_params) |scope, params| {
             for (scope, 0..) |param_index, position| {
                 const param = params[param_index];
-                if (param.dispatcher_ty == variable and std.mem.eql(u8, names.methodNameText(param.method), method_text)) return try self.dictInputWord(offset + position);
+                if (param.dispatcher_ty != variable or !std.mem.eql(u8, names.methodNameText(param.method), method_text)) continue;
+                const dictionary = try self.dictInputWord(offset + position);
+                const declared = try self.program.converter().convert(worker.module, param.callable_ty, self.worker_env);
+                const own = try self.program.dictionaryTypeAtEdge(self.allocator, declared, requirement.callable);
+                return try self.adaptDictionary(dictionary, own, requirement.callable);
             }
             offset += scope.len;
         }
@@ -8084,10 +8098,11 @@ pub const Builder = struct {
     /// The callable type the requirement of evidence parameter `index` of
     /// the scopes in reach names, at the types its scope is read at: what
     /// its dictionary's method is called at. An entered scope (a scheme
-    /// alias's, an exact procedure alias's, a literal chain frame's, a
-    /// declaration context's) reads its requirements at the types it was
-    /// entered with (`AliasScope.requirements`); the worker's own scopes
-    /// read theirs at this body's types.
+    /// alias's, an exact procedure alias's, a literal chain frame's) reads
+    /// its requirements at the types it was entered with
+    /// (`AliasScope.requirements`); the worker's own scopes read theirs at
+    /// this body's types. No evidence names a declaration context's scope
+    /// (`frameDictionary`).
     pub fn scopeInterface(self: *Builder, index: static_dispatch.EvidenceChainIndex) Allocator.Error!TypeId {
         if (self.enteredScope(index.depth)) |position| {
             const requirements = self.alias_scopes.items[position].requirements;
@@ -8148,18 +8163,17 @@ pub const Builder = struct {
     fn frameDictionary(self: *Builder, position: usize, param: u32) Allocator.Error!Word {
         const scope = self.alias_scopes.items[position];
         const slot = std.mem.findScalar(u32, scope.params, param) orelse invariant("evidence named a dictionary parameter its alias scope does not have");
-        if (scope.declaration) |declaration| if (declaration.dicts[slot] == null) {
-            // Only a requirement naming a type the callee's body declares
-            // (a captured codec requirement whose format is a local type)
-            // composes a dictionary that reaches the callee's local
-            // procedures, so only such a slot is ever being built while one
-            // is. A local procedure's own scheme names a declaring slot only
-            // through a requirement on one of the callee's quantified
-            // variables, which the callee's annotation states outside its
-            // body and so cannot name a type its body declares; a captured
-            // requirement on a structural receiver resolves structurally.
-            invariant("a local procedure's own scheme names a declaration context's dictionary while it is built");
-        };
+        // A declaration context's dictionaries are the hidden words of the
+        // procedures built from it (`localProcWorker`), and no evidence read
+        // while its frame is entered names one. Only a captured codec
+        // requirement, whose relation names a type the callee's body
+        // declares, selects the callee's local procedures from outside its
+        // body, so that evidence is the nested evidence of a generated codec
+        // contract's call. A contract's types are a snapshot whose variables
+        // are unquantified copies (design.md "Sealed Result Rows"): a
+        // requirement of the procedure's own scheme is discharged there by a
+        // target or a derivation, never by a scope's dictionary.
+        if (scope.declaration != null) invariant("evidence named a declaration context's dictionary, which a generated codec contract's evidence never does");
         const deferred = scope.deferred_dicts orelse return scope.dicts[slot];
         if (deferred.composed[slot]) |dictionary| return dictionary;
         if (deferred.declaring) |declaring| if (self.frameDeclaration(deferred.composed) == null) {

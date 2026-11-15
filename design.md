@@ -15797,14 +15797,14 @@ of a recursion's levels are one table.
 The rule holds for every scope whose requirement discharges another's, not
 only for a worker's own. A scope the lowering enters while it lowers a body
 (a scheme alias's or an exact procedure alias's scope at one of its uses, a
-literal chain's frame, a declaration context) holds each dictionary at the
-interface its own requirement names, at the types the scope was entered with
+literal chain's frame) holds each dictionary at the interface its own
+requirement names, at the types the scope was entered with
 (`AliasScope.requirements`): the edge that entered the scope built the
 dictionary for exactly that parameter. Evidence read inside the scope that
 hands the dictionary on (an alias's forwarded lookup, a frame's edge into the
-next frame, the requirements of a literal conversion's target, a local
-procedure's own scheme) adapts it from that interface to the consumer's, and
-a dispatch through it calls it at that interface (`Builder.scopeInterface`).
+next frame, the requirements of a literal conversion's target) adapts it from
+that interface to the consumer's, and a dispatch through it calls it at that
+interface (`Builder.scopeInterface`).
 An alias can state its requirement at a narrower row than the procedure it
 forwards to requires (`narrow : b -> [Ok(Str), Err(Str), Extra] where
 [b.status : b -> [Ok(Str), Err(Str)]]` bound to a procedure whose requirement
@@ -15818,6 +15818,44 @@ at its scope's interface all the same.
 `test/cli/WidenClosedTryImplAliasScope.roc`, and
 `test/cli/WidenClosedImplLiteralChain.roc` run the alias scopes and the
 literal chain frames.
+
+A requirement resolved from its dispatcher's type rather than from checked
+evidence (callable-derived evidence, a nominal's override in a descriptor,
+and the requirements of the targets those select; design.md "Dictionaries")
+that lands on a scope variable takes the worker's dictionary for that
+variable by the same rule, adapted from the interface the worker's own
+requirement names to the requirement's callable
+(`Builder.variableDictionary`). `Holder(a)`'s `is_eq` can require
+`a.status : a -> [Ok(Str), Err(Str), Extra]`, and the descriptor of a record
+holding a `Holder(b)` reaches that override inside a function whose
+requirement on `b` names `[Ok(Str), Err(Str)]`.
+`test/cli/WidenClosedImplOverrideScope.roc` runs an override's requirement
+and the requirement of a target an override's requirement selects.
+
+A declaration context (design.md "Structural Serialization Methods") is the
+one entered scope that hands no dictionary on. Its dictionaries are the
+hidden words of the local procedures built from it. The evidence read while
+its frame is entered is the nested evidence of a generated codec contract's
+call, since only a captured codec requirement selects a callee's local
+procedures from outside the callee's body. A use site validates such a
+requirement's contract only at a relation that names none of the site's own
+scheme variables; a relation that names one is a requirement of the site's
+scheme, which the site forwards by constraint evidence without building a
+local procedure. A contract's types are a snapshot whose remaining variables
+are unquantified copies, so a requirement of a local procedure's own scheme
+is discharged there by a target or a derivation, adapted to the requirement's
+interface as any other target's dictionary is, and never by a scope's
+dictionary: a format method stating `where [s.status : s -> [Ok(Str),
+Err(Str), Extra]]` for a state the contract leaves a variable is a missing
+method, not a requirement the callee's dictionary fills. A where clause
+cannot state a requirement on a variable an enclosing annotation introduced
+either, so a local procedure's requirement on the callee's own variable is
+the callee's requirement itself, which reaches the procedure as a hidden word
+and is handed on inside the procedure's body from its worker's own scope.
+`Builder.frameDictionary` asserts that no evidence names a declaration
+context's dictionary. `test/cli/WidenClosedImplDeclarationContext.roc` runs
+local procedures built from a declaration context whose own requirements and
+bodies call a method at a wider row.
 
 A conversion between two CLOSED types is a static row conversion: a worker
 of the converting module (`WorkerKey.convert`, keyed by the source and
@@ -16444,9 +16482,11 @@ with that method's own requirements resolved the same way; a structural
 derivation where the owner registers none; a crashing dictionary where no
 value of the dispatcher can exist; and for a scope variable, a structural
 method over its descriptor for a method descriptors carry, or else its
-scope's dictionary. A target's scheme variables its callable leaves open are
-fixed by relating each resolved requirement's method back to the requirement's
-callable. A nominal override is instantiated at its method's interface:
+scope's dictionary, adapted from the interface its scope's requirement names
+to the requirement's callable (Sealed Result Rows). A target's scheme
+variables its callable leaves open are fixed by relating each resolved
+requirement's method back to the requirement's callable. A nominal override
+is instantiated at its method's interface:
 `is_eq` at `T, T -> Bool`, `to_hash` at `T, Hasher -> Hasher` with the
 Builtin hasher every runtime hash threads, and `to_inspect` at `T -> Str`. A
 SIMD vector's descriptor carries its builtin `to_inspect`.
