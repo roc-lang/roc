@@ -6443,6 +6443,8 @@ const Lowerer = struct {
         scrutinee_ty: Type.TypeId = undefined,
         scrutinee_local: LIR.LocalId = undefined,
         done: ValueJoin = undefined,
+        /// The match declares `done` and has it on the consumer stack.
+        consumer_pushed: bool = false,
         /// Owns the decision tree and its emitter.
         arena: ?*base.SingleThreadArena = null,
         emitter: *match_tree.Compiler(MatchTreeCtx).Emitter = undefined,
@@ -6458,6 +6460,8 @@ const Lowerer = struct {
         /// Some branch falls through to the value join, so the join exists.
         joined: bool = false,
         done: ValueJoin = undefined,
+        /// The `if` declares `done` and has it on the consumer stack.
+        consumer_pushed: bool = false,
         current: LIR.CFStmtId = undefined,
         body: LIR.CFStmtId = undefined,
     };
@@ -6685,6 +6689,21 @@ const Lowerer = struct {
         } }, where.glue());
     }
 
+    /// Make the join a value form declares the consumer its branches see, so a
+    /// form that ends a branch arrives at it too. Returns whether the join was
+    /// pushed; a join an enclosing form declared is already on the stack.
+    fn enterValueJoin(self: *Lowerer, done: ValueJoin, target: LIR.LocalId) Common.LowerError!bool {
+        if (done.declared) return false;
+        try self.value_consumers.append(self.allocator, .{ .join_id = done.id, .target = target });
+        return true;
+    }
+
+    /// Remove a value form's join from the consumer stack. Idempotent.
+    fn leaveValueJoin(self: *Lowerer, pushed: *bool) void {
+        if (pushed.*) _ = self.value_consumers.pop();
+        pushed.* = false;
+    }
+
     /// True when `root` never hands a value to its consumer: every path
     /// through it ends in a control transfer (a jump to a join point, a loop
     /// `break` or `continue`, an early return, a crash) or in a block whose
@@ -6901,7 +6920,9 @@ const Lowerer = struct {
             .match_ => |*task| {
                 if (task.arena) |arena| self.lane_scratch.releaseArena(arena);
                 task.arena = null;
+                self.leaveValueJoin(&task.consumer_pushed);
             },
+            .if_ => |*task| self.leaveValueJoin(&task.consumer_pushed),
             .block => |*task| {
                 var index = task.planned.items.len;
                 while (index != 0) {
@@ -6920,7 +6941,6 @@ const Lowerer = struct {
             },
             .expr,
             .stmt,
-            .if_,
             .payload_switch,
             .try_sequence,
             .try_record_sequence,
@@ -9034,6 +9054,7 @@ const Lowerer = struct {
         }
         const built = try MT.build(arena, ctx, scrutinee_ty, mt_branches);
         const emitter = try MT.Emitter.begin(arena, ctx, built, scrutinee_local, done.id);
+        const consumer_pushed = joined and try self.enterValueJoin(done, target);
         return .{ .tail = .{ .match_ = .{
             .where = where,
             .target = target,
@@ -9044,6 +9065,7 @@ const Lowerer = struct {
             .scrutinee_ty = scrutinee_ty,
             .scrutinee_local = scrutinee_local,
             .done = done,
+            .consumer_pushed = consumer_pushed,
             .arena = arena_state,
             .emitter = emitter,
         } } };
@@ -9067,6 +9089,7 @@ const Lowerer = struct {
                 .done => |branch_chain| {
                     if (task.arena) |arena| self.lane_scratch.releaseArena(arena);
                     task.arena = null;
+                    self.leaveValueJoin(&task.consumer_pushed);
                     frame.cursor = 1;
                     return .{ .call = exprTask(task.where, task.scrutinee_local, task.scrutinee, task.scrutinee_ty, branch_chain) };
                 },
@@ -9091,6 +9114,7 @@ const Lowerer = struct {
                 }
                 frame.index = GuardedList.borrowLen(branches);
                 frame.cursor = 1;
+                if (task.joined) task.consumer_pushed = try self.enterValueJoin(task.done, task.target);
                 return .{ .call = try self.valueBranchTask(task.where, task.target, task.final_else, task.result_ty, task.joined, task.done.id, task.next) };
             },
             // A lowered branch body; lower its condition before the switch.
@@ -9110,6 +9134,7 @@ const Lowerer = struct {
             frame.cursor = 2;
             return .{ .call = try self.valueBranchTask(task.where, task.target, branch.body, task.result_ty, task.joined, task.done.id, task.next) };
         }
+        self.leaveValueJoin(&task.consumer_pushed);
         if (!task.joined) return .{ .ret = task.current };
         return .{ .ret = try self.declareValueJoin(task.where, task.done, task.target, task.next, task.current) };
     }
