@@ -2064,6 +2064,7 @@ test "post-check lowerers define no helper twice with near-identical bodies" {
         "leaf",
         "namedEnter",
         "tagPayloadOperand",
+        "tagUnionEnter",
         "tagUnionExit",
         // Conventional method names on unrelated types (sort orders,
         // lifecycle, map access, timing scopes, worker task entry points).

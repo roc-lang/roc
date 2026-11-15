@@ -116,10 +116,7 @@ main =
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 255)
-			(e-runtime-error (tag "erroneous_value_expr"))
-			(e-string
-				(e-literal (string "not a person")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-import (mod "Data")
 		(exposes
 			(exposed (name "Person") (wildcard false)))))
@@ -129,8 +126,8 @@ main =
 (inferred-types
 	(defs
 		(patt (type "Error -> Str"))
-		(patt (type "Str")))
+		(patt (type "Error")))
 	(expressions
 		(expr (type "Error -> Str"))
-		(expr (type "Str"))))
+		(expr (type "Error"))))
 ~~~

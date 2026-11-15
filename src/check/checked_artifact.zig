@@ -17439,8 +17439,10 @@ const CheckedTemplateRefCollector = struct {
                 for (run.args) |arg| try self.pushChild(.{ .expr = arg });
                 self.endChildren(children);
             },
-            // The operands a retired expression still evaluates are lowered
-            // before its crash, so their uses are collected like any other.
+            // A runtime error's `evaluated` operands run before it crashes,
+            // so lowering reads their value refs, plans, and evidence like
+            // those of any other subexpression (design.md "Erroneous Call
+            // Operand Retirement").
             .runtime_error => |runtime_error| {
                 const children = self.beginChildren();
                 for (runtime_error.evaluated) |operand| try self.pushChild(.{ .expr = operand });
