@@ -948,7 +948,7 @@ lambda_arg = |f| f(|_| ...)
 				(s-let
 					(p-assign (ident "#interp_0"))
 					(e-not-implemented))
-				(e-interpolation (constraint-fn-var 587) (dispatcher-var 98)
+				(e-interpolation (constraint-fn-var 585) (dispatcher-var 98)
 					(first
 						(e-literal (string "a ")))
 					(parts
@@ -1050,7 +1050,7 @@ lambda_arg = |f| f(|_| ...)
 		(e-lambda
 			(args
 				(p-assign (ident "a")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 642)
+			(e-dispatch-call (method "plus") (constraint-fn-var 640)
 				(receiver
 					(e-not-implemented))
 				(args
@@ -1061,7 +1061,7 @@ lambda_arg = |f| f(|_| ...)
 		(e-lambda
 			(args
 				(p-assign (ident "a")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 644)
+			(e-dispatch-call (method "plus") (constraint-fn-var 642)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "a"))))
@@ -1082,7 +1082,7 @@ lambda_arg = |f| f(|_| ...)
 		(e-lambda
 			(args
 				(p-assign (ident "a")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 649)
+			(e-dispatch-call (method "plus") (constraint-fn-var 647)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "a"))))
@@ -1134,7 +1134,7 @@ lambda_arg = |f| f(|_| ...)
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-dispatch-call (method "not") (constraint-fn-var 677)
+			(e-dispatch-call (method "not") (constraint-fn-var 675)
 				(receiver
 					(e-not-implemented))
 				(args))))
@@ -1184,7 +1184,7 @@ lambda_arg = |f| f(|_| ...)
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 723)
+			(e-call (constraint-fn-var 714)
 				(e-not-implemented)
 				(e-num (value "1")))))
 	(d-let
@@ -1192,7 +1192,7 @@ lambda_arg = |f| f(|_| ...)
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-dispatch-call (method "range_inclusive_to") (constraint-fn-var 736)
+			(e-dispatch-call (method "range_inclusive_to") (constraint-fn-var 727)
 				(receiver
 					(e-num (value "1")))
 				(args
@@ -1287,7 +1287,7 @@ lambda_arg = |f| f(|_| ...)
 		(e-lambda
 			(args
 				(p-assign (ident "f")))
-			(e-call (constraint-fn-var 852)
+			(e-call (constraint-fn-var 850)
 				(e-lookup-local
 					(p-assign (ident "f")))
 				(e-lambda
@@ -1317,10 +1317,10 @@ lambda_arg = |f| f(|_| ...)
 		(patt (type "_arg -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 		(patt (type "[A, ..] -> _ret"))
 		(patt (type "c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(patt (type "c -> d where [d.plus : d, c -> d]"))
-		(patt (type "c -> c where [c.plus : c, d -> c]"))
+		(patt (type "c -> c where [c.plus : c, c -> c]"))
+		(patt (type "c -> c where [c.plus : c, c -> c]"))
 		(patt (type "_arg -> Bool"))
-		(patt (type "c -> c where [c.plus : c, d -> c]"))
+		(patt (type "c -> c where [c.plus : c, c -> c]"))
 		(patt (type "Try(ok, err) -> ok"))
 		(patt (type "Bool -> Bool"))
 		(patt (type "_arg -> c where [c.not : c -> c]"))
@@ -1354,10 +1354,10 @@ lambda_arg = |f| f(|_| ...)
 		(expr (type "_arg -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 		(expr (type "[A, ..] -> _ret"))
 		(expr (type "c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(expr (type "c -> d where [d.plus : d, c -> d]"))
-		(expr (type "c -> c where [c.plus : c, d -> c]"))
+		(expr (type "c -> c where [c.plus : c, c -> c]"))
+		(expr (type "c -> c where [c.plus : c, c -> c]"))
 		(expr (type "_arg -> Bool"))
-		(expr (type "c -> c where [c.plus : c, d -> c]"))
+		(expr (type "c -> c where [c.plus : c, c -> c]"))
 		(expr (type "Try(ok, err) -> ok"))
 		(expr (type "Bool -> Bool"))
 		(expr (type "_arg -> c where [c.not : c -> c]"))
