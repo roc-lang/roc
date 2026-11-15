@@ -1,15 +1,16 @@
 # Local procedures built from a declaration context whose requirements are
-# called at a wider row than the implementation returns. Each `make` below
-# declares a type whose method a generated encoder calls, and its caller
-# supplies that encoder, so the method's function value is built from the
-# declaration context of the caller's instance of `make`.
+# called at a wider row than the implementation returns. Each function below
+# (`make`) declares a type whose method a generated encoder calls, and its
+# caller supplies that encoder, so the method's function value is built from
+# the declaration context of the caller's instance of `make`.
 #
-# No evidence read there names a dictionary of `make`'s scope: the encoder's
-# contract is validated where `make`'s variable is a closed type, so the
-# method's own requirement takes its dictionary from the implementation,
-# adapted to the wider row, and the method's body hands `make`'s dictionary
-# on from its own worker's scope. Either way `Ok` must not be read back under
-# the wider row's numbering as `Extra`.
+# No evidence read there names a dictionary of `make`'s scope: an encoder's
+# contract resolves the requirements of the methods it calls with no
+# enclosing scope's requirements in reach, so a method's own requirement
+# takes its dictionary from the implementation, adapted to the wider row,
+# and the method's body hands `make`'s dictionary on from its own worker's
+# scope. Either way `Ok` must not be read back under the wider row's
+# numbering as `Extra`.
 WidenClosedImplDeclarationContext := {}
 
 Job := [Pending, Failed].{

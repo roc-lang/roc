@@ -8265,11 +8265,11 @@ pub const Builder = struct {
         // while its frame is entered names one. Only a captured codec
         // requirement, whose relation names a type the callee's body
         // declares, selects the callee's local procedures from outside its
-        // body, so that evidence is the nested evidence of a generated codec
-        // contract's call. A contract's types are a snapshot whose variables
-        // are unquantified copies (design.md "Sealed Result Rows"): a
-        // requirement of the procedure's own scheme is discharged there by a
-        // target or a derivation, never by a scope's dictionary.
+        // body, so that evidence is nested under a generated codec
+        // contract's call, and checked-module output resolves a contract
+        // call's nested evidence with no evidence chain in scope (design.md
+        // "Sealed Result Rows"): to a target, a derivation, or an
+        // unreachable value, never to a scope's dictionary.
         if (scope.declaration != null) invariant("evidence named a declaration context's dictionary, which a generated codec contract's evidence never does");
         const deferred = scope.deferred_dicts orelse return scope.dicts[slot];
         if (deferred.composed[slot]) |dictionary| return dictionary;

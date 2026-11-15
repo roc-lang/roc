@@ -16580,24 +16580,23 @@ and the requirement of a target an override's requirement selects.
 
 A declaration context (design.md "Structural Serialization Methods") is the
 one entered scope that hands no dictionary on. Its dictionaries are the
-hidden words of the local procedures built from it. The evidence read while
-its frame is entered is the nested evidence of a generated codec contract's
-call, since only a captured codec requirement selects a callee's local
-procedures from outside the callee's body. A use site validates such a
-requirement's contract only at a relation that names none of the site's own
-scheme variables; a relation that names one is a requirement of the site's
-scheme, which the site forwards by constraint evidence without building a
-local procedure. A contract's types are a snapshot whose remaining variables
-are unquantified copies, so a requirement of a local procedure's own scheme
-is discharged there by a target or a derivation, adapted to the requirement's
-interface as any other target's dictionary is, and never by a scope's
-dictionary: a format method stating `where [s.status : s -> [Ok(Str),
-Err(Str), Extra]]` for a state the contract leaves a variable is a missing
-method, not a requirement the callee's dictionary fills. A where clause
-cannot state a requirement on a variable an enclosing annotation introduced
-either, so a local procedure's requirement on the callee's own variable is
-the callee's requirement itself, which reaches the procedure as a hidden word
-and is handed on inside the procedure's body from its worker's own scope.
+hidden words of the local procedures built from it, which hand them on inside
+their own bodies, from their workers' own scopes. No evidence read while its
+frame is entered names one, by what checking publishes. A type declared in a
+function body leaves that body only in a captured codec requirement of the
+function's scheme, so a local procedure is built from a declaration context
+only for a generated codec contract's call, or for evidence nested under one.
+Checked-module output publishes every contract call's evidence node, nested
+evidence included, before it walks any template
+(`EvidencePass.linkGeneratedCodecCalls`), so with no evidence chain in scope:
+each nested requirement is resolved totally to a target, a derivation, or an
+unreachable value, and never to an enclosing scope's evidence parameter. A
+contract's variables are unquantified copies besides, so a requirement of a
+local procedure's own scheme that lands on one is a missing method in
+checking, not a requirement the callee's dictionary fills: a format method
+stating `where [s.status : s -> [Ok(Str), Err(Str), Extra]]` checks only
+where the contract fixes `s` to a closed type, whose own method fills the
+requirement, adapted to that interface as any other target's dictionary is.
 `Builder.frameDictionary` asserts that no evidence names a declaration
 context's dictionary. `test/cli/WidenClosedImplDeclarationContext.roc` runs
 local procedures built from a declaration context whose own requirements and
