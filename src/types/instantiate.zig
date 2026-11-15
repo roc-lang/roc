@@ -723,13 +723,21 @@ pub const Instantiator = struct {
         try machine.reach_stack.append(self.store.gpa, root_resolved.var_);
 
         while (machine.reach_stack.pop()) |parent| {
-            const resolved = self.store.resolveVar(parent);
-            switch (resolved.desc.content) {
-                inline .flex, .rigid => |flex| {
-                    if (resolved.desc.rank != .generalized) continue;
-                    try self.visitReachConstraints(parent, flex.constraints);
+            // The node's children are read by its stored kind: only the
+            // payload of the kind found is decoded.
+            const desc_idx = self.store.resolveDescIdx(parent);
+            const word = self.store.wordAt(desc_idx);
+            switch (word.kind) {
+                .flex => {
+                    if (word.rank != .generalized) continue;
+                    try self.visitReachConstraints(parent, self.store.flexAt(desc_idx).constraints);
                 },
-                .alias => |alias| {
+                .rigid => {
+                    if (word.rank != .generalized) continue;
+                    try self.visitReachConstraints(parent, self.store.rigidAt(desc_idx).constraints);
+                },
+                .alias => {
+                    const alias = self.store.aliasAt(desc_idx);
                     var arg_span = alias.vars.nonempty;
                     arg_span.dropFirstElem();
                     var i: u32 = 0;
@@ -738,29 +746,29 @@ pub const Instantiator = struct {
                     }
                     try self.visitReachChild(parent, self.store.getAliasBackingVar(alias));
                 },
-                .structure => |flat_type| switch (flat_type) {
-                    .empty_record, .empty_tag_union => {},
-                    .tuple => |tuple| try self.visitReachVars(parent, tuple.elems),
-                    .nominal_type => |nominal| try self.visitReachVars(parent, TypesStore.getNominalArgsRange(nominal)),
-                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                        try self.visitReachVars(parent, func.args);
-                        try self.visitReachChild(parent, func.ret);
-                        try self.visitReachVars(parent, func.effect_deps);
-                    },
-                    .record => |record| {
-                        try self.visitReachFields(parent, record.fields);
-                        try self.visitReachChild(parent, record.ext);
-                    },
-                    .tag_union => |tag_union| {
-                        var i: u32 = 0;
-                        while (i < tag_union.tags.count) : (i += 1) {
-                            const tag = self.store.tags.get(@fromBackingInt(@intCast(@backingInt(tag_union.tags.start) + i)));
-                            try self.visitReachVars(parent, tag.args);
-                        }
-                        try self.visitReachChild(parent, tag_union.ext);
-                    },
+                .empty_record, .empty_tag_union, .field_presence, .err => {},
+                .tuple => try self.visitReachVars(parent, self.store.tupleAt(desc_idx).elems),
+                .nominal_type => try self.visitReachVars(parent, TypesStore.getNominalArgsRange(self.store.nominalAt(desc_idx))),
+                .fn_pure, .fn_effectful, .fn_unbound => {
+                    const func = self.store.funcAt(desc_idx);
+                    try self.visitReachVars(parent, func.args);
+                    try self.visitReachChild(parent, func.ret);
+                    try self.visitReachVars(parent, func.effect_deps);
                 },
-                .field_presence, .err => {},
+                .record => {
+                    const record = self.store.recordAt(desc_idx);
+                    try self.visitReachFields(parent, record.fields);
+                    try self.visitReachChild(parent, record.ext);
+                },
+                .tag_union => {
+                    const tag_union = self.store.tagUnionAt(desc_idx);
+                    var i: u32 = 0;
+                    while (i < tag_union.tags.count) : (i += 1) {
+                        const tag = self.store.tags.get(@fromBackingInt(@intCast(@backingInt(tag_union.tags.start) + i)));
+                        try self.visitReachVars(parent, tag.args);
+                    }
+                    try self.visitReachChild(parent, tag_union.ext);
+                },
             }
         }
 
@@ -785,10 +793,10 @@ pub const Instantiator = struct {
         var reached = reach_state.iterator();
         while (reached.next()) |entry| {
             if (!entry.value_ptr.*) continue;
-            const resolved = self.store.resolveVar(entry.key_ptr.*);
-            if (resolved.desc.rank == .generalized) continue;
-            switch (resolved.desc.content) {
-                .alias, .structure => {
+            const word = self.store.wordAt(self.store.resolveDescIdx(entry.key_ptr.*));
+            if (word.rank == .generalized) continue;
+            switch (word.kind) {
+                .alias, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => {
                     self.monomorphic_reach = true;
                     break;
                 },
@@ -888,14 +896,17 @@ pub const Instantiator = struct {
         defer sides.deinit(allocator);
         try pending.append(allocator, .{ .var_ = root, .polarity = self.current_polarity, .reach = self.current_reach });
         while (pending.pop()) |item| {
-            const resolved = self.store.resolveVar(item.var_);
+            const resolved = self.store.resolveVarWord(item.var_);
             const visit_bit: u8 = @as(u8, 1) << (@as(u3, @backingInt(item.polarity)) * 4 + @as(u3, @backingInt(item.reach)));
             const visit = try visited.getOrPut(resolved.var_);
             if (!visit.found_existing) visit.value_ptr.* = 0;
             if (visit.value_ptr.* & visit_bit != 0) continue;
             visit.value_ptr.* |= visit_bit;
-            switch (resolved.desc.content) {
-                .rigid => |rigid| if (rigid.name.eql(marker_ident)) {
+            // The occurrences below the node are read by its stored kind:
+            // only the payload of the kind found is decoded.
+            const desc_idx = resolved.desc_idx;
+            switch (resolved.word.kind) {
+                .rigid => if (self.store.rigidAt(desc_idx).name.eql(marker_ident)) {
                     const entry = try sides.getOrPut(allocator, resolved.var_);
                     if (!entry.found_existing) entry.value_ptr.* = .{};
                     const first = switch (self.polarity_var_behavior) {
@@ -905,13 +916,14 @@ pub const Instantiator = struct {
                     };
                     if (first) entry.value_ptr.first = true else entry.value_ptr.second = true;
                 } else {
-                    try self.pushConstraintChoiceItems(Item, &pending, rigid.constraints, item.polarity);
+                    try self.pushConstraintChoiceItems(Item, &pending, self.store.rigidAt(desc_idx).constraints, item.polarity);
                 },
                 // The copy walk descends into static-dispatch constraints
                 // (`stepFlexLike`), so the markers of their signatures are
                 // occurrences too.
-                .flex => |flex| try self.pushConstraintChoiceItems(Item, &pending, flex.constraints, item.polarity),
-                .alias => |alias| {
+                .flex => try self.pushConstraintChoiceItems(Item, &pending, self.store.flexAt(desc_idx).constraints, item.polarity),
+                .alias => {
+                    const alias = self.store.aliasAt(desc_idx);
                     try binders.appendSlice(allocator, self.store.sliceAliasHiddenArgs(alias));
                     try pending.append(allocator, .{ .var_ = self.store.getAliasBackingVar(alias), .polarity = item.polarity, .reach = item.reach });
                     for (self.store.sliceAliasArgs(alias), 0..) |arg, index| {
@@ -926,13 +938,15 @@ pub const Instantiator = struct {
                         if (unused) try pending.append(allocator, .{ .var_ = arg, .polarity = item.polarity, .reach = .nested });
                     }
                 },
-                .structure => |flat| switch (flat) {
-                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                        for (self.store.sliceVars(func.args)) |arg| try pending.append(allocator, .{ .var_ = arg, .polarity = item.polarity.flip(), .reach = .nested });
-                        try pending.append(allocator, .{ .var_ = func.ret, .polarity = item.polarity, .reach = base.annotation_positions.functionReturnReach(item.reach) });
-                        for (self.store.sliceVars(func.effect_deps)) |dep| try pending.append(allocator, .{ .var_ = dep, .polarity = item.polarity, .reach = .nested });
-                    },
-                    .nominal_type => |nominal| for (self.store.sliceNominalArgs(nominal), 0..) |arg, index| {
+                .fn_pure, .fn_effectful, .fn_unbound => {
+                    const func = self.store.funcAt(desc_idx);
+                    for (self.store.sliceVars(func.args)) |arg| try pending.append(allocator, .{ .var_ = arg, .polarity = item.polarity.flip(), .reach = .nested });
+                    try pending.append(allocator, .{ .var_ = func.ret, .polarity = item.polarity, .reach = base.annotation_positions.functionReturnReach(item.reach) });
+                    for (self.store.sliceVars(func.effect_deps)) |dep| try pending.append(allocator, .{ .var_ = dep, .polarity = item.polarity, .reach = .nested });
+                },
+                .nominal_type => {
+                    const nominal = self.store.nominalAt(desc_idx);
+                    for (self.store.sliceNominalArgs(nominal), 0..) |arg, index| {
                         const position: NominalArgumentPosition = if (self.nominal_argument_position) |provider| (try provider.resolve(provider.context, nominal, @intCast(index), item.polarity)) orelse return false else blk: {
                             // A source declaration requires the checker's exact
                             // placement provider; primitives have no body.
@@ -948,28 +962,29 @@ pub const Instantiator = struct {
                                 try pending.append(allocator, .{ .var_ = arg, .polarity = polarity, .reach = reach });
                             },
                         }
-                    },
-                    .tuple => |tuple| for (self.store.sliceVars(tuple.elems)) |arg| {
-                        try pending.append(allocator, .{ .var_ = arg, .polarity = item.polarity, .reach = .nested });
-                    },
-                    .record => |record| {
-                        for (0..record.fields.count) |index| {
-                            const presence = self.store.getRecordFieldAt(record.fields, @intCast(index)).presence;
-                            try pending.append(allocator, .{ .var_ = presence.typeVar(), .polarity = item.polarity, .reach = .nested });
-                            if (presence.presenceVar()) |presence_var| try pending.append(allocator, .{ .var_ = presence_var, .polarity = item.polarity, .reach = .nested });
-                        }
-                        try pending.append(allocator, .{ .var_ = record.ext, .polarity = item.polarity, .reach = .nested });
-                    },
-                    .tag_union => |union_| {
-                        for (0..union_.tags.count) |index| {
-                            const tag = self.store.getTagAt(union_.tags, @intCast(index));
-                            for (self.store.sliceVars(tag.args)) |arg| try pending.append(allocator, .{ .var_ = arg, .polarity = item.polarity, .reach = .nested });
-                        }
-                        try pending.append(allocator, .{ .var_ = union_.ext, .polarity = item.polarity, .reach = item.reach });
-                    },
-                    .empty_record, .empty_tag_union => {},
+                    }
                 },
-                .field_presence, .err => {},
+                .tuple => for (self.store.sliceVars(self.store.tupleAt(desc_idx).elems)) |arg| {
+                    try pending.append(allocator, .{ .var_ = arg, .polarity = item.polarity, .reach = .nested });
+                },
+                .record => {
+                    const record = self.store.recordAt(desc_idx);
+                    for (0..record.fields.count) |index| {
+                        const presence = self.store.getRecordFieldAt(record.fields, @intCast(index)).presence;
+                        try pending.append(allocator, .{ .var_ = presence.typeVar(), .polarity = item.polarity, .reach = .nested });
+                        if (presence.presenceVar()) |presence_var| try pending.append(allocator, .{ .var_ = presence_var, .polarity = item.polarity, .reach = .nested });
+                    }
+                    try pending.append(allocator, .{ .var_ = record.ext, .polarity = item.polarity, .reach = .nested });
+                },
+                .tag_union => {
+                    const union_ = self.store.tagUnionAt(desc_idx);
+                    for (0..union_.tags.count) |index| {
+                        const tag = self.store.getTagAt(union_.tags, @intCast(index));
+                        for (self.store.sliceVars(tag.args)) |arg| try pending.append(allocator, .{ .var_ = arg, .polarity = item.polarity, .reach = .nested });
+                    }
+                    try pending.append(allocator, .{ .var_ = union_.ext, .polarity = item.polarity, .reach = item.reach });
+                },
+                .empty_record, .empty_tag_union, .field_presence, .err => {},
             }
         }
         var marker_sides = sides.iterator();
@@ -1842,13 +1857,14 @@ pub const Instantiator = struct {
 
     fn recordConstrainedRowTailCopy(self: *Self, source_ext: Var, fresh_ext: Var) std.mem.Allocator.Error!void {
         const sink = self.constrained_row_tail_copies orelse return;
-        const constraints = switch (self.store.resolveVar(source_ext).desc.content) {
-            .flex => |flex| flex.constraints,
-            .rigid => |rigid| rigid.constraints,
-            .alias, .structure, .err, .field_presence => return,
+        const source_desc_idx = self.store.resolveDescIdx(source_ext);
+        const constraints = switch (self.store.kindAt(source_desc_idx)) {
+            .flex => self.store.flexAt(source_desc_idx).constraints,
+            .rigid => self.store.rigidAt(source_desc_idx).constraints,
+            .alias, .field_presence, .err, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return,
         };
         if (constraints.len() == 0) return;
-        try sink.put(self.store.resolveVar(fresh_ext).var_, {});
+        try sink.put(self.store.resolveVarWord(fresh_ext).var_, {});
     }
 
     /// Pair each copied field axis on the value stack with its re-fetched
