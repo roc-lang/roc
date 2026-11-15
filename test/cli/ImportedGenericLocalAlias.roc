@@ -57,9 +57,17 @@ record_optional = {
     }
 }
 
+# A record destructuring of a local name for the constant.
+record_of_named = {
+    rec = ImportedGenericLocalAliasDep.rec
+    { twice, tag: _ } = rec
+    twice("gh")
+}
+
 expect destructured == "hi!"
 expect whole == ("abab", [1, 2, 1, 2])
 expect captured == "cd!"
 expect generic("gh") == "gh!"
 expect record_destructured == ("xyxy", "efef", "t")
 expect record_optional == ("uvuv", "o")
+expect record_of_named == "ghgh"

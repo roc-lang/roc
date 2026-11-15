@@ -20655,8 +20655,17 @@ that scope at the use's instantiation, under both strategies. The name can
 therefore be used at more than one type, and the constant's requirements are
 met at each.
 
+A value use of a scheme alias of a constant reads that constant, whichever
+alias of a chain it names (`rec = Hooks.rec`, then `again = rec`): its site
+evidence is published as the constant's own read is, so a requirement
+nothing pins that is reachable through a stored function's callable type
+resolves from that function's eventual request (`from_callable`) and does
+not commit to `unreachable` (`EvidencePass.emitSiteEvidence`, which
+classifies the use by the alias's final `alias_target`).
+
 A local declaration that takes such a lookup apart (`(shout, _) =
-Hooks.pair`, `{ twice } = Hooks.rec`) is a destructuring scheme alias
+Hooks.pair`, `{ twice } = Hooks.rec`), or takes apart a local name for one
+(`{ twice } = rec`), is a destructuring scheme alias
 (`body_analyses.bindsDestructuredSchemeAlias`). Its pattern is the
 generalized binding, so the names it binds have no scope of their own, and
 each use of one instantiates the name's type. A record pattern's names take
@@ -20671,7 +20680,8 @@ computes nothing. A closure that reads such a name lowers the declaration in
 its own body and does not capture the name. The `.lss` strategy needs no such
 step: a specialization lowers the declaration at the types it fixes.
 `test/cli/ImportedGenericLocalAlias.roc` runs both forms, the destructuring
-one with a tuple pattern and with a record pattern.
+one with a tuple pattern, with a record pattern, with a record pattern over
+an optional field, and over a local name for the constant.
 
 A call through a forwarding alias is a direct call. Monotype enters the
 alias's scope with the call's use-site evidence and substitution, and requests
