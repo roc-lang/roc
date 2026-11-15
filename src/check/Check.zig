@@ -709,6 +709,8 @@ predeclared_slot_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// Backing storage for `PredeclaredSlots.retained`. Freed once every body
 /// has been checked (`releaseRetainedAnnotations`).
 retained_annotation_vars: std.ArrayListUnmanaged(Var) = .empty,
+/// Backing storage for `PredeclaredSlots.retained_identities`.
+retained_identities: std.ArrayListUnmanaged(RetainedIdentity) = .empty,
 /// How many predeclared annotations still hold a retained generation
 /// (`PredeclaredSlots.retained`).
 retained_annotation_count: u32 = 0,
@@ -1931,6 +1933,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .predeclared_slots = .keyed,
     .predeclared_slot_vars = .keyed,
     .retained_annotation_vars = .keyed,
+    .retained_identities = .keyed,
     .retained_annotation_count = .keyed,
     .annotation_generation_is_retainable = .lexical,
     .retainable_generation_shared_roots = .scratch,
@@ -3532,6 +3535,22 @@ const PredeclaredSlots = struct {
     /// (`takeOverRetainedAnnotation`): the pool entries of the classes that
     /// generation made for itself.
     retained: ?VarRange = null,
+    /// For a retained generation, each of its identities with the copy the
+    /// scheme holds (a range of `Check.retained_identities`). They say which
+    /// identity of the annotation each of the scheme's slots is the copy of,
+    /// so a body that takes the generation over has `body` enumerated from
+    /// them when a use first reads it.
+    retained_identities: ?VarRange = null,
+    /// The body took the retained generation over, so `body` follows from
+    /// `retained_identities`.
+    body_took_over: bool = false,
+};
+
+/// One identity of a retained annotation generation and its copy in the
+/// predeclared scheme.
+const RetainedIdentity = struct {
+    scheme: Var,
+    body: Var,
 };
 
 /// Where one use of a predeclared scheme happened, for relating it to the
@@ -22050,6 +22069,8 @@ const PredeclaredScheme = struct {
     shares_holes: bool,
     /// See `PredeclaredSlots.retained`.
     retained: ?VarRange = null,
+    /// See `PredeclaredSlots.retained_identities`.
+    retained_identities: ?VarRange = null,
 };
 
 /// What a definition's body does about its predeclared annotation.
@@ -22158,6 +22179,8 @@ fn predeclareAnnotationSchemeHelp(
             .use_last_var,
         );
 
+    const retained_identities: ?VarRange = if (retained != null) try self.recordRetainedIdentities() else null;
+
     if (hole_rank) |hr| {
         for (live_holes.items) |hole_var| {
             const resolved_hole = self.types.resolveVar(hole_var);
@@ -22210,7 +22233,24 @@ fn predeclareAnnotationSchemeHelp(
         try self.hole_shared_vars.appendSlice(self.gpa, shared_vars.items);
         try self.hole_shared_schemes.put(self.gpa, scheme_var, .{ .start = start, .len = len });
     }
-    return .{ .scheme_var = scheme_var, .shares_holes = live_holes.items.len > 0, .retained = retained };
+    return .{
+        .scheme_var = scheme_var,
+        .shares_holes = live_holes.items.len > 0,
+        .retained = retained,
+        .retained_identities = retained_identities,
+    };
+}
+
+/// Record each identity of the retained generation with its copy in the
+/// scheme, from the copy `var_map` still holds.
+fn recordRetainedIdentities(self: *Self) Allocator.Error!VarRange {
+    const start: u32 = @intCast(self.retained_identities.items.len);
+    var copies = self.var_map.iterator();
+    while (copies.next()) |copy| {
+        if (!canonical_type_keys.isIdentityVariable(self.types.resolveVar(copy.key_ptr.*).desc)) continue;
+        try self.retained_identities.append(self.gpa, .{ .scheme = copy.value_ptr.*, .body = copy.key_ptr.* });
+    }
+    return .{ .start = start, .len = @intCast(self.retained_identities.items.len - start) };
 }
 
 /// Debug builds verify that `deduplicateGeneralizedDispatchRequirements`
@@ -22278,6 +22318,7 @@ fn takeOverRetainedAnnotation(self: *Self, annotation_idx: CIR.Annotation.Idx, e
     const generates_differently = self.local_procedure_candidate_stack.items.len != 0 or
         self.types.mayContainErrorState();
     if (generates_differently) {
+        slots.retained_identities = null;
         try self.resetAnnotationNodes(annotation_idx);
         return false;
     }
@@ -22304,6 +22345,7 @@ fn releaseRetainedAnnotations(self: *Self) Allocator.Error!void {
             const slots = self.predeclared_slots.getPtr(annotation_idx) orelse continue;
             if (slots.retained == null) continue;
             slots.retained = null;
+            slots.retained_identities = null;
             try self.resetAnnotationNodes(annotation_idx);
         }
         self.retained_annotation_count = 0;
@@ -22350,6 +22392,7 @@ fn registerPredeclaredSlots(self: *Self, annotation_idx: CIR.Annotation.Idx, sch
         .scheme_var = scheme.scheme_var,
         .shares_holes = scheme.shares_holes,
         .retained = scheme.retained,
+        .retained_identities = scheme.retained_identities,
     });
 }
 
@@ -22407,13 +22450,19 @@ fn appendPredeclaredIdentitySlots(self: *Self, scheme_var: Var, var_: Var) Alloc
 /// entry and cost one map lookup.
 fn recordPredeclaredBodySlots(self: *Self, annotation_idx: CIR.Annotation.Idx) Allocator.Error!void {
     const slots = self.predeclared_slots.getPtr(annotation_idx) orelse return;
-    if (slots.body != null) return;
-    const start: u32 = @intCast(self.predeclared_slot_vars.items.len);
-    try self.appendPredeclaredIdentitySlots(slots.scheme_var, ModuleEnv.varFrom(annotation_idx));
-    slots.body = .{
-        .start = start,
-        .len = @intCast(self.predeclared_slot_vars.items.len - start),
-    };
+    if (slots.body != null or slots.body_took_over) return;
+    if (slots.retained_identities != null) {
+        // The body took the retained generation over: its slots follow from
+        // the scheme's (`predeclaredBodySlots`).
+        slots.body_took_over = true;
+    } else {
+        const start: u32 = @intCast(self.predeclared_slot_vars.items.len);
+        try self.appendPredeclaredIdentitySlots(slots.scheme_var, ModuleEnv.varFrom(annotation_idx));
+        slots.body = .{
+            .start = start,
+            .len = @intCast(self.predeclared_slot_vars.items.len - start),
+        };
+    }
     if (self.waiting_predeclared_dispatch_uses.items.len == 0) return;
 
     var write: usize = 0;
@@ -22439,6 +22488,36 @@ fn recordPredeclaredBodySlots(self: *Self, annotation_idx: CIR.Annotation.Idx) A
     }
     self.waiting_predeclared_dispatch_uses.shrinkRetainingCapacity(write);
     self.reclaimPredeclaredUseFreshVars();
+}
+
+/// The body side of a predeclared annotation's identity slots. A body that
+/// generated its annotation enumerated them then. A body that took the
+/// retained generation over has the very identities the scheme's slots were
+/// copied from, so its slot i is the identity whose copy the scheme's slot i
+/// is.
+fn predeclaredBodySlots(self: *Self, annotation_idx: CIR.Annotation.Idx) Allocator.Error![]const Var {
+    const predeclared_len = (try self.predeclaredSchemeSlots(annotation_idx)).len;
+    const slots = self.predeclaredSlotsPtr(annotation_idx);
+    if (slots.body == null) {
+        if (!slots.body_took_over) {
+            base.invariant("type checker invariant violated: predeclared scheme use read its body's slots before the body had its annotation", .{});
+        }
+        const identities_range = slots.retained_identities orelse
+            base.invariant("type checker invariant violated: a body took over an annotation generation whose identities were not recorded", .{});
+        const identities = self.retained_identities.items[identities_range.start..][0..identities_range.len];
+        const start: u32 = @intCast(self.predeclared_slot_vars.items.len);
+        try self.predeclared_slot_vars.ensureUnusedCapacity(self.gpa, predeclared_len);
+        const predeclared = slots.predeclared.?.slice(self.predeclared_slot_vars.items);
+        for (predeclared) |slot_var| {
+            const slot_root = self.types.resolveVar(slot_var).var_;
+            const body_var = for (identities) |identity| {
+                if (self.types.resolveVar(identity.scheme).var_ == slot_root) break identity.body;
+            } else base.invariant("type checker invariant violated: a predeclared scheme slot is the copy of no identity of the generation it was copied from", .{});
+            self.predeclared_slot_vars.appendAssumeCapacity(body_var);
+        }
+        slots.body = .{ .start = start, .len = @intCast(predeclared_len) };
+    }
+    return slots.body.?.slice(self.predeclared_slot_vars.items);
 }
 
 /// Fresh-var storage is referenced only by pending and waiting uses, so it is
@@ -22493,11 +22572,8 @@ fn appendPredeclaredUseFreshVars(self: *Self, annotation_idx: CIR.Annotation.Idx
 /// body has already solved to structure cannot be a quantified variable of
 /// the binding's scheme, so it needs no entry.
 fn appendPredeclaredUsePairs(self: *Self, annotation_idx: CIR.Annotation.Idx, use_copies: []const Var) Allocator.Error!void {
+    const body = try self.predeclaredBodySlots(annotation_idx);
     const predeclared = try self.predeclaredSchemeSlots(annotation_idx);
-    const slots = self.predeclaredSlotsPtr(annotation_idx);
-    const body_range = slots.body orelse
-        base.invariant("type checker invariant violated: predeclared scheme use composed before its body generated the annotation", .{});
-    const body = body_range.slice(self.predeclared_slot_vars.items);
     if (body.len != predeclared.len) {
         base.invariant("type checker invariant violated: predeclared scheme and body annotation enumerated different identity slots", .{});
     }
@@ -22705,9 +22781,7 @@ fn relatePredeclaredUse(
     quantified_from: ?Rank,
     env: *Env,
 ) Allocator.Error!void {
-    const body_range = self.predeclaredSlotsPtr(annotation_idx).body orelse
-        base.invariant("type checker invariant violated: predeclared scheme use related before its body generated the annotation", .{});
-    const body = body_range.slice(self.predeclared_slot_vars.items);
+    const body = try self.predeclaredBodySlots(annotation_idx);
     var images = self.predeclared_use_images orelse collections.DenseMap(Var, Var).init(self.gpa);
     self.predeclared_use_images = null;
     defer {
@@ -22807,7 +22881,8 @@ fn recordPredeclaredDispatchUse(
         .region = region,
         .def_name = null,
     };
-    if (self.predeclaredSlotsPtr(annotation_idx).body != null) {
+    const target_slots = self.predeclaredSlotsPtr(annotation_idx);
+    if (target_slots.body != null or target_slots.body_took_over) {
         return self.recordInFlightPredeclaredSchemeUse(annotation_idx, .dispatch_target, node_idx, @backingInt(constraint_fn_var), scheme_root, policy, site, env);
     }
     try self.waiting_predeclared_dispatch_uses.append(self.gpa, .{

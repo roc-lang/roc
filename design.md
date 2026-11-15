@@ -14127,6 +14127,10 @@ side is enumerated at the moment the body generates the annotation, before
 anything unifies with it; it is enumerated for every predeclared annotation,
 because a use made while the body is being checked is only discovered after
 that generation. The predeclared side is enumerated at the first use. A
+body that took over the pre-pass's generation (Def Checking Order) holds the
+very identities the scheme's slots were copied from, so the pre-pass records
+each identity with its copy and the body side is read off the predeclared
+side when a use first needs it (`Check.predeclaredBodySlots`). A
 group-start predeclaration's shared hole variables are opaque leaves in both
 enumerations: a hole is never quantified by the predeclared scheme, and
 whatever the group has unified it with by the time either side is enumerated
