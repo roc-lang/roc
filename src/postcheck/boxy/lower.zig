@@ -1905,6 +1905,19 @@ pub const Program = struct {
         return kept;
     }
 
+    /// Assert that this lowering may read the constant `const_ref` of
+    /// `owner`: any constant of a module it emits, and only an exposed
+    /// constant of another module, whose value is the only kind another
+    /// unit's key covers (`boxy_interface.Digests.hashConsts`). A Debug
+    /// compiler fails on any other read.
+    pub fn assertConstReadable(self: *const Program, owner: *const types.ModuleView, const_ref: checked.ConstRef) void {
+        if (!std.debug.runtime_safety or self.ownsModule(owner.index)) return;
+        for (owner.view.exported_const_templates.templates) |exported| {
+            if (exported.const_ref.template == const_ref.template) return;
+        }
+        invariant("a lowering read a constant of another module that the module does not expose");
+    }
+
     /// `templateScopeWorker` of the template `ref` names.
     pub fn templateRefScopeWorker(self: *Program, ref: checked_names.ProcedureTemplateRef) Allocator.Error!WorkerId {
         const view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
@@ -4275,9 +4288,9 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
 ///
 /// - a template its checked module names to importers: an exposed
 ///   definition, an exposed binding's template or the template an exposed
-///   procedure alias forwards to, a registered method, a constant's entry
-///   procedure, and the entry wrapper of a callable binding, with each
-///   one's integer list workers;
+///   procedure alias forwards to, a registered method, an exposed
+///   constant's entry procedure, and the entry wrapper of a callable
+///   binding, with each one's integer list workers;
 /// - every default, which a construction omitting its field calls;
 /// - every lambda and dictionary entry that takes a type table: a function
 ///   value an importer's compile-time evaluation stored can be any of them,
@@ -4371,10 +4384,6 @@ fn recordExports(program: *Program) Allocator.Error!void {
                 .local_proc, .structural, .callable_binding => {},
             }
         }
-        for (view.view.const_templates.templates.items()) |template| switch (template.state) {
-            .eval_template => |eval_template| try visit.template(module_index, eval_template.entry_template),
-            .reserved, .stored_const, .unimplemented => {},
-        };
         for (view.view.exported_const_templates.templates) |exported| switch (exported.template.state) {
             .eval_template => |eval_template| try visit.template(module_index, eval_template.entry_template),
             .reserved, .stored_const, .unimplemented => {},

@@ -16774,7 +16774,11 @@ and Per-Module Output is the invariant that makes it possible:
   declarations of that name, its method name and its target, in an order no
   checked id decides), its defaults' count, the names of its nominal
   declarations with the number of declarations of each, which is all their
-  runtime names depend on, and the stored values an importer restores); its export digest covers the
+  runtime names depend on, and the stored values an importer restores: its
+  exposed constants' and its callable bindings'. A private constant is read
+  only by its own module's code, whose object holds its value, so it is no
+  part of the interface; a Debug compiler fails when a lowering reads a
+  constant another module does not expose (`Program.assertConstReadable`)); its export digest covers the
   importer-visible export records its object solved (FILE, below). Each folds
   in the same digest of the module's own imports, because lowering reads
   through an import to the modules behind it: a needs list an importer fills
@@ -16850,9 +16854,9 @@ and Per-Module Output is the invariant that makes it possible:
   or its records. The visible records are those of the templates the
   checked module names to importers (exposed definitions, exposed bindings'
   templates and the templates exposed procedure aliases forward to,
-  registered methods, constants' entry procedures, and the entry wrappers of
-  callable bindings, each with its integer list workers), every default, every lambda and dictionary entry that takes a
-  type table (a function value an importer's compile-time evaluation stored
+  registered methods, exposed constants' entry procedures, and the entry
+  wrappers of callable bindings, each with its integer list workers), every
+  default, every lambda and dictionary entry that takes a type table (a function value an importer's compile-time evaluation stored
   can be any of them, and restoring it fills its table), and every worker a
   visible worker's needs list names. A debug compiler fails when a unit
   reads a record that is not visible (`bindImportedInterface`,

@@ -445,13 +445,22 @@ pub const Digests = struct {
         }
     }
 
+    /// `artifact`'s exposed constants, the only ones another unit reads: an
+    /// importer's reference resolves to an exported constant
+    /// (`importedConstTemplateForDef`), and a private constant is read only
+    /// by its own module's code, whose object holds its value. A function
+    /// value compile-time evaluation stored for an exposed constant is read
+    /// whatever its template says.
     fn hashConsts(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
-        const exported_consts = artifact.exported_const_templates.templates.items();
-        for (exported_consts) |exported| try self.hashConstTemplate(hasher, artifact, exported.template);
-        for (artifact.const_templates.templates.items()) |template| switch (template.owner) {
-            .top_level_binding => try self.hashConstTemplate(hasher, artifact, template),
-            .hoisted_root => {},
-        };
+        for (artifact.exported_const_templates.templates.items()) |exported| {
+            try self.hashConstTemplate(hasher, artifact, exported.template);
+            const root_id = switch (exported.template.owner) {
+                .top_level_binding => |top_level| artifact.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse continue,
+                .hoisted_root => continue,
+            };
+            const root = artifact.compile_time_roots.root(root_id);
+            if (root.boxy_value != null) try self.hashRootValue(hasher, artifact, root);
+        }
     }
 
     /// The name of `ref`'s worker (its module's link name and the
@@ -493,8 +502,10 @@ pub const Digests = struct {
     }
 
     /// `read_by_importers` names the roots an importer restores whatever
-    /// their constant template says: callable bindings, and function values
-    /// a `.boxy` program stored (design.md "Stored Function Values").
+    /// their constant template says: callable bindings, whose stored
+    /// function values a method bound to one or an exposed binding restores
+    /// (design.md "Stored Function Values"). An exposed constant's stored
+    /// function value is in `hashConsts`.
     const RootScope = enum { every_root, read_by_importers };
 
     /// The values of `artifact`'s compile-time roots in `scope`. A module's
@@ -503,7 +514,7 @@ pub const Digests = struct {
         for (artifact.compile_time_roots.roots.items()) |root| {
             switch (scope) {
                 .every_root => {},
-                .read_by_importers => if (root.kind != .callable_binding and root.boxy_value == null) continue,
+                .read_by_importers => if (root.kind != .callable_binding) continue,
             }
             try self.hashRootValue(hasher, artifact, root);
         }

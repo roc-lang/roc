@@ -14637,6 +14637,26 @@ test "Boxy edits to what an importer reads rebuild the importer" {
     try expectLeafEdit(allocator, &tmp, path, cache, "spare : I64 -> I64\nspare = |n|", "spared : I64 -> I64\nspared = |n|", false, 240);
 }
 
+test "Boxy private constants are no part of what importers are keyed on" {
+    if (is_freestanding) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeEditLoopFixture(&tmp);
+    // `bump` reads a private constant, whose value `Leaf`'s object holds.
+    try editLeaf(allocator, &tmp, "bump = |n| helper(n) * 10", "bump = |n| helper(n) * scale\n\nscale : I64\nscale = 10");
+    const path = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(path);
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const cold = try runEditLoop(allocator, path, cache);
+    try std.testing.expectEqual(@as(?i64, 137), cold.answer);
+    // The private constant's value changes: `bump` returns 22.
+    try expectLeafEdit(allocator, &tmp, path, cache, "scale = 10", "scale = 11", true, 139);
+    // A new private constant.
+    try expectLeafEdit(allocator, &tmp, path, cache, "scale : I64\n", "unused_constant : I64\nunused_constant = 3\n\nscale : I64\n", true, 139);
+}
+
 test "Boxy definitions sharing a name are distinct workers" {
     if (is_freestanding) return error.SkipZigTest;
     const allocator = std.testing.allocator;

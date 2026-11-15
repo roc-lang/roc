@@ -2562,6 +2562,7 @@ pub const Builder = struct {
         const body_start = try self.newHole();
         self.hole = body_start;
         const owner = self.program.moduleByKey(checked.constModuleId(request.const_locator));
+        self.program.assertConstReadable(owner, request.const_locator);
         try self.tasks.append(self.allocator, .ret);
         if (rootOfConstRef(owner, request.const_locator)) |root_id| {
             if (owner.view.compile_time_roots.root(root_id).payloadFor(.boxy) == .pending) {
@@ -5761,6 +5762,7 @@ pub const Builder = struct {
 
     pub fn restoreConstUse(self: *Builder, expr_id: ExprId, use: checked.ConstUseTemplate, ty: TypeId) Allocator.Error!void {
         const owner = self.program.moduleByKey(use.const_ref.artifact);
+        self.program.assertConstReadable(owner, use.const_ref);
         const template = owner.view.const_templates.get(use.const_ref);
         if (rootOfConstRef(owner, use.const_ref)) |root_id| {
             const root = owner.view.compile_time_roots.root(root_id);
