@@ -1,7 +1,7 @@
 OptionalFieldsPerUse :: [].{}
 
-# Each use of `make` owns its copy of the record `make` returns, so two uses
-# can each widen it by an optional field of a different type.
+# A use of `make` cannot give the record `make` built an optional field it was
+# built without, whatever the field's type: each use here is a type mismatch.
 
 make = |value| { a: value }
 

@@ -44,7 +44,7 @@ pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.
 const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.CheckedReports.Serialized, 1);
 
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 39 stores reproducible checking
+/// reflected in layout fingerprints. Version 40 stores reproducible checking
 /// and evaluation reports beside paired callable forwarding and request
 /// completion and cached literal argument roots for both strategies,
 /// body-local type context arguments, generated-codec recurrences,
@@ -53,14 +53,15 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// padded record's declaration entries rather than its slots, nominal
 /// declaration backings whose formals bind by binder identity rather than by
 /// name, stored function recipes naming modules the storing module imports,
-/// type stores listing their widening field names once, and anonymous
-/// structure that every use shares when nothing visible can lift or widen it,
-/// checked artifacts' type, scheme, blob and proc-base interning tables, and
-/// type tags that record whether only `match` branch patterns put them in
-/// their row, and literal argument roots whose source is their edge owner and
-/// which hold no expression. It rejects every earlier format. Platform-pairing
-/// entries share it.
-const checked_envelope_version: u32 = 39;
+/// type stores listing their widening field names once, anonymous structure
+/// that every use shares when nothing visible can lift or widen it, record and
+/// tag tails a use closes or lifts in place of that sharing, checked artifacts'
+/// type, scheme, blob and proc-base interning tables, type tags that record
+/// whether only `match` branch patterns put them in their row, and literal
+/// argument roots whose source is their edge owner and which hold no
+/// expression. It rejects every earlier format. Platform-pairing entries share
+/// it.
+const checked_envelope_version: u32 = 40;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment.
@@ -159,8 +160,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xB4, 0x1A, 0x81, 0xB5, 0x4E, 0xAE, 0x30, 0xBB, 0xD1, 0xEE, 0x08, 0xCD, 0x72, 0xEB, 0x35, 0xD4,
-        0x19, 0x38, 0xD4, 0xDC, 0x2E, 0xB1, 0x08, 0xAB, 0x3A, 0xB6, 0x86, 0x9D, 0x15, 0x88, 0xF4, 0x7A,
+        0xAE, 0x08, 0x38, 0x87, 0x97, 0x76, 0x23, 0xDE, 0x3A, 0xD1, 0x52, 0x69, 0x87, 0x26, 0x72, 0x7C,
+        0x49, 0xCA, 0xA4, 0x31, 0xEB, 0x97, 0xD7, 0xA9, 0x63, 0x08, 0xA0, 0xE3, 0xE4, 0x59, 0xEB, 0x6E,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }
