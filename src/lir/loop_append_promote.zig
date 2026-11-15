@@ -67,6 +67,19 @@
 //! so the dispatch needs no argument copies, and the copy is lexically nested
 //! inside the head's body so every jump still targets an enclosing join.
 //!
+//! Only the loop exists twice. The statements a pass through the body runs
+//! after it has decided to leave (those from which no jump back to the head
+//! is reachable) are moved out of the body before it is copied, into joins
+//! declared at the top of the head's body, around the dispatch
+//! (`body_clone.shareLoopExits`). Both versions jump to them, so the code
+//! after a loop in the middle of a procedure is emitted once. Such an exit
+//! is the body as promoted: a set in it dispatches on its flag and an
+//! append in it tests its limit, whichever version of the loop ran, and
+//! both versions pass it the flags and limits it reads as the join's
+//! parameters.
+//! The slack dispatch still counts the appends an exit performs, which
+//! only makes it ask for more spare capacity than the copy needs.
+//!
 //! An update that moves an element out of its slot and back in reaches the
 //! same flag through other operations, and the chain follows them. The
 //! ownership transfer `list_map_prepare_reuse` returns the list it consumed,
@@ -3450,8 +3463,15 @@ const Pass = struct {
         const join = self.store.getCFStmtImmediate(loop_stmt).join;
         const chains = self.slack_loops.get(loop_stmt).?.chains.items;
 
+        // What the loop runs only after it has exited stays out of the copy:
+        // both versions continue into the same statements.
+        var exits = std.ArrayList(body_clone.LoopExit).empty;
+        defer exits.deinit(allocator);
+        try body_clone.shareLoopExits(self.store, join, max_join_id, allocator, &exits, new_locals, origin.kind);
+
         var renamable = try body_clone.renamableBodyLocals(self.store, join.body, proc_body, self.analysis, allocator);
         defer renamable.deinit();
+        body_clone.keepExitParams(self.store, exits.items, &renamable);
 
         const fast_id: LIR.JoinPointId = @fromBackingInt(@intCast(max_join_id.*));
         max_join_id.* += 1;
@@ -3513,7 +3533,7 @@ const Pass = struct {
                 .next = head,
             } }, origin);
         }
-        self.store.getCFStmtPtr(loop_stmt).join.body = head;
+        self.store.getCFStmtPtr(loop_stmt).join.body = try body_clone.declareLoopExits(self.store, exits.items, head, origin);
     }
 
     /// Emit the dispatch for one chain, continuing at `fits` when its spare
@@ -3597,6 +3617,12 @@ const Pass = struct {
         const version = self.loop_versions.getPtr(loop_stmt).?;
         const flags = version.owned_params.items;
 
+        // What the loop runs only after it has exited stays out of the copy:
+        // both versions continue into the same statements.
+        var exits = std.ArrayList(body_clone.LoopExit).empty;
+        defer exits.deinit(allocator);
+        try body_clone.shareLoopExits(self.store, join, max_join_id, allocator, &exits, new_locals, origin.kind);
+
         // Flags that may be zero inside the copy: measurements of lists the
         // chain did not carry, and every flag fed by one, to a fixpoint. The
         // loop's own flags are one throughout the copy, which is entered only
@@ -3674,6 +3700,7 @@ const Pass = struct {
         // arm's calls; everything else, the parameters included, is shared.
         var renamable = try body_clone.renamableBodyLocals(self.store, join.body, proc_body, self.analysis, allocator);
         defer renamable.deinit();
+        body_clone.keepExitParams(self.store, exits.items, &renamable);
 
         const unique_id: LIR.JoinPointId = @fromBackingInt(@intCast(max_join_id.*));
         max_join_id.* += 1;
@@ -3728,7 +3755,7 @@ const Pass = struct {
                 .next = head,
             } }, origin);
         }
-        self.store.getCFStmtPtr(loop_stmt).join.body = head;
+        self.store.getCFStmtPtr(loop_stmt).join.body = try body_clone.declareLoopExits(self.store, exits.items, head, origin);
     }
 };
 

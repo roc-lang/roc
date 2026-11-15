@@ -5722,6 +5722,12 @@ const Pass = struct {
     //                                              } in remainder[jump loop := jump guard]
     // ```
     //
+    // Before the body is copied, the statements a pass runs only after it
+    // has decided to leave the loop are moved out of it into joins declared
+    // around the loop and its guard (`BodyClone.shareLoopExits`), so the
+    // copy is of the loop alone and both versions continue into one copy
+    // of what follows it.
+    //
     // The guard only branches, on a length it reads and a value it reads,
     // and the copy is the loop's body statement for statement, so the
     // procedure computes what it computed before whichever arm runs. No
@@ -5755,6 +5761,12 @@ const Pass = struct {
     //   procedure is finished with by then, is not measured.
     // - The loop encloses no other loop and is neither a guarded loop nor a
     //   guard's copy, so the pass copies a statement at most once.
+    //
+    // A comparison asks for one test. Where several pairings of a base
+    // with a list would each decide it, it asks for the weakest for the
+    // first list that has one: a test that implies another passes for
+    // fewer lists than the one it implies, and conjoining alternatives
+    // would make the guard pass only when all of them do.
     //
     // Tests for one loop are conjoined: the copy runs only when all hold.
     // Two comparisons asking for the same base against the same list ask
@@ -5974,10 +5986,15 @@ const Pass = struct {
         };
         const used = self.query_used;
         defer self.query_used = used;
-        for (claims) |claim| try self.noteClaimDemands(join_id, claim.x, claim.y, claim.m);
+        // One test per comparison: either outcome decides it.
+        for (claims) |claim| {
+            if (try self.noteClaimDemand(join_id, claim.x, claim.y, claim.m)) break;
+        }
     }
 
-    fn noteClaimDemands(self: *Pass, join_id: JoinPointId, x_id: NodeId, y_id: NodeId, m: i128) ResourceError!void {
+    /// Ask for the one test that makes `x <= y + m` hold, if a length test
+    /// can. Returns whether one was asked for.
+    fn noteClaimDemand(self: *Pass, join_id: JoinPointId, x_id: NodeId, y_id: NodeId, m: i128) ResourceError!bool {
         // Lengths at or below `y`: `root <= y.root + c` puts the length at
         // most `c - y.off_lo` above `y`.
         const y = self.nodes.items[y_id];
@@ -6000,7 +6017,7 @@ const Pass = struct {
                 }
             }
         }
-        if (lengths_len == 0) return;
+        if (lengths_len == 0) return false;
 
         // Values at or above `x`: `x.root <= root + c` puts `x` at most
         // `c + x.off_hi` above the value. A literal's value folds into the
@@ -6034,49 +6051,88 @@ const Pass = struct {
             }
         }
 
+        // Any one pairing of a length with a value decides the claim, so
+        // the claim asks for one: the first length, in the order of
+        // `hoistLengthBefore`, that has a test worth asking, and for that
+        // length the weakest test, since a test that implies another holds
+        // for fewer lists than the one it implies.
+        std.mem.sortUnstable(HoistLength, lengths[0..lengths_len], {}, hoistLengthBefore);
+        std.mem.sortUnstable(HoistValue, values[0..values_len], {}, hoistValueBefore);
         for (lengths[0..lengths_len]) |length| {
+            // `value(value.root) <= value(length.root) + c` is a value's
+            // test. One both of whose sides are the same value is decided
+            // already, as is one the path's facts refute: a pass that
+            // reaches this comparison then never runs in the copy.
+            var tests: [hoist_term_cap]HoistValue = undefined;
+            var tests_len: usize = 0;
             for (values[0..values_len]) |value| {
-                // `value(value.root) <= value(length.root) + c` is the test.
-                // One both of whose sides are the same value is decided
-                // already, as is one the path's facts refute: a pass that
-                // reaches this comparison then never runs in the copy.
                 if (value.root == length.root) continue;
                 const c = clampSlack(m - value.c - length.c);
                 if (try self.proveLeQuery(length.root, value.root, -c - 1)) continue;
-                try self.addHoistDemand(.{
+                tests[tests_len] = .{ .base = value.base, .root = value.root, .c = c };
+                tests_len += 1;
+            }
+            // A test `i` implies a test `j` when `j`'s value is at most
+            // `i`'s shifted by the difference of their slacks. Among tests
+            // that imply each other the first stands.
+            for (tests[0..tests_len], 0..) |candidate, index| {
+                var weakest = true;
+                for (tests[0..tests_len], 0..) |other, other_index| {
+                    if (other_index == index) continue;
+                    if (!try self.proveLeQuery(other.root, candidate.root, other.c - candidate.c)) continue;
+                    if (other_index < index or !try self.proveLeQuery(candidate.root, other.root, candidate.c - other.c)) {
+                        weakest = false;
+                        break;
+                    }
+                }
+                if (!weakest) continue;
+                if (try self.addHoistDemand(.{
                     .join = join_id,
                     .list = length.list,
                     .carried = length.carried,
-                    .base = value.base,
-                    .c = if (value.base == .constant) c - self.nodes.items[value.root].lo else c,
-                });
+                    .base = candidate.base,
+                    .c = if (candidate.base == .constant) candidate.c - self.nodes.items[candidate.root].lo else candidate.c,
+                })) return true;
             }
         }
+        return false;
     }
 
-    fn addHoistDemand(self: *Pass, demand: HoistDemand) ResourceError!void {
+    fn hoistLengthBefore(_: void, a: HoistLength, b: HoistLength) bool {
+        if (a.carried != b.carried) return !a.carried;
+        return @backingInt(a.list) < @backingInt(b.list);
+    }
+
+    fn hoistValueBefore(_: void, a: HoistValue, b: HoistValue) bool {
+        return hoistBaseOrder(a.base) < hoistBaseOrder(b.base);
+    }
+
+    /// Record a test a comparison asks for. Returns whether the test is one
+    /// a guard can make.
+    fn addHoistDemand(self: *Pass, demand: HoistDemand) ResourceError!bool {
         switch (demand.base) {
             // A length of zero or less is no test, and no list is `2^63`
             // long.
-            .constant => if (demand.c >= 0 or -demand.c > std.math.maxInt(i64)) return,
+            .constant => if (demand.c >= 0 or -demand.c > std.math.maxInt(i64)) return false,
             .local => |local| {
-                if (demand.c > hoist_offset_cap or -demand.c > hoist_offset_cap) return;
+                if (demand.c > hoist_offset_cap or -demand.c > hoist_offset_cap) return false;
                 switch (self.localLayout(local)) {
                     .u8, .u16, .u32, .u64 => {},
-                    .bool, .str, .i8, .i16, .i32, .i64, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return,
-                    _ => return,
+                    .bool, .str, .i8, .i16, .i32, .i64, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return false,
+                    _ => return false,
                 }
             },
-            .length => if (demand.c > hoist_offset_cap or -demand.c > hoist_offset_cap) return,
+            .length => if (demand.c > hoist_offset_cap or -demand.c > hoist_offset_cap) return false,
         }
         for (self.hoist_demands.items) |*have| {
             if (have.join == demand.join and have.list == demand.list and have.carried == demand.carried and std.meta.eql(have.base, demand.base)) {
                 have.c = @min(have.c, demand.c);
-                return;
+                return true;
             }
         }
-        if (self.hoist_demands.items.len == hoist_demand_cap) return;
+        if (self.hoist_demands.items.len == hoist_demand_cap) return false;
         try self.hoist_demands.append(self.allocator, demand);
+        return true;
     }
 
     fn hoistBaseOrder(base: HoistBase) u64 {
@@ -6206,9 +6262,15 @@ const Pass = struct {
         var origin = self.store.stmtOrigin(join_stmt);
         origin.kind = .range_prove;
 
+        // What the loop runs only after it has exited stays out of the copy:
+        // both versions continue into the same statements.
+        var exits = std.ArrayList(BodyClone.LoopExit).empty;
+        defer exits.deinit(self.allocator);
+        try BodyClone.shareLoopExits(self.store, join, &self.joins.next_join_point, self.allocator, &exits, &self.new_locals, .range_prove);
+
         const copy_id = self.joins.freshJoinPoint();
         const guard_id = self.joins.freshJoinPoint();
-        const copy_stmt = try BodyClone.cloneLoop(self.store, join, copy_id, proc_body, &self.joins.next_join_point, self.analysis, self.allocator, &self.new_locals, origin);
+        const copy_stmt = try BodyClone.cloneLoop(self.store, join, copy_id, proc_body, &self.joins.next_join_point, self.analysis, self.allocator, &self.new_locals, exits.items, origin);
         var head = copy_stmt;
         var index = tests.len;
         while (index > 0) {
@@ -6235,13 +6297,30 @@ const Pass = struct {
             .body = head,
             .remainder = join.remainder,
         } }, origin);
-        self.store.getCFStmtPtr(join_stmt).join.remainder = guard;
+        // The exits are declared around the loop and its guard, so the loop
+        // moves under them and the outermost declaration takes its place.
+        var loop_stmt = join_stmt;
+        if (exits.items.len == 0) {
+            self.store.getCFStmtPtr(join_stmt).join.remainder = guard;
+        } else {
+            var guarded = join;
+            guarded.remainder = guard;
+            loop_stmt = try self.store.addCFStmt(.{ .join = guarded }, self.store.stmtOrigin(join_stmt));
+            const outermost = exits.items[exits.items.len - 1];
+            const inner = try BodyClone.declareLoopExits(self.store, exits.items[0 .. exits.items.len - 1], loop_stmt, origin);
+            try self.store.replaceCFStmt(join_stmt, .{ .join = .{
+                .id = outermost.id,
+                .params = outermost.params,
+                .body = outermost.body,
+                .remainder = inner,
+            } }, origin);
+        }
         try self.hoisted_joins.put(loop_id, {});
         try self.hoisted_joins.put(copy_id, {});
         try self.guard_trials.append(self.allocator, .{
             .loop_id = loop_id,
             .guard_id = guard_id,
-            .loop_stmt = join_stmt,
+            .loop_stmt = loop_stmt,
             .copy_stmt = copy_stmt,
             .remainder = join.remainder,
         });

@@ -1064,8 +1064,9 @@ pub const LoopCopyRewriter = struct {
 /// A second version of the loop `join` declares, as a join `copy_id` over
 /// the same parameter locals whose body is a copy of the loop's and whose
 /// remainder enters it. The locals the copy made are appended to
-/// `new_locals`. The caller places the result where every join the loop's
-/// body jumps out to is in scope.
+/// `new_locals`. `exits` are the loop's shared exits, whose parameters the
+/// copy writes as the loop does. The caller places the result where every
+/// join the loop's body jumps out to is in scope.
 pub fn cloneLoop(
     store: *LirStore,
     join: @FieldType(LIR.CFStmt, "join"),
@@ -1075,10 +1076,12 @@ pub fn cloneLoop(
     scratch: *AnalysisScratch,
     allocator: Allocator,
     new_locals: *std.ArrayList(LocalId),
+    exits: []const LoopExit,
     origin: LIR.StmtOrigin,
 ) Allocator.Error!CFStmtId {
     var renamable = try renamableBodyLocals(store, join.body, proc_body, scratch, allocator);
     defer renamable.deinit();
+    keepExitParams(store, exits, &renamable);
     var cloner = try BodyCloner(LoopCopyRewriter).initWithAllocator(store, .{
         .loop_id = join.id,
         .copy_id = copy_id,
@@ -1097,6 +1100,376 @@ pub fn cloneLoop(
         .body = body_copy,
         .remainder = enter,
     } }, origin);
+}
+
+/// One exit `shareLoopExits` moved out of a loop's body: the join both
+/// versions of the loop jump to, the locals that join receives, and the
+/// statement its body begins at.
+pub const LoopExit = struct {
+    id: LIR.JoinPointId,
+    params: LIR.LocalSpan,
+    body: CFStmtId,
+};
+
+/// What sharing an exit adds to a procedure: the join that declares it and a
+/// jump to it from each of the loop's two versions. Copying the exit adds
+/// its statements once more, so sharing an exit of at most this many
+/// statements would not leave the procedure any smaller.
+const shared_exit_cost: usize = 3;
+
+/// Move the statements a loop runs only after it has exited out of the
+/// loop's body, so that a second version of the loop continues into the
+/// same statements instead of a copy of them.
+///
+/// `join` declares the loop. A statement in its body is on the loop's cycle
+/// when a jump back to `join` is reachable from it, following straight-line
+/// successors, every arm of a branch, a join's remainder, and a jump to a
+/// join the body declares into that join's body. Every other statement in
+/// the body runs after the pass through the loop that reaches it has
+/// decided to leave: nothing it does can lead back to the loop's head. An
+/// exit begins at such a statement that a cycle statement leads to
+/// directly (as a successor, a branch arm, a branch's continuation, or the
+/// body or remainder of a join on the cycle), and consists of every
+/// statement reachable from there.
+///
+/// An exit is shared when
+///
+/// - it has more than `shared_exit_cost` statements, so that sharing it
+///   leaves fewer statements than copying it;
+/// - the loop enters it only at its first statement: no other exit begins
+///   inside it, and no branch on the cycle has its continuation inside it
+///   (the arms of such a branch reach the continuation without crossing a
+///   join, so the exit shared in their place begins at the continuation);
+/// - it holds no statement of an exit already shared;
+/// - every jump inside it targets a join it declares itself or a join in
+///   scope where the loop is declared, so it can run outside the body;
+/// - no local it reads from the loop is also defined inside it.
+///
+/// Each shared exit gets a fresh join, declared by `declareLoopExits`
+/// around both versions of the loop. What the exit carries out of the loop
+/// is explicit: every local it reads that the loop's parameters or the
+/// rest of the body define becomes a parameter of the join, and the join's
+/// body is a copy of the exit that reads those parameters. LIR initializes
+/// a local on every path to a read, so each carried local is initialized
+/// wherever the loop enters the exit. Every edge from the loop into the
+/// exit's first statement becomes one sequence that writes the parameters
+/// and jumps to the join, which is how a jump hands values to any join:
+/// ownership of each carried value passes to the join at the write, in the
+/// frame that holds it, and nothing outside the loop reads a local that
+/// only the loop's joins bind. The locals the copies make are appended to
+/// `new_locals`. An exit that is not shared stays in the body.
+///
+/// The parameters are written in the body and read outside it, so the copy
+/// of the loop must write the same ones: `keepExitParams` takes them out of
+/// the locals `renamableBodyLocals` lets a copy make its own.
+pub fn shareLoopExits(
+    store: *LirStore,
+    join: @FieldType(LIR.CFStmt, "join"),
+    next_join_point: *u32,
+    allocator: Allocator,
+    exits: *std.ArrayList(LoopExit),
+    new_locals: *std.ArrayList(LocalId),
+    kind: LIR.OriginKind,
+) Allocator.Error!void {
+    const Edge = struct { from: u32, to: u32 };
+    var stmts = std.ArrayList(CFStmtId).empty;
+    defer stmts.deinit(allocator);
+    var index_of = collections.DenseMap(CFStmtId, u32).init(allocator);
+    defer index_of.deinit();
+    var join_bodies = collections.DenseMap(LIR.JoinPointId, CFStmtId).init(allocator);
+    defer join_bodies.deinit();
+    var successors = std.ArrayList(CFStmtId).empty;
+    defer successors.deinit(allocator);
+
+    // Every statement of the body, numbered, and the joins it declares.
+    try stmts.append(allocator, join.body);
+    try index_of.put(join.body, 0);
+    var cursor: usize = 0;
+    while (cursor < stmts.items.len) : (cursor += 1) {
+        const stmt = store.getCFStmt(stmts.items[cursor]);
+        if (stmt == .join) try join_bodies.put(stmt.join.id, stmt.join.body);
+        successors.clearRetainingCapacity();
+        try appendSuccessors(store, &successors, stmts.items[cursor], allocator);
+        for (successors.items) |next| {
+            const entry = try index_of.getOrPut(next);
+            if (entry.found_existing) continue;
+            entry.value_ptr.* = @intCast(stmts.items.len);
+            try stmts.append(allocator, next);
+        }
+    }
+    const count = stmts.items.len;
+
+    // The control-flow edges, reversed: a join statement leads to its
+    // remainder only, and a jump to a join of the body leads to that
+    // join's body.
+    var edges = std.ArrayList(Edge).empty;
+    defer edges.deinit(allocator);
+    var pending = std.ArrayList(u32).empty;
+    defer pending.deinit(allocator);
+    const on_cycle = try allocator.alloc(bool, count);
+    defer allocator.free(on_cycle);
+    @memset(on_cycle, false);
+    for (stmts.items, 0..) |stmt_id, from| {
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .jump) {
+            if (stmt.jump.target == join.id) {
+                on_cycle[from] = true;
+                try pending.append(allocator, @intCast(from));
+            } else if (join_bodies.get(stmt.jump.target)) |target_body| {
+                try edges.append(allocator, .{ .from = @intCast(from), .to = index_of.get(target_body).? });
+            }
+            continue;
+        }
+        successors.clearRetainingCapacity();
+        try appendSuccessorsInOrder(store, &successors, stmt_id, allocator, .{ .join_body = false });
+        for (successors.items) |next| try edges.append(allocator, .{ .from = @intCast(from), .to = index_of.get(next).? });
+    }
+    if (pending.items.len == 0) return;
+    const pred_start = try allocator.alloc(u32, count + 1);
+    defer allocator.free(pred_start);
+    @memset(pred_start, 0);
+    for (edges.items) |edge| pred_start[edge.to + 1] += 1;
+    for (1..pred_start.len) |i| pred_start[i] += pred_start[i - 1];
+    const preds = try allocator.alloc(u32, edges.items.len);
+    defer allocator.free(preds);
+    const fill = try allocator.alloc(u32, count);
+    defer allocator.free(fill);
+    @memcpy(fill, pred_start[0..count]);
+    for (edges.items) |edge| {
+        preds[fill[edge.to]] = edge.from;
+        fill[edge.to] += 1;
+    }
+    while (pending.pop()) |current| {
+        for (preds[pred_start[current]..pred_start[current + 1]]) |pred| {
+            if (on_cycle[pred]) continue;
+            on_cycle[pred] = true;
+            try pending.append(allocator, pred);
+        }
+    }
+    if (!on_cycle[0]) return;
+
+    // Where the loop enters an exit: the statements off the cycle that a
+    // cycle statement leads to, and the continuations of the cycle's
+    // branches, which their arms lead to.
+    const entered = try allocator.alloc(bool, count);
+    defer allocator.free(entered);
+    @memset(entered, false);
+    var starts = std.ArrayList(u32).empty;
+    defer starts.deinit(allocator);
+    for (stmts.items, 0..) |stmt_id, from| {
+        if (!on_cycle[from]) continue;
+        successors.clearRetainingCapacity();
+        try appendSuccessors(store, &successors, stmt_id, allocator);
+        for (successors.items) |next| {
+            const to = index_of.get(next).?;
+            if (on_cycle[to] or entered[to]) continue;
+            entered[to] = true;
+            try starts.append(allocator, to);
+        }
+    }
+
+    // How many statements of the body define each local, the loop's own
+    // parameters counted as defined by the loop.
+    const LocalCounts = struct {
+        counts: collections.DenseMap(LocalId, u32),
+        order: ?*std.ArrayList(LocalId) = null,
+        allocator: Allocator,
+        failure: ?Allocator.Error = null,
+
+        fn note(self: *@This(), local: LocalId) void {
+            if (self.failure != null) return;
+            const entry = self.counts.getOrPut(local) catch |err| {
+                self.failure = err;
+                return;
+            };
+            if (!entry.found_existing) {
+                entry.value_ptr.* = 0;
+                if (self.order) |order| order.append(self.allocator, local) catch |err| {
+                    self.failure = err;
+                    return;
+                };
+            }
+            entry.value_ptr.* += 1;
+        }
+    };
+    var body_defs = LocalCounts{ .counts = collections.DenseMap(LocalId, u32).init(allocator), .allocator = allocator };
+    defer body_defs.counts.deinit();
+    {
+        const params = store.getLocalSpan(join.params);
+        for (0..GuardedList.borrowLen(params)) |i| body_defs.note(GuardedList.at(params, i));
+    }
+    for (stmts.items) |stmt_id| forEachStmtDef(store, store.getCFStmt(stmt_id), &body_defs, LocalCounts.note);
+    if (body_defs.failure) |err| return err;
+
+    // The exits to share. `shared` maps an exit's first statement to the
+    // statement that replaces every edge into it: the writes of the exit's
+    // parameters, ending in the jump to its join.
+    var shared = collections.DenseMap(CFStmtId, CFStmtId).init(allocator);
+    defer shared.deinit();
+    const in_region = try allocator.alloc(u32, count);
+    defer allocator.free(in_region);
+    @memset(in_region, std.math.maxInt(u32));
+    const claimed = try allocator.alloc(bool, count);
+    defer allocator.free(claimed);
+    @memset(claimed, false);
+    var declared = collections.DenseMap(LIR.JoinPointId, void).init(allocator);
+    defer declared.deinit();
+    var region_defs = LocalCounts{ .counts = collections.DenseMap(LocalId, u32).init(allocator), .allocator = allocator };
+    defer region_defs.counts.deinit();
+    var read_order = std.ArrayList(LocalId).empty;
+    defer read_order.deinit(allocator);
+    var region_reads = LocalCounts{ .counts = collections.DenseMap(LocalId, u32).init(allocator), .order = &read_order, .allocator = allocator };
+    defer region_reads.counts.deinit();
+    var carried = collections.DenseMap(LocalId, void).init(allocator);
+    defer carried.deinit();
+    var params = std.ArrayList(LocalId).empty;
+    defer params.deinit(allocator);
+    const first_exit = exits.items.len;
+    for (starts.items) |start| {
+        // The exit's statements, and whether the loop enters it anywhere
+        // but at its first.
+        declared.clearRetainingCapacity();
+        pending.clearRetainingCapacity();
+        try pending.append(allocator, start);
+        in_region[start] = start;
+        var entered_once = !claimed[start];
+        var region_cursor: usize = 0;
+        while (region_cursor < pending.items.len) : (region_cursor += 1) {
+            const current = pending.items[region_cursor];
+            const stmt = store.getCFStmt(stmts.items[current]);
+            if (stmt == .join) try declared.put(stmt.join.id, {});
+            successors.clearRetainingCapacity();
+            try appendSuccessors(store, &successors, stmts.items[current], allocator);
+            for (successors.items) |next| {
+                const to = index_of.get(next).?;
+                if (entered[to] or claimed[to]) entered_once = false;
+                if (in_region[to] == start) continue;
+                in_region[to] = start;
+                try pending.append(allocator, to);
+            }
+        }
+        if (!entered_once or pending.items.len <= shared_exit_cost) continue;
+        var in_scope = true;
+        for (pending.items) |current| {
+            const stmt = store.getCFStmt(stmts.items[current]);
+            if (stmt != .jump) continue;
+            if (join_bodies.contains(stmt.jump.target) and !declared.contains(stmt.jump.target)) in_scope = false;
+        }
+        if (!in_scope) continue;
+
+        // What the exit carries out of the loop: the locals it reads that
+        // the rest of the body defines. A local both sides define has no
+        // one value to carry.
+        region_defs.counts.clearRetainingCapacity();
+        region_reads.counts.clearRetainingCapacity();
+        read_order.clearRetainingCapacity();
+        for (pending.items) |current| {
+            const stmt = store.getCFStmt(stmts.items[current]);
+            forEachStmtDef(store, stmt, &region_defs, LocalCounts.note);
+            forEachStmtRead(store, stmt, &region_reads, LocalCounts.note);
+        }
+        if (region_defs.failure) |err| return err;
+        if (region_reads.failure) |err| return err;
+        carried.clearRetainingCapacity();
+        params.clearRetainingCapacity();
+        var one_value = true;
+        for (read_order.items) |local| {
+            const in_body = body_defs.counts.get(local) orelse continue;
+            const in_exit = region_defs.counts.get(local) orelse 0;
+            if (in_body == in_exit) continue;
+            if (in_exit != 0) one_value = false;
+            try carried.put(local, {});
+        }
+        if (!one_value) continue;
+        for (pending.items) |current| claimed[current] = true;
+
+        // The exit as the body of its join: a copy that reads each carried
+        // local as a parameter of the join.
+        const exit_id: LIR.JoinPointId = @fromBackingInt(next_join_point.*);
+        next_join_point.* += 1;
+        var cloner = try BodyCloner(LoopCopyRewriter).initWithAllocator(store, .{
+            .loop_id = join.id,
+            .copy_id = join.id,
+            .renamable = &carried,
+            .join_map = collections.DenseMap(LIR.JoinPointId, LIR.JoinPointId).init(allocator),
+            .next_join_point = next_join_point,
+        }, allocator);
+        defer cloner.deinit();
+        defer cloner.rewriter.join_map.deinit();
+        const exit_body = try cloner.cloneStmt(stmts.items[start]);
+        for (read_order.items) |local| {
+            if (carried.contains(local)) try params.append(allocator, try cloner.mapLocal(local));
+        }
+        try new_locals.appendSlice(allocator, cloner.new_locals.items);
+
+        var origin = store.stmtOrigin(stmts.items[start]);
+        origin.kind = kind;
+        var leave = try store.addCFStmt(.{ .jump = .{ .target = exit_id } }, origin);
+        var param_index: usize = 0;
+        for (read_order.items) |local| {
+            if (!carried.contains(local)) continue;
+            leave = try store.addCFStmt(.{ .set_local = .{
+                .target = params.items[param_index],
+                .value = local,
+                .mode = .initialize_join_param,
+                .next = leave,
+            } }, origin);
+            param_index += 1;
+        }
+        try shared.put(stmts.items[start], leave);
+        try exits.append(allocator, .{ .id = exit_id, .body = exit_body, .params = try store.addLocalSpan(params.items) });
+    }
+    if (exits.items.len == first_exit) return;
+
+    // Every edge from the statements left in the body into a shared exit
+    // becomes that exit's parameter writes and jump. Edges are redirected
+    // before they are followed, so the walk stays in the body.
+    const Redirect = struct {
+        shared: *const collections.DenseMap(CFStmtId, CFStmtId),
+
+        fn resolve(self: *const @This(), successor: CFStmtId) CFStmtId {
+            return self.shared.get(successor) orelse successor;
+        }
+    };
+    const redirect = Redirect{ .shared = &shared };
+    var seen = collections.DenseMap(CFStmtId, void).init(allocator);
+    defer seen.deinit();
+    var work = std.ArrayList(CFStmtId).empty;
+    defer work.deinit(allocator);
+    try work.append(allocator, join.body);
+    while (work.pop()) |stmt_id| {
+        if ((try seen.getOrPut(stmt_id)).found_existing) continue;
+        redirectSuccessors(store, stmt_id, &redirect, Redirect.resolve);
+        try appendSuccessors(store, &work, stmt_id, allocator);
+    }
+}
+
+/// Take the parameters of a loop's shared exits out of the locals a copy of
+/// the loop's body may make its own: the body writes them and the exits,
+/// which the body does not hold, read them.
+pub fn keepExitParams(store: *const LirStore, exits: []const LoopExit, renamable: *collections.DenseMap(LocalId, void)) void {
+    for (exits) |exit| {
+        const params = store.getLocalSpan(exit.params);
+        for (0..GuardedList.borrowLen(params)) |i| _ = renamable.remove(GuardedList.at(params, i));
+    }
+}
+
+/// Declare the exits `shareLoopExits` moved out of a loop around `inner`,
+/// which holds every version of that loop, and return the statement that
+/// declares them all. A jump to an exit's join targets an enclosing join
+/// from anywhere in `inner`, and each exit's own jumps target joins in
+/// scope where the loop was declared, which is where the exits now are.
+pub fn declareLoopExits(store: *LirStore, exits: []const LoopExit, inner: CFStmtId, origin: LIR.StmtOrigin) Allocator.Error!CFStmtId {
+    var head = inner;
+    for (exits) |exit| {
+        head = try store.addCFStmt(.{ .join = .{
+            .id = exit.id,
+            .params = exit.params,
+            .body = exit.body,
+            .remainder = head,
+        } }, origin);
+    }
+    return head;
 }
 
 /// Like `collectReachableDefinitions`, with independently owned scratch.
