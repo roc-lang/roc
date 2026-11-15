@@ -120,7 +120,7 @@ test "hosted generic dispatch at a widened method result is rejected at the call
     defer gpa.free(cwd);
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "app.roc", gpa);
     defer gpa.free(app_path);
-    var build_env = try compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
     try build_env.build(app_path);
     const drained = try build_env.drainReports();

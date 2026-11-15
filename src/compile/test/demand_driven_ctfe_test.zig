@@ -132,6 +132,7 @@ fn checkApp(allocator: std.mem.Allocator, app: []const u8, extra: []const Source
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(allocator, allocator, io),
+        .lss,
     );
     errdefer coord.deinit();
     coord.enable_hosted_transform = true;

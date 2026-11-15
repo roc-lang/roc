@@ -30,7 +30,7 @@ test "issue 10940: a default app that never defines main! reports it as exposed 
     const main_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", gpa);
     defer gpa.free(main_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
 
     try build_env.build(main_path);
@@ -69,7 +69,7 @@ test "issue 10940: explicit roots do not require a default app entrypoint" {
     const main_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", gpa);
     defer gpa.free(main_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
     build_env.setEntryValidation(.explicit_roots);
 
@@ -110,7 +110,7 @@ test "issue 10940: a headerless default app still publishes main!" {
     const main_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", gpa);
     defer gpa.free(main_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
 
     try build_env.build(main_path);
@@ -145,7 +145,7 @@ test "issue 10940: explicit roots do not automatically publish a defined main!" 
     const main_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", gpa);
     defer gpa.free(main_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
     build_env.setEntryValidation(.explicit_roots);
 

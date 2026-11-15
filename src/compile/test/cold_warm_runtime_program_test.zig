@@ -116,10 +116,10 @@ fn buildWithCacheAndTests(gpa: std.mem.Allocator, cache_dir: []const u8, app_pat
         build_options.compiler_compatibility_id,
         &cache_manager,
         roc_ctx,
+        target.specialization_strategy,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
-    coord.specialization_strategy = target.specialization_strategy;
     var arena_impl = collections.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     try coord.start();

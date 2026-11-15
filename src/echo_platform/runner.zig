@@ -166,13 +166,12 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
     // by EchoCtx, so the std_io is never actually dereferenced—but the
     // field still must be a concrete value (no `undefined`) to avoid UB if
     // a future refactor adds a real-OS call path.
-    var build_env = BuildEnv.init(allocator, .single_threaded, 1, opts.roc_target, opts.paths.cwd, opts.std_io) catch |err| {
+    // `.lss` is the strategy the program lowers under below.
+    var build_env = BuildEnv.init(allocator, .single_threaded, 1, opts.roc_target, opts.paths.cwd, opts.std_io, .lss) catch |err| {
         diag.step("BuildEnv.init", err);
         return err;
     };
     defer build_env.deinit();
-    // The strategy the program lowers under below.
-    build_env.setSpecializationStrategy(.lss);
     build_env.setSyntheticRootSourceMappingWithLineOffset(
         std.fs.path.basename(opts.paths.app_abs),
         opts.source,

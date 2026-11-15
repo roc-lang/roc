@@ -18002,10 +18002,12 @@ session (the baked Builtin's among them), is a program of that module alone
 and splits its roots between the two evaluators the same way.
 
 Every producer of checked modules names its strategy; the finalization option
-has no default. One rule decides it everywhere: the strategy of the runtime
-program that consumes the modules, and `.boxy` when nothing lowers them for
-runtime. The coordinator's compilations take it from their command
-(`BuildEnv.setSpecializationStrategy`). The REPL session
+has no default, and neither do the `BuildEnv` and `Coordinator` that drive a
+compilation, which take the strategy as a parameter of `init`. One rule
+decides it everywhere: the strategy of the runtime program that consumes the
+modules, and `.boxy` when nothing lowers them for runtime. The coordinator's
+compilations take it from their command (`CliBuildEnvOptions.specialization_strategy`).
+The REPL session
 (`roc repl` and the REPL WebAssembly module) evaluates each expression as a
 compile-time root and lowers no runtime program, so it names `.boxy`. The
 playground runs each expression as a `.boxy` runtime program on the LIR
