@@ -14436,7 +14436,7 @@ const EvidencePass = struct {
                 const root = self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root);
                 break :blk root.source_pattern == .none and switch (root.kind) {
                     .callable_binding, .constant => true,
-                    .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument, .expect, .repl_expr => false,
+                    .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .interpolation_conversion, .literal_argument, .expect, .repl_expr => false,
                 };
             },
             .checked_body, .intrinsic_wrapper, .unimplemented => false,
@@ -14500,7 +14500,7 @@ const EvidencePass = struct {
                 if (root.source_pattern.get()) |pattern| break :blk ModuleEnv.varFrom(pattern);
                 break :blk switch (root.kind) {
                     .callable_binding, .constant => rootSchemeVar(root),
-                    .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument, .expect, .repl_expr => null,
+                    .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .interpolation_conversion, .literal_argument, .expect, .repl_expr => null,
                 };
             },
             .checked_body, .intrinsic_wrapper, .unimplemented => null,
@@ -25242,7 +25242,7 @@ pub const CompileTimeRoot = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(CompileTimeRoot) == 156);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(CompileTimeRoot) == 160);
 }
 
 /// One literal's conversion root (`CompileTimeRootTable.literal_conversions`).
@@ -25305,7 +25305,7 @@ fn publishValueFormRoots(allocator: Allocator, roots: *CompileTimeRootTable, bod
     for (roots.roots.items()) |*root| {
         switch (root.kind) {
             .constant, .hoisted_constant => {},
-            .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => continue,
+            .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => continue,
         }
         if (root.hoisted_body) |body| switch (body) {
             .expr => {},
@@ -25389,7 +25389,7 @@ pub fn exprIsValueForm(allocator: Allocator, bodies: CheckedBodies, root: CIR.Ex
 fn valueFormCandidate(bodies: CheckedBodies, id: CIR.Expr.Idx) ?checked_bodies_mod.ExprData {
     switch (bodies.env.store.getExpr(id)) {
         .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external => {},
-        .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_block, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
+        .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_block, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
     }
     if (bodies.exprIsRetired(id)) return null;
     return bodies.exprData(id);
