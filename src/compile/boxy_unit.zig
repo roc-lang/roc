@@ -362,6 +362,8 @@ fn recordInterfaces(interfaces: *ExportInterfaces, entry: object_cache.Entry) Al
         .rc_ret_conditions = record.rc_ret_conditions,
         .may_leave_pending = record.may_leave_pending,
         .table_needs = record.table_needs,
+        .template = record.template,
+        .visible = record.visible,
     });
 }
 
@@ -373,7 +375,9 @@ pub fn exportRecords(gpa: Allocator, lowered: *const lir.CheckedPipeline.Lowered
     errdefer gpa.free(records);
     for (lowered.lir_result.exported_procs.items, records) |proc, *record| {
         const identity = procs.getProcSpec(proc).identity;
-        const interface = try interfaces.putProc(procs, proc, lowered.lir_result.boxy_table_needs.get(identity) orelse &.{});
+        const boxy_export = lowered.lir_result.boxy_exports.get(identity) orelse
+            base.invariant("an exported procedure has no export record of its unit", .{});
+        const interface = try interfaces.putProc(procs, proc, lowered.lir_result.boxy_table_needs.get(identity) orelse &.{}, boxy_export);
         record.* = .{
             .identity = procs.getProcSpec(proc).identity.bytes,
             .rc_borrowed_params = interface.rc_borrowed_params,
@@ -385,6 +389,8 @@ pub fn exportRecords(gpa: Allocator, lowered: *const lir.CheckedPipeline.Lowered
             .may_leave_pending = interface.may_leave_pending,
             .rc_ret_conditions = interface.rc_ret_conditions,
             .table_needs = interface.table_needs,
+            .template = interface.template,
+            .visible = interface.visible,
         };
     }
     return records;

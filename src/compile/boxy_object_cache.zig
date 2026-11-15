@@ -21,7 +21,7 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 20;
+pub const format_version: u32 = 21;
 
 const magic = "RBXO";
 
@@ -137,21 +137,42 @@ pub const ExportRecord = struct {
     /// The worker's encoded needs list, for a worker that takes a type
     /// table (`LirProgram.Result.boxy_table_needs`); empty otherwise.
     table_needs: []const u8 = &.{},
+    /// For a template's worker: the template's position in its module's
+    /// checked table, which a needs list naming the worker by identity
+    /// resolves it to (`LirProgram.BoxyExport.template`). It locates the
+    /// worker in the module the entry was built from, so it is no part of
+    /// the export digest.
+    template: u32 = no_template,
+    /// Whether another unit can read this record
+    /// (`LirProgram.BoxyExport.visible`): the export digest covers exactly
+    /// these records.
+    visible: bool = false,
+
+    /// `template` of a worker that is no template's.
+    pub const no_template = std.math.maxInt(u32);
 };
 
-/// The digest of `records` in identity order, whatever order they are
-/// listed in: the part of a module's export interface its own object
-/// solved (`boxy_interface.Digests.recordExportsDigest` folds in its imports').
+/// The digest of the importer-visible ones of `records` in identity order,
+/// whatever order they are listed in: the part of a module's export
+/// interface its own object solved that another unit can read
+/// (`boxy_interface.Digests.recordExportsDigest` folds in its imports').
 pub fn exportRecordsDigest(allocator: Allocator, records: []const ExportRecord) Allocator.Error![32]u8 {
-    const sorted = try allocator.dupe(ExportRecord, records);
+    var visible_count: usize = 0;
+    for (records) |record| visible_count += @intFromBool(record.visible);
+    const sorted = try allocator.alloc(ExportRecord, visible_count);
     defer allocator.free(sorted);
+    var at: usize = 0;
+    for (records) |record| if (record.visible) {
+        sorted[at] = record;
+        at += 1;
+    };
     std.mem.sort(ExportRecord, sorted, {}, struct {
         fn lessThan(_: void, a: ExportRecord, b: ExportRecord) bool {
             return std.mem.order(u8, &a.identity, &b.identity) == .lt;
         }
     }.lessThan);
     var hasher = base.Sha256.init(.{});
-    hasher.update("roc.boxy.export_records.v1");
+    hasher.update("roc.boxy.export_records.v2");
     for (sorted) |record| {
         hasher.update(&record.identity);
         inline for (.{ record.rc_borrowed_params, record.rc_ret_lenders, record.rc_read_only_params, record.rc_ret_unique_fields }) |word| hasher.update(std.mem.asBytes(&word));
@@ -243,6 +264,8 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
         for (record.rc_ret_conditions) |word| try appendU32(&bytes, allocator, word);
         try appendU32(&bytes, allocator, @intCast(record.table_needs.len));
         try bytes.appendSlice(allocator, record.table_needs);
+        try appendU32(&bytes, allocator, record.template);
+        try bytes.append(allocator, @intFromBool(record.visible));
     }
     for ([_][]const []const u8{ entry.hosted_symbols, entry.link_root_symbols, entry.app_export_symbols }) |symbols| {
         try appendU32(&bytes, allocator, @intCast(symbols.len));
@@ -291,7 +314,7 @@ pub fn functionUnitKey(ordinary: Key) Key {
 
 /// The bytes of an export record with no return conditions: its identity,
 /// four 64-bit masks, three flags, and its condition count.
-const min_export_record_size = 32 + 4 * @sizeOf(u64) + 3 + 2 * @sizeOf(u32);
+const min_export_record_size = 32 + 4 * @sizeOf(u64) + 4 + 3 * @sizeOf(u32);
 
 /// The bytes of an expect-site or test-root record: a digest and two words.
 const table_record_size = 32 + 2 * @sizeOf(u32);
@@ -365,6 +388,8 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         const needs = try allocator.dupe(u8, try reader.take(needs_len));
         record.rc_ret_conditions = conditions;
         record.table_needs = needs;
+        record.template = try reader.word32();
+        record.visible = try reader.flag();
         decoded_exports += 1;
     }
     const hosted_symbols = try decodeSymbols(allocator, &reader);
@@ -580,7 +605,7 @@ test "a Boxy object entry round-trips through its bytes" {
     const conditions = [_]u32{ 3, 9 };
     var entry: Entry = .{
         .exports = &.{
-            .{ .identity = @splat(1), .rc_borrowed_params = 5, .rc_ret_lenders = 1, .rc_read_only_params = 4, .rc_ret_unique_fields = 0, .rc_ret_borrowed = true, .rc_ret_unique = false, .may_leave_pending = true, .rc_ret_conditions = &conditions },
+            .{ .identity = @splat(1), .rc_borrowed_params = 5, .rc_ret_lenders = 1, .rc_read_only_params = 4, .rc_ret_unique_fields = 0, .rc_ret_borrowed = true, .rc_ret_unique = false, .may_leave_pending = true, .rc_ret_conditions = &conditions, .template = 6, .visible = true },
             .{ .identity = @splat(2), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 2, .rc_ret_borrowed = false, .rc_ret_unique = true, .may_leave_pending = false, .rc_ret_conditions = &.{} },
         },
         .exports_digest = undefined,
@@ -641,7 +666,7 @@ test "a Boxy object entry round-trips through its bytes" {
 
 test "an export records digest is a function of the records in identity order" {
     const allocator = std.testing.allocator;
-    const first: ExportRecord = .{ .identity = @splat(1), .rc_borrowed_params = 1, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 0, .rc_ret_borrowed = false, .rc_ret_unique = false, .may_leave_pending = false, .rc_ret_conditions = &.{} };
+    const first: ExportRecord = .{ .identity = @splat(1), .rc_borrowed_params = 1, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 0, .rc_ret_borrowed = false, .rc_ret_unique = false, .may_leave_pending = false, .rc_ret_conditions = &.{}, .visible = true };
     var second = first;
     second.identity = @splat(2);
     const baseline = try exportRecordsDigest(allocator, &.{ first, second });
@@ -666,6 +691,20 @@ test "an export records digest is a function of the records in identity order" {
     changed.table_needs = "needs";
     try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{ first, changed })));
     try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{first})));
+    // Where a template lies in its module, and any record no other unit
+    // reads, are no part of the digest.
+    changed = second;
+    changed.template = 9;
+    try std.testing.expectEqual(baseline, try exportRecordsDigest(allocator, &.{ first, changed }));
+    var private = second;
+    private.identity = @splat(4);
+    private.visible = false;
+    try std.testing.expectEqual(baseline, try exportRecordsDigest(allocator, &.{ first, second, private }));
+    private.rc_borrowed_params = 7;
+    try std.testing.expectEqual(baseline, try exportRecordsDigest(allocator, &.{ first, private, second }));
+    changed = second;
+    changed.visible = false;
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{ first, changed })));
 }
 
 test "a hosted bindings digest is a function of the bindings in order" {

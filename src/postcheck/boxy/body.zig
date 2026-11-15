@@ -2698,16 +2698,12 @@ pub const Builder = struct {
     /// `field_ty`: its declaring module's default expression, evaluated now
     /// at the instantiation the field's type gives its variables.
     pub fn defaultValue(self: *Builder, default: checked.CheckedFieldDefault, field_ty: TypeId) Allocator.Error!LocalId {
-        return self.fieldDefaultValue(self.program.modules.fieldDefault(self.module, default), field_ty);
+        return self.fieldDefaultValue(try self.program.modules.fieldDefault(self.module, default), field_ty);
     }
 
     /// Materialize a default whose declaring module is already program-owned.
     pub fn fieldDefaultValue(self: *Builder, default: types.FieldDefault, field_ty: TypeId) Allocator.Error!LocalId {
-        const default_bodies = self.program.module(default.module).bodies();
-        try default_bodies.demandIndex();
-        const expr = default_bodies.defaultExpr(default.expr_node) orelse
-            invariant("a field default's expression was not archived");
-        const worker_id = try self.program.defaultWorker(default.module, expr);
+        const worker_id = try self.program.defaultWorker(default.module, try self.program.defaultAt(default.module, default.ordinal));
         const worker = self.program.worker(worker_id).*;
         const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = field_ty, .effectful = false } });
         const bound = try self.boundTypesAt(worker_id, &.{}, fn_ty);
@@ -6027,7 +6023,8 @@ pub const Builder = struct {
             // A procedure template's value, whether a checked body, a hosted
             // procedure, or a checked-generated procedure.
             .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated => |ref| {
-                const target = try self.program.templateRefWorker(ref);
+                // The value calls the template through its entry.
+                const target = try self.program.templateRefScopeWorker(ref);
                 const target_worker = self.program.worker(target).*;
                 const formal = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
                 // A scheme variable only the target's requirements mention is
@@ -6238,7 +6235,7 @@ pub const Builder = struct {
     /// runtime: its function type, which the value records, and its stored
     /// evidence.
     pub fn storedRuntimeLocals(self: *Builder, source: lower.ConstSource, stored: check.ConstStore.ConstFn, owner: check.CheckedNames.ProcTemplate, out: []LocalId, family: u32, bound: []const TypeId) Allocator.Error!void {
-        const owner_worker = try self.program.templateRefWorker(owner);
+        const owner_worker = try self.program.templateRefScopeWorker(owner);
         const target = self.program.worker(owner_worker).*;
         const owner_fn_ty = stored.owner_fn_ty orelse invariant("a stored generated runtime calling local procedures records no instance of its procedure");
         const formal = try self.program.store.intern(.{ .function = .{ .args = target.params, .ret = target.ret, .effectful = false } });

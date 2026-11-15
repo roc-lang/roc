@@ -180,6 +180,13 @@ pub const ExportInterface = struct {
     /// For a worker that takes a type table: its encoded needs list
     /// (`StoredFn.encodeNeeds`), which an importer fills its tables from.
     table_needs: []const u8 = &.{},
+    /// For a template's worker: its template's position in its module's
+    /// checked table, which a needs list naming the worker by identity
+    /// resolves it to (`LirProgram.BoxyExport.template`).
+    template: u32 = LirProgram.BoxyExport.no_template,
+    /// Whether another unit may read this interface: the module's export
+    /// digest covers only these (`LirProgram.BoxyExport.visible`).
+    visible: bool = false,
 };
 
 /// The export interfaces of every object a unit imports, by worker identity.
@@ -250,7 +257,7 @@ pub const ExportInterfaces = struct {
     /// Record the interface ARC solved for `proc` of `store`, with the
     /// worker's encoded needs list `table_needs`, under the procedure's
     /// identity, and return it.
-    pub fn putProc(self: *ExportInterfaces, store: *const lir_core.LirStore, proc: LIR.LirProcSpecId, table_needs: []const u8) Allocator.Error!ExportInterface {
+    pub fn putProc(self: *ExportInterfaces, store: *const lir_core.LirStore, proc: LIR.LirProcSpecId, table_needs: []const u8, boxy_export: LirProgram.BoxyExport) Allocator.Error!ExportInterface {
         const spec = store.getProcSpec(proc);
         const words = store.getU32Span(spec.rc_ret_conditions);
         self.mutex.lockUncancelable(self.io);
@@ -267,6 +274,8 @@ pub const ExportInterfaces = struct {
             .rc_ret_conditions = conditions,
             .may_leave_pending = spec.may_leave_pending,
             .table_needs = try self.arena.allocator().dupe(u8, table_needs),
+            .template = boxy_export.template,
+            .visible = boxy_export.visible,
         };
         try self.map.put(self.allocator, spec.identity, interface);
         return interface;
@@ -296,6 +305,8 @@ test "export interface snapshot owns the complete calling contract" {
         .rc_ret_conditions = &.{ 7, 8, 9 },
         .may_leave_pending = true,
         .table_needs = "producer needs",
+        .template = 4,
+        .visible = true,
     };
     try producer.put(identity, expected);
     try consumer.copyFrom(&producer);
@@ -464,7 +475,7 @@ pub const ListIntItem = enum(u8) {
 
 test "integer list worker identities distinguish all ten bindings and the generic worker" {
     const module_name: [32]u8 = @splat(7);
-    const template: checked_names.CheckedProcedureTemplateId = @fromBackingInt(23);
+    const template: checked.TemplateName = .{ .definition = .{ .text = "List.get", .shadow = 0 } };
     const generic = templateWorkerIdentity(module_name, template);
     const items = std.enums.values(ListIntItem);
     try std.testing.expectEqual(@as(usize, 10), items.len);
@@ -473,11 +484,24 @@ test "integer list worker identities distinguish all ten bindings and the generi
         try std.testing.expect(!std.meta.eql(identity, generic));
         try std.testing.expectEqual(identity, listIntTemplateWorkerIdentity(module_name, template, item));
         try std.testing.expect(!std.meta.eql(identity, listIntTemplateWorkerIdentity(@splat(8), template, item)));
-        try std.testing.expect(!std.meta.eql(identity, listIntTemplateWorkerIdentity(module_name, @fromBackingInt(24), item)));
+        try std.testing.expect(!std.meta.eql(identity, listIntTemplateWorkerIdentity(module_name, .{ .definition = .{ .text = "List.set", .shadow = 0 } }, item)));
         for (items[index + 1 ..]) |other| {
             try std.testing.expect(!std.meta.eql(identity, listIntTemplateWorkerIdentity(module_name, template, other)));
         }
     }
+}
+
+test "a template worker is named by its definition's name, not its position" {
+    const module_name: [32]u8 = @splat(7);
+    const named = templateWorkerIdentity(module_name, .{ .definition = .{ .text = "parse", .shadow = 0 } });
+    try std.testing.expectEqual(named, templateWorkerIdentity(module_name, .{ .definition = .{ .text = "parse", .shadow = 0 } }));
+    // A shadowed definition of the same name, a constant's entry of that
+    // name, and the template at any position are other workers.
+    try std.testing.expect(!std.meta.eql(named, templateWorkerIdentity(module_name, .{ .definition = .{ .text = "parse", .shadow = 1 } })));
+    try std.testing.expect(!std.meta.eql(named, templateWorkerIdentity(module_name, .{ .constant = .{ .text = "parse", .shadow = 0 } })));
+    try std.testing.expect(!std.meta.eql(named, templateWorkerIdentity(module_name, .{ .definition = .{ .text = "pars", .shadow = 0 } })));
+    try std.testing.expect(!std.meta.eql(named, templateWorkerIdentity(@splat(8), .{ .definition = .{ .text = "parse", .shadow = 0 } })));
+    try std.testing.expect(!std.meta.eql(templateWorkerIdentity(module_name, .{ .position = 3 }), templateWorkerIdentity(module_name, .{ .position = 4 })));
 }
 
 /// A worker's list item variable bound to an integer type: its position
@@ -624,29 +648,43 @@ fn hashLengthPrefixed(hasher: *base.TypeDigestHasher, bytes: []const u8) void {
 }
 
 /// The content identity of the template worker of module `link_name`'s
-/// template `template` (`Program.workerIdentity`), a function of the checked
-/// module alone: what names the worker in every object of the link.
-pub fn templateWorkerIdentity(link_name: [32]u8, template: checked_names.CheckedProcedureTemplateId) LIR.ProcIdentity {
+/// template named `template` (`ImportedModuleView.templateName`,
+/// `Program.workerIdentity`), a function of the checked module alone: what
+/// names the worker in every object of the link. A definition's worker is
+/// named by the definition's name, which an edit elsewhere in the module
+/// leaves alone.
+pub fn templateWorkerIdentity(link_name: [32]u8, template: checked.TemplateName) LIR.ProcIdentity {
     var hasher = base.TypeDigestHasher.init();
-    hasher.update("roc.boxy.worker.v1");
+    hasher.update("roc.boxy.worker.v2");
     hasher.update("template");
     hasher.update(&link_name);
-    hasher.update(std.mem.asBytes(&@as(u32, @backingInt(template))));
+    hashTemplateName(&hasher, template);
     return .{ .bytes = hasher.finalResult() };
 }
 
 /// The content identity of the integer list worker for `item` of module
-/// `link_name`'s template `template` (`TemplateBinding.list_int`), distinct
-/// from its generic worker's and its other item types' and the same in every
-/// object of the link.
-pub fn listIntTemplateWorkerIdentity(link_name: [32]u8, template: checked_names.CheckedProcedureTemplateId, item: ListIntItem) LIR.ProcIdentity {
+/// `link_name`'s template named `template` (`TemplateBinding.list_int`),
+/// distinct from its generic worker's and its other item types' and the
+/// same in every object of the link.
+pub fn listIntTemplateWorkerIdentity(link_name: [32]u8, template: checked.TemplateName, item: ListIntItem) LIR.ProcIdentity {
     var hasher = base.TypeDigestHasher.init();
-    hasher.update("roc.boxy.worker.v1");
+    hasher.update("roc.boxy.worker.v2");
     hasher.update("template_list_int");
     hasher.update(&link_name);
-    hasher.update(std.mem.asBytes(&@as(u32, @backingInt(template))));
+    hashTemplateName(&hasher, template);
     hasher.update(&.{@backingInt(item)});
     return .{ .bytes = hasher.finalResult() };
+}
+
+fn hashTemplateName(hasher: *base.TypeDigestHasher, template: checked.TemplateName) void {
+    hasher.update(&.{@backingInt(std.meta.activeTag(template))});
+    switch (template) {
+        .definition, .constant => |named| {
+            hashLengthPrefixed(hasher, named.text);
+            hashWord(hasher, named.shadow);
+        },
+        .position => |index| hashWord(hasher, index),
+    }
 }
 
 /// A scheme variable's related type, absent when no relation fixed it.
@@ -870,6 +908,9 @@ pub const Program = struct {
     composed_in_body: collections.DenseMapUnmanaged(TypeId, bool) = .empty,
     /// The nested procedure site of each lambda and closure expression.
     sites_by_expr: std.AutoHashMapUnmanaged(ExprKey, u32) = .empty,
+    /// The first nested procedure site each default expression owns: a
+    /// default's sites are scanned together, after every template's.
+    default_first_sites: std.AutoHashMapUnmanaged(ExprKey, u32) = .empty,
     /// The default a record construction that omits a field materializes.
     omitted_defaults: std.AutoHashMapUnmanaged(OmittedField, checked.CheckedFieldDefault) = .empty,
     /// The generated codec families and their workers.
@@ -895,6 +936,13 @@ pub const Program = struct {
             }
         }
         for (view.view.nested_proc_sites.sites.items(), 0..) |site, site_index| {
+            switch (site.owner) {
+                .default_root => |default_expr| {
+                    const first = try program.default_first_sites.getOrPut(allocator, .{ .module = view.index, .expr = default_expr });
+                    if (!first.found_existing) first.value_ptr.* = @intCast(site_index);
+                },
+                .template => {},
+            }
             const site_expr = site.checked_expr.get() orelse continue;
             try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_expr }, @intCast(site_index));
             // A closure's site is also its lambda's, which names its worker.
@@ -996,47 +1044,154 @@ pub const Program = struct {
         return unit.root and self.module(index).view.platform_type_inputs.requirements.items().len != 0;
     }
 
-    /// The content identity of a module's worker (design.md "Per-Module
-    /// Output"): a digest of the declaring module's link name
-    /// (`types.Modules.linkName`) and the worker's checked key, the same in
-    /// every lowering, so one object's reference to another's worker names it
-    /// by symbol.
-    pub fn workerIdentity(self: *Program, key: WorkerKey) LIR.ProcIdentity {
+    /// The content identity of a module's worker (design.md "Caching Under
+    /// `.boxy`"): a digest of the declaring module's link name
+    /// (`types.Modules.linkName`) and what names the worker within its
+    /// module, the same in every lowering, so one object's reference to
+    /// another's worker names it by symbol. A template is named by its
+    /// definition's name (`ImportedModuleView.templateName`), a lambda by
+    /// its outer worker and its place among its owner's nested procedure
+    /// sites, a default by its place among its module's defaults: an edit
+    /// elsewhere in the module leaves each alone.
+    pub fn workerIdentity(self: *Program, key: WorkerKey) Allocator.Error!LIR.ProcIdentity {
         var hasher = base.TypeDigestHasher.init();
-        hasher.update("roc.boxy.worker.v1");
+        hasher.update("roc.boxy.worker.v2");
         switch (key) {
-            .template => |template| return switch (template.binding) {
-                .generic => templateWorkerIdentity(self.modules.linkName(template.module), template.template),
-                .list_int => |item| listIntTemplateWorkerIdentity(self.modules.linkName(template.module), template.template, item),
-            },
+            .template => |template| return self.templateIdentity(template.module, template.template, template.binding),
             .lambda => |lambda| {
+                const site = try self.lambdaSite(lambda.module, lambda.expr);
+                const owner = try self.siteOwnerIdentity(site.owner);
                 hasher.update("lambda");
-                hasher.update(&self.modules.linkName(lambda.module));
-                hasher.update(std.mem.asBytes(&@as(u32, @backingInt(lambda.expr))));
                 hasher.update(&self.worker(lambda.outer).identityBytes(self));
+                hasher.update(&owner.bytes);
+                hashWord(&hasher, site.ordinal);
                 hasher.update(&[_]u8{@intFromBool(lambda.captured_scheme)});
             },
             .method_entry => |target| {
                 hasher.update("method_entry");
                 hasher.update(&self.worker(target).identityBytes(self));
             },
-            .default => |default| {
-                hasher.update("default");
-                hasher.update(&self.modules.linkName(default.module));
-                hasher.update(std.mem.asBytes(&self.defaultOrdinal(default.module, default.expr)));
-            },
+            .default => |default| return self.defaultIdentity(default.module, self.defaultOrdinal(default.module, default.expr)),
             .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker no module's object exports has no content identity"),
         }
         return .{ .bytes = hasher.finalResult() };
     }
 
+    /// The identity of module `module_index`'s template worker for
+    /// `template` at `binding`.
+    pub fn templateIdentity(self: *const Program, module_index: ModuleIndex, template: checked_names.CheckedProcedureTemplateId, binding: TemplateBinding) LIR.ProcIdentity {
+        const name = self.module(module_index).view.templateName(template);
+        return switch (binding) {
+            .generic => templateWorkerIdentity(self.modules.linkName(module_index), name),
+            .list_int => |item| listIntTemplateWorkerIdentity(self.modules.linkName(module_index), name, item),
+        };
+    }
+
+    /// The identity of the worker of module `module_index`'s default at
+    /// `ordinal` among its defaults.
+    fn defaultIdentity(self: *const Program, module_index: ModuleIndex, ordinal: u32) LIR.ProcIdentity {
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.boxy.worker.v2");
+        hasher.update("default");
+        hasher.update(&self.modules.linkName(module_index));
+        hashWord(&hasher, ordinal);
+        return .{ .bytes = hasher.finalResult() };
+    }
+
     /// The position of default expression `expr` among its module's, which
     /// an edit elsewhere in the module leaves alone.
-    fn defaultOrdinal(self: *const Program, module_index: ModuleIndex, expr: ExprId) u32 {
-        for (self.module(module_index).bodies().defaultExprs(), 0..) |default, ordinal| {
-            if (default == @backingInt(expr)) return @intCast(ordinal);
+    pub fn defaultOrdinal(self: *const Program, module_index: ModuleIndex, expr: ExprId) u32 {
+        const defaults = self.module(module_index).bodies().defaultExprs();
+        const found = std.sort.binarySearch(u32, defaults, @as(u32, @backingInt(expr)), struct {
+            fn order(target: u32, item: u32) std.math.Order {
+                return std.math.order(target, item);
+            }
+        }.order) orelse invariant("a default worker's expression is no default expression of its module");
+        return @intCast(found);
+    }
+
+    /// The default expression at `ordinal` among module `module_index`'s.
+    pub fn defaultAt(self: *const Program, module_index: ModuleIndex, ordinal: u32) Allocator.Error!ExprId {
+        const bodies = self.module(module_index).bodies();
+        try bodies.demandIndex();
+        const defaults = bodies.defaultExprs();
+        if (ordinal >= defaults.len) invariant("a default ordinal is past its module's defaults");
+        return @fromBackingInt(defaults[ordinal]);
+    }
+
+    /// What owns a nested procedure site: a template's body or a default
+    /// expression (`checked.NestedProcSiteOwner`).
+    pub const SiteOwner = union(enum) {
+        template: struct { module: ModuleIndex, template: checked_names.CheckedProcedureTemplateId },
+        default: struct { module: ModuleIndex, expr: ExprId },
+    };
+
+    /// A lambda's nested procedure site, named by its owner and its place
+    /// among the owner's sites, which only an edit of the owner's own body
+    /// changes.
+    pub const LambdaSite = struct { owner: SiteOwner, ordinal: u32 };
+
+    /// The site of the lambda or closure expression `expr` of module
+    /// `module_index` (`nestedProcSite`).
+    pub fn lambdaSite(self: *Program, module_index: ModuleIndex, expr: ExprId) Allocator.Error!LambdaSite {
+        const site_index = (try self.nestedProcSite(module_index, expr)) orelse
+            invariant("a lambda worker's expression has no nested procedure site");
+        const view = self.module(module_index);
+        const site = view.view.nested_proc_sites.sites.items()[site_index];
+        switch (site.owner) {
+            .template => |ref| {
+                const owner_view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
+                std.debug.assert(owner_view.index == module_index);
+                const range = owner_view.view.checked_procedure_templates.get(ref.template).nested_proc_sites;
+                const first = @backingInt(owner_view.view.nested_proc_sites.template_refs.items()[range.start]);
+                const ordinal = site_index - first;
+                // A template's sites are scanned together, so they are
+                // consecutive and listed in order.
+                std.debug.assert(ordinal < range.len and @backingInt(owner_view.view.nested_proc_sites.template_refs.items()[range.start + ordinal]) == site_index);
+                return .{ .owner = .{ .template = .{ .module = owner_view.index, .template = ref.template } }, .ordinal = ordinal };
+            },
+            .default_root => |default_expr| {
+                const first = self.default_first_sites.get(.{ .module = module_index, .expr = default_expr }) orelse
+                    invariant("a default-root site's default has no first site");
+                return .{ .owner = .{ .default = .{ .module = module_index, .expr = default_expr } }, .ordinal = site_index - first };
+            },
         }
-        invariant("a default worker's expression is no default expression of its module");
+    }
+
+    /// The lambda expression of the site at `ordinal` among `owner`'s.
+    pub fn lambdaAt(self: *Program, owner: SiteOwner, ordinal: u32) Allocator.Error!ExprId {
+        const module_index, const site_index = switch (owner) {
+            .template => |template| blk: {
+                try self.indexBodyMetadata(template.module);
+                const view = self.module(template.module);
+                const range = view.view.checked_procedure_templates.get(template.template).nested_proc_sites;
+                if (ordinal >= range.len) invariant("a lambda's site ordinal is past its template's sites");
+                break :blk .{ template.module, @backingInt(view.view.nested_proc_sites.template_refs.items()[range.start + ordinal]) };
+            },
+            .default => |default| blk: {
+                try self.indexBodyMetadata(default.module);
+                const first = self.default_first_sites.get(.{ .module = default.module, .expr = default.expr }) orelse
+                    invariant("a default's lambda names a default with no sites");
+                break :blk .{ default.module, first + ordinal };
+            },
+        };
+        const view = self.module(module_index);
+        const site = view.view.nested_proc_sites.sites.items()[site_index];
+        const site_expr = site.checked_expr.get() orelse invariant("a lambda's site has no checked expression");
+        return switch (view.bodies().exprData(site_expr)) {
+            .closure => |closure| closure.lambda,
+            .lambda => site_expr,
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a lambda's site is not a lambda or closure"),
+        };
+    }
+
+    /// The identity of what owns a site: its template's generic worker or
+    /// its default's worker.
+    fn siteOwnerIdentity(self: *Program, owner: SiteOwner) Allocator.Error!LIR.ProcIdentity {
+        return switch (owner) {
+            .template => |template| self.templateIdentity(template.module, template.template, .generic),
+            .default => |default| self.defaultIdentity(default.module, self.defaultOrdinal(default.module, default.expr)),
+        };
     }
 
     /// Whether workers of `key`'s kind are the workers a module's object
@@ -1152,7 +1307,7 @@ pub const Program = struct {
                     hasher.update(&[_]u8{@intFromBool(field.default.get() != null)});
                     if (field.default.get()) |default| {
                         hasher.update(&self.modules.get(default.module).view.module_identity.stable_hash);
-                        hashWord(&hasher, default.expr_node);
+                        hashWord(&hasher, default.ordinal);
                     }
                 }
                 try self.hashOptionalType(&hasher, record.ext.get());
@@ -1232,6 +1387,7 @@ pub const Program = struct {
         const proc = self.result.store.getProcSpecPtr(imported.proc);
         const interface = unit.imports.get(proc.identity) orelse
             invariant("a call reached a worker of an imported module whose object exports no such worker");
+        if (std.debug.runtime_safety and !interface.visible) invariant("a call reached a worker its module's export digest leaves out (`recordExports`)");
         proc.rc_borrowed_params = interface.rc_borrowed_params;
         proc.rc_ret_borrowed = interface.rc_ret_borrowed;
         proc.rc_ret_lenders = interface.rc_ret_lenders;
@@ -1372,6 +1528,7 @@ pub const Program = struct {
         self.local_proc_bindings.deinit(self.allocator);
         self.local_method_bindings.deinit(self.allocator);
         self.sites_by_expr.deinit(self.allocator);
+        self.default_first_sites.deinit(self.allocator);
         self.nominal_overrides.deinit(self.allocator);
         self.composed_in_body.deinit(self.allocator);
         self.omitted_defaults.deinit(self.allocator);
@@ -1456,6 +1613,24 @@ pub const Program = struct {
         return id;
     }
 
+    /// The worker of a procedure template another worker names as its
+    /// scope or calls only through its entry (a lambda's outer worker, a
+    /// dictionary entry's target): queued for lowering when this lowering
+    /// emits it, and for an imported template its scope alone, since no
+    /// call here compiles against its interface.
+    pub fn templateScopeWorker(self: *Program, module_index: ModuleIndex, template_id: checked_names.CheckedProcedureTemplateId) Allocator.Error!WorkerId {
+        const id = try self.templateScope(module_index, template_id);
+        if (self.worker(id).imported) return id;
+        return try self.templateWorker(module_index, template_id);
+    }
+
+    /// `templateScopeWorker` for an integer list worker.
+    pub fn listIntTemplateScopeWorker(self: *Program, module_index: ModuleIndex, template_id: checked_names.CheckedProcedureTemplateId, item: ListIntItem) Allocator.Error!WorkerId {
+        const id = try self.listIntTemplateScope(module_index, template_id, item);
+        if (self.worker(id).imported) return id;
+        return try self.listIntTemplateWorker(module_index, template_id, item);
+    }
+
     /// The worker of a procedure template as the scope of the lambdas it
     /// contains, lowered only when something calls the template itself. The
     /// owner of a closure that compile-time evaluation stored is such a
@@ -1514,7 +1689,7 @@ pub const Program = struct {
         const kinds = try self.schemeKinds(kind_roots, scheme_vars.items.len);
 
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
-        const identity = self.workerIdentity(key);
+        const identity = try self.workerIdentity(key);
         const imported = !self.ownsModule(module_index);
         const proc = if (imported) try self.addImportedProc(identity, module_index, .roc) else try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
@@ -1584,7 +1759,7 @@ pub const Program = struct {
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a procedure template's checked root is not a function type"),
         };
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
-        const identity = self.workerIdentity(key);
+        const identity = try self.workerIdentity(key);
         const proc = if (generic.imported) try self.addImportedProc(identity, module_index, .roc) else try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
             .identity = identity,
@@ -1715,6 +1890,12 @@ pub const Program = struct {
         return kept;
     }
 
+    /// `templateScopeWorker` of the template `ref` names.
+    pub fn templateRefScopeWorker(self: *Program, ref: checked_names.ProcedureTemplateRef) Allocator.Error!WorkerId {
+        const view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
+        return try self.templateScopeWorker(view.index, ref.template);
+    }
+
     pub fn templateRefScope(self: *Program, ref: checked_names.ProcedureTemplateRef) Allocator.Error!WorkerId {
         const view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
         return try self.templateScope(view.index, ref.template);
@@ -1762,7 +1943,7 @@ pub const Program = struct {
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a lambda's type is not a function type"),
         };
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
-        const identity = self.workerIdentity(key);
+        const identity = try self.workerIdentity(key);
         // A lambda of an imported worker is that worker's object's.
         const imported = outer_worker.imported;
         const proc = if (imported) try self.addImportedProc(identity, outer_worker.module, .erased_record) else try self.result.store.addProcSpec(.{
@@ -2855,7 +3036,7 @@ pub const Program = struct {
         for (bound, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
         const ret = try self.converter().convert(module_index, default_ty, .{ .module = module_index, .vars = scheme_vars, .bound = bound });
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
-        const identity = self.workerIdentity(key);
+        const identity = try self.workerIdentity(key);
         const imported = !self.ownsModule(module_index);
         const proc = if (imported) try self.addImportedProc(identity, module_index, .roc) else try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
@@ -3021,7 +3202,7 @@ pub const Program = struct {
         const key: WorkerKey = .{ .method_entry = target };
         if (self.worker_ids.get(key)) |existing| return existing;
         const target_worker = self.worker(target).*;
-        const identity = self.workerIdentity(key);
+        const identity = try self.workerIdentity(key);
         if (target_worker.imported) {
             // The entry of an imported template is its object's.
             const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
@@ -3577,6 +3758,7 @@ pub const Program = struct {
             const interface = unit.imports.get(self.result.store.getProcSpec(target.proc).identity) orelse
                 invariant("a type table names a worker of an imported module whose object exports no such worker");
             if (interface.table_needs.len == 0) invariant("an imported worker with inputs exports no needs");
+            if (std.debug.runtime_safety and !interface.visible) invariant("a type table names a worker its module's export digest leaves out (`recordExports`)");
             const decoded = try StoredFn.decodeNeeds(self, interface.table_needs);
             self.worker(unfilled.worker).needs = decoded;
         }
@@ -4064,6 +4246,153 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
         program.result.store.getProcSpecPtr(worker.proc).exported = true;
         try program.result.exported_procs.append(program.allocator, worker.proc);
     }
+    try recordExports(program);
+}
+
+/// Record, for each worker the unit exports, what an importer resolves a
+/// needs list's name of it to and whether it is importer-visible
+/// (`LirProgram.BoxyExport`; design.md "Caching Under `.boxy`").
+///
+/// Another unit reads a worker's export record (its ownership signature
+/// when it calls the worker, its needs when it fills the worker's table)
+/// only for a worker it can name, and it names a worker of this module only
+/// through what this module's checked interface or its records say:
+///
+/// - a template its checked module names to importers: an exposed
+///   definition, an exposed binding's template or the template an exposed
+///   procedure alias forwards to, a registered method, a constant's entry
+///   procedure, and the entry wrapper of a callable binding, with each
+///   one's integer list workers;
+/// - every default, which a construction omitting its field calls;
+/// - every lambda and dictionary entry that takes a type table: a function
+///   value an importer's compile-time evaluation stored can be any of them,
+///   and restoring it fills its table;
+/// - every worker a visible worker's needs list names, whose table an
+///   importer fills or whose callable it builds when it fills the visible
+///   worker's table.
+///
+/// Everything else (a private helper, a lambda with no table, a template's
+/// entry with no table) is named by another unit only by identity, and
+/// nothing reads a record of it. Only visible records are in the module's
+/// export digest, so an edit to anything else leaves its importers' keys
+/// alone.
+fn recordExports(program: *Program) Allocator.Error!void {
+    const allocator = program.allocator;
+    const visible = try allocator.alloc(bool, program.workers.items.len);
+    defer allocator.free(visible);
+    @memset(visible, false);
+    var pending: std.ArrayList(WorkerId) = .empty;
+    defer pending.deinit(allocator);
+    const Visit = struct {
+        program: *Program,
+        visible: []bool,
+        pending: *std.ArrayList(WorkerId),
+
+        fn worker(self: @This(), id: WorkerId) Allocator.Error!void {
+            const record = self.program.worker(id);
+            if (record.imported or !Program.exportableKind(record.key)) return;
+            if (self.visible[@backingInt(id)]) return;
+            self.visible[@backingInt(id)] = true;
+            try self.pending.append(self.program.allocator, id);
+        }
+
+        fn template(self: @This(), module_index: ModuleIndex, ref: checked_names.ProcedureTemplateRef) Allocator.Error!void {
+            const owner = self.program.moduleByKey(.{ .bytes = ref.artifact.bytes });
+            if (owner.index != module_index) return;
+            if (self.program.worker_ids.get(.{ .template = .{ .module = module_index, .template = ref.template } })) |id| try self.worker(id);
+            for (std.enums.values(ListIntItem)) |item| {
+                if (self.program.worker_ids.get(.{ .template = .{ .module = module_index, .template = ref.template, .binding = .{ .list_int = item } } })) |id| try self.worker(id);
+            }
+        }
+
+        /// The template a procedure binding of `module_index` calls,
+        /// following procedure aliases to the binding they forward to.
+        fn binding(self: @This(), module_index: ModuleIndex, body: checked.ProcedureBindingBody) Allocator.Error!void {
+            var current = body;
+            var current_module = module_index;
+            while (true) switch (current) {
+                .direct_template => |direct| return self.template(current_module, Program.directTemplate(direct.template)),
+                .checked_error => return,
+                .callable_eval_template => |template_id| {
+                    const owner = self.program.module(current_module);
+                    const callable = owner.view.callable_eval_templates.templates[@backingInt(template_id)];
+                    const forwarded = callable.forwarded_lookup.get() orelse {
+                        if (self.program.wrapper_by_root.get(.{ .module = current_module, .root = callable.root })) |wrapper| try self.template(current_module, wrapper);
+                        return;
+                    };
+                    const ref_id = owner.view.resolved_value_refs.lookupIdByExpr(forwarded) orelse
+                        invariant("a procedure alias's lookup has no resolved reference");
+                    var ref = owner.view.resolved_value_refs.records.items()[@backingInt(ref_id)].ref;
+                    while (true) switch (ref) {
+                        .local_proc => |local| {
+                            const final = local.alias_target orelse invariant("a callable alias has no recorded target");
+                            ref = owner.view.resolved_value_refs.records.items()[@backingInt(final)].ref;
+                        },
+                        .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => break,
+                    };
+                    const next: checked.ProcedureBindingRef = switch (ref) {
+                        .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |target| target.binding,
+                        .platform_required_proc => |required| required.procedure.binding,
+                        .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => invariant("a procedure alias forwards only to a procedure, as checking requires"),
+                    };
+                    const resolved = self.program.procedureBinding(next);
+                    current_module = resolved.module;
+                    current = resolved.body;
+                },
+            };
+        }
+    };
+    const visit: Visit = .{ .program = program, .visible = visible, .pending = &pending };
+
+    for (program.modules.views.items) |*view| {
+        if (!program.ownsModule(view.index)) continue;
+        const module_index = view.index;
+        for (view.view.exported_procedure_templates.templates) |exported| try visit.template(module_index, exported.template);
+        for (view.view.exported_procedure_bindings.bindings) |exported| try visit.binding(module_index, exported.body);
+        for (view.view.method_registry.entries.items()) |entry| {
+            const target = entry.target orelse continue;
+            switch (target.kind) {
+                .procedure => |procedure| try visit.template(module_index, procedure.template),
+                .local_proc, .structural, .callable_binding => {},
+            }
+        }
+        for (view.view.const_templates.templates.items()) |template| switch (template.state) {
+            .eval_template => |eval_template| try visit.template(module_index, eval_template.entry_template),
+            .reserved, .stored_const, .unimplemented => {},
+        };
+        for (view.view.exported_const_templates.templates) |exported| switch (exported.template.state) {
+            .eval_template => |eval_template| try visit.template(module_index, eval_template.entry_template),
+            .reserved, .stored_const, .unimplemented => {},
+        };
+        for (view.view.compile_time_roots.roots.items()) |root| switch (root.kind) {
+            .callable_binding => if (program.wrapper_by_root.get(.{ .module = module_index, .root = root.id })) |wrapper| try visit.template(module_index, wrapper),
+            .constant, .hoisted_constant, .hoisted_validation, .expect, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => {},
+        };
+    }
+    for (program.workers.items, 0..) |worker, index| switch (worker.key) {
+        .default => try visit.worker(@fromBackingInt(@intCast(index))),
+        .lambda, .method_entry => if (worker.needs != null) try visit.worker(@fromBackingInt(@intCast(index))),
+        .template, .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => {},
+    };
+    while (pending.pop()) |id| {
+        const needs = program.worker(id).needs orelse continue;
+        for (needs.recipes) |recipe| switch (recipe) {
+            .callable => |callable| try visit.worker(callable.entry),
+            .table => |table| try visit.worker(table.worker),
+            .input, .desc, .args_desc, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => {},
+        };
+    }
+
+    const result_allocator = program.result.store.allocator;
+    try program.result.boxy_exports.ensureTotalCapacity(result_allocator, @intCast(program.result.exported_procs.items.len));
+    for (program.workers.items, visible) |worker, is_visible| {
+        if (worker.imported or !Program.exportableKind(worker.key)) continue;
+        const template: u32 = switch (worker.key) {
+            .template => |key| @backingInt(key.template),
+            .lambda, .method_entry, .default, .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => LirProgram.BoxyExport.no_template,
+        };
+        program.result.boxy_exports.putAssumeCapacity(program.result.store.getProcSpec(worker.proc).identity, .{ .template = template, .visible = is_visible });
+    }
 }
 
 /// Whether checking rejected `template`'s signature: it has no type to lower
@@ -4392,7 +4721,7 @@ test "Boxy field default identity survives substitution and stable type digests"
         const number = try store.primitive(.u8);
         var fields = [_]types.Field{.{ .name = name, .ty = variable, .kind = .inline_slot }};
         for (0..3) |variant| {
-            fields[0].default = .of(if (variant == 0) null else .{ .module = @fromBackingInt(@intCast(round)), .expr_node = @intCast(variant * 10) });
+            fields[0].default = .of(if (variant == 0) null else .{ .module = @fromBackingInt(@intCast(round)), .ordinal = @intCast(variant * 10) });
             const generic = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
             const concrete = try program.substitute(allocator, generic, &.{number});
             const field = store.fieldSpan(store.get(concrete).record.fields)[0];

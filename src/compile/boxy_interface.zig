@@ -164,7 +164,7 @@ pub const Digests = struct {
     /// names, so it runs on any thread while nothing adds to the link.
     fn prepare(self: *Digests, artifact: *const Artifact) Allocator.Error!Prepared {
         var interface = Sha256.init(.{});
-        interface.update("roc.boxy.interface.v1");
+        interface.update("roc.boxy.interface.v2");
         interface.update(&self.nameOf(artifact.key.bytes));
         try self.hashPublicSurface(&interface, artifact);
         var object_input = Sha256.init(.{});
@@ -229,7 +229,7 @@ pub const Digests = struct {
             .bindings => self.hashBindings(hasher, artifact),
             .methods => self.hashMethods(hasher, artifact),
             .defaults => hasher.update(std.mem.asBytes(&@as(u32, @intCast(try artifact.bodies().defaultExprCount(self.gpa))))),
-            .nominals => hashNominals(hasher, artifact),
+            .nominals => try self.hashNominals(hasher, artifact),
             .consts => try self.hashConsts(hasher, artifact),
             .values => try self.hashStoredValues(hasher, artifact, .read_by_importers),
             .imports => for (artifact.direct_import_module_keys.items()) |key| {
@@ -324,7 +324,7 @@ pub const Digests = struct {
         self.hashBindings(hasher, artifact);
         self.hashMethods(hasher, artifact);
         hasher.update(std.mem.asBytes(&@as(u32, @intCast(try artifact.bodies().defaultExprCount(self.gpa)))));
-        hashNominals(hasher, artifact);
+        try self.hashNominals(hasher, artifact);
         try self.hashConsts(hasher, artifact);
         try self.hashStoredValues(hasher, artifact, .read_by_importers);
     }
@@ -357,10 +357,28 @@ pub const Digests = struct {
         }
     }
 
-    fn hashNominals(hasher: *Sha256, artifact: *const Artifact) void {
+    /// The names a lowering gives `artifact`'s nominal declarations: each
+    /// is its name and its position among the declarations sharing it
+    /// (`types.Converter.declName`), so this hashes each name with the
+    /// number of declarations of it, in name order. Where a declaration of
+    /// another name lies changes no name.
+    fn hashNominals(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
         const checked_types = artifact.typesView();
-        for (checked_types.nominal_declarations) |declaration| {
-            hashBytes(hasher, artifact.canonical_names.typeNameText(checked_types.nominalDeclarationName(declaration)));
+        const names = try self.gpa.alloc(canonical.TypeNameId, checked_types.nominal_declarations.len);
+        defer self.gpa.free(names);
+        for (names, checked_types.nominal_declarations) |*name, declaration| name.* = checked_types.nominalDeclarationName(declaration);
+        std.mem.sort(canonical.TypeNameId, names, &artifact.canonical_names, struct {
+            fn lessThan(store: *const canonical.CanonicalNameStore, a: canonical.TypeNameId, b: canonical.TypeNameId) bool {
+                return std.mem.order(u8, store.typeNameText(a), store.typeNameText(b)) == .lt;
+            }
+        }.lessThan);
+        var at: usize = 0;
+        while (at < names.len) {
+            var count: u32 = 1;
+            while (at + count < names.len and names[at + count] == names[at]) count += 1;
+            hashBytes(hasher, artifact.canonical_names.typeNameText(names[at]));
+            hasher.update(std.mem.asBytes(&count));
+            at += count;
         }
     }
 
@@ -373,13 +391,17 @@ pub const Digests = struct {
         };
     }
 
-    /// The name of `ref`'s worker, and the hidden inputs a call to it
-    /// passes when `artifact` declares it. An imported template's are part of
-    /// its own module's interface.
+    /// The name of `ref`'s worker (its module's link name and the
+    /// template's name, `ImportedModuleView.templateName`, never its
+    /// position), and the hidden inputs a call to it passes when `artifact`
+    /// declares it. An imported template's are part of its own module's
+    /// interface.
     fn hashTemplateRef(self: *Digests, hasher: *Sha256, artifact: *const Artifact, ref: canonical.ProcedureTemplateRef) void {
         hasher.update(&self.nameOf(ref.artifact.bytes));
-        hasher.update(std.mem.asBytes(&@as(u32, @backingInt(ref.template))));
-        if (!std.mem.eql(u8, &ref.artifact.bytes, &artifact.key.bytes)) return;
+        const own = std.mem.eql(u8, &ref.artifact.bytes, &artifact.key.bytes);
+        const owner = if (own) artifact else self.artifactOf(ref.artifact.bytes);
+        hashTemplateName(hasher, CheckedArtifact.importedView(owner).templateName(ref.template));
+        if (!own) return;
         const templates = &artifact.checked_procedure_templates;
         const template = templates.templates.items()[@backingInt(ref.template)];
         hasher.update(std.mem.asBytes(&template.scheme_vars.len));
@@ -452,6 +474,17 @@ const ValueContext = struct {
         return self.artifact.key.bytes;
     }
 };
+
+fn hashTemplateName(hasher: *Sha256, name: CheckedArtifact.TemplateName) void {
+    hashTag(hasher, @tagName(std.meta.activeTag(name)));
+    switch (name) {
+        .definition, .constant => |named| {
+            hashBytes(hasher, named.text);
+            hasher.update(std.mem.asBytes(&named.shadow));
+        },
+        .position => |index| hasher.update(std.mem.asBytes(&index)),
+    }
+}
 
 fn hashTag(hasher: *Sha256, tag: []const u8) void {
     hasher.update(tag);

@@ -16705,8 +16705,9 @@ on, and it is the reason modules can be lowered independently and in
 parallel.
 
 Unit lowering finishes the closure of those module-definition workers and
-records their export inventory in `seedUnitWorkers`, before lowering command
-roots. Test and REPL roots, platform entrypoint wrappers, and requested static
+records their export inventory in `seedUnitWorkers`, with which of them are
+importer-visible and where each template's worker lies in its module
+(`recordExports`, Caching Under `.boxy`), before lowering command roots. Test and REPL roots, platform entrypoint wrappers, and requested static
 initializers keep their own explicit entrypoint/data references. Workers created
 only for those roots are local to the unit; being a lambda or method-entry worker
 does not make a test helper part of the module's external interface. A root can
@@ -16763,15 +16764,27 @@ and Per-Module Output is the invariant that makes it possible:
 
 - The KEY of a module's lowered output is what that output is a function of,
   extended with the compiler version, the opt level, and the target
-  (`compile.boxy_interface`, `Digests.objectInput`): the content hashes of the
-  checked modules it was built from (the module's own checked entry key, which
-  covers its imports' keys) and its evaluation output, together with its name
-  in the link. It is never a hash of a derived table: evidence, worker
-  signatures, ownership signatures and layouts are functions of those checked
-  modules, so their keys already cover them. A key names one file.
-- An edit to a module changes its checked entry key and therefore the key of
-  every module whose checked entry covers it, so the edited module and its
-  importers rebuild. A unit's task computes its key on its lane, once its
+  (`compile.boxy_interface`, `Digests.objectInput`): the module's own source,
+  checking policy and evaluation output, its name in the link, and, for each
+  module it imports, that module's interface and export digests, never its
+  implementation. A module's interface digest covers what its checked module
+  tells an importer's lowering (its checking interface, the names and hidden
+  inputs of the workers its exposed definitions, bindings, registered
+  methods and constants name, its defaults' count, its nominal declarations,
+  and the stored values an importer restores); its export digest covers the
+  importer-visible export records its object solved (FILE, below). Each folds
+  in the same digest of the module's own imports, because lowering reads
+  through an import to the modules behind it: a needs list an importer fills
+  a table from names the workers of the module's imports, and the module's
+  types name theirs. A key names one file.
+- An edit to a module changes that module's key. It changes an importer's
+  key only when it changes something the importer's key covers: an exposed
+  name, signature, or stored value, or an importer-visible export record. An
+  edit to a private function's body, a new private definition, or a new
+  expression inside an exposed function's body that leaves its ownership
+  signature and needs alone rebuilds the edited module only, because no
+  worker's name is a position in its module (NAMES, below). A unit's task
+  computes its key on its lane, once its
   imports' units are done: the module's own part of its digests (its stored
   values and public surface, the bulk of the hashing) is hashed there, or
   earlier by a lane no unit was ready for, and the imports' parts come from
@@ -16795,13 +16808,26 @@ and Per-Module Output is the invariant that makes it possible:
   entries already filed stay valid under their own keys. The name is an input
   of the module's key and of its importers', so a key always names the object
   its link needs. A whole program links nothing and names modules by content
-  identity. A worker's name is the template's position in its table, which the
-  interface covers for every template an importer can name; a default's is its
-  position among its module's defaults, and a nominal type's is its position
-  among the declarations sharing its name. A lambda's worker is named by its
-  expression, which only a function value stored in a constant reaches across
-  modules; a stored function value's recipe names its modules by checked key,
-  and its digest names them by link name.
+  identity. Within its module, a worker is named by what an edit elsewhere in
+  the module leaves alone (`Program.workerIdentity`,
+  `ImportedModuleView.templateName`): a definition's template by the
+  definition's name, and a top-level constant's or callable binding's entry
+  wrapper by the constant's name; a lambda by its outer worker, the template
+  or default owning its nested procedure site, and the site's place among
+  that owner's sites; a default by its place among its module's defaults; a
+  dictionary entry by its target. A template with no name of its own (a
+  promoted local procedure, a hoisted constant's or literal's entry wrapper)
+  is named by its position in its module's table. Exposed names are unique
+  within a module except where a module declares one name twice, which
+  canonicalization reports as a warning and resolves by keeping one
+  definition per name (`top_level_value_defs`, which is the very span of
+  `global_value_defs` when all names are distinct); each definition that
+  selection leaves out is named by its name and one more than the number of
+  module-global definitions of that name before it, and a module with no
+  duplicate does no work for this beyond comparing those two spans. A nominal
+  type's name is its position among the declarations sharing its name. A
+  stored function value's recipe names its modules by checked key, and its
+  digest names them by link name.
 - The root program's key adds the key of its platform/app pairing, which covers
   both modules' checked entries and the pairing's evaluation output: the root
   unit lowers the platform's implementations at the app's types, read through
@@ -16813,15 +16839,30 @@ and Per-Module Output is the invariant that makes it possible:
   words of ARC interface a downstream module compiles against (each exported
   procedure's solved ownership signature and uniqueness data, which
   Per-Module Output makes a function of the module and its imports), with
-  the digest of those records (`exportRecordsDigest`). An importer's key
-  folds in the module's export digest, which combines that records digest
-  with its imports' export digests (`Digests.recordExportsDigest`), so a
-  restored object's records are not hashed again. This is a checked
-  interface digest, never a payload-integrity hash. The v2 export digest
-  composition changes hash bytes; object format 19 also incorporates stored
-  field-default identities alongside integer worker bindings and invalidates
-  the older entries. Its inputs remain the module's own export records and its imports,
-  never its importers or other modules in the program. There
+  the digest of the importer-visible ones (`exportRecordsDigest`). A record
+  is importer-visible when another unit can read it
+  (`lower.recordExports`): it reads a worker's ownership signature when it
+  calls the worker and its needs when it fills the worker's table, and it
+  names a worker of the module only through the module's checked interface
+  or its records. The visible records are those of the templates the
+  checked module names to importers (exposed definitions, exposed bindings'
+  templates and the templates exposed procedure aliases forward to,
+  registered methods, constants' entry procedures, and the entry wrappers of
+  callable bindings, each with its integer list workers), every default, every lambda and dictionary entry that takes a
+  type table (a function value an importer's compile-time evaluation stored
+  can be any of them, and restoring it fills its table), and every worker a
+  visible worker's needs list names. A debug compiler fails when a unit
+  reads a record that is not visible (`bindImportedInterface`,
+  `fillTable`). A decoder resolving a worker a link's encoding names reads
+  only the record's template position, which locates the worker and is no
+  part of the digest. An importer's key folds in the module's export
+  digest, which combines that records digest with its imports' export
+  digests (`Digests.recordExportsDigest`), so a restored object's records
+  are not hashed again. This is a checked interface digest, never a
+  payload-integrity hash. Object format 21 adds each record's template
+  position and visibility and invalidates the older entries. Its inputs
+  remain the module's own export records and its imports, never its
+  importers or other modules in the program. There
   is no index, no manifest, no second cache the file refers to, and nothing
   in it comes from any other cache. `ROC_VERIFY_BOXY_OBJECT_REUSE` rebuilds
   every restored or embedded object (Embedded Units) and compares the bytes,
@@ -17430,8 +17471,18 @@ recipe then holds its own table of types rather than ids of stored types. A
 generated codec worker's signature is generic, so a recipe type can name
 variables, which no stored type does, and a table keeps a block-local nominal's
 context arguments, which a stored type leaves to its reader's scope. Workers are
-named as their keys name them: templates and lambdas by checked id, codec
-pieces by their family's derivation, a compile-time slot by its root.
+named as their identities name them (Caching Under `.boxy`): a template by its
+worker's identity and an index into a table of template positions that follows
+the module table, a lambda by its owner and its place among the owner's nested
+procedure sites, a default by its place among its module's defaults, codec
+pieces by their family's derivation, a compile-time slot by its root. The
+positions table locates each template in the modules the recipe was stored
+with; it is no part of what the recipe names (`ConstStore.recipeBody`), so a
+stored function value's digest changes only when the value does, not when an
+edit elsewhere in a module moves its templates. A needs list and a function
+unit's metadata, which are read against modules built apart from them, name a
+template by its worker's identity alone, which the reader resolves through the
+worker's export record.
 
 Function types share one descriptor, so a descriptor cannot be read back into
 a type by its structure. A function value's table names its inputs instead:
