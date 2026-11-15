@@ -19818,9 +19818,9 @@ const BodyDraftStore = struct {
     root_value_reads: std.ArrayList(DraftRootValueRead),
     /// The statements that run before an expression, in the statement list
     /// enclosing it: what its strict operands contributed there (design.md
-    /// "Operand Sequencing"). The expression that uses it, or the scope it is
-    /// the whole of, places them.
-    leading: std.AutoHashMapUnmanaged(DraftExprId, DraftSpan(DraftStmtId)) = .empty,
+    /// "Operand Sequencing"). Each expression that uses it, and the scope it
+    /// is the whole of, places them.
+    leading: collections.DenseMapUnmanaged(DraftExprId, DraftSpan(DraftStmtId)) = .empty,
     /// A reservation was filled with an expression that changes the sequence
     /// around it, so the bodies are sequenced again before they are sealed.
     resequence_filled: bool = false,
@@ -25614,7 +25614,9 @@ const BodyContext = struct {
         defer stack.deinit(self.allocator);
         var children: std.ArrayList(DraftExprId) = .empty;
         defer children.deinit(self.allocator);
-        var visited: std.AutoHashMapUnmanaged(DraftExprId, void) = .empty;
+        // Sequencing an expression adds expressions, none of which this walk
+        // reaches: each expression's children are read before it is changed.
+        var visited = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.draft.exprs.items.len);
         defer visited.deinit(self.allocator);
         try stack.append(self.allocator, .{ .expr = root, .inside_done = false });
         while (stack.pop()) |visit| {
@@ -25622,7 +25624,8 @@ const BodyContext = struct {
                 try self.resequenceExpr(visit.expr);
                 continue;
             }
-            if ((try visited.getOrPut(self.allocator, visit.expr)).found_existing) continue;
+            if (visited.isSet(@backingInt(visit.expr))) continue;
+            visited.set(@backingInt(visit.expr));
             try stack.append(self.allocator, .{ .expr = visit.expr, .inside_done = true });
             children.clearRetainingCapacity();
             if (self.draft.leadingOf(visit.expr)) |leading| try self.appendStatementValues(&children, leading);

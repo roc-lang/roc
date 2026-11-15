@@ -563,8 +563,9 @@ test "constants several functions read lower the same whether evaluated or read 
     // from every function that reads it, and each of those functions lifts
     // to a body of its own; debug builds verify that every lifted
     // expression with expressions inside it has one parent (design.md
-    // "Operand Sequencing").
-    try expectColdEqualsWarm(.specialized_once,
+    // "Operand Sequencing"). `settings` holds a function value, so the cold
+    // build specializes its runtime program again.
+    try expectColdEqualsWarm(.respecialized,
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
         \\Shape := [Circle(U64), Rect({ w : U64, h : U64 })].{
