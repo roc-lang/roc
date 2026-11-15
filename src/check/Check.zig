@@ -19250,13 +19250,9 @@ fn checkInstantiatedStaticDispatchConstraints(
             // A materialized default can ground a receiver whose derived
             // codec relation then parks for final validation. Every final
             // validation pass has already run, so this phase validates it and
-            // judges whatever that validation grounds in another round. A
-            // validated relation can grow a value's error row with its
-            // format's tags, which every widened use of that value must see.
+            // judges whatever that validation grounds in another round.
             try self.checkFinalGeneratedCodecConstraints(env);
-            while (try self.propagateValueRowsToWidenedUses(env)) {
-                if (self.final_codec_dispatch_constraints.items.len != 0) try self.checkFinalGeneratedCodecConstraints(env);
-            }
+            if (builtin.mode == .debug) try self.debugAssertWidenedUseRowsComplete();
             continue;
         }
         if (self.instantiation_dispatchers_checked == self.instantiation_dispatchers.items.len and
@@ -25272,6 +25268,23 @@ const WidenedUseRow = struct {
 /// longer admits such a tag is a type mismatch at the result. Returns whether
 /// any copy gained a tag, since unifying one can introduce constraints of its
 /// own.
+/// Every row a use's widening copy re-opened copies a value row that was
+/// closed or bounded when the use read it (`widenedRowCopy` re-opens no other
+/// row), and neither kind gains a tag afterwards: a closed row has no tail,
+/// and the unifier refuses a tag into a bounded extension
+/// (`unify.refuseTagsIntoBoundedExt`). So a relation validated after value
+/// rows propagated, such as a derived codec relation parked by settled
+/// default materialization, cannot add a tag a widened use lacks.
+fn debugAssertWidenedUseRowsComplete(self: *Self) std.mem.Allocator.Error!void {
+    var missing: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
+    defer missing.deinit(self.gpa);
+    for (self.widened_use_rows.items) |pair| {
+        if (pair.settled or !self.varIsTagRow(pair.use_row)) continue;
+        try self.collectTagsMissingFromUse(pair, &missing);
+        std.debug.assert(missing.items.len == 0);
+    }
+}
+
 fn propagateValueRowsToWidenedUses(self: *Self, env: *Env) std.mem.Allocator.Error!bool {
     var changed = false;
     var missing: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
