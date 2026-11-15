@@ -842,7 +842,8 @@ pub const MachOWriter = struct {
                     .abs64 => @bitCast(std.mem.readInt(u64, field[0..8], .little)),
                     .abs32 => std.mem.readInt(u32, field[0..4], .little),
                     .pc32 => @as(i64, std.mem.readInt(i32, field[0..4], .little)) - 4,
-                    else => 0,
+                    // Without an addend entry these fields carry no addend.
+                    .abs32s, .branch26, .page21, .pageoff12, .rva32, .got_load_page21, .got_load_pageoff12 => 0,
                 } });
             } else {
                 if (kind != .abs64 and kind != .abs32 and !x86_pcrel) return error.UnsupportedRelocation;
