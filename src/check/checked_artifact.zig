@@ -1655,6 +1655,7 @@ const CompileTimeRequestScheduler = struct {
                 const template_ref = (try self.collectResolvedRefDependency(self.resolved_value_refs.records.items()[@backingInt(ref_id)].ref)) orelse return;
                 try self.collectTemplateDependencies(template_ref);
             },
+            .requirement => |requirement| try self.collectTemplateDependencies(self.procedure_templates.templateRef(self.artifact_key.digest(), requirement.template)),
         }
     }
 
@@ -13529,6 +13530,7 @@ const EvidencePass = struct {
     compile_time_roots: *const CompileTimeRootTable,
     platform_requirement_solutions: []const ModuleEnv.PlatformRequirementSolution,
     platform_requirement_root_evidence: []artifact_serialize.Span,
+    platform_requirement_root_substs: []artifact_serialize.Span,
     template_root_evidence: []?artifact_serialize.Span,
 
     types: *const types.Store,
@@ -13661,9 +13663,10 @@ const EvidencePass = struct {
         compile_time_roots: *const CompileTimeRootTable,
         platform_requirement_solutions: []const ModuleEnv.PlatformRequirementSolution,
         platform_requirement_root_evidence: []artifact_serialize.Span,
+        platform_requirement_root_substs: []artifact_serialize.Span,
         template_root_evidence: []?artifact_serialize.Span,
     ) EvidencePass {
-        if (platform_requirement_solutions.len != platform_requirement_root_evidence.len) {
+        if (platform_requirement_solutions.len != platform_requirement_root_evidence.len or platform_requirement_solutions.len != platform_requirement_root_substs.len) {
             checkedArtifactInvariant("platform requirement solutions and root evidence output had different lengths", .{});
         }
         return .{
@@ -13683,6 +13686,7 @@ const EvidencePass = struct {
             .compile_time_roots = compile_time_roots,
             .platform_requirement_solutions = platform_requirement_solutions,
             .platform_requirement_root_evidence = platform_requirement_root_evidence,
+            .platform_requirement_root_substs = platform_requirement_root_substs,
             .template_root_evidence = template_root_evidence,
             .types = module.typeStoreConst(),
             .value_use_by_node = collections.DenseMap(u32, u32).init(allocator),
@@ -13923,8 +13927,9 @@ const EvidencePass = struct {
         // root edge here, while the app checker's solved requirement variable
         // and exact target records are still available, and carry only the
         // finished evidence vector across the checked-artifact boundary.
-        for (self.platform_requirement_solutions, self.platform_requirement_root_evidence) |solution, *out| {
+        for (self.platform_requirement_solutions, self.platform_requirement_root_evidence, self.platform_requirement_root_substs) |solution, *out, *out_subst| {
             out.* = .{};
+            out_subst.* = .{};
             switch (solution.outcome) {
                 .checked_error => continue,
                 .success => {},
@@ -13936,14 +13941,17 @@ const EvidencePass = struct {
                 const spans = (try self.evidenceRefsForRecord(record, .root_default)) orelse
                     checkedArtifactInvariant("platform invocation evidence remained unresolved after checking", .{});
                 out.* = spans.refs;
+                out_subst.* = spans.subst;
                 continue;
             }
             params.clearRetainingCapacity();
-            // A use without a record has no substitution and no evidence.
+            // A use without a record shares the binding's own variables and
+            // has no evidence: each variable stands for itself.
             try self.enumerateParams(ModuleEnv.varFrom(solution.def), &params);
             if (params.items.len != 0) {
                 checkedArtifactInvariant("platform invocation omitted its scheme-use evidence record", .{});
             }
+            out_subst.* = try self.appendSiteSubstitution(ModuleEnv.varFrom(solution.def), &.{}, &.{});
         }
 
         // Explicit shared-var use sites no template chain fully bound resolve
@@ -16788,6 +16796,7 @@ fn resolveTotalDispatchPlans(
     compile_time_roots: *const CompileTimeRootTable,
     platform_requirement_solutions: []const ModuleEnv.PlatformRequirementSolution,
     platform_requirement_root_evidence: []artifact_serialize.Span,
+    platform_requirement_root_substs: []artifact_serialize.Span,
     template_root_evidence: []?artifact_serialize.Span,
 ) Allocator.Error!void {
     var pass = EvidencePass.init(
@@ -16807,6 +16816,7 @@ fn resolveTotalDispatchPlans(
         compile_time_roots,
         platform_requirement_solutions,
         platform_requirement_root_evidence,
+        platform_requirement_root_substs,
         template_root_evidence,
     );
     defer pass.deinit();
@@ -18256,6 +18266,11 @@ pub const CheckedProcedureTemplateTable = struct {
         return self.literal_requirements_pool.items()[template.literal_requirements.start .. template.literal_requirements.start + template.literal_requirements.len];
     }
 
+    /// The reference to this table's template `id`, in the module `artifact`.
+    pub fn templateRef(self: *const CheckedProcedureTemplateTable, artifact: canonical.ArtifactRef, id: canonical.CheckedProcedureTemplateId) canonical.ProcedureTemplateRef {
+        return .{ .artifact = artifact, .proc_base = self.templates.items()[@backingInt(id)].proc_base, .template = id };
+    }
+
     /// A generalized-local scope's literal requirements.
     pub fn scopeLiteralRequirements(self: *const CheckedProcedureTemplateTable, scope: *const DispatchRefScope) []const LiteralRequirement {
         return self.literal_requirements_pool.items()[scope.literal_requirements.start .. scope.literal_requirements.start + scope.literal_requirements.len];
@@ -18272,7 +18287,9 @@ pub const CheckedProcedureTemplateTable = struct {
         const entries: []const LiteralEdgeEntry, const key: u32 = switch (edge) {
             .node => |id| .{ self.literal_node_edges.items(), @backingInt(id) },
             .use => |expr| .{ self.literal_use_edges.items(), @backingInt(expr) },
-            .literal => return &.{},
+            // The invocation's frame derives its literal arguments from its
+            // types, as the platform's call does.
+            .literal, .requirement => return &.{},
         };
         const found = artifact_serialize.binarySearchByKey(LiteralEdgeEntry, u32, entries, key, literalEdgeEntryOrder) orelse return &.{};
         return self.literal_edge_args_pool.items()[found.args.start .. found.args.start + found.args.len];
@@ -19920,6 +19937,10 @@ pub const PlatformRequirementSolution = struct {
     solved_root: CheckedTypeId,
     /// Root-call dispatch evidence in this app artifact's evidence table.
     root_evidence: artifact_serialize.Span = .{},
+    /// The types the platform's invocation gives the app procedure's scheme
+    /// variables, in this app artifact's site substitutions; empty when the
+    /// procedure's scheme has none.
+    root_subst: artifact_serialize.Span = .{},
     value_kind: PlatformRequiredValueKind,
     /// Range into the table's `identity_solutions`; the offset within the
     /// range is the canonical identity slot of the platform requirement
@@ -19983,8 +20004,9 @@ fn platformRequirementSolutionTableFromInputs(
     exported_const_templates: *const ExportedConstTemplateTable,
     inputs: []const ModuleEnv.PlatformRequirementSolution,
     root_evidence: []const artifact_serialize.Span,
+    root_substs: []const artifact_serialize.Span,
 ) Allocator.Error!PlatformRequirementSolutionTable {
-    if (inputs.len != root_evidence.len) {
+    if (inputs.len != root_evidence.len or inputs.len != root_substs.len) {
         checkedArtifactInvariant("platform requirement solutions and root evidence had different lengths", .{});
     }
     if (inputs.len == 0) return .{};
@@ -19997,7 +20019,7 @@ fn platformRequirementSolutionTableFromInputs(
     var identity_solutions = std.ArrayList(CheckedTypeId).empty;
     errdefer identity_solutions.deinit(allocator);
 
-    for (inputs, root_evidence) |input, evidence| {
+    for (inputs, root_evidence, root_substs) |input, evidence, subst| {
         switch (input.outcome) {
             .checked_error => continue,
             .success => {},
@@ -20042,6 +20064,7 @@ fn platformRequirementSolutionTableFromInputs(
             .pattern = top_level.pattern,
             .solved_root = solved_root,
             .root_evidence = evidence,
+            .root_subst = subst,
             .value_kind = value_kind,
             .identity_start = identity_start,
             .identity_len = @intCast(identity_vars.len),
@@ -21029,6 +21052,9 @@ fn publishLiteralArgumentRoots(
     import_views: CheckedImportViews,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     callable_eval_templates: *const CallableEvalTemplateTable,
+    top_level_values: *const TopLevelValueTable,
+    requirement_solutions: []const ModuleEnv.PlatformRequirementSolution,
+    requirement_root_substs: []const artifact_serialize.Span,
 ) Allocator.Error!void {
     const store = &checked_types.store;
     const template_count = templates.templates.items().len;
@@ -21597,6 +21623,32 @@ fn publishLiteralArgumentRoots(
         }
     }
 
+    // The platform's invocation of each app procedure that satisfies a
+    // requirement instantiates the procedure's scheme at the types checking
+    // solved for it.
+    for (requirement_solutions, requirement_root_substs) |solution, subst| {
+        if (solution.outcome != .success or !solution.is_function) continue;
+        const top_level = top_level_values.lookupByDef(solution.def) orelse continue;
+        const binding = switch (top_level.value) {
+            .procedure_binding => |binding| binding,
+            .const_ref => continue,
+        };
+        const template = switch (top_level_procedure_bindings.get(binding).body) {
+            .direct_template => |direct| switch (direct.template) {
+                .checked => |template| template,
+                .lifted, .synthetic => continue,
+            },
+            .callable_eval_template, .checked_error => continue,
+        };
+        try collector.add(.{
+            .key = .{ .requirement = .{ .requires_idx = solution.requires_idx, .template = template.template } },
+            .callee = .{ .template = template },
+            .subst = plans.site_substitutions.items()[subst.start..][0..subst.len],
+            .scope = null,
+            .owner_expr = module.def(solution.def).expr.idx,
+        });
+    }
+
     // Instantiation of each edge's callee literal requirements, to a fixpoint.
     const ArgBuild = union(enum) { root: u32, forwarded: u32 };
     var edge_args = std.ArrayListUnmanaged(std.ArrayListUnmanaged(ArgBuild)).empty;
@@ -21728,6 +21780,7 @@ fn publishLiteralArgumentRoots(
                                 .literal => 0,
                                 .node => |id| @backingInt(id),
                                 .use => |use_expr| @backingInt(use_expr),
+                                .requirement => |requirement| requirement.requires_idx,
                             };
                             std.debug.print("literal-args: root {d}: literal expr {d} ({s}) at type root {d}, edge {s} {d} (owner expr {d}), callee obligation {d}\n", .{ new_roots.items.len - 1, obligation.site.node, @tagName(obligation.site.kind), @backingInt(ty), @tagName(edge.key), edge_id, @backingInt(edge.owner_expr), j });
                         }
@@ -21773,6 +21826,7 @@ fn publishLiteralArgumentRoots(
                         .literal => 0,
                         .node => |id| @backingInt(id),
                         .use => |use_expr| @backingInt(use_expr),
+                        .requirement => |requirement| requirement.requires_idx,
                     };
                     std.debug.print("literal-args: template {d} obligation {d}: literal expr {d} ({s}) at type root {d}, edge {s} {d}, callee obligation {d}\n", .{ template_index, index, obligation.site.node, @tagName(obligation.site.kind), @backingInt(obligation.ty), @tagName(obligation.edge), edge_id, obligation.callee_requirement });
                 }
@@ -21854,6 +21908,9 @@ fn publishLiteralArgumentRoots(
         @memset(demand, .empty);
         for (edges.items, edge_args.items, edge_templates.items) |edge, args, holders| {
             if (args.items.len == 0) continue;
+            // A requirement's invocation is held by no template, and its
+            // frame derives its literal arguments from its types.
+            if (edge.key == .requirement) continue;
             const start: u32 = @intCast(pool.items.len);
             for (args.items) |arg| {
                 try pool.append(allocator, switch (arg) {
@@ -21873,13 +21930,14 @@ fn publishLiteralArgumentRoots(
                     .node => |id| @backingInt(id),
                     .use => |expr| @backingInt(expr),
                     .literal => checkedArtifactInvariant("a literal obligation's own literal is no edge", .{}),
+                    .requirement => unreachable, // the loop skips requirement edges above
                 },
                 .args = .{ .start = start, .len = @intCast(pool.items.len - start) },
             };
             switch (edge.key) {
                 .node => try node_edges.append(allocator, entry),
                 .use => try use_edges.append(allocator, entry),
-                .literal => unreachable, // the entry's key switch above rejects literal keys
+                .literal, .requirement => unreachable, // the entry's key switch above rejects these keys
             }
         }
         std.sort.pdq(LiteralEdgeEntry, node_edges.items, {}, literalEdgeEntryLessThan);
@@ -24171,6 +24229,16 @@ pub const LiteralEdge = union(enum(u8)) {
     literal,
     node: static_dispatch.EvidenceNodeId,
     use: CIR.Expr.Idx,
+    /// The platform's invocation of the app procedure that satisfies a
+    /// requirement, which the app's checking instantiated
+    /// (`PlatformRequirementSolution`).
+    requirement: PlatformRequirementEdge,
+};
+
+/// A platform requirement's invocation of this module's procedure `template`.
+pub const PlatformRequirementEdge = struct {
+    requires_idx: u32,
+    template: canonical.CheckedProcedureTemplateId,
 };
 
 /// One literal a scheme's instantiation must convert: a literal of the
@@ -24368,7 +24436,7 @@ pub const CompileTimeRoot = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(CompileTimeRoot) == 148);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(CompileTimeRoot) == 152);
 }
 
 /// One literal's conversion root (`CompileTimeRootTable.literal_conversions`).
@@ -34686,6 +34754,9 @@ pub fn publishFromTypedModule(
     );
     defer allocator.free(platform_requirement_root_evidence);
     @memset(platform_requirement_root_evidence, .{});
+    const platform_requirement_root_substs = try allocator.alloc(artifact_serialize.Span, requirement_solutions.len);
+    defer allocator.free(platform_requirement_root_substs);
+    @memset(platform_requirement_root_substs, .{});
     const template_root_evidence = try allocator.alloc(
         ?artifact_serialize.Span,
         checked_procedure_templates.templates.items().len,
@@ -34710,6 +34781,7 @@ pub fn publishFromTypedModule(
         &compile_time_roots,
         requirement_solutions,
         platform_requirement_root_evidence,
+        platform_requirement_root_substs,
         template_root_evidence,
     );
 
@@ -34757,6 +34829,9 @@ pub fn publishFromTypedModule(
         .{ .current_owner = artifact_key.digest(), .direct = inputs.imports, .available = inputs.available_artifacts, .relations = inputs.relation_artifacts },
         &top_level_procedure_bindings,
         &callable_eval_templates,
+        &top_level_values,
+        requirement_solutions,
+        platform_requirement_root_substs,
     );
     try classifyTemplateDispatchPlanRefs(
         allocator,
@@ -34934,6 +35009,7 @@ pub fn publishFromTypedModule(
         &exported_const_templates,
         requirement_solutions,
         platform_requirement_root_evidence,
+        platform_requirement_root_substs,
     );
     errdefer platform_requirement_solutions.deinit(allocator);
 
@@ -36730,8 +36806,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x3D, 0x82, 0xF1, 0x73, 0xC2, 0x08, 0xE4, 0x91, 0xE8, 0x02, 0xE1, 0x35, 0x6F, 0x63, 0x4B, 0xD8,
-        0x82, 0xC1, 0xD2, 0x41, 0xCF, 0x6F, 0xDD, 0x29, 0xA7, 0xC9, 0xFE, 0xBA, 0x66, 0xDC, 0x81, 0xE5,
+        0x46, 0xE9, 0x40, 0xDF, 0x24, 0x35, 0xBF, 0x72, 0x1E, 0x7A, 0xE9, 0x6E, 0xF8, 0x0E, 0x05, 0x67,
+        0x96, 0x97, 0xB8, 0x2A, 0x2C, 0xE1, 0x10, 0x36, 0x55, 0xCC, 0x90, 0x64, 0x64, 0xF4, 0xFF, 0x22,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

@@ -9767,9 +9767,6 @@ const Builder = struct {
     /// Whether a discovery request reaches no literal root
     /// (`LiteralDemand`): its procedure's module reaches none, its types name
     /// no reaching nominal, and its evidence selects no reaching procedure.
-    /// The procedure's own literal requirements count: a specialization is
-    /// shared by every request for it, and one made at an instantiation
-    /// checking records no edge for converts them in this body.
     fn discoveryRequestReachesNoLiteralRoot(
         self: *Builder,
         template_ref: names.ProcTemplate,
@@ -9779,7 +9776,7 @@ const Builder = struct {
     ) Allocator.Error!bool {
         const demand = self.literal_demand orelse
             Common.invariant("discovery request reached Monotype without its literal demand");
-        var flags = demand.templateFlags(template_ref).merge(demand.requirementFlags(template_ref));
+        var flags = demand.templateFlags(template_ref);
         flags = flags.merge(try self.monoTypeLiteralFlags(demand, fn_ty));
         if (subst) |slots| for (slots) |slot| switch (slot) {
             .ty => |ty| flags = flags.merge(try self.monoTypeLiteralFlags(demand, ty)),

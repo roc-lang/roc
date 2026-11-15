@@ -2442,11 +2442,7 @@ reached only through a plan that selects it. A node's reach flags are its
 own and those of every node it reaches.
 
 A specialization can register a literal root only when the reach flags of
-its template, the literal requirements of its template's own scheme (a
-conversion at a variable the request leaves unfixed, as in a platform's call
-of `main!` whose error type mentions `Sql(a)`, registers its root in the
-specialization itself), the types of its request, and its dispatch evidence
-include
+its template, the types of its request, and its dispatch evidence include
 *strict*, or a dependent kind together with the custom type of that kind:
 every body it would lower is reached from its template, every type a
 dependent conversion is instantiated at is named by the request or by a
@@ -15964,6 +15960,12 @@ strategy).
   literal requirement of every scheme the body instantiates at an open type (an
   *edge*: a dispatch edge's evidence node, a procedure use, a use of a
   constant (which instantiates the scheme of the constant's entry wrapper), a
+  platform requirement's invocation of the app procedure that satisfies it
+  (`LiteralEdge.requirement`, whose substitution is the requirement
+  solution's `root_subst`: the app's check instantiated the binding for the
+  platform, so the app module owns the roots of that instantiation and the
+  platform's call of `main!` whose error type mentions `Sql(a)` validates
+  its literals there), a
   generalized local function's use or construction), recording the type after the edge's
   substitution, the edge, and the callee's literal requirement index. Literal requirements are
   computed to a fixpoint over the module's schemes and deduplicated by
@@ -16930,16 +16932,11 @@ its type, under either strategy: as a literal argument root of the
 instantiating module where checking recorded the instantiation, which both
 strategies evaluate, and otherwise as a literal root of the specialization
 under `.lss` or a literal thunk under `.boxy`. A `.boxy` compile-time program converts its literals exactly as a
-runtime program does, through its literal arguments and dictionaries, and no
-literal table exists. A literal thunk runs only when the program does, so
-the conversions checking recorded no instantiation for are validated by the
-same discovery pass under both strategies: once its own roots are complete,
-a `.boxy` finalization plans the program's discovery roots and specializes
-and evaluates those the demand analysis keeps (`discoverLiteralRoots`),
-exactly as `roc check` does, and stores nothing from them. A
-literal rejection, a conversion's effects, and a dormant-code diagnostic are
-therefore the same under both strategies because the same conversions run at
-the same types.
+runtime program does, through its literal arguments and dictionaries, so the
+evaluator runs no discovery pass and no literal table exists: a literal
+rejection, a conversion's effects, and a dormant-code diagnostic are the
+same under both strategies because the same conversions run at the same
+types.
 
 ### Strategy Equivalence Tests
 
