@@ -2435,10 +2435,7 @@ const TypeTable = struct {
     ///
     /// Each root's checked type is requested from one compiler lowering of the
     /// artifact that owns it, and that lowering's layout store is the only
-    /// authority for every layout fact glue emits. A root's own layout is the
-    /// type's intrinsic layout, so a root whose layout is a box over a
-    /// by-value repr (an opaque record holding a callable) becomes a box over
-    /// a payload entry before any walk starts. From each root the walk then
+    /// authority for every layout fact glue emits. From each root the walk
     /// descends the entry graph in lockstep with the committed layout: struct
     /// fields by original index, tag payloads by discriminant, list elements
     /// and box payloads by child layout. A slot the compiler boxed while the
@@ -2461,12 +2458,6 @@ const TypeTable = struct {
             const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable; // the loop above lowered every root's artifact
             const layout_idx = lowering.root_layouts.get(root.checked_type) orelse
                 glueInvariant("compiler emitted no layout for requested glue root checked type {d}", .{@backingInt(root.checked_type)});
-            try self.boxRootInPlace(lowering.abi_layouts.layouts(), entry_idx, layout_idx);
-        }
-
-        for (self.roots.keys(), self.roots.values()) |entry_idx, root| {
-            const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable; // the first loop lowered every root's artifact
-            const layout_idx = lowering.root_layouts.get(root.checked_type) orelse unreachable; // the previous loop checked every root's layout exists
             try self.attachEntryLayout(lowering.abi_layouts.layouts(), entry_idx, layout_idx);
         }
 
@@ -2761,28 +2752,6 @@ const TypeTable = struct {
 
     fn layoutIsBox(layout_val: layout.Layout) bool {
         return layout_val.tag == .box or layout_val.tag == .box_of_zst;
-    }
-
-    /// A root whose own committed layout is a box over a by-value repr is a
-    /// type the compiler stores behind a compiler-owned box everywhere (an
-    /// opaque nominal record that holds a callable, whose box doubles as the
-    /// recursive-slot storage for closures that capture the record). The host
-    /// sees the box, so the entry becomes the box and its repr moves to a new
-    /// payload entry. Runs before any edge walk so every slot of the type
-    /// already finds the box repr.
-    fn boxRootInPlace(
-        self: *TypeTable,
-        store: *const layout.Store,
-        entry_idx: u64,
-        layout_idx: layout.Idx,
-    ) Allocator.Error!void {
-        if (self.entries.items[@intCast(entry_idx)].abi != null) return;
-        if (!layoutIsBox(store.getLayout(layout_idx))) return;
-        const repr = self.entries.items[@intCast(entry_idx)].repr;
-        if (repr == .box) return;
-        const payload_idx: u64 = @intCast(self.entries.items.len);
-        try self.entries.append(self.gpa, .{ .repr = repr });
-        self.entries.items[@intCast(entry_idx)].repr = .{ .box = .{ .inner_id = payload_idx } };
     }
 
     /// The entry a parent slot references for a committed child layout. When

@@ -2822,7 +2822,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "issue 9824: glue reports an error for a by-value unresolved type variable", .body = .{ .custom = .glue_unresolved_by_value_errors } },
     .{ .id = 0, .suite = .glue, .name = "issue 12760: glue reports an error for a by-value unresolved argument", .body = .{ .custom = .glue_unresolved_arg_by_value_errors } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: frozen generator data survives both strategies and all optimization modes", .body = .{ .custom = .glue_frozen_generator } },
-    .{ .id = 0, .suite = .glue, .name = "glue regression: opaque nominal record with a function field is a boxed payload", .body = .{ .custom = .glue_record_function_field } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: opaque nominal record with a function field is passed by value", .body = .{ .custom = .glue_record_function_field } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: recursive-slot boxed edges wrap by-value types and compile", .body = .{ .custom = .glue_recursive_slot_box } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: function stored in a generic type is an erased callable in every generator", .body = .{ .custom = .glue_generic_callable_arg } },
     .{ .id = 0, .suite = .glue, .name = "issue 11505: hosted Box of a generic function is an erased callable in every generator", .body = .{ .custom = .glue_hosted_erased_generic_callback } },
@@ -19575,11 +19575,9 @@ fn customGlueFrozenGenerator(io: std.Io, allocator: Allocator, env: *const CaseE
 
 fn customGlueRecordFunctionField(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     // A platform whose provided entrypoint returns an opaque nominal record
-    // holding a directly boxed function field. Its compiler-owned record
-    // allocation does not exempt that field from the direct-boxing rule.
-    // The host receives a pointer to a payload
-    // struct whose only field is an erased callable. Glue describes exactly
-    // that committed layout.
+    // holding a directly boxed function field. The host receives the record
+    // by value: a struct whose only field is an erased callable. Glue
+    // describes exactly that committed layout.
     const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
@@ -19598,21 +19596,20 @@ fn customGlueRecordFunctionField(io: std.Io, allocator: Allocator, env: *const C
     const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
         return customFailure(allocator, timer, "failed to read generated Zig file: {}", .{err});
 
-    // The payload struct is one pointer-sized erased callable at both widths,
-    // the entrypoint returns a pointer to it, releasing the returned box
-    // composes the box policy over the payload's policy, and the payload's
-    // own decref and incref release and retain the callable.
+    // The struct is one pointer-sized erased callable at both widths, the
+    // entrypoint returns it by value, and its decref and incref release and
+    // retain the callable.
     for ([_][]const u8{
         "    @\"first\": RocErasedCallable,",
         "        decrefErasedCallable(value.@\"first\", roc_host);",
         "        increfErasedCallable(value.@\"first\", amount);",
         "if (@sizeOf(Value) != 8) @compileError",
         "if (@sizeOf(Value) != 4) @compileError",
-        "pub extern fn shape() callconv(.c) *Value;",
-        "if (T == *Value) return RocBoxRelease(*Value, Value, ValueRelease);",
+        "pub extern fn shape() callconv(.c) Value;",
+        "if (T == Value) return ValueRelease;",
     }) |needle| {
         if (std.mem.find(u8, generated, needle) == null) {
-            return customFailure(allocator, timer, "generated Zig file missing boxed opaque record ABI text {s}", .{needle});
+            return customFailure(allocator, timer, "generated Zig file missing opaque record ABI text {s}", .{needle});
         }
     }
     return null;
