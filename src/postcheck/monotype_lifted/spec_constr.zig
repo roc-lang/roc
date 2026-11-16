@@ -14069,6 +14069,7 @@ const Cloner = struct {
     const LoopAttemptMark = struct {
         analysis: Pass.AnalysisMark,
         callable_workers: usize,
+        prefix_fns: usize,
         rebased_inline_scope_changes: usize,
         recorded_value_keys: usize,
         clone_templates: usize,
@@ -14099,6 +14100,7 @@ const Cloner = struct {
         return .{
             .analysis = self.pass.markAnalysis(),
             .callable_workers = self.pass.callable_workers.count(),
+            .prefix_fns = self.pass.prefix_fns.count(),
             .rebased_inline_scope_changes = self.rebased_inline_scope_changes.items.len,
             .recorded_value_keys = self.recorded_value_keys.items.len,
             .clone_templates = self.clone_templates.items.len,
@@ -14116,9 +14118,13 @@ const Cloner = struct {
     ///
     /// A callable worker the attempt created stays: it is keyed by its
     /// template and ABIs alone, so the retry and every later clone reuse it,
-    /// and its body lies in the program suffix the attempt appended. The
-    /// suffix, and the ids minted for it, are rewound only when the attempt
-    /// created no worker. Exit selection never retries.
+    /// and its body lies in the program suffix the attempt appended. A
+    /// prefix split the attempt committed stays too: the split function's
+    /// new source body, and each prefix function's parameters and template,
+    /// lie in that suffix, and every later clone of the split function
+    /// reads them. The suffix, and the ids minted for it, are rewound only
+    /// when the attempt created no worker and committed no prefix split.
+    /// Exit selection never retries.
     fn rewindLoopAttempt(
         self: *Cloner,
         mark: LoopAttemptMark,
@@ -14140,7 +14146,9 @@ const Cloner = struct {
             if (!removed) Common.invariant("recorded value change had no map entry");
         }
 
-        if (self.pass.callable_workers.count() == mark.callable_workers) {
+        if (self.pass.callable_workers.count() == mark.callable_workers and
+            self.pass.prefix_fns.count() == mark.prefix_fns)
+        {
             self.rewindProgramSuffix(mark);
         }
 

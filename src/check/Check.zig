@@ -45348,6 +45348,19 @@ const DispatchDedupScratch = struct {
     }
 };
 
+/// Journal that deduplication dropped the requirement whose callable is
+/// `dropped_fn_var` in favor of the one whose callable is `retained_fn_var`.
+/// A dispatch written against the dropped callable is keyed by that exact
+/// var, so it reaches the retained relation's selected target only through
+/// this fold (`publishDispatchRelationMerges`).
+fn recordDeduplicatedDispatchRelation(self: *Self, dropped_fn_var: Var, retained_fn_var: Var) Allocator.Error!void {
+    if (dropped_fn_var == retained_fn_var) return;
+    try self.types.static_dispatch_relation_merges.append(self.types.gpa, .{
+        .dropped_fn_var = dropped_fn_var,
+        .retained_fn_var = retained_fn_var,
+    });
+}
+
 fn deduplicateGeneralizedDispatchRequirements(
     self: *Self,
     scheme_var: Var,
@@ -45462,8 +45475,11 @@ fn deduplicateGeneralizedDispatchRequirements(
                 if (constraint.origin == .where_clause) {
                     const body_required = constraint.origin.where_clause.body_required or
                         (retained.origin == .where_clause and retained.origin.where_clause.body_required);
+                    try self.recordDeduplicatedDispatchRelation(retained.fn_var, constraint.fn_var);
                     retained.* = constraint;
                     retained.origin.where_clause.body_required = body_required;
+                } else {
+                    try self.recordDeduplicatedDispatchRelation(constraint.fn_var, retained.fn_var);
                 }
                 duplicate = true;
                 break;
@@ -45513,6 +45529,7 @@ fn deduplicateGeneralizedDispatchRequirements(
                 try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.fn_var, requirement.constraint.fn_var, env);
             self.canonical_key_writer.invalidateAnchoredKeys();
             if (same_callable) {
+                try self.recordDeduplicatedDispatchRelation(requirement.constraint.fn_var, entry.value_ptr.fn_var);
                 const retained = &self.type_schemes.items[scheme_idx].dispatch_requirements.items[entry.value_ptr.write_index];
                 retained.deferred_generated_codec = retained.deferred_generated_codec or requirement.deferred_generated_codec;
                 retained.pristine_codec_is_scheme_only = retained.pristine_codec_is_scheme_only or requirement.pristine_codec_is_scheme_only;
