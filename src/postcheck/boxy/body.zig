@@ -10583,7 +10583,7 @@ pub const Builder = struct {
                 // instantiation (`lowerAliasUse`). A scheme with no variable
                 // is generalized too when the alias's type holds an
                 // uncommitted tag tail, which each use copies and may lift
-                // (`DispatchRefScope.holds_uncommitted_tag_tail`).
+                // (the dispatch scope's `holds_uncommitted_tag_tail`).
                 if (self.bodies().binder(decl.pattern).is_scheme_alias) {
                     if (try self.program.localScope(self.module, decl.expr)) |scope_id| {
                         const scheme = try self.localScheme(scope_id);

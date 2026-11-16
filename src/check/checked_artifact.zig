@@ -18199,7 +18199,6 @@ pub const ProcTarget = union(enum) {
     comptime_only,
 };
 
-/// Public `CheckedProcedureTemplate` declaration.
 /// Whether a procedure template's signature may hold an uncommitted tag tail
 /// (`CheckedProcedureTemplate.uncommitted_tag_tail`).
 pub const TemplateTagTail = enum(u8) {
@@ -18214,6 +18213,7 @@ pub const TemplateTagTail = enum(u8) {
     no_scheme,
 };
 
+/// Public `CheckedProcedureTemplate` declaration.
 pub const CheckedProcedureTemplate = struct {
     proc_base: canonical.ProcBaseKeyRef,
     template_id: canonical.CheckedProcedureTemplateId,
@@ -26293,7 +26293,7 @@ fn publishClosedRowNodes(allocator: Allocator, checked_types: CheckedTypeStoreVi
 pub const ClosedRowNodeWalk = struct {
     allocator: Allocator,
     types: CheckedTypeStoreView,
-    sealed_tails: std.ArrayList(CheckedTypeId) = .empty,
+    sealed_tails: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty,
     pending: std.ArrayList(CheckedTypeId) = .empty,
     seen: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty,
 
@@ -26317,14 +26317,13 @@ pub const ClosedRowNodeWalk = struct {
         sealed_slots: []const u32,
         out: *std.ArrayList(CheckedTypeId),
     ) Allocator.Error!void {
-        const first = out.items.len;
         self.sealed_tails.clearRetainingCapacity();
         self.pending.clearRetainingCapacity();
         self.seen.clearRetainingCapacity();
         for (sealed_slots) |slot| {
             const variable = scheme_vars[slot];
             switch (self.types.payload(variable)) {
-                .flex => |flex| if (flex.row_tail == .uncommitted_record) try self.sealed_tails.append(self.allocator, variable),
+                .flex => |flex| if (flex.row_tail == .uncommitted_record) try self.sealed_tails.put(self.allocator, variable, {}),
                 .pending, .err, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union, .field_kind => {},
             }
         }
@@ -26335,6 +26334,8 @@ pub const ClosedRowNodeWalk = struct {
             try self.pending.append(self.allocator, evidence_params[index].callable_ty);
         }
         try self.pending.append(self.allocator, fn_root);
+        // `seen` visits each type once, so each closed row node is appended
+        // once.
         while (self.pending.pop()) |ty| {
             if ((try self.seen.getOrPut(self.allocator, ty)).found_existing) continue;
             const start = self.pending.items.len;
@@ -26355,11 +26356,7 @@ pub const ClosedRowNodeWalk = struct {
                             .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union, .field_kind => break,
                         }
                     }
-                    if (std.mem.findScalar(CheckedTypeId, self.sealed_tails.items, current) != null and
-                        std.mem.findScalar(CheckedTypeId, out.items[first..], ty) == null)
-                    {
-                        try out.append(self.allocator, ty);
-                    }
+                    if (self.sealed_tails.contains(current)) try out.append(self.allocator, ty);
                 },
                 .tag_union => |tag_union| {
                     var tags = tag_union.tags;
@@ -26378,11 +26375,7 @@ pub const ClosedRowNodeWalk = struct {
                             .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .record, .empty_tag_union, .field_kind => break,
                         }
                     }
-                    if (tag_count != 0 and self.types.uncommittedTagTail(current) and
-                        std.mem.findScalar(CheckedTypeId, out.items[first..], ty) == null)
-                    {
-                        try out.append(self.allocator, ty);
-                    }
+                    if (tag_count != 0 and self.types.uncommittedTagTail(current)) try out.append(self.allocator, ty);
                 },
                 .tuple => |items| try self.pending.appendSlice(self.allocator, items),
                 .function => |function| {
