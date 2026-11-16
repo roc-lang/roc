@@ -34089,7 +34089,7 @@ pub const ImportedModuleView = struct {
                 const root = self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root);
                 switch (root.kind) {
                     .constant, .callable_binding => {},
-                    .hoisted_constant, .hoisted_validation, .expect, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => return position,
+                    .hoisted_constant, .hoisted_validation, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => return position,
                 }
                 const def = switch (root.source) {
                     .def => |def| def,
