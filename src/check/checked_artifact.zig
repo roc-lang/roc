@@ -13798,6 +13798,10 @@ fn publishLocalMethodDispatchScopes(
 /// `SchemeUseRecord`s, whose fresh vars are resolved against the
 /// settled type store.
 const EvidencePass = struct {
+    const BuiltinNominalKey = struct {
+        origin_module: base.ModuleIdentity.Idx,
+        source_decl: u32,
+    };
     const PairRootKey = struct {
         pairs_start: u32,
         pairs_len: u32,
@@ -13969,6 +13973,9 @@ const EvidencePass = struct {
     enumerated_path_arena: base.SingleThreadArena,
     /// Scratch backing for the chain currently being resolved against.
     chain_scratch: std.ArrayList(ChainLevel),
+    /// The builtin each builtin-origin nominal declaration categorizes as
+    /// (`categorizeBuiltinNominal`), by origin and declaration.
+    builtin_nominals: std.AutoHashMapUnmanaged(BuiltinNominalKey, ?CheckedBuiltinNominal) = .empty,
     /// Per-plan / per-iterator-plan visited flags: a plan reachable from two
     /// templates (const body + entry wrapper) resolves once, and the final
     /// sweep resolves whatever no template reached (chain-free).
@@ -14118,6 +14125,7 @@ const EvidencePass = struct {
         self.enum_scratch.deinit(self.allocator);
         self.enumerated_path_arena.deinit();
         self.chain_scratch.deinit(self.allocator);
+        self.builtin_nominals.deinit(self.allocator);
     }
 
     fn run(self: *EvidencePass) Allocator.Error!void {
@@ -16006,6 +16014,19 @@ const EvidencePass = struct {
     /// The method owner of a settled source var, walking alias content
     /// transparently (the source-var analog of monotype lowering's
     /// dispatch-head read of published type identity).
+    /// The builtin `nominal` names (`categorizeBuiltinNominal`). The answer
+    /// depends only on the nominal's origin and declaration and the pass's
+    /// imports, so each declaration is categorized once.
+    fn builtinNominalOf(self: *EvidencePass, nominal: types.NominalType) Allocator.Error!?CheckedBuiltinNominal {
+        if (!nominal.originIsBuiltin()) return null;
+        const entry = try self.builtin_nominals.getOrPut(self.allocator, .{
+            .origin_module = nominal.origin_module,
+            .source_decl = nominal.statement(),
+        });
+        if (!entry.found_existing) entry.value_ptr.* = categorizeBuiltinNominal(self.module, self.import_views, nominal);
+        return entry.value_ptr.*;
+    }
+
     fn methodOwnerForSourceContent(self: *EvidencePass, var_: Var) Allocator.Error!?static_dispatch.MethodOwner {
         var current = var_;
         var remaining: u64 = self.types.len();
@@ -16021,7 +16042,7 @@ const EvidencePass = struct {
                 },
                 .structure => |flat_type| switch (flat_type) {
                     .nominal_type => |nominal| {
-                        if (categorizeBuiltinNominal(self.module, self.import_views, nominal)) |builtin_nominal| {
+                        if (try self.builtinNominalOf(nominal)) |builtin_nominal| {
                             if (builtin_nominal == .try_) {
                                 const module_identity_id = try self.names.internModuleIdentity(self.module.moduleEnvConst().moduleIdentityHash(nominal.origin_module));
                                 return .{ .nominal = .{
