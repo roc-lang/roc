@@ -18107,6 +18107,13 @@ pub const NestedProcSite = struct {
     /// (or a procedure nested in it) selects requires, ordered by binder id.
     runtime_captures: artifact_serialize.Span = .{},
     kind: NestedProcKind,
+    /// The site is a local procedure (a block-local function binding that
+    /// is not an alias) every use of which is the function of a call: every
+    /// lookup of its binder is a call's function, no site's runtime captures
+    /// name its binder, and no method registry entry targets it. `.boxy`
+    /// calls its worker directly and never builds its function value
+    /// (design.md "Function Values").
+    direct_calls_only: bool = false,
     checked_expr: collections.OptionalId(CIR.Expr.Idx),
     checked_pattern: collections.OptionalId(CIR.Pattern.Idx),
 };
@@ -18143,6 +18150,7 @@ pub const NestedProcSiteTable = struct {
         entry_wrappers: *const EntryWrapperTable,
         templates: *CheckedProcedureTemplateTable,
         resolved_value_refs: *const ResolvedValueRefTable,
+        method_registry: *const static_dispatch.MethodRegistry,
     ) Allocator.Error!NestedProcSiteTable {
         var scope_by_checked_expr = try nestedProcScopeMap(allocator, templates.dispatch_scopes.items());
         defer scope_by_checked_expr.deinit();
@@ -18199,6 +18207,7 @@ pub const NestedProcSiteTable = struct {
 
         const runtime_captures = try builder.publishRuntimeCaptures(sites);
         errdefer allocator.free(runtime_captures);
+        try builder.publishDirectCalls(sites, runtime_captures, method_registry);
 
         return .{
             .sites = .fromOwnedSlice(sites),
@@ -18967,6 +18976,17 @@ const NestedProcSiteBuilder = struct {
     open_sites: std.ArrayList(canonical.NestedProcSiteId) = .empty,
     /// Every local procedure a site's own body selects.
     selected_procs: std.ArrayList(SelectedLocalProc) = .empty,
+    /// The local lookups that are the function of a call, until the walk
+    /// reaches them.
+    callee_lookups: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty,
+    /// Each local procedure some lookup names, by its expression.
+    local_proc_uses: std.AutoHashMapUnmanaged(CIR.Expr.Idx, LocalProcUse) = .empty,
+
+    const LocalProcUse = struct {
+        binder: CIR.Pattern.Idx,
+        /// Some lookup of the procedure is not the function of a call.
+        value_use: bool,
+    };
 
     const SelectedLocalProc = struct {
         site: u32,
@@ -19012,6 +19032,8 @@ const NestedProcSiteBuilder = struct {
         self.binder_sites.deinit(self.allocator);
         self.open_sites.deinit(self.allocator);
         self.selected_procs.deinit(self.allocator);
+        self.callee_lookups.deinit(self.allocator);
+        self.local_proc_uses.deinit(self.allocator);
         self.work.deinit(self.allocator);
     }
 
@@ -19223,6 +19245,7 @@ const NestedProcSiteBuilder = struct {
                 try self.pushExpr(if_.final_else, owner);
             },
             .call => |call| {
+                if (bodies.exprData(call.func) == .lookup_local) try self.callee_lookups.put(self.allocator, call.func, {});
                 try self.pushExpr(call.func, owner);
                 for (call.args) |arg| try self.pushExpr(arg, owner);
             },
@@ -19474,8 +19497,10 @@ const NestedProcSiteBuilder = struct {
     }
 
     fn selectLookupTarget(self: *NestedProcSiteBuilder, expr_id: CIR.Expr.Idx) Allocator.Error!void {
+        const callee = self.callee_lookups.remove(expr_id);
         const refs = self.resolved_value_refs orelse return;
         const id = refs.lookupIdByExpr(expr_id) orelse return;
+        try self.recordLocalProcUse(refs.records.items()[@backingInt(id)].ref, callee);
         switch (refs.callableTarget(id).ref) {
             .local_proc => |local| try self.selectLocalProc(local.expr),
             .local_param,
@@ -19494,6 +19519,68 @@ const NestedProcSiteBuilder = struct {
             .platform_required_proc,
             .promoted_top_level_proc,
             => {},
+        }
+    }
+
+    /// Record a lookup resolved to `ref`: a use of the local procedure it
+    /// names, as the function of a call when `callee`.
+    fn recordLocalProcUse(self: *NestedProcSiteBuilder, ref: ResolvedValueRef, callee: bool) Allocator.Error!void {
+        const local = switch (ref) {
+            .local_proc => |local| local,
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_checked_error,
+            .platform_required_const,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => return,
+        };
+        // An alias forwards a callable its own lookup names, which is a use
+        // of that callable recorded where the alias's right-hand side is.
+        if (local.is_alias) return;
+        const entry = try self.local_proc_uses.getOrPut(self.allocator, local.expr);
+        if (!entry.found_existing) entry.value_ptr.* = .{ .binder = local.binder, .value_use = false };
+        if (!callee) entry.value_ptr.value_use = true;
+    }
+
+    /// Mark each site that is a local procedure only direct calls reach
+    /// (`NestedProcSite.direct_calls_only`): one whose lookups are all the
+    /// function of a call, whose binder no site's runtime captures name,
+    /// since a capture holds its function value, and which no method
+    /// registry entry targets, since a dispatch or a dictionary holds a
+    /// method's function value.
+    fn publishDirectCalls(
+        self: *NestedProcSiteBuilder,
+        sites: []NestedProcSite,
+        runtime_captures: []const CheckedCapture,
+        method_registry: *const static_dispatch.MethodRegistry,
+    ) Allocator.Error!void {
+        if (self.local_proc_uses.count() == 0) return;
+        for (method_registry.entries.items()) |entry| {
+            const target = entry.target orelse continue;
+            switch (target.kind) {
+                .local_proc => |local| if (self.local_proc_uses.getPtr(local.expr)) |use| {
+                    use.value_use = true;
+                },
+                .procedure, .structural, .callable_binding => {},
+            }
+        }
+        var captured = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){};
+        defer captured.deinit(self.allocator);
+        for (runtime_captures) |capture| try captured.put(self.allocator, capture.pattern, {});
+        for (sites) |*site| {
+            const expr = site.checked_expr.get() orelse continue;
+            const use = self.local_proc_uses.get(expr) orelse continue;
+            site.direct_calls_only = !use.value_use and !captured.contains(use.binder);
         }
     }
 
@@ -36521,6 +36608,7 @@ pub fn publishFromTypedModule(
         &entry_wrappers,
         &checked_procedure_templates,
         &resolved_value_refs,
+        &method_registry,
     );
     errdefer nested_proc_sites.deinit(allocator);
 
@@ -38509,8 +38597,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x79, 0x82, 0xF1, 0xC0, 0x41, 0x46, 0xE0, 0x91, 0x26, 0x67, 0x08, 0x92, 0xB4, 0x32, 0xED, 0x1D,
-        0x03, 0x06, 0xD8, 0x31, 0xBF, 0x3B, 0x9F, 0x62, 0x3F, 0x53, 0x1F, 0x1A, 0x8F, 0x4C, 0x9B, 0x53,
+        0xA1, 0x42, 0x44, 0x8B, 0x04, 0x35, 0xE7, 0xD8, 0x3B, 0x17, 0x7E, 0xC3, 0x08, 0x80, 0xF8, 0x7E,
+        0xFF, 0x47, 0x42, 0xAB, 0x7F, 0x18, 0x31, 0x42, 0x9E, 0x4B, 0x53, 0x58, 0xE7, 0xAD, 0xE5, 0x46,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

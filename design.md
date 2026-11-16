@@ -8076,7 +8076,9 @@ order, generated symbols, source display strings, body shape, capture shape,
 runtime layout, or LIR procedure ids.
 
 The nested-site table stores each site's checked expression, owner, lexical
-scope, evidence, and runtime captures. It does not retain a copy of the
+scope, evidence, runtime captures, and whether the site is a local procedure
+only direct calls reach (`NestedProcSite.direct_calls_only`, "Function
+Values" under `.boxy`). It does not retain a copy of the
 traversal path to each site: site identity is already explicit, and storing
 all ancestor paths costs quadratic space for deeply nested functions.
 
@@ -17425,8 +17427,9 @@ parameters) calls through the enclosing worker's dictionary, an input of its
 type table. A call
 whose target is concrete calls the target's worker directly, with hidden
 arguments from the site evidence as above. A call of a function value is an
-erased call (see Function Values). `from_callable`, `from_scheme`,
-`unreachable_value`, and `checked_error` resolutions lower as the checked
+erased call (see Function Values), except a call of a local procedure only
+direct calls reach, which calls the procedure's worker directly (also
+there). `from_callable`, `from_scheme`, `unreachable_value`, and `checked_error` resolutions lower as the checked
 boundary defines them for every strategy; they never cause a search.
 
 Every hidden input a call supplies is therefore a direct read of checked data:
@@ -17716,8 +17719,9 @@ each unit's static descriptors are its own static data.
 A worker with hidden inputs (the descriptors of its type variables, its
 dictionaries, then its literal arguments) takes one hidden argument: the
 address of its type table, immutable static data. A template takes it after
-its explicit parameters. An erased worker's capture record holds it after the
-captured values, except for a generalized local procedure whose calls pass
+its explicit parameters, and so does the worker of a local procedure only
+direct calls reach (Function Values). An erased worker's capture record
+holds it after the captured values, except for a generalized local procedure whose calls pass
 its own scheme's instantiation: its argument record leads with the table, and
 its function value captures none. A worker without inputs takes no table;
 a row node is an input, so a worker whose signature has one takes a table.
@@ -18324,6 +18328,31 @@ table, is immutable data too. Zero-capture functions are therefore static,
 immortal callables under both strategies, rather than allocations at each use.
 The `out_desc` slot of the erased-callable ABI is always
 written null: the caller knows the result type's descriptor itself.
+
+A local procedure that only direct calls reach has no function value at all.
+Checking records the fact at the procedure's nested procedure site
+(`NestedProcSite.direct_calls_only`) while it walks the module's bodies: the
+site is a block-local function binding that is not an alias, every lookup of
+its binder is the function of a call (in its own body, the declaring body, or
+any body nested in either), no site's runtime captures name its binder, since
+a capture holds the procedure's function value, and no method registry entry
+targets it, since a dispatch or a dictionary holds a method's. Its worker
+(`Worker.direct`) is an ordinary procedure, not an erased one: it takes the
+values the procedure captures as its leading parameters, in its site's
+runtime-capture order, then its explicit parameters, then its type table when
+it has inputs, which is the table its function value would have captured,
+or, for a generalized local procedure, the table its argument record would
+have led with, at the call's instantiation of its scheme. Its declaration
+creates the worker, records the values it captures, and binds nothing. A call
+evaluates its arguments and calls the worker with the captured values, which
+the declaring body reads as its declaration recorded them and a nested body
+reads from its own captures (they are among them, as the runtime captures of
+a site include those of every local procedure it selects). They are ordinary
+call arguments, whose ownership ARC decides as for any other call. A call
+from the procedure's own body at its own table passes the table the body
+received, so a self tail call loops. A local procedure used as a value
+anywhere keeps its function value for every use, its calls included. The
+rule applies under `.boxy` at every `--opt` level.
 
 Completed callable parts carry the producer-selected drop helper along with
 the procedure. The static-data encoder preserves that relocation: an immortal
