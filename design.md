@@ -10625,13 +10625,13 @@ dedicated `selectGeneratedPrivateRepresentation` capability before lowering
 the dispatch. The capability exists only during relation production, requires
 an explicitly directed public-to-private edge, and rejects every class that
 contains an imported finished Monotype. Ordinary graph unification rejects the
-same edge, and rejects binding an unresolved checked variable to a private
-class; the one unresolved cell it does bind is an undetermined record field's
-runtime slot, which holds no representation (Field Kinds). This preserves
-producer selection for branch results without making public/private
-merging—or reopening a durable Monotype—available as a general unification
-behavior. If the requested public interface is already a finished
-Monotype, the producer relates its distinct private result to that immutable
+same edge, except for a codec representation (below). Outside a codec
+representation it also rejects binding an unresolved checked variable to a
+private class; the one unresolved cell it does bind is an undetermined record
+field's runtime slot, which holds no representation (Field Kinds). This preserves producer selection for branch
+results without making public/private merging—or reopening a durable
+Monotype—available as a general unification behavior. If the requested public
+interface is already a finished Monotype, the producer relates its distinct private result to that immutable
 interface without merging either class, and the enclosing procedure or
 compile-time wrapper carries the private result cell as its exact output
 witness. ConstStore preserves that witness beside the stored value, and restore
@@ -10761,7 +10761,13 @@ and nominal backings without making constructor inspection global to unrelated
 calls. If a control-flow prepass cannot see a private result before emission,
 the first exact private branch upgrades the selection and all already-emitted
 inhabited branches are retagged with that validated selection before the
-control-flow expression is finalized.
+control-flow expression is finalized. A branch whose value is only a public
+interface, such as a generic body's list item or tag payload instantiated at
+the public type its specialization substitutes for a variable, meets a
+finished private selection the same way: its public interface relates to the
+selection through the opaque interface relation and the branch takes the
+selection. Lambda Solved then joins the public interface into the selected
+representation, as it does for a retagged earlier branch.
 
 Call specialization and control-flow result selection consume that same exact
 constructor witness where the producer granted the capability. They propagate
@@ -10791,23 +10797,77 @@ the use lifted it into. When that nominal carries generated-private evidence,
 the public structure relates to the nominal's structural backing through the
 opaque relation, so every generated-private node stays distinct from its
 public counterpart, and the public class then takes the request's nominal.
-A checked type variable carries no public structure of its own, so one related
-to a generated-private named representation other than an iterator (such as a
-codec method's unannotated `FieldNames` parameter, constrained only by the
-methods it calls) denotes that representation itself, as a checked variable
-related to an imported generated iterator does. The same holds for an interface
-parameter standing for such a variable's substitution cell, as when that
-parameter passes through an unannotated generic helper. Body lowering relates
-an expression's checked type to a known Monotype that carries generated-private
-evidence through this same opaque relation, just as it relates a checked
-interface to a type cell carrying such evidence; any other known Monotype
-unifies. Joining the variable never
-collapses two different representations. The checker gives the variable one
-type, and a codec representation's generated backing is built only from its
-named type's arguments and never changes afterwards, so every representation
-one variable meets is the same type. A generated iterator's variable takes the
-iterator's public interface instead, because representation selection may
+A codec representation is the generated-private `FieldNames`, `FieldName` or
+`ParseTagUnionSpec` value a derived parser builds for a format's methods. It
+is the only runtime representation of its named type at its arguments: no
+value of the type has the declared public backing as its layout, and a
+`FieldNames` or `ParseTagUnionSpec` consumer reads the renamed field names
+from the generated backing. Every type that denotes such a value therefore
+takes the representation:
+
+- A checked type variable carries no public structure of its own, so one
+  related to a codec representation (such as a codec method's unannotated
+  `FieldNames` parameter, constrained only by the methods it calls) denotes
+  that representation itself, as a checked variable related to an imported
+  generated iterator does. The same holds for an interface parameter standing
+  for such a variable's substitution cell, as when that parameter passes
+  through an unannotated generic helper.
+- The representation's own checked-public named type denotes it too: the
+  `FieldNames(shape)` a codec contract substitutes for that parameter's
+  variable, the parameter's annotation, the type the checker infers for a
+  `ParseTagUnionSpec.parse` argument, or the type a body instantiates for a
+  list item, a tag payload, a helper's result or a captured binder that holds
+  the value. The opaque relation relates the two types' arguments and the
+  public class takes the representation, and ordinary unification joins the
+  two the same way. Ordinary unification still rejects every other
+  public/private edge.
+
+Such a join changes what the public class denotes, unlike a join of two
+classes with equal content. The graph therefore treats it as it treats a
+nominal/structural join and an iterator representation join: every active
+snapshot and every durable type sealed through either class is invalidated,
+and the public class's nodes give up the finished Monotypes they were
+imported as, together with the class's finished witness. A view of the public
+type taken before the join (a request sealed for a deferred callee, say)
+would otherwise outlive it, and the joined class would still read as the
+public type.
+
+Body lowering relates an expression's checked type to a known Monotype that
+carries generated-private evidence through the opaque relation, just as it
+relates a checked interface to a type cell carrying such evidence; any other
+known Monotype unifies. Joining never collapses two different
+representations. The checker gives the variable or public type one type, and
+a codec representation's generated backing is built only from its named
+type's arguments and never changes afterwards, so every representation it
+meets is the same type. A generated iterator's variable and public type keep
+the iterator's public interface instead, because representation selection may
 still join a live iterator's representation or force it dynamic.
+
+A value produced inside a callee reaches its caller the same way a
+callee-authored iterator representation does. A call whose result type holds
+a codec representation's public named type (a helper or format method that
+returns the result of `FieldNames.rename_fields`, say) has no argument that
+relates that result to its representation: only the callee's body does. The
+caller therefore lowers such a callee before it consumes the result, and
+adopts the completed result, exactly as it does for a public iterator
+result. A codec representation among the call's arguments does not hold that
+back, because unlike an iterator representation it never changes. A branch of
+an `if` or `match` that is such a call contributes the completed callee's
+result to the shared result selection, as a branch calling an iterator
+producer does.
+
+Because every `FieldNames` value is the generated representation, the
+`FieldNames` operations (`iter`, `for_size`, `shortest_name`, `longest_name`,
+`rename_fields`) read their names only from the generated backing. An
+operation reads its subject's type from its request, and some subject
+expressions (a `match`, or a call through a function value) have no evidence
+to hand the request before they are lowered. While the request still holds
+the subject's public named type, the subject is lowered first at the
+request's own cell, which gives that cell the representation, and the
+operation reads its argument types afterwards. A
+`FieldNames` argument without it is a compiler invariant violation; there is
+no lowering that reads a record's own field labels in its place, since that
+would silently drop the format's renames.
 
 Match lowering likewise relates each checked pattern interface to the exact
 scrutinee node without merging a generated-private root into that public
