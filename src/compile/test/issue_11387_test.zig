@@ -163,6 +163,7 @@ fn expectReports(app_path: []const u8, expectation: ReportExpectation) TestError
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;

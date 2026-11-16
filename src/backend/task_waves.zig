@@ -1,4 +1,4 @@
-//! Bounded executor waves shared by the native and wasm code generators.
+//! Bounded executor waves the wasm code generator runs its bodies in.
 //!
 //! A wave runs one callback per job, on the executor's workers or inline on a
 //! sequential lane when there is no executor, through the same callback path

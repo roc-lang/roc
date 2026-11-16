@@ -1126,6 +1126,9 @@ const Lowerer = struct {
         join_id: LIR.JoinPointId,
         params: LIR.LocalSpan,
         param_tys: []const Type.TypeId,
+        /// The join's remainder is being lowered. Its parameters are in scope
+        /// only in its body, so no argument of a jump lowered now reads them.
+        in_remainder: bool = false,
     };
 
     /// The join that receives a value-position join's result in `target`.
@@ -6383,6 +6386,17 @@ const Lowerer = struct {
         /// arguments, as a capture record would be, and bound to the
         /// callee's capture locals instead of being packed into one.
         capture_values: []Lifted.ExprId = &.{},
+        /// The capture record `capture_arg` holds, when the call builds it
+        /// itself, next to the call statement. Every operand of such a
+        /// record is a plain local read (`operandIsPlainLocalRead`), so
+        /// building it after the arguments reads the same values, and the
+        /// record is not live across an argument's branching.
+        capture_record: ?struct {
+            captures: CaptureSpanId,
+            /// Borrowed from the lifted program.
+            operands: []const Lifted.CaptureOperand,
+            ty: Type.TypeId,
+        } = null,
         /// The capture value types, then the argument types.
         arg_tys: []Type.TypeId = &.{},
         lowered: ?LoweredExprLocals = null,
@@ -6667,13 +6681,20 @@ const Lowerer = struct {
     fn valueJoinFor(self: *Lowerer, next: LIR.CFStmtId, target: LIR.LocalId) ValueJoin {
         const stmt = self.result.store.getCFStmtImmediate(next);
         if (stmt.* == .jump) {
-            var index = self.value_consumers.items.len;
-            while (index > 0) {
-                index -= 1;
-                const consumer = self.value_consumers.items[index];
-                if (consumer.join_id == stmt.jump.target and consumer.target == target) {
-                    return .{ .id = consumer.join_id, .declared = true };
+            // Each consumer's join is minted after every consumer below it was
+            // pushed, so the stack ascends by join id.
+            const wanted = @backingInt(stmt.jump.target);
+            const consumers = self.value_consumers.items;
+            var low: usize = 0;
+            var high: usize = consumers.len;
+            while (low < high) {
+                const mid = low + (high - low) / 2;
+                const found = @backingInt(consumers[mid].join_id);
+                if (found == wanted) {
+                    if (consumers[mid].target != target) break;
+                    return .{ .id = consumers[mid].join_id, .declared = true };
                 }
+                if (found < wanted) low = mid + 1 else high = mid;
             }
         }
         return .{ .id = self.freshJoinPointId(), .declared = false };
@@ -6703,8 +6724,17 @@ const Lowerer = struct {
     /// pushed; a join an enclosing form declared is already on the stack.
     fn enterValueJoin(self: *Lowerer, done: ValueJoin, target: LIR.LocalId) Common.LowerError!bool {
         if (done.declared) return false;
-        try self.value_consumers.append(self.allocator, .{ .join_id = done.id, .target = target });
+        try self.pushValueConsumer(.{ .join_id = done.id, .target = target });
         return true;
+    }
+
+    fn pushValueConsumer(self: *Lowerer, consumer: ValueConsumer) Common.LowerError!void {
+        if (self.value_consumers.getLastOrNull()) |top| {
+            if (@backingInt(top.join_id) >= @backingInt(consumer.join_id)) {
+                Common.invariant("a value consumer's join was minted before the consumer below it");
+            }
+        }
+        try self.value_consumers.append(self.allocator, consumer);
     }
 
     /// Remove a value form's join from the consumer stack. Idempotent.
@@ -8295,6 +8325,23 @@ const Lowerer = struct {
         task.capture_ty = self.fn_entries.items[@backingInt(task.target_fn)].spec.capture_ty.get() orelse
             Common.invariant("capturing direct call target had no capture record type");
         task.capture_local = try self.addTemp(task.capture_ty);
+        var plain_captures = true;
+        for (task.capture_operands) |operand| {
+            if (!self.operandIsPlainLocalRead(operand.value)) plain_captures = false;
+        }
+        if (plain_captures) {
+            return .{ .tail = .{ .known_call = .{
+                .where = task.where,
+                .target = task.target,
+                .result_ty = task.result_ty,
+                .callee = task.target_fn,
+                .args = args,
+                .capture_arg = task.capture_local,
+                .is_cold = task.is_cold,
+                .next = task.next,
+                .capture_record = .{ .captures = task.captures, .operands = task.capture_operands, .ty = task.capture_ty },
+            } } };
+        }
         frame.cursor = 1;
         return .{ .call = .{ .known_call = .{
             .where = task.where,
@@ -8337,6 +8384,10 @@ const Lowerer = struct {
     }
 
     fn stepKnownCall(self: *Lowerer, frame: *LowerFrame, task: *KnownCallTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        // The capture record is built; the arguments are lowered ahead of it.
+        if (frame.cursor == 2) {
+            return .{ .tail = try self.operandChain(task.where, task.lowered.?, task.arg_tys, null, input.?) };
+        }
         if (frame.cursor == 1) {
             const lowered = task.lowered.?;
             const start = task.substituted_start.?;
@@ -8451,6 +8502,11 @@ const Lowerer = struct {
             }),
             .next = after_call,
         } }, where.source());
+        if (task.capture_record) |record| {
+            const capture_local = task.capture_arg orelse Common.invariant("a call that builds its capture record had no capture argument");
+            frame.cursor = 2;
+            return .{ .call = try self.captureRecordTask(where, capture_local, record.captures, record.operands, record.ty, current) };
+        }
         return .{ .tail = try self.operandChain(where, lowered, task.arg_tys, null, current) };
     }
 
@@ -9622,7 +9678,7 @@ const Lowerer = struct {
                     const consumer = self.valueJoinFor(task.next, task.target);
                     task.consumer = consumer;
                     if (!consumer.declared) {
-                        try self.value_consumers.append(self.allocator, .{ .join_id = consumer.id, .target = task.target });
+                        try self.pushValueConsumer(.{ .join_id = consumer.id, .target = task.target });
                         task.consumer_pushed = true;
                     }
                 }
@@ -9631,6 +9687,9 @@ const Lowerer = struct {
             1 => {
                 task.body_stmt = input.?;
                 frame.cursor = 2;
+                const entered = &self.join_stack.items[self.join_stack.items.len - 1];
+                if (entered.join_id != task.lir_join_id) Common.invariant("a join point's remainder began with another join innermost");
+                entered.in_remainder = true;
                 return .{ .call = try self.joinPointArrivalTask(task, task.join_point.remainder) };
             },
             else => {
@@ -9690,6 +9749,19 @@ const Lowerer = struct {
         const args = self.solved.lifted.exprSpan(jump.args);
         if (self.result.store.getLocalSpan(join_point.params).len != args.len) {
             Common.invariant("jump argument count differed from join-point parameter count during direct LIR lowering");
+        }
+
+        // A jump from the remainder that supplies one tag union builds it in
+        // the parameter itself, the definition form a value join's branches
+        // use, so tag-case fusion sees the edge as a producer of the join.
+        if (args.len == 1 and join_point.in_remainder and jump.loop_params.len == 0) {
+            const param = GuardedList.at(self.result.store.getLocalSpan(join_point.params), 0);
+            const param_layout = self.result.layouts.getLayout(self.result.store.getLocal(param).layout_idx);
+            const arg = GuardedList.at(args, 0);
+            if (param_layout.tag == .tag_union and try self.joinArgNeedsWriteAtType(param, join_point.param_tys[0], arg)) {
+                const direct_jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_point.join_id } }, where.glue());
+                return .{ .tail = exprTask(where, param, arg, join_point.param_tys[0], direct_jump) };
+            }
         }
 
         const locals = try self.lowerExprsToJoinTempsAtTypes(join_point.params, join_point.param_tys, args);

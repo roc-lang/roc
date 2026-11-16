@@ -87,6 +87,7 @@ test "issue 10182: local import cycle reports an error without scheduling partia
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;

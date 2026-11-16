@@ -178,7 +178,7 @@ pub const ObjectFileCompiler = struct {
         /// Detailed steps, recorded only when `Timing.detail` is set.
         /// Native procedure emission (`NativeProcCompiler.Timing`).
         native_setup_ns: u64 = 0,
-        native_waves_ns: u64 = 0,
+        native_runs_ns: u64 = 0,
         native_idle_ns: u64 = 0,
         native_worker_setup_ns: u64 = 0,
         native_emit_ns: u64 = 0,
@@ -240,7 +240,7 @@ pub const ObjectFileCompiler = struct {
             const measured = native orelse return;
             const value = &active.snapshot_value;
             value.native_setup_ns +|= measured.setup_ns;
-            value.native_waves_ns +|= measured.waves_ns;
+            value.native_runs_ns +|= measured.runs_ns;
             value.native_idle_ns +|= measured.capacity_ns -| (measured.worker_setup_ns +| measured.emit_ns +| measured.extract_ns);
             value.native_worker_setup_ns +|= measured.worker_setup_ns;
             value.native_emit_ns +|= measured.emit_ns;
