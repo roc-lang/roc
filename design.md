@@ -19348,9 +19348,11 @@ recipe then holds its own table of types rather than ids of stored types. A
 generated codec worker's signature is generic, so a recipe type can name
 variables, which no stored type does, and a table keeps a block-local nominal's
 context arguments, which a stored type leaves to its reader's scope. Workers are
-named as their identities name them (Caching Under `.boxy`): a template by its
-worker's identity and an index into a table of template positions that follows
-the module table, a lambda by its owner and its place among the owner's nested
+named as their identities name them (Caching Under `.boxy`), but for their
+modules: a template by its name within its module, which no module's link name
+enters, since the lowering that stores a recipe and the one that restores it can
+name modules differently, and an index into a table of template positions that
+follows the module table, a lambda by its owner and its place among the owner's nested
 procedure sites, a default by its place among its module's defaults, codec
 pieces by their family's derivation, a compile-time slot by its root. The
 positions table locates each template in the modules the recipe was stored
