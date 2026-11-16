@@ -22,6 +22,7 @@
 
 const std = @import("std");
 const collections = @import("collections");
+const GuardedList = collections.GuardedList;
 const diagnostics = @import("base").dev_diagnostics;
 
 const Common = @import("../common.zig");
@@ -474,7 +475,7 @@ const Pass = struct {
                     if (data == .let_) try pat_stack.append(pass.allocator, data.let_.bind);
                     if (data == .match_) {
                         const branches = lifted.branchSpan(data.match_.branches);
-                        for (0..branches.len) |index| try pat_stack.append(pass.allocator, branches.at(index).pat);
+                        for (0..branches.len) |index| try pat_stack.append(pass.allocator, GuardedList.at(branches, index).pat);
                     }
                     try Lifted.appendChildren(pass.allocator, lifted, expr_id, &stack);
                 },
@@ -486,24 +487,24 @@ const Pass = struct {
                     .nominal => |inner| try pat_stack.append(pass.allocator, inner),
                     .tuple => |items| {
                         const pats = lifted.patSpan(items);
-                        for (0..pats.len) |index| try pat_stack.append(pass.allocator, pats.at(index));
+                        for (0..pats.len) |index| try pat_stack.append(pass.allocator, GuardedList.at(pats, index));
                     },
                     .tag => |tag| {
                         const pats = lifted.patSpan(tag.payloads);
-                        for (0..pats.len) |index| try pat_stack.append(pass.allocator, pats.at(index));
+                        for (0..pats.len) |index| try pat_stack.append(pass.allocator, GuardedList.at(pats, index));
                     },
                     .record => |fields| {
                         const destructs = lifted.recordDestructSpan(fields);
-                        for (0..destructs.len) |index| try pat_stack.append(pass.allocator, destructs.at(index).pattern);
+                        for (0..destructs.len) |index| try pat_stack.append(pass.allocator, GuardedList.at(destructs, index).pattern);
                     },
                     .list => |list| {
                         const pats = lifted.patSpan(list.patterns);
-                        for (0..pats.len) |index| try pat_stack.append(pass.allocator, pats.at(index));
+                        for (0..pats.len) |index| try pat_stack.append(pass.allocator, GuardedList.at(pats, index));
                         if (list.rest.get()) |rest| if (rest.pattern.get()) |rest_pat| try pat_stack.append(pass.allocator, rest_pat);
                     },
                     .str_pattern => |str| {
                         const steps = lifted.strPatternStepSpan(str.steps);
-                        for (0..steps.len) |index| if (steps.at(index).capture.get()) |capture| try pat_stack.append(pass.allocator, capture);
+                        for (0..steps.len) |index| if (GuardedList.at(steps, index).capture.get()) |capture| try pat_stack.append(pass.allocator, capture);
                     },
                     .bind, .wildcard, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => {},
                 }
@@ -635,7 +636,7 @@ const Pass = struct {
 
             fn pushLocals(self: *Graph, pass: *Pass, span: Lifted.Span(Lifted.TypedLocal)) Allocator.Error!void {
                 const locals = pass.program.lifted.typedLocalSpan(span);
-                for (0..locals.len) |index| try self.push(pass.allocator, pass.program.local_tys.items[@backingInt(locals.at(index).local)], no_parent);
+                for (0..locals.len) |index| try self.push(pass.allocator, pass.program.local_tys.items[@backingInt(GuardedList.at(locals, index).local)], no_parent);
             }
 
             fn edge(self: *Graph, allocator: Allocator, parent: u32, child: u32) Allocator.Error!void {
@@ -1039,21 +1040,21 @@ const Pass = struct {
         fn exprSpan(self: *BodyCloner, span: Lifted.Span(Lifted.ExprId)) Allocator.Error!Lifted.Span(Lifted.ExprId) {
             const borrow = self.lifted().exprSpan(span);
             self.exprs.clearRetainingCapacity();
-            for (0..borrow.len) |index| try self.exprs.append(self.pass.allocator, self.expr(borrow.at(index)));
+            for (0..borrow.len) |index| try self.exprs.append(self.pass.allocator, self.expr(GuardedList.at(borrow, index)));
             return try self.lifted().addExprSpan(self.exprs.items);
         }
 
         fn patSpan(self: *BodyCloner, span: Lifted.Span(Lifted.PatId)) Allocator.Error!Lifted.Span(Lifted.PatId) {
             const borrow = self.lifted().patSpan(span);
             self.pats.clearRetainingCapacity();
-            for (0..borrow.len) |index| try self.pats.append(self.pass.allocator, self.pat(borrow.at(index)));
+            for (0..borrow.len) |index| try self.pats.append(self.pass.allocator, self.pat(GuardedList.at(borrow, index)));
             return try self.lifted().addPatSpan(self.pats.items);
         }
 
         fn stmtSpan(self: *BodyCloner, span: Lifted.Span(Lifted.StmtId)) Allocator.Error!Lifted.Span(Lifted.StmtId) {
             const borrow = self.lifted().stmtSpan(span);
             self.stmts.clearRetainingCapacity();
-            for (0..borrow.len) |index| try self.stmts.append(self.pass.allocator, self.stmt_map.get(borrow.at(index)).?);
+            for (0..borrow.len) |index| try self.stmts.append(self.pass.allocator, self.stmt_map.get(GuardedList.at(borrow, index)).?);
             return try self.lifted().addStmtSpan(self.stmts.items);
         }
 
@@ -1061,7 +1062,7 @@ const Pass = struct {
             const borrow = self.lifted().typedLocalSpan(span);
             self.typed_locals.clearRetainingCapacity();
             for (0..borrow.len) |index| {
-                const typed = borrow.at(index);
+                const typed = GuardedList.at(borrow, index);
                 try self.typed_locals.append(self.pass.allocator, .{ .local = try self.local(typed.local), .ty = typed.ty });
             }
             return try self.lifted().addTypedLocalSpan(self.typed_locals.items);
@@ -1072,7 +1073,7 @@ const Pass = struct {
             const borrow = self.lifted().captureOperandSpan(span);
             self.operands.clearRetainingCapacity();
             for (0..borrow.len) |index| {
-                const operand = borrow.at(index);
+                const operand = GuardedList.at(borrow, index);
                 try self.operands.append(self.pass.allocator, .{ .id = operand.id, .value = self.expr(operand.value) });
             }
             return try self.lifted().addCaptureOperandSpan(self.operands.items);
@@ -1082,7 +1083,7 @@ const Pass = struct {
             const borrow = self.lifted().fieldExprSpan(span);
             self.fields.clearRetainingCapacity();
             for (0..borrow.len) |index| {
-                const field = borrow.at(index);
+                const field = GuardedList.at(borrow, index);
                 try self.fields.append(self.pass.allocator, .{ .name = field.name, .value = self.expr(field.value) });
             }
             return try self.lifted().addFieldExprSpan(self.fields.items);
@@ -1130,7 +1131,7 @@ const Pass = struct {
                         const borrow = program.lifted.recordDestructSpan(fields);
                         self.destructs.clearRetainingCapacity();
                         for (0..borrow.len) |index| {
-                            const destruct = borrow.at(index);
+                            const destruct = GuardedList.at(borrow, index);
                             try self.destructs.append(pass.allocator, .{ .name = destruct.name, .pattern = self.pat(destruct.pattern) });
                         }
                         break :blk .{ .record = try program.lifted.addRecordDestructSpan(self.destructs.items) };
@@ -1148,7 +1149,7 @@ const Pass = struct {
                         const borrow = program.lifted.strPatternStepSpan(str.steps);
                         self.steps.clearRetainingCapacity();
                         for (0..borrow.len) |index| {
-                            var step = borrow.at(index);
+                            var step = GuardedList.at(borrow, index);
                             if (step.capture.get()) |capture| step.capture = .of(self.pat(capture));
                             try self.steps.append(pass.allocator, step);
                         }
@@ -1239,7 +1240,7 @@ const Pass = struct {
                     var branches: std.ArrayList(Lifted.Branch) = .empty;
                     defer branches.deinit(self.pass.allocator);
                     for (0..borrow.len) |index| {
-                        const branch = borrow.at(index);
+                        const branch = GuardedList.at(borrow, index);
                         try branches.append(self.pass.allocator, .{
                             .pat = self.pat(branch.pat),
                             .bindings = try self.stmtSpan(branch.bindings),
@@ -1253,7 +1254,7 @@ const Pass = struct {
                     const borrow = program.lifted.ifBranchSpan(if_.branches);
                     self.if_branches.clearRetainingCapacity();
                     for (0..borrow.len) |index| {
-                        const branch = borrow.at(index);
+                        const branch = GuardedList.at(borrow, index);
                         try self.if_branches.append(self.pass.allocator, .{ .cond = self.expr(branch.cond), .body = self.expr(branch.body) });
                     }
                     break :blk .{ .if_ = .{ .branches = try program.lifted.addIfBranchSpan(self.if_branches.items), .final_else = self.expr(if_.final_else) } };
