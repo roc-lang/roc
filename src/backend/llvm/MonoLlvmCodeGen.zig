@@ -1320,6 +1320,53 @@ pub const MonoLlvmCodeGen = struct {
         ) catch return error.OutOfMemory;
     }
 
+    /// Gives the generated function under construction an artificial
+    /// subprogram and puts its instructions at line 0 in it. LLVM keeps the
+    /// locations of inlined code only in callers that have a subprogram, so
+    /// every generated function that calls Roc procs needs one.
+    fn beginGeneratedFunctionDebugInfo(
+        self: *MonoLlvmCodeGen,
+        name: LlvmBuilder.Metadata.String,
+        linkage_name: LlvmBuilder.Metadata.String,
+        loc: SourceLoc,
+    ) Error!void {
+        const builder, const wip = try self.builderAndWip();
+        if (wip.strip) return;
+        const compile_unit = self.debug_compile_unit.unwrap() orelse return;
+        const line = if (loc.hasLocation()) loc.line else 0;
+        const func = wip.function;
+        const subprogram = builder.debugSubprogram(
+            try self.debugFileFor(builder, loc.file),
+            name,
+            linkage_name,
+            line,
+            line,
+            builder.debugSubroutineType(null) catch return error.OutOfMemory,
+            .{
+                .di_flags = .{ .Artificial = true },
+                .sp_flags = .{
+                    .Definition = true,
+                    .LocalToUnit = func.ptrConst(builder).global.ptrConst(builder).linkage == .internal,
+                },
+            },
+            compile_unit,
+        ) catch return error.OutOfMemory;
+        func.setSubprogram(subprogram, builder);
+        wip.debug_location = .{ .location = .{
+            .line = 0,
+            .column = 0,
+            .scope = subprogram.toOptional(),
+            .inlined_at = .none,
+        } };
+    }
+
+    fn beginEntrypointWrapperDebugInfo(self: *MonoLlvmCodeGen, symbol_name: []const u8, entry_proc: LirProcSpecId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        if (builder.strip) return;
+        const name = builder.metadataString(symbol_name) catch return error.OutOfMemory;
+        try self.beginGeneratedFunctionDebugInfo(name, name, self.store.procLoc(entry_proc));
+    }
+
     fn procDebugName(
         self: *MonoLlvmCodeGen,
         builder: *LlvmBuilder,
@@ -2272,6 +2319,10 @@ pub const MonoLlvmCodeGen = struct {
         var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = driver.function, .strip = builder.strip }) catch return error.OutOfMemory;
         defer wip.deinit();
         self.wip = &wip;
+        if (!builder.strip) {
+            const name = builder.metadataString(driver.function.name(builder).slice(builder).?) catch return error.OutOfMemory;
+            try self.beginGeneratedFunctionDebugInfo(name, name, .none);
+        }
         const ptr_ty = try self.ptrType();
         const pending_ptr = self.tail_pending_ptr.?;
         const args_ptr = self.tail_args_ptr.?;
@@ -2655,6 +2706,11 @@ pub const MonoLlvmCodeGen = struct {
         var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = packed_fn, .strip = builder.strip }) catch return error.OutOfMemory;
         defer wip.deinit();
         self.wip = &wip;
+        if (!builder.strip) try self.beginGeneratedFunctionDebugInfo(
+            try self.procDebugName(builder, proc_id, proc),
+            try self.procSymbolDebugName(builder, proc_id, proc),
+            self.store.procLoc(proc_id),
+        );
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
         if (self.stack_checks) try self.emitStackCheck(packed_fn);
@@ -3237,10 +3293,11 @@ pub const MonoLlvmCodeGen = struct {
             self.rc_arg_scratch = outer_rc_scratch;
         }
 
-        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = wrapper, .strip = true }) catch return error.OutOfMemory;
+        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = wrapper, .strip = builder.strip }) catch return error.OutOfMemory;
         defer wip.deinit();
         self.wip = &wip;
         self.rc_arg_scratch = null;
+        if (entry_proc) |proc_id| try self.beginEntrypointWrapperDebugInfo(symbol_name, proc_id);
 
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
@@ -3348,6 +3405,7 @@ pub const MonoLlvmCodeGen = struct {
         defer wip.deinit();
         self.wip = &wip;
         self.rc_arg_scratch = null;
+        try self.beginEntrypointWrapperDebugInfo(symbol_name, entry_proc);
 
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
@@ -15689,6 +15747,62 @@ fn printedFunction(ir: []const u8, name: []const u8) ?[]const u8 {
         start = line_end;
     }
     return null;
+}
+
+test "issue 13125: generated functions that call procs have debug subprograms" {
+    // Wrappers and adapters around a proc need a subprogram, or LLVM drops the
+    // locations of the proc code it inlines into them; the verifier then also
+    // requires a location on each of their calls.
+    const gpa = std.testing.allocator;
+    var store = lir.LirStore.init(gpa);
+    defer store.deinit();
+    var layouts = try layout.Store.init(gpa, .u64);
+    defer layouts.deinit();
+    try store.setSourceFiles(&.{.{ .name = "main", .qualified_name = "main", .module_identity = @splat(0) }});
+    const arg = try store.addLocal(.{ .layout_idx = .i64 });
+    const args = try store.addLocalSpan(&.{arg});
+    const body = try store.addCFStmt(.{ .ret = .{ .value = arg } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = lir.LIR.Symbol.fromRaw(0),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
+        .args = args,
+        .frame_locals = args,
+        .body = .some(body),
+        .ret_layout = .i64,
+    }, .{ .file = 0, .line = 3, .column = 1 });
+    var symbol_buf: [lir.LIR.ProcIdentity.symbol_name_len]u8 = undefined;
+    const adapter_name = store.getProcSpec(proc).identity.writeSymbolName(&symbol_buf);
+
+    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .x86_64, .os_tag = .linux });
+    inline for (.{ MonoLlvmCodeGen.ProgramKind.platform, MonoLlvmCodeGen.ProgramKind.in_process }) |program_kind| {
+        var codegen = MonoLlvmCodeGen.initForLinkedObject(gpa, &store, target);
+        defer codegen.deinit();
+        codegen.layout_store = &layouts;
+        codegen.program_kind = program_kind;
+        codegen.emit_debug_info = true;
+        var ir: std.Io.Writer.Allocating = .init(gpa);
+        defer ir.deinit();
+        try codegen.printEntrypointModule("issue_13125", &.{.{
+            .symbol_name = "roc_main",
+            .proc = proc,
+            .arg_layouts = &.{.i64},
+            .ret_layout = .i64,
+        }}, &ir.writer);
+
+        for ([_][]const u8{ "roc_main", adapter_name }) |name| {
+            const function = printedFunction(ir.written(), name) orelse return error.TestUnexpectedResult;
+            var lines = std.mem.splitScalar(u8, function, '\n');
+            const define_line = lines.first();
+            try std.testing.expect(std.mem.find(u8, define_line, " !dbg !") != null);
+            var calls: usize = 0;
+            while (lines.next()) |line| {
+                if (std.mem.find(u8, line, "call ") == null) continue;
+                calls += 1;
+                try std.testing.expect(std.mem.find(u8, line, ", !dbg !") != null);
+            }
+            try std.testing.expect(calls > 0);
+        }
+    }
 }
 
 test "issue 12505: addressed Bool alias materializes its SSA source" {
