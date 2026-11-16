@@ -21238,10 +21238,37 @@ const ResolvedDispatchCallableSpecializer = struct {
     instantiated_pairs: std.AutoHashMapUnmanaged(ResolvedDispatchCallablePair, CheckedTypeId) = .empty,
     evidence_closure: []DirectEvidenceClosure,
     identity_index: EnclosingIdentityIndex,
+    /// Projects imported targets' callables; reset for each projection.
+    projector: ?CheckedTypeStoreImportProjector = null,
 
     fn deinit(self: *ResolvedDispatchCallableSpecializer) void {
+        if (self.projector) |*projector| projector.deinit();
         self.identity_index.deinit();
         self.instantiated_pairs.deinit(self.allocator);
+    }
+
+    /// The resolved target's callable in this store: its own callable when
+    /// this module owns the target, else its projection.
+    fn projectTargetCallable(self: *ResolvedDispatchCallableSpecializer, target: static_dispatch.MethodTarget) Allocator.Error!CheckedTypeId {
+        const target_key = switch (target.kind) {
+            .local_proc => return target.callable_ty,
+            .callable_binding => |binding| binding.module,
+            .structural => checkedArtifactInvariant("structural method registry result was published as a direct callable target", .{}),
+            .procedure => |procedure| procedure.template.artifact,
+        };
+        if (target_key.eql(self.artifact_key.digest())) return target.callable_ty;
+
+        // Snapshot-style compiles pass the builtin module only as a DIRECT
+        // import; total resolution makes builtin-owned direct targets ubiquitous,
+        // so search both view sets.
+        const imported = dependencyViewByKey(target_key, self.direct_imports, self.available_artifacts, &.{}) orelse
+            checkedArtifactInvariant("resolved dispatch target artifact was not available during checked publication", .{});
+        if (self.projector) |*projector| {
+            projector.reset(imported.*);
+        } else {
+            self.projector = CheckedTypeStoreImportProjector.init(self.allocator, self.store, self.names, imported.*);
+        }
+        return try self.projector.?.project(target.callable_ty);
     }
 
     fn finalizePlan(
@@ -21282,16 +21309,7 @@ const ResolvedDispatchCallableSpecializer = struct {
         node_id: static_dispatch.EvidenceNodeId,
         plan_callable: CheckedTypeId,
     ) Allocator.Error!CheckedTypeId {
-        const target = self.plans.evidenceNode(node_id).target;
-        const target_callable = try projectResolvedDispatchTargetCallable(
-            self.allocator,
-            self.names,
-            self.store,
-            self.artifact_key,
-            self.direct_imports,
-            self.available_artifacts,
-            target,
-        );
+        const target_callable = try self.projectTargetCallable(self.plans.evidenceNode(node_id).target);
         return try instantiateResolvedDispatchTargetCallableMemoized(
             self.allocator,
             self.names,
@@ -23139,33 +23157,6 @@ fn instantiateResolvedDispatchTargetCallableMemoized(
     );
     try memo.put(allocator, key, instantiated);
     return instantiated;
-}
-
-fn projectResolvedDispatchTargetCallable(
-    allocator: Allocator,
-    names: *canonical.CanonicalNameStore,
-    store: *CheckedTypeStore,
-    artifact_key: CheckedModuleArtifactKey,
-    direct_imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
-    target: static_dispatch.MethodTarget,
-) Allocator.Error!CheckedTypeId {
-    const target_key = switch (target.kind) {
-        .local_proc => return target.callable_ty,
-        .callable_binding => |binding| binding.module,
-        .structural => checkedArtifactInvariant("structural method registry result was published as a direct callable target", .{}),
-        .procedure => |procedure| procedure.template.artifact,
-    };
-    if (target_key.eql(artifact_key.digest())) return target.callable_ty;
-
-    // Snapshot-style compiles pass the builtin module only as a DIRECT
-    // import; total resolution makes builtin-owned direct targets ubiquitous,
-    // so search both view sets.
-    const imported = dependencyViewByKey(target_key, direct_imports, available_artifacts, &.{}) orelse
-        checkedArtifactInvariant("resolved dispatch target artifact was not available during checked publication", .{});
-    var projector = CheckedTypeStoreImportProjector.init(allocator, store, names, imported.*);
-    defer projector.deinit();
-    return try projector.project(target.callable_ty);
 }
 
 fn instantiateResolvedDispatchTargetCallable(
@@ -34556,6 +34547,15 @@ const CheckedTypeStoreImportProjector = struct {
     fn deinit(self: *CheckedTypeStoreImportProjector) void {
         self.projected.deinit();
         self.active.deinit();
+    }
+
+    /// Start projecting from `imported` as a fresh projector would, keeping
+    /// this one's map storage.
+    fn reset(self: *CheckedTypeStoreImportProjector, imported: ImportedModuleView) void {
+        std.debug.assert(!self.preserve_source_instance);
+        self.imported = imported;
+        self.projected.clearRetainingCapacity();
+        self.active.clearRetainingCapacity();
     }
 
     /// A type whose payload is still being projected: its ops occupy
