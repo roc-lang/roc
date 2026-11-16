@@ -248,8 +248,6 @@ pub fn listOp(op: LowLevel) BuiltinFn {
         .{ LowLevel.list_owned_unique, BuiltinFn.list_owned_unique },
         .{ LowLevel.list_prepend, BuiltinFn.list_prepend },
         .{ LowLevel.list_sublist, BuiltinFn.list_sublist },
-        .{ LowLevel.list_take_first, BuiltinFn.list_sublist },
-        .{ LowLevel.list_take_last, BuiltinFn.list_sublist },
         .{ LowLevel.list_sublist_borrowed, BuiltinFn.list_sublist_borrowed },
         .{ LowLevel.list_drop_at, BuiltinFn.list_drop_at },
         .{ LowLevel.list_swap, BuiltinFn.list_swap },

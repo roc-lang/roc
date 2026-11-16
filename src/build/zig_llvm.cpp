@@ -240,6 +240,12 @@ LLVMTargetMachineRef ZigLLVMCreateTargetMachine(LLVMTargetRef T, const char *Tri
 }
 
 namespace {
+// Path of the time-trace report to write. Empty disables time tracing; a
+// developer who wants a trace sets a path here and rebuilds the compiler.
+constexpr const char *kTimeTraceFile = "";
+// Minimum duration, in milliseconds, of an event recorded in the time trace.
+constexpr unsigned kTimeTraceGranularityMs = 500U;
+
 // LLVM's time profiler can provide a hierarchy view of the time spent
 // in each component. It generates JSON report in Chrome's "Trace Event"
 // format. So the report can be easily visualized by the Chrome browser.
@@ -250,14 +256,11 @@ struct TimeTracerRAII {
   bool EnableTimeTrace;
 
   TimeTracerRAII(StringRef ProgramName, StringRef OF)
-    : TimeTraceGranularity(500U),
-      TimeTraceFile(std::getenv("ZIG_LLVM_TIME_TRACE_FILE")),
+    : TimeTraceGranularity(kTimeTraceGranularityMs),
+      TimeTraceFile(kTimeTraceFile),
       OutputFilename(OF),
       EnableTimeTrace(!TimeTraceFile.empty()) {
     if (EnableTimeTrace) {
-      if (const char *G = std::getenv("ZIG_LLVM_TIME_TRACE_GRANULARITY"))
-        TimeTraceGranularity = (unsigned)std::atoi(G);
-
       llvm::timeTraceProfilerInitialize(TimeTraceGranularity, ProgramName);
     }
   }

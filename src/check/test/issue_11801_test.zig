@@ -381,6 +381,35 @@ test "issue 11801: concrete dispatch replay accepts a scheme row whose field kin
     try std.testing.expect(env.checker.dispatch_replayed_edges.items.len >= 2);
 }
 
+test "issue 11801: concrete dispatch replay covers a receiver whose type a default chose" {
+    // Each receiver is a literal that nothing but its default gives a type.
+    // The first call makes the binding replayable, the second becomes the
+    // source, and the rest replay it: a replay shares an instance whose
+    // relation to an equal callable already succeeded, so it cannot reject
+    // the default.
+    for ([_][]const u8{
+        \\a = "ab".count_utf8_bytes()
+        \\b = "cd".count_utf8_bytes()
+        \\c = "ef".count_utf8_bytes()
+        \\d = "gh".count_utf8_bytes()
+        \\e = "ij".count_utf8_bytes()
+        \\f = "kl".count_utf8_bytes()
+        ,
+        \\a = 1.5.to_str()
+        \\b = 2.5.to_str()
+        \\c = 3.5.to_str()
+        \\d = 4.5.to_str()
+        \\e = 5.5.to_str()
+        \\f = 6.5.to_str()
+        ,
+    }) |source| {
+        var env = try TestEnv.init("Test", source);
+        defer env.deinit();
+        try env.assertNoErrors();
+        try std.testing.expect(env.checker.dispatch_replayed_edges.items.len >= 2);
+    }
+}
+
 test "issue 11801: a type error in one replayed use leaves the uses sharing its instance intact" {
     // The uses of `mk` differ in their unused argument's type, so each
     // settles its own copy of `mk`'s `pair_with` requirement. `first` makes
@@ -545,4 +574,56 @@ test "issue 11801: whole-use replay replays uses of an imported scheme" {
     try std.testing.expectEqual(@as(usize, 1), useStateCount(&env, .replayed));
     try env.assertDefType("third", "List(I64)");
     try env.assertDefType("fourth", "List(U8)");
+}
+
+test "issue 11801: a same-target reach answered while a minted name is unfinished is not reused" {
+    // `step` mints `bump`. The first `step` edge is selected inside
+    // `Other.bump`, while that binding of `bump` is still being checked, so
+    // `bump`'s summary is not final and the edge keeps its digest without
+    // the answer being kept. Once every `bump` binding is checked, neither
+    // mints `step`, so the top-level `step` edges, the later ones answered
+    // from the kept answer of the first, keep no digest.
+    const source =
+        \\Wrap(a) := [W(a)].{
+        \\  step : Wrap(a) -> Wrap(a) where [a.bump : a -> a]
+        \\  step = |Wrap.W(x)| Wrap.W(x.bump())
+        \\}
+        \\
+        \\Cnt := [Cnt(I64)].{
+        \\  bump : Cnt -> Cnt
+        \\  bump = |Cnt.Cnt(n)| Cnt.Cnt(n + 1)
+        \\}
+        \\
+        \\Other := [O].{
+        \\  bump : Other -> Other
+        \\  bump = |o| {
+        \\    _early = Wrap.W(Cnt.Cnt(0.I64)).step()
+        \\    o
+        \\  }
+        \\}
+        \\
+        \\x = Wrap.W(Cnt.Cnt(1.I64)).step()
+        \\y = Wrap.W(Cnt.Cnt(2.I64)).step()
+        \\z = Wrap.W(Cnt.Cnt(3.I64)).step()
+    ;
+    var env = try TestEnv.init("Test", source);
+    defer env.deinit();
+    try env.assertNoErrors();
+
+    var keyed_steps: usize = 0;
+    var keyless_steps: usize = 0;
+    for (env.checker.dispatch_target_instantiations.items) |edge| {
+        const name = env.module_env.getIdentText(edge.method_name);
+        if (textEql(name, "step")) {
+            if (edge.state_type_key != null) {
+                // Every edge selected once the answer is final keeps none.
+                try std.testing.expectEqual(@as(usize, 0), keyless_steps);
+                keyed_steps += 1;
+            } else keyless_steps += 1;
+        } else if (textEql(name, "bump")) {
+            try std.testing.expect(edge.state_type_key == null);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), keyed_steps);
+    try std.testing.expectEqual(@as(usize, 3), keyless_steps);
 }

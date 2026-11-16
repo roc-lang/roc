@@ -187,14 +187,14 @@ NO CHANGE
 			(e-block
 				(s-let
 					(p-assign (ident "user"))
-					(e-call (constraint-fn-var 382)
+					(e-call (constraint-fn-var 374)
 						(e-lookup-local
 							(p-assign (ident "create_user")))
 						(e-num (value "123"))
 						(e-string
 							(e-literal (string "Alice")))
 						(e-num (value "25"))))
-				(e-call (constraint-fn-var 397)
+				(e-call (constraint-fn-var 389)
 					(e-lookup-local
 						(p-assign (ident "get_user_name")))
 					(e-lookup-local

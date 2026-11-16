@@ -1,7 +1,7 @@
 import FooDerived
 
 BarDerived := [].{
-    Fuzz : { beta : [Qux(Str), Baz] }
+    Fuzz : { beta : FooDerived(Str) }
 
     frob : Fuzz -> Str
     frob = |fuzz| FooDerived.fizz(fuzz.beta, "buzz")

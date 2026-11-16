@@ -1799,89 +1799,6 @@ pub fn fromUtf8C(
 
 const UNICODE_REPLACEMENT: u21 = 0xfffd;
 
-const Utf8Iterator = struct {
-    bytes: []u8,
-    i: usize,
-
-    pub fn init(list: RocList) Utf8Iterator {
-        const bytes = @as([*]u8, @ptrCast(list.bytes))[0..list.length];
-        return Utf8Iterator{
-            .bytes = bytes,
-            .i = 0,
-        };
-    }
-
-    pub fn nextLossy(it: *Utf8Iterator) ?u32 {
-        if (it.bytes.len <= it.i) {
-            return null;
-        }
-
-        const rest = it.bytes[it.i..];
-        const n = unicode.utf8ByteSequenceLength(rest[0]) catch {
-            // invalid start byte
-            it.i += 1;
-            it.skipAdjacentInvalidStartBytes();
-            return UNICODE_REPLACEMENT;
-        };
-
-        for (1..n) |i| {
-            if (rest.len == i) {
-                // unexpected end
-                it.i += i;
-                return UNICODE_REPLACEMENT;
-            }
-            if ((rest[i] & 0xC0) != 0x80) {
-                // expected continuation byte (0b10xx_xxxx)
-                it.i += i;
-                return UNICODE_REPLACEMENT;
-            }
-        }
-
-        it.i += n;
-        return unicode.utf8Decode(rest[0..n]) catch {
-            return UNICODE_REPLACEMENT;
-        };
-    }
-
-    fn skipAdjacentInvalidStartBytes(it: *Utf8Iterator) void {
-        while (it.i < it.bytes.len) {
-            const byte = it.bytes[it.i];
-            if (byte < 0x80) return;
-            _ = unicode.utf8ByteSequenceLength(byte) catch {
-                it.i += 1;
-                continue;
-            };
-            return;
-        }
-    }
-
-    pub fn reset(it: *Utf8Iterator) void {
-        it.i = 0;
-    }
-};
-
-fn codepointSeqLengthLossy(c: u32) u3 {
-    if (c < 0x110000) {
-        if (unicode.utf8CodepointSequenceLength(@intCast(c))) |n| {
-            return n;
-        } else |_| {
-            // fallthrough
-        }
-    }
-    return unicode.utf8CodepointSequenceLength(UNICODE_REPLACEMENT) catch unreachable; // U+FFFD is a valid scalar value
-}
-
-fn utf8EncodeLossy(c: u32, out: []u8) u3 {
-    if (c < 0x110000) {
-        if (unicode.utf8Encode(@intCast(c), out)) |n| {
-            return n;
-        } else |_| {
-            // fallthrough
-        }
-    }
-    return unicode.utf8Encode(UNICODE_REPLACEMENT, out) catch unreachable; // U+FFFD is a valid scalar value
-}
-
 /// Borrows bytes whose producer guarantees valid UTF-8. No validation scan is
 /// needed: copy inline output, or retain and share the existing byte allocation.
 pub fn fromUtf8Validated(list: RocList, roc_ops: *RocOps) callconv(.c) RocStr {
@@ -2021,6 +1938,14 @@ test "short wide UTF decoding: inline capacity boundaries" {
 
 /// Convert borrowed bytes to an owned string, replacing invalid UTF-8 with U+FFFD.
 /// Valid UTF-8 shares the input allocation without copying.
+///
+/// Each ill-formed sequence becomes one U+FFFD. A sequence whose lead byte
+/// announces a length (C0-DF: 2, E0-EF: 3, F0-F7: 4) consumes its lead byte and
+/// the continuation bytes that follow it, up to the first byte that is not a
+/// continuation byte or the end of the input; when all of its bytes are
+/// continuation bytes, it consumes the whole announced length. Any other
+/// non-ASCII byte (80-BF or F8-FF) consumes itself together with the run of
+/// such bytes that follows it.
 pub fn fromUtf8Lossy(
     list: RocList,
     roc_ops: *RocOps,
@@ -2030,30 +1955,69 @@ pub fn fromUtf8Lossy(
     }
 
     const bytes = @as([*]const u8, @ptrCast(list.bytes))[0..list.len()];
-    if (isValidUnicode(bytes)) {
-        return fromValidUtf8List(list, .Immutable, roc_ops);
-    }
+    const first_error = validateUtf8(bytes) orelse return fromValidUtf8List(list, .Immutable, roc_ops);
 
-    var it = Utf8Iterator.init(list);
-
-    var enc_len: usize = 0;
-    while (it.nextLossy()) |c| {
-        enc_len += codepointSeqLengthLossy(c);
-    }
-
-    var str = RocStr.allocate(enc_len, roc_ops);
-    const ptr = str.asU8ptrMut()[0..enc_len];
-    var end_index: usize = 0;
-    it.reset();
-    while (it.nextLossy()) |c| {
-        end_index += utf8EncodeLossy(c, ptr[end_index..]);
-    }
-    str.setLen(end_index);
-
+    const len = lossyUtf8(bytes, first_error.index, null);
+    var str = RocStr.allocate(len, roc_ops);
+    const written = lossyUtf8(bytes, first_error.index, str.asU8ptrMut()[0..len]);
+    std.debug.assert(written == len);
     return str;
 }
 
-/// TODO: Document fromUtf8.
+const REPLACEMENT_UTF8 = "\u{FFFD}";
+
+/// Lossy UTF-8 output of `bytes`, whose first ill-formed sequence starts at
+/// `first_error`. Returns the output length, and writes the output to `out`
+/// when it is given.
+fn lossyUtf8(bytes: []const u8, first_error: usize, out: ?[]u8) usize {
+    if (out) |o| @memcpy(o[0..first_error], bytes[0..first_error]);
+    var written = first_error;
+    var i = first_error;
+    while (i < bytes.len) {
+        i += lossyReplacedLen(bytes, i);
+        if (out) |o| @memcpy(o[written..][0..REPLACEMENT_UTF8.len], REPLACEMENT_UTF8);
+        written += REPLACEMENT_UTF8.len;
+
+        const rest = bytes[i..];
+        const valid_len = if (validateUtf8(rest)) |err| err.index else rest.len;
+        if (out) |o| @memcpy(o[written..][0..valid_len], rest[0..valid_len]);
+        written += valid_len;
+        i += valid_len;
+    }
+    return written;
+}
+
+/// Number of bytes one U+FFFD replaces for the ill-formed sequence starting at
+/// `start` (see `fromUtf8Lossy`).
+fn lossyReplacedLen(bytes: []const u8, start: usize) usize {
+    const announced: usize = switch (bytes[start]) {
+        0xC0...0xDF => 2,
+        0xE0...0xEF => 3,
+        0xF0...0xF7 => 4,
+        0x00...0x7F => unreachable, // ASCII bytes are always well-formed, so no ill-formed sequence starts with one
+        0x80...0xBF, 0xF8...0xFF => {
+            var end = start + 1;
+            while (end < bytes.len and isUtf8InvalidLeadByte(bytes[end])) end += 1;
+            return end - start;
+        },
+    };
+    for (1..announced) |k| {
+        if (start + k == bytes.len or !isUtf8Continuation(bytes[start + k])) return k;
+    }
+    return announced;
+}
+
+fn isUtf8Continuation(byte: u8) bool {
+    return byte & 0xC0 == 0x80;
+}
+
+/// Bytes that neither are ASCII nor announce a sequence length.
+fn isUtf8InvalidLeadByte(byte: u8) bool {
+    return (byte >= 0x80 and byte <= 0xBF) or byte >= 0xF8;
+}
+
+/// Convert borrowed bytes to an owned string, or report the first ill-formed
+/// UTF-8 sequence (see `validateUtf8`).
 pub fn fromUtf8(
     list: RocList,
     update_mode: UpdateMode,
@@ -2069,24 +2033,20 @@ pub fn fromUtf8(
     }
     const bytes = @as([*]const u8, @ptrCast(list.bytes))[0..list.len()];
 
-    if (isValidUnicode(bytes)) {
-        const string = fromValidUtf8List(list, update_mode, roc_ops);
-        return FromUtf8Try{
-            .is_ok = true,
-            .string = string,
-            .byte_index = 0,
-            .problem_code = Utf8ByteProblem.InvalidStartByte,
-        };
-    } else {
-        const temp = errorToProblem(bytes) orelse utils.builtinInvariant(roc_ops, "fromUtf8: errorToProblem found no problem in bytes isValidUnicode rejected");
-
+    if (validateUtf8(bytes)) |err| {
         return FromUtf8Try{
             .is_ok = false,
             .string = RocStr.empty(),
-            .byte_index = @intCast(temp.index),
-            .problem_code = temp.problem,
+            .byte_index = @intCast(err.index),
+            .problem_code = err.problem,
         };
     }
+    return FromUtf8Try{
+        .is_ok = true,
+        .string = fromValidUtf8List(list, update_mode, roc_ops),
+        .byte_index = 0,
+        .problem_code = Utf8ByteProblem.InvalidStartByte,
+    };
 }
 
 /// Retain a validated, nonempty byte list for an independently owned string.
@@ -2097,102 +2057,181 @@ fn fromValidUtf8List(list: RocList, update_mode: UpdateMode, roc_ops: *RocOps) R
     return RocStr.fromSubListUnsafe(list, 0, list.len(), update_mode, roc_ops);
 }
 
-fn errorToProblem(bytes: []const u8) ?struct { index: usize, problem: Utf8ByteProblem } {
-    const len = bytes.len;
-    var index: usize = 0;
+/// The first ill-formed sequence in a byte slice: where it starts, and why it
+/// is ill-formed.
+pub const Utf8Error = struct {
+    index: usize,
+    problem: Utf8ByteProblem,
+};
 
-    while (index < len) {
-        const nextNumBytes = numberOfNextCodepointBytes(bytes, index) catch |err| {
-            switch (err) {
-                error.UnexpectedEof => {
-                    return .{ .index = index, .problem = Utf8ByteProblem.UnexpectedEndOfSequence };
-                },
-                error.Utf8InvalidStartByte => return .{ .index = index, .problem = Utf8ByteProblem.InvalidStartByte },
-                error.Utf8ExpectedContinuation => return .{ .index = index, .problem = Utf8ByteProblem.ExpectedContinuation },
-                error.Utf8OverlongEncoding => return .{ .index = index, .problem = Utf8ByteProblem.OverlongEncoding },
-                error.Utf8EncodesSurrogateHalf => return .{ .index = index, .problem = Utf8ByteProblem.EncodesSurrogateHalf },
-                error.Utf8CodepointTooLarge => return .{ .index = index, .problem = Utf8ByteProblem.CodepointTooLarge },
+/// Returns null when `bytes` is well-formed UTF-8 (Unicode Table 3-7), and
+/// otherwise the start index and problem of its first ill-formed sequence.
+///
+/// The problem is decided in this order. A lead byte that is neither ASCII nor
+/// C0-F7 is `InvalidStartByte`. The lead byte announces the sequence length
+/// (C0-DF: 2, E0-EF: 3, F0-F7: 4); a sequence running past the end of the input
+/// is `UnexpectedEndOfSequence`, whatever its available bytes are. A byte
+/// outside 80-BF after the lead byte is `ExpectedContinuation`. Otherwise the
+/// lead and second byte decide `OverlongEncoding` (C0, C1, E0 below A0, F0 below
+/// 90), `EncodesSurrogateHalf` (ED from A0), or `CodepointTooLarge` (F4 from 90,
+/// F5-F7).
+///
+/// Valid input is checked in one pass without decoding: ASCII runs in 32- and
+/// 16-byte blocks, everything else through a shift-based DFA that costs one
+/// table load and one shift per byte. Only an error reruns the DFA, from the
+/// start of the sequence containing it, to find where that sequence begins.
+pub fn validateUtf8(bytes: []const u8) ?Utf8Error {
+    const n = bytes.len;
+    var i: usize = 0;
+    var state: u64 = utf8_dfa_accept;
+    while (n - i >= 16) {
+        if (state & utf8_dfa_state_mask == utf8_dfa_accept) {
+            while (n - i >= 32 and isAsciiBlock(32, bytes[i..][0..32])) i += 32;
+            if (n - i < 16) break;
+            if (isAsciiBlock(16, bytes[i..][0..16])) {
+                i += 16;
+                continue;
             }
-        };
-        index += nextNumBytes;
+        }
+        const chunk_state = state;
+        inline for (0..16) |k| state = utf8DfaStep(state, bytes[i + k]);
+        if (state & utf8_dfa_state_mask == utf8_dfa_reject) return utf8ErrorFrom(bytes, i, chunk_state);
+        i += 16;
     }
-
+    if (state & utf8_dfa_state_mask == utf8_dfa_accept and isAsciiTail(bytes, i)) return null;
+    const tail_state = state;
+    const tail_start = i;
+    while (i < n) : (i += 1) state = utf8DfaStep(state, bytes[i]);
+    if (state & utf8_dfa_state_mask != utf8_dfa_accept) return utf8ErrorFrom(bytes, tail_start, tail_state);
     return null;
 }
 
-/// Returns true if the given buffer contains valid Unicode data.
-pub fn isValidUnicode(buf: []const u8) bool {
-    const size = @sizeOf(u64);
-    // TODO: we should test changing the step on other platforms.
-    // The general tradeoff is making extremely large strings potentially much faster
-    // at the cost of small strings being slightly slower.
-    const step = size;
-    var i: usize = 0;
-    while (i + step < buf.len) {
-        var bytes: u64 = undefined;
-        @memcpy(@as([*]u8, @ptrCast(&bytes))[0..size], buf[i..(i + size)]);
-        const unicode_bytes = bytes & 0x8080_8080_8080_8080;
-        if (unicode_bytes == 0) {
-            i += step;
-            continue;
-        }
-
-        while (buf[i] < 0b1000_0000) : (i += 1) {}
-
-        while (buf[i] >= 0b1000_0000) {
-            // This forces prefetching, otherwise the loop can run at about half speed.
-            if (i + 4 >= buf.len) break;
-            var small_buf: [4]u8 = undefined;
-            @memcpy(small_buf[0..4], buf[i..(i + 4)]);
-            // TODO: Should we always inline these function calls below?
-            if (std.unicode.utf8ByteSequenceLength(small_buf[0])) |cp_len| {
-                if (std.meta.isError(std.unicode.utf8Decode(small_buf[0..cp_len]))) {
-                    return false;
-                }
-                i += cp_len;
-            } else |_| {
-                return false;
-            }
-        }
-    }
-
-    if (i == buf.len) return true;
-    while (buf[i] < 0b1000_0000) {
-        i += 1;
-        if (i == buf.len) return true;
-    }
-
-    return @call(.always_inline, unicode.utf8ValidateSlice, .{buf[i..]});
+/// Whether a block of `len` bytes is all ASCII, using generic vector operations
+/// so the builtin bitcode stays target-independent.
+inline fn isAsciiBlock(comptime len: comptime_int, block: *const [len]u8) bool {
+    const Vec = @Vector(16, u8);
+    var any: Vec = block[0..16].*;
+    inline for (1..len / 16) |k| any |= block[k * 16 ..][0..16].*;
+    return @as(u128, @bitCast(any)) & 0x80808080_80808080_80808080_80808080 == 0;
 }
 
-/// TODO
-pub const Utf8DecodeError = error{
-    UnexpectedEof,
-    Utf8InvalidStartByte,
-    Utf8ExpectedContinuation,
-    Utf8OverlongEncoding,
-    Utf8EncodesSurrogateHalf,
-    Utf8CodepointTooLarge,
-};
+/// Whether `bytes[start..]`, fewer than 16 bytes, is all ASCII. Reads may
+/// overlap bytes before `start`, which are already known to be valid.
+inline fn isAsciiTail(bytes: []const u8, start: usize) bool {
+    const n = bytes.len;
+    const rem = n - start;
+    std.debug.assert(rem < 16);
+    if (rem == 0) return true;
+    if (n >= 16) return isAsciiBlock(16, bytes[n - 16 ..][0..16]);
+    if (n >= 8) {
+        var word = mem.readInt(u64, bytes[n - 8 ..][0..8], .little);
+        if (rem > 8) word |= mem.readInt(u64, bytes[start..][0..8], .little);
+        return word & 0x80808080_80808080 == 0;
+    }
+    if (n >= 4) {
+        var word = mem.readInt(u32, bytes[n - 4 ..][0..4], .little);
+        if (rem > 4) word |= mem.readInt(u32, bytes[start..][0..4], .little);
+        return word & 0x80808080 == 0;
+    }
+    for (bytes[start..]) |byte| {
+        if (byte >= 0x80) return false;
+    }
+    return true;
+}
 
-/// Returns the number of bytes in the next codepoint starting at the given index in the byte slice.
-/// Returns an error if the bytes are not valid UTF-8.
-///
-/// Essentially unicode.utf8ValidateSlice -> https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L156
-/// but only for the next codepoint from the index. Then we return the number of bytes of that codepoint.
-///
-/// TODO: we only ever use the values 0-4, so can we use smaller int than `usize`?
-pub fn numberOfNextCodepointBytes(bytes: []const u8, index: usize) Utf8DecodeError!usize {
-    const codepoint_len = try unicode.utf8ByteSequenceLength(bytes[index]);
-    const codepoint_end_index = index + codepoint_len;
-    if (codepoint_end_index > bytes.len) {
-        return error.UnexpectedEof;
+/// Finds the first ill-formed sequence, given that the DFA rejected or ended
+/// mid-sequence somewhere at or after `chunk_start`, and was in `chunk_state`
+/// there. Everything before `chunk_start` is well-formed, except a sequence
+/// that `chunk_state` says is still in progress.
+noinline fn utf8ErrorFrom(bytes: []const u8, chunk_start: usize, chunk_state: u64) Utf8Error {
+    var i = chunk_start;
+    if (chunk_state & utf8_dfa_state_mask != utf8_dfa_accept) {
+        // Back up over the in-progress sequence's continuation bytes to its lead byte.
+        while (isUtf8Continuation(bytes[i - 1])) i -= 1;
+        i -= 1;
     }
-    const codepoint = try unicode.utf8Decode(bytes[index..codepoint_end_index]);
-    if (codepoint > 0x10FFFF) {
-        return error.Utf8CodepointTooLarge;
+    var state: u64 = utf8_dfa_accept;
+    var sequence_start = i;
+    while (i < bytes.len) : (i += 1) {
+        if (state & utf8_dfa_state_mask == utf8_dfa_accept) sequence_start = i;
+        state = utf8DfaStep(state, bytes[i]);
+        if (state & utf8_dfa_state_mask == utf8_dfa_reject) break;
     }
-    return codepoint_end_index - index;
+    return .{ .index = sequence_start, .problem = utf8Problem(bytes, sequence_start) };
+}
+
+/// The problem of the ill-formed sequence starting at `start`, in the order
+/// `validateUtf8` documents.
+fn utf8Problem(bytes: []const u8, start: usize) Utf8ByteProblem {
+    const lead = bytes[start];
+    const len: usize = switch (lead) {
+        0xC0...0xDF => 2,
+        0xE0...0xEF => 3,
+        0xF0...0xF7 => 4,
+        else => return .InvalidStartByte,
+    };
+    if (bytes.len - start < len) return .UnexpectedEndOfSequence;
+    for (bytes[start + 1 .. start + len]) |byte| {
+        if (!isUtf8Continuation(byte)) return .ExpectedContinuation;
+    }
+    return switch (lead) {
+        0xC0, 0xC1, 0xE0, 0xF0 => .OverlongEncoding,
+        0xED => .EncodesSurrogateHalf,
+        0xF4...0xF7 => .CodepointTooLarge,
+        else => unreachable, // only lead bytes C0, C1, E0, ED and F0-F7 start complete all-continuation sequences that are ill-formed
+    };
+}
+
+// Shift-based UTF-8 DFA. State `s` is stored as the bit offset `s * 6`, and the
+// row for a byte packs, in bits `s * 6 .. s * 6 + 5`, the next state's offset.
+// One step is `row[byte] >> state`; only the low 6 bits of a state are
+// meaningful. States follow Unicode Table 3-7:
+//   0 accept, 1 reject (absorbing), 2 one continuation byte left,
+//   3 two continuation bytes left, 4 after E0 (needs A0-BF), 5 after ED
+//   (needs 80-9F), 6 after F0 (needs 90-BF), 7 after F1-F3 (needs 80-BF, then
+//   two more), 8 after F4 (needs 80-8F).
+const utf8_dfa_state_mask: u64 = 63;
+const utf8_dfa_accept: u64 = 0 * 6;
+const utf8_dfa_reject: u64 = 1 * 6;
+
+/// Packs the next state for each current state 0-8.
+fn utf8DfaRow(comptime next: [9]u64) u64 {
+    var row: u64 = 0;
+    for (next, 0..) |next_state, state| row |= (next_state * 6) << (state * 6);
+    return row;
+}
+
+const utf8_dfa_row_ascii = utf8DfaRow(.{ 0, 1, 1, 1, 1, 1, 1, 1, 1 });
+const utf8_dfa_row_cont_80_8f = utf8DfaRow(.{ 1, 1, 0, 2, 1, 2, 1, 3, 3 });
+const utf8_dfa_row_cont_90_9f = utf8DfaRow(.{ 1, 1, 0, 2, 1, 2, 3, 3, 1 });
+const utf8_dfa_row_cont_a0_bf = utf8DfaRow(.{ 1, 1, 0, 2, 2, 1, 3, 3, 1 });
+const utf8_dfa_row_invalid = utf8DfaRow(.{ 1, 1, 1, 1, 1, 1, 1, 1, 1 });
+const utf8_dfa_row_lead_2 = utf8DfaRow(.{ 2, 1, 1, 1, 1, 1, 1, 1, 1 });
+const utf8_dfa_row_lead_e0 = utf8DfaRow(.{ 4, 1, 1, 1, 1, 1, 1, 1, 1 });
+const utf8_dfa_row_lead_3 = utf8DfaRow(.{ 3, 1, 1, 1, 1, 1, 1, 1, 1 });
+const utf8_dfa_row_lead_ed = utf8DfaRow(.{ 5, 1, 1, 1, 1, 1, 1, 1, 1 });
+const utf8_dfa_row_lead_f0 = utf8DfaRow(.{ 6, 1, 1, 1, 1, 1, 1, 1, 1 });
+const utf8_dfa_row_lead_4 = utf8DfaRow(.{ 7, 1, 1, 1, 1, 1, 1, 1, 1 });
+const utf8_dfa_row_lead_f4 = utf8DfaRow(.{ 8, 1, 1, 1, 1, 1, 1, 1, 1 });
+
+const utf8_dfa_rows: [256]u64 =
+    @as([0x80]u64, @splat(utf8_dfa_row_ascii)) ++ // 00-7F
+    @as([0x10]u64, @splat(utf8_dfa_row_cont_80_8f)) ++ // 80-8F
+    @as([0x10]u64, @splat(utf8_dfa_row_cont_90_9f)) ++ // 90-9F
+    @as([0x20]u64, @splat(utf8_dfa_row_cont_a0_bf)) ++ // A0-BF
+    @as([0x02]u64, @splat(utf8_dfa_row_invalid)) ++ // C0-C1
+    @as([0x1E]u64, @splat(utf8_dfa_row_lead_2)) ++ // C2-DF
+    @as([0x01]u64, @splat(utf8_dfa_row_lead_e0)) ++ // E0
+    @as([0x0C]u64, @splat(utf8_dfa_row_lead_3)) ++ // E1-EC
+    @as([0x01]u64, @splat(utf8_dfa_row_lead_ed)) ++ // ED
+    @as([0x02]u64, @splat(utf8_dfa_row_lead_3)) ++ // EE-EF
+    @as([0x01]u64, @splat(utf8_dfa_row_lead_f0)) ++ // F0
+    @as([0x03]u64, @splat(utf8_dfa_row_lead_4)) ++ // F1-F3
+    @as([0x01]u64, @splat(utf8_dfa_row_lead_f4)) ++ // F4
+    @as([0x0B]u64, @splat(utf8_dfa_row_invalid)); // F5-FF
+
+inline fn utf8DfaStep(state: u64, byte: u8) u64 {
+    return utf8_dfa_rows[byte] >> @as(u6, @truncate(state));
 }
 
 /// Return types for validateUtf8Bytes
@@ -4397,14 +4436,12 @@ test "fromUtf8Lossy: empty input does not allocate" {
 fn expectErr(
     list: RocList,
     index: usize,
-    err: Utf8DecodeError,
     problem: Utf8ByteProblem,
     test_env: *TestEnv,
-) error{ TestExpectedError, TestUnexpectedError, TestExpectedEqual }!void {
+) error{TestExpectedEqual}!void {
     const str_ptr = @as([*]u8, @ptrCast(list.bytes));
     const len = list.length;
 
-    try std.testing.expectError(err, numberOfNextCodepointBytes(str_ptr[0..len], index));
     try std.testing.expectEqual(
         toErrUtf8ByteResponse(index, problem),
         validateUtf8Bytes(str_ptr, len, test_env.getOps()),
@@ -4423,7 +4460,6 @@ test "validateUtf8Bytes: invalid start byte" {
     try expectErr(
         list,
         2,
-        error.Utf8InvalidStartByte,
         Utf8ByteProblem.InvalidStartByte,
         &test_env,
     );
@@ -4441,7 +4477,6 @@ test "validateUtf8Bytes: unexpected eof for 2 byte sequence" {
     try expectErr(
         list,
         3,
-        error.UnexpectedEof,
         Utf8ByteProblem.UnexpectedEndOfSequence,
         &test_env,
     );
@@ -4459,7 +4494,6 @@ test "validateUtf8Bytes: expected continuation for 2 byte sequence" {
     try expectErr(
         list,
         3,
-        error.Utf8ExpectedContinuation,
         Utf8ByteProblem.ExpectedContinuation,
         &test_env,
     );
@@ -4477,7 +4511,6 @@ test "validateUtf8Bytes: unexpected eof for 3 byte sequence" {
     try expectErr(
         list,
         3,
-        error.UnexpectedEof,
         Utf8ByteProblem.UnexpectedEndOfSequence,
         &test_env,
     );
@@ -4495,7 +4528,6 @@ test "validateUtf8Bytes: expected continuation for 3 byte sequence" {
     try expectErr(
         list,
         3,
-        error.Utf8ExpectedContinuation,
         Utf8ByteProblem.ExpectedContinuation,
         &test_env,
     );
@@ -4513,7 +4545,6 @@ test "validateUtf8Bytes: unexpected eof for 4 byte sequence" {
     try expectErr(
         list,
         3,
-        error.UnexpectedEof,
         Utf8ByteProblem.UnexpectedEndOfSequence,
         &test_env,
     );
@@ -4531,7 +4562,6 @@ test "validateUtf8Bytes: expected continuation for 4 byte sequence" {
     try expectErr(
         list,
         3,
-        error.Utf8ExpectedContinuation,
         Utf8ByteProblem.ExpectedContinuation,
         &test_env,
     );
@@ -4549,7 +4579,6 @@ test "validateUtf8Bytes: overlong" {
     try expectErr(
         list,
         3,
-        error.Utf8OverlongEncoding,
         Utf8ByteProblem.OverlongEncoding,
         &test_env,
     );
@@ -4567,7 +4596,6 @@ test "validateUtf8Bytes: codepoint out too large" {
     try expectErr(
         list,
         3,
-        error.Utf8CodepointTooLarge,
         Utf8ByteProblem.CodepointTooLarge,
         &test_env,
     );
@@ -4585,10 +4613,351 @@ test "validateUtf8Bytes: surrogate halves" {
     try expectErr(
         list,
         3,
-        error.Utf8EncodesSurrogateHalf,
         Utf8ByteProblem.EncodesSurrogateHalf,
         &test_env,
     );
+}
+
+const ExpectedUtf8Error = struct { index: usize, problem: Utf8ByteProblem };
+
+/// The `fromUtf8` result specified by byte ranges: null for well-formed UTF-8,
+/// otherwise the start index of the first ill-formed sequence and its problem.
+/// A lead byte's length comes from its bit pattern alone (C0-DF: 2, E0-EF: 3,
+/// F0-F7: 4). A sequence running past the end reports UnexpectedEndOfSequence
+/// before its available bytes are inspected; then each continuation byte must be
+/// 80-BF; then the lead and first continuation byte decide overlong encodings,
+/// surrogates, and code points above U+10FFFF.
+fn expectedUtf8Error(bytes: []const u8) ?ExpectedUtf8Error {
+    var i: usize = 0;
+    while (i < bytes.len) {
+        const lead = bytes[i];
+        const len: usize = switch (lead) {
+            0x00...0x7F => 1,
+            0xC0...0xDF => 2,
+            0xE0...0xEF => 3,
+            0xF0...0xF7 => 4,
+            else => return .{ .index = i, .problem = .InvalidStartByte },
+        };
+        if (i + len > bytes.len) return .{ .index = i, .problem = .UnexpectedEndOfSequence };
+        for (bytes[i + 1 .. i + len]) |byte| {
+            if (byte & 0xC0 != 0x80) return .{ .index = i, .problem = .ExpectedContinuation };
+        }
+        if (len > 1) {
+            const second = bytes[i + 1];
+            const problem: ?Utf8ByteProblem = switch (lead) {
+                0xC0, 0xC1 => .OverlongEncoding,
+                0xE0 => if (second < 0xA0) .OverlongEncoding else null,
+                0xED => if (second >= 0xA0) .EncodesSurrogateHalf else null,
+                0xF0 => if (second < 0x90) .OverlongEncoding else null,
+                0xF4 => if (second >= 0x90) .CodepointTooLarge else null,
+                0xF5...0xF7 => .CodepointTooLarge,
+                else => null,
+            };
+            if (problem) |p| return .{ .index = i, .problem = p };
+        }
+        i += len;
+    }
+    return null;
+}
+
+fn expectFromUtf8MatchesSpec(bytes: []const u8, ops: *RocOps) error{ TestUnexpectedResult, TestExpectedEqual }!void {
+    const list = RocList.fromSlice(u8, bytes, false, ops);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, ops);
+    const result = fromUtf8(list, .Immutable, ops);
+    if (expectedUtf8Error(bytes)) |expected| {
+        if (result.is_ok or result.byte_index != expected.index or result.problem_code != expected.problem) {
+            result.string.decref(ops);
+            std.debug.print("fromUtf8({x}) = is_ok: {}, index: {d}, problem: {s}; expected index {d}, {s}\n", .{
+                bytes,
+                result.is_ok,
+                result.byte_index,
+                @tagName(result.problem_code),
+                expected.index,
+                @tagName(expected.problem),
+            });
+            return error.TestUnexpectedResult;
+        }
+    } else {
+        defer result.string.decref(ops);
+        if (!result.is_ok) {
+            std.debug.print("fromUtf8({x}) = Err(index: {d}, problem: {s}); expected Ok\n", .{
+                bytes,
+                result.byte_index,
+                @tagName(result.problem_code),
+            });
+            return error.TestUnexpectedResult;
+        }
+        try testing.expectEqualStrings(bytes, result.string.asSlice());
+    }
+}
+
+// Pins the exact `Str.from_utf8` error index and problem for every kind of
+// ill-formed sequence, at positions inside and across word-sized ASCII chunks
+// and near the end of the input, for the validator in
+// https://github.com/roc-lang/roc/issues/13025.
+test "fromUtf8: error index and problem match the byte-range specification" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    // Every two-byte input, alone.
+    for (0..0x10000) |n| {
+        const pair = [2]u8{ @intCast(n >> 8), @intCast(n & 0xFF) };
+        try expectFromUtf8MatchesSpec(&pair, ops);
+    }
+
+    // Each non-ASCII lead byte, alone and followed by second bytes on both
+    // sides of every second-byte range boundary, then by further continuation
+    // and non-continuation bytes. Each sequence sits after ASCII and multi-byte
+    // prefixes and before suffixes of several lengths.
+    const seconds = [_]u8{ 0x00, 0x41, 0x7F, 0x80, 0x8F, 0x90, 0x9F, 0xA0, 0xBF, 0xC0, 0xF0, 0xFF };
+    const thirds = [_]u8{ 0x41, 0x80, 0xBF };
+    const fourths = [_]u8{ 0x41, 0x80 };
+    const prefixes = [_][]const u8{ "", "abcdefg", "abcdefgh", "abcdefghi", "abcdefghijklmnopq", "\u{e9}\u{6f22}\u{1f389}ab" };
+    const suffixes = [_][]const u8{ "", "z", "zzzzzzzzz", "\u{e9}" };
+
+    var buf: [64]u8 = undefined;
+    for (0x80..0x100) |lead_int| {
+        const lead: u8 = @intCast(lead_int);
+        var seqs: [1 + seconds.len * (1 + thirds.len * (1 + fourths.len))][4]u8 = undefined;
+        var seq_lens: [seqs.len]usize = undefined;
+        var count: usize = 0;
+        seqs[count] = .{ lead, 0, 0, 0 };
+        seq_lens[count] = 1;
+        count += 1;
+        for (seconds) |b1| {
+            seqs[count] = .{ lead, b1, 0, 0 };
+            seq_lens[count] = 2;
+            count += 1;
+            for (thirds) |b2| {
+                seqs[count] = .{ lead, b1, b2, 0 };
+                seq_lens[count] = 3;
+                count += 1;
+                for (fourths) |b3| {
+                    seqs[count] = .{ lead, b1, b2, b3 };
+                    seq_lens[count] = 4;
+                    count += 1;
+                }
+            }
+        }
+        for (seqs[0..count], seq_lens[0..count]) |*seq, seq_len| {
+            for (prefixes) |prefix| {
+                for (suffixes) |suffix| {
+                    var len: usize = 0;
+                    @memcpy(buf[len..][0..prefix.len], prefix);
+                    len += prefix.len;
+                    @memcpy(buf[len..][0..seq_len], seq[0..seq_len]);
+                    len += seq_len;
+                    @memcpy(buf[len..][0..suffix.len], suffix);
+                    len += suffix.len;
+                    try expectFromUtf8MatchesSpec(buf[0..len], ops);
+                }
+            }
+        }
+    }
+
+    try testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
+}
+
+/// Unicode Table 3-7 as transitions between the states `utf8_dfa_rows` uses.
+fn table37NextState(state: u64, byte: u8) u64 {
+    return switch (state) {
+        1 => 1,
+        0 => switch (byte) {
+            0x00...0x7F => 0,
+            0xC2...0xDF => 2,
+            0xE0 => 4,
+            0xE1...0xEC, 0xEE...0xEF => 3,
+            0xED => 5,
+            0xF0 => 6,
+            0xF1...0xF3 => 7,
+            0xF4 => 8,
+            else => 1,
+        },
+        2 => if (byte >= 0x80 and byte <= 0xBF) 0 else 1,
+        3 => if (byte >= 0x80 and byte <= 0xBF) 2 else 1,
+        4 => if (byte >= 0xA0 and byte <= 0xBF) 2 else 1,
+        5 => if (byte >= 0x80 and byte <= 0x9F) 2 else 1,
+        6 => if (byte >= 0x90 and byte <= 0xBF) 3 else 1,
+        7 => if (byte >= 0x80 and byte <= 0xBF) 3 else 1,
+        8 => if (byte >= 0x80 and byte <= 0x8F) 3 else 1,
+        else => unreachable, // the DFA has states 0 through 8
+    };
+}
+
+test "validateUtf8: DFA rows encode Unicode Table 3-7 for every byte and state" {
+    for (0..256) |byte| {
+        for (0..9) |state| {
+            const next = (utf8_dfa_rows[byte] >> @intCast(state * 6)) & utf8_dfa_state_mask;
+            try testing.expectEqual(table37NextState(state, @intCast(byte)) * 6, next);
+            try testing.expectEqual(next, utf8DfaStep(state * 6, @intCast(byte)) & utf8_dfa_state_mask);
+        }
+    }
+}
+
+/// Writes `len` bytes of well-formed text to `out`: ASCII, or a cycle of 2-, 3-
+/// and 4-byte sequences padded with ASCII where the next one does not fit.
+fn fillValidUtf8(out: []u8, multi_byte: bool) void {
+    const cycle = "\u{e9}\u{6f22}\u{1f389}x";
+    var i: usize = 0;
+    var c: usize = 0;
+    while (i < out.len) {
+        const width: usize = if (!multi_byte) 1 else switch (cycle[c]) {
+            0x00...0x7F => 1,
+            0xC0...0xDF => 2,
+            0xE0...0xEF => 3,
+            else => 4,
+        };
+        if (width <= out.len - i) {
+            @memcpy(out[i..][0..width], if (multi_byte) cycle[c..][0..width] else "a");
+            i += width;
+            c = (c + width) % cycle.len;
+        } else {
+            out[i] = 'a';
+            i += 1;
+        }
+    }
+}
+
+// Every input length up to 80 with an ill-formed sequence at every position,
+// after ASCII or multi-byte text, so errors land in each 16- and 32-byte block
+// position, in the tail, and straddling block boundaries.
+test "validateUtf8: errors at every position of every length up to 80" {
+    const templates = [_][]const u8{
+        "\x80",             "\xbf",             "\xf8",             "\xff",
+        "\xc0\x80",         "\xc1\xbf",         "\xc2\x41",         "\xc2",
+        "\xe0\x80\x80",     "\xe0\x9f\xbf",     "\xed\xa0\x80",     "\xe2\x82\x41",
+        "\xe2\x41\x41",     "\xe2\x82",         "\xe2\x41",         "\xf0\x8f\xbf\xbf",
+        "\xf4\x90\x80\x80", "\xf5\x80\x80\x80", "\xf1\x80\x80\x41", "\xf0\x9f\x98",
+    };
+    var buf: [80]u8 = undefined;
+    for (0..buf.len + 1) |len| {
+        for ([_]bool{ false, true }) |multi_byte| {
+            fillValidUtf8(buf[0..len], multi_byte);
+            try testing.expectEqual(@as(?Utf8Error, null), validateUtf8(buf[0..len]));
+            for (templates) |template| {
+                if (template.len > len) continue;
+                for (0..len - template.len + 1) |pos| {
+                    fillValidUtf8(buf[0..pos], multi_byte);
+                    @memcpy(buf[pos..][0..template.len], template);
+                    fillValidUtf8(buf[pos + template.len .. len], multi_byte);
+                    const bytes = buf[0..len];
+                    const expected = expectedUtf8Error(bytes).?;
+                    const actual = validateUtf8(bytes) orelse {
+                        std.debug.print("validateUtf8({x}) = null; expected index {d}, {s}\n", .{ bytes, expected.index, @tagName(expected.problem) });
+                        return error.TestUnexpectedResult;
+                    };
+                    if (actual.index != expected.index or actual.problem != expected.problem) {
+                        std.debug.print("validateUtf8({x}) = index {d}, {s}; expected index {d}, {s}\n", .{ bytes, actual.index, @tagName(actual.problem), expected.index, @tagName(expected.problem) });
+                        return error.TestUnexpectedResult;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// `Str.from_utf8_lossy` output specified by byte ranges. Well-formed sequences
+/// (Unicode Table 3-7) are copied. Each ill-formed sequence becomes one U+FFFD:
+/// a byte in 80-BF or F8-FF consumes itself and every directly following byte in
+/// those ranges; a lead byte C0-F7 consumes itself and the continuation bytes
+/// after it, up to its announced length (C0-DF: 2, E0-EF: 3, F0-F7: 4), stopping
+/// early at a non-continuation byte or the end of the input. Returns the output
+/// length and writes the output to `out`.
+fn expectedLossyUtf8(bytes: []const u8, out: []u8) usize {
+    var written: usize = 0;
+    var i: usize = 0;
+    while (i < bytes.len) {
+        const lead = bytes[i];
+        const len: usize = switch (lead) {
+            0x00...0x7F => 1,
+            0xC0...0xDF => 2,
+            0xE0...0xEF => 3,
+            0xF0...0xF7 => 4,
+            else => 0,
+        };
+        if (len == 0) {
+            i += 1;
+            while (i < bytes.len and ((bytes[i] >= 0x80 and bytes[i] <= 0xBF) or bytes[i] >= 0xF8)) i += 1;
+            @memcpy(out[written..][0..3], "\u{FFFD}");
+            written += 3;
+            continue;
+        }
+        var present: usize = 1;
+        while (present < len and i + present < bytes.len and bytes[i + present] & 0xC0 == 0x80) present += 1;
+        const well_formed = present == len and (len == 1 or switch (lead) {
+            0xC0, 0xC1, 0xF5...0xF7 => false,
+            0xE0 => bytes[i + 1] >= 0xA0,
+            0xED => bytes[i + 1] <= 0x9F,
+            0xF0 => bytes[i + 1] >= 0x90,
+            0xF4 => bytes[i + 1] <= 0x8F,
+            else => true,
+        });
+        if (well_formed) {
+            @memcpy(out[written..][0..len], bytes[i..][0..len]);
+            written += len;
+        } else {
+            @memcpy(out[written..][0..3], "\u{FFFD}");
+            written += 3;
+        }
+        i += present;
+    }
+    return written;
+}
+
+fn expectFromUtf8LossyMatchesSpec(bytes: []const u8, ops: *RocOps) error{TestUnexpectedResult}!void {
+    var expected_buf: [3 * 128]u8 = undefined;
+    const expected = expected_buf[0..expectedLossyUtf8(bytes, &expected_buf)];
+    const list = RocList.fromSlice(u8, bytes, false, ops);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, ops);
+    const result = fromUtf8Lossy(list, ops);
+    defer result.decref(ops);
+    if (!mem.eql(u8, expected, result.asSlice())) {
+        std.debug.print("fromUtf8Lossy({x}) = {x}; expected {x}\n", .{ bytes, result.asSlice(), expected });
+        return error.TestUnexpectedResult;
+    }
+}
+
+test "fromUtf8Lossy: replacements match the byte-range specification" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+    var buf: [80]u8 = undefined;
+
+    // Random mostly-ASCII inputs with boundary bytes of every range mixed in.
+    const alphabet = [_]u8{ 0x00, 0x41, 0x7F, 0x80, 0x8F, 0x90, 0x9F, 0xA0, 0xBF, 0xC0, 0xC1, 0xC2, 0xDF, 0xE0, 0xE1, 0xEC, 0xED, 0xEE, 0xEF, 0xF0, 0xF1, 0xF3, 0xF4, 0xF5, 0xF7, 0xF8, 0xFF };
+    var prng = std.Random.DefaultPrng.init(13025);
+    const random = prng.random();
+    for (0..100_000) |_| {
+        const len = random.uintLessThan(usize, buf.len + 1);
+        const density = random.uintLessThan(u32, 4);
+        for (buf[0..len]) |*byte| {
+            byte.* = if (density != 0 and random.uintLessThan(u32, 4 * density) != 0) 'a' else alphabet[random.uintLessThan(usize, alphabet.len)];
+        }
+        try expectFromUtf8LossyMatchesSpec(buf[0..len], ops);
+    }
+
+    // Each non-ASCII lead byte followed by boundary bytes, truncated at every
+    // length, between ASCII and multi-byte text.
+    const seconds = [_]u8{ 0x00, 0x41, 0x7F, 0x80, 0x8F, 0x90, 0x9F, 0xA0, 0xBF, 0xC0, 0xF0, 0xFF };
+    const laters = [_]u8{ 0x41, 0x80, 0xC0 };
+    const prefixes = [_][]const u8{ "", "abcdefghijklmnopq", "\u{e9}\u{6f22}\u{1f389}ab" };
+    const suffixes = [_][]const u8{ "", "\u{e9}", "\x80\x80" };
+    for (0x80..0x100) |lead| {
+        for (seconds) |b1| for (laters) |b2| for (laters) |b3| for (1..5) |seq_len| for (prefixes) |prefix| for (suffixes) |suffix| {
+            const seq = [4]u8{ @intCast(lead), b1, b2, b3 };
+            var len: usize = 0;
+            @memcpy(buf[len..][0..prefix.len], prefix);
+            len += prefix.len;
+            @memcpy(buf[len..][0..seq_len], seq[0..seq_len]);
+            len += seq_len;
+            @memcpy(buf[len..][0..suffix.len], suffix);
+            len += suffix.len;
+            try expectFromUtf8LossyMatchesSpec(buf[0..len], ops);
+        };
+    }
+
+    try testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 }
 
 test "fromUtf8Lossy: invalid start byte" {

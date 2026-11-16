@@ -254,7 +254,7 @@ NO CHANGE
 						(record-destruct (label "rest") (ident "rest")
 							(rest-pattern
 								(p-assign (ident "rest")))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 406)
+			(e-dispatch-call (method "plus") (constraint-fn-var 360)
 				(receiver
 					(e-dispatch-call (method "plus") (constraint-fn-var 402)
 						(receiver

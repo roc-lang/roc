@@ -24,7 +24,8 @@ pub const Var = enum {
     /// which part an edit changed. Hashing the parts separately costs more
     /// than the digests themselves, so the work trace leaves it out.
     trace_boxy_digests,
-    /// Rebuild every restored Boxy object and compare it with the cached one.
+    /// Rebuild every restored or embedded Boxy object and compare it with the
+    /// cached or embedded one.
     verify_boxy_object_reuse,
     /// Separate coordinator request-resolution costs into exclusive phases.
     spec_resolution_profile,
@@ -75,6 +76,9 @@ pub const Var = enum {
     /// range prover walks: its proof rounds and restarts, its loop guards,
     /// its loop-invariant assumptions, and its walks and sum refreshes.
     range_prove_stats,
+    /// Print when `roc` starts a program it built and when it has released
+    /// the build's state, so the order of the two is visible.
+    trace_run_order,
 
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
@@ -100,6 +104,7 @@ pub const Var = enum {
             .storage_work => "ROC_STORAGE_WORK",
             .perf_map => "ROC_PERF_MAP",
             .range_prove_stats => "ROC_RANGE_PROVE_STATS",
+            .trace_run_order => "ROC_TRACE_RUN_ORDER",
         };
     }
 };

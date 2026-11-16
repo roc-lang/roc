@@ -72,6 +72,7 @@ pub const MatchBranchPart = types.MatchBranchPart;
 pub const MatchAltBinderMissing = types.MatchAltBinderMissing;
 pub const DiscardedVarUpdate = types.DiscardedVarUpdate;
 pub const ComptimeCondition = types.ComptimeCondition;
+pub const GeneralizationNestingTooDeep = types.GeneralizationNestingTooDeep;
 
 // Type declaration errors
 pub const TypeApplyArityMismatch = types.TypeApplyArityMismatch;
@@ -127,3 +128,4 @@ pub const ComptimeEvalError = types.ComptimeEvalError;
 pub const VarWithSnapshot = types.VarWithSnapshot;
 pub const LocalTypeEscape = types.LocalTypeEscape;
 pub const LocalTypeEscapeCause = types.LocalTypeEscapeCause;
+pub const RecordTailRefusal = types.RecordTailRefusal;

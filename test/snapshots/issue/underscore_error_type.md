@@ -38,9 +38,9 @@ UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:11:23:11:24
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:16:16:16:17
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:16:21:16:22
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:21:14:21:15
-TYPE MISMATCH - underscore_error_type.md:4:7:4:9
 TYPE MISMATCH - underscore_error_type.md:9:7:9:16
 TYPE MISMATCH - underscore_error_type.md:19:7:19:10
+TYPE MISMATCH - underscore_error_type.md:4:7:4:9
 TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 # PROBLEMS
 ~~~clojure
@@ -118,22 +118,6 @@ TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 4 7) (end 4 9))
-		(headline
-			(reflow "This number is being used where a non-number type is needed."))
-		(document
-			(source-region (file "underscore_error_type.md") (start 4 7) (end 4 9) (annotation error) (line-text "foo = 42"))
-			(line-break)
-			(reflow "Other code expects this to have the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "BadType")
-			(annotation-end)))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
 		(region (start 9 7) (end 9 16))
 		(headline
 			(reflow "This expression is used in an unexpected way."))
@@ -180,6 +164,22 @@ TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 			(annotation-start code-block)
 			(indent 1)
 			(text "BadFunction")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 4 7) (end 4 9))
+		(headline
+			(reflow "This number is being used where a non-number type is needed."))
+		(document
+			(source-region (file "underscore_error_type.md") (start 4 7) (end 4 9) (annotation error) (line-text "foo = 42"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "BadType")
 			(annotation-end)))
 	(report
 		(severity runtime_error)

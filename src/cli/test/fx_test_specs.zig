@@ -91,6 +91,15 @@ pub const inline_list_slow_arms_test = TestSpec{
     .description = "Inline list fast paths and their builtin slow arms leave the same bytes",
 };
 
+/// Regression test for https://github.com/roc-lang/roc/issues/13026: a helper
+/// whose loop precedes the only read of a known tag gives the same results
+/// and effects in the same order whether the loop is inline or factored out.
+pub const issue_13026_shared_prefix_test = TestSpec{
+    .roc_file = "test/fx/issue_13026_shared_prefix.roc",
+    .io_spec = "0<abcde|1>combined start 5|1>combined loop 28249|1>combined start 6|1>combined loop 599797|1>combined start 7|1>combined loop 7|1>factored start 5|1>factored loop 28249|1>factored start 6|1>factored loop 599797|1>factored start 7|1>factored loop 7|1>628059 628059",
+    .description = "Regression test: a shared tag-independent prefix keeps results and effect order",
+};
+
 /// All fx platform tests that can be run with --test mode IO specs.
 /// These tests work with cross-compilation because they only test
 /// the compiled binary's IO behavior, not build-time features.

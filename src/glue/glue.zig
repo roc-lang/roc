@@ -153,6 +153,9 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         return error.BuildEnvInit;
     };
     defer build_env.deinit();
+    // The strategy the platform's ABI layouts are lowered under
+    // (`attachAbiLayouts`).
+    build_env.setSpecializationStrategy(.lss);
     // Glue caches by default like every other pipeline; --no-cache opts out.
     if (!args.no_cache) build_env.enableDefaultCacheManager(false) catch {
         return error.BuildEnvInit;

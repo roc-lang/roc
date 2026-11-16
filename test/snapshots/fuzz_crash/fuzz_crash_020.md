@@ -1227,7 +1227,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue]")
+			(text "[Blue, ..f] where [f.is_eq : f, f -> Bool]")
 			(annotation-end)
 			(line-break)
 			(line-break)

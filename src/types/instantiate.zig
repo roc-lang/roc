@@ -380,13 +380,11 @@ pub const Instantiator = struct {
 
     /// A rank-1 scheme can contain quantified leaves below monomorphic
     /// structural nodes. While instantiating such a scheme, copy exactly the
-    /// monomorphic nodes from which a generalized variable or per-use
-    /// structure (`DescriptorFlags.per_use_structure`) is reachable,
-    /// per-use structure included (as recorded in `Scratch.reach_state`), so
-    /// the walk reaches every node each use must own. Every other monomorphic
-    /// node stays shared: it is not quantified, so each use must see the same
-    /// node, including a function node's effect kind and effect
-    /// dependencies.
+    /// monomorphic nodes from which a generalized variable is reachable (as
+    /// recorded in `Scratch.reach_state`) so the walk reaches every
+    /// generalized descendant. Every other monomorphic node stays shared: it
+    /// is not quantified, so each use must see the same node, including a
+    /// function node's effect kind and effect dependencies.
     copy_scheme_structure: bool = false,
     /// Set by a caller that knows the next scheme root it instantiates has no
     /// monomorphic structural node from which a generalized variable is
@@ -449,7 +447,7 @@ pub const Instantiator = struct {
     /// When set, the resolved fresh copy of every row extension whose source
     /// is a constrained flex or rigid is added here: the copy stands in a row's
     /// tail position, where the row default closes it to the empty row
-    /// (design.md "Derived Equality And Hashing Over Open Rows").
+    /// (design.md "Methods On Open Rows").
     constrained_row_tail_copies: ?*DenseMap(Var, void) = null,
     /// How to resolve polarity vars (see `PolarityVarBehavior`). `.close`
     /// reproduces the written (closed) row and is the safe default.
@@ -701,8 +699,7 @@ pub const Instantiator = struct {
     }
 
     /// Fill `Scratch.reach_state` for every node reachable from `root`: true
-    /// when a generalized variable, or structure every use copies
-    /// (`schemeCopiesNode`), is reachable from that node. The walk
+    /// when a generalized variable is reachable from that node. The walk
     /// follows exactly the child edges the copy follows, stops at monomorphic
     /// flex and rigid leaves (shared, so their constraints are shared too),
     /// and records every edge by its child. Reachability then propagates from
@@ -718,8 +715,8 @@ pub const Instantiator = struct {
         machine.reach_stack.clearRetainingCapacity();
         reach_state.clearRetainingCapacity();
 
-        const root_resolved = self.store.resolveVar(root);
-        try reach_state.put(root_resolved.var_, schemeCopiesNode(root_resolved.desc));
+        const root_resolved = self.store.resolveVarWord(root);
+        try reach_state.put(root_resolved.var_, schemeCopiesNode(root_resolved.word));
         try machine.reach_stack.append(self.store.gpa, root_resolved.var_);
 
         while (machine.reach_stack.pop()) |parent| {
@@ -834,7 +831,7 @@ pub const Instantiator = struct {
     /// Record the edge to `child` and schedule the child's own children once.
     fn visitReachChild(self: *Self, parent: Var, child: Var) std.mem.Allocator.Error!void {
         const machine = self.scratch();
-        const resolved = self.store.resolveVar(child);
+        const resolved = self.store.resolveVarWord(child);
         const edge_idx: u32 = @intCast(machine.reach_edges.items.len);
         const head = try machine.reach_heads.?.getOrPut(resolved.var_);
         try machine.reach_edges.append(self.store.gpa, .{
@@ -844,16 +841,14 @@ pub const Instantiator = struct {
         head.value_ptr.* = edge_idx;
         const entry = try machine.reach_state.?.getOrPut(resolved.var_);
         if (entry.found_existing) return;
-        entry.value_ptr.* = schemeCopiesNode(resolved.desc);
+        entry.value_ptr.* = schemeCopiesNode(resolved.word);
         try machine.reach_stack.append(self.store.gpa, resolved.var_);
     }
 
     /// Whether every instantiation of a scheme copies this node itself: a
-    /// generalized variable, or anonymous structure made in the scheme's own
-    /// scope, which a use may lift into a nominal type
-    /// (`DescriptorFlags.per_use_structure`).
-    fn schemeCopiesNode(desc: types_mod.Descriptor) bool {
-        return desc.rank == .generalized or desc.flags.per_use_structure;
+    /// generalized variable.
+    fn schemeCopiesNode(word: types_mod.Descriptor.Word) bool {
+        return word.rank == .generalized;
     }
 
     /// Resolve shared declaration binders before copying. Every semantic
@@ -1093,8 +1088,9 @@ pub const Instantiator = struct {
         force_root_copy: bool,
     ) std.mem.Allocator.Error!bool {
         const machine = self.scratch();
-        const resolved = self.store.resolveVar(initial_var);
+        const resolved = self.store.resolveVarWord(initial_var);
         const resolved_var = resolved.var_;
+        const desc_idx = resolved.desc_idx;
 
         // The root and its explicit scheme requirements use one substitution.
         // An established copy takes precedence over ordinary rank-based sharing.
@@ -1106,40 +1102,41 @@ pub const Instantiator = struct {
         }
 
         // Ordinary instantiation shares every non-generalized var. A binding
-        // explicitly classified as a scheme instead copies its per-use
-        // structure and the non-generalized structural nodes from which a
-        // generalized leaf or per-use structure is reachable, so those stay
-        // reachable at arbitrary depth while every other monomorphic node and
-        // leaf keeps its identity. A polarity marker is
+        // explicitly classified as a scheme instead copies the non-generalized
+        // structural nodes from which a generalized leaf is reachable, so
+        // generalized leaves at arbitrary depth remain reachable while every
+        // monomorphic node and leaf keeps its identity. A polarity marker is
         // never shared: it stands for "decided by this instantiation" whatever
         // its rank (a where-method signature is instantiated per body use
         // before the enclosing scheme generalizes).
         const is_polarity_marker = self.polarity_var_ident != null and
-            resolved.desc.content == .rigid and
-            resolved.desc.content.rigid.name.eql(self.polarity_var_ident.?);
-        const is_leaf = switch (resolved.desc.content) {
-            .alias, .structure => false,
+            resolved.word.kind == .rigid and
+            self.store.rigidAt(desc_idx).name.eql(self.polarity_var_ident.?);
+        const is_leaf = switch (resolved.word.kind) {
+            .alias, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => false,
             .flex, .rigid, .field_presence, .err => true,
         };
         if (!force_root_copy and self.share_leaves and is_leaf and !is_polarity_marker) {
             try machine.value_stack.append(self.store.gpa, resolved_var);
             return true;
         }
-        if (!force_root_copy and self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
-            const copy_structure = self.copy_scheme_structure and switch (resolved.desc.content) {
-                .alias, .structure => !self.reach_known_empty and (machine.reach_state.?.get(resolved_var) orelse false),
-                .flex, .rigid, .field_presence, .err => false,
-            };
+        if (!force_root_copy and self.rank_behavior == .respect_rank and resolved.word.rank != .generalized) {
+            const copy_structure = self.copy_scheme_structure and !is_leaf and
+                !self.reach_known_empty and (machine.reach_state.?.get(resolved_var) orelse false);
             if (!copy_structure and !is_polarity_marker) {
                 try machine.value_stack.append(self.store.gpa, resolved_var);
                 return true;
             }
         }
 
-        var flags = resolved.desc.flags.copied();
-        flags.annotation_tag_ext = self.preserve_annotation_tag_ext and resolved.desc.flags.annotation_tag_ext;
-        switch (resolved.desc.content) {
-            .rigid => |rigid| {
+        var flags = resolved.word.flags().copied();
+        flags.annotation_tag_ext = self.preserve_annotation_tag_ext and resolved.word.flags().annotation_tag_ext;
+        // A copy of an uncommitted record tail absorbs optional fields only
+        // (design.md "Uncommitted Record Tails").
+        if (flags.uncommitted_record_tail) flags.uncommitted_copy = true;
+        switch (resolved.word.kind) {
+            .rigid => {
+                const rigid = self.store.rigidAt(desc_idx);
                 // Polarity vars (the deferred open-vs-closed tag union
                 // extensions of alias declaration bodies) are resolved before
                 // any rigid behavior applies: they are compiler-internal and
@@ -1274,14 +1271,15 @@ pub const Instantiator = struct {
                 } });
                 return false;
             },
-            .flex => |flex| {
+            .flex => {
+                const flex = self.store.flexAt(desc_idx);
                 // Remember this substitution for recursive references
                 // IMPORTANT: This has to be registered _before_ any child copy runs
                 const fresh_var = try self.store.fresh();
                 try self.var_map.put(resolved_var, fresh_var);
 
-                if (self.close_bounded_row_exts and resolved.desc.flags.bounded_row_ext) {
-                    try self.fillPlaceholder(fresh_var, .{ .structure = .empty_tag_union }, flags);
+                if (self.close_bounded_row_exts and resolved.word.flags().bounded_row_ext) {
+                    try self.fillPlaceholder(fresh_var, .{ .structure = .empty_tag_union }, flags.forKind(.empty_tag_union));
                     try machine.value_stack.append(self.store.gpa, fresh_var);
                     return true;
                 }
@@ -1305,7 +1303,8 @@ pub const Instantiator = struct {
                 } });
                 return false;
             },
-            .alias => |alias| {
+            .alias => {
+                const alias = self.store.aliasAt(desc_idx);
                 const fresh_var = try self.store.fresh();
                 try self.var_map.put(resolved_var, fresh_var);
 
@@ -1324,7 +1323,8 @@ pub const Instantiator = struct {
                 } });
                 return false;
             },
-            .field_presence => |field_presence| {
+            .field_presence => {
+                const field_presence = self.store.fieldPresenceAt(desc_idx);
                 // A resolved presence fact carries no inner variables. It is
                 // still copied to a fresh var so an instantiated field-kind
                 // axis has the same identity semantics as every other axis.
@@ -1334,11 +1334,12 @@ pub const Instantiator = struct {
                 try machine.value_stack.append(self.store.gpa, fresh_var);
                 return true;
             },
-            .structure => |flat_type| {
+            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => {
                 const fresh_var = try self.store.fresh();
                 try self.var_map.put(resolved_var, fresh_var);
 
-                switch (flat_type) {
+                switch (resolved.word.kind) {
+                    .flex, .rigid, .alias, .field_presence, .err => unreachable, // the outer switch takes these kinds
                     .empty_record => {
                         try self.fillPlaceholder(fresh_var, Content{ .structure = FlatType.empty_record }, flags);
                         try machine.value_stack.append(self.store.gpa, fresh_var);
@@ -1349,7 +1350,8 @@ pub const Instantiator = struct {
                         try machine.value_stack.append(self.store.gpa, fresh_var);
                         return true;
                     },
-                    .tuple => |tuple| {
+                    .tuple => {
+                        const tuple = self.store.tupleAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .tuple = .{
                             .common = .{
                                 .fresh_var = fresh_var,
@@ -1361,7 +1363,8 @@ pub const Instantiator = struct {
                         } });
                         return false;
                     },
-                    .nominal_type => |nominal| {
+                    .nominal_type => {
+                        const nominal = self.store.nominalAt(desc_idx);
                         // A nominal application instantiates its actual args
                         // only. The declaration's backing template is never
                         // touched here; it is instantiated exclusively by
@@ -1383,7 +1386,8 @@ pub const Instantiator = struct {
                         } });
                         return false;
                     },
-                    .fn_pure => |func| {
+                    .fn_pure => {
+                        const func = self.store.funcAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .func = .{
                             .common = .{
                                 .fresh_var = fresh_var,
@@ -1397,7 +1401,8 @@ pub const Instantiator = struct {
                         } });
                         return false;
                     },
-                    .fn_effectful => |func| {
+                    .fn_effectful => {
+                        const func = self.store.funcAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .func = .{
                             .common = .{
                                 .fresh_var = fresh_var,
@@ -1411,7 +1416,8 @@ pub const Instantiator = struct {
                         } });
                         return false;
                     },
-                    .fn_unbound => |func| {
+                    .fn_unbound => {
+                        const func = self.store.funcAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .func = .{
                             .common = .{
                                 .fresh_var = fresh_var,
@@ -1425,7 +1431,8 @@ pub const Instantiator = struct {
                         } });
                         return false;
                     },
-                    .record => |record| {
+                    .record => {
+                        const record = self.store.recordAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .record = .{
                             .common = .{
                                 .fresh_var = fresh_var,
@@ -1437,7 +1444,8 @@ pub const Instantiator = struct {
                         } });
                         return false;
                     },
-                    .tag_union => |tag_union| {
+                    .tag_union => {
+                        const tag_union = self.store.tagUnionAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .tag_union = .{
                             .common = .{
                                 .fresh_var = fresh_var,
@@ -1464,7 +1472,7 @@ pub const Instantiator = struct {
     }
 
     /// Update the placeholder fresh var with its real content.
-    fn fillPlaceholder(
+    inline fn fillPlaceholder(
         self: *Self,
         fresh_var: Var,
         content: Content,
@@ -1481,7 +1489,7 @@ pub const Instantiator = struct {
     }
 
     /// Fill `common`'s placeholder and publish it as this frame's result.
-    fn finishFrame(
+    inline fn finishFrame(
         self: *Self,
         common: FillCommon,
         content: Content,

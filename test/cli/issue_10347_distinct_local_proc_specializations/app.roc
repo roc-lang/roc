@@ -4,7 +4,7 @@ main! = || {
     c1 = 10.U64
     c2 = "hello"
 
-	f1 = |x| x + c1
+	f1 = |x| x + x.absent(c1)
 	f2 = |x| Str.concat(c2, Str.inspect(x))
 
 	fns = (f1, f2)

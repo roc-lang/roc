@@ -370,14 +370,55 @@ pub const Constants = struct {
     /// 187: CIR external nominal construction and pattern nodes record which
     ///      index space their module refers to, and a reserved-module-name
     ///      diagnostic node is added.
+    /// 188: a serialized module env records the BLAKE3 digest of its source,
+    ///      and module identities, cache keys and file-dependency content
+    ///      hashes are computed from source digests; a flex variable records
+    ///      whether it is a deferred literal's type. Includes the 187 changes.
     /// 189: checked artifacts store their type, scheme, blob and proc-base
     ///      interning tables; combines with the independent 187 entry change.
     /// 190: type tags record whether they are in their row only because `match`
     ///      branch patterns asked for them.
+    /// 191: includes both the 188 changes (source digests, deferred-literal
+    ///      flex variables) and the 190 changes (pattern-only type tags).
     /// 191: combines the independent 189 and 190 entry changes.
+    /// 192: combines the two independent 191 entries, so it includes the 188,
+    ///      189 and 190 changes.
     /// 192: literal argument roots record their edge owner as their own root
     ///      source and hold no expression.
-    pub const CACHE_VERSION = 192;
+    /// 193: combines the two independent 192 entries.
+    /// 193: a `return` in its function's result position canonicalizes to its
+    ///      operand rather than to a return node.
+    /// 193: on top of the 192 entry layout, uncommitted record and tag tails
+    ///      replace per-use structure, checked variables record uncommitted
+    ///      record tails, type stores list no widening field names, quantified
+    ///      record tails are restricted at every use, record pattern tails are
+    ///      marked, nominal declarations record padding, method requirements on
+    ///      open rows are held on the row variable for the whole record or tag
+    ///      union, and snapshots record which value a requirement is about.
+    /// 194: combines the two independent 193 entries.
+    /// 194: a Boxy lambda's type table refers to its creator's table instead
+    ///      of repeating its creator's inputs, in needs lists, stored function
+    ///      recipes and compiler-only function metadata.
+    /// 194: combines the two independent 193 entries.
+    /// 195: combines the three independent 194 entries.
+    /// 194: checked artifacts index their compile-time roots by pattern.
+    /// 196: combines the 194 entry above with the 195 entry.
+    /// 194: two independent entries. A type descriptor is stored as a 16-byte
+    ///      row: one word of kind, flags, a flex's literal marker, two
+    ///      generalization marks that are always clear in a stored row and a
+    ///      14-bit rank, and a payload of three words. A type store interns
+    ///      the identities of its nominal types and aliases, which their
+    ///      descriptors name by row, and every vars range has its length in
+    ///      the pool slot just before it, so a stored descriptor keeps only a
+    ///      range's start. And checked artifacts index their compile-time
+    ///      roots by pattern.
+    /// 195: combines the two independent 194 entries.
+    /// 197: combines the 196 entry with the 195 entry above, and a stored
+    ///      descriptor's word packs its flags by kind.
+    /// 195: unary `!` canonicalizes to its own node and checks as a dispatch
+    ///      of the operand's `not` method.
+    /// 198: combines the 197 entry with the 195 entry above.
+    pub const CACHE_VERSION = 198;
 };
 
 /// Configuration for the Roc cache system.

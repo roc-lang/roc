@@ -47,7 +47,7 @@ test "let-polymorphism with function composition" {
     ;
     try typeCheck(
         source,
-        "a -> a where [a.plus : a, Dec -> a, a.times : a, Dec -> a]",
+        "Dec -> Dec",
     );
 }
 
