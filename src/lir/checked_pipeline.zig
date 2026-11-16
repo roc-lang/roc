@@ -457,6 +457,13 @@ pub const Timing = struct {
         active.unit_steps_ns[@backingInt(step)].add(active.elapsedSince(started_ns));
     }
 
+    /// Add the time since `started_ns` to codegen step `step` when `timing`
+    /// records detail.
+    pub fn finishCodegenStep(timing: ?*Timing, started_ns: i64, step: CodegenStep) void {
+        const active = detailOf(timing) orelse return;
+        active.codegen_steps_ns[@backingInt(step)].add(active.elapsedSince(started_ns));
+    }
+
     /// Fold one lowering's procedure-local phase measures.
     pub fn addProcPasses(self: *Timing, passes: *const ProcPasses.Timing) void {
         const columns = [proc_pass_measure_count]*const [ProcPasses.phase_count]u64{
@@ -829,9 +836,13 @@ pub const CodegenStep = enum {
     /// Composing the pieces into an object for the unit image.
     composition,
     dwarf,
+    /// Encoding a relocatable object; a unit image is built from its
+    /// composition's object contents with no object encoded.
     object_encoding,
-    /// Reading the composed object back into the unit image.
+    /// Building the unit image from its composition's object contents.
     unit_image,
+    /// Encoding the pieces of a unit whose entry holds them.
+    pieces_encoding,
 };
 
 /// The number of `CodegenStep` members.
@@ -1969,7 +1980,14 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         timing.lss_steps_ns[@backingInt(LssStep.lambda_solve)].add(detail.solve_ns);
     }
     errdefer solved.deinit();
+    const specialized = try postcheck.LambdaSolved.Specialize.run(allocator, &solved);
     lambda_solve_timing_scope.end();
+    // Specialization gives some functions copies; the copies' uses are
+    // counted afresh over the specialized program.
+    if (specialized.cloned_fns != 0 and procedure_usage.items.len != 0) {
+        procedure_usage.deinit();
+        procedure_usage = try postcheck.MonotypeLifted.SpecConstr.collectProcedureUsage(allocator, &solved.lifted);
+    }
 
     var inline_plan_timing_scope = PipelineStageScope.begin(
         if (target.inline_mode != .none) target.timing else null,

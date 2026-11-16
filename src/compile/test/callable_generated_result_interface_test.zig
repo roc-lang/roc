@@ -115,6 +115,40 @@ test "callable result interface: an unboxed function joins a local one" {
     );
 }
 
+test "callable result interface: an iterator over functions returning produced iterators is mapped and filtered" {
+    // The adapters' `iter` specialization relates the public `Iter(() -> Iter(U8))`
+    // to its produced representation, and the public side holds the
+    // produced iterator its items return among its arguments. The lists
+    // read runtime data, so no compile-time root stands in for them.
+    try expectLowersUnderBothStrategies(digits ++
+        \\mapped! : Bool => U64
+        \\mapped! = |use| {
+        \\    its = [|| [(if use 3.U8 else 3)].iter()].iter().map(|f| f())
+        \\    var $t = 0.U64
+        \\    for it in its {
+        \\        $t = $t * 100 + digits(it)
+        \\    }
+        \\    $t
+        \\}
+        \\
+        \\filtered! : Bool => U64
+        \\filtered! = |use| {
+        \\    its = [|| [(if use 3.U8 else 3)].iter()].iter().keep_if(|f| digits(f()) > 5)
+        \\    var $t = 0.U64
+        \\    for f in its {
+        \\        $t = $t * 100 + digits(f())
+        \\    }
+        \\    $t
+        \\}
+        \\
+        \\main! = |args| {
+        \\    echo!(mapped!(args.len() > 0).to_str())
+        \\    echo!(filtered!(args.len() > 0).to_str())
+        \\    Ok({})
+        \\}
+    );
+}
+
 test "callable result interface: functions returning iterators cross the host in every form" {
     try harness.expectAppPathLowersToLir("test/fx/callable_iterator_result_host_round_trip.roc");
     try harness.expectAppPathLowersToLirWithOptions(

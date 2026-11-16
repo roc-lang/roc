@@ -2327,8 +2327,9 @@ const Gen = struct {
                 const separated = try self.callFormat("parse_dict_after_key", container_ty, &.{ self.encoding, key.rest });
                 const value_state = try self.unwrap(separated.value, separated.ty, on_err);
                 const parsed = try self.parseWith(dict.value, value_state, ret_ty, on_err);
-                next_acc = (try self.callFormat("insert", container_ty, &.{ acc, key.value, parsed.value })).value;
-                after_entry = parsed.rest;
+                const settled = try self.insertParsedEntry(container_ty, acc, key.value, parsed.value, parsed.rest, on_err);
+                next_acc = settled.dict;
+                after_entry = settled.rest;
             },
         }
         if (counted) {
@@ -2350,6 +2351,54 @@ const Gen = struct {
         self.b.hole = holes[1];
         const done = try self.payload(event, event_ty, "Done", 0);
         try self.finishCounted(ret_ty, set_ty, next_acc, done.value);
+    }
+
+    /// Add a parsed entry to `acc` with `Dict.insert_fresh`. A key `acc`
+    /// already holds goes to the format's `parse_dict_duplicate_key`, called
+    /// with `rest`, the state after the entry's value: `KeepFirst` keeps
+    /// `acc` as it is, and `KeepLast` replaces the held value through
+    /// `Dict.insert`. Returns the resulting dict and the state to continue from.
+    fn insertParsedEntry(
+        self: *Gen,
+        dict_ty: TypeId,
+        acc: LocalId,
+        key: LocalId,
+        value: LocalId,
+        rest: LocalId,
+        on_err: OnErr,
+    ) Allocator.Error!struct { dict: LocalId, rest: LocalId } {
+        const outcome = try self.callFormat("insert_fresh", dict_ty, &.{ acc, key, value });
+        const settled = self.b.freshJoin();
+        const settled_dict = try self.local(dict_ty);
+        const settled_rest = try self.local(self.fam().state);
+        const settled_params = [_]LocalId{ settled_dict, settled_rest };
+        const after = try self.declareJoin(settled, &settled_params, &.{});
+
+        var holes: [2]CFStmtId = undefined;
+        try self.switchTags(outcome.value, outcome.ty, &.{ "Inserted", "Occupied" }, &holes);
+        self.b.hole = holes[0];
+        const inserted = try self.payload(outcome.value, outcome.ty, "Inserted", 0);
+        try self.jump(settled, &settled_params, &.{ inserted.value, rest });
+
+        self.b.hole = holes[1];
+        const occupied = try self.payload(outcome.value, outcome.ty, "Occupied", 0);
+        const held = try self.field(occupied.value, occupied.ty, "dict");
+        const refused_key = try self.field(occupied.value, occupied.ty, "key");
+        const refused_value = try self.field(occupied.value, occupied.ty, "value");
+        const decided = try self.callFormat("parse_dict_duplicate_key", dict_ty, &.{ self.encoding, rest });
+        const decision = try self.unwrap(decided.value, decided.ty, on_err);
+        const decision_ty = (try requireTry(self.program(), decided.ty)).ok;
+        try self.switchTags(decision, decision_ty, &.{ "KeepFirst", "KeepLast" }, &holes);
+        self.b.hole = holes[0];
+        const first_rest = try self.payload(decision, decision_ty, "KeepFirst", 0);
+        try self.jump(settled, &settled_params, &.{ held.value, first_rest.value });
+        self.b.hole = holes[1];
+        const last_rest = try self.payload(decision, decision_ty, "KeepLast", 0);
+        const replaced = try self.callFormat("insert", dict_ty, &.{ held.value, refused_key.value, refused_value.value });
+        try self.jump(settled, &settled_params, &.{ replaced.value, last_rest.value });
+
+        self.b.hole = after;
+        return .{ .dict = settled_dict, .rest = settled_rest };
     }
 
     fn append(self: *Gen, list: LocalId, list_ty: TypeId, elem: LocalId) Allocator.Error!LocalId {

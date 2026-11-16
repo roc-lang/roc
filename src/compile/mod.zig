@@ -303,6 +303,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/match_lowering_test.zig"));
     std.testing.refAllDecls(@import("test/specialization_epoch_test.zig"));
     std.testing.refAllDecls(@import("test/range_prove_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_13035_test.zig"));
     std.testing.refAllDecls(@import("test/list_prefetched_test.zig"));
     std.testing.refAllDecls(@import("test/parallel_fusion_test.zig"));
     std.testing.refAllDecls(@import("test/parallel_spec_constr_test.zig"));

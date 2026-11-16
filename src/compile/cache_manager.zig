@@ -170,6 +170,11 @@ pub const CacheManager = struct {
         self.storeEntry(self.allocator, .checked, family, key, .{ .bytes = bytes }, bytes.len, scope, name);
     }
 
+    /// File the `size` bytes `stream` writes as a `family` entry.
+    pub fn storeFamilyStream(self: *Self, family: artifacts.Family, key: [32]u8, stream: CoreCtx.FileStream, size: usize, scope: []const u8, name: []const u8) void {
+        self.storeEntry(self.allocator, .checked, family, key, .{ .stream = stream }, size, scope, name);
+    }
+
     pub fn storeRawBytesIn(self: *Self, allocator: Allocator, kind: Kind, key: [32]u8, bytes: []const u8, scope: []const u8, name: []const u8) void {
         self.storeEntry(allocator, kind, familyFor(kind), key, .{ .bytes = bytes }, bytes.len, scope, name);
     }

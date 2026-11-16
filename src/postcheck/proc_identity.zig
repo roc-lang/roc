@@ -117,7 +117,7 @@ pub const Renderer = struct {
         writeBytes(&hasher, return_reuse);
         const signature = switch (self.types.get(self.renderedRoot(solved_fn_ty))) {
             .func => |func| func,
-            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .lambda_set, .erased, .zst, .hole, .mono => Common.invariant("procedure identity requires a solved function signature"),
+            .link, .unbound, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .lambda_set, .erased, .zst, .hole, .mono => Common.invariant("procedure identity requires a solved function signature"),
         };
         writeBytes(&hasher, "args");
         const args = self.types.span(signature.args);
@@ -259,7 +259,7 @@ const Engine = struct {
         self.graph.beginNode(node);
         const content = renderer.types.get(self.tys.items[node]);
         switch (content) {
-            .mono, .link, .unbound, .forall => Common.invariant("unresolved Lambda Solved type reached procedure identity rendering"),
+            .mono, .link, .unbound => Common.invariant("unresolved Lambda Solved type reached procedure identity rendering"),
             .primitive => |primitive| {
                 try self.putBytes("primitive");
                 try self.putBytes(@tagName(primitive));

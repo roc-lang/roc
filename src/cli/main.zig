@@ -12302,7 +12302,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         null;
     defer if (boxy_library) |library| library.deinit(ctx.gpa);
     const boxy_cache_manager: ?*CacheManager = if (args.no_cache) null else build_env.cache_manager;
-    const boxy_root_key: ?compile.boxy_object_cache.Key = if (boxy_library) |library| try boxyObjectKey(ctx.gpa, &boxy_digests, root_artifact, boxyUnitPlatform(root_artifact, library.platform), BoxyUnitPolicy.ofBuild(args), target, library.paired_platforms, false) else null;
+    // A link that composes pieces files the root unit's under its pieces
+    // key; a fast dev link reads only its image.
+    const boxy_root_key: ?compile.boxy_object_cache.Key = if (boxy_library) |library| key: {
+        const image_key = try boxyObjectKey(ctx.gpa, &boxy_digests, root_artifact, boxyUnitPlatform(root_artifact, library.platform), BoxyUnitPolicy.ofBuild(args), target, library.paired_platforms, false);
+        break :key if (fast_link == null and compile.boxy_unit.producesImage(target)) compile.boxy_object_cache.piecesKey(image_key) else image_key;
+    } else null;
     if (dev_diagnostics.isSet(.trace_boxy_work)) if (boxy_library) |library| std.debug.print("boxy-work: library units {d}, root key {s}\n", .{ library.pieces.len, &std.fmt.bytesToHex(boxy_root_key.?.bytes[0..8], .lower) });
     // The root program's object is cached under its own key too: a build
     // whose every module is cached lowers nothing.
@@ -12410,15 +12415,13 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             if (!args.no_cache) {
                 const records = try compile.boxy_unit.exportRecords(ctx.gpa, &lowered, &boxy_interfaces.?);
                 defer ctx.gpa.free(records);
-                const encoded = try backend.dev.UnitPieces.encode(ctx.gpa, &root_pieces);
-                defer ctx.gpa.free(encoded);
                 try compile.boxy_unit.store(ctx.gpa, boxy_cache_manager, boxy_root_key.?, .{
                     .exports = records,
                     .exports_digest = try compile.boxy_object_cache.exportRecordsDigest(ctx.gpa, records),
                     .hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
                     .link_root_symbols = try devObjectLinkRootSymbols(ctx.arena, static_data_exports),
                     .app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
-                    .pieces = encoded,
+                    .pieces = &.{},
                     .image = root_image.?,
                 });
                 build_env.recordBoxyObjects(0, 1);
@@ -19251,7 +19254,8 @@ fn codegenStepLabel(step: lir.CheckedPipeline.CodegenStep) []const u8 {
         .composition => "Image Composition",
         .dwarf => "DWARF Generation",
         .object_encoding => "Object Encoding",
-        .unit_image => "Object to Unit Image",
+        .unit_image => "Unit Image Build",
+        .pieces_encoding => "Pieces Encoding",
     };
 }
 
