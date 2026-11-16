@@ -14625,8 +14625,6 @@ const EvidencePass = struct {
             entry.value_ptr.* = record_idx;
         }
 
-        const global_value_defs = module_env.store.sliceDefs(module_env.global_value_defs);
-
         // Generalized local VALUE decls and one representative use record per
         // looked-up pattern (see `local_value_scheme_by_var`).
         for (module_env.scheme_uses.items(), 0..) |record, i| {
@@ -14646,14 +14644,6 @@ const EvidencePass = struct {
                 const statement_data = self.module.getStatement(statement);
                 if (statement_data != .s_decl) continue;
                 try self.mapValueSchemeParams(statement_data.s_decl.pattern, statement_data.s_decl.expr, &scheme_params);
-            }
-            // Top-level generalized VALUE defs (e.g. an `if` choosing between
-            // closures) lower inline at their single use type exactly like
-            // local value decls; their body plans resolve through use records
-            // the same way.
-            for (global_value_defs) |def_idx| {
-                const def = module_env.store.getDef(def_idx);
-                try self.mapValueSchemeParams(def.pattern, def.expr, &scheme_params);
             }
         }
     }
