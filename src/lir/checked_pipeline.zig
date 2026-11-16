@@ -1566,7 +1566,14 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     lifted = undefined;
     var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted_input);
     errdefer solved.deinit();
+    const specialized = try postcheck.LambdaSolved.Specialize.run(allocator, &solved);
     lambda_solve_timing_scope.end();
+    // Specialization gives some functions copies; the copies' uses are
+    // counted afresh over the specialized program.
+    if (specialized.cloned_fns != 0 and procedure_usage.items.len != 0) {
+        procedure_usage.deinit();
+        procedure_usage = try postcheck.MonotypeLifted.SpecConstr.collectProcedureUsage(allocator, &solved.lifted);
+    }
 
     var inline_plan_timing_scope = PipelineStageScope.begin(
         if (target.inline_mode != .none) target.timing else null,

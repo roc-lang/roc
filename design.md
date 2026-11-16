@@ -20558,7 +20558,6 @@ not a side representation store.
 const LambdaType = union(enum) {
     link: TypeVarId,
     unbound,
-    forall,
     content: LambdaContent,
 };
 
@@ -20588,6 +20587,7 @@ const LambdaSet = struct {
 const LambdaSetMember = struct {
     lambda: Symbol,
     captures: Span(Capture),
+    inst: InstId,
 };
 
 const Capture = struct {
@@ -20673,50 +20673,67 @@ unevaluated, so LIR carries the operation's two runtime operands. Adding the
 item's type to the buffer's instead would give every in-place operation a
 second type parameter for what this operand states directly.
 
-Solving is monomorphic. Every lifted function's type is registered before any
-body is solved, and all of a function's call sites unify with those same type
-nodes; there is no generalization or per-use instantiation. Definitions are
-output in `FnId` order because consumers reach functions only through explicit
-references.
+Every lifted function's type is registered before any body is solved.
+Definitions are output in `FnId` order because consumers reach functions only
+through explicit references.
 
 Bodies are solved one binding group at a time. A binding group is a strongly
 connected component of the lifted-function reference graph, whose edges are
-the functions a body names (`fn_ref` and direct `call_proc`); the groups are
-listed callee-first, and a group's functions in ascending `FnId` order
-(`Lifted.Program.bindingGroups`). The groups are a pure function of the final
-lifted program's explicit references, which SpecConstr may still rewrite
-after lifting, so Lambda Solved computes them as its first step from the
-program it consumes and records them on its output program
-(`Ast.Program.binding_groups`) for every later consumer. Every reference
-still unifies with the one registered type, and solving is order-independent:
-the solved classes do not depend on the order bodies are visited in
-(`Solve.BodyOrder`; tests solve programs in both binding-group and `FnId`
-order and compare their classes), and the order in which merges meet
-lambda-set members does not reach any consumer, since the final member order
-is canonical (below). Every shortcut that relates types without unifying
-their structure must keep this: two unexpanded leaves of one Monotype are
-linked directly only when they lie in one clone context and inherit one
-argument scope (`Solver.leavesExpandAlike`), because a leaf's expansion ties
-its parts to its context's and scope's nodes, and linking leaves that differ
-there would drop the relation their expansions' unification makes between
-those nodes. Whether that relation was made would then depend on whether the
-two leaves met before or after one of them expanded.
+the functions a body names (`fn_ref` and direct `call_proc`), plus one edge
+back from a capturing function to every function that names it with capture
+operands. The operands read locals of the naming function's scope, so the
+back edge puts a closure in one group with every function whose locals it
+captures, and no group's types depend on locals another group binds. The
+groups are listed callee-first, and a group's functions in ascending `FnId`
+order (`Lifted.Program.bindingGroups`). The groups are a pure function of the
+final lifted program's explicit references, which SpecConstr may still
+rewrite after lifting, so Lambda Solved computes them as its first step from
+the program it consumes and records them on its output program
+(`Ast.Program.binding_groups`) for every later consumer. The same walk
+records which groups share an expression with another group's body
+(SpecConstr reuses unchanged expressions of a body it copies): such an
+expression has one type for both bodies.
 
-Monotype specialization
-shares one `FnId` among every call site that reaches a callable at the same
-closed type, so those sites' lambda sets become their union. The union is
-sound: a finite callable value carries the tag of the member it was built
-from, and a call dispatches on that tag. Lambda sets key members by lambda
-symbol, so every lifted function must have its own symbol.
+Solving is order-independent within that discipline: the solved classes do
+not depend on the order a group's bodies are visited in (`Solve.BodyOrder`;
+tests solve and specialize programs with each group's bodies in both orders
+and compare their classes), and the order in which merges meet lambda-set
+members does not reach any consumer, since the final member order is
+canonical (below). `BodyOrder.fn_ids` solves in `FnId` order without
+generalization, a monomorphic solve. Every shortcut that relates types
+without unifying their structure must keep this: two unexpanded leaves of one
+Monotype are linked directly only when they lie in one clone context and
+inherit one argument scope (`Solver.leavesExpandAlike`), because a leaf's
+expansion ties its parts to its context's and scope's nodes, and linking
+leaves that differ there would drop the relation their expansions'
+unification makes between those nodes. Whether that relation was made would
+then depend on whether the two leaves met before or after one of them
+expanded.
 
-A lambda-set member is born only when a lifted function's type is registered,
-with that function's one capture span. Every member naming a lambda therefore
-carries the same span, and merging two sets never relates capture lists; a
-lambda that reaches a merge with two different spans is a compiler invariant
-violation. Merges append new members in encounter order so a growing set can
-extend in place at the end of the member pool. When solving ends, every
-lambda set and erased callable is rewritten with its members in ascending
-lambda-symbol order, so every consumer that numbers callable variants by
+Monotype specialization shares one `FnId` among every call site that reaches
+a callable at the same closed type. Within one solve, references to a
+function of a monomorphic group, and references inside the group being
+solved, unify with the function's one registered type, so those sites' lambda
+sets become their union. The union is sound: a finite callable value carries
+the tag of the member it was built from, and a call dispatches on that tag.
+References to a generalized group are instantiated instead (below).
+
+A lambda-set member is a lambda at one instantiation of its binding group
+(`FnMember.inst`). A member is born only when a lifted function's type is
+registered, naming its group's identity instantiation and that function's one
+capture span; instantiating a group copies its members with the reference's
+instantiation and one copy of each capture span per instantiation. Lambda
+sets key members by lambda and instantiation, so every member naming one
+lambda at one instantiation carries one capture span, and merging two sets
+never relates capture lists; a member that reaches a merge with two different
+spans is a compiler invariant violation. Merges append new members in
+encounter order so a growing set can extend in place at the end of the
+member pool. When solving ends, every lambda set and erased callable is
+rewritten with its members in ascending lambda-and-instantiation order. Lambda
+Specialize then gives every member the lifted function of its instance and
+`InstId.specialized`, and orders every set by lambda symbol with one member
+per lambda, so every consumer keys members by symbol, every lifted function
+has its own symbol, and every consumer that numbers callable variants by
 position sees one order for a given member set.
 
 Explicit return boundaries preserve the source value's tag rows and the
@@ -20938,6 +20955,107 @@ equalities, including nested callable sets; matching checked source types or
 byte sizes cannot replace them. The cast between input and output buffers does
 not equate their different item types. Layout eligibility is computed only
 from the resulting solved representations.
+
+### Lambda Set Generalization
+
+Lambda Solved follows "Better Defunctionalization through Lambda Set
+Specialization" (Brandon et al., PLDI 2023): a finished binding group is
+generalized over the callable slots its function types own, every reference
+to it from a later group copies those slots, and Lambda Specialize gives each
+distinct copy its own functions. The unit of generalization is the binding
+group, as the paper's unit is the strongly connected definition; recursive
+references inside a group use the group's own types, so no group is
+polymorphically recursive.
+
+Ownership is explicit. Every type variable class has an owner
+(`Type.Store.owners`): the binding group whose solving created it, numbered
+from `first_group_owner`. Variables created before any group is solved
+(registered function types and local types) are `unowned` until a group's
+solving relates them; a lazy leaf's parts belong to the leaf's owner,
+whichever group expands it; variables created after solving belong to
+`global_owner`. A link gives the joined class the older owner. While a group
+is solved, every link that joins a class it owns to an older class is
+recorded (`Store.escapes`): the older class is the group's environment, in
+the paper's terms a type free in the context, and nothing it reaches can be
+quantified.
+
+When a group finishes, after its own boundaries are erased, its scheme is
+computed. The group stays monomorphic (an empty scheme) when it holds a
+monomorphic root (a root, a literal root, a layout request's function, or a
+hosted function), when it shares an expression with another group's body,
+when one of its function types belongs to an older class, or when its
+environment reaches one of its own lambdas. Otherwise the scheme is every
+node of its function types (arguments, callable slots, results, and through
+the slots every member's captures and the images of the instantiations
+members name) that the group owns, that its environment does not reach, and
+that reaches a callable slot. Every callable-bearing lazy leaf the walk meets
+is expanded first, so a scheme holds no leaf: a copy reproduces the ties a
+leaf's expansion would make, and finalization never gives an untouched
+scheme leaf a clone other leaves share. Nodes outside the scheme stay shared:
+callable-free nodes, including tag rows that reach no callable slot (rows
+join where values flow; a shared row joins every instance's flows, so every
+instance and every copy reads one representation of it), and older classes.
+Scheme nodes are never related again once the group finishes: later groups
+only meet their copies, which is what lets one scheme serve every reference. A scheme is an explicit list of nodes (`Ast.Scheme`); the type store has
+no quantifier node.
+
+A reference to a function of a generalized group from a later group
+(`fn_ref` or direct `call_proc`) instantiates the group once per referencing
+expression (`Ast.Polymorphism.expr_insts`): every scheme node gets a fresh
+image whose content is the node's with scheme nodes replaced by their images,
+members of the group's own lambdas name the new instantiation, and members
+naming another instantiation whose images the scheme reaches name a copy of
+it. The reference unifies with the image of the function's type, and its
+capture operands with the images of the function's capture types. The
+instantiation is recorded as a row of images (`Ast.Instantiation`), the
+paper's delayed substitution: nothing is substituted into bodies until
+Lambda Specialize.
+
+### Lambda Specialize
+
+Lambda Specialize (`lambda_solved/specialize.zig`) runs after Lambda Solving
+and before Solved Inline. It consumes the polymorphic program and outputs an
+ordinary monomorphic Lambda Solved program: every reference and every member
+names one lifted function, and every function has one solved type per
+expression, local and pattern. A program without a generalized group costs
+one pass over the member pool.
+
+Generalized groups are visited callers first, so every instantiation of a
+group exists when the group is visited: each was made at a reference in an
+already specialized body, or copied there with a member that names it.
+Instantiations are compared as infinite types: from the images of the
+group's function types, pairs of types are assumed equal while their parts
+are compared, so cycles close; members compare by lambda and by their
+instantiations, which compare the same way unless their group is already
+specialized, when they compare by instance. Any difference fails the whole
+comparison, so equality is exact: the assumed pairs are a bisimulation. Equal
+instantiations are one instance, and their images are linked into one class
+pair by pair. The first instance keeps the group's own functions: each scheme
+node is linked to that instance's image, which instantiation built as a copy
+of it and unification then only extended. Every further instance copies the
+group's bodies with fresh locals (each a copy of its source's identity, so
+capture operands still match their slots), join points, function ids and
+symbols. The copy's types substitute the instance's images for scheme nodes
+and copy every body type the group owns that reaches a scheme node, a
+callable naming one of the group's own lambdas, or an instantiation whose
+images are such types; every other type stays shared. Instantiations named
+by the copied bodies and types are copied too, for the groups visited later.
+A generalized group no reference instantiated keeps its own types.
+
+Once every group is visited, every reference is pointed at the function of
+its instance, and every member at that function's symbol, with captures
+naming the instance's locals. Copies of a function keep its source, so
+procedure identities (`proc_identity.zig`) still name them by content.
+SpecConstr's procedure-use inventory counts uses per function, so when
+specialization copies a function the pipeline counts the specialized
+program's uses afresh (`SpecConstr.collectProcedureUsage`).
+
+The developer-only `ROC_LAMBDA_SOLVE_STATS` diagnostic reports, per solve,
+generalized groups, scheme nodes, instantiations and the nodes they copied,
+and the groups kept monomorphic for each reason; per specialization, groups,
+generalized groups, instantiated references, distinct instances (sum and
+maximum), and the functions and expressions copied against the program's
+expressions.
 
 ### Erased Callable Requirements
 

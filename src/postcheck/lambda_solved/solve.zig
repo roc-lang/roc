@@ -1,28 +1,30 @@
 //! Lambda solving over lifted Monotype IR.
 //!
-//! Solving is monomorphic: every lifted function's type is registered once,
-//! before any body is solved, and all of that function's call sites unify
-//! with the same type nodes. There is no generalization or per-use
-//! instantiation. Bodies are solved one binding group at a time, callee
-//! groups first (`Lifted.BindingGroups`, stored on the output program), and
-//! every reference still unifies with the one registered type. The stage is
-//! sound because of these properties, each checked where it is consumed:
+//! Every lifted function's type is registered once, before any body is
+//! solved. Bodies are solved one binding group at a time, callee groups
+//! first (`Lifted.BindingGroups`, stored on the output program). A finished
+//! group is generalized over the callable slots its function types own
+//! (design.md "Lambda Set Generalization"), and every reference to it from a
+//! later group instantiates that scheme (`instantiate`); Lambda Specialize
+//! then gives each instance its own functions. The stage is sound because
+//! of these properties, each checked where it is consumed:
 //!
-//! - Monotype specialization shares one `FnId` among every call site that
-//!   reaches a callable at the same closed type, so those sites' lambda sets
-//!   become their union. A union is a sound over-approximation: a finite
-//!   callable value carries the tag of the member it was built from, and a
-//!   call dispatches on that tag, never on which call site the value reached.
-//!   Lambda sets key members by lambda symbol, so the stage requires every
-//!   lifted function to have its own symbol (`verifyDistinctFnSymbols`).
-//! - `functionType` is the only producer of lambda-set members, and it gives
-//!   each function one capture span. Every member naming a lambda therefore
-//!   carries that lambda's one span, and a merge never relates two capture
-//!   lists (`mergeLambdaSets`).
+//! - References to a monomorphic group, and references inside the group
+//!   being solved, unify with the one registered type, so those sites'
+//!   lambda sets become their union. A union is a sound over-approximation:
+//!   a finite callable value carries the tag of the member it was built
+//!   from, and a call dispatches on that tag, never on which call site the
+//!   value reached. Lambda sets key members by lambda and instantiation, so
+//!   the stage requires every lifted function to have its own symbol
+//!   (`verifyDistinctFnSymbols`).
+//! - `functionType` is the only producer of new lambda-set members, and it
+//!   gives each function one capture span; an instantiation copies each
+//!   span once. Every member naming a lambda at one instantiation therefore
+//!   carries one span, and a merge never relates two capture lists
+//!   (`mergeLambdaSets`).
 //! - Merges append members in encounter order so a growing set extends in
 //!   place, and `canonicalizeCallableMemberOrder` then sorts every output
-//!   set by lambda symbol. Consumers that number variants by position read one
-//!   order for a given member set, whatever order unification met it in.
+//!   set by lambda and instantiation.
 //! - Erasure comes from explicit boundaries: hosted and platform function
 //!   signatures, layout and runtime-schema requests (including constants the
 //!   const store materializes), and forced-dynamic iterators. A `Box` is a
@@ -36,8 +38,8 @@
 //!   (`verifyErasedBoundaries`) and require each callable it reaches to be
 //!   erased.
 //!
-//! The solved classes do not depend on the order bodies are visited in
-//! (`BodyOrder`). Unification is order-independent, so every shortcut that
+//! The solved classes do not depend on the order a group's bodies are
+//! visited in (`BodyOrder`). Unification is order-independent, so every shortcut that
 //! relates types without unifying their structure must be exact: linking two
 //! unexpanded leaves (`leavesExpandAlike`) or a leaf and an instance
 //! (`canLinkUntouchedLeafToInstance`) stands for unifying their expansions.
@@ -263,6 +265,18 @@ pub const WorkCounters = struct {
     lambda_copies: u64 = 0,
     /// Members offered to final ordering, including already ordered spans.
     ordered_members: u64 = 0,
+    /// Binding groups given a nonempty scheme, and their scheme nodes.
+    generic_groups: u64 = 0,
+    scheme_nodes: u64 = 0,
+    /// Groups kept monomorphic: for sharing an expression with another
+    /// group's body, for holding a monomorphic root, and for a type or own
+    /// lambda an older class holds.
+    sharing_groups: u64 = 0,
+    root_groups: u64 = 0,
+    environment_groups: u64 = 0,
+    /// References that instantiated a scheme, and the nodes they copied.
+    instantiations: u64 = 0,
+    instantiated_nodes: u64 = 0,
 };
 
 /// The order in which a solve visits function bodies.
@@ -270,8 +284,13 @@ pub const BodyOrder = enum {
     /// One binding group at a time, callee groups first: the pipeline's
     /// order.
     binding_groups,
-    /// Ascending `FnId`. Solving is order-independent, so this solves to
-    /// the same classes; tests compare the two.
+    /// One binding group at a time, callee groups first, each group's
+    /// functions in descending `FnId` order. Generalization needs only
+    /// callee groups first, so this solves to the same classes; tests
+    /// compare the two.
+    binding_groups_reversed,
+    /// Ascending `FnId`, without generalization: a monomorphic solve. Its
+    /// classes are the ones a solve that never generalizes reaches.
     fn_ids,
 };
 
@@ -302,6 +321,7 @@ pub fn runInOrder(
     };
     defer solver.deinit();
     solver.body_order = order;
+    solver.generalizing = order != .fn_ids;
     solver.setRowJoined(row_joined);
     var counters: WorkCounters = .{};
     if (diagnostics.isSet(.lambda_solve_stats)) solver.counters = &counters;
@@ -503,6 +523,31 @@ const Solver = struct {
     /// earlier group finished.
     group_erasure_scan_start: usize = 0,
     body_order: BodyOrder = .binding_groups,
+    /// Whether finished binding groups are generalized: only when bodies
+    /// are solved group by group, callee groups first, and not for the
+    /// row-join analysis.
+    generalizing: bool = false,
+    /// The binding group being solved and the function whose body is.
+    current_group: ?u32 = null,
+    current_fn: Lifted.FnId = undefined,
+    /// Per lifted function: whether it is a monomorphic root (a root, a
+    /// literal root, a layout request's function, or hosted), whose group
+    /// is never generalized.
+    mono_root_fns: std.DynamicBitSetUnmanaged = .{},
+    /// Per binding group: the scheme position of each scheme node's root,
+    /// for instantiation.
+    scheme_positions: std.ArrayList(collections.DenseMapUnmanaged(Type.TypeVarId, u32)) = .empty,
+    /// Scratch for one instantiation.
+    inst_capture_spans: collections.DenseMapUnmanaged(u32, Type.Span) = .empty,
+    inst_records: collections.DenseMapUnmanaged(Type.InstId, Type.InstId) = .empty,
+    /// Generalization scratch.
+    gen_env: collections.DenseMapUnmanaged(Type.TypeVarId, void) = .empty,
+    gen_index: collections.DenseMapUnmanaged(Type.TypeVarId, u32) = .empty,
+    gen_nodes: std.ArrayList(Type.TypeVarId) = .empty,
+    gen_seed: std.ArrayList(bool) = .empty,
+    gen_edges: std.ArrayList([2]u32) = .empty,
+    gen_stack: std.ArrayList(Type.TypeVarId) = .empty,
+    gen_children: std.ArrayList(Type.TypeVarId) = .empty,
     /// The one type every read of a declared compile-time root shares at a
     /// Monotype type other than the root's own, so each such type unifies
     /// with the root's return once however many reads name it.
@@ -634,6 +679,18 @@ const Solver = struct {
     }
 
     fn deinit(self: *Solver) void {
+        self.mono_root_fns.deinit(self.allocator);
+        for (self.scheme_positions.items) |*positions| positions.deinit(self.allocator);
+        self.scheme_positions.deinit(self.allocator);
+        self.inst_capture_spans.deinit(self.allocator);
+        self.inst_records.deinit(self.allocator);
+        self.gen_env.deinit(self.allocator);
+        self.gen_index.deinit(self.allocator);
+        self.gen_nodes.deinit(self.allocator);
+        self.gen_seed.deinit(self.allocator);
+        self.gen_edges.deinit(self.allocator);
+        self.gen_stack.deinit(self.allocator);
+        self.gen_children.deinit(self.allocator);
         self.erased_reachability.deinit(self.allocator);
         self.exact_clone_proofs.deinit(self.allocator);
         self.exact_clone_work.deinit(self.allocator);
@@ -728,9 +785,10 @@ const Solver = struct {
 
         try self.program.fn_tys.ensureTotalCapacity(self.allocator, self.lifted.fns.len);
         try self.program.defs.ensureTotalCapacity(self.allocator, self.lifted.fns.len);
+        try self.initPolymorphism();
 
-        for (self.lifted.fns) |fn_| {
-            const fn_ty = try self.functionType(fn_);
+        for (self.lifted.fns, 0..) |fn_, fn_index| {
+            const fn_ty = try self.functionType(fn_, Ast.Polymorphism.identity(self.program.poly.fn_groups.items[fn_index]));
             try self.program.fn_tys.append(self.allocator, fn_ty);
             try self.program.defs.append(self.allocator, .{
                 .symbol = fn_.symbol,
@@ -752,11 +810,25 @@ const Solver = struct {
         }
         for (0..groups.count()) |group_index| {
             const group = groups.group(group_index);
-            for (group) |fn_id| try self.solveFn(fn_id, self.lifted.fns[@backingInt(fn_id)]);
+            self.beginGroup(@intCast(group_index));
+            if (self.body_order == .binding_groups_reversed) {
+                var index = group.len;
+                while (index > 0) {
+                    index -= 1;
+                    try self.solveFn(group[index], self.lifted.fns[@backingInt(group[index])]);
+                }
+            } else for (group) |fn_id| try self.solveFn(fn_id, self.lifted.fns[@backingInt(fn_id)]);
             // The row-join analysis (`findRowJoinedTypes`) relates bodies
             // only; erasure joins no rows.
-            if (self.join_sides == null) try self.finishBindingGroup(group);
+            if (self.join_sides == null) {
+                // Expansion creates types the group's erasure must see.
+                if (self.generalizing) try self.expandSignatureLeaves(group);
+                try self.finishBindingGroup(group);
+                if (self.generalizing) try self.generalizeGroup(@intCast(group_index), group);
+            }
         }
+        self.current_group = null;
+        self.program.types.escape_watch = null;
     }
 
     /// Apply the erasure requirements a binding group's own types carry once
@@ -784,8 +856,473 @@ const Solver = struct {
         self.group_erasure_scan_start = self.program.types.varCount();
     }
 
+    // Lambda set generalization (design.md "Lambda Set Generalization").
+
+    /// Number the binding groups, give each its identity instantiation, and
+    /// find the monomorphic roots.
+    fn initPolymorphism(self: *Solver) Allocator.Error!void {
+        const poly = &self.program.poly;
+        const groups = self.program.binding_groups;
+        try poly.fn_groups.resize(self.allocator, self.lifted.fns.len);
+        for (0..groups.count()) |group_index| {
+            for (groups.group(group_index)) |fn_id| poly.fn_groups.items[@backingInt(fn_id)] = @intCast(group_index);
+        }
+        try poly.schemes.appendNTimes(self.allocator, .{}, groups.count());
+        try poly.instantiations.ensureTotalCapacity(self.allocator, groups.count());
+        for (0..groups.count()) |group_index| {
+            poly.instantiations.appendAssumeCapacity(.{ .group = @intCast(group_index), .context = null, .images = null });
+        }
+        try self.scheme_positions.appendNTimes(self.allocator, .empty, groups.count());
+
+        self.mono_root_fns = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.lifted.fns.len);
+        for (self.lifted.roots) |root| self.mono_root_fns.set(@backingInt(root.fn_id));
+        for (self.lifted.literal_roots) |root| self.mono_root_fns.set(@backingInt(root.fn_id));
+        for (self.lifted.layout_requests) |request| if (request.fn_id) |fn_id| self.mono_root_fns.set(@backingInt(fn_id));
+        for (self.lifted.fns, 0..) |fn_, index| if (fn_.body == .hosted) self.mono_root_fns.set(index);
+    }
+
+    fn groupOwner(group: u32) Type.Owner {
+        return Type.first_group_owner + group;
+    }
+
+    /// Every type created from here on belongs to `group`, and a link that
+    /// joins a class it owns to an older class is recorded.
+    fn beginGroup(self: *Solver, group: u32) void {
+        self.current_group = group;
+        self.program.types.current_owner = groupOwner(group);
+        if (self.generalizing) {
+            self.program.types.escape_watch = groupOwner(group);
+            self.program.types.escapes.clearRetainingCapacity();
+        }
+    }
+
+    /// The type a reference expression gives the function it names: the
+    /// function's own type for a function of a monomorphic group or of the
+    /// group being solved, and otherwise its image in the reference's
+    /// instantiation.
+    fn referenceFnType(self: *Solver, expr_id: Lifted.ExprId, fn_id: Lifted.FnId) Allocator.Error!Type.TypeVarId {
+        return try self.referenceVarType(expr_id, fn_id, self.program.fn_tys.items[@backingInt(fn_id)]);
+    }
+
+    /// `ty`, a type of the function `fn_id`'s group, as the reference
+    /// `expr_id` sees it.
+    fn referenceVarType(self: *Solver, expr_id: Lifted.ExprId, fn_id: Lifted.FnId, ty: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
+        const group = self.program.poly.fn_groups.items[@backingInt(fn_id)];
+        const scheme = self.program.poly.schemes.items[group];
+        if (!scheme.isGeneric() or self.current_group == group) return ty;
+        const inst = try self.instantiation(expr_id, group);
+        const root = self.program.types.rootCompressed(ty);
+        const position = self.scheme_positions.items[group].get(root) orelse return root;
+        return self.program.poly.instImages(inst)[position];
+    }
+
+    /// The instantiation of the generalized `group` at the reference
+    /// `expr_id`, made the first time the reference is solved.
+    fn instantiation(self: *Solver, expr_id: Lifted.ExprId, group: u32) Allocator.Error!Type.InstId {
+        const poly = &self.program.poly;
+        const entry = try poly.expr_insts.getOrPut(self.allocator, expr_id);
+        if (entry.found_existing) return entry.value_ptr.*;
+        errdefer _ = poly.expr_insts.remove(expr_id);
+        const inst = try self.instantiate(group);
+        entry.value_ptr.* = inst;
+        return inst;
+    }
+
+    /// Copy `group`'s scheme: every scheme node gets a fresh image, whose
+    /// content is the node's with each scheme node replaced by its image.
+    /// Nodes outside the scheme stay shared.
+    fn instantiate(self: *Solver, group: u32) Allocator.Error!Type.InstId {
+        const poly = &self.program.poly;
+        const types = &self.program.types;
+        const scheme = poly.schemes.items[group];
+        const count = scheme.nodes_len;
+        const images_start = std.math.cast(u32, poly.images.items.len) orelse return error.OutOfMemory;
+        try poly.images.ensureUnusedCapacity(self.allocator, count);
+        for (0..count) |_| poly.images.appendAssumeCapacity(try types.add(.unbound));
+        const inst: Type.InstId = @fromBackingInt(std.math.cast(u32, poly.instantiations.items.len) orelse return error.OutOfMemory);
+        try poly.instantiations.append(self.allocator, .{ .group = group, .context = self.current_fn, .images = images_start });
+        self.countWork(.instantiations, 1);
+        self.countWork(.instantiated_nodes, count);
+
+        self.inst_capture_spans.clearRetainingCapacity();
+        self.inst_records.clearRetainingCapacity();
+        const map: ImageMap = .{ .positions = &self.scheme_positions.items[group], .images_start = images_start, .group = group, .inst = inst };
+        for (0..count) |position| {
+            const generic = poly.scheme_nodes.items[scheme.nodes_start + position];
+            const image = poly.images.items[images_start + position];
+            const content = types.get(generic);
+            const copied = try self.substituteContent(content, map);
+            try types.set(image, copied);
+            self.registerNamedBacking(copied);
+            if (self.leaf_origins.get(generic)) |origin| try self.leaf_origins.put(image, origin);
+        }
+        return inst;
+    }
+
+    /// One instantiation's view of its group's scheme.
+    const ImageMap = struct {
+        positions: *const collections.DenseMapUnmanaged(Type.TypeVarId, u32),
+        images_start: u32,
+        group: u32,
+        inst: Type.InstId,
+    };
+
+    fn mapVar(self: *Solver, ty: Type.TypeVarId, map: ImageMap) Type.TypeVarId {
+        const root = self.program.types.rootCompressed(ty);
+        const position = map.positions.get(root) orelse return root;
+        return self.program.poly.images.items[map.images_start + position];
+    }
+
+    fn mapSpan(self: *Solver, span: Type.Span, map: ImageMap) Allocator.Error!Type.Span {
+        const slots = try self.program.types.addSpanSlots(span.count());
+        for (slots.slots, 0..) |*slot, index| slot.* = self.mapVar(self.program.types.spanItem(span, index), map);
+        return slots.span;
+    }
+
+    fn substituteContent(self: *Solver, content: Type.Content, map: ImageMap) Allocator.Error!Type.Content {
+        const types = &self.program.types;
+        return switch (content) {
+            .link => Common.invariant("a scheme node was not a class root"),
+            .unbound, .primitive, .zst, .hole => content,
+            .mono => Common.invariant("a scheme node was an unexpanded leaf"),
+            .list => |elem| .{ .list = self.mapVar(elem, map) },
+            .box => |elem| .{ .box = self.mapVar(elem, map) },
+            .tuple => |items| .{ .tuple = try self.mapSpan(items, map) },
+            .record => |fields| blk: {
+                const start = types.fields.items.len;
+                try types.fields.ensureUnusedCapacity(self.allocator, fields.count());
+                for (0..fields.count()) |index| {
+                    var field = types.fieldItem(fields, index);
+                    field.ty = self.mapVar(field.ty, map);
+                    if (field.value_ty.get()) |value_ty| field.value_ty = .of(self.mapVar(value_ty, map));
+                    types.fields.appendAssumeCapacity(field);
+                }
+                break :blk .{ .record = .{ .start = @intCast(start), .len = fields.len } };
+            },
+            .tag_union => |tags| blk: {
+                const copied = try self.allocator.alloc(Type.Tag, tags.count());
+                defer self.allocator.free(copied);
+                for (copied, 0..) |*tag, index| {
+                    tag.* = types.tagItem(tags, index);
+                    tag.payloads = try self.mapSpan(tag.payloads, map);
+                }
+                break :blk .{ .tag_union = try types.addTags(copied) };
+            },
+            .func => |func| .{ .func = .{
+                .args = try self.mapSpan(func.args, map),
+                .callable = self.mapVar(func.callable, map),
+                .ret = self.mapVar(func.ret, map),
+            } },
+            .named => |named| blk: {
+                var copied = named;
+                copied.args = try self.mapSpan(named.args, map);
+                if (named.backing.get()) |backing| {
+                    var mapped = backing;
+                    mapped.ty = self.mapVar(backing.ty, map);
+                    copied.backing = .some(mapped);
+                }
+                if (named.declared_order.count() != 0) {
+                    const declared = try self.allocator.alloc(Type.DeclaredField, named.declared_order.count());
+                    defer self.allocator.free(declared);
+                    for (declared, 0..) |*field, index| field.* = switch (types.declaredFieldItem(named.declared_order, index)) {
+                        .named => |name| .{ .named = name },
+                        .padding => |padding| .{ .padding = self.mapVar(padding, map) },
+                    };
+                    copied.declared_order = try types.addDeclaredFields(declared);
+                }
+                break :blk .{ .named = copied };
+            },
+            .lambda_set => |members| .{ .lambda_set = try self.substituteMembers(members, map) },
+            .erased => |erased| .{ .erased = .{
+                .source_fn_ty = erased.source_fn_ty,
+                .members = try self.substituteMembers(erased.members, map),
+                .abi_fn = if (erased.abi_fn) |abi_fn| self.mapVar(abi_fn, map) else null,
+            } },
+        };
+    }
+
+    fn substituteMembers(self: *Solver, members: Type.Span, map: ImageMap) Allocator.Error!Type.Span {
+        if (members.count() == 0) return members;
+        const copied = try self.allocator.alloc(Type.FnMember, members.count());
+        defer self.allocator.free(copied);
+        for (copied, 0..) |*member, index| {
+            member.* = self.program.types.memberItem(members, index);
+            member.inst = try self.substituteInst(member.inst, map);
+            member.captures = try self.substituteCaptures(member.captures, map);
+        }
+        return try self.program.types.addMembers(copied);
+    }
+
+    /// One capture span per original span per instantiation, so every copy
+    /// of one member carries one span.
+    fn substituteCaptures(self: *Solver, captures: Type.Span, map: ImageMap) Allocator.Error!Type.Span {
+        if (captures.count() == 0) return captures;
+        const entry = try self.inst_capture_spans.getOrPut(self.allocator, captures.start);
+        if (entry.found_existing) return entry.value_ptr.*;
+        const slots = try self.program.types.addCaptureSlots(captures.count());
+        for (slots.slots, 0..) |*slot, index| {
+            slot.* = self.program.types.captureItem(captures, index);
+            slot.ty = self.mapVar(slot.ty, map);
+        }
+        entry.value_ptr.* = slots.span;
+        return slots.span;
+    }
+
+    /// The instantiation a copied member names: the reference's own for a
+    /// lambda of the instantiated group, and a copy of any other
+    /// instantiation whose images the scheme reaches.
+    fn substituteInst(self: *Solver, inst: Type.InstId, map: ImageMap) Allocator.Error!Type.InstId {
+        const poly = &self.program.poly;
+        if (inst == Ast.Polymorphism.identity(map.group)) return map.inst;
+        if (poly.isIdentity(inst)) return inst;
+        if (self.inst_records.get(inst)) |copied| return copied;
+        const reaches = for (poly.instImages(inst)) |image| {
+            if (map.positions.contains(self.program.types.rootCompressed(image))) break true;
+        } else false;
+        if (!reaches) return inst;
+        const row = poly.instantiations.items[@backingInt(inst)];
+        const len = poly.schemes.items[row.group].nodes_len;
+        const start = std.math.cast(u32, poly.images.items.len) orelse return error.OutOfMemory;
+        try poly.images.ensureUnusedCapacity(self.allocator, len);
+        for (0..len) |index| {
+            const image = poly.images.items[row.images.? + index];
+            poly.images.appendAssumeCapacity(self.mapVar(image, map));
+        }
+        const copied: Type.InstId = @fromBackingInt(std.math.cast(u32, poly.instantiations.items.len) orelse return error.OutOfMemory);
+        try poly.instantiations.append(self.allocator, .{ .group = row.group, .context = self.current_fn, .images = start });
+        try self.inst_records.put(self.allocator, inst, copied);
+        return copied;
+    }
+
+    /// Generalize a finished binding group (design.md "Lambda Set
+    /// Generalization"). The scheme is every node of the group's function
+    /// types that the group owns, that no older class reaches, and that
+    /// reaches a callable slot or a scheme leaf. A group with a monomorphic
+    /// root, or whose own lambda an older class reaches, keeps an empty
+    /// scheme.
+    fn generalizeGroup(self: *Solver, group: u32, fns: []const Lifted.FnId) Allocator.Error!void {
+        const types = &self.program.types;
+        const owner = groupOwner(group);
+        types.escape_watch = null;
+        // An expression another group's body shares has one type for both
+        // bodies, so the other body would relate this group's own nodes.
+        if (self.program.binding_groups.shares_exprs[group]) return self.countWork(.sharing_groups, 1);
+        for (fns) |fn_id| {
+            if (self.mono_root_fns.isSet(@backingInt(fn_id))) return self.countWork(.root_groups, 1);
+            // A function type an older class holds is that class's.
+            if (types.ownerOf(self.program.fn_tys.items[@backingInt(fn_id)]) < owner) return self.countWork(.environment_groups, 1);
+        }
+
+        // The environment: every class this group owns that an older class
+        // reaches. A class joined to an older one is older itself.
+        self.gen_env.clearRetainingCapacity();
+        self.gen_stack.clearRetainingCapacity();
+        for (types.escapes.items) |escaped| {
+            const root = types.rootCompressed(escaped);
+            self.gen_children.clearRetainingCapacity();
+            try self.appendGeneralizationChildren(root);
+            try self.gen_stack.appendSlice(self.allocator, self.gen_children.items);
+        }
+        while (self.gen_stack.pop()) |next| {
+            const root = types.rootCompressed(next);
+            if (types.owners.items[@backingInt(root)] < owner) continue;
+            if ((try self.gen_env.getOrPut(self.allocator, root)).found_existing) continue;
+            if (self.namesOwnLambda(root, group)) return self.countWork(.environment_groups, 1);
+            for (fns) |fn_id| if (types.rootCompressed(self.program.fn_tys.items[@backingInt(fn_id)]) == root) return self.countWork(.environment_groups, 1);
+            self.gen_children.clearRetainingCapacity();
+            try self.appendGeneralizationChildren(root);
+            try self.gen_stack.appendSlice(self.allocator, self.gen_children.items);
+        }
+
+        // The group's function types, with every leaf whose expansion ties
+        // it to another var expanded, so a copy reproduces those ties.
+        self.gen_index.clearRetainingCapacity();
+        self.gen_nodes.clearRetainingCapacity();
+        self.gen_seed.clearRetainingCapacity();
+        self.gen_edges.clearRetainingCapacity();
+        self.gen_stack.clearRetainingCapacity();
+        for (fns) |fn_id| try self.gen_stack.append(self.allocator, self.program.fn_tys.items[@backingInt(fn_id)]);
+        // Each stack entry is a child; its parent is pushed as an edge.
+        var parents: std.ArrayList(u32) = .empty;
+        defer parents.deinit(self.allocator);
+        try parents.appendNTimes(self.allocator, std.math.maxInt(u32), fns.len);
+        while (self.gen_stack.pop()) |next| {
+            const parent = parents.pop().?;
+            const root = types.rootCompressed(next);
+            if (types.owners.items[@backingInt(root)] < owner) continue;
+            if (self.gen_env.contains(root)) continue;
+            const content = types.get(root);
+            // `expandSignatureLeaves` left only callable-free leaves.
+            if (content == .mono) {
+                std.debug.assert(self.isCallableFree(content.mono.id));
+                continue;
+            }
+            if (types.owners.items[@backingInt(root)] < owner or self.gen_env.contains(root)) continue;
+            const entry = try self.gen_index.getOrPut(self.allocator, root);
+            if (entry.found_existing) {
+                if (parent != std.math.maxInt(u32)) try self.gen_edges.append(self.allocator, .{ parent, entry.value_ptr.* });
+                continue;
+            }
+            const index: u32 = @intCast(self.gen_nodes.items.len);
+            entry.value_ptr.* = index;
+            try self.gen_nodes.append(self.allocator, root);
+            types.owners.items[@backingInt(root)] = owner;
+            if (parent != std.math.maxInt(u32)) try self.gen_edges.append(self.allocator, .{ parent, index });
+            const seed = content == .unbound or content == .lambda_set or content == .erased;
+            try self.gen_seed.append(self.allocator, seed);
+            self.gen_children.clearRetainingCapacity();
+            try self.appendGeneralizationChildren(root);
+            for (self.gen_children.items) |child| {
+                try self.gen_stack.append(self.allocator, child);
+                try parents.append(self.allocator, index);
+            }
+        }
+
+        // Keep the nodes that reach a seed.
+        const count = self.gen_nodes.items.len;
+        const reaches = self.gen_seed.items;
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (self.gen_edges.items) |edge| {
+                if (reaches[edge[1]] and !reaches[edge[0]]) {
+                    reaches[edge[0]] = true;
+                    changed = true;
+                }
+            }
+        }
+
+        const poly = &self.program.poly;
+        const nodes_start = std.math.cast(u32, poly.scheme_nodes.items.len) orelse return error.OutOfMemory;
+        const fn_roots_start = std.math.cast(u32, poly.fn_roots.items.len) orelse return error.OutOfMemory;
+        const positions = &self.scheme_positions.items[group];
+        for (fns) |fn_id| {
+            const root = types.rootCompressed(self.program.fn_tys.items[@backingInt(fn_id)]);
+            const index = self.gen_index.get(root) orelse Common.invariant("a generalized function's type was outside its group's scheme");
+            if (!reaches[index]) Common.invariant("a generalized function's type reached no callable slot");
+            const entry = try positions.getOrPut(self.allocator, root);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = @intCast(poly.scheme_nodes.items.len - nodes_start);
+                try poly.scheme_nodes.append(self.allocator, root);
+            }
+            try poly.fn_roots.append(self.allocator, entry.value_ptr.*);
+        }
+        for (0..count) |index| {
+            if (!reaches[index]) continue;
+            const root = self.gen_nodes.items[index];
+            const entry = try positions.getOrPut(self.allocator, root);
+            if (entry.found_existing) continue;
+            entry.value_ptr.* = @intCast(poly.scheme_nodes.items.len - nodes_start);
+            try poly.scheme_nodes.append(self.allocator, root);
+        }
+        poly.schemes.items[group] = .{
+            .nodes_start = nodes_start,
+            .nodes_len = @intCast(poly.scheme_nodes.items.len - nodes_start),
+            .fn_roots_start = fn_roots_start,
+        };
+        self.countWork(.generic_groups, 1);
+        self.countWork(.scheme_nodes, poly.scheme_nodes.items.len - nodes_start);
+    }
+
+    /// Expand every callable-bearing leaf the group's function types reach,
+    /// so the scheme holds none: a copy must reproduce the ties a leaf's
+    /// expansion makes, and finalization would give an untouched one a clone
+    /// every untouched leaf shares. This runs before the group's boundaries
+    /// are erased, so erasure sees the expanded types.
+    fn expandSignatureLeaves(self: *Solver, fns: []const Lifted.FnId) Allocator.Error!void {
+        const types = &self.program.types;
+        var visited = self.solved_set_pool.acquire();
+        defer self.solved_set_pool.release(&visited);
+        self.gen_stack.clearRetainingCapacity();
+        for (fns) |fn_id| try self.gen_stack.append(self.allocator, self.program.fn_tys.items[@backingInt(fn_id)]);
+        while (self.gen_stack.pop()) |next| {
+            var root = types.rootCompressed(next);
+            var content = types.get(root);
+            while (content == .mono) {
+                if (self.isCallableFree(content.mono.id)) break;
+                _ = try self.expandMonoRoot(root, content.mono);
+                root = types.rootCompressed(root);
+                content = types.get(root);
+            }
+            if (content == .mono) continue;
+            if ((try visited.getOrPut(root)).found_existing) continue;
+            self.gen_children.clearRetainingCapacity();
+            try self.appendGeneralizationChildren(root);
+            try self.gen_stack.appendSlice(self.allocator, self.gen_children.items);
+        }
+    }
+
+    /// Whether `root` is a callable naming one of `group`'s own lambdas.
+    fn namesOwnLambda(self: *Solver, root: Type.TypeVarId, group: u32) bool {
+        const content = self.program.types.get(root);
+        const members = if (content == .lambda_set)
+            content.lambda_set
+        else if (content == .erased)
+            content.erased.members
+        else
+            return false;
+        const identity = Ast.Polymorphism.identity(group);
+        for (0..members.count()) |index| {
+            if (self.program.types.memberItem(members, index).inst == identity) return true;
+        }
+        return false;
+    }
+
+    /// The vars `root`'s content refers to, including the captures of its
+    /// members and the images of the instantiations they name, into
+    /// `gen_children`.
+    fn appendGeneralizationChildren(self: *Solver, root: Type.TypeVarId) Allocator.Error!void {
+        const types = &self.program.types;
+        const out = &self.gen_children;
+        switch (types.get(root)) {
+            .link => Common.invariant("Lambda Solved root returned a link"),
+            .unbound, .primitive, .zst, .hole, .mono => {},
+            .list, .box => |elem| try out.append(self.allocator, elem),
+            .tuple => |items| for (0..items.count()) |index| try out.append(self.allocator, types.spanItem(items, index)),
+            .record => |fields| for (0..fields.count()) |index| {
+                const field = types.fieldItem(fields, index);
+                try out.append(self.allocator, field.ty);
+                if (field.value_ty.get()) |value_ty| try out.append(self.allocator, value_ty);
+            },
+            .tag_union => |tags| for (0..tags.count()) |tag_index| {
+                const tag = types.tagItem(tags, tag_index);
+                for (0..tag.payloads.count()) |index| try out.append(self.allocator, types.spanItem(tag.payloads, index));
+            },
+            .func => |func| {
+                for (0..func.args.count()) |index| try out.append(self.allocator, types.spanItem(func.args, index));
+                try out.append(self.allocator, func.callable);
+                try out.append(self.allocator, func.ret);
+            },
+            .named => |named| {
+                for (0..named.args.count()) |index| try out.append(self.allocator, types.spanItem(named.args, index));
+                if (named.backing.get()) |backing| try out.append(self.allocator, backing.ty);
+                for (0..named.declared_order.count()) |index| switch (types.declaredFieldItem(named.declared_order, index)) {
+                    .named => {},
+                    .padding => |padding| try out.append(self.allocator, padding),
+                };
+            },
+            .lambda_set => |members| try self.appendMemberChildren(members),
+            .erased => |erased| {
+                try self.appendMemberChildren(erased.members);
+                if (erased.abi_fn) |abi_fn| try out.append(self.allocator, abi_fn);
+            },
+        }
+    }
+
+    fn appendMemberChildren(self: *Solver, members: Type.Span) Allocator.Error!void {
+        const types = &self.program.types;
+        const poly = &self.program.poly;
+        for (0..members.count()) |member_index| {
+            const member = types.memberItem(members, member_index);
+            for (0..member.captures.count()) |index| try self.gen_children.append(self.allocator, types.captureItem(member.captures, index).ty);
+            if (!poly.isIdentity(member.inst)) try self.gen_children.appendSlice(self.allocator, poly.instImages(member.inst));
+        }
+    }
+
     /// Seed erasure boundaries, then output and finalize every solved type.
     fn finishSolve(self: *Solver) Allocator.Error!void {
+        // Every type created from here on belongs to no binding group.
+        self.program.types.current_owner = Type.global_owner;
         // Every group is solved, so the rows a digest reads are final; every
         // callable erased below digests its function type at those rows too.
         try self.refreshErasedSourceDigests();
@@ -900,35 +1437,35 @@ const Solver = struct {
                     sorted_erased.members = span;
                     try self.program.types.set(ty, .{ .erased = sorted_erased });
                 },
-                .link, .unbound, .forall, .primitive, .zst, .hole, .func, .list, .box, .tuple, .record, .tag_union, .named, .mono => {},
+                .link, .unbound, .primitive, .zst, .hole, .func, .list, .box, .tuple, .record, .tag_union, .named, .mono => {},
             }
         }
     }
 
-    /// `members` sorted by lambda symbol in a new span, or null when it is
-    /// already sorted. Sets sharing a start are prefixes of one another, so a
-    /// set is never sorted in place.
+    /// `members` sorted by lambda symbol and instantiation in a new span, or
+    /// null when it is already sorted. Sets sharing a start are prefixes of
+    /// one another, so a set is never sorted in place.
     fn canonicalMemberSpan(self: *Solver, members: Type.Span, sorted: *std.ArrayList(Type.FnMember)) Allocator.Error!?Type.Span {
         self.countWork(.ordered_members, members.count());
         if (members.count() < 2) return null;
         const types = &self.program.types;
         const ascending = for (1..members.count()) |index| {
-            if (@backingInt(types.memberItem(members, index - 1).lambda) >= @backingInt(types.memberItem(members, index).lambda)) break false;
+            if (memberKey(types.memberItem(members, index - 1)) >= memberKey(types.memberItem(members, index))) break false;
         } else true;
         if (ascending) return null;
 
         sorted.clearRetainingCapacity();
         try sorted.ensureTotalCapacity(self.allocator, members.count());
         for (0..members.count()) |index| sorted.appendAssumeCapacity(types.memberItem(members, index));
-        std.mem.sort(Type.FnMember, sorted.items, {}, memberLambdaLessThan);
+        std.mem.sort(Type.FnMember, sorted.items, {}, memberLessThan);
         for (1..sorted.items.len) |index| {
-            if (sorted.items[index - 1].lambda == sorted.items[index].lambda) Common.invariant("lambda set repeated a member");
+            if (memberKey(sorted.items[index - 1]) == memberKey(sorted.items[index])) Common.invariant("lambda set repeated a member");
         }
         return try types.addMembers(sorted.items);
     }
 
-    fn memberLambdaLessThan(_: void, lhs: Type.FnMember, rhs: Type.FnMember) bool {
-        return @backingInt(lhs.lambda) < @backingInt(rhs.lambda);
+    fn memberLessThan(_: void, lhs: Type.FnMember, rhs: Type.FnMember) bool {
+        return memberKey(lhs) < memberKey(rhs);
     }
 
     /// Every function value a boundary commits must be erased once solving
@@ -966,7 +1503,7 @@ const Solver = struct {
                     Common.invariant("callable-bearing Monotype leaf survived Lambda Solved unexpanded at an erasure boundary");
                 },
                 .link => Common.invariant("Lambda Solved root returned a link"),
-                .unbound, .forall, .primitive, .zst, .hole => {},
+                .unbound, .primitive, .zst, .hole => {},
                 .erased => |erased| try self.appendCallableCaptureTypes(erased.members, &pending),
                 .lambda_set => |members| try self.appendCallableCaptureTypes(members, &pending),
                 .func => |func| {
@@ -1002,7 +1539,7 @@ const Solver = struct {
         try pending.append(self.allocator, content.func.ret);
     }
 
-    fn functionType(self: *Solver, fn_: Lifted.Fn) Allocator.Error!Type.TypeVarId {
+    fn functionType(self: *Solver, fn_: Lifted.Fn, inst: Type.InstId) Allocator.Error!Type.TypeVarId {
         const arg_locals = self.lifted.typedLocalSpan(fn_.args);
         const capture_locals = self.lifted.typedLocalSpan(fn_.captures);
         const captures = try self.program.types.addCaptureSlots(capture_locals.len);
@@ -1023,6 +1560,7 @@ const Solver = struct {
         const members = [_]Type.FnMember{.{
             .lambda = fn_.symbol,
             .captures = capture_span,
+            .inst = inst,
         }};
         const callable = try self.program.types.add(.{ .lambda_set = try self.program.types.addMembers(&members) });
 
@@ -1073,6 +1611,7 @@ const Solver = struct {
 
     fn solveFn(self: *Solver, fn_id: Lifted.FnId, fn_: Lifted.Fn) Allocator.Error!void {
         defer self.compatibility_proofs.clear(self.allocator);
+        self.current_fn = fn_id;
         const fn_ty = self.program.fn_tys.items[@backingInt(fn_id)];
         const fn_content = self.program.types.rootContentCompressed(fn_ty);
         if (std.meta.activeTag(fn_content) != .func) Common.invariant("Lambda Solved function table contains a non-function type");
@@ -1177,7 +1716,6 @@ const Solver = struct {
                 .mono => {},
                 .link => Common.invariant("Lambda Solved root returned a link"),
                 .unbound,
-                .forall,
                 .primitive,
                 .zst,
                 .hole,
@@ -1220,7 +1758,6 @@ const Solver = struct {
             .erased,
             => try pending.append(self.allocator, root),
             .link,
-            .forall,
             .primitive,
             .named,
             .record,
@@ -1451,8 +1988,8 @@ const Solver = struct {
             },
             .lambda, .def_ref, .fn_def => Common.invariant("pre-lift function expression reached Lambda Solved"),
             .fn_ref => |ref| {
-                if (cursor == 0) try self.unify(expected, self.program.fn_tys.items[@backingInt(ref.fn_id)]);
-                return try self.captureRequest(ref.fn_id, ref.captures, cursor);
+                if (cursor == 0) try self.unify(expected, try self.referenceFnType(expr_id, ref.fn_id));
+                return try self.captureRequest(expr_id, ref.fn_id, ref.captures, cursor);
             },
             .call_value => |call| {
                 if (cursor == 0) return .{ .expr = .{ .id = call.callee } };
@@ -1474,11 +2011,11 @@ const Solver = struct {
                 }
                 switch (Lifted.directCallee(call)) {
                     .local => |callee| {
-                        const func = try self.functionShape(self.program.fn_tys.items[@backingInt(callee)]);
+                        const func = try self.functionShape(try self.referenceFnType(expr_id, callee));
                         if (func.args.count() != args.len) Common.invariant("procedure call arity differs from its checked type");
                         if (cursor == 0) try self.unify(expected, func.ret);
                         if (cursor < args.len) return .{ .expr = .{ .id = args[cursor], .expected = self.program.types.spanItem(func.args, cursor) } };
-                        return try self.captureRequest(callee, call.captures, cursor - args.len);
+                        return try self.captureRequest(expr_id, callee, call.captures, cursor - args.len);
                     },
                 }
             },
@@ -1712,13 +2249,13 @@ const Solver = struct {
         }
     }
 
-    fn captureRequest(self: *Solver, fn_id: Lifted.FnId, span: Lifted.Span(Lifted.CaptureOperand), index: usize) Allocator.Error!?ExprRequest {
+    fn captureRequest(self: *Solver, expr_id: Lifted.ExprId, fn_id: Lifted.FnId, span: Lifted.Span(Lifted.CaptureOperand), index: usize) Allocator.Error!?ExprRequest {
         const captures = self.liftedCapturesForFn(fn_id);
         const operands = self.lifted.captureOperandSpan(span);
         if (captures.len != operands.len) Common.invariant("capture operand count differs from its target");
         if (index == operands.len) return null;
         if (operands[index].id != self.lifted.captureIdOfLocal(captures[index].local)) Common.invariant("capture operand CaptureId did not match its slot");
-        return .{ .expr = .{ .id = operands[index].value, .expected = self.localTy(captures[index].local) } };
+        return .{ .expr = .{ .id = operands[index].value, .expected = try self.referenceVarType(expr_id, fn_id, self.localTy(captures[index].local)) } };
     }
 
     fn bindPattern(self: *Solver, pat_id: Lifted.PatId, value_ty: Type.TypeVarId) Allocator.Error!void {
@@ -1874,7 +2411,7 @@ const Solver = struct {
         // `Fields` or `Field` nominal, whose backing is compiler-generated.
         // Preserve that explicit generated backing deterministically;
         // structural size is not an authority signal.
-        self.program.types.setLink(expected, generated);
+        try self.program.types.setLink(expected, generated);
     }
 
     fn expectExpr(self: *Solver, expr_id: Lifted.ExprId, expected: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
@@ -1893,10 +2430,10 @@ const Solver = struct {
         const ty = if (tag == .local)
             self.localTy(expr.data.local)
         else if (tag == .fn_ref)
-            self.program.fn_tys.items[@backingInt(expr.data.fn_ref.fn_id)]
+            try self.referenceFnType(expr_id, expr.data.fn_ref.fn_id)
         else if (tag == .call_proc and !expr.data.call_proc.demand_shaped)
             switch (Lifted.directCallee(expr.data.call_proc)) {
-                .local => |callee| (try self.functionShape(self.program.fn_tys.items[@backingInt(callee)])).ret,
+                .local => |callee| (try self.functionShape(try self.referenceFnType(expr_id, callee))).ret,
             }
         else
             try self.lowerTypeFresh(expr.ty);
@@ -1916,7 +2453,7 @@ const Solver = struct {
         const ty = if (tag == .local)
             self.localTy(expr.data.local)
         else if (tag == .fn_ref)
-            self.program.fn_tys.items[@backingInt(expr.data.fn_ref.fn_id)]
+            try self.referenceFnType(expr_id, expr.data.fn_ref.fn_id)
         else
             expected;
         try self.unify(ty, expected);
@@ -2098,7 +2635,7 @@ const Solver = struct {
             switch (resolved) {
                 .mono => Common.invariant("lazy Monotype leaf reached erased-callable marking unexpanded"),
                 .link => Common.invariant("Lambda Solved root returned a link"),
-                .unbound, .forall, .primitive, .zst, .hole => {},
+                .unbound, .primitive, .zst, .hole => {},
                 .erased => |erased| try self.appendCallableCaptureTypes(erased.members, &pending),
                 .func => |func| {
                     // An erased callable already has this marking's effect.
@@ -2176,6 +2713,11 @@ const Solver = struct {
     /// lead back to it (`TypeCloner.existingClone`).
     fn expandMonoRoot(self: *Solver, root: Type.TypeVarId, leaf: MonoLeaf) Allocator.Error!Type.Content {
         self.countWork(.expansions, 1);
+        // A leaf's parts belong to whoever owns the leaf, whichever group's
+        // solving first reads them.
+        const outer_owner = self.program.types.current_owner;
+        self.program.types.current_owner = self.program.types.ownerOf(root);
+        defer self.program.types.current_owner = outer_owner;
         const sharing = self.leafSharing(leaf.id);
         const ctx: u32 = if (leaf.ctx != Type.no_leaf_context) leaf.ctx else switch (sharing) {
             .shared => try self.sharedLeafContext(),
@@ -2192,7 +2734,7 @@ const Solver = struct {
             if (self.leaf_contexts.items[ctx].get(leaf.id)) |existing| {
                 const existing_root = self.program.types.rootCompressed(existing);
                 if (existing_root != root) {
-                    self.program.types.setLink(root, existing_root);
+                    try self.program.types.setLink(root, existing_root);
                     return try self.resolvedContentAt(existing_root);
                 }
             } else {
@@ -2375,9 +2917,9 @@ const Solver = struct {
                 .link => Common.invariant("Lambda Solved root returned a link"),
                 .mono => |leaf| {
                     const clone = try self.finalMonoClone(leaf.id);
-                    self.program.types.setLink(root, self.program.types.rootCompressed(clone));
+                    try self.program.types.setLink(root, self.program.types.rootCompressed(clone));
                 },
-                .unbound, .forall, .primitive, .zst, .hole => {},
+                .unbound, .primitive, .zst, .hole => {},
                 .list, .box => |elem| try work.append(self.allocator, elem),
                 .tuple => |items| for (0..items.count()) |index| {
                     try work.append(self.allocator, self.program.types.spanItem(items, index));
@@ -2598,7 +3140,7 @@ const Solver = struct {
             const right_content = try self.resolvedContentAt(right);
             const left_tag = std.meta.activeTag(left_content);
             const right_tag = std.meta.activeTag(right_content);
-            if (left_tag == .unbound or left_tag == .forall or right_tag == .unbound or right_tag == .forall) continue;
+            if (left_tag == .unbound or right_tag == .unbound) continue;
             // A named type and a bare structure are a lifted pair, which
             // unification relates through the named type's backing.
             if (left_tag == .named and right_tag != .named) {
@@ -2611,7 +3153,7 @@ const Solver = struct {
             }
             if (left_tag != right_tag) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, committable);
             switch (left_content) {
-                .link, .mono, .unbound, .forall => unreachable, // resolvedContentAt follows links and monos, and unbound/forall pairs continued above
+                .link, .mono, .unbound => unreachable, // resolvedContentAt follows links and monos, and unbound pairs continued above
                 .primitive => |prim| if (prim != right_content.primitive) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, committable),
                 .zst, .hole, .lambda_set, .erased, .tag_union => {},
                 .list => |elem| try work.append(self.allocator, .{ .first = elem, .second = right_content.list }),
@@ -3417,7 +3959,7 @@ const Solver = struct {
             if (read_root == shared) return;
             const raw = self.program.types.get(read_root);
             if (raw == .mono and raw.mono.id == read_mono and raw.mono.ctx == Type.no_leaf_context and !self.leaf_arg_scopes.contains(read_root)) {
-                self.program.types.setLink(read_root, shared);
+                try self.program.types.setLink(read_root, shared);
                 return;
             }
             return self.unify(read_ty, shared);
@@ -3513,7 +4055,7 @@ const Solver = struct {
             self.leavesExpandAlike(a, raw_left.mono, b, raw_right.mono))
         {
             self.retireContextLeaf(raw_right.mono);
-            self.program.types.setLink(b, a);
+            try self.program.types.setLink(b, a);
             return;
         }
         if (try self.linkUntouchedLeafToInstance(a, raw_left, rhs, b)) return;
@@ -3529,18 +4071,16 @@ const Solver = struct {
         const left_tag = std.meta.activeTag(left);
         if (left_tag == .link) Common.invariant("Lambda Solved root returned a link");
         if (left_tag == .unbound) {
-            self.program.types.setLink(a, b);
+            try self.program.types.setLink(a, b);
             return;
         }
-        if (left_tag == .forall) Common.invariant("generalized Lambda Solved type reached local unification without instantiation");
 
         const right_tag = std.meta.activeTag(right);
         if (right_tag == .link) Common.invariant("Lambda Solved root returned a link");
         if (right_tag == .unbound) {
-            self.program.types.setLink(b, a);
+            try self.program.types.setLink(b, a);
             return;
         }
-        if (right_tag == .forall) Common.invariant("generalized Lambda Solved type reached local unification without instantiation");
 
         const pair = UnifyPair.init(a, b);
         if (!try self.active_unifications.begin(self.allocator, pair)) {
@@ -3845,7 +4385,7 @@ const Solver = struct {
     ) Allocator.Error!bool {
         if (!try self.canLinkUntouchedLeafToInstance(leaf_root, leaf_content, other, other_root)) return false;
         self.retireContextLeaf(leaf_content.mono);
-        self.program.types.setLink(leaf_root, other_root);
+        try self.program.types.setLink(leaf_root, other_root);
         return true;
     }
 
@@ -3903,15 +4443,15 @@ const Solver = struct {
                 if (left_primitive != right.primitive) {
                     Common.invariant("primitive types failed Lambda Solved unification");
                 }
-                self.program.types.setLink(b, a);
+                try self.program.types.setLink(b, a);
             },
             .hole => {
                 if (right != .hole) Common.invariant("a demand hole failed Lambda Solved unification");
-                self.program.types.setLink(b, a);
+                try self.program.types.setLink(b, a);
             },
             .zst => {
                 if (right != .zst) Common.invariant("zero-sized type failed Lambda Solved unification");
-                self.program.types.setLink(b, a);
+                try self.program.types.setLink(b, a);
             },
             .erased => |left_erased| {
                 if (right == .erased) {
@@ -3995,11 +4535,11 @@ const Solver = struct {
                 // uninhabited, so it contributes no tag and takes the
                 // populated peer's row.
                 if (left_tags.count() == 0) {
-                    self.program.types.setLink(a, b);
+                    try self.program.types.setLink(a, b);
                     return;
                 }
                 if (right_tags.count() == 0) {
-                    self.program.types.setLink(b, a);
+                    try self.program.types.setLink(b, a);
                     return;
                 }
                 const pairs_start = self.payload_pairs.items.len;
@@ -4048,7 +4588,7 @@ const Solver = struct {
                     try self.pushSpanPairs(stack, left_named.args, right_named.args, "named type arguments failed Lambda Solved unification");
                 }
             },
-            .link, .unbound, .forall => unreachable, // processUnifyPair, the only caller, links unbound roots and rejects link and forall roots first
+            .link, .unbound => unreachable, // processUnifyPair, the only caller, links unbound roots and rejects link roots first
         }
     }
 
@@ -4067,7 +4607,7 @@ const Solver = struct {
     /// side extends the merged content rather than a stale copy of it.
     fn setMergedLinkRight(self: *Solver, lhs: Type.TypeVarId, rhs: Type.TypeVarId, merged: Type.Content) Allocator.Error!void {
         try self.program.types.set(lhs, merged);
-        self.program.types.setLink(rhs, lhs);
+        try self.program.types.setLink(rhs, lhs);
     }
 
     fn applyUnifyFinish(
@@ -4098,7 +4638,7 @@ const Solver = struct {
                 if (self.program.types.rootCompressed(link.lhs) == link.lhs and
                     self.program.types.rootCompressed(link.rhs) == link.rhs)
                 {
-                    if (link.lhs != link.rhs) self.program.types.setLink(link.rhs, link.lhs);
+                    if (link.lhs != link.rhs) try self.program.types.setLink(link.rhs, link.lhs);
                     return;
                 }
                 try self.reunifyMovedPair(stack, link.lhs, link.rhs, structural_isolated);
@@ -4107,7 +4647,7 @@ const Solver = struct {
                 // The alias resolves to whatever its backing's class is now.
                 if (self.program.types.rootCompressed(link.var_) == link.var_) {
                     const target = self.program.types.rootCompressed(link.target);
-                    if (target != link.var_) self.program.types.setLink(link.var_, target);
+                    if (target != link.var_) try self.program.types.setLink(link.var_, target);
                     return;
                 }
                 try self.reunifyMovedPair(stack, link.var_, link.target, structural_isolated);
@@ -4116,7 +4656,7 @@ const Solver = struct {
                 const structural_root = self.program.types.rootCompressed(link.structural);
                 const named_root = self.program.types.rootCompressed(link.named);
                 if (structural_root == named_root or self.program.types.isOwnedNamedBacking(structural_root)) return;
-                self.program.types.setLink(structural_root, named_root);
+                try self.program.types.setLink(structural_root, named_root);
             },
         }
     }
@@ -4223,7 +4763,7 @@ const Solver = struct {
         const backing_root = self.program.types.rootCompressed(backing_ty);
         const named_root = self.program.types.rootCompressed(named_ty);
         if (backing_root != named_root) {
-            self.program.types.setLink(backing_root, named_root);
+            try self.program.types.setLink(backing_root, named_root);
         }
         return true;
     }
@@ -4239,7 +4779,7 @@ const Solver = struct {
         structural_isolated: bool,
     ) Allocator.Error!bool {
         const structural_tag = std.meta.activeTag(structural_content);
-        if (structural_tag == .named or structural_tag == .link or structural_tag == .unbound or structural_tag == .forall) return false;
+        if (structural_tag == .named or structural_tag == .link or structural_tag == .unbound) return false;
         if (std.meta.activeTag(named_content) != .named) return false;
         const named = named_content.named;
         if (named.kind == .alias) return false;
@@ -4358,7 +4898,6 @@ const Solver = struct {
             .unbound, .lambda_set, .erased => unreachable, // the check above hands these pairs to pushUnifyPair and returns
             .link => Common.invariant("Lambda Solved root returned a link"),
             .mono => Common.invariant("lazy Monotype leaf reached the generated-private evidence relation unexpanded"),
-            .forall => Common.invariant("generated-private evidence relation received a generalized public type"),
             .primitive => |public_primitive| {
                 if (private_content_tag != .primitive) Common.invariant("generated-private evidence relation received different type structure");
                 if (public_primitive != private.primitive) Common.invariant("generated-private evidence relation received different primitive types");
@@ -4962,7 +5501,7 @@ const Solver = struct {
         self.countWork(.lambda_members, other.count());
         for (0..other.count()) |i| {
             const other_member = self.program.types.memberItem(other, i);
-            if (self.lambdaSetPosition(kept_index, other_member.lambda, kept)) |position| {
+            if (self.lambdaSetPosition(kept_index, other_member, kept)) |position| {
                 const kept_member = self.program.types.memberItem(kept, position);
                 if (!std.meta.eql(kept_member.captures, other_member.captures)) {
                     Common.invariant("one lambda reached Lambda Solved unification with two capture spans");
@@ -5000,19 +5539,28 @@ const Solver = struct {
 
     const LambdaSetIndex = struct {
         len: u32,
-        by_lambda: collections.DenseMapUnmanaged(Common.Symbol, u32),
+        /// Positions by lambda and instantiation (`memberKey`).
+        by_lambda: std.AutoHashMapUnmanaged(u64, u32),
     };
 
-    /// The first position of `lambda` within `span`, a set sharing `index`'s
-    /// start, or scanned in place when the set has no index.
-    fn lambdaSetPosition(self: *const Solver, index: ?*const LambdaSetIndex, lambda: Common.Symbol, span: Type.Span) ?usize {
+    /// A member's identity: its lambda at its instantiation. One lambda
+    /// at two instantiations is two members.
+    fn memberKey(member: Type.FnMember) u64 {
+        return (@as(u64, @backingInt(member.lambda)) << 32) | @backingInt(member.inst);
+    }
+
+    /// The first position of `member`'s identity within `span`, a set
+    /// sharing `index`'s start, or scanned in place when the set has no
+    /// index.
+    fn lambdaSetPosition(self: *const Solver, index: ?*const LambdaSetIndex, member: Type.FnMember, span: Type.Span) ?usize {
         const set_index = index orelse {
             for (0..span.count()) |position| {
-                if (self.program.types.memberItem(span, position).lambda == lambda) return position;
+                const candidate = self.program.types.memberItem(span, position);
+                if (candidate.lambda == member.lambda and candidate.inst == member.inst) return position;
             }
             return null;
         };
-        const found = set_index.by_lambda.get(lambda) orelse return null;
+        const found = set_index.by_lambda.get(memberKey(member)) orelse return null;
         return if (found < span.count()) found else null;
     }
 
@@ -5028,7 +5576,7 @@ const Solver = struct {
         if (gop.value_ptr.len >= span.len) return gop.value_ptr;
         try gop.value_ptr.by_lambda.ensureUnusedCapacity(self.allocator, span.len - gop.value_ptr.len);
         for (gop.value_ptr.len..span.count()) |index| {
-            const entry = try gop.value_ptr.by_lambda.getOrPut(self.allocator, self.program.types.memberItem(span, index).lambda);
+            const entry = try gop.value_ptr.by_lambda.getOrPut(self.allocator, memberKey(self.program.types.memberItem(span, index)));
             if (!entry.found_existing) entry.value_ptr.* = @intCast(index);
         }
         gop.value_ptr.len = span.len;
@@ -5131,7 +5679,7 @@ const Solver = struct {
         switch (content) {
             .mono => Common.invariant("lazy Monotype leaf reached digest hashing unexpanded"),
             .link => Common.invariant("Lambda Solved root returned a link"),
-            .unbound, .forall => Common.invariant("unresolved Lambda Solved type reached erased callable digest"),
+            .unbound => Common.invariant("unresolved Lambda Solved type reached erased callable digest"),
             .primitive => |primitive| {
                 try self.addDigestActions(actions, &.{ .{ .bytes = "primitive" }, .{ .bytes = @tagName(primitive) } });
             },
@@ -5583,7 +6131,7 @@ const SolvedUninhabitedScan = struct {
                 try items.add(payload);
                 break :blk .{ .group = .any };
             },
-            .list, .func, .primitive, .lambda_set, .erased, .zst, .hole, .link, .unbound, .forall => .{ .value = false },
+            .list, .func, .primitive, .lambda_set, .erased, .zst, .hole, .link, .unbound => .{ .value = false },
         };
         if (expansion == .group) {
             try self.entry_marks.append(self.solver.allocator, .{
@@ -6499,7 +7047,7 @@ test "inspectable backing unification never redirects an owned backing to its no
     solver.unify_stack = .empty;
     defer solver.unify_stack.deinit(allocator);
     program.types.markNamedBacking(backing);
-    program.types.setLink(backing, backing_representative);
+    try program.types.setLink(backing, backing_representative);
     solver.solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator);
     defer solver.solved_set_pool.deinit();
     solver.mono_set_pool = collections.DenseMapPool(MonoType.TypeId, void).init(allocator);
@@ -7103,7 +7651,7 @@ test "issue 12595 compatibility proofs invalidate on mutation but not compressio
     try types.set(right, .{ .primitive = .u64 });
     try std.testing.expect(try solver.typesCompatible(a, b));
     const string = try types.add(.{ .primitive = .str });
-    types.setLink(right, string);
+    try types.setLink(right, string);
     try std.testing.expect(!try solver.typesCompatible(a, b));
     try std.testing.expectEqual(@as(u64, 3), counts.compatibility_invalidations);
 }

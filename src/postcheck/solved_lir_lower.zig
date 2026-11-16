@@ -3655,7 +3655,7 @@ const Lowerer = struct {
                         return Common.invariant("function callable slot was unresolved before direct Lambda Mono");
                     },
                     .link => Common.invariant("direct Lambda Mono type lowering saw an unresolved Lambda Solved link"),
-                    .unbound, .forall => Common.invariant("direct Lambda Mono type lowering saw an unresolved Lambda Solved type"),
+                    .unbound => Common.invariant("direct Lambda Mono type lowering saw an unresolved Lambda Solved type"),
                     .mono => Common.invariant("direct Lambda Mono type lowering saw an unfinalized lazy Monotype leaf"),
                     .primitive => |primitive| return try self.finishTypeVar(task, .{ .primitive = primitive }),
                     .zst => return try self.finishTypeVar(task, .zst),
@@ -3690,7 +3690,7 @@ const Lowerer = struct {
                         .members = members,
                     } },
                     .lambda_set => .{ .callable = members },
-                    .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .zst, .hole, .mono => unreachable, // TypeVarCursor.callable is set only for func, erased, and lambda_set contents
+                    .link, .unbound, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .zst, .hole, .mono => unreachable, // TypeVarCursor.callable is set only for func, erased, and lambda_set contents
                 });
             },
             TypeVarCursor.children => try self.acceptTypeChild(frame, task, input.?.ty),
@@ -3752,7 +3752,7 @@ const Lowerer = struct {
                 frame.index += 1;
             },
             .tag_union => try task.tys.append(self.allocator, lowered),
-            .link, .unbound, .forall, .primitive, .func, .lambda_set, .erased, .zst, .hole, .mono => unreachable, // TypeVarCursor.children is set only for list, box, tuple, record, tag_union, and named contents
+            .link, .unbound, .primitive, .func, .lambda_set, .erased, .zst, .hole, .mono => unreachable, // TypeVarCursor.children is set only for list, box, tuple, record, tag_union, and named contents
         }
     }
 
@@ -3846,7 +3846,7 @@ const Lowerer = struct {
                 frame.cursor = TypeVarCursor.named_declared_order;
                 return .{ .call = .{ .declared_order = .{ .span = named.declared_order } } };
             },
-            .link, .unbound, .forall, .primitive, .func, .lambda_set, .erased, .zst, .hole, .mono => unreachable, // cursor start returns for every content without children
+            .link, .unbound, .primitive, .func, .lambda_set, .erased, .zst, .hole, .mono => unreachable, // cursor start returns for every content without children
         }
     }
 
@@ -14690,7 +14690,7 @@ const Lowerer = struct {
             switch (self.solved.types.get(root)) {
                 .func, .lambda_set, .erased => return true,
                 .mono => Common.invariant("callable scan saw an unfinalized lazy Monotype leaf"),
-                .link, .unbound, .forall => Common.invariant("callable scan saw unresolved Lambda Solved type"),
+                .link, .unbound => Common.invariant("callable scan saw unresolved Lambda Solved type"),
                 .primitive, .zst, .hole => {},
                 .list, .box => |elem| try pending.append(self.allocator, elem),
                 .tuple => |items| try self.appendSolvedTypeSpan(&pending, items),
