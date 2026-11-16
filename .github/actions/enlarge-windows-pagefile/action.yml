@@ -1,0 +1,118 @@
+name: 'Enlarge Windows pagefile'
+description: >-
+  Add a fixed-size pagefile on the runner's spare drive so the Windows commit
+  limit (RAM + pagefiles) covers several large LLVM compiles peaking at once.
+inputs:
+  size_gb:
+    description: 'Initial and maximum size of the added pagefile, in GiB'
+    required: false
+    default: '32'
+runs:
+  using: 'composite'
+  steps:
+    # Win32_PageFileSetting (WMI) and the PagingFiles registry value only take
+    # effect after a reboot. NtCreatePagingFile, which System Properties itself
+    # calls, adds or grows the pagefile in the running system, so the commit
+    # limit printed at the end already includes it.
+    - name: Enlarge pagefile
+      shell: pwsh
+      env:
+        PAGEFILE_SIZE_GB: ${{ inputs.size_gb }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+
+        $drive = if (Test-Path 'D:\') { 'D:' } else { 'C:' }
+        $size = [long]$env:PAGEFILE_SIZE_GB * 1GB
+
+        Add-Type -TypeDefinition @'
+        using System;
+        using System.ComponentModel;
+        using System.Runtime.InteropServices;
+        using System.Text;
+
+        public static class RocCiPagefile
+        {
+            [StructLayout(LayoutKind.Sequential)]
+            struct LUID { public uint Low; public int High; }
+
+            [StructLayout(LayoutKind.Sequential)]
+            struct TOKEN_PRIVILEGES { public uint Count; public LUID Luid; public uint Attributes; }
+
+            [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+            struct UNICODE_STRING { public ushort Length; public ushort MaximumLength; public string Buffer; }
+
+            [DllImport("advapi32.dll", SetLastError = true)]
+            static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+
+            [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+            static extern bool LookupPrivilegeValueW(string system, string name, out LUID luid);
+
+            [DllImport("advapi32.dll", SetLastError = true)]
+            static extern bool AdjustTokenPrivileges(IntPtr token, bool disableAll, ref TOKEN_PRIVILEGES state, uint length, IntPtr previous, IntPtr returnLength);
+
+            [DllImport("kernel32.dll")]
+            static extern IntPtr GetCurrentProcess();
+
+            [DllImport("kernel32.dll")]
+            static extern bool CloseHandle(IntPtr handle);
+
+            [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+            static extern uint QueryDosDeviceW(string device, StringBuilder target, int capacity);
+
+            [DllImport("ntdll.dll", CharSet = CharSet.Unicode)]
+            static extern int NtCreatePagingFile(ref UNICODE_STRING name, ref long minimumSize, ref long maximumSize, uint priority);
+
+            public static string Create(string drive, long size)
+            {
+                const uint TOKEN_ADJUST_PRIVILEGES = 0x20, TOKEN_QUERY = 0x8, SE_PRIVILEGE_ENABLED = 0x2;
+                const int ERROR_NOT_ALL_ASSIGNED = 1300;
+
+                IntPtr token;
+                if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, out token))
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                try
+                {
+                    TOKEN_PRIVILEGES privileges = new TOKEN_PRIVILEGES { Count = 1, Attributes = SE_PRIVILEGE_ENABLED };
+                    if (!LookupPrivilegeValueW(null, "SeCreatePagefilePrivilege", out privileges.Luid))
+                        throw new Win32Exception(Marshal.GetLastWin32Error());
+                    bool adjusted = AdjustTokenPrivileges(token, false, ref privileges, 0, IntPtr.Zero, IntPtr.Zero);
+                    int error = Marshal.GetLastWin32Error();
+                    if (!adjusted || error == ERROR_NOT_ALL_ASSIGNED)
+                        throw new Win32Exception(error);
+                }
+                finally
+                {
+                    CloseHandle(token);
+                }
+
+                StringBuilder device = new StringBuilder(1024);
+                if (QueryDosDeviceW(drive, device, device.Capacity) == 0)
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+
+                string path = device.ToString() + "\\pagefile.sys";
+                UNICODE_STRING name = new UNICODE_STRING
+                {
+                    Length = (ushort)(path.Length * 2),
+                    MaximumLength = (ushort)((path.Length + 1) * 2),
+                    Buffer = path,
+                };
+                long minimum = size, maximum = size;
+                int status = NtCreatePagingFile(ref name, ref minimum, ref maximum, 0);
+                if (status != 0)
+                    throw new InvalidOperationException(string.Format("NtCreatePagingFile({0}) failed with NTSTATUS 0x{1:X8}", path, status));
+                return path;
+            }
+        }
+        '@
+
+        function Show-Memory([string]$label) {
+          $os = Get-CimInstance Win32_OperatingSystem
+          "{0}: RAM {1:N1} GiB, commit limit {2:N1} GiB" -f $label, ($os.TotalVisibleMemorySize / 1MB), ($os.TotalVirtualMemorySize / 1MB)
+          Get-CimInstance Win32_PageFileUsage | ForEach-Object { "  pagefile {0}: {1} MiB allocated" -f $_.Name, $_.AllocatedBaseSize }
+        }
+
+        Show-Memory 'Before'
+        Get-PSDrive -PSProvider FileSystem | ForEach-Object { "  drive {0}: {1:N1} GiB free" -f $_.Name, ($_.Free / 1GB) }
+        $path = [RocCiPagefile]::Create($drive, $size)
+        "Pagefile {0} ({1}\pagefile.sys) set to {2} GiB" -f $path, $drive, $env:PAGEFILE_SIZE_GB
+        Show-Memory 'After'
