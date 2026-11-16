@@ -1,1447 +1,1284 @@
-//! How the LLVM backend represents each local of one procedure.
+//! Roc Code Emitter
 //!
-//! A local whose layout has a scalar LLVM type (a Bool, an integer, a float,
-//! a Dec, or a SIMD vector) and whose every operand position the emitter reads
-//! and writes through value helpers lives as LLVM SSA values instead of a
-//! stack slot. Every other local keeps its addressable entry-block slot: its
-//! layout has no scalar carrier, or some statement, call boundary, or builtin
-//! needs its address. `Rep` records the choice.
+//! Converts the Canonical IR (CIR) to valid Roc source code.
+//! This is primarily used for testing the monomorphization pipeline -
+//! we can emit monomorphic Roc code and verify it produces the same results
+//! as the original polymorphic code.
 //!
-//! An SSA local is either `dominating` or `merged`. A dominating local has one
-//! definition (a statement's write, or the prologue's for a parameter no
-//! statement writes) that dominates every read: no path reaches a read without
-//! passing the definition, which `lir.StackPlan` liveness proves by the local
-//! not being live on entry to the procedure. Its value is recorded once and
-//! read everywhere. Every other SSA local is merged: its current definition
-//! depends on the path taken, so each control-flow merge point at which it is
-//! live on entry receives a phi. The merge points are exactly the blocks the
-//! emitter shares between several incoming edges: a join's body, entered by
-//! the join's jumps, and a statement reached by more than one edge.
-//!
-//! The plan consumes only explicit LIR: statements and their operands, layouts,
-//! join declarations, the emitter's shared-statement counts, and the callee
-//! ABI placements the caller supplies. It is computed per procedure immediately
-//! before that procedure's body is emitted and is invalid after it; the
-//! store-indexed representation column is reset from the procedure's own local
-//! inventory, so sibling specializations that reuse a `LocalId` never observe
-//! each other's representations.
-const std = @import("std");
-const lir = @import("lir");
+//! The emitter walks the CIR expression tree and writes corresponding Roc syntax.
 
+const std = @import("std");
 const Allocator = std.mem.Allocator;
-const CFStmtId = lir.CFStmtId;
-const LocalId = lir.LocalId;
-const LocalSpan = lir.LocalSpan;
-const LirStore = lir.LirStore;
-const LowLevel = lir.LowLevel;
-const GuardedList = LirStore.GuardedList;
-const StackPlan = lir.StackPlan;
-const numeric_conversion = @import("base").numeric_conversion;
+const base = @import("base");
+const builtins = @import("builtins");
+const parse = @import("parse");
+
+const i128h = builtins.compiler_rt_128;
+const RocDec = builtins.dec.RocDec;
+
+const ModuleEnv = @import("ModuleEnv.zig");
+const CIR = @import("CIR.zig");
+const PatternMod = @import("Pattern.zig");
+const Expr = CIR.Expr;
+const Pattern = PatternMod.Pattern;
+
 const Self = @This();
 
-/// A local's representation in the procedure being emitted.
-pub const Rep = enum(u8) {
-    /// An addressable entry-block slot.
-    memory,
-    /// SSA values; the single definition dominates every read.
-    dominating,
-    /// SSA values; merge points where the local is live get phis.
-    merged,
+/// The allocator used for intermediate allocations
+allocator: std.mem.Allocator,
+
+/// The module environment containing the CIR
+module_env: *const ModuleEnv,
+
+/// The output buffer where Roc code is written
+output: std.ArrayList(u8),
+
+/// Scratch buffer for short-lived formatting.
+scratch: std.ArrayList(u8),
+
+/// Current indentation level
+indent_level: u32,
+
+/// Names currently in scope (to detect shadowing)
+names_in_scope: std.StringHashMap(void),
+
+/// Renames for captures that would shadow (pattern_idx -> renamed string)
+capture_renames: std.AutoHashMap(PatternMod.Pattern.Idx, []const u8),
+
+/// Counter for generating unique names
+rename_counter: u32,
+
+/// Record-field order used while emitting expressions.
+record_field_order: RecordFieldOrder,
+
+const RecordFieldOrder = enum {
+    source,
+    lexicographic,
 };
 
-/// A memory value can name an immutable byte range in another local instead
-/// of owning another slot. Offsets come only from committed LIR layouts.
-pub const View = struct { source: LocalId, offset: u32 };
-/// The storage used by a memory local in the current procedure.
-pub const Place = union(enum) { slot, parameter, view: View };
-
-/// How the emitter accesses one operand.
-pub const Access = enum {
-    /// Only through the representation-agnostic value helpers.
-    value,
-    /// Through the address of the local's slot.
-    address,
-};
-
-/// The operand accesses of one low-level operation's emitter.
-pub const OpAccess = struct {
-    /// Bit `i` is set when argument `i` is accessed by value.
-    value_args: u64 = 0,
-    value_target: bool = false,
-
-    const all_values: OpAccess = .{ .value_args = std.math.maxInt(u64), .value_target = true };
-
-    fn args(mask: u64, value_target: bool) OpAccess {
-        return .{ .value_args = mask, .value_target = value_target };
-    }
-
-    pub fn arg(self: OpAccess, index: usize) Access {
-        if (index >= 64) return .address;
-        return if ((self.value_args >> @intCast(index)) & 1 != 0) .value else .address;
-    }
-
-    pub fn target(self: OpAccess) Access {
-        return if (self.value_target) .value else .address;
-    }
-};
-
-/// How the emitter accesses the operands of `op`. Each listed operation's
-/// emitter reaches the listed operands only through the value helpers; every
-/// other operand of every operation is read and written through its address,
-/// which is what the remaining emitters (and the builtins they call with
-/// pointers) require.
-pub fn lowLevelAccess(op: LowLevel) OpAccess {
-    if (numeric_conversion.getConversionSpec(op)) |spec| {
-        // The wrapping float-to-integer builtin writes its result through a
-        // pointer to the target.
-        if (spec.src.class() == .float and spec.dst.class() == .int and spec.mode == .trunc) return OpAccess.args(1, false);
-        return .all_values;
-    }
-    return switch (op) {
-        .boxed_sequence_pack => OpAccess.args(2, false),
-        .boxed_sequence_unpack => OpAccess.args(0, false),
-        .bool_not,
-        .bool_likely,
-        .num_is_eq,
-        .num_is_gt,
-        .num_is_gte,
-        .num_is_lt,
-        .num_is_lte,
-        .compare,
-        .num_int_add_wrap,
-        .num_int_add_crash_on_overflow,
-        .num_int_add_overflows,
-        .num_int_add_proven_cannot_overflow,
-        .num_int_sub_wrap,
-        .num_int_sub_crash_on_overflow,
-        .num_int_sub_overflows,
-        .num_int_sub_proven_cannot_overflow,
-        .num_int_mul_wrap,
-        .num_int_mul_crash_on_overflow,
-        .num_int_mul_overflows,
-        .num_int_mul_proven_cannot_overflow,
-        .num_float_add,
-        .num_float_sub,
-        .num_float_mul,
-        .dec_mul,
-        .num_div_by,
-        .num_div_by_checked,
-        .num_div_trunc_by,
-        .num_div_trunc_by_checked,
-        .num_rem_by,
-        .num_rem_by_checked,
-        .num_mod_by,
-        .num_mod_by_checked,
-        .num_shift_left_by,
-        .num_shift_right_by,
-        .num_shift_right_zf_by,
-        .num_bitwise_and,
-        .num_bitwise_or,
-        .num_bitwise_xor,
-        .num_bitwise_not,
-        .num_count_one_bits,
-        .num_count_leading_zero_bits,
-        .num_count_trailing_zero_bits,
-        .num_negate,
-        .num_negate_checked,
-        .num_abs,
-        .num_abs_checked,
-        .num_abs_diff,
-        .num_pow,
-        .num_atan2,
-        .num_sqrt,
-        .num_sin,
-        .num_cos,
-        .num_tan,
-        .num_asin,
-        .num_acos,
-        .num_atan,
-        .num_floor,
-        .num_ceiling,
-        .f32_to_bits,
-        .f32_from_bits,
-        .f64_to_bits,
-        .f64_from_bits,
-        .dec_from_attos,
-        .dec_to_attos,
-        .simd_splat,
-        .simd_get_lane_unchecked,
-        .simd_with_lane_unchecked,
-        .simd_to_u128_bits,
-        .simd_from_u128_bits,
-        .simd_add_wrap,
-        .simd_sub_wrap,
-        .simd_add_sat,
-        .simd_sub_sat,
-        .simd_neg_wrap,
-        .simd_abs_wrap,
-        .simd_min,
-        .simd_max,
-        .simd_abs_diff,
-        .simd_avg_rounded,
-        .simd_mul_wrap,
-        .simd_mul_high,
-        .simd_mul_q15_sat,
-        .simd_mul_wide_lo,
-        .simd_mul_wide_hi,
-        .simd_dot_pairs,
-        .simd_dot_pairs_sat,
-        .simd_sad,
-        .simd_and,
-        .simd_or,
-        .simd_xor,
-        .simd_not,
-        .simd_bit_select,
-        .simd_eq_lanes,
-        .simd_gt_lanes,
-        .simd_gte_lanes,
-        .simd_bitmask,
-        .simd_shl_wrap,
-        .simd_shr_wrap,
-        .simd_shr_zf_wrap,
-        .simd_shr_rounded,
-        .simd_interleave_lo,
-        .simd_interleave_hi,
-        .simd_even_lanes,
-        .simd_odd_lanes,
-        .simd_reverse_lanes,
-        .simd_table_lookup,
-        .simd_concat_shift_bytes,
-        .simd_widen_lo,
-        .simd_widen_hi,
-        .simd_pairwise_add_widen,
-        .simd_narrow_wrap,
-        .simd_narrow_sat,
-        .simd_sum_lanes,
-        .simd_sum_lanes_wrap,
-        .simd_clmul_lo,
-        .simd_clmul_hi,
-        => .all_values,
-        // (list, index): the element loads from the list's bytes.
-        .list_get_unsafe => OpAccess.args(0b10, true),
-        // (bytes, index)
-        .num_from_le_bytes_unchecked, .simd_load_16_unchecked => OpAccess.args(0b10, true),
-        // (list, index)
-        .list_prefetch => OpAccess.args(0b10, false),
-        // (list, i, j)
-        .list_swap => OpAccess.args(0b110, false),
-        // (list, index, element): the builtin takes the element's address.
-        .list_set, .list_set_in_place_unsafe, .list_replace_unsafe => OpAccess.args(0b010, false),
-        // (list, element): the element's bytes are stored after the last.
-        .list_append_unsafe => OpAccess.args(0b10, false),
-        .list_len, .list_capacity => OpAccess.args(0, true),
-        // (vector, list, index)
-        .simd_store_16_unchecked => OpAccess.args(0b101, false),
-        // (vector, list)
-        .simd_append_16 => OpAccess.args(0b01, false),
-        .str_is_eq,
-        .str_is_eq_static_small,
-        .str_static_small_word_eq,
-        .str_static_small_word_caseless_eq,
-        .str_concat,
-        .str_append,
-        .str_contains,
-        .str_trim,
-        .str_trim_start,
-        .str_trim_end,
-        .str_caseless_ascii_equals,
-        .str_with_ascii_lowercased,
-        .str_with_ascii_uppercased,
-        .str_starts_with,
-        .str_ends_with,
-        .str_repeat,
-        .str_drop_prefix,
-        .str_drop_prefix_caseless_ascii,
-        .str_drop_suffix,
-        .str_split_first,
-        .str_split_last,
-        .str_count_utf8_bytes,
-        .str_get_utf8_byte_unsafe,
-        .str_substring_unsafe,
-        .str_with_capacity,
-        .str_reserve,
-        .str_release_excess_capacity,
-        .str_to_utf8,
-        .str_from_utf8_lossy,
-        .str_from_utf8_validated,
-        .str_from_utf16_le_short,
-        .str_from_utf16_be_short,
-        .str_from_utf32_le_short,
-        .str_from_utf32_be_short,
-        .str_from_utf8,
-        .str_split_on,
-        .str_join_with,
-        .str_from_parts,
-        .str_inspect,
-        .u8_to_str,
-        .i8_to_str,
-        .u16_to_str,
-        .i16_to_str,
-        .u32_to_str,
-        .i32_to_str,
-        .u64_to_str,
-        .i64_to_str,
-        .u128_to_str,
-        .i128_to_str,
-        .dec_to_str,
-        .f32_to_str,
-        .f64_to_str,
-        .list_prefetched,
-        .list_concat,
-        .list_append_range_within,
-        .list_copy_range_within,
-        .list_append_range_within_unsafe,
-        .list_append_sublist,
-        .list_append_le_bytes,
-        .list_append_le_bytes_unsafe,
-        .list_slack_unique,
-        .list_owned_unique,
-        .list_with_capacity,
-        .list_drop_at,
-        .list_sublist,
-        .list_sublist_borrowed,
-        .list_prepend,
-        .list_reverse,
-        .list_reserve,
-        .list_reserve_for_append,
-        .list_release_excess_capacity,
-        .list_clear,
-        .list_map_prepare_reuse,
-        .list_map_can_reuse,
-        .list_map_cast_unsafe,
-        .list_map_extract_unsafe,
-        .list_move_out_unsafe,
-        .list_map_write_unsafe,
-        .list_item_size_at_most,
-        .dict_pseudo_seed,
-        .hasher_finish,
-        .hasher_write_bool,
-        .hasher_write_u8,
-        .hasher_write_u16,
-        .hasher_write_u32,
-        .hasher_write_u64,
-        .hasher_write_u128,
-        .hasher_write_i8,
-        .hasher_write_i16,
-        .hasher_write_i32,
-        .hasher_write_i64,
-        .hasher_write_i128,
-        .hasher_write_f32,
-        .hasher_write_f64,
-        .hasher_write_dec,
-        .hasher_write_bytes,
-        .hasher_write_str,
-        .crypto_sha256_hash_bytes,
-        .crypto_sha256_hasher_empty,
-        .crypto_sha256_hasher_write,
-        .crypto_sha256_hasher_finish,
-        .crypto_blake3_hash_bytes,
-        .crypto_blake3_hasher_empty,
-        .crypto_blake3_hasher_write,
-        .crypto_blake3_hasher_finish,
-        .num_plus,
-        .num_minus,
-        .num_times,
-        .u8_from_str,
-        .i8_from_str,
-        .u16_from_str,
-        .i16_from_str,
-        .u32_from_str,
-        .i32_from_str,
-        .u64_from_str,
-        .i64_from_str,
-        .u128_from_str,
-        .i128_from_str,
-        .dec_from_str,
-        .f32_from_str,
-        .f64_from_str,
-        .u8_from_str_prefix,
-        .u8_from_utf8_prefix,
-        .i8_from_str_prefix,
-        .i8_from_utf8_prefix,
-        .u16_from_str_prefix,
-        .u16_from_utf8_prefix,
-        .i16_from_str_prefix,
-        .i16_from_utf8_prefix,
-        .u32_from_str_prefix,
-        .u32_from_utf8_prefix,
-        .i32_from_str_prefix,
-        .i32_from_utf8_prefix,
-        .u64_from_str_prefix,
-        .u64_from_utf8_prefix,
-        .i64_from_str_prefix,
-        .i64_from_utf8_prefix,
-        .u128_from_str_prefix,
-        .u128_from_utf8_prefix,
-        .i128_from_str_prefix,
-        .i128_from_utf8_prefix,
-        .dec_from_str_prefix,
-        .dec_from_utf8_prefix,
-        .f32_from_str_prefix,
-        .f32_from_utf8_prefix,
-        .f64_from_str_prefix,
-        .f64_from_utf8_prefix,
-        .u8_to_i8_wrap,
-        .u8_to_i8_try,
-        .u8_to_i16,
-        .u8_to_i32,
-        .u8_to_i64,
-        .u8_to_i128,
-        .u8_to_u16,
-        .u8_to_u32,
-        .u8_to_u64,
-        .u8_to_u128,
-        .u8_to_f32,
-        .u8_to_f64,
-        .u8_to_dec,
-        .i8_to_i16,
-        .i8_to_i32,
-        .i8_to_i64,
-        .i8_to_i128,
-        .i8_to_u8_wrap,
-        .i8_to_u8_try,
-        .i8_to_u16_wrap,
-        .i8_to_u16_try,
-        .i8_to_u32_wrap,
-        .i8_to_u32_try,
-        .i8_to_u64_wrap,
-        .i8_to_u64_try,
-        .i8_to_u128_wrap,
-        .i8_to_u128_try,
-        .i8_to_f32,
-        .i8_to_f64,
-        .i8_to_dec,
-        .u16_to_i8_wrap,
-        .u16_to_i8_try,
-        .u16_to_i16_wrap,
-        .u16_to_i16_try,
-        .u16_to_i32,
-        .u16_to_i64,
-        .u16_to_i128,
-        .u16_to_u8_wrap,
-        .u16_to_u8_try,
-        .u16_to_u32,
-        .u16_to_u64,
-        .u16_to_u128,
-        .u16_to_f32,
-        .u16_to_f64,
-        .u16_to_dec,
-        .i16_to_i8_wrap,
-        .i16_to_i8_try,
-        .i16_to_i32,
-        .i16_to_i64,
-        .i16_to_i128,
-        .i16_to_u8_wrap,
-        .i16_to_u8_try,
-        .i16_to_u16_wrap,
-        .i16_to_u16_try,
-        .i16_to_u32_wrap,
-        .i16_to_u32_try,
-        .i16_to_u64_wrap,
-        .i16_to_u64_try,
-        .i16_to_u128_wrap,
-        .i16_to_u128_try,
-        .i16_to_f32,
-        .i16_to_f64,
-        .i16_to_dec,
-        .u32_to_i8_wrap,
-        .u32_to_i8_try,
-        .u32_to_i16_wrap,
-        .u32_to_i16_try,
-        .u32_to_i32_wrap,
-        .u32_to_i32_try,
-        .u32_to_i64,
-        .u32_to_i128,
-        .u32_to_u8_wrap,
-        .u32_to_u8_try,
-        .u32_to_u16_wrap,
-        .u32_to_u16_try,
-        .u32_to_u64,
-        .u32_to_u128,
-        .u32_to_f32,
-        .u32_to_f64,
-        .u32_to_dec,
-        .i32_to_i8_wrap,
-        .i32_to_i8_try,
-        .i32_to_i16_wrap,
-        .i32_to_i16_try,
-        .i32_to_i64,
-        .i32_to_i128,
-        .i32_to_u8_wrap,
-        .i32_to_u8_try,
-        .i32_to_u16_wrap,
-        .i32_to_u16_try,
-        .i32_to_u32_wrap,
-        .i32_to_u32_try,
-        .i32_to_u64_wrap,
-        .i32_to_u64_try,
-        .i32_to_u128_wrap,
-        .i32_to_u128_try,
-        .i32_to_f32,
-        .i32_to_f64,
-        .i32_to_dec,
-        .u64_to_i8_wrap,
-        .u64_to_i8_try,
-        .u64_to_i16_wrap,
-        .u64_to_i16_try,
-        .u64_to_i32_wrap,
-        .u64_to_i32_try,
-        .u64_to_i64_wrap,
-        .u64_to_i64_try,
-        .u64_to_i128,
-        .u64_to_u8_wrap,
-        .u64_to_u8_try,
-        .u64_to_u16_wrap,
-        .u64_to_u16_try,
-        .u64_to_u32_wrap,
-        .u64_to_u32_try,
-        .u64_to_u128,
-        .u64_to_f32,
-        .u64_to_f64,
-        .u64_to_dec,
-        .i64_to_i8_wrap,
-        .i64_to_i8_try,
-        .i64_to_i16_wrap,
-        .i64_to_i16_try,
-        .i64_to_i32_wrap,
-        .i64_to_i32_try,
-        .i64_to_i128,
-        .i64_to_u8_wrap,
-        .i64_to_u8_try,
-        .i64_to_u16_wrap,
-        .i64_to_u16_try,
-        .i64_to_u32_wrap,
-        .i64_to_u32_try,
-        .i64_to_u64_wrap,
-        .i64_to_u64_try,
-        .i64_to_u128_wrap,
-        .i64_to_u128_try,
-        .i64_to_f32,
-        .i64_to_f64,
-        .i64_to_dec,
-        .u128_to_i8_wrap,
-        .u128_to_i8_try,
-        .u128_to_i16_wrap,
-        .u128_to_i16_try,
-        .u128_to_i32_wrap,
-        .u128_to_i32_try,
-        .u128_to_i64_wrap,
-        .u128_to_i64_try,
-        .u128_to_i128_wrap,
-        .u128_to_i128_try,
-        .u128_to_u8_wrap,
-        .u128_to_u8_try,
-        .u128_to_u16_wrap,
-        .u128_to_u16_try,
-        .u128_to_u32_wrap,
-        .u128_to_u32_try,
-        .u128_to_u64_wrap,
-        .u128_to_u64_try,
-        .u128_to_f32,
-        .u128_to_f64,
-        .u128_to_dec_try_unsafe,
-        .i128_to_i8_wrap,
-        .i128_to_i8_try,
-        .i128_to_i16_wrap,
-        .i128_to_i16_try,
-        .i128_to_i32_wrap,
-        .i128_to_i32_try,
-        .i128_to_i64_wrap,
-        .i128_to_i64_try,
-        .i128_to_u8_wrap,
-        .i128_to_u8_try,
-        .i128_to_u16_wrap,
-        .i128_to_u16_try,
-        .i128_to_u32_wrap,
-        .i128_to_u32_try,
-        .i128_to_u64_wrap,
-        .i128_to_u64_try,
-        .i128_to_u128_wrap,
-        .i128_to_u128_try,
-        .i128_to_f32,
-        .i128_to_f64,
-        .i128_to_dec_try_unsafe,
-        .f32_to_i8_trunc,
-        .f32_to_i8_try_unsafe,
-        .f32_to_i16_trunc,
-        .f32_to_i16_try_unsafe,
-        .f32_to_i32_trunc,
-        .f32_to_i32_try_unsafe,
-        .f32_to_i64_trunc,
-        .f32_to_i64_try_unsafe,
-        .f32_to_i128_trunc,
-        .f32_to_i128_try_unsafe,
-        .f32_to_u8_trunc,
-        .f32_to_u8_try_unsafe,
-        .f32_to_u16_trunc,
-        .f32_to_u16_try_unsafe,
-        .f32_to_u32_trunc,
-        .f32_to_u32_try_unsafe,
-        .f32_to_u64_trunc,
-        .f32_to_u64_try_unsafe,
-        .f32_to_u128_trunc,
-        .f32_to_u128_try_unsafe,
-        .f32_to_f64,
-        .f64_to_i8_trunc,
-        .f64_to_i8_try_unsafe,
-        .f64_to_i16_trunc,
-        .f64_to_i16_try_unsafe,
-        .f64_to_i32_trunc,
-        .f64_to_i32_try_unsafe,
-        .f64_to_i64_trunc,
-        .f64_to_i64_try_unsafe,
-        .f64_to_i128_trunc,
-        .f64_to_i128_try_unsafe,
-        .f64_to_u8_trunc,
-        .f64_to_u8_try_unsafe,
-        .f64_to_u16_trunc,
-        .f64_to_u16_try_unsafe,
-        .f64_to_u32_trunc,
-        .f64_to_u32_try_unsafe,
-        .f64_to_u64_trunc,
-        .f64_to_u64_try_unsafe,
-        .f64_to_u128_trunc,
-        .f64_to_u128_try_unsafe,
-        .f64_to_f32_wrap,
-        .f64_to_f32_try_unsafe,
-        .dec_to_i8_trunc,
-        .dec_to_i8_try_unsafe,
-        .dec_to_i16_trunc,
-        .dec_to_i16_try_unsafe,
-        .dec_to_i32_trunc,
-        .dec_to_i32_try_unsafe,
-        .dec_to_i64_trunc,
-        .dec_to_i64_try_unsafe,
-        .dec_to_i128_trunc,
-        .dec_to_u8_trunc,
-        .dec_to_u8_try_unsafe,
-        .dec_to_u16_trunc,
-        .dec_to_u16_try_unsafe,
-        .dec_to_u32_trunc,
-        .dec_to_u32_try_unsafe,
-        .dec_to_u64_trunc,
-        .dec_to_u64_try_unsafe,
-        .dec_to_u128_trunc,
-        .dec_to_u128_try_unsafe,
-        .dec_to_f32_wrap,
-        .dec_to_f32_try_unsafe,
-        .dec_to_f64,
-        .box_box,
-        .box_unbox,
-        .box_unbox_borrowed,
-        .box_prepare_update,
-        .erased_capture_load,
-        .erased_capture_load_borrowed,
-        .ptr_alloca,
-        .box_alloc_zeroed,
-        .ptr_store,
-        .ptr_load,
-        .ptr_cast,
-        .crash,
-        => .{},
+/// Initialize a new Emitter
+pub fn init(allocator: std.mem.Allocator, module_env: *const ModuleEnv) Self {
+    return .{
+        .allocator = allocator,
+        .module_env = module_env,
+        .output = std.ArrayList(u8).empty,
+        .scratch = std.ArrayList(u8).empty,
+        .indent_level = 0,
+        .names_in_scope = std.StringHashMap(void).init(allocator),
+        .capture_renames = std.AutoHashMap(PatternMod.Pattern.Idx, []const u8).init(allocator),
+        .rename_counter = 0,
+        .record_field_order = .source,
     };
 }
 
-/// An operand of a direct call: one of its arguments, or its result.
-pub const CallOperand = union(enum) {
-    result,
-    arg: usize,
-};
-
-/// One merge point's merged locals that are live on entry to it.
-pub const Merge = struct { start: u32, len: u32 };
-
-allocator: Allocator,
-indexes: StackPlan.Indexes,
-/// Each local's representation, by local id. Rows outside the current
-/// procedure's inventory hold `.memory`.
-reps: std.ArrayList(Rep) = .empty,
-places: std.ArrayList(Place) = .empty,
-inventory: std.ArrayList(LocalId) = .empty,
-view_states: std.ArrayList(ViewState) = .empty,
-view_work: std.ArrayList(LocalId) = .empty,
-/// Whether some operand of the current procedure needs the local's address,
-/// by local id. Cleared from the procedure's inventory.
-addressed: std.ArrayList(bool) = .empty,
-/// The current procedure's SSA locals.
-ssa_locals: std.ArrayList(LocalId) = .empty,
-/// By merge-point statement, its span of `merge_locals`.
-merges: std.AutoHashMapUnmanaged(u32, Merge) = .empty,
-merge_locals: std.ArrayList(LocalId) = .empty,
-visited: std.AutoHashMapUnmanaged(u32, void) = .empty,
-work: std.ArrayList(CFStmtId) = .empty,
-planned: std.ArrayList(CFStmtId) = .empty,
-value_accesses: std.ArrayList(ValueAccesses) = .empty,
-merge_nodes: std.ArrayList(MergeNode) = .empty,
-pairs: std.ArrayList(MergePair) = .empty,
-
-const ValueAccesses = struct { start: u32, end: u32, definition: ?u32 = null };
-
-const ViewState = enum { untracked, candidate, pending, visiting, resolved, parameter };
-
-const MergeNode = struct { position: u32, node: u32, stmt: u32 };
-const MergePair = struct { stmt: u32, local: LocalId };
-
-pub fn init(allocator: Allocator) Self {
-    return .{ .allocator = allocator, .indexes = StackPlan.Indexes.init(allocator) };
-}
-
+/// Free resources used by the emitter
 pub fn deinit(self: *Self) void {
-    self.indexes.deinit();
-    self.reps.deinit(self.allocator);
-    self.places.deinit(self.allocator);
-    self.inventory.deinit(self.allocator);
-    self.view_states.deinit(self.allocator);
-    self.view_work.deinit(self.allocator);
-    self.addressed.deinit(self.allocator);
-    self.ssa_locals.deinit(self.allocator);
-    self.merges.deinit(self.allocator);
-    self.merge_locals.deinit(self.allocator);
-    self.visited.deinit(self.allocator);
-    self.work.deinit(self.allocator);
-    self.planned.deinit(self.allocator);
-    self.value_accesses.deinit(self.allocator);
-    self.merge_nodes.deinit(self.allocator);
-    self.pairs.deinit(self.allocator);
+    self.output.deinit(self.allocator);
+    self.scratch.deinit(self.allocator);
+    self.names_in_scope.deinit();
+    // Free the allocated rename strings
+    var iter = self.capture_renames.valueIterator();
+    while (iter.next()) |rename| {
+        self.allocator.free(rename.*);
+    }
+    self.capture_renames.deinit();
 }
 
-/// The representation of `local` in the planned procedure.
-pub fn rep(self: *const Self, local: LocalId) Rep {
-    const raw = @backingInt(local);
-    if (raw >= self.reps.items.len) return .memory;
-    return self.reps.items[raw];
+/// Get the emitted Roc source code
+pub fn getOutput(self: *const Self) []const u8 {
+    return self.output.items;
 }
 
-/// The memory location selected for `local`.
-pub fn place(self: *const Self, local: LocalId) Place {
-    const raw = @backingInt(local);
-    return if (raw < self.places.items.len) self.places.items[raw] else .slot;
+/// Reset the emitter for reuse
+pub fn reset(self: *Self) void {
+    self.output.clearRetainingCapacity();
+    self.scratch.clearRetainingCapacity();
+    self.indent_level = 0;
+    self.names_in_scope.clearRetainingCapacity();
+    // Free the allocated rename strings
+    var iter = self.capture_renames.valueIterator();
+    while (iter.next()) |rename| {
+        self.allocator.free(rename.*);
+    }
+    self.capture_renames.clearRetainingCapacity();
+    self.rename_counter = 0;
 }
 
-/// The local owning the bytes read through `local`, after view flattening.
-pub fn storageRoot(self: *const Self, local: LocalId) LocalId {
-    return switch (self.place(local)) {
-        .view => |view| view.source,
-        .slot, .parameter => local,
+/// Emit an expression as Roc source code
+pub fn emitExpr(self: *Self, expr_idx: Expr.Idx) EmitError!void {
+    try self.emitFromFrame(.{ .expr = expr_idx });
+}
+
+/// Emit an expression with record fields ordered lexicographically at every
+/// nesting level. This is used when source-equivalent record literals need one
+/// deterministic textual identity rather than source-preserving output.
+pub fn emitExprWithLexicographicRecords(self: *Self, expr_idx: Expr.Idx) EmitError!void {
+    const previous_order = self.record_field_order;
+    self.record_field_order = .lexicographic;
+    defer self.record_field_order = previous_order;
+    try self.emitFromFrame(.{ .expr = expr_idx });
+}
+
+/// Emit a pattern as Roc source code
+pub fn emitPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) EmitError!void {
+    try self.emitFromFrame(.{ .pattern = pattern_idx });
+}
+
+const EmitFrame = union(enum) {
+    expr: Expr.Idx,
+    pattern: CIR.Pattern.Idx,
+    statement: CIR.Statement.Idx,
+    binop_operand: struct { expr_idx: Expr.Idx, outer_op: Expr.Binop.Op, side: BinopSide },
+    field_access_suffix: Expr.FieldAccessSegment.Span,
+    write: []const u8,
+    indent,
+    inc_indent,
+    dec_indent,
+    pattern_record_field: struct { destruct_idx: CIR.Pattern.RecordDestruct.Idx, index: usize },
+};
+
+fn emitFromFrame(self: *Self, first: EmitFrame) EmitError!void {
+    var stack_allocator_state_buffer: [8192]u8 align(@alignOf(usize)) = undefined;
+    var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, self.allocator);
+    const stack_allocator = stack_allocator_state.allocator();
+    var frames: std.ArrayList(EmitFrame) = .empty;
+    defer frames.deinit(stack_allocator);
+
+    try frames.append(stack_allocator, first);
+    while (frames.pop()) |frame| {
+        switch (frame) {
+            .write => |text| try self.write(text),
+            .indent => try self.emitIndent(),
+            .inc_indent => self.indent_level += 1,
+            .dec_indent => self.indent_level -= 1,
+            .expr => |idx| try self.emitExprFrame(idx, &frames, stack_allocator),
+            .pattern => |idx| try self.emitPatternFrame(idx, &frames, stack_allocator),
+            .statement => |idx| try self.emitStatementFrame(idx, &frames, stack_allocator),
+            .binop_operand => |operand| try self.emitBinopOperandFrame(operand.expr_idx, operand.outer_op, operand.side, &frames, stack_allocator),
+            .field_access_suffix => |segments| try self.emitFieldAccessSuffix(segments),
+            .pattern_record_field => |field| try self.emitPatternRecordFieldFrame(field.destruct_idx, field.index, &frames, stack_allocator),
+        }
+    }
+}
+
+fn pushExprList(
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+    exprs: []const Expr.Idx,
+    close: []const u8,
+    separator: []const u8,
+) std.mem.Allocator.Error!void {
+    try frames.append(allocator, .{ .write = close });
+    var i = exprs.len;
+    while (i > 0) {
+        i -= 1;
+        try frames.append(allocator, .{ .expr = exprs[i] });
+        if (i > 0) try frames.append(allocator, .{ .write = separator });
+    }
+}
+
+fn pushPatternList(
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+    patterns: []const CIR.Pattern.Idx,
+    close: []const u8,
+    separator: []const u8,
+) std.mem.Allocator.Error!void {
+    try frames.append(allocator, .{ .write = close });
+    var i = patterns.len;
+    while (i > 0) {
+        i -= 1;
+        try frames.append(allocator, .{ .pattern = patterns[i] });
+        if (i > 0) try frames.append(allocator, .{ .write = separator });
+    }
+}
+
+/// One record item to render: a supplied field (`name: value`) or an unset
+/// field (`name: _`).
+const RecordItem = union(enum) {
+    field: CIR.RecordField.Idx,
+    unset: CIR.UnsetField.Idx,
+};
+
+fn recordItemName(module_env: *const ModuleEnv, item: RecordItem) base.Ident.Idx {
+    return switch (item) {
+        .field => |idx| module_env.store.getRecordField(idx).name,
+        .unset => |idx| module_env.store.getUnsetField(idx).name,
     };
 }
 
-/// The merged locals live on entry to the merge point `stmt`: a join body or
-/// a statement the emitter shares between several incoming edges.
-pub fn mergeLocals(self: *const Self, stmt: CFStmtId) []const LocalId {
-    const merge = self.merges.get(@backingInt(stmt)) orelse return &.{};
-    return self.merge_locals.items[merge.start..][0..merge.len];
+fn recordItemLessThan(module_env: *const ModuleEnv, lhs: RecordItem, rhs: RecordItem) bool {
+    return module_env.getIdentStoreConst().idxTextLessThan(
+        recordItemName(module_env, lhs),
+        recordItemName(module_env, rhs),
+    );
 }
 
-/// The planned procedure's SSA locals.
-pub fn ssaLocals(self: *const Self) []const LocalId {
-    return self.ssa_locals.items;
-}
-
-/// Forget the planned procedure.
-pub fn clear(self: *Self) void {
-    for (self.inventory.items) |local| {
-        self.places.items[@backingInt(local)] = .slot;
-        self.view_states.items[@backingInt(local)] = .untracked;
-    }
-    self.inventory.clearRetainingCapacity();
-    for (self.ssa_locals.items) |local| self.reps.items[@backingInt(local)] = .memory;
-    self.ssa_locals.clearRetainingCapacity();
-    self.merges.clearRetainingCapacity();
-    self.merge_locals.clearRetainingCapacity();
-}
-
-/// Plan the representations of the procedure whose parameters are `params`,
-/// whose other locals are `frame_locals`, and whose body is rooted at `root`.
-///
-/// `ops` supplies the facts the plan consumes from the emitter's contracts:
-/// `isCandidate(local)` (the layout has a scalar carrier), `paramAccess(index)`
-/// (how the prologue binds parameter `index`), `callAccess(call, operand)`
-/// (how a direct call passes argument `operand.arg` or receives its result),
-/// `isShared(stmt)` (the emitter enters `stmt` through a shared block),
-/// `borrowParam(index)` (the ABI supplies stable parameter storage),
-/// `memoryView(assign)` (the committed byte range of an aggregate alias), and
-/// `returnAccess()` (how a `ret` reads its value).
-pub fn plan(
+fn pushRecordFieldsAndUnsets(
     self: *Self,
-    store: *const LirStore,
-    params: LocalSpan,
-    frame_locals: LocalSpan,
-    root: CFStmtId,
-    ops: anytype,
-) Allocator.Error!void {
-    self.clear();
-    const local_count = store.localCount();
-    if (self.reps.items.len < local_count) {
-        const old_len = self.reps.items.len;
-        try self.reps.resize(self.allocator, local_count);
-        @memset(self.reps.items[old_len..], .memory);
-        try self.addressed.resize(self.allocator, local_count);
-        @memset(self.addressed.items[old_len..], false);
-    }
-    if (self.places.items.len < local_count) {
-        const old_len = self.places.items.len;
-        try self.places.resize(self.allocator, local_count);
-        @memset(self.places.items[old_len..], .slot);
-    }
-    if (self.view_states.items.len < local_count) {
-        const old_len = self.view_states.items.len;
-        try self.view_states.resize(self.allocator, local_count);
-        @memset(self.view_states.items[old_len..], .untracked);
-    }
-    const param_locals = store.getLocalSpan(params);
-    const frame = store.getLocalSpan(frame_locals);
-    defer {
-        for (0..param_locals.len) |i| self.addressed.items[@backingInt(GuardedList.at(param_locals, i))] = false;
-        for (0..frame.len) |i| self.addressed.items[@backingInt(GuardedList.at(frame, i))] = false;
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+    fields: []const CIR.RecordField.Idx,
+    unsets: []const CIR.UnsetField.Idx,
+) EmitError!void {
+    const total = fields.len + unsets.len;
+    if (total == 0) return;
+
+    const items = try allocator.alloc(RecordItem, total);
+    defer allocator.free(items);
+    for (fields, items[0..fields.len]) |field_idx, *item| item.* = .{ .field = field_idx };
+    for (unsets, items[fields.len..]) |unset_idx, *item| item.* = .{ .unset = unset_idx };
+
+    switch (self.record_field_order) {
+        // CIR stores supplied fields and unset fields in separate spans, so
+        // the source interleaving of unsets among fields is not preserved:
+        // source order renders all supplied fields (in CIR order) and then
+        // all unsets (in CIR order).
+        .source => {},
+        // Supplied fields and unsets merge into a single name-sorted
+        // sequence, so any CIR ordering of the same field set renders one
+        // canonical text.
+        .lexicographic => std.mem.sort(RecordItem, items, self.module_env, recordItemLessThan),
     }
 
-    // Record the complete reset inventory before changing any per-local
-    // columns, including when a later allocation fails.
-    try self.inventory.ensureTotalCapacity(self.allocator, param_locals.len + frame.len);
-    for ([_]@TypeOf(frame){ param_locals, frame }) |locals| {
-        for (0..locals.len) |i| self.inventory.appendAssumeCapacity(GuardedList.at(locals, i));
-    }
-
-    // Operands the emitter reaches through an address.
-    for (0..param_locals.len) |i| {
-        if (ops.borrowParam(i)) self.view_states.items[@backingInt(GuardedList.at(param_locals, i))] = .candidate;
-        if (ops.paramAccess(i) == .address) self.addressed.items[@backingInt(GuardedList.at(param_locals, i))] = true;
-    }
-    self.visited.clearRetainingCapacity();
-    self.work.clearRetainingCapacity();
-    try self.work.append(self.allocator, root);
-    while (self.work.pop()) |id| {
-        if ((try self.visited.getOrPut(self.allocator, @backingInt(id))).found_existing) continue;
-        const stmt = store.getCFStmt(id);
-        self.noteAddressedOperands(store, stmt, ops);
-        if (stmt == .assign_ref) {
-            if (ops.memoryView(stmt.assign_ref)) |view| {
-                self.view_states.items[@backingInt(stmt.assign_ref.target)] = .candidate;
-                self.view_states.items[@backingInt(view.source)] = .candidate;
-            }
+    var i = items.len;
+    while (i > 0) {
+        i -= 1;
+        switch (items[i]) {
+            .field => |field_idx| {
+                const field = self.module_env.store.getRecordField(field_idx);
+                try frames.append(allocator, .{ .expr = field.value });
+                try frames.append(allocator, .{ .write = ": " });
+                try frames.append(allocator, .{ .write = self.module_env.getIdent(field.name) });
+            },
+            .unset => |unset_idx| {
+                const unset = self.module_env.store.getUnsetField(unset_idx);
+                try frames.append(allocator, .{ .write = ": _" });
+                try frames.append(allocator, .{ .write = self.module_env.getIdent(unset.name) });
+            },
         }
-        try lir.BodyClone.appendSuccessors(store, &self.work, id, self.allocator);
+        if (i > 0) try frames.append(allocator, .{ .write = ", " });
     }
-
-    var param_count: usize = 0;
-    for ([_]@TypeOf(frame){ param_locals, frame }, 0..) |locals, list| {
-        for (0..locals.len) |i| {
-            const local = GuardedList.at(locals, i);
-            if (self.addressed.items[@backingInt(local)] or !ops.isCandidate(local)) continue;
-            if (self.reps.items[@backingInt(local)] != .memory) continue;
-            self.reps.items[@backingInt(local)] = .dominating;
-            try self.ssa_locals.append(self.allocator, local);
-        }
-        if (list == 0) param_count = self.ssa_locals.items.len;
-    }
-    const has_memory_candidates = for (self.inventory.items) |local| {
-        if (self.view_states.items[@backingInt(local)] == .candidate) break true;
-    } else false;
-    if (self.ssa_locals.items.len == 0 and !has_memory_candidates) return;
-    try self.classify(store, params, param_count, root, ops);
 }
 
-const Tracked = struct {
-    plan: *const Self,
-
-    pub fn tracks(self: Tracked, local: LocalId) bool {
-        return self.plan.rep(local) != .memory or self.plan.view_states.items[@backingInt(local)] != .untracked;
+/// The binary operator this expression prints as, if any: a still-sugared
+/// `e_binop`, a checked `e_dispatch_call` desugared from one, or a checked
+/// equality node (printed as `==`/`!=`).
+fn surfaceBinopOp(expr: Expr) ?Expr.Binop.Op {
+    const tag = std.meta.activeTag(expr);
+    if (tag == .e_binop) return expr.e_binop.op;
+    if (tag == .e_dispatch_call and expr.e_dispatch_call.surface_origin == .binop) {
+        return expr.e_dispatch_call.surface_origin.binop;
     }
+    if (tag == .e_structural_eq) return if (expr.e_structural_eq.negated) .ne else .eq;
+    if (tag == .e_method_eq) return if (expr.e_method_eq.negated) .ne else .eq;
+    return null;
+}
 
-    pub fn statement(_: Tracked, _: *StackPlan, _: u32, _: lir.LIR.CFStmt) Allocator.Error!void {}
-};
+/// Which side of a binary operator an operand sits on. The two sides have
+/// different parenthesization rules: e.g. left-associative operators need
+/// parens around an equal-precedence RIGHT operand (`1 - (2 - 3)`) but not
+/// around an equal-precedence left one (`(1 - 2) - 3` reparses unchanged).
+const BinopSide = enum { left, right };
 
-/// Share only immutable storage. A static single definition can execute again
-/// in a loop: the view must not be live on entry to that definition. This is
-/// checked against the ultimate storage owner, including through view chains.
-fn planMemory(self: *Self, store: *const LirStore, stack: *StackPlan, params: LocalSpan, root: CFStmtId, ops: anytype) Allocator.Error!void {
-    const accesses = stack.sortedAccesses();
-    const entry = self.indexes.nodeOf(root).?;
-    const param_locals = store.getLocalSpan(params);
-    for (0..param_locals.len) |i| {
-        const local = GuardedList.at(param_locals, i);
-        self.view_states.items[@backingInt(local)] = .parameter;
-        if (self.rep(local) != .memory) continue;
-        const definitions = if (stack.localIndex(local)) |index| stack.values.items[index].definitions else 0;
-        if (definitions == 0 and ops.borrowParam(i)) {
-            self.places.items[@backingInt(local)] = .parameter;
+fn emitBinopOperandFrame(
+    self: *Self,
+    expr_idx: Expr.Idx,
+    outer_op: Expr.Binop.Op,
+    side: BinopSide,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+) EmitError!void {
+    const expr = self.module_env.store.getExpr(expr_idx);
+    const needs_parens = if (surfaceBinopOp(expr)) |inner_op| switch (side) {
+        // The left operand's text is parsed first; the inner expression then
+        // keeps its operands iff the outer operator does NOT bind into the
+        // inner operator's right operand, i.e. the outer operator's left
+        // binding power is below the inner operator's right binding power.
+        .left => binopBp(outer_op).left >= binopBp(inner_op).right,
+        // The right operand's text is parsed with the outer operator's right
+        // binding power as the minimum; the inner operator only binds its
+        // operands together if its left binding power reaches that minimum.
+        .right => binopBp(inner_op).left < binopBp(outer_op).right,
+    } else false;
+    if (needs_parens) {
+        try frames.append(allocator, .{ .write = ")" });
+        try frames.append(allocator, .{ .expr = expr_idx });
+        try frames.append(allocator, .{ .write = "(" });
+    } else {
+        try frames.append(allocator, .{ .expr = expr_idx });
+    }
+}
+
+/// Whether a unary operator's receiver must be parenthesized to reparse as
+/// written: operator expressions (unary binds tighter than any binop), other
+/// unary applications, and negative literals. The latter two print a leading
+/// `-` or `!`, which would fuse with the unary operator into different
+/// tokens: `--x` tokenizes as binary minus, not as two negations.
+fn unaryReceiverNeedsParens(self: *Self, receiver_idx: Expr.Idx) bool {
+    const receiver = self.module_env.store.getExpr(receiver_idx);
+    if (surfaceBinopOp(receiver) != null) return true;
+    const tag = std.meta.activeTag(receiver);
+    if (tag == .e_unary_minus or tag == .e_unary_not) return true;
+    if (tag == .e_dispatch_call) {
+        const origin = std.meta.activeTag(receiver.e_dispatch_call.surface_origin);
+        return origin == .unary_minus or origin == .unary_not;
+    }
+    if (tag == .e_num) return receiver.e_num.value.kind == .i128 and receiver.e_num.value.toI128() < 0;
+    if (tag == .e_frac_f32) return std.math.signbit(receiver.e_frac_f32.value);
+    if (tag == .e_frac_f64) return std.math.signbit(receiver.e_frac_f64.value);
+    if (tag == .e_dec) return receiver.e_dec.value.num < 0;
+    if (tag == .e_dec_small) return receiver.e_dec_small.value.numerator < 0;
+    if (tag == .e_num_from_numeral or tag == .e_typed_num_from_numeral) {
+        const literal = self.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(receiver_idx)) orelse {
+            base.invariant("missing recorded numeral for expression {}", .{@backingInt(receiver_idx)});
+        };
+        return literal.isNegative();
+    }
+    if (tag == .e_typed_int) return receiver.e_typed_int.value.kind == .i128 and receiver.e_typed_int.value.toI128() < 0;
+    if (tag == .e_typed_frac) return receiver.e_typed_frac.value.toI128() < 0;
+    return false;
+}
+
+/// Push frames emitting a unary operator's receiver, parenthesized when
+/// required to reparse as the same expression.
+fn pushUnaryReceiverFrames(
+    self: *Self,
+    receiver_idx: Expr.Idx,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+) EmitError!void {
+    if (self.unaryReceiverNeedsParens(receiver_idx)) {
+        try frames.append(allocator, .{ .write = ")" });
+        try frames.append(allocator, .{ .expr = receiver_idx });
+        try frames.append(allocator, .{ .write = "(" });
+    } else {
+        try frames.append(allocator, .{ .expr = receiver_idx });
+    }
+}
+
+/// Whether a field-access path receiver needs parentheses to reparse as the
+/// same CIR expression.
+///
+/// Field access is a postfix operator, so prefix and lower-precedence
+/// expressions need parentheses. Numeric literals need them independently of
+/// precedence so their trailing text cannot fuse with the accessor's leading
+/// dot. A nested field-access node also needs parentheses: it denotes a source
+/// path boundary which would otherwise flatten into one canonical path.
+fn fieldAccessPathReceiverNeedsParens(self: *Self, receiver_idx: Expr.Idx) bool {
+    var current_idx = receiver_idx;
+    while (true) {
+        switch (self.module_env.store.getExpr(current_idx)) {
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            => return true,
+
+            .e_if,
+            .e_match,
+            .e_closure,
+            .e_lambda,
+            .e_binop,
+            .e_unary_minus,
+            .e_unary_not,
+            .e_field_access,
+            .e_structural_eq,
+            .e_method_eq,
+            .e_crash,
+            .e_dbg,
+            .e_expect,
+            .e_return,
+            .e_for,
+            => return true,
+
+            .e_dispatch_call => |call| return switch (call.surface_origin) {
+                .binop, .unary_minus, .unary_not => true,
+                .method_call => false,
+            },
+
+            // Nominal nodes emit only their transparent backing expression,
+            // so iteratively peel them before classifying surface precedence.
+            .e_nominal => |nominal| current_idx = nominal.backing_expr,
+            .e_nominal_external => |nominal| current_idx = nominal.backing_expr,
+            .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached Roc source emission", .{}),
+
+            .e_str_segment,
+            .e_str,
+            .e_bytes_literal,
+            .e_lookup_local,
+            .e_lookup_external,
+            .e_lookup_required,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
+            .e_list,
+            .e_empty_list,
+            .e_tuple,
+            .e_call,
+            .e_record,
+            .e_empty_record,
+            .e_block,
+            .e_tag,
+            .e_zero_argument_tag,
+            .e_method_call,
+            .e_interpolation,
+            .e_structural_hash,
+            .e_type_method_call,
+            .e_type_dispatch_call,
+            .e_tuple_access,
+            .e_runtime_error,
+            .e_expect_err,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_derived_method,
+            .e_break,
+            .e_hosted_lambda,
+            .e_run_low_level,
+            => return false,
         }
     }
-    for (self.planned.items) |id| {
-        const stmt = store.getCFStmt(id);
-        if (stmt == .set_local and stmt.set_local.mode != .initialize_join_param) {
-            if (stack.localIndex(stmt.set_local.target)) |index| stack.values.items[index].mutable = true;
-        } else if (stmt == .init_uninitialized) {
-            if (stack.localIndex(stmt.init_uninitialized.target)) |index| stack.values.items[index].mutable = true;
-        }
+}
+
+/// Push a field-access path receiver with the parentheses required by
+/// `fieldAccessPathReceiverNeedsParens`.
+fn pushFieldAccessPathReceiverFrames(
+    self: *Self,
+    receiver_idx: Expr.Idx,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+) EmitError!void {
+    if (self.fieldAccessPathReceiverNeedsParens(receiver_idx)) {
+        try frames.append(allocator, .{ .write = ")" });
+        try frames.append(allocator, .{ .expr = receiver_idx });
+        try frames.append(allocator, .{ .write = "(" });
+    } else {
+        try frames.append(allocator, .{ .expr = receiver_idx });
     }
-    for (self.planned.items) |id| {
-        const stmt = store.getCFStmt(id);
-        if (stmt != .assign_ref) continue;
-        const target = stmt.assign_ref.target;
-        if (self.rep(target) != .memory or self.view_states.items[@backingInt(target)] == .parameter) continue;
-        const view = ops.memoryView(stmt.assign_ref) orelse continue;
-        // A layout can also have an SSA carrier (Bool is a tag union). An
-        // addressed alias must materialize that value, not borrow its address.
-        if (self.rep(view.source) != .memory) continue;
-        const t = stack.localIndex(target).?;
-        const s = stack.localIndex(view.source).?;
-        if (stack.values.items[t].definitions != 1 or stack.values.items[t].mutable or
-            stack.values.items[s].definitions > 1 or stack.values.items[s].mutable) continue;
-        if (stack.values.items[s].definitions == 0 and self.view_states.items[@backingInt(view.source)] != .parameter) continue;
-        const span = self.value_accesses.items[t];
-        if (stack.liveIn(t, accesses[span.start..span.end], entry)) continue;
-        self.places.items[@backingInt(target)] = .{ .view = view };
-        self.view_states.items[@backingInt(target)] = .pending;
-    }
-    self.view_work.clearRetainingCapacity();
-    for (self.inventory.items) |local| {
-        if (self.view_states.items[@backingInt(local)] != .pending) continue;
-        var cursor = local;
-        while (self.view_states.items[@backingInt(cursor)] == .pending) {
-            self.view_states.items[@backingInt(cursor)] = .visiting;
-            try self.view_work.append(self.allocator, cursor);
-            cursor = self.places.items[@backingInt(cursor)].view.source;
-        }
-        if (self.view_states.items[@backingInt(cursor)] == .visiting) {
-            // A cyclic alias definition has no immutable storage origin.
-            for (self.view_work.items) |cyclic| {
-                self.places.items[@backingInt(cyclic)] = .slot;
-                self.view_states.items[@backingInt(cyclic)] = .resolved;
-            }
-            self.view_work.clearRetainingCapacity();
+}
+
+/// Whether emitting a call callee without parentheses would select different
+/// source syntax.
+///
+/// A record-field path followed immediately by an argument list is method-call
+/// syntax. Ordinary application of a function stored in a record field must
+/// therefore retain the source boundary as `(value.field)(arg)`. Nominal CIR
+/// nodes emit only their transparent backing expression, so inspect through
+/// them before deciding.
+fn callCalleeNeedsParens(self: *Self, callee_idx: Expr.Idx) bool {
+    var current_idx = callee_idx;
+    while (true) {
+        const expr = self.module_env.store.getExpr(current_idx);
+        if (expr == .e_field_access) return true;
+        if (expr == .e_unary_not) return true;
+        if (expr == .e_dispatch_call and expr.e_dispatch_call.surface_origin == .unary_not) return true;
+        if (expr == .e_nominal) {
+            current_idx = expr.e_nominal.backing_expr;
             continue;
         }
-        while (self.view_work.pop()) |target| {
-            const raw = @backingInt(target);
-            var view = self.places.items[raw].view;
-            if (self.place(view.source) == .view) {
-                const parent = self.place(view.source).view;
-                view.source = parent.source;
-                view.offset += parent.offset;
-            }
-            const source_index = stack.localIndex(view.source).?;
-            const target_index = stack.localIndex(target).?;
-            const source_span = self.value_accesses.items[source_index];
-            const target_span = self.value_accesses.items[target_index];
-            const target_accesses = accesses[target_span.start..target_span.end];
-            // Admission proved the owner has at most one static definition.
-            // Its node was inventoried once with the accesses: do not rescan
-            // every read of a wide, heavily projected owner for each view.
-            const snapshot_needed = if (source_span.definition) |definition|
-                stack.liveIn(target_index, target_accesses, definition)
-            else
-                false;
-            self.places.items[raw] = if (snapshot_needed) .slot else .{ .view = view };
-            self.view_states.items[raw] = .resolved;
+        if (expr == .e_nominal_external) {
+            current_idx = expr.e_nominal_external.backing_expr;
+            continue;
         }
-    }
-}
-
-/// Split the SSA locals into dominating and merged ones, and give every merge
-/// point the merged locals live on entry to it.
-/// The first `param_count` SSA locals are parameters.
-fn classify(self: *Self, store: *const LirStore, params: LocalSpan, param_count: usize, root: CFStmtId, ops: anytype) Allocator.Error!void {
-    var stack_plan = self.indexes.takePlan();
-    defer self.indexes.keepPlan(&stack_plan);
-    self.planned.clearRetainingCapacity();
-    defer self.indexes.clear();
-    try stack_plan.addProcGraph(store, &self.indexes, root, &self.planned, Tracked{ .plan = self });
-    for (stack_plan.values.items) |*value| value.size = 1;
-    try stack_plan.solveLifetimes();
-
-    // Each solved value's run of the sorted accesses.
-    const accesses = stack_plan.sortedAccesses();
-    self.value_accesses.clearRetainingCapacity();
-    try self.value_accesses.appendNTimes(self.allocator, .{ .start = 0, .end = 0 }, stack_plan.values.items.len);
-    var begin: usize = 0;
-    while (begin < accesses.len) {
-        const value = accesses[begin].value;
-        var end = begin;
-        var definition: ?u32 = null;
-        while (end < accesses.len and accesses[end].value == value) : (end += 1) {
-            if (accesses[end].write) definition = accesses[end].node;
-        }
-        self.value_accesses.items[value] = .{ .start = @intCast(begin), .end = @intCast(end), .definition = definition };
-        begin = end;
-    }
-
-    try self.planMemory(store, &stack_plan, params, root, ops);
-
-    const entry = self.indexes.nodeOf(root).?;
-    var any_merged = false;
-    for (self.ssa_locals.items, 0..) |local, position| {
-        const index = stack_plan.localIndex(local) orelse continue;
-        const definitions = stack_plan.values.items[index].definitions;
-        const is_param = position < param_count;
-        const span = self.value_accesses.items[index];
-        const dominating = if (is_param)
-            definitions == 0
-        else
-            definitions == 1 and !stack_plan.liveIn(index, accesses[span.start..span.end], entry);
-        if (!dominating) {
-            self.reps.items[@backingInt(local)] = .merged;
-            any_merged = true;
-        }
-    }
-    if (!any_merged) return;
-
-    // The merge points, by solved position: every join body, entered only by
-    // its jumps, and every statement the emitter shares between edges.
-    self.merge_nodes.clearRetainingCapacity();
-    var joins = self.indexes.joins.iterator();
-    while (joins.next()) |join| try self.appendMergeNode(&stack_plan, join.value_ptr.*);
-    for (self.planned.items) |stmt| {
-        if (ops.isShared(stmt)) try self.appendMergeNode(&stack_plan, stmt);
-    }
-    if (self.merge_nodes.items.len == 0) return;
-    std.mem.sort(MergeNode, self.merge_nodes.items, {}, struct {
-        fn lessThan(_: void, a: MergeNode, b: MergeNode) bool {
-            return a.position < b.position;
-        }
-    }.lessThan);
-
-    // A merged local can be live only where its ranges cover a position.
-    self.pairs.clearRetainingCapacity();
-    for (self.ssa_locals.items) |local| {
-        if (self.reps.items[@backingInt(local)] != .merged) continue;
-        const index = stack_plan.localIndex(local) orelse continue;
-        const span = self.value_accesses.items[index];
-        const value_accesses = accesses[span.start..span.end];
-        for (stack_plan.liveRanges(index)) |range| {
-            var at = lowerBound(self.merge_nodes.items, range.start);
-            while (at < self.merge_nodes.items.len and self.merge_nodes.items[at].position < range.end) : (at += 1) {
-                const merge = self.merge_nodes.items[at];
-                if (!stack_plan.liveIn(index, value_accesses, merge.node)) continue;
-                try self.pairs.append(self.allocator, .{ .stmt = merge.stmt, .local = local });
-            }
-        }
-    }
-    std.mem.sort(MergePair, self.pairs.items, {}, struct {
-        fn lessThan(_: void, a: MergePair, b: MergePair) bool {
-            if (a.stmt != b.stmt) return a.stmt < b.stmt;
-            return @backingInt(a.local) < @backingInt(b.local);
-        }
-    }.lessThan);
-    var i: usize = 0;
-    while (i < self.pairs.items.len) {
-        const stmt = self.pairs.items[i].stmt;
-        const start: u32 = @intCast(self.merge_locals.items.len);
-        while (i < self.pairs.items.len and self.pairs.items[i].stmt == stmt) : (i += 1) {
-            try self.merge_locals.append(self.allocator, self.pairs.items[i].local);
-        }
-        try self.merges.put(self.allocator, stmt, .{ .start = start, .len = @intCast(self.merge_locals.items.len - start) });
-    }
-}
-
-fn appendMergeNode(self: *Self, stack_plan: *const StackPlan, stmt: CFStmtId) Allocator.Error!void {
-    const node = self.indexes.nodeOf(stmt).?;
-    try self.merge_nodes.append(self.allocator, .{ .position = stack_plan.nodePosition(node), .node = node, .stmt = @backingInt(stmt) });
-}
-
-fn lowerBound(nodes: []const MergeNode, position: u32) usize {
-    var low: usize = 0;
-    var high: usize = nodes.len;
-    while (low < high) {
-        const mid = low + (high - low) / 2;
-        if (nodes[mid].position < position) low = mid + 1 else high = mid;
-    }
-    return low;
-}
-
-fn markAddressed(self: *Self, local: LocalId) void {
-    const raw = @backingInt(local);
-    if (raw < self.addressed.items.len) self.addressed.items[raw] = true;
-}
-
-fn noteAccess(self: *Self, local: LocalId, access: Access) void {
-    if (access == .address) self.markAddressed(local);
-}
-
-fn noteAllAddressed(self: *Self, store: *const LirStore, stmt: lir.LIR.CFStmt) void {
-    lir.BodyClone.forEachStmtRead(store, stmt, self, markAddressed);
-    lir.BodyClone.forEachStmtDef(store, stmt, self, markAddressed);
-}
-
-/// Mark every operand of `stmt` the emitter reaches through its address.
-fn noteAddressedOperands(self: *Self, store: *const LirStore, stmt: lir.LIR.CFStmt, ops: anytype) void {
-    switch (stmt) {
-        // Writes nothing: the local keeps whatever it held.
-        .init_uninitialized => {},
-        .assign_ref => |assign| if (store.getLocal(assign.target).dyn != null) {
-            self.noteAllAddressed(store, stmt);
-        } else switch (assign.op.kind) {
-            // A copy reads and writes values in either representation.
-            .local, .list_reinterpret, .nominal => {},
-            // The aggregate is read in memory; the result is a value.
-            .discriminant, .field, .tag_payload, .tag_payload_struct => self.markAddressed(assign.op.source),
-        },
-        .assign_literal => |assign| switch (assign.value) {
-            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal => {},
-            .str_literal, .static_data, .bytes_literal, .proc_ref => self.markAddressed(assign.target),
-        },
-        .assign_call => |call| {
-            const extra = store.stmtRowOrDefault(call.extra);
-            // A pending drive writes the result through its address.
-            if (extra.drive.canDriveHere()) self.markAddressed(call.target);
-            if (!extra.replaces_frame) self.noteAccess(call.target, ops.callAccess(call, .result));
-            const args = store.getLocalSpan(call.args);
-            for (0..args.len) |i| self.noteAccess(GuardedList.at(args, i), ops.callAccess(call, .{ .arg = i }));
-        },
-        // A list operation over an element descriptor reaches every
-        // operand through its address.
-        .assign_low_level => |assign| if (store.stmtRowOrDefault(assign.extra).dyn_elem_desc) {
-            self.noteAllAddressed(store, stmt);
-        } else {
-            const access = lowLevelAccess(assign.op);
-            self.noteAccess(assign.target, access.target());
-            const args = store.getLocalSpan(assign.args);
-            for (0..args.len) |i| self.noteAccess(GuardedList.at(args, i), access.arg(i));
-        },
-        // The aggregate is built in memory from field values.
-        inline .assign_list, .assign_struct => |assign| self.markAddressed(assign.target),
-        .assign_tag => |assign| self.markAddressed(assign.target),
-        .store_struct => |assign| self.markAddressed(assign.dest),
-        .store_tag => |assign| self.markAddressed(assign.dest),
-        // A copy reads and writes values in either representation, except
-        // a copy to or from a dynamic local, which copies the bytes at the
-        // two addresses.
-        .set_local => |assign| if (store.getLocal(assign.target).dyn != null or store.getLocal(assign.value).dyn != null) {
-            self.markAddressed(assign.target);
-            self.markAddressed(assign.value);
-        },
-        .expect => {},
-        .switch_stmt => {},
-        .switch_initialized_payload => |sw| self.markAddressed(sw.payload),
-        .decref_if_initialized => |dec| self.markAddressed(dec.value),
-        .ret => |ret| self.noteAccess(ret.value, ops.returnAccess()),
-        .join, .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
-        .assign_call_erased,
-        .assign_packed_erased_fn,
-        .dyn,
-        .debug,
-        .expect_err,
-        .crash,
-        .incref,
-        .decref,
-        .free,
-        .str_match,
-        .str_match_set,
-        => self.noteAllAddressed(store, stmt),
-    }
-}
-
-const TestOps = struct {
-    store: *const LirStore,
-    local_alias_views: bool = false,
-
-    pub fn isCandidate(self: TestOps, local: LocalId) bool {
-        return switch (self.store.getLocal(local).layout_idx) {
-            .bool, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64 => true,
-            .str, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => false,
-        };
-    }
-
-    pub fn paramAccess(_: TestOps, _: usize) Access {
-        return .value;
-    }
-
-    pub fn borrowParam(self: TestOps, _: usize) bool {
-        return self.local_alias_views;
-    }
-
-    pub fn memoryView(self: TestOps, assign: @FieldType(lir.LIR.CFStmt, "assign_ref")) ?View {
-        if (self.local_alias_views and assign.op.kind == .local and !self.isCandidate(assign.target)) return .{ .source = assign.op.source, .offset = 0 };
-        return null;
-    }
-
-    pub fn callAccess(_: TestOps, _: @FieldType(lir.LIR.CFStmt, "assign_call"), _: CallOperand) Access {
-        return .value;
-    }
-
-    pub fn isShared(_: TestOps, _: CFStmtId) bool {
         return false;
     }
-
-    pub fn returnAccess(_: TestOps) Access {
-        return .value;
-    }
-};
-
-/// Join point ids a fixture mints in order, like a lowerer's per-proc counter.
-pub const JoinPointIds = struct {
-    next: u32 = 0,
-
-    pub fn fresh(self: *JoinPointIds) lir.LIR.JoinPointId {
-        const id: lir.LIR.JoinPointId = @fromBackingInt(self.next);
-        self.next += 1;
-        return id;
-    }
-};
-
-/// Test fixture: `loop(n)` swaps `a` and `b` and counts `i` up to `n`, then returns
-/// `a - b`. `tmp` holds the old `a` within one iteration only.
-pub const SwapLoop = struct {
-    n: LocalId,
-    a: LocalId,
-    b: LocalId,
-    i: LocalId,
-    tmp: LocalId,
-    body: CFStmtId,
-    loop_body: CFStmtId,
-    frame: LocalSpan,
-    params: LocalSpan,
-
-    pub fn build(store: *LirStore) Allocator.Error!SwapLoop {
-        const local = struct {
-            fn add(s: *LirStore) Allocator.Error!LocalId {
-                return s.addLocal(.{ .layout_idx = .i64 });
-            }
-        }.add;
-        const n = try local(store);
-        const a = try local(store);
-        const b = try local(store);
-        const i = try local(store);
-        const tmp = try local(store);
-        const one = try local(store);
-        const next_i = try local(store);
-        const result = try local(store);
-        const done = try store.addLocal(.{ .layout_idx = .bool });
-        var join_points = JoinPointIds{};
-        const loop_id = join_points.fresh();
-        const write = struct {
-            fn set(s: *LirStore, target: LocalId, value: LocalId, next: CFStmtId) Allocator.Error!CFStmtId {
-                return s.addCFStmt(.{ .set_local = .{ .target = target, .value = value, .mode = .replace_existing, .next = next } }, .test_fixture);
-            }
-            fn literal(s: *LirStore, target: LocalId, value: i64, next: CFStmtId) Allocator.Error!CFStmtId {
-                return s.addCFStmt(.{ .assign_literal = .{ .target = target, .value = .{ .i64_literal = .{ .value = value, .layout_idx = .i64 } }, .next = next } }, .test_fixture);
-            }
-        };
-
-        const again = try store.addCFStmt(.{ .jump = .{ .target = loop_id } }, .test_fixture);
-        var step = try write.set(store, i, next_i, again);
-        step = try store.addLowLevelStmt(next_i, .num_int_add_wrap, &.{ i, one }, step, .test_fixture);
-        step = try write.literal(store, one, 1, step);
-        step = try write.set(store, b, tmp, step);
-        step = try write.set(store, a, b, step);
-        step = try store.addCFStmt(.{ .assign_ref = .{ .target = tmp, .op = lir.LIR.RefOp.local(a), .next = step } }, .test_fixture);
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
-        const finish = try store.addLowLevelStmt(result, .num_int_sub_wrap, &.{ a, b }, ret, .test_fixture);
-        const branch = try store.addCFStmt(.{ .switch_stmt = .{
-            .cond = done,
-            .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = finish }}),
-            .default_branch = step,
-        } }, .test_fixture);
-        const loop_body = try store.addLowLevelStmt(done, .num_is_gte, &.{ i, n }, branch, .test_fixture);
-
-        var start = try store.addCFStmt(.{ .jump = .{ .target = loop_id } }, .test_fixture);
-        start = try write.literal(store, i, 0, start);
-        start = try write.literal(store, b, 2, start);
-        start = try write.literal(store, a, 1, start);
-        const body = try store.addCFStmt(.{ .join = .{
-            .id = loop_id,
-            .params = try store.addLocalSpan(&.{ a, b, i }),
-            .body = loop_body,
-            .remainder = start,
-        } }, .test_fixture);
-        return .{
-            .n = n,
-            .a = a,
-            .b = b,
-            .i = i,
-            .tmp = tmp,
-            .body = body,
-            .loop_body = loop_body,
-            .frame = try store.addLocalSpan(&.{ a, b, i, tmp, one, next_i, result, done }),
-            .params = try store.addLocalSpan(&.{n}),
-        };
-    }
-};
-
-test "loop-carried locals merge at the loop header and single definitions dominate" {
-    const gpa = std.testing.allocator;
-    var store = LirStore.init(gpa);
-    defer store.deinit();
-    const program = try SwapLoop.build(&store);
-
-    var value_plan = Self.init(gpa);
-    defer value_plan.deinit();
-    try value_plan.plan(&store, program.params, program.frame, program.body, TestOps{ .store = &store });
-
-    // The parameter only the prologue defines, and `tmp`, defined once per
-    // iteration before every read, need no phi.
-    try std.testing.expectEqual(Rep.dominating, value_plan.rep(program.n));
-    try std.testing.expectEqual(Rep.dominating, value_plan.rep(program.tmp));
-    // The swapped pair and the counter are redefined around the back edge.
-    try std.testing.expectEqual(Rep.merged, value_plan.rep(program.a));
-    try std.testing.expectEqual(Rep.merged, value_plan.rep(program.b));
-    try std.testing.expectEqual(Rep.merged, value_plan.rep(program.i));
-    try std.testing.expectEqualSlices(LocalId, &.{ program.a, program.b, program.i }, value_plan.mergeLocals(program.loop_body));
-
-    value_plan.clear();
-    try std.testing.expectEqual(Rep.memory, value_plan.rep(program.a));
-    try std.testing.expectEqual(@as(usize, 0), value_plan.mergeLocals(program.loop_body).len);
 }
 
-test "an operand the emitter reads through an address keeps a scalar in memory" {
-    const gpa = std.testing.allocator;
-    var store = LirStore.init(gpa);
-    defer store.deinit();
-    // `bits = to_i64_trunc(x)`: the wrapping builtin writes through a
-    // pointer to `bits`, while it reads `x` as a value.
-    const x = try store.addLocal(.{ .layout_idx = .f64 });
-    const bits = try store.addLocal(.{ .layout_idx = .i64 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = bits } }, .test_fixture);
-    const body = try store.addLowLevelStmt(bits, .f64_to_i64_trunc, &.{x}, ret, .test_fixture);
-
-    var value_plan = Self.init(gpa);
-    defer value_plan.deinit();
-    try value_plan.plan(&store, try store.addLocalSpan(&.{x}), try store.addLocalSpan(&.{bits}), body, TestOps{ .store = &store });
-    try std.testing.expectEqual(Rep.dominating, value_plan.rep(x));
-    try std.testing.expectEqual(Rep.memory, value_plan.rep(bits));
+/// Push a call callee while preserving any field-path boundary required to
+/// keep ordinary application distinct from method dispatch.
+fn pushCallCalleeFrames(
+    self: *Self,
+    callee_idx: Expr.Idx,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+) EmitError!void {
+    if (self.callCalleeNeedsParens(callee_idx)) {
+        try frames.append(allocator, .{ .write = ")" });
+        try frames.append(allocator, .{ .expr = callee_idx });
+        try frames.append(allocator, .{ .write = "(" });
+    } else {
+        try frames.append(allocator, .{ .expr = callee_idx });
+    }
 }
 
-test "a local live into a shared continuation from two arms merges there" {
-    const gpa = std.testing.allocator;
-    var store = LirStore.init(gpa);
-    defer store.deinit();
-    // `v = if c then 1 else 2; ret v`, with both arms reaching one shared
-    // return statement.
-    const c = try store.addLocal(.{ .layout_idx = .bool });
-    const v = try store.addLocal(.{ .layout_idx = .u8 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = v } }, .test_fixture);
-    const literal = struct {
-        fn add(s: *LirStore, target: LocalId, value: i64, next: CFStmtId) Allocator.Error!CFStmtId {
-            return s.addCFStmt(.{ .assign_literal = .{ .target = target, .value = .{ .i64_literal = .{ .value = value, .layout_idx = .u8 } }, .next = next } }, .test_fixture);
-        }
-    }.add;
-    const then_arm = try literal(&store, v, 1, ret);
-    const else_arm = try literal(&store, v, 2, ret);
-    const body = try store.addCFStmt(.{ .switch_stmt = .{
-        .cond = c,
-        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = then_arm }}),
-        .default_branch = else_arm,
-    } }, .test_fixture);
+/// Emit every segment of one flattened field-access path.
+/// Keeping the span in one frame makes emitter stack usage independent of path
+/// length.
+fn emitFieldAccessSuffix(self: *Self, segments: Expr.FieldAccessSegment.Span) EmitError!void {
+    const segment_count = segments.len;
+    for (0..segment_count) |position| {
+        const segment_idx = self.module_env.store.fieldAccessSegmentAt(segments, @intCast(position));
+        const segment = self.module_env.store.getFieldAccessSegment(segment_idx);
+        try self.write(switch (segment.mode) {
+            .required => ".",
+            .optional => ".?",
+        });
+        try self.write(self.module_env.getIdent(segment.name));
+    }
+}
 
-    const SharedReturn = struct {
-        inner: TestOps,
-        shared: CFStmtId,
+/// Emit decoded string bytes as one valid, unambiguous Roc string literal.
+/// Canonical CIR stores literal contents after escape processing, so the
+/// emitter must restore every syntactically significant byte rather than
+/// writing the decoded contents verbatim.
+fn emitStringBytes(self: *Self, bytes: []const u8) EmitError!void {
+    for (bytes) |byte| {
+        switch (byte) {
+            '\n' => try self.write("\\n"),
+            '\r' => try self.write("\\r"),
+            '\t' => try self.write("\\t"),
+            '\\' => try self.write("\\\\"),
+            '"' => try self.write("\\\""),
+            '$' => try self.write("\\$"),
+            else => if (byte < 0x20 or byte == 0x7f) {
+                try self.output.print(self.allocator, "\\u({x})", .{byte});
+            } else {
+                try self.output.append(self.allocator, byte);
+            },
+        }
+    }
+}
 
-        pub fn isCandidate(self: @This(), local: LocalId) bool {
-            return self.inner.isCandidate(local);
-        }
-        pub fn paramAccess(self: @This(), index: usize) Access {
-            return self.inner.paramAccess(index);
-        }
-        pub fn borrowParam(self: @This(), index: usize) bool {
-            return self.inner.borrowParam(index);
-        }
-        pub fn memoryView(self: @This(), assign: @FieldType(lir.LIR.CFStmt, "assign_ref")) ?View {
-            return self.inner.memoryView(assign);
-        }
-        pub fn callAccess(self: @This(), call: @FieldType(lir.LIR.CFStmt, "assign_call"), operand: CallOperand) Access {
-            return self.inner.callAccess(call, operand);
-        }
-        pub fn isShared(self: @This(), stmt: CFStmtId) bool {
-            return stmt == self.shared;
-        }
-        pub fn returnAccess(self: @This()) Access {
-            return self.inner.returnAccess();
-        }
+fn emitStringLiteral(self: *Self, bytes: []const u8) EmitError!void {
+    try self.write("\"");
+    try self.emitStringBytes(bytes);
+    try self.write("\"");
+}
+
+/// Emit a small decimal from its exact base-10 representation. Using integer
+/// division here loses leading fractional zeroes (and overflows for powers
+/// larger than the numerator's integer width), so place the decimal point in
+/// the numerator's digit string instead.
+fn emitSmallDec(self: *Self, value: CIR.SmallDecValue) EmitError!void {
+    const magnitude: u16 = @abs(value.numerator);
+    var digit_buffer: [5]u8 = undefined;
+    const digits = std.fmt.bufPrint(&digit_buffer, "{d}", .{magnitude}) catch unreachable; // a u16 has at most 5 decimal digits
+    const power: usize = value.denominator_power_of_ten;
+
+    if (value.numerator < 0) try self.write("-");
+    if (power == 0) {
+        try self.write(digits);
+    } else if (power >= digits.len) {
+        try self.write("0.");
+        var padding = power - digits.len;
+        while (padding > 0) : (padding -= 1) try self.write("0");
+        try self.write(digits);
+    } else {
+        const decimal_point = digits.len - power;
+        try self.write(digits[0..decimal_point]);
+        try self.write(".");
+        try self.write(digits[decimal_point..]);
+    }
+}
+
+/// Emit an i128 fixed-point decimal while preserving the sign of values whose
+/// integer part truncates to zero. Typed fractional literals must retain a
+/// fractional component so they cannot be reparsed as typed integers.
+fn emitScaledDec(self: *Self, value: i128, force_fraction: bool) EmitError!void {
+    const scale: i128 = RocDec.one_point_zero_i128;
+    const whole = i128h.divTrunc_i128(value, scale);
+    const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
+
+    if (value < 0 and whole == 0) try self.write("-");
+    try self.write(try self.formatI128(whole));
+
+    if (frac_part != 0) {
+        try self.write(".");
+        const frac_str = try self.formatU128(frac_part);
+        var pad: usize = @as(usize, RocDec.decimal_places) - frac_str.len;
+        while (pad > 0) : (pad -= 1) try self.write("0");
+        try self.write(frac_str);
+    } else if (force_fraction) {
+        try self.write(".0");
+    }
+}
+
+fn emitExprFrame(
+    self: *Self,
+    expr_idx: Expr.Idx,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+) EmitError!void {
+    const expr = self.module_env.store.getExpr(expr_idx);
+    switch (expr) {
+        .e_num => |num| try self.emitIntValue(num.value),
+        .e_frac_f32 => |frac| try self.output.print(self.allocator, "{d}f32", .{frac.value}),
+        .e_frac_f64 => |frac| try self.output.print(self.allocator, "{d}f64", .{frac.value}),
+        .e_dec => |dec| try self.emitScaledDec(dec.value.num, false),
+        .e_dec_small => |small| try self.emitSmallDec(small.value),
+        .e_num_from_numeral => try self.emitRecordedNumeral(ModuleEnv.nodeIdxFrom(expr_idx), null),
+        .e_typed_int => |typed| {
+            try self.emitIntValue(typed.value);
+            try self.output.print(self.allocator, ".{s}", .{self.module_env.getIdent(typed.type_name)});
+        },
+        .e_typed_frac => |typed| {
+            try self.emitScaledDec(typed.value.toI128(), true);
+            try self.output.print(self.allocator, ".{s}", .{self.module_env.getIdent(typed.type_name)});
+        },
+        .e_typed_num_from_numeral => |typed| try self.emitRecordedNumeral(ModuleEnv.nodeIdxFrom(expr_idx), typed.type_name),
+        .e_str_segment => |seg| try self.emitStringLiteral(self.module_env.common.getString(seg.literal)),
+        .e_bytes_literal => |bytes| try self.output.print(self.allocator, "<bytes:{d}>", .{self.module_env.common.getString(bytes.literal).len}),
+        .e_str => |str| {
+            const segments = self.module_env.store.sliceExpr(str.span);
+            try self.write("\"");
+            for (segments) |segment_idx| {
+                const segment = self.module_env.store.getExpr(segment_idx);
+                std.debug.assert(segment == .e_str_segment);
+                try self.emitStringBytes(self.module_env.common.getString(segment.e_str_segment.literal));
+            }
+            try self.write("\"");
+        },
+        .e_lookup_local => |lookup| {
+            if (self.capture_renames.get(lookup.pattern_idx)) |renamed| {
+                try self.emitIdent(renamed);
+            } else {
+                try frames.append(allocator, .{ .pattern = lookup.pattern_idx });
+            }
+        },
+        .e_lookup_external => |ext| try self.emitIdent(self.module_env.getIdent(ext.ident_idx)),
+        .e_lookup_associated_local => |lookup| try self.output.print(
+            self.allocator,
+            "{s}.{s}",
+            .{ self.module_env.getIdent(lookup.type_ident), self.module_env.getIdent(lookup.item_ident) },
+        ),
+        .e_lookup_associated => |lookup| try self.output.print(
+            self.allocator,
+            "{s}.{s}",
+            .{ self.module_env.getIdent(lookup.type_ident), self.module_env.getIdent(lookup.item_ident) },
+        ),
+        .e_lookup_associated_resolved => |lookup| try self.emitIdent(self.module_env.getIdent(lookup.source_ident)),
+        .e_list => |list| {
+            try self.write("[");
+            try pushExprList(frames, allocator, self.module_env.store.sliceExpr(list.elems), "]", ", ");
+        },
+        .e_empty_list => try self.write("[]"),
+        .e_tuple => |tuple| {
+            try self.write("(");
+            try pushExprList(frames, allocator, self.module_env.store.sliceExpr(tuple.elems), ")", ", ");
+        },
+        .e_tuple_access => |tuple_access| {
+            try frames.append(allocator, .{ .write = try std.fmt.allocPrint(allocator, ".{d}", .{tuple_access.elem_index}) });
+            try frames.append(allocator, .{ .expr = tuple_access.tuple });
+        },
+        .e_if => |if_expr| {
+            try frames.append(allocator, .{ .expr = if_expr.final_else });
+            try frames.append(allocator, .{ .write = " else " });
+            const branches = self.module_env.store.sliceIfBranches(if_expr.branches);
+            var i = branches.len;
+            while (i > 0) {
+                i -= 1;
+                const branch = self.module_env.store.getIfBranch(branches[i]);
+                try frames.append(allocator, .{ .expr = branch.body });
+                try frames.append(allocator, .{ .write = ") " });
+                try frames.append(allocator, .{ .expr = branch.cond });
+                try frames.append(allocator, .{ .write = if (i > 0) " else if (" else "if (" });
+            }
+        },
+        .e_call => |call| {
+            try pushExprList(frames, allocator, self.module_env.store.sliceExpr(call.args), ")", ", ");
+            try frames.append(allocator, .{ .write = "(" });
+            try self.pushCallCalleeFrames(call.func, frames, allocator);
+        },
+        .e_record => |record| {
+            try self.write("{ ");
+            try frames.append(allocator, .{ .write = " }" });
+            const fields = self.module_env.store.sliceRecordFields(record.fields);
+            const unsets = self.module_env.store.sliceUnsetFields(record.unsets);
+            try self.pushRecordFieldsAndUnsets(frames, allocator, fields, unsets);
+            if (record.ext) |ext_idx| {
+                // The extension must render FIRST (frames pop last-pushed
+                // first): the parser only accepts `..ext` immediately after
+                // `{`, so `{ ..base, f: 1 }` re-parses while
+                // `{ f: 1, ..base }` does not. This matches fmt's ordering.
+                if (fields.len > 0 or unsets.len > 0) try frames.append(allocator, .{ .write = ", " });
+                try frames.append(allocator, .{ .expr = ext_idx });
+                try frames.append(allocator, .{ .write = ".." });
+            }
+        },
+        .e_empty_record => try self.write("{}"),
+        .e_block => |block| {
+            try self.write("{\n");
+            self.indent_level += 1;
+            try frames.append(allocator, .{ .write = "}" });
+            try frames.append(allocator, .indent);
+            try frames.append(allocator, .dec_indent);
+            try frames.append(allocator, .{ .write = "\n" });
+            try frames.append(allocator, .{ .expr = block.final_expr });
+            try frames.append(allocator, .indent);
+            const stmts = self.module_env.store.sliceStatements(block.stmts);
+            var i = stmts.len;
+            while (i > 0) {
+                i -= 1;
+                try frames.append(allocator, .{ .write = "\n" });
+                try frames.append(allocator, .{ .statement = stmts[i] });
+                try frames.append(allocator, .indent);
+            }
+        },
+        .e_tag => |tag| {
+            try self.emitTagName(self.module_env.getIdent(tag.name));
+            const args = self.module_env.store.sliceExpr(tag.args);
+            if (args.len > 0) {
+                try self.write("(");
+                try pushExprList(frames, allocator, args, ")", ", ");
+            }
+        },
+        .e_zero_argument_tag => |tag| try self.emitTagName(self.module_env.getIdent(tag.name)),
+        .e_closure => |closure| try frames.append(allocator, .{ .expr = closure.lambda_idx }),
+        .e_lambda => |lambda| {
+            try self.write("|");
+            const args = self.module_env.store.slicePatterns(lambda.args);
+            try frames.append(allocator, .{ .expr = lambda.body });
+            try frames.append(allocator, .{ .write = "| " });
+            var i = args.len;
+            while (i > 0) {
+                i -= 1;
+                try frames.append(allocator, .{ .pattern = args[i] });
+                if (i > 0) try frames.append(allocator, .{ .write = ", " });
+            }
+        },
+        .e_binop => |binop| {
+            try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = binop.rhs, .outer_op = binop.op, .side = .right } });
+            try frames.append(allocator, .{ .write = " " });
+            try frames.append(allocator, .{ .write = binopToStr(binop.op) });
+            try frames.append(allocator, .{ .write = " " });
+            try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = binop.lhs, .outer_op = binop.op, .side = .left } });
+        },
+        .e_unary_minus => |unary| {
+            try self.pushUnaryReceiverFrames(unary.expr, frames, allocator);
+            try frames.append(allocator, .{ .write = "-" });
+        },
+        .e_unary_not => |unary| {
+            try self.pushUnaryReceiverFrames(unary.expr, frames, allocator);
+            try frames.append(allocator, .{ .write = "!" });
+        },
+        .e_field_access => |field_access| {
+            try frames.append(allocator, .{ .field_access_suffix = field_access.segments });
+            try self.pushFieldAccessPathReceiverFrames(field_access.receiver, frames, allocator);
+        },
+        .e_method_call => |method_call| {
+            try pushExprList(frames, allocator, self.module_env.store.sliceExpr(method_call.args), ")", ", ");
+            try frames.append(allocator, .{ .write = "(" });
+            try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
+            try frames.append(allocator, .{ .write = "." });
+            try frames.append(allocator, .{ .expr = method_call.receiver });
+        },
+        .e_dispatch_call => |method_call| {
+            // Re-emit in the surface form the dispatch was desugared from
+            // (see `SurfaceOrigin`): printing a desugared `+` back as
+            // `.plus()` would weaken the re-checked program.
+            switch (method_call.surface_origin) {
+                .binop => |op| {
+                    const args = self.module_env.store.sliceExpr(method_call.args);
+                    std.debug.assert(args.len == 1);
+                    try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = args[0], .outer_op = op, .side = .right } });
+                    try frames.append(allocator, .{ .write = " " });
+                    try frames.append(allocator, .{ .write = binopToStr(op) });
+                    try frames.append(allocator, .{ .write = " " });
+                    try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = method_call.receiver, .outer_op = op, .side = .left } });
+                },
+                .unary_minus, .unary_not => {
+                    try self.pushUnaryReceiverFrames(method_call.receiver, frames, allocator);
+                    try frames.append(allocator, .{ .write = if (method_call.surface_origin == .unary_minus) "-" else "!" });
+                },
+                .method_call => {
+                    try pushExprList(frames, allocator, self.module_env.store.sliceExpr(method_call.args), ")", ", ");
+                    try frames.append(allocator, .{ .write = "(" });
+                    try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
+                    try frames.append(allocator, .{ .write = "." });
+                    try frames.append(allocator, .{ .expr = method_call.receiver });
+                },
+            }
+        },
+        .e_interpolation => |interpolation| {
+            try frames.append(allocator, .{ .write = ")" });
+            try pushExprList(frames, allocator, self.module_env.store.sliceExpr(interpolation.parts), "]", ", ");
+            try frames.append(allocator, .{ .write = ", [" });
+            try frames.append(allocator, .{ .expr = interpolation.first });
+            try frames.append(allocator, .{ .write = "<interpolation>(" });
+        },
+        .e_structural_eq => |eq| {
+            const op: Expr.Binop.Op = if (eq.negated) .ne else .eq;
+            try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = eq.rhs, .outer_op = op, .side = .right } });
+            try frames.append(allocator, .{ .write = if (eq.negated) " != " else " == " });
+            try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = eq.lhs, .outer_op = op, .side = .left } });
+        },
+        .e_structural_hash => |h| {
+            try frames.append(allocator, .{ .write = ")" });
+            try frames.append(allocator, .{ .expr = h.hasher });
+            try frames.append(allocator, .{ .write = ".to_hash(" });
+            try frames.append(allocator, .{ .expr = h.value });
+        },
+        .e_method_eq => |eq| {
+            const op: Expr.Binop.Op = if (eq.negated) .ne else .eq;
+            try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = eq.rhs, .outer_op = op, .side = .right } });
+            try frames.append(allocator, .{ .write = if (eq.negated) " != " else " == " });
+            try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = eq.lhs, .outer_op = op, .side = .left } });
+        },
+        .e_type_method_call => |method_call| {
+            try pushExprList(frames, allocator, self.module_env.store.sliceExpr(method_call.args), ")", ", ");
+            try frames.append(allocator, .{ .write = "(" });
+            try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
+            try frames.append(allocator, .{ .write = "." });
+            const alias_str = try std.fmt.allocPrint(allocator, "__type_dispatch_{d}__", .{@backingInt(method_call.type_dispatch_stmt)});
+            try frames.append(allocator, .{ .write = alias_str });
+        },
+        .e_type_dispatch_call => |method_call| {
+            try pushExprList(frames, allocator, self.module_env.store.sliceExpr(method_call.args), ")", ", ");
+            try frames.append(allocator, .{ .write = "(" });
+            try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
+            try frames.append(allocator, .{ .write = "." });
+            const alias_str = switch (method_call.owner) {
+                .statement => |stmt| try std.fmt.allocPrint(allocator, "__type_dispatch_{d}__", .{@backingInt(stmt)}),
+                .dispatcher => |dispatcher| try std.fmt.allocPrint(allocator, "__type_dispatch_var_{d}__", .{@backingInt(dispatcher)}),
+            };
+            try frames.append(allocator, .{ .write = alias_str });
+        },
+        .e_runtime_error => try self.write("<runtime_error>"),
+        .e_crash => |crash| try self.output.print(self.allocator, "crash \"{s}\"", .{self.module_env.common.getString(crash.msg)}),
+        .e_dbg => |dbg| {
+            try frames.append(allocator, .{ .expr = dbg.expr });
+            try frames.append(allocator, .{ .write = "dbg " });
+        },
+        .e_expect_err => try self.write("<expect_err>"),
+        .e_expect => |expect| {
+            try frames.append(allocator, .{ .expr = expect.body });
+            try frames.append(allocator, .{ .write = "expect " });
+        },
+        .e_ellipsis => try self.write("..."),
+        .e_anno_only => try self.write("<anno_only>"),
+        .e_derived_method => try self.write("<derived_method>"),
+        .e_return => |ret| {
+            try frames.append(allocator, .{ .expr = ret.expr });
+            try frames.append(allocator, .{ .write = "return " });
+        },
+        .e_break => try self.write("break"),
+        .e_match => |match| {
+            try self.write("match ");
+            try frames.append(allocator, .{ .write = "}" });
+            try frames.append(allocator, .indent);
+            try frames.append(allocator, .dec_indent);
+            const branches = self.module_env.store.sliceMatchBranches(match.branches);
+            var i = branches.len;
+            while (i > 0) {
+                i -= 1;
+                const branch = self.module_env.store.getMatchBranch(branches[i]);
+                try frames.append(allocator, .{ .write = "\n" });
+                try frames.append(allocator, .{ .expr = branch.value });
+                try frames.append(allocator, .{ .write = " => " });
+                if (branch.guard) |guard_idx| {
+                    try frames.append(allocator, .{ .expr = guard_idx });
+                    try frames.append(allocator, .{ .write = " if " });
+                }
+                const patterns = self.module_env.store.sliceMatchBranchPatterns(branch.patterns);
+                var j = patterns.len;
+                while (j > 0) {
+                    j -= 1;
+                    try frames.append(allocator, .{ .pattern = self.module_env.store.getMatchBranchPattern(patterns[j]).pattern });
+                    if (j > 0) try frames.append(allocator, .{ .write = " | " });
+                }
+                try frames.append(allocator, .indent);
+            }
+            try frames.append(allocator, .inc_indent);
+            try frames.append(allocator, .{ .write = " {\n" });
+            try frames.append(allocator, .{ .expr = match.cond });
+        },
+        .e_nominal => |nominal| try frames.append(allocator, .{ .expr = nominal.backing_expr }),
+        .e_nominal_external => |nominal| try frames.append(allocator, .{ .expr = nominal.backing_expr }),
+        .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached Roc source emission", .{}),
+        .e_lookup_required => try self.write("<required>"),
+        .e_for => |for_expr| {
+            try frames.append(allocator, .{ .expr = for_expr.body });
+            try frames.append(allocator, .{ .write = " " });
+            try frames.append(allocator, .{ .expr = for_expr.expr });
+            try frames.append(allocator, .{ .write = " in " });
+            try frames.append(allocator, .{ .pattern = for_expr.patt });
+            try frames.append(allocator, .{ .write = switch (for_expr.kind) {
+                .iter => "for ",
+                .stream => "for! ",
+            } });
+        },
+        .e_hosted_lambda => try self.write("<hosted_lambda>"),
+        .e_run_low_level => |run_ll| try self.output.print(self.allocator, "<run_low_level: {s}>", .{@tagName(run_ll.op)}),
+    }
+}
+
+fn emitPatternFrame(
+    self: *Self,
+    pattern_idx: CIR.Pattern.Idx,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+) EmitError!void {
+    const pattern = self.module_env.store.getPattern(pattern_idx);
+    switch (pattern) {
+        .assign => |ident| try self.emitIdent(self.module_env.getIdent(ident.ident)),
+        .var_assign => |ident| {
+            try self.write("var ");
+            try self.emitIdent(self.module_env.getIdent(ident.ident));
+        },
+        .underscore => try self.write("_"),
+        .num_literal => |num| try self.emitIntValue(num.value),
+        .num_from_numeral_literal => try self.emitRecordedNumeral(ModuleEnv.nodeIdxFrom(pattern_idx), null),
+        .str_literal => |str| try self.output.print(self.allocator, "\"{s}\"", .{self.module_env.common.getString(str.literal)}),
+        .str_interpolation => |str| {
+            try self.write("\"");
+            try self.write(self.module_env.common.getString(str.prefix));
+            var step_offset: u32 = 0;
+            while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                const step = self.module_env.store.getStrPatternStep(str.steps, step_offset);
+                try self.write("${");
+                if (step.capture) |capture_idx| {
+                    const capture = self.module_env.store.getPattern(capture_idx);
+                    if (std.meta.activeTag(capture) == .assign) {
+                        try self.emitIdent(self.module_env.getIdent(capture.assign.ident));
+                    } else {
+                        try self.write("<capture>");
+                    }
+                } else {
+                    try self.write("_");
+                }
+                try self.write("}");
+                try self.write(self.module_env.common.getString(step.delimiter));
+            }
+            try self.write("\"");
+        },
+        .applied_tag => |tag| {
+            try self.emitTagName(self.module_env.getIdent(tag.name));
+            const args = self.module_env.store.slicePatterns(tag.args);
+            if (args.len > 0) {
+                try self.write("(");
+                try pushPatternList(frames, allocator, args, ")", ", ");
+            }
+        },
+        .record_destructure => |record| {
+            const destructs = self.module_env.store.sliceRecordDestructs(record.destructs);
+            if (destructs.len == 0) {
+                try self.write("{}");
+            } else {
+                try self.write("{ ");
+                try frames.append(allocator, .{ .write = " }" });
+                var i = destructs.len;
+                while (i > 0) {
+                    i -= 1;
+                    try frames.append(allocator, .{ .pattern_record_field = .{ .destruct_idx = destructs[i], .index = i } });
+                    if (i > 0) try frames.append(allocator, .{ .write = ", " });
+                }
+            }
+        },
+        .tuple => |t| {
+            try self.write("(");
+            try pushPatternList(frames, allocator, self.module_env.store.slicePatterns(t.patterns), ")", ", ");
+        },
+        .list => |l| {
+            try self.write("[");
+            try frames.append(allocator, .{ .write = "]" });
+            if (l.rest_info) |rest| {
+                if (rest.pattern) |rest_pat| {
+                    try frames.append(allocator, .{ .pattern = rest_pat });
+                }
+                try frames.append(allocator, .{ .write = ".." });
+                if (self.module_env.store.slicePatterns(l.patterns).len > 0) try frames.append(allocator, .{ .write = ", " });
+            }
+            const elems = self.module_env.store.slicePatterns(l.patterns);
+            var i = elems.len;
+            while (i > 0) {
+                i -= 1;
+                try frames.append(allocator, .{ .pattern = elems[i] });
+                if (i > 0) try frames.append(allocator, .{ .write = ", " });
+            }
+        },
+        .as => |as_pat| {
+            try frames.append(allocator, .{ .write = self.module_env.getIdent(as_pat.ident) });
+            try frames.append(allocator, .{ .write = " as " });
+            try frames.append(allocator, .{ .pattern = as_pat.pattern });
+        },
+        .runtime_error => try self.write("<pattern_error>"),
+        .nominal => |nom| try frames.append(allocator, .{ .pattern = nom.backing_pattern }),
+        .nominal_external => |nom| try frames.append(allocator, .{ .pattern = nom.backing_pattern }),
+        .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached Roc source emission", .{}),
+        .small_dec_literal => |dec| try self.emitSmallDec(dec.value),
+        .dec_literal => |dec| try self.emitScaledDec(dec.value.num, false),
+        .frac_f32_literal => |frac| {
+            try self.write(try self.formatF32(frac.value));
+            try self.write("f32");
+        },
+        .frac_f64_literal => |frac| {
+            try self.write(try self.formatF64(frac.value));
+            try self.write("f64");
+        },
+    }
+}
+
+fn emitPatternRecordFieldFrame(
+    self: *Self,
+    destruct_idx: CIR.Pattern.RecordDestruct.Idx,
+    _: usize,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+) EmitError!void {
+    const destruct = self.module_env.store.getRecordDestruct(destruct_idx);
+    const name = self.module_env.getIdent(destruct.label);
+    try self.write(name);
+    switch (destruct.kind) {
+        .Required => |pat_idx| {
+            const inner_pat = self.module_env.store.getPattern(pat_idx);
+            const shorthand = if (inner_pat == .assign)
+                std.mem.eql(u8, name, self.module_env.getIdent(inner_pat.assign.ident))
+            else
+                false;
+            if (!shorthand) {
+                try frames.append(allocator, .{ .pattern = pat_idx });
+                try frames.append(allocator, .{ .write = ": " });
+            }
+        },
+        .SubPattern => |pat_idx| {
+            try frames.append(allocator, .{ .pattern = pat_idx });
+            try frames.append(allocator, .{ .write = ": " });
+        },
+        .Rest => |pat_idx| {
+            try frames.append(allocator, .{ .pattern = pat_idx });
+            try frames.append(allocator, .{ .write = ".." });
+        },
+    }
+}
+
+fn emitStatementFrame(
+    self: *Self,
+    stmt_idx: CIR.Statement.Idx,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+) EmitError!void {
+    const stmt = self.module_env.store.getStatement(stmt_idx);
+    if (std.meta.activeTag(stmt) != .s_decl) return;
+    const decl = stmt.s_decl;
+    try self.addPatternToScope(decl.pattern);
+    try frames.append(allocator, .{ .expr = decl.expr });
+    try frames.append(allocator, .{ .write = " = " });
+    try frames.append(allocator, .{ .pattern = decl.pattern });
+}
+
+fn binopOpToToken(op: Expr.Binop.Op) parse.tokenize.Token.Tag {
+    return switch (op) {
+        .add => .OpPlus,
+        .sub => .OpBinaryMinus,
+        .mul => .OpStar,
+        .div => .OpSlash,
+        .rem => .OpPercent,
+        .lt => .OpLessThan,
+        .gt => .OpGreaterThan,
+        .le => .OpLessThanOrEq,
+        .ge => .OpGreaterThanOrEq,
+        .eq => .OpEquals,
+        .ne => .OpNotEquals,
+        .div_trunc => .OpDoubleSlash,
+        .@"and" => .OpAnd,
+        .@"or" => .OpOr,
+        .range_exclusive => .OpDoubleDotLessThan,
+        .range_inclusive => .OpDoubleDotEquals,
     };
-    var value_plan = Self.init(gpa);
-    defer value_plan.deinit();
-    try value_plan.plan(&store, try store.addLocalSpan(&.{c}), try store.addLocalSpan(&.{v}), body, SharedReturn{ .inner = .{ .store = &store }, .shared = ret });
-    try std.testing.expectEqual(Rep.merged, value_plan.rep(v));
-    try std.testing.expectEqualSlices(LocalId, &.{v}, value_plan.mergeLocals(ret));
 }
 
-test "issue 12505 memory aliases share immutable parameters but retain mutable snapshots" {
-    const gpa = std.testing.allocator;
-    var store = LirStore.init(gpa);
-    defer store.deinit();
-    // The test policy admits aliases of an addressable layout. Production
-    // admission uses committed struct and inline tag layouts instead.
-    const input = try store.addLocal(.{ .layout_idx = .str });
-    const replacement = try store.addLocal(.{ .layout_idx = .str });
-    const snapshot = try store.addLocal(.{ .layout_idx = .str });
-    const alias = try store.addLocal(.{ .layout_idx = .str });
-    const params = try store.addLocalSpan(&.{ input, replacement });
-    const frame = try store.addLocalSpan(&.{ snapshot, alias });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = alias } }, .test_fixture);
-    const read_snapshot = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = lir.LIR.RefOp.local(snapshot), .next = ret } }, .test_fixture);
-    const original = try store.addCFStmt(.{ .assign_ref = .{ .target = snapshot, .op = lir.LIR.RefOp.local(input), .next = read_snapshot } }, .test_fixture);
-    var plan_value = Self.init(gpa);
-    defer plan_value.deinit();
-    const ops = TestOps{ .store = &store, .local_alias_views = true };
-    try plan_value.plan(&store, params, frame, original, ops);
-    try std.testing.expect(plan_value.place(input) == .parameter);
-    try std.testing.expectEqual(input, plan_value.place(snapshot).view.source);
-    try std.testing.expectEqual(input, plan_value.place(alias).view.source);
-
-    // Replan the same local ids: snapshot must keep the old input bytes when
-    // input changes; the later alias can still share the snapshot's storage.
-    const mutate = try store.addCFStmt(.{ .set_local = .{ .target = input, .value = replacement, .mode = .replace_existing, .next = read_snapshot } }, .test_fixture);
-    const modified = try store.addCFStmt(.{ .assign_ref = .{ .target = snapshot, .op = lir.LIR.RefOp.local(input), .next = mutate } }, .test_fixture);
-    try plan_value.plan(&store, params, frame, modified, ops);
-    try std.testing.expect(plan_value.place(input) == .slot);
-    try std.testing.expect(plan_value.place(snapshot) == .slot);
-    try std.testing.expectEqual(snapshot, plan_value.place(alias).view.source);
-
-    // A parameter is initialized by the prologue even when its incoming
-    // value is unused. A body assignment may not turn its slot into a view.
-    const replace_parameter = try store.addCFStmt(.{ .assign_ref = .{ .target = input, .op = lir.LIR.RefOp.local(replacement), .next = original } }, .test_fixture);
-    try plan_value.plan(&store, params, frame, replace_parameter, ops);
-    try std.testing.expect(plan_value.place(input) == .slot);
-
-    // A call may read the snapshot while overwriting its former owner.
-    // Keeping those bytes separate also preserves the result's noalias ABI.
-    const callee_param = try store.addLocal(.{ .layout_idx = .str });
-    const callee = try store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(1), .args = try store.addLocalSpan(&.{callee_param}), .ret_layout = .str }, .none);
-    const overwrite = try store.addCFStmt(.{ .assign_call = .{ .target = input, .proc = callee, .args = try store.addLocalSpan(&.{snapshot}), .next = read_snapshot } }, .test_fixture);
-    const before_call = try store.addCFStmt(.{ .assign_ref = .{ .target = snapshot, .op = lir.LIR.RefOp.local(input), .next = overwrite } }, .test_fixture);
-    try plan_value.plan(&store, params, frame, before_call, ops);
-    try std.testing.expect(plan_value.place(input) == .slot);
-    try std.testing.expect(plan_value.place(snapshot) == .slot);
-    try std.testing.expectEqual(snapshot, plan_value.place(alias).view.source);
-
-    // Multiple incoming writes require a snapshot even when both incoming
-    // values are themselves immutable.
-    var join_points = JoinPointIds{};
-    const join_id = join_points.fresh();
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
-    const first = try store.addCFStmt(.{ .set_local = .{ .target = snapshot, .value = input, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
-    const second = try store.addCFStmt(.{ .set_local = .{ .target = snapshot, .value = replacement, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
-    const cond = try store.addLocal(.{ .layout_idx = .bool });
-    const choose = try store.addCFStmt(.{ .switch_stmt = .{ .cond = cond, .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = first }}), .default_branch = second } }, .test_fixture);
-    const join = try store.addCFStmt(.{ .join = .{ .id = join_id, .params = try store.addLocalSpan(&.{snapshot}), .body = read_snapshot, .remainder = choose } }, .test_fixture);
-    try plan_value.plan(&store, try store.addLocalSpan(&.{ input, replacement, cond }), frame, join, ops);
-    try std.testing.expect(plan_value.place(snapshot) == .slot);
-    try std.testing.expect(plan_value.place(alias) == .slot);
+/// Binding powers for re-emission parenthesization come straight from the
+/// parser's single binding-power table, so a re-emitted operator expression
+/// always reparses to the same tree. (Every `Binop.Op` maps to an in-range
+/// operator token with non-zero binding power, so the lookup never returns null.)
+fn binopBp(op: Expr.Binop.Op) parse.Parser.BinOpBp {
+    return parse.Parser.getTokenBP(binopOpToToken(op)).?;
 }
 
-test "issue 12819 single-definition join views are refreshed on each loop iteration" {
-    const gpa = std.testing.allocator;
-    var store = LirStore.init(gpa);
-    defer store.deinit();
-    const input = try store.addLocal(.{ .layout_idx = .str });
-    const done = try store.addLocal(.{ .layout_idx = .bool });
-    const joined = try store.addLocal(.{ .layout_idx = .str });
-    const alias = try store.addLocal(.{ .layout_idx = .str });
-    const chained = try store.addLocal(.{ .layout_idx = .str });
-    var join_points = JoinPointIds{};
-    const join_id = join_points.fresh();
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
-    const initialize = try store.addCFStmt(.{ .set_local = .{ .target = joined, .value = input, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = chained } }, .test_fixture);
-    const branch = try store.addCFStmt(.{ .switch_stmt = .{ .cond = done, .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = ret }}), .default_branch = initialize } }, .test_fixture);
-    const chain = try store.addCFStmt(.{ .assign_ref = .{ .target = chained, .op = .local(alias), .next = branch } }, .test_fixture);
-    const read = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .local(joined), .next = chain } }, .test_fixture);
-    const body = try store.addCFStmt(.{ .join = .{ .id = join_id, .params = try store.addLocalSpan(&.{joined}), .body = read, .remainder = initialize } }, .test_fixture);
-    var value_plan = Self.init(gpa);
-    defer value_plan.deinit();
-    try value_plan.plan(&store, try store.addLocalSpan(&.{ input, done }), try store.addLocalSpan(&.{ joined, alias, chained }), body, TestOps{ .store = &store, .local_alias_views = true });
-    try std.testing.expectEqual(joined, value_plan.place(alias).view.source);
-    try std.testing.expectEqual(joined, value_plan.place(chained).view.source);
+comptime {
+    // Enforce the invariant `binopBp`'s doc comment states: every `Binop.Op` maps
+    // to an operator token with a defined binding power, so the `.?` above can
+    // never panic. A future `binopOpToToken` mapping onto a non-operator (or
+    // zero-binding-power) token becomes a compile error here instead of a runtime
+    // crash during re-emission.
+    for (@typeInfo(Expr.Binop.Op).@"enum".field_values) |field_value| {
+        const op: Expr.Binop.Op = @fromBackingInt(@intCast(field_value));
+        std.debug.assert(parse.Parser.getTokenBP(binopOpToToken(op)) != null);
+    }
+}
+
+const EmitError = std.mem.Allocator.Error || std.fmt.BufPrintError;
+
+fn emitRecordedNumeral(self: *Self, node_idx: CIR.Node.Idx, maybe_type_name: ?base.Ident.Idx) EmitError!void {
+    const literal = self.module_env.numeralLiteralForNode(node_idx) orelse {
+        base.invariant("missing recorded numeral for node {}", .{@backingInt(node_idx)});
+    };
+    if (!literal.isMaterialized()) {
+        base.invariant("cannot emit an unmaterialized numeral for node {}", .{@backingInt(node_idx)});
+    }
+
+    if (literal.isNegative()) {
+        try self.write("-");
+    }
+
+    const before = self.module_env.numeralDigitsBefore(literal);
+    const before_digits = try self.base256ToDecimalDigits(before);
+    defer self.allocator.free(before_digits);
+    try self.write(before_digits);
+
+    if (literal.isFractional()) {
+        try self.write(".");
+        const after = self.module_env.numeralDigitsAfter(literal);
+        const after_digits = try self.base256ToDecimalDigits(after);
+        defer self.allocator.free(after_digits);
+
+        const after_count = std.math.cast(usize, literal.after_decimal_digit_count) orelse {
+            base.invariant("recorded numeral decimal digit count exceeded host usize", .{});
+        };
+        if (after_count <= after_digits.len) {
+            try self.write(after_digits);
+        } else {
+            var pad = after_count - after_digits.len;
+            while (pad > 0) : (pad -= 1) {
+                try self.write("0");
+            }
+            try self.write(after_digits);
+        }
+    }
+
+    if (maybe_type_name) |type_name| {
+        try self.output.print(self.allocator, ".{s}", .{self.module_env.getIdent(type_name)});
+    }
+}
+
+fn base256ToDecimalDigits(self: *Self, bytes_be: []const u8) std.mem.Allocator.Error![]u8 {
+    var start: usize = 0;
+    while (start < bytes_be.len and bytes_be[start] == 0) : (start += 1) {}
+    if (start == bytes_be.len) {
+        return try self.allocator.dupe(u8, "0");
+    }
+
+    const value = try self.allocator.dupe(u8, bytes_be[start..]);
+    defer self.allocator.free(value);
+
+    var digits = std.ArrayList(u8).empty;
+    defer digits.deinit(self.allocator);
+
+    var active = value;
+    while (active.len > 0) {
+        var remainder: u16 = 0;
+        for (active) |*byte| {
+            const next = remainder * 256 + byte.*;
+            byte.* = @intCast(next / 10);
+            remainder = next % 10;
+        }
+        try digits.append(self.allocator, @as(u8, @intCast(remainder)) + '0');
+
+        var trim: usize = 0;
+        while (trim < active.len and active[trim] == 0) : (trim += 1) {}
+        active = active[trim..];
+    }
+
+    const out = try self.allocator.alloc(u8, digits.items.len);
+    for (out, 0..) |*digit, i| {
+        digit.* = digits.items[digits.items.len - 1 - i];
+    }
+    return out;
+}
+
+fn addPatternToScope(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
+    const pattern = self.module_env.store.getPattern(pattern_idx);
+    if (pattern == .assign or pattern == .var_assign) {
+        const ident = if (pattern == .assign) pattern.assign.ident else pattern.var_assign.ident;
+        const name = self.module_env.getIdent(ident);
+        try self.names_in_scope.put(name, {});
+    }
+    // For other pattern types (destructuring, etc.), we could recursively add names
+    // but for now just handling simple assigns
+}
+
+fn emitIntValue(self: *Self, value: CIR.IntValue) Allocator.Error!void {
+    const str = try value.bufPrint(try self.scratchBuffer(40));
+    try self.write(str);
+}
+
+fn emitIndent(self: *Self) Allocator.Error!void {
+    for (0..self.indent_level) |_| {
+        try self.write("\t");
+    }
+}
+
+fn write(self: *Self, str: []const u8) Allocator.Error!void {
+    try self.output.appendSlice(self.allocator, str);
+}
+
+fn scratchBuffer(self: *Self, len: usize) std.mem.Allocator.Error![]u8 {
+    try self.scratch.resize(self.allocator, len);
+    return self.scratch.items;
+}
+
+fn formatI128(self: *Self, value: i128) std.mem.Allocator.Error![]const u8 {
+    const buf = try self.scratchBuffer(40);
+    return i128h.i128_to_str(buf, value).str;
+}
+
+fn formatU128(self: *Self, value: u128) std.mem.Allocator.Error![]const u8 {
+    const buf = try self.scratchBuffer(40);
+    return i128h.u128_to_str(buf, value).str;
+}
+
+fn formatF32(self: *Self, value: f32) std.mem.Allocator.Error![]const u8 {
+    const buf = try self.scratchBuffer(400);
+    return i128h.f32_to_str(buf, value);
+}
+
+fn formatF64(self: *Self, value: f64) std.mem.Allocator.Error![]const u8 {
+    const buf = try self.scratchBuffer(400);
+    return i128h.f64_to_str(buf, value);
+}
+
+/// Emit a tag name, transforming compiler-generated `#` prefix to `C`.
+/// This handles closure tag names like "#1_foo" which become "C1_foo" in output.
+/// The `#` prefix is used internally because it's reserved for comments in Roc
+/// source code, ensuring no collision with user-defined tag names.
+fn emitTagName(self: *Self, name: []const u8) Allocator.Error!void {
+    if (name.len > 0 and name[0] == '#') {
+        // Compiler-generated tag: replace # with C (uppercase for tags)
+        try self.output.append(self.allocator, 'C');
+        try self.output.appendSlice(self.allocator, name[1..]);
+    } else {
+        // Regular user tag: emit as-is
+        try self.output.appendSlice(self.allocator, name);
+    }
+}
+
+/// Emit an identifier, transforming compiler-generated `#` prefix to `c`.
+/// This handles lifted function names like "#1_foo" which become "c1_foo" in output.
+/// The `#` prefix is used internally because it's reserved for comments in Roc
+/// source code, ensuring no collision with user-defined identifiers.
+fn emitIdent(self: *Self, name: []const u8) Allocator.Error!void {
+    if (name.len > 0 and name[0] == '#') {
+        // Compiler-generated ident: replace # with c (lowercase for functions)
+        try self.output.append(self.allocator, 'c');
+        try self.output.appendSlice(self.allocator, name[1..]);
+    } else {
+        // Regular user identifier: emit as-is
+        try self.output.appendSlice(self.allocator, name);
+    }
+}
+
+fn binopToStr(op: Expr.Binop.Op) []const u8 {
+    return switch (op) {
+        .add => "+",
+        .sub => "-",
+        .mul => "*",
+        .div => "/",
+        .div_trunc => "//",
+        .rem => "%",
+        .lt => "<",
+        .gt => ">",
+        .le => "<=",
+        .ge => ">=",
+        .eq => "==",
+        .ne => "!=",
+        .@"and" => "and",
+        .@"or" => "or",
+        .range_exclusive => "..<",
+        .range_inclusive => "..=",
+    };
 }
