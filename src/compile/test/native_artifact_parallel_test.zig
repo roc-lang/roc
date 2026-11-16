@@ -26,7 +26,8 @@ const InspectionError = EmissionError || backend.CompilationError ||
     eval.BuiltinModules.InitError || std.Thread.SpawnError ||
     @import("../coordinator.zig").CoordinatorError;
 
-/// Delegate every callback to the real persistent compiler workers. The first
+/// Delegate every callback to the real persistent compiler workers, for the
+/// wasm generator's bounded waves. The first
 /// full batch from submission `rendezvous_from` on rendezvous, which makes
 /// parallelism an assertion, not a timing guess.
 const ObservedExecutor = struct {
@@ -177,6 +178,120 @@ const ObservedExecutor = struct {
     }
 };
 
+/// Delegate every callback to the real persistent compiler workers, optionally
+/// holding each completion back until every outstanding task has completed and
+/// then returning them in descending task order. Native code generation runs
+/// ordered runs, whose drain tasks each compile any number of procedures, so
+/// the owner sees completions late and out of order while lanes keep
+/// claiming work.
+const DelayedExecutor = struct {
+    inner: tasks.Executor,
+    reverse: bool,
+    session: ?tasks.Session = null,
+    slots: [4]?WrappedTask = @splat(null),
+    completions: [4]tasks.Completion = undefined,
+    buffered: usize = 0,
+    outstanding: usize = 0,
+    submitted: usize = 0,
+    received: usize = 0,
+    lanes: std.atomic.Value(usize) = .init(0),
+
+    const WrappedTask = struct {
+        owner: *DelayedExecutor,
+        task: tasks.Task,
+
+        fn run(context: *anyopaque, worker: tasks.Worker) ?*anyopaque {
+            const self: *WrappedTask = @ptrCast(@alignCast(context));
+            _ = self.owner.lanes.fetchOr(@as(usize, 1) << @intCast(worker.id % @bitSizeOf(usize)), .acq_rel);
+            return self.task.run(self.task.context, worker);
+        }
+    };
+
+    fn begin(context: *anyopaque) std.mem.Allocator.Error!*anyopaque {
+        const self: *DelayedExecutor = @ptrCast(@alignCast(context));
+        std.debug.assert(self.session == null);
+        self.session = try self.inner.begin();
+        return context;
+    }
+
+    fn submit(context: *anyopaque, _: *anyopaque, task: tasks.Task) std.mem.Allocator.Error!void {
+        const self: *DelayedExecutor = @ptrCast(@alignCast(context));
+        for (&self.slots) |*slot| {
+            if (slot.* != null) continue;
+            slot.* = .{ .owner = self, .task = task };
+            errdefer slot.* = null;
+            try self.session.?.submit(.{ .id = task.id, .context = &slot.*.?, .run = WrappedTask.run });
+            self.submitted += 1;
+            self.outstanding += 1;
+            return;
+        }
+        @panic("DelayedExecutor.submit: every slot holds an outstanding task");
+    }
+
+    fn receive(context: *anyopaque, _: *anyopaque) tasks.Completion {
+        const self: *DelayedExecutor = @ptrCast(@alignCast(context));
+        const completion = if (self.reverse) blk: {
+            if (self.buffered == 0) {
+                while (self.outstanding > 0) {
+                    self.completions[self.buffered] = self.session.?.receive();
+                    self.buffered += 1;
+                    self.outstanding -= 1;
+                }
+                std.mem.sort(tasks.Completion, self.completions[0..self.buffered], {}, struct {
+                    fn lessThan(_: void, lhs: tasks.Completion, rhs: tasks.Completion) bool {
+                        return lhs.id < rhs.id;
+                    }
+                }.lessThan);
+            }
+            self.buffered -= 1;
+            break :blk self.completions[self.buffered];
+        } else blk: {
+            self.outstanding -= 1;
+            break :blk self.session.?.receive();
+        };
+        for (&self.slots) |*slot| {
+            if (slot.*) |wrapped| {
+                if (wrapped.task.id == completion.id) {
+                    slot.* = null;
+                    self.received += 1;
+                    return completion;
+                }
+            }
+        }
+        @panic("DelayedExecutor.receive: completion matches no submitted task");
+    }
+
+    fn tryReceive(_: *anyopaque, _: *anyopaque) ?tasks.Completion {
+        return null;
+    }
+
+    fn end(context: *anyopaque, _: *anyopaque) void {
+        const self: *DelayedExecutor = @ptrCast(@alignCast(context));
+        std.debug.assert(self.outstanding == 0 and self.buffered == 0);
+        self.session.?.end();
+        self.session = null;
+    }
+
+    fn executor(self: *DelayedExecutor) tasks.Executor {
+        return .{
+            .context = self,
+            .worker_count = self.inner.worker_count,
+            .lane_count = self.inner.lane_count,
+            .beginFn = begin,
+            .submitFn = submit,
+            .receiveFn = receive,
+            .tryReceiveFn = tryReceive,
+            .endFn = end,
+        };
+    }
+
+    fn verify(self: *const DelayedExecutor) AssertionError!void {
+        try std.testing.expect(self.submitted > 0);
+        try std.testing.expectEqual(self.submitted, self.received);
+        try std.testing.expect(self.lanes.load(.acquire) != 0);
+    }
+};
+
 fn expectLiteral(retained: *const Native.Retained) (std.mem.Allocator.Error || AssertionError)!void {
     const data = try retained.dataItems(allocator);
     defer allocator.free(data);
@@ -279,10 +394,11 @@ fn inspectHelpers(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.Lo
     };
 }
 
-/// Which phase's first full batch the observed workers must run together.
-const RendezvousPhase = enum { procedures, helpers };
+/// Which program an inspection compiles: the one whose procedures carry a
+/// literal, or the one built for its nested helpers.
+const InspectedProgram = enum { procedures, helpers };
 
-fn inspectFallible(lowered: *const lir.CheckedPipeline.LoweredProgram, phase: RendezvousPhase) InspectionError!void {
+fn inspectFallible(lowered: *const lir.CheckedPipeline.LoweredProgram, phase: InspectedProgram) InspectionError!void {
     const program = &lowered.lir_result;
     const demand = try allocator.alloc(lir.LIR.LirProcSpecId, program.store.getProcSpecs().len);
     defer allocator.free(demand);
@@ -303,32 +419,17 @@ fn inspectFallible(lowered: *const lir.CheckedPipeline.LoweredProgram, phase: Re
     var baseline_object = try object(lowered, null, &object_metrics);
     defer baseline_object.deinit();
     try expectUseful(object_metrics);
-    const baseline_object_procedures = object_metrics.procedures_emitted;
     var builtins = try eval.BuiltinModules.init(allocator, std.testing.io);
     defer builtins.deinit();
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     for ([_]usize{ 2, 4 }) |workers| {
-        var coord = try Coordinator.init(allocator, .multi_threaded, workers, target.detectNative(), &builtins, @import("build_options").compiler_compatibility_id, null, CoreCtx.default(allocator, arena.allocator(), std.testing.io));
+        var coord = try Coordinator.init(allocator, .multi_threaded, workers, target.detectNative(), &builtins, @import("build_options").compiler_compatibility_id, null, CoreCtx.default(allocator, arena.allocator(), std.testing.io), .lss);
         defer coord.deinit();
         try coord.start();
         try coord.coordinatorLoop();
-        // Helper jobs are submitted after every procedure job; a probe run
-        // finds the first helper wave every worker can join.
-        var helper_wave: usize = 0;
-        var object_helper_wave: usize = 0;
-        if (phase == .helpers) {
-            var probe = ObservedExecutor{ .inner = coord.postCheckExecutor(), .reverse = false, .rendezvous_from = std.math.maxInt(usize) };
-            var probed = try emit(lowered, demand, root.?, probe.executor(), null);
-            probed.deinit();
-            helper_wave = try probe.firstFullWave(baseline.metrics.procedures_emitted, workers);
-            var object_probe = ObservedExecutor{ .inner = coord.postCheckExecutor(), .reverse = false, .rendezvous_from = std.math.maxInt(usize) };
-            var probed_object = try object(lowered, object_probe.executor(), &object_metrics);
-            probed_object.deinit();
-            object_helper_wave = try object_probe.firstFullWave(baseline_object_procedures, workers);
-        }
         for ([_]bool{ false, true }) |reverse| {
-            var observed = ObservedExecutor{ .inner = coord.postCheckExecutor(), .reverse = reverse, .rendezvous_from = helper_wave };
+            var observed = DelayedExecutor{ .inner = coord.postCheckExecutor(), .reverse = reverse };
             var emitted = try emit(lowered, demand, root.?, observed.executor(), null);
             defer emitted.deinit();
             try observed.verify();
@@ -346,7 +447,7 @@ fn inspectFallible(lowered: *const lir.CheckedPipeline.LoweredProgram, phase: Re
             try std.testing.expect(reused.metrics.helpers_reused > 0);
             try std.testing.expectEqualSlices(u8, baseline.code, reused.code);
             if (phase == .procedures) try expectLiteral(&reused.retained);
-            var object_observed = ObservedExecutor{ .inner = coord.postCheckExecutor(), .reverse = reverse, .rendezvous_from = object_helper_wave };
+            var object_observed = DelayedExecutor{ .inner = coord.postCheckExecutor(), .reverse = reverse };
             var result = try object(lowered, object_observed.executor(), &object_metrics);
             defer result.deinit();
             try object_observed.verify();
@@ -462,7 +563,7 @@ test "wasm modules are byte identical across worker counts, completion orders, a
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     for ([_]usize{ 2, 4 }) |workers| {
-        var coord = try Coordinator.init(allocator, .multi_threaded, workers, target.detectNative(), &builtins, @import("build_options").compiler_compatibility_id, null, CoreCtx.default(allocator, arena.allocator(), std.testing.io));
+        var coord = try Coordinator.init(allocator, .multi_threaded, workers, target.detectNative(), &builtins, @import("build_options").compiler_compatibility_id, null, CoreCtx.default(allocator, arena.allocator(), std.testing.io), .lss);
         defer coord.deinit();
         try coord.start();
         try coord.coordinatorLoop();

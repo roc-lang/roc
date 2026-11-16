@@ -55,6 +55,7 @@ var coord = try compile.coordinator.Coordinator.init(
     gpa, .single_threaded, 1,
     target, &builtins, version, null,
     CoreCtx.default(gpa, arena, my_io),
+    .lss,  // the strategy the runtime program in step 5 lowers under
 );
 defer coord.deinit();
 coord.enable_hosted_transform = true;  // if you have host functions

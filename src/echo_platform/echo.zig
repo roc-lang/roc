@@ -128,7 +128,7 @@ export fn allocateBuffer(size: usize) ?[*]u8 {
 }
 
 /// Register an extra module file (e.g. name="Greeting", content="Greeting := [].{ msg = \"hi\" }\n").
-/// Files are resolved as `/app/<name>.roc` during compilation.
+/// Files are resolved as `<extras_prefix><name>.roc` (`runner.Paths`) during compilation.
 /// Must be called after init() and before compileAndRun().
 /// Returns 0 on success, 1 if too many files, 2 if name too long, 3 if content too long.
 export fn addFile(
@@ -197,7 +197,7 @@ fn compileAndRunInner(source: []const u8) (runner.RunEchoError || error{CorruptE
     // Synthetic app source must be set on the WasmFilesystem so it shares
     // the filename mapping; runner.runEcho generates it and passes it back
     // through the Io vtable for any internal reads it triggers.
-    wasm_ctx.setFilename(allocator, "/app/main.roc");
+    wasm_ctx.setFilename(allocator, (runner.Paths{}).app_abs);
     // The runner writes the synthetic source itself via EchoCtx—the wasm
     // fallback's setSource is only consulted for non-synthetic paths.
 

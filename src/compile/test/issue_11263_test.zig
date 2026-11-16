@@ -30,7 +30,7 @@ test "issue 11263: match on a field access of an out-of-scope name reports rathe
     const module_path = try tmp_dir.dir.realPathFileAlloc(io, "Repro.roc", gpa);
     defer gpa.free(module_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
     try build_env.build(module_path);
 
@@ -116,7 +116,7 @@ test "issue 11263: a rejected field access preserves independent compile-time ro
     defer gpa.free(cwd);
     const path = try tmp.dir.realPathFileAlloc(io, "Repro.roc", gpa);
     defer gpa.free(path);
-    var build = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build.deinit();
     try build.build(path);
 

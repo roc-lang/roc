@@ -56,7 +56,7 @@ fn expectNestedModuleChecksCleanly(package_root_source: []const u8) NestedModule
     const nested_module = try tmp.dir.realPathFileAlloc(io, "Src/Widget.roc", gpa);
     defer gpa.free(nested_module);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
 
     var build_failed = false;
@@ -133,7 +133,7 @@ fn checkEntry(
     const main_path = try tmp.dir.realPathFileAlloc(io, main, gpa);
     defer gpa.free(main_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
 
     var outcome = Outcome{ .build_error = null, .error_titles = .empty };

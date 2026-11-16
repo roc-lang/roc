@@ -37,7 +37,7 @@ test "issue 11259: typed string literal with an ill-typed from_quote reports rat
     const module_path = try tmp_dir.dir.realPathFileAlloc(io, "Repro.roc", gpa);
     defer gpa.free(module_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
     try build_env.build(module_path);
 
@@ -177,7 +177,7 @@ fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, ex
     defer gpa.free(cwd);
     const path = try tmp.dir.realPathFileAlloc(io, "Repro.roc", gpa);
     defer gpa.free(path);
-    var build = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build.deinit();
     try build.build(path);
     const reports = try build.drainReports();

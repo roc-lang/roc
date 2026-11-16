@@ -242,8 +242,14 @@ test "specialization discovery submits a child before an unrelated task finishes
     try std.testing.expectEqual(arc.uniqueness.task_submitted, arc.uniqueness.task_committed);
     try std.testing.expectEqual(arc.uniqueness.topology_tasks_submitted, arc.uniqueness.topology_tasks_committed);
     try std.testing.expectEqual(arc.dismantle_tasks_submitted, arc.dismantle_tasks_committed);
-    const arc_tasks = arc.dismantle_tasks_submitted + arc.source_tasks_submitted + arc.planning_tasks_submitted + arc.emission_tasks_submitted + arc.uniqueness.task_submitted + arc.uniqueness.topology_tasks_submitted;
-    try std.testing.expectEqual(monotype.specialization_tasks_submitted + spec_constr.tasks_submitted + solved_lir.tasks_submitted + rewrites.tasks_submitted + arc_tasks, executor.submitted);
+    // LIR pass procedures and ARC's procedure tasks run as items of ordered
+    // runs, whose drain tasks each run any number of them, so they bound the
+    // executor's submissions from above only.
+    const task_per_item = monotype.specialization_tasks_submitted + spec_constr.tasks_submitted + solved_lir.tasks_submitted +
+        arc.dismantle_tasks_submitted + arc.uniqueness.task_submitted + arc.uniqueness.topology_tasks_submitted;
+    const ordered_items = rewrites.tasks_submitted + arc.source_tasks_submitted + arc.planning_tasks_submitted + arc.emission_tasks_submitted;
+    try std.testing.expect(executor.submitted >= task_per_item);
+    try std.testing.expect(executor.submitted <= task_per_item + ordered_items);
     try std.testing.expect(executor.peak_outstanding <= 4);
     try std.testing.expect(!executor.open);
 }
