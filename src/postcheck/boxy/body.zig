@@ -7392,16 +7392,6 @@ pub const Builder = struct {
         return declaration.words.?;
     }
 
-    /// The innermost declaration context of the call instances being built
-    /// whose callee is `worker`.
-    fn declarationOf(self: *const Builder, worker: WorkerId) ?*Declaration {
-        var next = self.declaration;
-        while (next) |declaration| : (next = declaration.outer) {
-            if (declaration.worker == worker) return declaration;
-        }
-        return null;
-    }
-
     /// The declaration context of the literal chain frame whose
     /// dictionaries are `composed`, when one is being built.
     fn frameDeclaration(self: *const Builder, composed: []?Word) ?*Declaration {
