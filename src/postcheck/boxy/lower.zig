@@ -186,6 +186,13 @@ pub const ExportInterface = struct {
     /// outputs none. That variant has an interface of its own, under the
     /// identity its demand names (`LIR.ProcIdentity.ownershipVariant`).
     rc_outcomes: []const u32 = &.{},
+    /// The worker's function parameters that never outlive its call
+    /// (`LIR.LirProcSpec.nonescaping_fn_params`), to which a caller may pass
+    /// a callable built in its own frame.
+    nonescaping_fn_params: u64 = 0,
+    /// The worker's function parameters a call may hand over through the
+    /// erased ABI's reuse channel (`LIR.LirProcSpec.capture_reuse_fn_params`).
+    capture_reuse_fn_params: u64 = 0,
     /// For a worker that takes a type table: its encoded needs list
     /// (`StoredFn.encodeNeeds`), which an importer fills its tables from.
     table_needs: []const u8 = &.{},
@@ -288,6 +295,8 @@ pub const ExportInterfaces = struct {
             .rc_ret_conditions = conditions,
             .may_leave_pending = spec.may_leave_pending,
             .rc_outcomes = outcomes,
+            .nonescaping_fn_params = spec.nonescaping_fn_params,
+            .capture_reuse_fn_params = spec.capture_reuse_fn_params,
             .table_needs = try self.arena.allocator().dupe(u8, table_needs),
             .template = boxy_export.template,
             .visible = boxy_export.visible,
@@ -320,6 +329,8 @@ test "export interface snapshot owns the complete calling contract" {
         .rc_ret_conditions = &.{ 7, 8, 9 },
         .may_leave_pending = true,
         .rc_outcomes = &.{ 0, 0, 1, 2 },
+        .nonescaping_fn_params = 5,
+        .capture_reuse_fn_params = 4,
         .table_needs = "producer needs",
         .template = 4,
         .visible = true,
@@ -1503,6 +1514,8 @@ pub const Program = struct {
         proc.rc_ret_unique = interface.rc_ret_unique;
         proc.rc_ret_unique_fields = interface.rc_ret_unique_fields;
         proc.may_leave_pending = interface.may_leave_pending;
+        proc.nonescaping_fn_params = interface.nonescaping_fn_params;
+        proc.capture_reuse_fn_params = interface.capture_reuse_fn_params;
         proc.rc_ret_conditions = self.result.store.addU32Span(interface.rc_ret_conditions) catch |err| switch (err) {
             error.OutOfMemory => invariant("out of memory binding an imported worker's interface"),
         };

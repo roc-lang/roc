@@ -96,7 +96,11 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      changes.
 /// v78: procedure specs carry the outcome table of a published
 ///      outcome-restitution variant (`rc_outcomes`).
-pub const FORMAT_VERSION: u32 = 78;
+/// v79: procedure specs carry their non-escaping and capture-reusing
+///      function parameters (`nonescaping_fn_params`,
+///      `capture_reuse_fn_params`).
+/// v80: packings carry `frame`, and procedure shapes record packings.
+pub const FORMAT_VERSION: u32 = 80;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.

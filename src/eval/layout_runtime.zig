@@ -481,10 +481,11 @@ pub const LayoutRuntime = struct {
             },
             .erased_callable_incref => {
                 const alloc_ptr = val.read(?[*]u8);
-                builtins.utils.increfDataPtr(alloc_ptr, @intCast(count), atomicity, self.roc_ops);
+                builtins.erased_callable.increfWithAtomicity(alloc_ptr, @intCast(count), atomicity, self.roc_ops);
             },
             .erased_callable_decref => {
                 const alloc_ptr = val.read(?[*]u8);
+                if (builtins.erased_callable.isFrame(alloc_ptr)) return;
                 if (!utils.releaseDataPtr(alloc_ptr, atomicity, self.roc_ops)) return;
                 self.performErasedCallableFinalDrop(alloc_ptr, .decref, count);
                 utils.freeDataPtrC(
@@ -496,6 +497,7 @@ pub const LayoutRuntime = struct {
             },
             .erased_callable_free => {
                 const alloc_ptr = val.read(?[*]u8);
+                if (builtins.erased_callable.isFrame(alloc_ptr)) return;
                 self.performErasedCallableFinalDrop(alloc_ptr, .free, count);
                 builtins.utils.freeDataPtrC(
                     alloc_ptr,

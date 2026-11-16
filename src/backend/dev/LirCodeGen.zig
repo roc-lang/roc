@@ -12868,13 +12868,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     helper.atomicity,
                     ptr_slot,
                 ),
-                // An erased callable's single-thread incref is exactly a data-pointer
-                // incref of its single allocation, so its native entry point is the
-                // data-ptr adapter; the object symbol still names the registry member.
                 .erased_callable_incref => {
                     const rc_fn = LowLevelBuiltins.rcHelper(.erased_callable_incref, rc_atomicity);
-                    const native_addr = if (single_thread) BuiltinFn.incref_data_ptr_single_thread.wrapperAddress() else rc_fn.wrapperAddress();
-                    try self.emitBuiltinInternalRcHelperBoxIncref(rc_fn, native_addr, ptr_slot, count_slot.?);
+                    try self.emitBuiltinInternalRcHelperBoxIncref(rc_fn, rc_fn.wrapperAddress(), ptr_slot, count_slot.?);
                 },
                 .erased_callable_decref => try self.emitBuiltinInternalRcHelperErasedCallableDrop(
                     LowLevelBuiltins.rcHelper(.erased_callable_decref, rc_atomicity),
@@ -14498,6 +14494,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             on_copy: lir.LIR.ErasedCallableOnDrop,
             reuse: ?LocalId,
             reuse_unique: bool,
+            frame: bool,
         ) Allocator.Error!ValueLocation {
             const target_layout_val = self.layout_store.getLayout(target_layout);
             if (builtin.mode == .debug and target_layout_val.tag != .erased_callable) {
@@ -14643,15 +14640,31 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const payload_size = builtins.erased_callable.payloadSize(base_capture_size);
             const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
 
-            {
+            if (frame) {
+                // The callable lives in a stack slot of this statement's
+                // own, 16-byte aligned, whose refcount word is the frame
+                // marker. Lowering builds frame callables only without a
+                // hot-reload capture prefix.
+                if (builtin.mode == .debug and capture_prefix_size != 0) {
+                    base.invariant("Dev/codegen invariant violated: a frame packing with a hot-reload capture prefix", .{});
+                }
+                const prefix: i32 = builtins.erased_callable.payload_alignment;
+                const storage_slot = self.codegen.allocStackSlot(@intCast(@as(usize, @intCast(prefix)) + payload_size));
+                const reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(reg, builtins.utils.REFCOUNT_FRAME);
+                try self.emitStore(.w64, frame_ptr, storage_slot + prefix - 8, reg);
+                try self.emitAddPtrImmAny(reg, frame_ptr, storage_slot + prefix);
+                try self.emitStore(.w64, frame_ptr, heap_ptr_slot, reg);
+                self.codegen.freeGeneral(reg);
+            } else {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 defer builder.deinit();
                 try builder.addImmArg(@intCast(payload_size));
                 try builder.addImmArg(builtins.erased_callable.payload_alignment);
                 try builder.addImmArg(if (builtins.erased_callable.allocation_has_refcounted_children) 1 else 0);
                 try self.callBuiltin(&builder, .allocate_with_refcount);
+                try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
             }
-            try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
             const hot_reload_code_ref_slot: ?i32 = if (self.hotReloadEnabled()) blk: {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -18033,6 +18046,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (0..locals.len) |i| {
                 const local = GuardedList.at(locals, i);
                 const dyn = self.localDyn(local) orelse continue;
+                if (dyn.storage == .frame_callable) {
+                    // A frame callable's storage: 16-byte aligned, its data
+                    // pointer after the 16-byte prefix ending in its refcount
+                    // word, then the header and the capture record.
+                    const prefix = builtins.erased_callable.payload_alignment;
+                    try self.emitLoad(.w64, desc_reg, frame_ptr, self.localSlot(dyn.desc));
+                    try self.emitAddImm(total, total, prefix - 1);
+                    try self.codegen.emitLoadImm(field, -@as(i64, prefix));
+                    try self.codegen.emitAnd(.w64, total, total, field);
+                    try self.emitAddImm(total, total, prefix);
+                    try self.emitStore(.w64, frame_ptr, self.localSlot(local), total);
+                    try self.emitAddImm(total, total, @intCast(builtins.erased_callable.capture_offset));
+                    try self.emitLoad(.w32, field, desc_reg, desc_size_offset);
+                    try self.codegen.emitAdd(.w64, total, total, field);
+                    continue;
+                }
                 if (dyn.storage != .frame) continue;
                 try self.emitLoad(.w64, desc_reg, frame_ptr, self.localSlot(dyn.desc));
                 // total = alignForward(total, alignment); the local's offset.
@@ -18075,7 +18104,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (0..locals.len) |i| {
                 const local = GuardedList.at(locals, i);
                 const dyn = self.localDyn(local) orelse continue;
-                if (dyn.storage != .frame) continue;
+                if (dyn.storage != .frame and dyn.storage != .frame_callable) continue;
                 try self.emitLoad(.w64, field, frame_ptr, self.localSlot(local));
                 try self.codegen.emitAdd(.w64, field, field, total);
                 try self.emitStore(.w64, frame_ptr, self.localSlot(local), field);
@@ -18262,7 +18291,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(reg);
                     try self.bindComponentAddress(dst_local);
                 },
-                .closure => |c| {
+                .closure => |c| if (c.frame) |frame| {
+                    // Built in its frame storage; lowering builds frame
+                    // callables only without a hot-reload capture prefix.
+                    if (builtin.mode == .debug and self.hotReloadEnabled()) {
+                        base.invariant("Dev/codegen invariant violated: a frame closure with hot reloading", .{});
+                    }
+                    const fn_slot = self.codegen.allocStackSlot(8);
+                    try self.emitProcAddressToSlot(c.proc, fn_slot);
+                    try builder.addMemArg(frame_ptr, fn_slot);
+                    try self.addBytesArg(&builder, c.capture);
+                    try builder.addMemArg(frame_ptr, self.localSlot(frame));
+                    try self.callBoxyRuntime(&builder, "roc_desc_closure_frame");
+                    try self.bindReturnedScalar(dst_local, 8);
+                } else {
                     const fn_slot = self.codegen.allocStackSlot(8);
                     try self.emitProcAddressToSlot(c.proc, fn_slot);
                     var code_ref_slot: ?i32 = null;
@@ -21093,6 +21135,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 assign.on_copy,
                                 assign.reuse,
                                 assign.reuse_unique,
+                                assign.frame,
                             );
                             try self.bindAssignedLocal(assign_stmt.target, value_loc);
                             try work.append(wa, .{ .node = assign_stmt.next });

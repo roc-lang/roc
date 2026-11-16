@@ -1726,6 +1726,10 @@ const VariantTable = struct {
             .rc_ret_unique = source_spec.rc_ret_unique,
             .rc_ret_unique_fields = source_spec.rc_ret_unique_fields,
             .rc_ret_conditions = source_spec.rc_ret_conditions,
+            // The defining object solves a worker and its published variant
+            // to one pair of masks.
+            .nonescaping_fn_params = source_spec.nonescaping_fn_params,
+            .capture_reuse_fn_params = source_spec.capture_reuse_fn_params,
         }, store.procLoc(callee));
         try store.copyProcDebugInfo(variant, callee);
         return variant;
@@ -2829,6 +2833,7 @@ const Inserter = struct {
                             .frozen_capture_layout = assign.frozen_capture_layout,
                             .reuse = assign.reuse,
                             .reuse_unique = step.reuse_unique,
+                            .frame = assign.frame,
                         }),
                         .next = next,
                     } }, origin);

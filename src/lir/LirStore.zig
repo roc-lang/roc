@@ -2209,11 +2209,12 @@ pub fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
             const row = self.stmtRow(dyn.data);
             if (row == .table_entry) self.shapes.static_literal = true;
             if (row == .call_erased) self.shapes.erased_call = true;
+            if (row == .closure) self.shapes.erased_pack = true;
         },
         .assign_call_erased => self.shapes.erased_call = true,
+        .assign_packed_erased_fn => self.shapes.erased_pack = true,
         .init_uninitialized,
         .assign_ref,
-        .assign_packed_erased_fn,
         .assign_list,
         .store_struct,
         .store_tag,

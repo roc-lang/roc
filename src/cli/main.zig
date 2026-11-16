@@ -19112,6 +19112,7 @@ fn passStepLabel(step: lir.CheckedPipeline.PassStep) []const u8 {
         .str_append => "Str Append",
         .tag_reachability => "Tag Reachability",
         .reachable_procs_before_arc => "Reachable Procs",
+        .frame_callables => "Frame Callables",
         .tail_drive => "Tail Drive",
         .reachable_procs_after_arc => "Reachable Procs After ARC",
         .immortal_locals => "Immortal Locals",
@@ -19178,7 +19179,7 @@ fn recordLirPassDetail(reporter: *progress.Reporter, snapshot: lir.CheckedPipeli
         const step = @field(Pipeline.PassStep, name);
         const ns = snapshot.pass_steps_ns[index];
         if (ns != 0) switch (step) {
-            .tail_drive, .reachable_procs_after_arc, .immortal_locals, .comptime_value_guards, .lir_diagnostics => {
+            .frame_callables, .tail_drive, .reachable_procs_after_arc, .immortal_locals, .comptime_value_guards, .lir_diagnostics => {
                 after[after_len] = .{ .name = passStepLabel(step), .ns = ns };
                 after_len += 1;
                 after_total +|= ns;

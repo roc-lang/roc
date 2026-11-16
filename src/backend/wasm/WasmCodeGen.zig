@@ -2399,31 +2399,37 @@ fn emitRawDirectRcPlan(
         },
         .erased_callable_incref => {
             const payload_ptr_local = try self.emitLoadAtToNewLocal(value_ptr_local, .i32, 0);
+            try self.emitFrameCallableSkipBlock(payload_ptr_local);
             if (count_local) |count| {
                 try self.emitDataPtrIncrefByLocal(payload_ptr_local, count);
             } else {
                 try self.emitDataPtrIncref(payload_ptr_local, 1);
             }
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
             return true;
         },
         .erased_callable_decref => {
             const payload_ptr_local = try self.emitLoadAtToNewLocal(value_ptr_local, .i32, 0);
+            try self.emitFrameCallableSkipBlock(payload_ptr_local);
             try self.emitErasedCallableOnDropIfUnique(payload_ptr_local);
             try self.emitDataPtrDecref(
                 payload_ptr_local,
                 builtins.erased_callable.payload_alignment,
                 builtins.erased_callable.allocation_has_refcounted_children,
             );
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
             return true;
         },
         .erased_callable_free => {
             const payload_ptr_local = try self.emitLoadAtToNewLocal(value_ptr_local, .i32, 0);
+            try self.emitFrameCallableSkipBlock(payload_ptr_local);
             try self.emitErasedCallableOnDrop(payload_ptr_local);
             try self.emitDataPtrFree(
                 payload_ptr_local,
                 builtins.erased_callable.payload_alignment,
                 builtins.erased_callable.allocation_has_refcounted_children,
             );
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
             return true;
         },
         .struct_, .tag_union, .closure => return false,
@@ -2983,6 +2989,23 @@ fn emitBuiltinInternalBoxChildDropIfUnique(
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 }
 
+/// Open a block that a null pointer or a frame callable
+/// (`utils.REFCOUNT_FRAME`, design.md "Frame Callables") branches out of:
+/// an erased callable's retain, release and free do nothing to frame
+/// storage. The caller closes the block.
+fn emitFrameCallableSkipBlock(self: *Self, payload_ptr_local: u32) Allocator.Error!void {
+    const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitVoidBlock();
+    try self.emitLocalGet(payload_ptr_local);
+    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+    try self.emitBrIf(0);
+    try self.emitLoadI32AtPtrOffset(payload_ptr_local, refcount_offset, rc_val);
+    try self.emitLocalGet(rc_val);
+    try self.emitI32Const(@intCast(builtins.utils.targetRefcountFrame(wasm_word_size)));
+    self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+    try self.emitBrIf(0);
+}
+
 fn emitErasedCallableOnDropIfUnique(
     self: *Self,
     payload_ptr_local: u32,
@@ -3067,25 +3090,31 @@ fn generateBuiltinInternalRcHelperBody(
         },
         .erased_callable_incref => {
             const payload_ptr_local = try self.emitLoadAtToNewLocal(value_ptr_local, .i32, 0);
+            try self.emitFrameCallableSkipBlock(payload_ptr_local);
             try self.emitDataPtrIncrefByLocal(payload_ptr_local, count_local.?);
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
         .erased_callable_decref => {
             const payload_ptr_local = try self.emitLoadAtToNewLocal(value_ptr_local, .i32, 0);
+            try self.emitFrameCallableSkipBlock(payload_ptr_local);
             try self.emitErasedCallableOnDropIfUnique(payload_ptr_local);
             try self.emitDataPtrDecref(
                 payload_ptr_local,
                 builtins.erased_callable.payload_alignment,
                 builtins.erased_callable.allocation_has_refcounted_children,
             );
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
         .erased_callable_free => {
             const payload_ptr_local = try self.emitLoadAtToNewLocal(value_ptr_local, .i32, 0);
+            try self.emitFrameCallableSkipBlock(payload_ptr_local);
             try self.emitErasedCallableOnDrop(payload_ptr_local);
             try self.emitDataPtrFree(
                 payload_ptr_local,
                 builtins.erased_callable.payload_alignment,
                 builtins.erased_callable.allocation_has_refcounted_children,
             );
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
         .struct_ => |struct_plan| {
             const field_count = self.getLayoutStore().rcHelperStructFieldCount(struct_plan);
@@ -8293,6 +8322,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 .on_copy = assign.on_copy,
                 .reuse = assign.reuse,
                 .reuse_unique = assign.reuse_unique,
+                .frame = assign.frame,
             });
             try self.bindAssignedLocal(assign_stmt.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign_stmt.next, .stop = stop } });
@@ -9580,6 +9610,29 @@ fn generateDynFrameAlloc(self: *Self) Allocator.Error!void {
     for (0..locals.len) |i| {
         const local = GuardedList.at(locals, i);
         const dyn = self.localDyn(local) orelse continue;
+        if (dyn.storage == .frame_callable) {
+            // A frame callable's storage: 16-byte aligned, its data pointer
+            // after the 16-byte prefix ending in its refcount word, then the
+            // header and the capture record its descriptor sizes.
+            const prefix: i32 = builtins.erased_callable.payload_alignment;
+            const desc = try self.emitProcLocalToNewLocal(dyn.desc, .i32);
+            try self.emitLocalGet(total);
+            try self.emitI32Const(prefix - 1);
+            try self.emitOps(.{Op.i32_add});
+            try self.emitI32Const(-prefix);
+            try self.emitOps(.{Op.i32_and});
+            try self.emitI32Const(prefix);
+            try self.emitOps(.{Op.i32_add});
+            try self.emitLocalTee(total);
+            try self.emitBindingSet(try self.procLocalBinding(local));
+            try self.emitLocalGet(total);
+            try self.emitI32Const(@intCast(builtins.erased_callable.captureOffset(wasm_word_size)));
+            try self.emitOps(.{Op.i32_add});
+            try self.emitLoadAt(desc, .i32, desc_size_offset);
+            try self.emitOps(.{Op.i32_add});
+            try self.emitLocalSet(total);
+            continue;
+        }
         if (dyn.storage != .frame) continue;
         const desc = try self.emitProcLocalToNewLocal(dyn.desc, .i32);
         try self.emitLoadAt(desc, .i32, desc_alignment_offset);
@@ -9617,7 +9670,7 @@ fn generateDynFrameAlloc(self: *Self) Allocator.Error!void {
     for (0..locals.len) |i| {
         const local = GuardedList.at(locals, i);
         const dyn = self.localDyn(local) orelse continue;
-        if (dyn.storage != .frame) continue;
+        if (dyn.storage != .frame and dyn.storage != .frame_callable) continue;
         const binding = try self.procLocalBinding(local);
         try self.emitBindingGet(binding);
         try self.emitLocalGet(total);
@@ -9803,7 +9856,13 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             try self.emitProcLocal(v.address);
             try self.bindComponentAddress(dst);
         },
-        .closure => |c| {
+        .closure => |c| if (c.frame) |frame| {
+            try self.emitProcTableIndex(c.proc);
+            try self.emitBytesAddress(c.capture);
+            try self.emitBindingGet(try self.procLocalBinding(frame));
+            try self.emitBoxyRuntimeCall(.closure_frame);
+            try self.bindReturnedScalar(dst, .i32);
+        } else {
             try self.emitProcTableIndex(c.proc);
             try self.emitBytesAddress(c.capture);
             if (c.reuse) |reuse| {
@@ -10318,7 +10377,17 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
     };
     const on_drop_table_idx = try self.erasedCallableOnDropTableIndex(c.on_drop);
     const payload_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    if (c.reuse) |reuse| {
+    if (c.frame) {
+        // The callable lives in frame memory of this statement's own,
+        // 16-byte aligned, whose refcount word is the frame marker.
+        const prefix: u32 = builtins.erased_callable.payload_alignment;
+        const offset = try self.allocPersistentStackMemory(prefix + @as(u32, @intCast(builtins.erased_callable.payloadSizeFor(wasm_word_size, capture_size))), builtins.erased_callable.payload_alignment);
+        try self.emitFpOffset(offset + prefix);
+        try self.emitLocalSet(payload_ptr);
+        try self.emitFpOffset(offset + prefix - wasm_word_size);
+        try self.emitI32Const(@intCast(builtins.utils.targetRefcountFrame(wasm_word_size)));
+        try self.emitStoreOpSized(.i32, 4, 0);
+    } else if (c.reuse) |reuse| {
         const reuse_ptr = try self.emitProcLocalToNewLocal(reuse, .i32);
 
         try self.emitLocalGet(reuse_ptr);
@@ -10349,11 +10418,13 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
             self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
 
             try self.emitFreshErasedCallablePayload(payload_ptr, capture_size);
+            try self.emitFrameCallableSkipBlock(reuse_ptr);
             try self.emitDataPtrDecref(
                 reuse_ptr,
                 builtins.erased_callable.payload_alignment,
                 builtins.erased_callable.allocation_has_refcounted_children,
             );
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 
             self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
         }

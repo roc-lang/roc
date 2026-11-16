@@ -679,6 +679,7 @@ const CustomCase = enum {
     boxy_platform_evaluation,
     boxy_platform_bindings,
     boxy_interface_edits,
+    frame_callee_object_reuse,
     issue_11710_shared_object_cache,
     issue_12220_shared_object_cache_literals,
     issue_12564_package_from_numeral_cache,
@@ -4081,6 +4082,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no build files one object per module and rebuilds only edited modules", .timeout_ms = 600_000, .body = .{ .custom = .boxy_module_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "boxy per-module objects: a module's object is the same whether or not an importer calls its published outcome variant", .timeout_ms = 600_000, .body = .{ .custom = .boxy_published_restitution } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no objects depend on their imports' interfaces, not their implementations", .timeout_ms = 900_000, .body = .{ .custom = .boxy_interface_edits } },
+    .{ .id = 0, .suite = .subcommands, .name = "a module's object is the same whether an importer passes it a frame callable or a heap one", .timeout_ms = 900_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .frame_callee_object_reuse } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12220: shared object cache keeps each module's list literals in a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_12220_shared_object_cache_literals } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12564: a package from_numeral cached by one app's check converts another app's literal", .timeout_ms = 600_000, .body = .{ .custom = .issue_12564_package_from_numeral_cache } },
@@ -6999,6 +7001,7 @@ fn runCustomCase(
         .boxy_module_object_cache => customBoxyModuleObjectCache(io, allocator, &env, &timer, timeout_ms),
         .boxy_published_restitution => customBoxyPublishedRestitution(io, allocator, &env, &timer, timeout_ms),
         .boxy_interface_edits => customBoxyInterfaceEdits(io, allocator, &env, &timer, timeout_ms),
+        .frame_callee_object_reuse => customFrameCalleeObjectReuse(io, allocator, &env, &timer, timeout_ms),
         .issue_11710_shared_object_cache => customIssue11710SharedObjectCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12220_shared_object_cache_literals => customIssue12220SharedObjectCacheLiterals(io, allocator, &env, &timer, timeout_ms),
         .issue_12564_package_from_numeral_cache => customIssue12564PackageFromNumeralCache(io, allocator, &env, &timer, timeout_ms),
@@ -12043,6 +12046,42 @@ fn boxyObjectCount(io: std.Io, allocator: Allocator, cache_root: []const u8) Cli
         if (entry.family == .boxy_object) objects += 1;
     }
     return objects;
+}
+
+/// A callee's non-escaping function parameters are a function of its own
+/// body (design.md "Frame Callables"), so its object is the same whether an
+/// importer passes it a callable built in the importer's frame or a heap
+/// one. The second app restores FrameCallee's object from the first app's
+/// build, and `ROC_VERIFY_BOXY_OBJECT_REUSE` rebuilds it in the second
+/// app's compilation and requires the same bytes.
+fn customFrameCalleeObjectReuse(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err| return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
+    defer isolated.env_map.deinit();
+    const cache_root = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "frame_callee_cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the cache root: {}", .{err});
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        isolated.env_map.put(key, cache_root) catch |err| return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
+    }
+    isolated.env_map.put("ROC_VERIFY_BOXY_OBJECT_REUSE", "1") catch |err| return customInfraFailure(allocator, timer, "failed to enable verification: {}", .{err});
+    const apps = [_]struct { file: []const u8, stderr: []const u8 }{
+        .{ .file = "test/alloc-count/app_frame_closures.roc", .stderr = "cross-module 0" },
+        .{ .file = "test/alloc-count/app_frame_callee_heap.roc", .stderr = "heap callee: " },
+    };
+    for (apps) |app| {
+        const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "frame callee test timed out");
+        const ran = runRocInEnv(io, allocator, &isolated, &.{ "--opt=dev", "--specialize=no" }, app.file, .relative, &.{}, null, remaining) catch |err|
+            return customInfraFailure(allocator, timer, "run: {}", .{err});
+        if (!processSucceeded(ran.term) or std.mem.find(u8, ran.stderr, app.stderr) == null or std.mem.find(u8, ran.stderr, "Expect failed") != null) {
+            return failureFromRun(allocator, timer, ran, "an app passing FrameCallee a callable did not run as expected");
+        }
+    }
+    return null;
 }
 
 /// A module's object depends on its imports' interfaces, so an edit rebuilds
