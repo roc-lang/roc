@@ -1003,6 +1003,48 @@ const MaybeUninitializedConditions = struct {
 const OwnershipMutation = union(enum) {
     balance: struct { value: ValueId, before: i32, after: i32 },
     claims: struct { value: ValueId, before: ClaimSet, after: ClaimSet },
+    repeat_claims: struct { value: ValueId, before: ?*const RepeatClaims, after: ?*const RepeatClaims },
+};
+
+/// The fields a value's further units have given away, when more than one of
+/// its units is partly dismantled (design.md "Field Takes From Dying
+/// Aggregates"). Every unit of a struct value stores one unit of each of its
+/// refcounted fields, so the claims of all its units together count, per
+/// field, how many units have given that field away. `State.claims` holds the
+/// fields claimed at least once; layer `k` of this list holds the fields
+/// claimed at least `k + 2` times. Each layer is nonempty and lies inside the
+/// one before it, so a claim joins the first layer missing its field and the
+/// first unit to complete is always the one `State.claims` describes.
+const RepeatClaims = struct {
+    set: ClaimSet,
+    next: ?*const RepeatClaims = null,
+
+    fn depth(layers: ?*const RepeatClaims) u32 {
+        var count: u32 = 0;
+        var layer = layers;
+        while (layer) |repeat| : (layer = repeat.next) count += 1;
+        return count;
+    }
+
+    fn eql(left: ?*const RepeatClaims, right: ?*const RepeatClaims) bool {
+        var a = left;
+        var b = right;
+        while (true) {
+            const x = a orelse return b == null;
+            const y = b orelse return false;
+            if (x == y) return true;
+            if (!x.set.eql(y.set)) return false;
+            a = x.next;
+            b = y.next;
+        }
+    }
+
+    fn hashInto(layers: ?*const RepeatClaims, hasher: *std.hash.Wyhash) void {
+        const count = depth(layers);
+        hasher.update(std.mem.asBytes(&count));
+        var layer = layers;
+        while (layer) |repeat| : (layer = repeat.next) repeat.set.hashInto(hasher);
+    }
 };
 
 const RestitutionReceipt = struct {
@@ -1072,6 +1114,9 @@ const State = struct {
     /// fields: it can no longer be released or consumed whole, and at a
     /// terminal it must be fully claimed and residual-released instead.
     claims: ArcSnapshot(ClaimSet, .{}),
+    /// Fields claimed again from further units of a value that holds several
+    /// (`RepeatClaims`). Empty unless `claims` is nonempty.
+    repeat_claims: ArcSnapshot(?*const RepeatClaims, null),
     /// Scalar discriminant locals explicitly read from a direct call result
     /// carrying outcome-conditioned ownership.
     outcome_discriminants: ArcSnapshot(ValueId, no_value),
@@ -1120,6 +1165,7 @@ const State = struct {
             .holder = ArcSnapshot(ValueId, no_value).init(proc_local_count),
             .conditional = ArcSnapshot(ConditionalEntry, .{}).init(proc_local_count),
             .claims = ArcSnapshot(ClaimSet, .{}).init(proc_local_count),
+            .repeat_claims = ArcSnapshot(?*const RepeatClaims, null).init(proc_local_count),
             .outcome_discriminants = ArcSnapshot(ValueId, no_value).init(local_dense.len),
             .known_variants = ArcSnapshot(u32, no_variant).init(proc_local_count),
             .variant_discriminants = ArcSnapshot(ValueId, no_value).init(local_dense.len),
@@ -1167,6 +1213,33 @@ const State = struct {
 
     fn setClaims(self: *State, value: ValueId, mask: ClaimSet) Allocator.Error!void {
         try self.put(&self.claims, value, mask);
+    }
+
+    fn repeatClaimsOf(self: *const State, value: ValueId) ?*const RepeatClaims {
+        return self.repeat_claims.get(value);
+    }
+
+    fn setRepeatClaims(self: *State, value: ValueId, repeat: ?*const RepeatClaims) Allocator.Error!void {
+        try self.put(&self.repeat_claims, value, repeat);
+    }
+
+    /// How many of the value's units have given `field` away.
+    fn claimCount(self: *const State, value: ValueId, field: u32) u32 {
+        if (!self.claimsOf(value).contains(field)) return 0;
+        var count: u32 = 1;
+        var layer = self.repeatClaimsOf(value);
+        while (layer) |repeat| : (layer = repeat.next) {
+            if (!repeat.set.contains(field)) break;
+            count += 1;
+        }
+        return count;
+    }
+
+    /// How many of the value's units are partly dismantled: one for
+    /// nonempty `claims`, plus one per repeat layer.
+    fn dismantlingUnitCount(self: *const State, value: ValueId) u32 {
+        if (self.claimsOf(value).isEmpty()) return 0;
+        return 1 + RepeatClaims.depth(self.repeatClaimsOf(value));
     }
 
     fn denseIndex(self: *const State, local: LIR.LocalId) usize {
@@ -1508,6 +1581,9 @@ const LocalSummary = struct {
     /// For owned locals: fields of the value already claimed by field takes.
     /// Set identically on every member of the alias set.
     claims: ClaimSet = .{},
+    /// For owned locals: fields further units of the value gave away
+    /// (`RepeatClaims`). Set identically on every member of the alias set.
+    repeat_claims: ?*const RepeatClaims = null,
     /// Discriminant the value is proven to hold on every represented path, or
     /// `no_variant`. Joins meet it: paths that disagree forget the variant
     /// rather than walking separately. That loses nothing a residual dispatch
@@ -2335,6 +2411,26 @@ const Certifier = struct {
             (value.product != .none and value.dyn.?.storage != .view);
     }
 
+    /// Whether a value of this layout can be a representation shell: a struct,
+    /// or a tag union, whose tag sits in its inline bytes.
+    fn isShellLayout(self: *const Certifier, layout_idx: layout_mod.Idx) bool {
+        return switch (self.layouts.getLayout(layout_idx).tag) {
+            .struct_, .tag_union => true,
+            .scalar,
+            .box,
+            .box_of_zst,
+            .list,
+            .list_of_zst,
+            .closure,
+            .erased_callable,
+            .zst,
+            .hole,
+            .ptr,
+            .dynamic,
+            => false,
+        };
+    }
+
     fn isInlineAggregateRepresentation(self: *const Certifier, local: LIR.LocalId) bool {
         return self.isInlineProductRepresentation(local) or
             self.layouts.getLayout(self.store.getLocal(local).layout_idx).tag == .tag_union;
@@ -2443,12 +2539,28 @@ const Certifier = struct {
     /// no unit and has claimed nothing of its own is a view of its parent's
     /// slots; claims through it are claims of the parent's slots. A stamped
     /// take instead claims its whole field as a unit of its own.
-    fn viewParent(self: *Certifier, state: *const State, value: ValueId) ?struct { parent: ValueId, first: u32 } {
+    fn viewParent(self: *Certifier, state: *const State, value: ValueId) ?ViewLink {
+        return self.readViewParent(state, value, .struct_);
+    }
+
+    /// The parent an unstamped tag union field read that holds no unit and
+    /// has claimed nothing of its own copies its one slot from, and that
+    /// slot there. Reading the union's payload reads that slot, so a payload
+    /// read through the union checks the slot against the parent's claims.
+    fn unionViewParent(self: *Certifier, state: *const State, value: ValueId) ?ViewLink {
+        return self.readViewParent(state, value, .tag_union);
+    }
+
+    /// A unit-less view read out of a struct's slots, and where its slots
+    /// start in that struct.
+    const ViewLink = struct { parent: ValueId, first: u32 };
+
+    fn readViewParent(self: *Certifier, state: *const State, value: ValueId, comptime view_tag: layout_mod.LayoutTag) ?ViewLink {
         if (state.balanceOf(value) != 0 or state.conditionalConditionOf(value) != null) return null;
         if (!state.claimsOf(value).isEmpty()) return null;
         const info = self.values.items[value];
         if (info.payload_source == no_value or info.payload_projection.kind != .field or info.payload_taken) return null;
-        if (self.layouts.getLayout(self.store.getLocal(info.origin).layout_idx).tag != .struct_) return null;
+        if (self.layouts.getLayout(self.store.getLocal(info.origin).layout_idx).tag != view_tag) return null;
         const parent = arc_dismantle.ProductFields.of(self.store, self.layouts, self.values.items[info.payload_source].origin) orelse return null;
         return .{
             .parent = info.payload_source,
@@ -2506,7 +2618,18 @@ const Certifier = struct {
             const container_layout = self.layouts.getLayout(container_layout_idx);
             const range: SlotRange = switch (container_layout.tag) {
                 .struct_, .dynamic => blk: {
-                    const fields = arc_dismantle.ProductFields.of(self.store, self.layouts, container_origin) orelse break :walk false;
+                    const fields = arc_dismantle.ProductFields.of(self.store, self.layouts, container_origin) orelse {
+                        // A dynamic tag union has no enumerated shape: its
+                        // complete payload projection spends its one unit.
+                        if (container_layout.tag != .dynamic or !arc_dismantle.projectionOwnsAllRc(
+                            self.store,
+                            self.layouts,
+                            container_origin,
+                            info.origin,
+                            info.payload_projection,
+                        )) break :walk false;
+                        break :blk .{ .first = 0, .count = 1 };
+                    };
                     break :blk carried orelse .{
                         .first = fields.slotBase(info.payload_projection.first),
                         .count = self.layouts.ownershipSlotCount(self.store.getLocal(info.origin).layout_idx),
@@ -2546,19 +2669,26 @@ const Certifier = struct {
             const existing = state.claimsOf(container);
             if (existing.intersects(claim)) {
                 if (!required.eql(claim)) {
-                    // A partial field claim repeats an earlier one only when
-                    // that earlier claim set spent a whole unit. The field is
-                    // then spent from another unit of the container: an
-                    // intact surplus unit, or its original unit, which a
-                    // retained projection still holds in its parent. The
-                    // spent claims settle against the unit they spent.
-                    // Repeating a field of an incomplete claim set would
-                    // lose its other fields.
-                    if (!existing.eql(required)) break :walk false;
+                    // A partial field claim that repeats an earlier one
+                    // spends the field from another unit of the container.
+                    // While the earlier claim set is incomplete, that is
+                    // another explicit unit the container holds, which starts
+                    // or continues a dismantle of its own.
                     if (state.conditionalConditionOf(container) != null) break :walk false;
+                    if (!existing.eql(required)) {
+                        break :walk try self.claimRepeatedFields(state, container, required, range, mutations);
+                    }
+                    // A complete earlier claim set spent a whole unit, and
+                    // settles against it. The field is then spent from an
+                    // intact surplus unit, or from the original unit, which
+                    // a retained projection still holds in its parent.
                     if (state.balanceOf(container) >= 2) {
                         try self.settleSpentClaims(state, container, existing, mutations);
-                        try self.claimContainerField(state, container, claim, .{}, mutations);
+                        const remaining = state.claimsOf(container);
+                        if (remaining.intersects(claim)) {
+                            break :walk try self.claimRepeatedFields(state, container, required, range, mutations);
+                        }
+                        try self.claimContainerField(state, container, claim, remaining, mutations);
                         break :walk true;
                     }
                     if (state.balanceOf(container) != 1) break :walk false;
@@ -2617,7 +2747,8 @@ const Certifier = struct {
     }
 
     /// Settles a claim set that spent one whole unit of `container` while it
-    /// holds another: the spent unit and its claims are both gone.
+    /// holds another: the spent unit and its claims are both gone, and the
+    /// claims of the next partly dismantled unit, if any, take their place.
     fn settleSpentClaims(
         self: *Certifier,
         state: *State,
@@ -2626,13 +2757,22 @@ const Certifier = struct {
         mutations: ?*std.ArrayList(OwnershipMutation),
     ) Allocator.Error!void {
         const balance = state.balanceOf(container);
-        try state.setClaims(container, .{});
+        const repeat = state.repeatClaimsOf(container);
+        const next_claims: ClaimSet = if (repeat) |layer| layer.set else .{};
+        const next_repeat: ?*const RepeatClaims = if (repeat) |layer| layer.next else null;
+        try state.setClaims(container, next_claims);
+        try state.setRepeatClaims(container, next_repeat);
         try state.addBalance(container, -1);
         if (mutations) |list| {
             try list.append(self.allocator, .{ .claims = .{
                 .value = container,
                 .before = spent,
-                .after = .{},
+                .after = next_claims,
+            } });
+            if (repeat != null) try list.append(self.allocator, .{ .repeat_claims = .{
+                .value = container,
+                .before = repeat,
+                .after = next_repeat,
             } });
             try list.append(self.allocator, .{ .balance = .{
                 .value = container,
@@ -2640,6 +2780,69 @@ const Certifier = struct {
                 .after = balance - 1,
             } });
         }
+    }
+
+    /// Claims the fields `required` names within `range` of `container`,
+    /// some of which an earlier claim already took from one of its units:
+    /// each field is taken from the first unit that still holds it, so it
+    /// joins the first claim layer missing it (`RepeatClaims`). Declines,
+    /// changing nothing, when some field would need more units than the
+    /// container holds: every unit has already given it away.
+    fn claimRepeatedFields(
+        self: *Certifier,
+        state: *State,
+        container: ValueId,
+        required: ClaimSet,
+        range: SlotRange,
+        mutations: ?*std.ArrayList(OwnershipMutation),
+    ) Allocator.Error!bool {
+        const balance = state.balanceOf(container);
+        if (balance < 2) return false;
+        const arena = self.state_arena.allocator();
+        const before_claims = state.claimsOf(container);
+        const before_repeat = state.repeatClaimsOf(container);
+        var layers = std.ArrayList(ClaimSet).empty;
+        defer layers.deinit(self.allocator);
+        try layers.append(self.allocator, before_claims);
+        var layer = before_repeat;
+        while (layer) |repeat| : (layer = repeat.next) try layers.append(self.allocator, repeat.set);
+        var slot = range.first;
+        while (slot < range.first + range.count) : (slot += 1) {
+            if (!required.contains(slot)) continue;
+            var index: usize = 0;
+            while (index < layers.items.len and layers.items[index].contains(slot)) index += 1;
+            if (index == layers.items.len) try layers.append(self.allocator, .{});
+            layers.items[index] = try layers.items[index].withField(arena, slot);
+        }
+        if (layers.items.len > @as(usize, @intCast(balance))) return false;
+
+        var after_repeat: ?*const RepeatClaims = null;
+        var rebuilt = layers.items.len;
+        while (rebuilt > 1) {
+            rebuilt -= 1;
+            const node = try arena.create(RepeatClaims);
+            node.* = .{ .set = layers.items[rebuilt], .next = after_repeat };
+            after_repeat = node;
+        }
+        const after_claims = layers.items[0];
+        try state.setClaims(container, after_claims);
+        try state.setRepeatClaims(container, after_repeat);
+        if (mutations) |list| {
+            try list.append(self.allocator, .{ .claims = .{
+                .value = container,
+                .before = before_claims,
+                .after = after_claims,
+            } });
+            try list.append(self.allocator, .{ .repeat_claims = .{
+                .value = container,
+                .before = before_repeat,
+                .after = after_repeat,
+            } });
+        }
+        // The first unit's claims hold every field any unit gave away, so
+        // they are the first to complete; a complete set has spent its unit.
+        if (after_claims.eql(required)) try self.settleSpentClaims(state, container, after_claims, mutations);
+        return true;
     }
 
     fn claimContainerField(
@@ -2698,6 +2901,9 @@ const Certifier = struct {
             for (slots.items) |slot| required = try required.withField(self.claim_arena.allocator(), slot.slot);
             return required;
         }
+        // A dynamic value without an enumerated shape is one unit, which only
+        // a complete payload projection of a dynamic tag union claims.
+        if (self.layouts.getLayout(self.store.getLocal(origin).layout_idx).tag == .dynamic) return .{ .low = 1 };
         return try self.requiredClaimsForLayout(self.store.getLocal(origin).layout_idx);
     }
 
@@ -2736,10 +2942,9 @@ const Certifier = struct {
         return required;
     }
 
-    /// Whether the value still holds an intact unit beyond the one being
-    /// dismantled. A container's claim bits are unique, so an outstanding
-    /// claim set can only ever describe a single unit's worth of field takes
-    /// and residual releases; any further unit is untouched and may be
+    /// Whether the value still holds an intact unit beyond the ones being
+    /// dismantled. Its claim layers (`RepeatClaims`) describe one partly
+    /// dismantled unit each; any further unit is untouched and may be
     /// transferred or released whole. ARC relies on this when a value is both
     /// projected into a sibling and moved whole - `{ level, world:
     /// World.new(level) }` - which it lowers as an incref of the aggregate
@@ -2747,8 +2952,9 @@ const Certifier = struct {
     /// against the remaining unit, so the terminal leak check still proves
     /// every stored unit was spent exactly once.
     fn hasIntactSurplusUnit(self: *Certifier, state: *const State, value: ValueId) Allocator.Error!bool {
-        if (state.claimsOf(value).isEmpty()) return false;
-        if (state.balanceOf(value) < 2) return false;
+        const dismantling = state.dismantlingUnitCount(value);
+        if (dismantling == 0) return false;
+        if (state.balanceOf(value) <= dismantling) return false;
         return try self.requiredClaims(value) != null;
     }
 
@@ -2996,6 +3202,14 @@ const Certifier = struct {
                         }
                         try state.setClaims(mutation.value, try (try current.withoutAll(arena, added)).withAll(arena, removed));
                     },
+                    // Repeat layers are restored whole: they must still be
+                    // exactly the ones the argument's claim left.
+                    .repeat_claims => |mutation| {
+                        if (!RepeatClaims.eql(state.repeatClaimsOf(mutation.value), mutation.after)) {
+                            return self.fail("outcome restitution argument {d} field claims changed before refinement", .{position});
+                        }
+                        try state.setRepeatClaims(mutation.value, mutation.before);
+                    },
                 }
             }
         }
@@ -3033,7 +3247,7 @@ const Certifier = struct {
                             .condition_mask = condition.mask,
                         };
                     } else {
-                        summary = .{ .dense = dense, .class = .owned, .repr = repr, .balance = @intCast(units), .condition = no_dense, .condition_mask = 0, .claims = state.claimsOf(value) };
+                        summary = .{ .dense = dense, .class = .owned, .repr = repr, .balance = @intCast(units), .condition = no_dense, .condition_mask = 0, .claims = state.claimsOf(value), .repeat_claims = state.repeatClaimsOf(value) };
                     }
                 } else if (try self.valueIsLive(state, value)) {
                     summary = .{
@@ -3416,6 +3630,7 @@ const Certifier = struct {
             hasher.update(std.mem.asBytes(&entry.condition));
             hasher.update(std.mem.asBytes(&entry.condition_mask));
             entry.claims.hashInto(&hasher);
+            RepeatClaims.hashInto(entry.repeat_claims, &hasher);
             hasher.update(std.mem.asBytes(&entry.known_variant));
         }
         return hasher.final();
@@ -3451,6 +3666,7 @@ const Certifier = struct {
             };
             if (entry.abi_live) self.values.items[value].always_live = true;
             if (!entry.claims.isEmpty()) try state.setClaims(value, entry.claims);
+            if (entry.repeat_claims != null) try state.setRepeatClaims(value, entry.repeat_claims);
             if (entry.known_variant != no_variant) try state.setKnownVariant(value, entry.known_variant);
         }
 
@@ -3609,6 +3825,7 @@ const Certifier = struct {
                 // Claims are per-field spend records, not attributable
                 // balances; states disagreeing on them walk separately.
                 .owned => if (!ga.claims.eql(sb.claims) or
+                    !RepeatClaims.eql(ga.repeat_claims, sb.repeat_claims) or
                     !summaryProofsJoinable(ga.provenance, sb.provenance)) return false,
                 .conditional_owned => if (ga.condition != sb.condition or
                     ga.condition_mask != sb.condition_mask or
@@ -4703,7 +4920,7 @@ const Certifier = struct {
                             .condition_mask = condition.mask,
                         };
                     } else {
-                        summary = .{ .dense = dense, .class = .owned, .repr = repr, .balance = @intCast(units), .abi_live = abi_live, .condition = no_dense, .condition_mask = 0, .claims = state.claimsOf(value) };
+                        summary = .{ .dense = dense, .class = .owned, .repr = repr, .balance = @intCast(units), .abi_live = abi_live, .condition = no_dense, .condition_mask = 0, .claims = state.claimsOf(value), .repeat_claims = state.repeatClaimsOf(value) };
                     }
                 } else if (try self.valueIsLive(state, value)) {
                     summary = .{
@@ -5310,6 +5527,8 @@ const Certifier = struct {
             if (conditional.condition != no_dense) try target.put(&target.conditional, value, conditional);
             const claims = source.claimsOf(value);
             if (!claims.isEmpty()) try target.setClaims(value, claims);
+            const repeat = source.repeatClaimsOf(value);
+            if (repeat != null) try target.setRepeatClaims(value, repeat);
             if (source.knownVariant(value)) |known| try target.setKnownVariant(value, known);
             const info = self.values.items[value];
             try self.value_reach_stack.appendSlice(self.allocator, info.lenders);
@@ -5606,19 +5825,19 @@ const Certifier = struct {
                 },
                 .assign_call_erased => |assign_stmt| {
                     const assign = self.store.stmtRow(assign_stmt.data);
-                    if (!LIR.erasedCallReuseFieldsMatch(assign)) {
-                        return self.fail("erased call reuse flag and ownership source disagreed", .{});
+                    if (assign.reuse_closure and assign.deferred) {
+                        return self.fail("deferred erased call transferred its closure", .{});
                     }
                     const closure_value = try self.requireLive(&state, assign.closure);
+                    const owner = LIR.erasedCallOwner(assign);
+                    const owner_value = try self.requireLive(&state, owner);
                     // A deferred call keeps one reference to its closure
                     // until whoever makes the call releases it.
                     if (assign.deferred) try self.consumeUnit(&state, closure_value, assign.closure);
-                    const reuse_value = if (assign.reuse_source) |reuse_source|
-                        try self.requireLive(&state, reuse_source)
-                    else
-                        no_value;
+                    // A transferring call moves one unit of its closure's
+                    // allocation into the callee; any other call borrows it.
                     try self.applyCall(&state, assign_stmt.target, arc_sig.RcSig.all_owned, assign.args, assign_stmt.next);
-                    if (assign.reuse_source) |reuse_source| try self.consumeUnit(&state, reuse_value, reuse_source);
+                    if (assign.reuse_closure) try self.consumeUnit(&state, owner_value, owner);
                     cursor = assign_stmt.next;
                 },
                 .assign_packed_erased_fn => |assign_stmt| {
@@ -6027,8 +6246,8 @@ const Certifier = struct {
         return self.bindPayloadReadWithShell(state, target, source, projection, take_kind, tag_discriminant, self.store.getU32Span(LIR.U32Span.empty()));
     }
 
-    /// `shell` names the target's ownership slots a struct view no longer
-    /// holds; see `validateResidualShellFields`.
+    /// `shell` names the target's ownership slots a struct or tag union view
+    /// no longer holds; see `validateResidualShellFields`.
     fn bindPayloadReadWithShell(
         self: *Certifier,
         state: *State,
@@ -6045,10 +6264,12 @@ const Certifier = struct {
             _ = try self.requireAggregateRepresentation(state, source);
             return;
         }
-        // A struct view whose residual shell names every refcounted slot of
-        // its layout holds no unit: it copies only its container's inline
+        // A view whose residual shell names every refcounted slot of its
+        // layout holds no unit: it copies only its container's inline
         // representation, which stays readable after every stored unit has
-        // left (design.md "Residual Shells").
+        // left. A tag union shell is readable only for its discriminant:
+        // `requireFieldUntaken` reads through it as a view of the slot it
+        // copied (design.md "Field Takes From Dying Aggregates").
         if (shell.len != 0 and try self.shellCoversLayout(self.store.getLocal(target).layout_idx, shell)) {
             std.debug.assert(take_kind == .none);
             const representation = try self.requireAggregateRepresentation(state, source);
@@ -6109,7 +6330,7 @@ const Certifier = struct {
     /// projected field. Once a take has spent that unit on this path (settled,
     /// or pending settlement from an aggregate move), the field's bytes no
     /// longer denote a unit this value holds, so reading them again is
-    /// invalid unless an intact surplus unit still keeps them live.
+    /// invalid unless another unit of the container still holds the field.
     fn requireFieldUntaken(
         self: *Certifier,
         state: *State,
@@ -6127,7 +6348,7 @@ const Certifier = struct {
             .count = self.layouts.ownershipSlotCount(self.store.getLocal(target).layout_idx),
         } else .{ .first = 0, .count = 1 };
         var steps: usize = 0;
-        while (self.viewParent(state, container)) |view| {
+        while (self.viewParent(state, container) orelse self.unionViewParent(state, container)) |view| {
             steps += 1;
             if (steps > self.values.items.len) return self.fail("struct view chain contained a cycle", .{});
             range.first += view.first;
@@ -6137,17 +6358,19 @@ const Certifier = struct {
         if (claims.isEmpty()) return;
         const container_origin = self.values.items[container].origin;
         const container_layout = self.layouts.getLayout(self.store.getLocal(container_origin).layout_idx);
+        // A field stays readable while one of the container's units still
+        // holds it. A claimed container keeps a conceptual unit even when
+        // its explicit balance is zero.
+        const units: u32 = @intCast(@max(state.balanceOf(container), 1));
         const taken = switch (container_layout.tag) {
             .struct_, .dynamic => blk: {
                 const required = try self.requiredClaims(container) orelse break :blk false;
-                const in_range = try self.claimsInRange(required, range);
-                if (!claims.intersects(in_range)) break :blk false;
-                // A view may copy slots already given away when its residual
-                // shell names every one of them.
-                if (shell.len == 0) break :blk true;
                 var slot = range.first;
                 while (slot < range.first + range.count) : (slot += 1) {
-                    if (!claims.contains(slot)) continue;
+                    if (!required.contains(slot)) continue;
+                    if (state.claimCount(container, slot) < units) continue;
+                    // A view may copy slots already given away when its
+                    // residual shell names them.
                     var listed = false;
                     for (0..shell.len) |index| {
                         if (GuardedList.at(shell, index) == slot - range.first) listed = true;
@@ -6156,7 +6379,7 @@ const Certifier = struct {
                 }
                 break :blk false;
             },
-            .tag_union => true,
+            .tag_union => state.claimCount(container, 0) >= units,
             .scalar,
             .box,
             .box_of_zst,
@@ -6169,7 +6392,7 @@ const Certifier = struct {
             .ptr,
             => false,
         };
-        if (!taken or try self.hasIntactSurplusUnit(state, container)) return;
+        if (!taken) return;
         self.diag.context_local = source;
         self.diag.context_proc = self.current_proc;
         self.diag.context_stmt = self.current_stmt;
@@ -6188,13 +6411,13 @@ const Certifier = struct {
         const source = switch (assign.op.kind) {
             .local => assign.op.source,
             .field => {
-                // A struct view's shell names refcounted slots of its own
-                // layout; the read itself checks them against the claims of
-                // the container it views.
+                // A view's shell names refcounted slots of its own layout (a
+                // tag union's one slot is slot 0); the read itself checks
+                // them against the claims of the container it views.
                 if (absent_fields.len == 0) return;
                 const target_layout = self.store.getLocal(assign.target).layout_idx;
-                if (!self.isRc(assign.target) or self.layouts.getLayout(target_layout).tag != .struct_) {
-                    return self.fail("residual-shell field metadata attached to a non-struct field read", .{});
+                if (!self.isRc(assign.target) or !self.isShellLayout(target_layout)) {
+                    return self.fail("residual-shell field metadata attached to a field read that is no struct or tag union", .{});
                 }
                 const required = try self.requiredClaimsForLayout(target_layout) orelse ClaimSet{};
                 for (0..absent_fields.len) |index| {
@@ -6225,9 +6448,19 @@ const Certifier = struct {
         const target_layout = self.store.getLocal(assign.target).layout_idx;
         const source_layout = self.store.getLocal(source).layout_idx;
         const source_layout_value = self.layouts.getLayout(source_layout);
-        if (!self.isRc(source) or !self.isRc(assign.target) or target_layout != source_layout or source_layout_value.tag != .struct_) {
+        if (!self.isRc(source) or !self.isRc(assign.target) or target_layout != source_layout or !self.isShellLayout(source_layout)) {
             if (absent_fields.len != 0) {
-                return self.fail("residual-shell field metadata attached to a non-struct or layout-changing alias", .{});
+                return self.fail("residual-shell field metadata attached to a layout-changing alias or one that is no struct or tag union", .{});
+            }
+            return;
+        }
+        if (source_layout_value.tag == .tag_union) {
+            // An alias of a tag union view whose slot its container gave
+            // away names that one slot. The alias shares the view's value,
+            // which the view's own read already checked.
+            if (absent_fields.len == 0) return;
+            if (absent_fields.len != 1 or GuardedList.at(absent_fields, 0) != 0) {
+                return self.fail("residual-shell metadata of a tag union alias names other than its one slot", .{});
             }
             return;
         }
@@ -6447,8 +6680,8 @@ const Certifier = struct {
     }
 
     fn applyLowLevel(self: *Certifier, state: *State, assign: anytype) CertifyError!void {
-        if (assign.op == .box_unbox) {
-            return self.fail("post-ARC LIR retained a consuming Box.unbox instead of explicit RC statements", .{});
+        if (assign.op.deadLenderArg() != null) {
+            return self.fail("post-ARC LIR retained a consuming {s} instead of explicit RC statements", .{@tagName(assign.op)});
         }
         const arg_locals = self.store.getLocalSpan(assign.args);
 
@@ -6626,14 +6859,14 @@ const Certifier = struct {
             },
             .call_erased => {
                 const call = op.call_erased;
-                if (!LIR.erasedCallReuseFieldsMatch(call)) return self.fail("erased call reuse flag and ownership source disagreed", .{});
-                // An owned call transfers one unit of its closure to the
+                // A transferring call moves one unit of its closure to the
                 // callee, and a deferred call keeps one reference to its
                 // closure until whoever makes the call transfers or
-                // releases it.
-                if (call.reuse_source) |reuse_source| {
-                    const reuse_value = try self.requireLive(state, reuse_source);
-                    if (self.isRc(reuse_source)) try self.consumeUnit(state, reuse_value, reuse_source);
+                // releases it. Any other call borrows its closure.
+                const owner = LIR.erasedCallOwner(call);
+                const owner_value = try self.requireLive(state, owner);
+                if (call.reuse_closure) {
+                    if (self.isRc(owner)) try self.consumeUnit(state, owner_value, owner);
                 } else if (call.deferred and self.isRc(call.closure)) try self.consumeUnit(state, state.valueOf(call.closure), call.closure);
                 if (call.args) |args| {
                     if (self.isRc(args)) try self.consumeUnit(state, state.valueOf(args), args);
@@ -7242,54 +7475,51 @@ test "certify accepts owned binding released once" {
     try f.certify();
 }
 
-test "certify rejects inconsistent erased call reuse fields" {
-    {
-        var f = try CertifyTest.init(testing.allocator);
-        defer f.deinit();
-        const erased_callable = try f.layouts.insertErasedCallable();
-        const closure = try f.local(erased_callable);
-        const result = try f.local(erased_callable);
-        const ret = try f.ret(result);
-        const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
-        const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
-            .target = result,
-            .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
-                .closure = closure,
-                .args = LIR.LocalSpan.empty(),
-                .arg_plan = arg_plan,
-                .reuse_closure = true,
-                .reuse_source = null,
-            }),
-            .next = ret,
-        } }, .test_fixture);
-        _ = try f.addProc(&.{closure}, body, erased_callable);
-        try testing.expectError(error.Certification, f.certify());
-        try testing.expect(std.mem.find(u8, f.diag.message(), "reuse flag and ownership source disagreed") != null);
-    }
+test "certify rejects a deferred erased call that transfers its closure" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const closure = try f.local(erased_callable);
+    const result = try f.local(erased_callable);
+    const ret = try f.ret(result);
+    const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
+    const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = result,
+        .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+            .closure = closure,
+            .args = LIR.LocalSpan.empty(),
+            .arg_plan = arg_plan,
+            .reuse_closure = true,
+            .deferred = true,
+        }),
+        .next = ret,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{closure}, body, erased_callable);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "deferred erased call transferred its closure") != null);
+}
 
-    {
-        var f = try CertifyTest.init(testing.allocator);
-        defer f.deinit();
-        const erased_callable = try f.layouts.insertErasedCallable();
-        const closure = try f.local(erased_callable);
-        const result = try f.local(erased_callable);
-        const ret = try f.ret(result);
-        const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
-        const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
-            .target = result,
-            .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
-                .closure = closure,
-                .args = LIR.LocalSpan.empty(),
-                .arg_plan = arg_plan,
-                .reuse_closure = false,
-                .reuse_source = closure,
-            }),
-            .next = ret,
-        } }, .test_fixture);
-        _ = try f.addProc(&.{closure}, body, erased_callable);
-        try testing.expectError(error.Certification, f.certify());
-        try testing.expect(std.mem.find(u8, f.diag.message(), "reuse flag and ownership source disagreed") != null);
-    }
+test "certify keeps a borrowed erased call's closure with its caller" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const closure = try f.local(erased_callable);
+    const result = try f.local(erased_callable);
+    const ret = try f.ret(result);
+    const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
+    // The call borrows the owned closure parameter, which is never released.
+    const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = result,
+        .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+            .closure = closure,
+            .args = LIR.LocalSpan.empty(),
+            .arg_plan = arg_plan,
+            .reuse_source = closure,
+        }),
+        .next = ret,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{closure}, body, erased_callable);
+    try testing.expectError(error.Certification, f.certify());
 }
 
 test "certify accepts erased call reuse from a transparent outer owner" {
@@ -7357,7 +7587,9 @@ test "erased owner resolution re-derives a reuse source that became an alias" {
     const proc_id = try f.addProc(&.{owner}, body, erased_callable);
     try testing.expectError(error.Certification, f.certify());
 
-    try erased_owner.resolveProcReuseSources(f.allocator, &f.store, &f.layouts, proc_id);
+    var scratch = erased_owner.Scratch.init(f.allocator);
+    defer scratch.deinit();
+    try erased_owner.resolveProcReuseSources(&scratch, &f.store, &f.layouts, proc_id);
     try testing.expectEqual(owner, f.store.stmtRow(f.store.getCFStmtImmediate(call).assign_call_erased.data).reuse_source.?);
     try f.certify();
 }
@@ -10021,6 +10253,164 @@ test "certify flags a view of a dismantled record that leaves its taken slot unn
     try testing.expect(std.mem.find(u8, f.diag.message(), "use of dead refcounted local") != null);
 }
 
+/// `outer = { 0: [Z, P({ Str, Str })], 1: Str }` as a parameter whose union
+/// is taken and released, then read again as a tag union (marked with
+/// `union_shell`) for its discriminant, and, when `read_payload`, for its
+/// payload too, before field 1 is taken and released.
+fn buildUnionReadAfterTake(f: *CertifyTest, union_shell: []const u32, read_payload: bool) Allocator.Error!void {
+    const union_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.pair_str,
+    });
+    const outer_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = union_layout },
+        .{ .index = 1, .layout = .str },
+    });
+    const outer = try f.local(outer_layout);
+    const taken_union = try f.local(union_layout);
+    const other = try f.local(.str);
+    const view = try f.local(union_layout);
+    const discriminant = try f.local(.u32);
+    const payload = try f.local(f.pair_str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const release_other = try f.decrefStmt(other, .str, result_assign);
+    const take_other = try takeFieldStmt(f, other, outer, 1, release_other);
+    const after_discriminant = if (read_payload) try tagPayloadStructReadStmt(f, payload, view, 1, take_other) else take_other;
+    const read_discriminant = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = discriminant,
+        .op = .discriminant(view),
+        .next = after_discriminant,
+    } }, .test_fixture);
+    const read_view = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = view,
+        .op = .field(outer, 0),
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .residual_shell_absent_fields = try f.store.addU32Span(union_shell),
+        }),
+        .next = read_discriminant,
+    } }, .test_fixture);
+    const release_union = try f.decrefStmt(taken_union, union_layout, read_view);
+    const body = try takeFieldStmt(f, taken_union, outer, 0, release_union);
+    _ = try f.addProc(&.{outer}, body, .i64);
+}
+
+test "certify accepts a discriminant read of a taken tag union whose shell names its slot" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildUnionReadAfterTake(&f, &.{0}, false);
+    try f.certify();
+}
+
+test "certify flags a tag union read after its slot was taken without naming it absent" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildUnionReadAfterTake(&f, &.{}, false);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "after the field's stored unit was taken") != null);
+}
+
+test "certify flags a payload read through a tag union shell" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildUnionReadAfterTake(&f, &.{0}, true);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "after the field's stored unit was taken") != null);
+}
+
+/// `record = { 0: Str, 1: Str }` as a parameter, copied into the join cell
+/// `cell` by a retained alias, so the one record value holds two units. The
+/// record gives field 0 away before the jump; in the join body the cell's
+/// field 0 moves into `held`, which is carried into a second join; there the
+/// cell gives field 1 away and the record gives field 1 away last.
+/// `.overtake` also takes the record's field 0 a second time, a third claim
+/// of a field the two units hold only twice; `.read_spent` reads the
+/// record's field 0 once the cell's field 0 has moved into `held`, when both
+/// units have given it away.
+const RetainedCopyVariant = enum { sound, overtake, read_spent };
+
+fn buildRetainedCopyDismantledAcrossJoin(f: *CertifyTest, variant: RetainedCopyVariant) Allocator.Error!void {
+    const held_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = .str }});
+    const record = try f.local(f.pair_str);
+    const copy = try f.local(f.pair_str);
+    const cell = try f.local(f.pair_str);
+    const record_first = try f.local(.str);
+    const cell_first = try f.local(.str);
+    const held = try f.local(held_layout);
+    const out = try f.local(held_layout);
+    const cell_second = try f.local(.str);
+    const record_second = try f.local(.str);
+    const record_first_again = try f.local(.str);
+    const record_first_peek = try f.local(.str);
+    const result = try f.local(.i64);
+    const join_cell = f.freshJoinPointId();
+    const join_out = f.freshJoinPointId();
+
+    var after = try f.ret(result);
+    after = try f.assignI64(result, after);
+    after = try f.decrefStmt(out, held_layout, after);
+    if (variant == .overtake) {
+        after = try f.decrefStmt(record_first_again, .str, after);
+        after = try takeFieldStmt(f, record_first_again, record, 0, after);
+    }
+    after = try f.decrefStmt(record_second, .str, after);
+    after = try takeFieldStmt(f, record_second, record, 1, after);
+    after = try f.decrefStmt(cell_second, .str, after);
+    after = try takeFieldStmt(f, cell_second, cell, 1, after);
+
+    var cell_body = try f.store.addCFStmt(.{ .jump = .{ .target = join_out } }, .test_fixture);
+    cell_body = try f.store.addCFStmt(.{ .set_local = .{ .target = out, .value = held, .mode = .initialize_join_param, .next = cell_body } }, .test_fixture);
+    if (variant == .read_spent) cell_body = try fieldReadStmt(f, record_first_peek, record, 0, cell_body);
+    cell_body = try f.store.addCFStmt(.{ .assign_struct = .{ .target = held, .fields = try f.store.addLocalSpan(&.{cell_first}), .next = cell_body } }, .test_fixture);
+    cell_body = try takeFieldStmt(f, cell_first, cell, 0, cell_body);
+    cell_body = try f.store.addCFStmt(.{ .join = .{
+        .id = join_out,
+        .params = try f.store.addLocalSpan(&.{out}),
+        .body = after,
+        .remainder = cell_body,
+    } }, .test_fixture);
+
+    var enter = try f.store.addCFStmt(.{ .jump = .{ .target = join_cell } }, .test_fixture);
+    enter = try f.decrefStmt(record_first, .str, enter);
+    enter = try takeFieldStmt(f, record_first, record, 0, enter);
+    enter = try f.store.addCFStmt(.{ .set_local = .{ .target = cell, .value = copy, .mode = .initialize_join_param, .next = enter } }, .test_fixture);
+    enter = try f.increfStmt(copy, f.pair_str, enter);
+    enter = try f.store.addCFStmt(.{ .assign_ref = .{ .target = copy, .op = .local(record), .next = enter } }, .test_fixture);
+    const body = try f.store.addCFStmt(.{ .join = .{
+        .id = join_cell,
+        .params = try f.store.addLocalSpan(&.{cell}),
+        .body = cell_body,
+        .remainder = enter,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{record}, body, .i64);
+}
+
+test "certify accepts dismantling a retained copy while the original's dismantle is incomplete" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildRetainedCopyDismantledAcrossJoin(&f, .sound);
+    f.certify() catch |err| {
+        std.debug.print("certifier: {s}\n", .{f.diag.message()});
+        return err;
+    };
+}
+
+test "certify flags a field taken more times than its value holds units" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildRetainedCopyDismantledAcrossJoin(&f, .overtake);
+    try testing.expectError(error.Certification, f.certify());
+}
+
+test "certify flags a read of a field every unit of its value gave away" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildRetainedCopyDismantledAcrossJoin(&f, .read_spent);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "after the field's stored unit was taken") != null);
+}
+
 test "certify flags a double take of one field" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
@@ -10207,7 +10597,30 @@ test "certify rejects consuming Box.unbox after the ARC boundary" {
     _ = try f.addProc(&.{boxed}, body, .str);
 
     try testing.expectError(error.Certification, f.certify());
-    try testing.expect(std.mem.find(u8, f.diag.message(), "post-ARC LIR retained a consuming Box.unbox") != null);
+    try testing.expect(std.mem.find(u8, f.diag.message(), "post-ARC LIR retained a consuming box_unbox") != null);
+}
+
+test "certify rejects a consuming capture load after the ARC boundary" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const captures = try f.layouts.putStructFields(&[_]layout_mod.StructField{.{ .index = 0, .layout = .str }});
+    const capture_ptr = try f.local(.opaque_ptr);
+    const owner = try f.local(erased_callable);
+    const record = try f.local(captures);
+    const ret = try f.ret(record);
+    const body = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = record,
+        .op = .erased_capture_load,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.erased_capture_load.rcEffect()),
+        .args = try f.store.addLocalSpan(&.{ capture_ptr, owner }),
+        .next = ret,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{ capture_ptr, owner }, body, captures);
+
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "post-ARC LIR retained a consuming erased_capture_load") != null);
 }
 
 const FrameNestShape = enum {

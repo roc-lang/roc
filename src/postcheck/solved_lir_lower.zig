@@ -553,7 +553,6 @@ const RuntimeSchemaRequest = struct {
 
 const CaptureSource = union(enum) {
     record: LIR.LocalId,
-    erased_ptr: LIR.LocalId,
 };
 
 const CaptureBinding = struct {
@@ -956,6 +955,10 @@ const Lowerer = struct {
     erased_owner_states: std.ArrayList(ErasedOwnerState),
     erased_call_owner_uses: std.ArrayList(ErasedCallOwnerUse),
     erased_capture_ptr_ty: ?Type.TypeId = null,
+    /// The `{ len, start }` record layout a list rest pattern's sublist takes,
+    /// which the coordinator creates when it first prepares or lowers a bound
+    /// rest pattern (`listRestRangeLayout`).
+    list_rest_range_layout: ?layout.Idx = null,
     parallel_metrics: ?*ParallelMetrics = null,
     /// Worker callbacks borrow the coordinator's frozen identity tables while
     /// owning procedure-local scratch and LIR body storage.
@@ -2633,6 +2636,7 @@ const Lowerer = struct {
                 .list => |list| {
                     for (view.patSpan(list.patterns)) |pattern| try self.add(.{ .pattern = pattern });
                     if (list.rest.get()) |rest| if (rest.pattern.get()) |pattern| {
+                        _ = try self.lowerer.listRestRangeLayout();
                         try self.add(.{ .pattern = pattern });
                     };
                 },
@@ -2868,18 +2872,15 @@ const Lowerer = struct {
 
                 try self.noteLocalSpan(self.result.store.getProcSpecImmediate(proc_id).args);
 
-                var capture_snapshot: ?LIR.LocalId = null;
+                // An erased procedure reads its capture record once, at entry,
+                // into a record its body reads like any other capture record.
+                var capture_record: ?LIR.LocalId = null;
                 if (spec.capture_ty.get()) |capture_ty| switch (spec.abi) {
                     .finite => {},
                     .erased => {
-                        const capture_ptr = GuardedList.at(proc_args, lifted_args.len);
-                        if (try self.erasedResultDemand(entry.ret) == .single_slot) {
-                            const snapshot = try self.addTemp(capture_ty);
-                            try self.bindCaptureRecord(spec.captures, capture_ty, .{ .record = snapshot });
-                            capture_snapshot = snapshot;
-                        } else {
-                            try self.bindCaptureRecord(spec.captures, capture_ty, .{ .erased_ptr = capture_ptr });
-                        }
+                        const record = try self.addTemp(capture_ty);
+                        try self.bindCaptureRecord(spec.captures, capture_ty, .{ .record = record });
+                        capture_record = record;
                     },
                 };
 
@@ -2890,10 +2891,10 @@ const Lowerer = struct {
                 if (self.return_forwarding_repeatable_depth != 0) {
                     Common.invariant("function lowering left a repeatable return-forwarding region active");
                 }
-                if (capture_snapshot) |snapshot| {
-                    body = try self.lowerAnchoredErasedCaptureLoadInto(
+                if (capture_record) |record| {
+                    body = try self.lowerErasedCaptureLoadInto(
                         where,
-                        snapshot,
+                        record,
                         GuardedList.at(proc_args, lifted_args.len),
                         GuardedList.at(proc_args, lifted_args.len + 1),
                         body,
@@ -3285,9 +3286,8 @@ const Lowerer = struct {
 
         const record_local = switch (capture.source) {
             .record => |local| local,
-            .erased_ptr => try self.addTemp(capture.record_ty),
         };
-        const assign = try self.assignTypedRefRead(
+        return try self.assignTypedRefRead(
             where,
             target,
             capture.ty,
@@ -3296,29 +3296,16 @@ const Lowerer = struct {
             LIR.RefOp.field(record_local, field_index),
             next,
         );
-        return switch (capture.source) {
-            .record => assign,
-            .erased_ptr => |ptr| try self.lowerErasedCaptureLoadInto(where, record_local, ptr, assign),
-        };
     }
 
-    fn lowerErasedCaptureLoadInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, ptr: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        return try self.result.store.addCFStmt(.{ .assign_low_level = .{
-            .target = target,
-            .op = .erased_capture_load,
-            .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.erased_capture_load.rcEffect()),
-            .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{ptr}),
-            .next = next,
-        } }, where.source());
-    }
-
-    /// Snapshot an erased frame's capture record before its callable
-    /// allocation can be consumed as a result destination. `owner` is an
-    /// ARC-only sequencing anchor: backends read capture bytes through `ptr`,
-    /// while the explicit owner operand keeps the allocation live through the
-    /// copy. `retain_result` then gives the snapshot independent ownership
-    /// before later statements may consume the owner.
-    fn lowerAnchoredErasedCaptureLoadInto(
+    /// Load an erased frame's capture record. Backends read the capture bytes
+    /// through `ptr`; `owner` is the frame's reuse argument, the allocation
+    /// those bytes live in whenever the caller transferred it. ARC reads the
+    /// record out of `owner` as `Box.unbox` reads a payload out of its box:
+    /// borrowing while `owner` stays live (a repack of the allocation as the
+    /// result), and otherwise taking the captures as `owner` dies at the
+    /// load, so the record is an owned container whose fields the body takes.
+    fn lowerErasedCaptureLoadInto(
         self: *Lowerer,
         where: LowerSite,
         target: LIR.LocalId,
@@ -3329,7 +3316,7 @@ const Lowerer = struct {
         return try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = .erased_capture_load,
-            .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.RcEffect.retainsResult()),
+            .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.erased_capture_load.rcEffect()),
             .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{ ptr, owner }),
             .next = next,
         } }, where.source());
@@ -6634,6 +6621,7 @@ const Lowerer = struct {
             return exprTask(where, target, body, result_ty, jump);
         }
         const branch_value = try self.addTemp(result_ty);
+        self.noteErasedOwnerDefinition(target, null);
         const initialize = try self.result.store.addCFStmt(.{ .set_local = .{
             .target = target,
             .value = branch_value,
@@ -8655,24 +8643,21 @@ const Lowerer = struct {
             next
         else
             try self.assignTypedBoundary(where, target, result_ty, call_target, abi_ret_ty, next);
-        const reuse_closure = try self.erasedResultDemand(abi_ret_ty) == .single_slot;
         const call_stmt = try self.result.store.addCFStmt(.{ .assign_call_erased = .{
             .target = call_target,
             .data = try self.result.store.addStmtRow(LIR.ErasedCallData, .{
                 .closure = callee,
                 .args = try self.result.store.addLocalSpan(args.ids),
                 .arg_plan = try self.erasedCallArgsPlan(args.ids),
-                .reuse_closure = reuse_closure,
-                .reuse_source = if (reuse_closure) callee else null,
+                .reuse_source = callee,
+                .result_reuse = try self.erasedResultDemand(abi_ret_ty) == .single_slot,
             }),
             .next = after_call,
         } }, where.source());
-        if (reuse_closure) {
-            try self.erased_call_owner_uses.append(self.allocator, .{
-                .stmt = call_stmt,
-                .closure = callee,
-            });
-        }
+        try self.erased_call_owner_uses.append(self.allocator, .{
+            .stmt = call_stmt,
+            .closure = callee,
+        });
         return .{ .tail = try self.operandChain(where, args, arg_tys, .{ .expr = .{ .target = callee, .expr = callee_expr, .ty = callee_ty } }, call_stmt) };
     }
 
@@ -10784,6 +10769,7 @@ const Lowerer = struct {
         }
         const err_payload_local = try self.addLocalForLayout(err_payload_layout);
         var jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_point.join_id } }, where.glue());
+        self.noteErasedOwnerDefinition(target_local, null);
         jump = try self.result.store.addCFStmt(.{ .set_local = .{
             .target = target_local,
             .value = err_payload_local,
@@ -11331,14 +11317,10 @@ const Lowerer = struct {
         }
 
         pub fn readListRest(self: MatchTreeCtx, dest: LIR.LocalId, source: LIR.LocalId, len_local: LIR.LocalId, front: u64, back: u64, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-            // rest = take_first(take_last(source, len - front), len - (front + back))
-            const front_dropped = try self.l.addLocalForLayout(self.l.result.store.getLocal(source).layout_idx);
+            // rest = sublist(source, { len: len - (front + back), start: front })
             const keep_len = try self.l.addLocalForLayout(.u64);
-            var current = try self.l.assignBinaryLowLevel(self.where, dest, .list_take_first, front_dropped, keep_len, next);
-            current = try self.l.lenMinusConst(self.where, keep_len, len_local, @intCast(front + back), current);
-            const keep_after_front = try self.l.addLocalForLayout(.u64);
-            current = try self.l.assignBinaryLowLevel(self.where, front_dropped, .list_take_last, source, keep_after_front, current);
-            return try self.l.lenMinusConst(self.where, keep_after_front, len_local, @intCast(front), current);
+            const sublist = try self.l.assignListRest(self.where, dest, source, @intCast(front), keep_len, next);
+            return try self.l.lenMinusConst(self.where, keep_len, len_local, @intCast(front + back), sublist);
         }
 
         pub fn readNominalBacking(self: MatchTreeCtx, dest: LIR.LocalId, backing_ty: Type.TypeId, source: LIR.LocalId, nominal_ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -11869,15 +11851,10 @@ const Lowerer = struct {
                 task.current = input.?;
                 if (elems.len != 0) {
                     const rest = list.rest.get().?;
-                    // rest = take_first(take_last(source, len - rest.index), len - fixed_count)
-                    const source_layout = self.result.store.getLocal(task.source).layout_idx;
-                    const front_dropped = try self.addLocalForLayout(source_layout);
+                    // rest = sublist(source, { len: len - fixed_count, start: rest.index })
                     const keep_len = try self.addLocalForLayout(.u64);
-                    task.current = try self.assignBinaryLowLevel(where, task.rest_local, .list_take_first, front_dropped, keep_len, task.current);
+                    task.current = try self.assignListRest(where, task.rest_local, task.source, @intCast(rest.index), keep_len, task.current);
                     task.current = try self.lenMinusConst(where, keep_len, task.len_local, fixed_count, task.current);
-                    const keep_after_front = try self.addLocalForLayout(.u64);
-                    task.current = try self.assignBinaryLowLevel(where, front_dropped, .list_take_last, task.source, keep_after_front, task.current);
-                    task.current = try self.lenMinusConst(where, keep_after_front, task.len_local, @intCast(rest.index), task.current);
                 }
             },
             ListPatternCursor.element => {
@@ -11998,6 +11975,36 @@ const Lowerer = struct {
             .args = try self.result.store.addLocalSpan(&args),
             .next = next,
         } }, where.source());
+    }
+
+    /// Emit `target = list_sublist(source, { len: len_local, start })`, the
+    /// rest of a list pattern: the items after its `start` leading patterns,
+    /// `len_local` of them. The `{ len, start }` record is in field-name
+    /// order, as `List.sublist` takes it.
+    fn assignListRest(self: *Lowerer, where: LowerSite, target: LIR.LocalId, source: LIR.LocalId, start: i64, len_local: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const range = try self.addLocalForLayout(try self.listRestRangeLayout());
+        const start_local = try self.addLocalForLayout(.u64);
+        const sublist = try self.assignBinaryLowLevel(where, target, .list_sublist, source, range, next);
+        const build_range = try self.result.store.addCFStmt(.{ .assign_struct = .{
+            .target = range,
+            .fields = try self.result.store.addLocalSpan(&.{ len_local, start_local }),
+            .next = sublist,
+        } }, where.source());
+        return try self.assignU64Literal(where, start_local, start, build_range);
+    }
+
+    /// The `{ len, start }` record layout of a list rest pattern's sublist.
+    /// The coordinator creates it the first time it prepares or lowers a bound
+    /// rest pattern; a worker only reads it, since workers never add layouts.
+    fn listRestRangeLayout(self: *Lowerer) Common.LowerError!layout.Idx {
+        if (self.list_rest_range_layout) |existing| return existing;
+        if (self.worker_callback) self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared list rest range layout");
+        const created = try self.result.layouts.putStructFields(&.{
+            .{ .index = 0, .layout = .u64 },
+            .{ .index = 1, .layout = .u64 },
+        });
+        self.list_rest_range_layout = created;
+        return created;
     }
 
     /// Emit `target = len_local - value` using a fresh u64 literal operand.
@@ -12549,6 +12556,7 @@ const Lowerer = struct {
         while (i > 0) {
             i -= 1;
             const arg = args[i] orelse continue;
+            self.noteErasedOwnerDefinition(GuardedList.at(param_locals, i), null);
             current = try self.result.store.addCFStmt(.{ .set_local = .{
                 .target = GuardedList.at(param_locals, i),
                 .value = arg,

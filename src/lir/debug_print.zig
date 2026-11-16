@@ -145,6 +145,7 @@ const Printer = struct {
                     if (s.reuse_source) |reuse_source| {
                         try writer.print(" reuse_source=l{d}", .{@backingInt(reuse_source)});
                     }
+                    if (s.result_reuse) try writer.writeAll(" result_reuse");
                     if (s.deferred) try writer.writeAll(" deferred");
                     if (s.drive != .none) try writer.print(" drive={s}", .{@tagName(s.drive)});
                     try writer.writeByte('\n');
@@ -458,6 +459,7 @@ const Printer = struct {
             },
             .call_erased => |call| {
                 if (call.reuse_closure) try writer.writeAll(" owned");
+                if (call.result_reuse) try writer.writeAll(" result_reuse");
                 if (call.deferred) try writer.writeAll(" deferred");
                 if (call.drive != .none) try writer.print(" drive={s}", .{@tagName(call.drive)});
             },

@@ -36,7 +36,7 @@ run! = |_input| {
 	before_counters = Host.alloc_count!()
 	kept_counters = List.drop_first(counters, 0)
 	counter_allocs = Host.alloc_count!() - before_counters
-	counted = List.fold(kept_counters, 0, |sum, counter| sum + Box.unbox(counter)(5))
+	counted = List.fold(kept_counters, 0.U64, |sum, counter| sum + Box.unbox(counter)(5))
 
 	"handlers: ${List.len(kept).to_str()}, allocations: ${handler_allocs.to_str()}, greeters: ${List.len(kept_greeters).to_str()}, allocations: ${greeter_allocs.to_str()}, counters: ${List.len(kept_counters).to_str()}, allocations: ${counter_allocs.to_str()}, counted: ${counted.to_str()}"
 }

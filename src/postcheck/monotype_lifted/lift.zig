@@ -8,6 +8,8 @@ const Common = @import("../common.zig");
 const Mono = @import("../monotype/ast.zig");
 const MonoType = @import("../monotype/type.zig");
 const Ast = @import("ast.zig");
+const body_copy = @import("body_copy.zig");
+const sequenced = @import("sequenced.zig");
 const checked = @import("check").CheckedModule;
 const BinderId = @import("check").CheckedBodies.BinderId;
 
@@ -157,18 +159,69 @@ pub fn run(
     program.retains_declared_captures = owned.retains_declared_captures;
 
     const source_view = movedMonoView(&owned, &program);
+    if (@import("builtin").mode == .debug) try assertMonotypeSharingInvariant(allocator, &program, source_view.defs);
     var lifter = try Lifter.init(allocator, source_view, &program);
     defer lifter.deinit();
 
     try lifter.lowerDefsAndRoots();
     program.next_symbol = lifter.symbols.next;
+    try lifter.copySharedExprs();
 
-    try @import("normalize.zig").run(&program);
-
+    try sequenced.verify(&program);
     verifyCaptureInvariants(&program);
 
     owned.deinit();
     return program;
+}
+
+/// Debug builds check the Monotype sharing invariant where lifting consumes
+/// Monotype: no expression with children is reachable twice from the
+/// definitions' bodies, within one body or across bodies. A leaf (a local
+/// read, a literal) may be shared, since lowering it again costs nothing.
+fn assertMonotypeSharingInvariant(allocator: Allocator, program: *const Ast.Program, defs: []const Mono.Def) Allocator.Error!void {
+    const expr_seen = try allocator.alloc(bool, program.exprs.len());
+    defer allocator.free(expr_seen);
+    @memset(expr_seen, false);
+    const stmt_seen = try allocator.alloc(bool, program.stmts.len());
+    defer allocator.free(stmt_seen);
+    @memset(stmt_seen, false);
+    var stack: std.ArrayList(Ast.ExprChild) = .empty;
+    defer stack.deinit(allocator);
+    var children: std.ArrayList(Ast.ExprChild) = .empty;
+    defer children.deinit(allocator);
+    for (defs) |def| {
+        const body = switch (def.body) {
+            .roc => |body| body,
+            .hosted => continue,
+        };
+        try stack.append(allocator, .{ .expr = @fromBackingInt(@backingInt(body)) });
+        while (stack.pop()) |item| {
+            children.clearRetainingCapacity();
+            switch (item) {
+                .expr => |id| {
+                    try Ast.appendChildren(allocator, program, id, &children);
+                    if (expr_seen[@backingInt(id)]) {
+                        if (children.items.len != 0) {
+                            Common.invariantFmt("Monotype expression {d} ({s}) is reachable from two positions", .{
+                                @backingInt(id),
+                                @tagName(program.getExpr(id).data),
+                            });
+                        }
+                        continue;
+                    }
+                    expr_seen[@backingInt(id)] = true;
+                },
+                .stmt => |id| {
+                    if (stmt_seen[@backingInt(id)]) {
+                        Common.invariantFmt("Monotype statement {d} is reachable from two positions", .{@backingInt(id)});
+                    }
+                    stmt_seen[@backingInt(id)] = true;
+                    try Ast.appendStmtChildren(allocator, program, id, &children);
+                },
+            }
+            try stack.appendSlice(allocator, children.items);
+        }
+    }
 }
 
 /// Build the read-only Monotype input view after side arrays have been moved
@@ -407,6 +460,10 @@ const Lifter = struct {
     fn_bodies: std.ArrayList(?MonoFnBody),
     nested_fn_ids: collections.DenseMap(Ast.FnId, void),
     initialized_fns: collections.DenseMap(Ast.FnId, void),
+    /// Each place the rewrite reached an expression that an earlier holder
+    /// already names. That holder takes a copy of its own of the expression
+    /// once lifting has finished (`copySharedExprs`).
+    shared_exprs: std.ArrayList(SharedExpr),
     symbols: Common.SymbolGen,
     /// Solved capture set per lifted function, indexed by `Ast.FnId`. Computed
     /// as a least fixed point over the function-reference graph before any body
@@ -436,6 +493,7 @@ const Lifter = struct {
             .fn_bodies = .empty,
             .nested_fn_ids = collections.DenseMap(Ast.FnId, void).init(allocator),
             .initialized_fns = collections.DenseMap(Ast.FnId, void).init(allocator),
+            .shared_exprs = .empty,
             .symbols = .{ .next = source.next_symbol },
             .fn_captures = &.{},
             .fn_capture_rows = &.{},
@@ -445,6 +503,7 @@ const Lifter = struct {
     fn deinit(self: *Lifter) void {
         self.allocator.free(self.fn_capture_rows);
         self.allocator.free(self.fn_captures);
+        self.shared_exprs.deinit(self.allocator);
         self.initialized_fns.deinit();
         self.nested_fn_ids.deinit();
         self.fn_bodies.deinit(self.allocator);
@@ -552,7 +611,7 @@ const Lifter = struct {
         const body: Ast.FnBody = switch (def.body) {
             .roc => |body| blk: {
                 const outer_shapes = self.output.beginFnShapes(fn_id);
-                try self.rewriteExpr(body);
+                try self.rewriteExpr(fn_id, body);
                 shapes = self.output.finishFnShapes(outer_shapes);
                 break :blk .{ .roc = body };
             },
@@ -581,7 +640,7 @@ const Lifter = struct {
 
     fn lowerNestedDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.NestedDef) Allocator.Error!void {
         const outer_shapes = self.output.beginFnShapes(fn_id);
-        try self.rewriteExpr(def.body);
+        try self.rewriteExpr(fn_id, def.body);
         const shapes = self.output.finishFnShapes(outer_shapes);
         const capture_span = try self.output.addTypedLocalSpan(self.fn_captures[@backingInt(fn_id)]);
         var source = self.nestedSource(def.fn_id, def.fn_def);
@@ -607,8 +666,9 @@ const Lifter = struct {
     /// pushed in reverse so they are rewritten in source order; each
     /// expression's completion is pushed before the children it follows.
     const RewriteWork = union(enum) {
-        expr: Mono.ExprId,
-        stmt: Mono.StmtId,
+        expr: struct { id: Mono.ExprId, holder: Holder },
+        /// A statement of a list `holder` holds.
+        stmt: struct { id: Mono.StmtId, holder: Mono.ExprId },
         finish_fn_def: Mono.ExprId,
         finish_call_proc: Mono.ExprId,
         /// A call of a function definition written as its callee.
@@ -627,7 +687,85 @@ const Lifter = struct {
         captures: []const Ast.TypedLocal,
     };
 
-    fn rewriteExpr(self: *Lifter, root: Mono.ExprId) Allocator.Error!void {
+    /// What names an expression the rewrite reaches.
+    const Holder = union(enum) {
+        /// The function whose body the expression is.
+        body: Ast.FnId,
+        /// The expression it stands directly inside, or whose statement
+        /// list holds the statement it is the value of.
+        expr: Mono.ExprId,
+    };
+
+    /// An expression with expressions inside it that `holder` names after an
+    /// earlier holder does, reached while rewriting `owner`'s body.
+    const SharedExpr = struct {
+        holder: Holder,
+        expr: Mono.ExprId,
+        owner: Ast.FnId,
+
+        fn holderOrder(shared: SharedExpr) u64 {
+            return switch (shared.holder) {
+                .body => |fn_id| @backingInt(fn_id),
+                .expr => |expr| (@as(u64, 1) << 32) | @backingInt(expr),
+            };
+        }
+
+        fn lessThan(_: void, lhs: SharedExpr, rhs: SharedExpr) bool {
+            return lhs.holderOrder() < rhs.holderOrder();
+        }
+    };
+
+    /// The rewrite reached `expr` a second time, through `holder`: Monotype
+    /// names one restored constant from every place that reads it.
+    fn noteSharedExpr(self: *Lifter, holder: Holder, expr: Mono.ExprId) Allocator.Error!void {
+        if (self.output.getExpr(expr).data.isLeaf()) return;
+        try self.shared_exprs.append(self.allocator, .{
+            .holder = holder,
+            .expr = expr,
+            .owner = self.output.shapes_owner orelse Common.invariant("a lifted expression was rewritten outside any function body"),
+        });
+    }
+
+    /// Give every holder after an expression's first a copy of its own of
+    /// that expression, so each expression with expressions inside it has
+    /// exactly one parent (design.md "Operand Sequencing"). The first holder
+    /// keeps the original, and nothing else in any body is copied.
+    fn copySharedExprs(self: *Lifter) Allocator.Error!void {
+        const shared = self.shared_exprs.items;
+        if (shared.len == 0) return;
+        const output = self.output;
+        std.mem.sort(SharedExpr, shared, {}, SharedExpr.lessThan);
+        var inside: std.ArrayList(Ast.ExprId) = .empty;
+        defer inside.deinit(self.allocator);
+        var start: usize = 0;
+        while (start < shared.len) {
+            const first = shared[start];
+            var end = start + 1;
+            while (end < shared.len and shared[end].holderOrder() == first.holderOrder()) end += 1;
+            defer start = end;
+
+            // The copies' shapes are their holder's function's.
+            const outer_shapes = output.beginFnShapes(first.owner);
+            switch (first.holder) {
+                .body => |fn_id| {
+                    var function = output.getFn(fn_id);
+                    function.body = .{ .roc = try body_copy.copy(output, first.expr) };
+                    output.setFn(fn_id, function);
+                },
+                .expr => |holder| {
+                    inside.clearRetainingCapacity();
+                    for (shared[start..end]) |entry| try inside.append(self.allocator, entry.expr);
+                    try body_copy.copyInside(output, holder, inside.items);
+                },
+            }
+            const shapes = output.finishFnShapes(outer_shapes);
+            var function = output.getFn(first.owner);
+            function.shapes = function.shapes.merged(shapes);
+            output.setFn(first.owner, function);
+        }
+    }
+
+    fn rewriteExpr(self: *Lifter, fn_id: Ast.FnId, root: Mono.ExprId) Allocator.Error!void {
         var work: std.ArrayList(RewriteWork) = .empty;
         defer {
             for (work.items) |item| switch (item) {
@@ -636,10 +774,10 @@ const Lifter = struct {
             };
             work.deinit(self.allocator);
         }
-        try work.append(self.allocator, .{ .expr = root });
+        try work.append(self.allocator, .{ .expr = .{ .id = root, .holder = .{ .body = fn_id } } });
         while (work.pop()) |item| switch (item) {
-            .expr => |expr_id| try self.pushRewriteExprWork(&work, expr_id),
-            .stmt => |stmt_id| try self.pushRewriteStmtWork(&work, stmt_id),
+            .expr => |expr| try self.pushRewriteExprWork(&work, expr.id, expr.holder),
+            .stmt => |stmt| try self.pushRewriteStmtWork(&work, stmt.id, stmt.holder),
             .finish_fn_def => |expr_id| {
                 const fn_def = self.output.getExpr(expr_id).data.fn_def;
                 const lifted = self.liftedFn(fn_def.fn_id);
@@ -658,28 +796,32 @@ const Lifter = struct {
         };
     }
 
-    fn pushRewriteStmtWork(self: *Lifter, work: *std.ArrayList(RewriteWork), stmt_id: Mono.StmtId) Allocator.Error!void {
+    fn pushRewriteStmtWork(self: *Lifter, work: *std.ArrayList(RewriteWork), stmt_id: Mono.StmtId, holder: Mono.ExprId) Allocator.Error!void {
+        const stmt = self.output.getStmt(stmt_id);
+        const value: ?Mono.ExprId = switch (stmt) {
+            .let_ => |let_| let_.value,
+            .expr, .expect, .dbg => |expr| expr,
+            .return_ => |ret| ret.value,
+            .uninitialized, .crash, .checked_error => null,
+        };
         const index = @backingInt(stmt_id);
-        if (self.stmt_done.isSet(index)) return;
+        if (self.stmt_done.isSet(index)) {
+            // Another list holds this statement too, and so its value.
+            if (value) |expr| try self.noteSharedExpr(.{ .expr = holder }, expr);
+            return;
+        }
         self.stmt_done.set(index);
 
-        const stmt = self.output.getStmt(stmt_id);
         self.output.noteStmtShapes(stmt);
-        switch (stmt) {
-            .uninitialized => {},
-            .let_ => |let_| try work.append(self.allocator, .{ .expr = let_.value }),
-            .expr,
-            .expect,
-            .dbg,
-            => |expr| try work.append(self.allocator, .{ .expr = expr }),
-            .return_ => |ret| try work.append(self.allocator, .{ .expr = ret.value }),
-            .crash, .checked_error => {},
-        }
+        if (value) |expr| try work.append(self.allocator, .{ .expr = .{ .id = expr, .holder = .{ .expr = holder } } });
     }
 
-    fn pushRewriteExprWork(self: *Lifter, work: *std.ArrayList(RewriteWork), expr_id: Mono.ExprId) Allocator.Error!void {
+    fn pushRewriteExprWork(self: *Lifter, work: *std.ArrayList(RewriteWork), expr_id: Mono.ExprId, holder: Holder) Allocator.Error!void {
         const index = @backingInt(expr_id);
-        if (self.expr_done.isSet(index)) return;
+        if (self.expr_done.isSet(index)) {
+            try self.noteSharedExpr(holder, expr_id);
+            return;
+        }
         self.expr_done.set(index);
 
         const output = self.output;
@@ -692,13 +834,14 @@ const Lifter = struct {
             list: *std.ArrayList(RewriteWork),
             allocator: Allocator,
             program: *const Ast.Program,
+            holder: Mono.ExprId,
 
             fn add(children: @This(), item: RewriteWork) Allocator.Error!void {
                 try children.list.append(children.allocator, item);
             }
 
             fn child(children: @This(), child_expr: Mono.ExprId) Allocator.Error!void {
-                try children.add(.{ .expr = child_expr });
+                try children.add(.{ .expr = .{ .id = child_expr, .holder = .{ .expr = children.holder } } });
             }
 
             fn span(children: @This(), items: Ast.Span(Ast.ExprId)) Allocator.Error!void {
@@ -713,10 +856,10 @@ const Lifter = struct {
 
             fn stmts(children: @This(), items: Ast.Span(Ast.StmtId)) Allocator.Error!void {
                 const values = children.program.stmtSpan(items);
-                for (0..values.len) |value_index| try children.add(.{ .stmt = GuardedList.at(values, value_index) });
+                for (0..values.len) |value_index| try children.add(.{ .stmt = .{ .id = GuardedList.at(values, value_index), .holder = children.holder } });
             }
         };
-        const children = Children{ .list = work, .allocator = self.allocator, .program = output };
+        const children = Children{ .list = work, .allocator = self.allocator, .program = output, .holder = expr_id };
         switch (expr.data) {
             .@"unreachable",
             .local,
@@ -762,7 +905,8 @@ const Lifter = struct {
                 try children.child(let_.rest);
             },
             .lambda => |lambda| if (try self.beginLiftedLambda(expr_id, expr.ty, lambda)) |finish| {
-                try children.child(lambda.body);
+                // The body is the lifted function's, not this expression's.
+                try children.add(.{ .expr = .{ .id = lambda.body, .holder = .{ .body = finish.fn_id } } });
                 children.add(.{ .finish_lambda = finish }) catch |err| {
                     self.allocator.free(finish.captures);
                     return err;

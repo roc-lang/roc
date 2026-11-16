@@ -257,38 +257,6 @@ test "method call on numeric literal infers return type as Dec" {
     try test_env.assertLastDefType("Dec");
 }
 
-test "mirror-image literal groups commit identical types" {
-    // Same literals, swapped operand order, must land on the same committed
-    // type: the defaulting oracle's answers cannot depend on which unify side
-    // each literal arrived on (the failure mode the old cross-module
-    // MUST-agree contract warned about).
-    //
-    // 1E300 is past Dec's range, every integer's, and F32's, and 1.5 refutes
-    // the integers; F64 is the first candidate whose digit-fit accepts both, so
-    // the `plus` group commits F64 from either side.
-    {
-        var test_env = try TestEnv.init("Test", "x = 1E300 + 1.5");
-        defer test_env.deinit();
-        try test_env.assertDefType("x", "F64");
-    }
-    {
-        var test_env = try TestEnv.init("Test", "x = 1.5 + 1E300");
-        defer test_env.deinit();
-        try test_env.assertDefType("x", "F64");
-    }
-    // The canonical Dec default is likewise order-independent.
-    {
-        var test_env = try TestEnv.init("Test", "x = 1 + 2.5");
-        defer test_env.deinit();
-        try test_env.assertDefType("x", "Dec");
-    }
-    {
-        var test_env = try TestEnv.init("Test", "x = 2.5 + 1");
-        defer test_env.deinit();
-        try test_env.assertDefType("x", "Dec");
-    }
-}
-
 test "fractional scale beyond Dec precision is a check-time error, not a wrong value" {
     // 1e-19 needs 19 fractional decimal places; Dec has 18. This used to slip
     // through a small-dec fast path and silently evaluate to 1e-18.

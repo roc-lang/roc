@@ -15,7 +15,7 @@ const ImportMapping = @import("types").import_mapping.ImportMapping;
 const Allocator = std.mem.Allocator;
 const Self = @This();
 
-/// Problems with the strings, snapshots and regions they render with.
+/// Problems with the strings and snapshots they render with.
 pub const Outcome = CheckingOutcome;
 
 /// One row of the checker's import display-name mapping.
@@ -23,8 +23,8 @@ pub const ImportName = struct { qualified: base.Ident.Idx, display: base.Ident.I
 
 /// The problems before this index are checking's; evaluation reported the rest.
 checking_problem_count: u64 = 0,
-/// Every problem with the problem store's strings, and the snapshots and
-/// regions checking's problems render with.
+/// Every problem with the problem store's strings, and the snapshots
+/// checking's problems render with.
 outcome: CheckingOutcome = .{},
 /// The display names the module's reports give its imports.
 import_names: []const ImportName = &.{},
@@ -62,7 +62,7 @@ pub fn evaluationProblemCount(self: *const Self) usize {
     return self.outcome.problems.len - @as(usize, @intCast(self.checking_problem_count));
 }
 
-/// Copy the snapshots and regions checking's problems render with out of the
+/// Copy the snapshots checking's problems render with out of the
 /// checker, which is released once the module is checked. The problem store
 /// columns are left empty: the entry reads them from the store once
 /// evaluation has added its own problems.
@@ -72,7 +72,6 @@ pub fn captureChecking(allocator: Allocator, checker: anytype) Allocator.Error!C
     // columns in `allocator` and borrows the rest from the checker.
     return .{
         .status = captured.status,
-        .regions = try allocator.dupe(base.Region, captured.regions),
         .contents = try allocator.dupe(snapshot.SnapshotContent, captured.contents),
         .node_formats = try allocator.dupe(snapshot.NodeFormat, captured.node_formats),
         .captures = try allocator.dupe(snapshot.Capture, captured.captures),
@@ -101,7 +100,6 @@ pub fn fromStore(
             .problems = try allocator.dupe(problem.Problem, store.problems.items),
             .extra_strings = try allocator.dupe(u8, store.extra_strings_backing.items),
             .missing_patterns = try allocator.dupe(problem.ExtraStringIdx, store.missing_patterns_backing.items),
-            .regions = try allocator.dupe(base.Region, checking.regions),
             .contents = try allocator.dupe(snapshot.SnapshotContent, checking.contents),
             .node_formats = try allocator.dupe(snapshot.NodeFormat, checking.node_formats),
             .captures = try allocator.dupe(snapshot.Capture, checking.captures),
@@ -148,16 +146,15 @@ pub fn instantiateProblems(self: *const Self, allocator: Allocator) Allocator.Er
     return store;
 }
 
-/// The snapshots and regions checking's problems render with, rendering on
+/// The snapshots checking's problems render with, rendering on
 /// demand with `format_context`.
 pub fn instantiateRendering(
     self: *const Self,
     allocator: Allocator,
     snapshots: *snapshot.Store,
-    regions: *base.Region.List,
     format_context: snapshot.FormatContext,
 ) Allocator.Error!void {
-    try self.outcome.installRendering(allocator, snapshots, regions, format_context);
+    try self.outcome.installRendering(allocator, snapshots, format_context);
 }
 
 test "checked reports keep every problem, its strings and the import names across serialization" {

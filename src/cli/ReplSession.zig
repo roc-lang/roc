@@ -68,6 +68,10 @@ allocator: Allocator,
 /// to read `import "path" as x : Str`/`: List(U8)` files.
 roc_ctx: CoreCtx,
 backend_kind: eval.EvalBackend,
+/// The strategy whose evaluator completes the compile-time roots of every
+/// module the session publishes, the interactive expression's root among
+/// them. The session's driver names it; an evaluation with no runtime consumer
+/// names `.boxy`, as `roc check` does (design.md "Runtime Lowering Strategy").
 specialization_strategy: base.SpecializationStrategy,
 definitions: DefinitionStore,
 virtual_modules: VirtualModuleStore,
@@ -195,7 +199,8 @@ fn initBorrowingBuiltins(
         .allocator = allocator,
         .roc_ctx = roc_ctx,
         .backend_kind = backend_kind,
-        .specialization_strategy = .lss,
+        // The strategy `roc repl` names.
+        .specialization_strategy = .boxy,
         .definitions = DefinitionStore.init(),
         .virtual_modules = .{},
         .import_policy = .filesystem,
@@ -903,6 +908,7 @@ pub fn inspectExpressionType(
         import_sources,
         self.prePublishedBuiltin(),
         self.roc_ctx,
+        self.specialization_strategy,
     ) catch |err| switch (err) {
         error.ParseError => return .{ .diagnostic = try self.renderModuleParseDiagnostics(source, report_config) },
         error.TypeCheckError => return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) },
@@ -1155,6 +1161,7 @@ fn initParsedResources(self: *ReplSession) ReplStepError!eval.Inspected.ParsedRe
         import_sources,
         self.prePublishedBuiltin(),
         self.roc_ctx,
+        self.specialization_strategy,
     );
 }
 
@@ -1374,6 +1381,7 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
         import_sources,
         self.prePublishedBuiltin(),
         self.roc_ctx,
+        self.specialization_strategy,
     )) |parsed_value| {
         var parsed = parsed_value;
         defer parsed.deinit(self.allocator);
@@ -1439,6 +1447,7 @@ fn evaluateMainSource(self: *ReplSession, source: []const u8, report_config: rep
         import_sources,
         self.prePublishedBuiltin(),
         self.roc_ctx,
+        self.specialization_strategy,
         .{
             .context = @ptrCast(&event_collector),
             .notify = ComptimeEventCollector.notify,
@@ -2127,7 +2136,9 @@ fn expectAllNative(expr: []const u8, expected: []const u8) ReplTestError!void {
         .native,
         repl.prePublishedBuiltin(),
         repl.roc_ctx,
-        repl.specialization_strategy,
+        // The runtime program's strategy, which `expectAllBackends` lowers
+        // under as well.
+        .lss,
     );
     defer compiled.deinit(testing.allocator);
 

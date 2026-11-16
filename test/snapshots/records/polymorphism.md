@@ -40,25 +40,7 @@ MISSING METHOD - polymorphism.md:6:29:6:35
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "{ pair1: { first: a, second: b }, pair2: { first: c, second: d }, pair3: { first: [True], second: [False] } }")
-			(line-break)
-			(indent 1)
-			(text "  where [")
-			(line-break)
-			(indent 1)
-			(text "    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),")
-			(line-break)
-			(indent 1)
-			(text "    b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),")
-			(line-break)
-			(indent 1)
-			(text "    c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)]),")
-			(line-break)
-			(indent 1)
-			(text "    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),")
-			(line-break)
-			(indent 1)
-			(text "  ]")
+			(text "{ pair1: { first: Dec, second: Str }, pair2: { first: Str, second: Dec }, pair3: { first: [True], second: [False] } }")
 			(annotation-end))))
 ~~~
 # TOKENS
@@ -144,7 +126,7 @@ EndOfFile,
 							(p-assign (ident "y"))))))))
 	(s-let
 		(p-assign (ident "pair1"))
-		(e-call (constraint-fn-var 271)
+		(e-call (constraint-fn-var 256)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-num (value "1"))
@@ -152,7 +134,7 @@ EndOfFile,
 				(e-literal (string "a")))))
 	(s-let
 		(p-assign (ident "pair2"))
-		(e-call (constraint-fn-var 294)
+		(e-call (constraint-fn-var 264)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-string
@@ -160,7 +142,7 @@ EndOfFile,
 			(e-num (value "42"))))
 	(s-let
 		(p-assign (ident "pair3"))
-		(e-call (constraint-fn-var 304)
+		(e-call (constraint-fn-var 274)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-tag (name "True"))
