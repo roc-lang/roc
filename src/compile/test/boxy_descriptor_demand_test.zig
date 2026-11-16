@@ -277,7 +277,7 @@ test "a module unit fills an imported generic worker's tables with its own descr
         defer static_data_exports.deinitStaticData(allocator, producer.static_data);
         for (producer.lir_result.exported_procs.items) |proc| {
             const identity = producer.lir_result.store.getProcSpec(proc).identity;
-            _ = try interfaces.putProc(&producer.lir_result.store, proc, producer.lir_result.boxy_table_needs.get(identity) orelse &.{});
+            _ = try interfaces.putProc(&producer.lir_result.store, proc, producer.lir_result.boxy_table_needs.get(identity) orelse &.{}, producer.lir_result.boxy_exports.get(identity).?);
         }
     }
 
