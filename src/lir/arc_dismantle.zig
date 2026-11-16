@@ -1755,6 +1755,20 @@ fn wholeMoveSite(
         if (!namesContainer(analysis, local, view, bind.op.source)) return null;
         return .{ .stmt = stmt_id, .next = bind.next, .position = 0 };
     }
+    if (whole_use.* == .assign_struct) {
+        // A fresh aggregate owns what it stores, so the field holding the
+        // container receives it whole like an owned call position.
+        const build = whole_use.assign_struct;
+        if (build.target == local) return null;
+        const fields = store.getLocalSpan(build.fields);
+        var found: ?WholeMoveSite = null;
+        for (0..GuardedList.borrowLen(fields)) |position| {
+            if (!namesContainer(analysis, local, view, GuardedList.at(fields, position))) continue;
+            if (found != null or position > std.math.maxInt(u8)) return null;
+            found = .{ .stmt = stmt_id, .next = build.next, .position = @intCast(position) };
+        }
+        return found;
+    }
     if (whole_use.* != .assign_call) return null;
     const stmt = whole_use.assign_call;
     if (stmt.target == local) return null;

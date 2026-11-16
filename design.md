@@ -26622,9 +26622,12 @@ again. Sites are solved for struct containers, held views and projected
 containers alike. A tag union's payload view has none. A container nothing
 takes from commits a plan for its sites alone only when it holds its unit in
 every emission: a borrowed parameter would otherwise earn an owned variant
-whose one difference is where a retained unit is released. Aggregate and
-low-level operands reach this rule through the owned binding lowering gives
-them; a borrowed operand retained directly at such a position keeps its whole
+whose one difference is where a retained unit is released. A fresh struct
+that stores the container whole is a site too, at the field holding it: the
+aggregate owns what it stores, so the field is an owned position, whether
+lowering stores the container itself or an owned binding of it. Low-level
+operands reach this rule through the owned binding lowering gives them; a
+borrowed operand retained directly at a low-level position keeps its whole
 retain.
 
 Emission applies a site only where it actually retains: the container is in
@@ -26633,7 +26636,8 @@ outcome receipt covers the position, and no other operand of the statement
 lends the same value, since the callee could release its unit of a field while
 that operand still reads it. Emission then pays the ordinary whole retain,
 releases the masked fields from the container's own unit before the receiver
-runs, and continues with the remaining fields as the container's residual.
+runs (after a struct site's store and its retain, since the struct runs no
+code), and continues with the remaining fields as the container's residual.
 The RC statements are the ones the container's death would have emitted for
 those fields; only their position changes, from after the receiver to before
 it. The certifier needs no rule for it: a retained aggregate that dismantles
