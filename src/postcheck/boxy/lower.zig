@@ -1959,11 +1959,6 @@ pub const Program = struct {
         return kept;
     }
 
-    pub fn templateRefScope(self: *Program, ref: checked_names.ProcedureTemplateRef) Allocator.Error!WorkerId {
-        const view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
-        return try self.templateScope(view.index, ref.template);
-    }
-
     /// The erased-callable worker of a lambda or closure expression of the
     /// worker `outer`.
     pub fn lambdaWorker(
