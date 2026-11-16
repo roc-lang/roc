@@ -24783,13 +24783,18 @@ generates constraints per statement:
   arguments it may borrow from; an owned return is a fresh owned resource.
 - `assign_call_erased`: the erased-callable ABI is a pinned all-owned
   `RcSig` for refcounted args and the result. Inference does not flow modes
-  through erased callable values. The closure is borrowed by the call unless
-  its unit dies there: then emission moves that unit into the callee through
-  the ABI's reuse channel (`reuse_closure`), and the callee reads its
-  captures out of the transferred allocation (see `erased_capture_load`
-  below). A call whose result holds exactly one erased-callable slot
-  (`result_reuse`) is solved as demanding the closure's unit, because the
-  callee can repack a transferred allocation as its result.
+  through erased callable values. The call demands its closure's unit (the
+  allocation `erasedCallOwner` names), so a closure parameter the procedure
+  calls is owned, and its caller hands over a closure that dies at the call
+  rather than lending it: a closure called through a function parameter
+  then reaches its body with its captures unshared, and a captured list the
+  body updates is updated in place. The call itself still borrows the
+  closure unless its unit dies there: then emission moves that unit into the
+  callee through the ABI's reuse channel (`reuse_closure`), and the callee
+  reads its captures out of the transferred allocation (see
+  `erased_capture_load` below). A call whose result holds exactly one
+  erased-callable slot (`result_reuse`) also consumes the unit there, because
+  the callee can repack a transferred allocation as its result.
 - dictionary calls are erased calls and follow the erased-call rule above.
   A type table argument and the descriptors and dictionaries read from it are
   pointer-sized opaque values that own nothing. Method selection is already encoded in the dictionary;
@@ -27632,9 +27637,10 @@ closure's unit exactly when that unit dies at the call (the callee consumes
 it: the dying closure's captures reach the body unshared, and a single-slot
 result can repack the allocation), and otherwise borrows the closure and
 passes null, with no refcount statement. Lowering records the call's
-ownership source on every erased call and marks a call whose result holds
-exactly one erased-callable slot (`result_reuse`), which ARC solves as
-demanding the closure's unit. A deferred `.lss` call keeps a retained
+ownership source on every erased call, which ARC solves as demanding the
+closure's unit, so a closure parameter is owned and can die at its call,
+and marks a call whose result holds exactly one erased-callable slot
+(`result_reuse`), which consumes the unit there. A deferred `.lss` call keeps a retained
 closure reference for whoever drives it and never transfers; a deferred
 `.boxy` call transfers when the closure dies there.
 
