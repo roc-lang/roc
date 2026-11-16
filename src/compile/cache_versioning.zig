@@ -44,7 +44,7 @@ pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.
 const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.CheckedReports.Serialized, 1);
 
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 39 stores reproducible checking
+/// reflected in layout fingerprints. Version 48 stores reproducible checking
 /// and evaluation reports beside paired callable forwarding and request
 /// completion and cached literal argument roots for both strategies,
 /// body-local type context arguments, generated-codec recurrences,
@@ -53,14 +53,28 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// padded record's declaration entries rather than its slots, nominal
 /// declaration backings whose formals bind by binder identity rather than by
 /// name, stored function recipes naming modules the storing module imports,
-/// type stores listing their widening field names once, and anonymous
-/// structure that every use shares when nothing visible can lift or widen it,
-/// checked artifacts' type, scheme, blob and proc-base interning tables, and
-/// type tags that record whether only `match` branch patterns put them in
-/// their row, and literal argument roots whose source is their edge owner and
-/// which hold no expression. It rejects every earlier format. Platform-pairing
+/// type stores listing their widening field names once, anonymous structure
+/// that every use shares when nothing visible can lift or widen it, record and
+/// tag tails a use closes or lifts in place of that sharing, literal conversion
+/// roots published for deferred literals, checked artifacts' type, scheme, blob
+/// and proc-base interning tables, type tags that record whether only `match`
+/// branch patterns put them in their row, literal argument roots whose source
+/// is their edge owner and which hold no expression, stored function recipes
+/// whose lambda tables refer to their creators' tables, compile-time roots
+/// indexed by pattern, each checking problem carrying the source regions its
+/// report highlights in place of a region per type variable, validate-only
+/// interpolation conversion roots and literal argument roots completed as
+/// `discarded`, specialization-interface relations that equate no use of a
+/// name a destructuring scheme alias binds with that name's type, and site
+/// evidence that leaves a requirement a use of a constant's scheme alias does
+/// not pin to the stored function's request, hoisted source-pattern root
+/// wrappers whose requirement paths lie below their return, the bodies of
+/// those roots resolved against no evidence chain, and top-level constants'
+/// right-hand sides resolved against their wrapper's own requirements, and
+/// procedure templates' closed row nodes. It rejects every earlier format,
+/// including the independent version 19 through 47 formats. Platform-pairing
 /// entries share it.
-const checked_envelope_version: u32 = 39;
+const checked_envelope_version: u32 = 48;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment.
@@ -159,8 +173,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x8D, 0x65, 0x1D, 0x58, 0xF1, 0xFF, 0xDE, 0x94, 0x2C, 0xE1, 0x69, 0x0A, 0x14, 0x2C, 0x97, 0x0F,
-        0x04, 0x51, 0x35, 0x7A, 0x3C, 0x12, 0xD2, 0x72, 0x00, 0x7A, 0x19, 0x1C, 0x10, 0x01, 0xB4, 0xBE,
+        0xBA, 0x6D, 0xE1, 0x89, 0xDB, 0x1F, 0x6C, 0xC2, 0xAC, 0xF9, 0x63, 0xFF, 0x42, 0xBF, 0xBA, 0x5F,
+        0xAC, 0xDA, 0x58, 0x88, 0x84, 0xEF, 0xE8, 0xC7, 0x73, 0xF1, 0x69, 0xFF, 0x80, 0x42, 0x34, 0x21,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

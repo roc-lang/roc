@@ -1029,8 +1029,8 @@ const cases = [_]Case{
         ,
     },
     .{
-        // List rest patterns lower to `list_take_first`/`list_take_last` over
-        // the matched list, and to `list_get_unsafe` for the fixed elements.
+        // A list rest pattern lowers to one `list_sublist` of the matched
+        // list, and its fixed items to `list_get_unsafe`.
         .name = "list rest patterns slice the matched list",
         .source_kind = .module,
         .source =
@@ -1262,6 +1262,7 @@ const cases = [_]Case{
 /// that removes it from this table.
 const exemptions = [_]Exemption{
     .{ .op = .box_unbox, .reason = "allocation-consuming compiled variant is pinned by focused LIR and runtime-helper tests" },
+    .{ .op = .erased_capture_load, .reason = "ARC normalizes the consuming capture load into erased_capture_load_borrowed plus explicit RC statements, which the erased-call alloc-count tests and the certifier pin" },
     .{ .op = .list_prefetched, .reason = "no LIR producer: lowering splits List.prefetched into an alias of its list and list_prefetch" },
     .{ .op = .list_reverse, .reason = "no producer: List.rev is written in Roc over list_get_unsafe" },
 };

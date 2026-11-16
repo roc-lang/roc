@@ -188,30 +188,24 @@ pub fn Channel(comptime T: type) type {
             return self.recvLocked();
         }
 
-        /// Receive an item with a timeout (in nanoseconds).
-        /// Returns null if the operation times out or channel is closed and empty.
+        /// Receive an item, waiting at most `timeout_ns` nanoseconds for one:
+        /// a send wakes the wait at once.
+        /// Returns null if the wait times out or the channel is closed and empty.
         pub fn recvTimeout(self: *Self, timeout_ns: u64) ?T {
-            const deadline_ns = std.Io.Timestamp.now(self.std_io, .awake).nanoseconds + @as(i96, @intCast(timeout_ns));
+            self.mutex.lockUncancelable(self.std_io);
+            defer self.mutex.unlock(self.std_io);
 
-            while (true) {
-                self.mutex.lockUncancelable(self.std_io);
-
-                if (self.count > 0 or self.closed) break;
-
-                const now_ns = std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
-                if (now_ns >= deadline_ns) {
-                    self.mutex.unlock(self.std_io);
-                    return null;
-                }
-
-                self.mutex.unlock(self.std_io);
-
-                if (comptime !threading.is_freestanding) {
-                    const remaining: i96 = deadline_ns - now_ns;
-                    std.Io.sleep(self.std_io, .{ .nanoseconds = @min(remaining, 1_000_000) }, .awake) catch {};
+            if (comptime !threading.is_freestanding) {
+                const deadline = (std.Io.Timeout{ .duration = .{
+                    .raw = .fromNanoseconds(@intCast(timeout_ns)),
+                    .clock = .awake,
+                } }).toDeadline(self.std_io);
+                while (self.count == 0 and !self.closed) {
+                    self.not_empty.waitTimeout(self.std_io, &self.mutex, deadline) catch |err| switch (err) {
+                        error.Timeout, error.Canceled => break,
+                    };
                 }
             }
-            defer self.mutex.unlock(self.std_io);
 
             if (self.count == 0) return null;
             return self.recvLocked();

@@ -78,7 +78,23 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      encode absence as zero.
 /// v72: the string literal store carries its dedup table, combined with
 ///      the v69-v71 changes.
-pub const FORMAT_VERSION: u32 = 72;
+/// v73: procedure debug names are a column parallel to procedure specs.
+/// v74: procedure shapes are 32 bits and record owned erased calls.
+/// v73: erased calls carry `result_reuse`, `erased_capture_load_borrowed`
+///      renumbers later LowLevel ops, RC reasons name dead-lender reads,
+///      procedure shapes widen to 32 bits, and dynamic tag payload reads
+///      carry `whole`.
+/// v74: `list_take_first` and `list_take_last` leave the LowLevel enum,
+///      renumbering later ops.
+/// v75: dynamic tag payload reads lose `whole`; a tag's only payload is an
+///      `assign_ref` `tag_payload_struct` of the dynamic union.
+/// v76: procedure debug names are a column parallel to the procedure
+///      specs, combined with the v73-v75 changes.
+/// v75: combines the v73 and v74 changes above; procedure shapes record
+///      every erased call.
+/// v77: procedure shapes record every erased call, combined with the v73-v76
+///      changes.
+pub const FORMAT_VERSION: u32 = 77;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -289,7 +305,7 @@ pub const LirStoreImage = extern struct {
             .body_coordinator = null,
             .body_prefix = std.mem.zeroes(LirStore.BodyPrefix),
             .proc_locs = try guardedListFromRef(base.SourceLoc, "LirStore.proc_locs", base_ptr, image_size, self.proc_locs),
-            .proc_debug_names = try guardedListFromRef(LirStore.ProcDebugName, "LirStore.proc_debug_names", base_ptr, image_size, self.proc_debug_names),
+            .proc_debug_names = try guardedListFromRef(base.StringLiteral.Idx, "LirStore.proc_debug_names", base_ptr, image_size, self.proc_debug_names),
             .local_names = try guardedListFromRef(u32, "LirStore.local_names", base_ptr, image_size, self.local_names),
         };
     }
@@ -490,14 +506,14 @@ comptime {
     // bottom of this file, then update the expected field count below. A
     // same-build omission is otherwise silent, since `FORMAT_VERSION` only
     // guards cross-version mismatches. `tail_call_builder`, `proc_rewrite`,
-    // `stmt_source_rows`, `rc_effect_rows` and `facts` are transient worker state, not
+    // `body_symbol_base`, `stmt_source_rows`, `rc_effect_rows` and `facts` are transient worker state, not
     // serialized, and default to null or empty in views. The layout store's `digest_cache` is a memo
     // each view starts empty; its interning caches, `recursive_layout_keys`,
     // `interned_recursive_graphs`, `recursive_commit_layouts` and
     // `recursive_digests` serve only commits,
     // which a view never makes; and its `commit_scratch` and
     // `scratch_field_offsets` are scratch that views start empty.
-    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 38);
+    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 39);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 21);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 

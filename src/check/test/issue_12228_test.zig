@@ -7,14 +7,14 @@
 const TestEnv = @import("TestEnv.zig");
 
 test "issue 12228: two folds seeded with an unannotated 0 check cleanly" {
-    // `check_argv`'s fold accumulator is a default-decided `U64`, and the
+    // `check_argv`'s fold accumulator is a default-decided `Dec`, and the
     // replayed `+` in `visit_workflow` shares a frozen copy of its instance;
     // `visit_workflow`'s accumulator is determined by `$argv_bytes`.
     const source =
         \\Project :: [].{
         \\    check_argv : List(Str), Str -> Try({}, Str)
         \\    check_argv = |argv, name| {
-        \\        if argv.len() > 4096 or argv.fold(0, |size, arg| size + arg.to_utf8().len()) > 1048576 {
+        \\        if argv.len() > 4096 or argv.fold(0, |size, arg| size + arg.to_utf8().len().to_dec()) > 1048576 {
         \\            return Err("NUL in argv: ${name}")
         \\        }
         \\        Ok({})
@@ -26,7 +26,7 @@ test "issue 12228: two folds seeded with an unannotated 0 check cleanly" {
         \\        var $done = done
         \\        var $height = 1.U64
         \\        var $count = 0.U64
-        \\        var $argv_bytes = 0.U64
+        \\        var $argv_bytes = 0.Dec
         \\        var $productive = []
         \\        for step in workflow.steps {
         \\            match step {
@@ -34,7 +34,7 @@ test "issue 12228: two folds seeded with an unannotated 0 check cleanly" {
         \\                    task = tasks.find_first(|t| t.name == task_name).map_err(|_| "unknown task")?
         \\                    run = task.run.concat(argv)
         \\                    check_argv(run, task_name)?
-        \\                    $argv_bytes = $argv_bytes + run.fold(0, |size, arg| size + arg.to_utf8().len())
+        \\                    $argv_bytes = $argv_bytes + run.fold(0, |size, arg| size + arg.to_utf8().len().to_dec())
         \\                }
         \\                BuildArtifact(build_name) => {
         \\                    if !builds.any(|b| b.name == build_name) {

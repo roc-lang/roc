@@ -82,17 +82,23 @@ fn countNewlines(bytes: []const u8) u32 {
     return count;
 }
 
+const sep = std.fs.path.sep_str;
+
 /// Caller-controlled paths for the synthetic app & embedded platform files.
 /// Both the wasm and native flows generate a synthetic app whose `app [main!]`
-/// header references these paths.
+/// header references these paths. Each is a resolved absolute path in the
+/// host's path syntax (`std.fs.path`), the form `BuildEnv` resolves every
+/// module path into before reading it, so the virtual tree answers to exactly
+/// the paths the build asks for.
 pub const Paths = struct {
-    app_abs: []const u8 = "/app/main.roc",
-    platform_main: []const u8 = "/app/.roc_echo_platform/main.roc",
-    echo_module: []const u8 = "/app/.roc_echo_platform/Echo.roc",
-    cwd: []const u8 = "/app",
+    app_abs: []const u8 = sep ++ "app" ++ sep ++ "main.roc",
+    platform_main: []const u8 = sep ++ "app" ++ sep ++ ".roc_echo_platform" ++ sep ++ "main.roc",
+    echo_module: []const u8 = sep ++ "app" ++ sep ++ ".roc_echo_platform" ++ sep ++ "Echo.roc",
+    cwd: []const u8 = sep ++ "app",
     /// Prefix prepended to extra-file paths so `addFile("Greeting", ...)`
-    /// resolves as `<extras_prefix>Greeting.roc`. Must end with `/`.
-    extras_prefix: []const u8 = "/app/",
+    /// resolves as `<extras_prefix>Greeting.roc`. Must end with
+    /// `std.fs.path.sep`.
+    extras_prefix: []const u8 = sep ++ "app" ++ sep,
 };
 
 /// Inputs to `runEcho`. See field doc comments for the contract on each.
@@ -166,7 +172,8 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
     // by EchoCtx, so the std_io is never actually dereferenced—but the
     // field still must be a concrete value (no `undefined`) to avoid UB if
     // a future refactor adds a real-OS call path.
-    var build_env = BuildEnv.init(allocator, .single_threaded, 1, opts.roc_target, opts.paths.cwd, opts.std_io) catch |err| {
+    // `.lss` is the strategy the program lowers under below.
+    var build_env = BuildEnv.init(allocator, .single_threaded, 1, opts.roc_target, opts.paths.cwd, opts.std_io, .lss) catch |err| {
         diag.step("BuildEnv.init", err);
         return err;
     };
@@ -368,8 +375,9 @@ fn emitDiagnostics(build_env: *BuildEnv, diag: Diagnostics, gpa: Allocator) Allo
 
 // --- Echo I/O context ---
 
-/// Unified I/O context for the echo platform. Intercepts readFile/fileExists
-/// for synthetic app source, embedded platform files, and extras; delegates
+/// Unified I/O context for the echo platform. Serves the synthetic app source,
+/// the embedded platform files, and the extras as a virtual tree under
+/// `paths` (their reads, existence checks, and canonical paths); delegates
 /// everything else to `fallback`.
 pub const EchoCtx = struct {
     paths: Paths,
@@ -402,7 +410,34 @@ pub const EchoCtx = struct {
     pub fn isSyntheticPath(self: *const EchoCtx, path: []const u8) bool {
         return self.getSyntheticContent(path) != null;
     }
+
+    /// Whether the lexically resolved `path` names a synthetic file or a
+    /// directory that contains one. Those paths exist only in this virtual
+    /// tree, so the fallback filesystem cannot resolve them.
+    fn isVirtualTreePath(self: *const EchoCtx, path: []const u8) bool {
+        for ([_][]const u8{ self.paths.app_abs, self.paths.platform_main, self.paths.echo_module }) |file| {
+            if (virtualFileIsAtOrBelow(file, path)) return true;
+        }
+        for (self.extras) |ef| {
+            if (extraIsAtOrBelow(self.paths.extras_prefix, ef.name, path)) return true;
+        }
+        return false;
+    }
 };
+
+/// Whether the virtual `file` is `path` itself or lies in directory `path`.
+fn virtualFileIsAtOrBelow(file: []const u8, path: []const u8) bool {
+    if (!std.mem.startsWith(u8, file, path)) return false;
+    if (file.len == path.len) return true;
+    return std.mem.endsWith(u8, path, sep) or file[path.len] == std.fs.path.sep;
+}
+
+/// `virtualFileIsAtOrBelow` for the extra file `<prefix><name>.roc`: the file
+/// itself, or a directory containing `prefix`, which ends with
+/// `std.fs.path.sep`.
+fn extraIsAtOrBelow(prefix: []const u8, name: []const u8, path: []const u8) bool {
+    return matchesExtra(prefix, name, path) or virtualFileIsAtOrBelow(prefix, path);
+}
 
 fn matchesExtra(prefix: []const u8, name: []const u8, path: []const u8) bool {
     const suffix = ".roc";
@@ -451,7 +486,11 @@ fn echoJoinPath(ctx_ptr: ?*anyopaque, _: std.Io, parts: []const []const u8, gpa:
     return echoGetCtx(ctx_ptr).fallback.joinPath(parts, gpa);
 }
 fn echoCanonicalize(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, gpa: Allocator) Io.CanonicalizeError![]const u8 {
-    return echoGetCtx(ctx_ptr).fallback.canonicalize(path, gpa);
+    const self = echoGetCtx(ctx_ptr);
+    const resolved = try std.fs.path.resolve(gpa, &.{path});
+    if (self.isVirtualTreePath(resolved)) return resolved;
+    gpa.free(resolved);
+    return self.fallback.canonicalize(path, gpa);
 }
 fn echoMakePath(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) Io.MakePathError!void {
     return echoGetCtx(ctx_ptr).fallback.makePath(path);

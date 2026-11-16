@@ -289,6 +289,7 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
             .args = try Remap.opt(context, call.args),
             .reuse_closure = call.reuse_closure,
             .reuse_source = try Remap.opt(context, call.reuse_source),
+            .result_reuse = call.result_reuse,
             .deferred = call.deferred,
             .drive = call.drive,
         } },

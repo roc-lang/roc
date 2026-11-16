@@ -78,7 +78,7 @@ test "SpecConstr staged workers fuse iterator-only bodies deterministically" {
         \\main! : List(Str) => Try({}, [Exit(I8), ..])
         \\main! = |args| {
         \\    offset = List.len(args)
-        \\    total = 0.U64.until(offset).map(|n| n + offset).fold(0, |sum, n| sum + n)
+        \\    total = 0.U64.until(offset).map(|n| n + offset).fold(0.U64, |sum, n| sum + n)
         \\    echo!(Str.inspect(total))
         \\    Ok({})
         \\}

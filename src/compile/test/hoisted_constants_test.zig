@@ -229,6 +229,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -402,6 +403,7 @@ test "imported checked bodies restore their module's hoisted constants" {
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -494,6 +496,7 @@ test "hoisted list constants lower to internal static data in request order" {
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -625,6 +628,7 @@ test "hoisted Dec and I128 list constants keep their elements 16-aligned in stat
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -764,6 +768,7 @@ fn expectInlineListStaticDataLiteral(gpa: std.mem.Allocator, source: []const u8)
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -1014,6 +1019,7 @@ test "an empty list with capacity in a record frozen into static data keeps its 
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -1131,6 +1137,7 @@ fn lowerEchoApp(source: []const u8, comptime inspect: fn (*lir.Program.Result) H
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -1222,9 +1229,8 @@ test "computed callable aliases retain evaluation requests while proven forwards
     const path = try tmp.dir.realPathFileAlloc(io, "Aliases.roc", gpa);
     defer gpa.free(path);
     for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
-        var build = try @import("../compile_build.zig").BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+        var build = try @import("../compile_build.zig").BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, strategy);
         defer build.deinit();
-        build.setSpecializationStrategy(strategy);
         try build.build(path);
         const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
         var evaluated: usize = 0;
@@ -1338,6 +1344,7 @@ test "callable binding with alias annotation is const-evaluated" {
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -1432,6 +1439,7 @@ test "hoisted constant crash reports original source region" {
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -1534,6 +1542,7 @@ test "inlined hoisted constant crash reports hoisted source region" {
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -1632,6 +1641,7 @@ test "hoisted pattern extraction and validation failures report original destruc
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -1738,6 +1748,7 @@ test "hoisted pattern extraction base match failure reports match" {
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -1840,6 +1851,7 @@ test "hoisted pattern extraction successful base match resolves pending diagnost
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -1900,6 +1912,7 @@ test "hoisted roots admit non-concrete transient locals without losing validatio
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -1974,6 +1987,7 @@ test "issue 10721: compile-time known destructure of a match-returned closure re
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -2042,6 +2056,7 @@ test "issue 10721: compile-time known destructure inside an effectful body resol
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -2111,6 +2126,7 @@ test "issue 10721: compile-time validation reports a known failing destructure" 
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -2237,6 +2253,27 @@ test "a guarded root that crashes at compile time is left to runtime" {
     try std.testing.expectEqual(EchoAppCheck{ .has_errors = true, .non_exhaustive = true, .has_runtime_roots = true }, crashing_rhs);
 }
 
+test "a hoisted call of a function field read from a value checking rejected reports nothing more" {
+    // `f`'s right-hand side is a type mismatch, so its evaluation fails and
+    // no lambda reaches `g`. Evaluating `(f.g)(1)` reads `f` first, which
+    // fails with `f`'s own error: nothing beyond that mismatch is reported.
+    const result = try checkEchoApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\f : { g : U8 -> Str }
+        \\f = { g: |n| n }
+        \\
+        \\main! = |_args| {
+        \\    Echo.line!((f.g)(1))
+        \\    Ok({})
+        \\}
+    );
+    try std.testing.expect(result.has_errors);
+    try std.testing.expect(!result.comptime_crash);
+}
+
 const EchoAppCheck = struct {
     has_errors: bool = false,
     non_exhaustive: bool = false,
@@ -2269,6 +2306,7 @@ fn checkEchoApp(gpa: std.mem.Allocator, source: []const u8) HoistedConstantsTest
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -2343,6 +2381,7 @@ test "issue 10721: runtime-dependent callable use keeps one validating extractio
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -2461,6 +2500,7 @@ test "a match on a constant with a guard selects a hoisted root" {
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -2531,6 +2571,7 @@ test "hoisted successful call does not clear runtime reachable helper exhaustive
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -2603,6 +2644,7 @@ test "hoisted failing call into runtime reachable helper reports static diagnost
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -2656,6 +2698,7 @@ fn expectCompileTimeRootKindsPresent(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .interpolation_conversion,
             .literal_argument,
             .repl_expr,
             => {},
@@ -2740,7 +2783,7 @@ fn compileTimeRootKindMatchesRequest(
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
         .repl_expr => request_kind == .repl_expr,
-        .numeral_conversion, .quote_conversion, .literal_argument => request_kind == .compile_time_constant,
+        .numeral_conversion, .quote_conversion, .interpolation_conversion, .literal_argument => request_kind == .compile_time_constant,
     };
 }
 
@@ -3115,6 +3158,7 @@ test "issue 9733: nested expect statements remain inline" {
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;

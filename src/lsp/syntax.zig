@@ -894,6 +894,8 @@ pub const SyntaxChecker = struct {
             cwd,
             self.std_io,
             builtin_modules,
+            // A check has no runtime consumer.
+            .boxy,
         );
         errdefer env.deinit();
         env.compiler_version = build_options.compiler_compatibility_id;
@@ -2488,6 +2490,7 @@ pub const SyntaxChecker = struct {
                     .e_hosted_lambda,
                     .e_binop,
                     .e_unary_minus,
+                    .e_unary_not,
                     .e_field_access,
                     .e_method_call,
                     .e_dispatch_call,

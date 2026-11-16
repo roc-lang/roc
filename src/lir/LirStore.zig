@@ -40,12 +40,6 @@ const U32Span = lir_defs.U32Span;
 const ErasedCallArgsPlan = lir_defs.ErasedCallArgsPlan;
 const ErasedCallArgsPlanId = lir_defs.ErasedCallArgsPlanId;
 
-/// Source-level name to use when presenting a specialized LIR proc in debug output.
-pub const ProcDebugName = extern struct {
-    proc: u32,
-    string: base.StringLiteral.Idx,
-};
-
 const Self = @This();
 
 /// Every out-of-line statement row type (see `LIR.StmtRowId`). Each has its
@@ -239,8 +233,9 @@ fn RewriteRows(comptime T: type, comptime field: []const u8) type {
         /// Whether this column's prepared rows hold private copies. Spans may
         /// overlap and a read may cover more rows than an earlier write, so
         /// the first mutable borrow copies the whole column: every read of
-        /// the column then sees one owner.
-        fn owned(self: *const Rows, _: u32) bool {
+        /// the column then sees one owner, and a reader tests this before
+        /// looking up a row's position.
+        fn owned(self: *const Rows) bool {
             return self.materialized;
         }
 
@@ -295,8 +290,8 @@ fn RewriteColumn(comptime T: type, comptime field: []const u8) type {
             return try self.keys.prepare(allocator, &@field(marks, field), id);
         }
 
-        fn owned(self: *const Column, dense_index: u32) bool {
-            return self.data.owned(dense_index);
+        fn owned(self: *const Column) bool {
+            return self.data.owned();
         }
 
         fn index(self: *const Column, start: u32, len: u32) ?u32 {
@@ -343,6 +338,19 @@ const ProcRewrite = struct {
     fn deinit(self: *ProcRewrite, allocator: Allocator) void {
         inline for (rewrite_columns) |field| @field(self, field).deinit(allocator);
         inline for (origin_columns) |field| @field(self, field).deinit(allocator);
+    }
+
+    /// The position of statement `index` among the prepared statement keys,
+    /// if prepared. Preparation reads only the frozen coordinator's
+    /// statements, whose ids are below `stmt_prefix` (the worker's
+    /// `body_prefix.cf_stmts`), so a statement the worker appended is never
+    /// prepared.
+    fn preparedStmt(self: *const ProcRewrite, stmt_prefix: u32, index: u32) ?u32 {
+        if (index >= stmt_prefix) {
+            if (builtin.mode == .debug) std.debug.assert(self.cf_stmts.keys.lookup(index) == null);
+            return null;
+        }
+        return self.cf_stmts.keys.lookup(index);
     }
 
     /// Typed traversal deliberately stops at unrelated identities and immutable
@@ -646,14 +654,15 @@ pub fn cloneForBodyShard(self: *const Self, allocator: Allocator) Allocator.Erro
     result.runtime_contract = self.runtime_contract;
     result.body_prefix = self.captureBodyPrefix();
     result.next_synthetic_symbol = self.next_synthetic_symbol;
+    result.body_symbol_base = self.next_synthetic_symbol;
     return result;
 }
 
 /// Captures the suffix added since `prefix`.
 pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!BodyShard {
-    if (self.body_coordinator) |coordinator| {
+    if (self.body_coordinator != null) {
         if (!std.meta.eql(prefix, self.body_prefix)) return error.InvalidBodyPrefix;
-        if (self.next_synthetic_symbol != coordinator.next_synthetic_symbol or
+        if (self.next_synthetic_symbol != self.body_symbol_base or
             self.proc_specs.len() != 0 or
             self.proc_locs.len() != 0 or
             self.proc_debug_names.len() != 0 or
@@ -1027,12 +1036,19 @@ inline_scopes: GuardedList.List(InlineScope, "LirStore.inline_scopes"),
 body_coordinator: ?*const Self,
 /// Logical lengths occupied by `body_coordinator` in a body worker.
 body_prefix: BodyPrefix,
+/// A body worker's synthetic symbol counter when it was cloned: a worker
+/// allocates none, since symbol identities have no body-shard relocation
+/// domain, while its coordinator may allocate them before the worker's
+/// suffix is appended.
+body_symbol_base: u64 = 0,
 /// Private mutable prefix rows for an opt-in procedure rewrite.
 proc_rewrite: ?ProcRewrite = null,
 /// Source location per proc, parallel to `proc_specs`.
 proc_locs: GuardedList.List(base.SourceLoc, "LirStore.proc_locs"),
-/// Source-level debug names for procs that have source names.
-proc_debug_names: GuardedList.List(ProcDebugName, "LirStore.proc_debug_names"),
+/// Source-level debug name per proc, parallel to `proc_specs`: the name to
+/// use when presenting a specialized LIR proc in debug output, or `.none`
+/// for a proc with no source name.
+proc_debug_names: GuardedList.List(base.StringLiteral.Idx, "LirStore.proc_debug_names"),
 /// Source-level name per local, parallel to `locals`: an index into
 /// `strings`, or `no_local_name` for compiler-generated temporaries.
 local_names: GuardedList.List(u32, "LirStore.local_names"),
@@ -1205,14 +1221,14 @@ pub fn localName(self: *const Self, id: LocalId) ?[]const u8 {
 /// Record the source-level debug name of a proc.
 pub fn setProcDebugName(self: *Self, id: LirProcSpecId, name: []const u8) Allocator.Error!void {
     if (name.len == 0) return;
-    try self.setProcDebugNameIndex(id, try self.insertString(name));
+    self.setProcDebugNameIndex(id, try self.insertString(name));
 }
 
 /// Copy proc source metadata from one proc to another, for compiler-generated variants.
 pub fn copyProcDebugInfo(self: *Self, dst: LirProcSpecId, src: LirProcSpecId) Allocator.Error!void {
     self.proc_locs.set(@backingInt(dst), self.proc_locs.get(@backingInt(src)));
     if (self.procDebugNameIndex(src)) |idx| {
-        try self.setProcDebugNameIndex(dst, idx);
+        self.setProcDebugNameIndex(dst, idx);
     }
 }
 
@@ -1243,22 +1259,14 @@ pub fn procDebugNameString(self: *const Self, id: LirProcSpecId) base.StringLite
 }
 
 fn procDebugNameIndex(self: *const Self, id: LirProcSpecId) ?base.StringLiteral.Idx {
-    const proc = @backingInt(id);
-    for (self.proc_debug_names.unsafeRawItemsForView()) |entry| {
-        if (entry.proc == proc) return entry.string;
-    }
-    return null;
+    if (self.body_coordinator) |coordinator| return coordinator.procDebugNameIndex(id);
+    const string = self.proc_debug_names.get(@backingInt(id));
+    return if (string == base.StringLiteral.Idx.none) null else string;
 }
 
-fn setProcDebugNameIndex(self: *Self, id: LirProcSpecId, string: base.StringLiteral.Idx) Allocator.Error!void {
-    const proc = @backingInt(id);
-    for (self.proc_debug_names.unsafeRawItemsMutForStore()) |*entry| {
-        if (entry.proc == proc) {
-            entry.string = string;
-            return;
-        }
-    }
-    try self.proc_debug_names.append(self.allocator, .{ .proc = proc, .string = string });
+fn setProcDebugNameIndex(self: *Self, id: LirProcSpecId, string: base.StringLiteral.Idx) void {
+    std.debug.assert(self.body_coordinator == null);
+    self.proc_debug_names.set(@backingInt(id), string);
 }
 
 /// Copies the source file table from a lowering stage's program.
@@ -1372,8 +1380,8 @@ pub const StmtSource = struct {
 fn stmtSourceId(self: *const Self, id: CFStmtId) StmtSourceId {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
-            if (rewrite.cf_stmt_sources.owned(private)) return rewrite.cf_stmt_sources.rows.get(private);
+        if (rewrite.cf_stmt_sources.owned()) {
+            if (rewrite.preparedStmt(self.body_prefix.cf_stmts, index)) |private| return rewrite.cf_stmt_sources.rows.get(private);
         }
     }
     if (self.body_coordinator) |coordinator| {
@@ -1417,8 +1425,8 @@ pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
 pub fn stmtInlineScope(self: *const Self, id: CFStmtId) InlineScopeId {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
-            if (rewrite.cf_stmt_inline_scopes.owned(private)) return rewrite.cf_stmt_inline_scopes.rows.get(private);
+        if (rewrite.cf_stmt_inline_scopes.owned()) {
+            if (rewrite.preparedStmt(self.body_prefix.cf_stmts, index)) |private| return rewrite.cf_stmt_inline_scopes.rows.get(private);
         }
     }
     if (self.body_coordinator) |coordinator| {
@@ -1461,8 +1469,8 @@ pub fn stmtRegion(self: *const Self, id: CFStmtId) base.Region {
 pub fn stmtOriginKind(self: *const Self, id: CFStmtId) OriginKind {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
-            if (rewrite.cf_stmt_origin_kinds.owned(private)) return rewrite.cf_stmt_origin_kinds.rows.get(private).unpack();
+        if (rewrite.cf_stmt_origin_kinds.owned()) {
+            if (rewrite.preparedStmt(self.body_prefix.cf_stmts, index)) |private| return rewrite.cf_stmt_origin_kinds.rows.get(private).unpack();
         }
     }
     if (self.body_coordinator) |coordinator| {
@@ -1475,9 +1483,26 @@ pub fn stmtOriginKind(self: *const Self, id: CFStmtId) OriginKind {
 /// Complete provenance of a statement. Rewrites and copies pass this value to
 /// the statement they create in place of the one they replace.
 pub fn stmtOrigin(self: *const Self, id: CFStmtId) StmtOrigin {
+    if (self.proc_rewrite) |*rewrite| {
+        // `replaceCFStmt` writes the three provenance columns together, so
+        // one position lookup serves all of them.
+        if (rewrite.cf_stmt_sources.owned()) {
+            if (rewrite.preparedStmt(self.body_prefix.cf_stmts, @backingInt(id))) |private| {
+                std.debug.assert(rewrite.cf_stmt_inline_scopes.owned() and rewrite.cf_stmt_origin_kinds.owned());
+                const source = self.stmtSource(rewrite.cf_stmt_sources.rows.get(private));
+                return .{
+                    .loc = source.loc,
+                    .region = source.region,
+                    .inline_scope = rewrite.cf_stmt_inline_scopes.rows.get(private),
+                    .kind = rewrite.cf_stmt_origin_kinds.rows.get(private).unpack(),
+                };
+            }
+        }
+    }
+    const source = self.stmtSource(self.stmtSourceId(id));
     return .{
-        .loc = self.stmtLoc(id),
-        .region = self.stmtRegion(id),
+        .loc = source.loc,
+        .region = source.region,
         .inline_scope = self.stmtInlineScope(id),
         .kind = self.stmtOriginKind(id),
     };
@@ -1523,8 +1548,12 @@ inline fn borrowStoreSpan(self: *const Self, comptime T: type, comptime field: [
 /// private copies of, which take precedence.
 inline fn borrowRewritableStoreSpan(self: *const Self, comptime T: type, comptime field: []const u8, comptime getter: anytype, span: anytype) StoreSpanBorrow(T, field) {
     if (self.proc_rewrite) |*rewrite| {
-        if (@field(rewrite, field).index(span.start, span.len)) |private| {
-            if (@field(rewrite, field).owned(private)) return @field(rewrite, field).data.rows.borrowSpan(private, span.len);
+        if (@field(rewrite, field).owned()) {
+            if (@field(rewrite, field).index(span.start, span.len)) |private| return @field(rewrite, field).data.rows.borrowSpan(private, span.len);
+        } else if (builtin.mode == .debug) {
+            // `index` checks that a span starting at a prepared row was
+            // prepared whole.
+            _ = @field(rewrite, field).index(span.start, span.len);
         }
     }
     return self.borrowStoreSpan(T, field, getter, span);
@@ -1976,8 +2005,8 @@ pub fn getCFStmt(self: *const Self, id: CFStmtId) CFStmt {
     self.verifyCFStmtId(id);
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
-            if (rewrite.cf_stmts.owned(private)) return rewrite.cf_stmts.data.rows.get(private);
+        if (rewrite.cf_stmts.owned()) {
+            if (rewrite.preparedStmt(self.body_prefix.cf_stmts, index)) |private| return rewrite.cf_stmts.data.rows.get(private);
         }
     }
     if (self.body_coordinator) |coordinator| {
@@ -1995,8 +2024,8 @@ pub fn getCFStmtImmediate(self: *const Self, id: CFStmtId) *const CFStmt {
     self.verifyCFStmtId(id);
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
-            if (rewrite.cf_stmts.owned(private)) return rewrite.cf_stmts.data.rows.getPtrConstImmediate(private);
+        if (rewrite.cf_stmts.owned()) {
+            if (rewrite.preparedStmt(self.body_prefix.cf_stmts, index)) |private| return rewrite.cf_stmts.data.rows.getPtrConstImmediate(private);
         }
     }
     if (self.body_coordinator) |coordinator| {
@@ -2130,6 +2159,7 @@ pub fn addProcSpec(self: *Self, proc: LirProcSpec, loc: base.SourceLoc) Allocato
     if (spec.body != .none) spec.shapes = spec.shapes.merged(self.shapes);
     try self.proc_specs.append(self.allocator, spec);
     try self.proc_locs.append(self.allocator, loc);
+    try self.proc_debug_names.append(self.allocator, base.StringLiteral.Idx.none);
     return @fromBackingInt(@intCast(@as(u32, @intCast(idx))));
 }
 
@@ -2175,12 +2205,14 @@ pub fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
         .assign_struct => self.shapes.struct_build = true,
         .assign_tag => self.shapes.tag_build = true,
         // A type table word is static data.
-        .dyn => |dyn| if (self.stmtRow(dyn.data) == .table_entry) {
-            self.shapes.static_literal = true;
+        .dyn => |dyn| {
+            const row = self.stmtRow(dyn.data);
+            if (row == .table_entry) self.shapes.static_literal = true;
+            if (row == .call_erased) self.shapes.erased_call = true;
         },
+        .assign_call_erased => self.shapes.erased_call = true,
         .init_uninitialized,
         .assign_ref,
-        .assign_call_erased,
         .assign_packed_erased_fn,
         .assign_list,
         .store_struct,
@@ -2210,7 +2242,7 @@ pub fn procSpecCount(self: *const Self) usize {
     return self.proc_specs.len() + if (self.body_coordinator != null) self.body_prefix.proc_specs else 0;
 }
 
-/// Number of stored proc debug-name entries.
+/// Number of rows in the proc debug-name column.
 pub fn procDebugNameCount(self: *const Self) usize {
     return self.proc_debug_names.len();
 }
@@ -2563,6 +2595,19 @@ test "body shard rejects generated symbol identities" {
     try std.testing.expectError(error.UnsupportedShardMetadata, worker.captureBodyShard(prefix));
 }
 
+test "body shard appends after its coordinator allocated a symbol" {
+    var coordinator = Self.init(std.testing.allocator);
+    defer coordinator.deinit();
+    const local = try coordinator.addLocal(.{ .layout_idx = .zst });
+    var worker = try coordinator.cloneForBodyShard(std.testing.allocator);
+    defer worker.deinit();
+    const prefix = worker.captureBodyPrefix();
+    const root = try worker.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+    _ = coordinator.freshSyntheticSymbol();
+    const appended = try coordinator.appendBodyShard(try worker.captureBodyShard(prefix), root, .empty(), null);
+    try std.testing.expect(coordinator.getCFStmtImmediate(appended.root.?).* == .ret);
+}
+
 test "body shard relocates nonzero local and body suffixes" {
     var coordinator = Self.init(std.testing.allocator);
     defer coordinator.deinit();
@@ -2879,11 +2924,6 @@ test "body shard reads coordinator prefix without copying it" {
     try std.testing.expectEqual(suffix_local, worker.getCFStmt(suffix_stmt).ret.value);
 }
 
-/// Returns one stored proc debug-name entry.
-pub fn getProcDebugName(self: *const Self, index: usize) ProcDebugName {
-    return self.proc_debug_names.get(index);
-}
-
 /// Returns the raw local-name table entry for the given local id.
 pub fn getLocalNameRaw(self: *const Self, id: LocalId) u32 {
     const index = @backingInt(id);
@@ -2894,38 +2934,27 @@ pub fn getLocalNameRaw(self: *const Self, id: LocalId) u32 {
     return self.local_names.get(index);
 }
 
-/// Remaps proc debug-name entries and drops names for pruned procs.
-pub fn compactProcDebugNames(self: *Self, old_to_new: *const collections.OptionalIndexColumn(LirProcSpecId)) void {
-    var write: usize = 0;
-    const names = self.proc_debug_names.unsafeRawItemsMutForStore();
-    for (names) |entry| {
-        if (entry.proc >= old_to_new.len()) continue;
-        const new_proc = old_to_new.get(entry.proc) orelse continue;
-        names[write] = .{
-            .proc = @backingInt(new_proc),
-            .string = entry.string,
-        };
-        write += 1;
-    }
-    self.proc_debug_names.shrinkRetainingCapacity(write);
-}
-
-/// Compacts proc specs and their parallel source-location table in place.
+/// Compacts proc specs and their parallel source-location and debug-name
+/// tables in place.
 pub fn compactProcSpecs(self: *Self, reachable: []const bool) void {
     std.debug.assert(reachable.len == self.proc_specs.len());
     std.debug.assert(self.proc_specs.len() == self.proc_locs.len());
+    std.debug.assert(self.proc_specs.len() == self.proc_debug_names.len());
 
     var write: usize = 0;
     const proc_specs = self.proc_specs.unsafeRawItemsMutForStore();
     const proc_locs = self.proc_locs.unsafeRawItemsMutForStore();
-    for (proc_specs, proc_locs, 0..) |proc, loc, index| {
+    const proc_debug_names = self.proc_debug_names.unsafeRawItemsMutForStore();
+    for (proc_specs, proc_locs, proc_debug_names, 0..) |proc, loc, debug_name, index| {
         if (!reachable[index]) continue;
         proc_specs[write] = proc;
         proc_locs[write] = loc;
+        proc_debug_names[write] = debug_name;
         write += 1;
     }
     self.proc_specs.shrinkRetainingCapacity(write);
     self.proc_locs.shrinkRetainingCapacity(write);
+    self.proc_debug_names.shrinkRetainingCapacity(write);
 }
 
 /// Compacts control-flow statements and their parallel debug metadata in place,

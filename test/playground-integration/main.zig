@@ -1149,10 +1149,13 @@ fn runTests(
     logDebug("Success Rate: {d:.0}%\n", .{stats.successRate()});
     logDebug("Duration: {}ms\n", .{stats.durationMs()});
 
+    // A failing run names each failed case and its message without
+    // `--verbose`, so a failure in CI or a build step can be diagnosed from
+    // its output alone.
     if (stats.failed > 0) {
-        logDebug("\n=== Failures ===\n", .{});
+        std.debug.print("\n=== Playground Failures ({d}/{d}) ===\n", .{ stats.failed, stats.total });
         for (failures.items) |failure| {
-            logDebug("- {s}: {s}\n", .{ failure.case_name, failure.message });
+            std.debug.print("- {s}: {s}\n", .{ failure.case_name, failure.message });
         }
     }
 
@@ -1322,7 +1325,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     try test_cases.append(allocator, try createSimpleTest(allocator, "Syntax Error - Mismatched Braces", syntax_error_code_val, .{ .min_errors = 1, .error_messages = &.{"EXPECTED LIST SEPARATOR"} }, true));
 
     const type_error_code_val = try TestData.typeErrorRocCode(allocator);
-    try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"MISSING METHOD"} }, true));
+    try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"TYPE MISMATCH"} }, true));
 
     // A buffer checked on its own gets no compile-time finalization, so the
     // exhaustiveness checks deferred to it are settled when reports are collected.
@@ -1416,6 +1419,18 @@ pub fn main(init: std.process.Init) anyerror!void {
     try test_cases.append(allocator, .{
         .name = "REPL Protocol - Step, Query, Clear, Reset",
         .steps = repl_protocol_steps,
+    });
+
+    // A definition holding function values, and an expression calling them.
+    var repl_function_steps = try allocator.alloc(MessageStep, 4);
+    repl_function_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
+    repl_function_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS", .expected_message_contains = "REPL initialized" };
+    repl_function_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "table = [|n| n + 1.I64, |n| n * 2.I64]" }, .expected_status = "SUCCESS", .expected_result_output_contains = "assigned `table`" };
+    repl_function_steps[3] = .{ .message = .{ .type = "REPL_STEP", .input = "table.fold(40.I64, |acc, f| f(acc))" }, .expected_status = "SUCCESS", .expected_result_output_contains = "82" };
+
+    try test_cases.append(allocator, .{
+        .name = "REPL - Definition Holding Functions",
+        .steps = repl_function_steps,
     });
 
     if (case_filters.items.len > 0) {

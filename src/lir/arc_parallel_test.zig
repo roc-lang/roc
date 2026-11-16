@@ -52,7 +52,7 @@ const Fixture = struct {
         // a decref. Borrow inference cannot turn this into a no-op fixture.
         // Forty procedures over 32-wide waves give the two base waves these
         // tests' session and commit expectations are written against.
-        try arc.insert(&self.store, &self.layouts, .{
+        _ = try arc.insert(&self.store, &self.layouts, .{
             .roots = roots[0..count],
             .post_check_executor = runner,
             .metrics_out = metrics,
@@ -654,7 +654,7 @@ const OutcomeFixture = struct {
     }
 
     fn run(self: *OutcomeFixture, runner: ?*const executor.Executor, metrics: *arc.ParallelMetrics) arc.ResourceError!void {
-        try arc.insert(&self.fixture.store, &self.fixture.layouts, .{
+        _ = try arc.insert(&self.fixture.store, &self.fixture.layouts, .{
             .specialize = true,
             .post_check_executor = runner,
             .metrics_out = metrics,
@@ -970,4 +970,88 @@ test "ARC dismantle fact ranges match inline analysis under reverse completions 
     try runner.expectDrained();
     try testing.expectEqual(@as(usize, 2), runner.received);
     try testing.expectEqual(arc_dismantle.TaskMetrics{ .submitted = 2, .committed = 2 }, metrics);
+}
+
+/// Insert without uniqueness proofs, which prepares, plans and emits every
+/// procedure in one task, over waves of `wave_size` owners.
+fn insertFused(fixture: *Fixture, runner: ?*const executor.Executor, wave_size: usize, specialize: bool) arc.ResourceError!void {
+    var roots: [64]core.LIR.LirProcSpecId = undefined;
+    const count = fixture.store.procSpecCount();
+    for (roots[0..count], 0..) |*root, index| root.* = @fromBackingInt(@intCast(index));
+    _ = try arc.insert(&fixture.store, &fixture.layouts, .{
+        .roots = if (specialize) &.{} else roots[0..count],
+        .specialize = specialize,
+        .prove_uniqueness = false,
+        .post_check_executor = runner,
+        .emission_wave_size = wave_size,
+    });
+}
+
+test "ARC fused procedure tasks match inline output at every worker count and wave size" {
+    const Case = struct { name: []const u8, specialize: bool };
+    for ([_]Case{ .{ .name = "independent", .specialize = false }, .{ .name = "outcome variants", .specialize = true } }) |case| {
+        const build = struct {
+            fn fixture(name: []const u8) std.mem.Allocator.Error!Fixture {
+                if (std.mem.eql(u8, name, "independent")) return Fixture.init(40);
+                return (try OutcomeFixture.init()).fixture;
+            }
+        };
+        var direct = try build.fixture(case.name);
+        defer direct.deinit();
+        try insertFused(&direct, null, 128, case.specialize);
+        for ([_]usize{ 1, 2, 3, 128 }) |wave_size| {
+            var inline_wave = try build.fixture(case.name);
+            defer inline_wave.deinit();
+            try insertFused(&inline_wave, null, wave_size, case.specialize);
+            try expectSame(&direct, &inline_wave);
+            for ([_]usize{ 1, 2, 4 }) |lanes| {
+                var reverse = try build.fixture(case.name);
+                defer reverse.deinit();
+                var runner: ReverseExecutor = .{ .lanes = lanes };
+                defer runner.deinit();
+                const interface = runner.interface();
+                try insertFused(&reverse, &interface, wave_size, case.specialize);
+                try runner.expectDrained();
+                try expectSame(&direct, &reverse);
+            }
+            for ([_]usize{ 0, 1, 3, 8 }) |threads| {
+                var threaded = try build.fixture(case.name);
+                defer threaded.deinit();
+                var pool = executor.ThreadedTestExecutor{};
+                try pool.start(threads);
+                defer pool.stop();
+                const interface = pool.executor();
+                try insertFused(&threaded, &interface, wave_size, case.specialize);
+                try expectSame(&direct, &threaded);
+            }
+        }
+    }
+}
+
+test "ARC fused procedure tasks drain and leave the store unchanged when a task runs out of memory" {
+    // Every session the insertion opens, up to and including its one wave.
+    for (0..4) |session| {
+        var fail_index: usize = 0;
+        while (true) : (fail_index += 1) {
+            var source = try Fixture.init(8);
+            defer source.deinit();
+            var candidate = try Fixture.init(8);
+            defer candidate.deinit();
+            var runner: ReverseExecutor = .{
+                .fail_session = session,
+                .fail_task = 0,
+                .output_failure = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index }),
+            };
+            defer runner.deinit();
+            const interface = runner.interface();
+            const result = insertFused(&candidate, &interface, 128, false);
+            try runner.expectDrained();
+            if (!runner.output_failure.has_induced_failure) {
+                try result;
+                break;
+            }
+            try testing.expectError(error.OutOfMemory, result);
+            try expectSame(&source, &candidate);
+        }
+    }
 }

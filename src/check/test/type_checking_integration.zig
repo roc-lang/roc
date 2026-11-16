@@ -103,15 +103,12 @@ test "check type - i64 annotation with fractional literal fails type checking" {
 }
 
 test "check type - string plus number should fail" {
-    // String literal + number: the `+` operator desugars to calling the
-    // `.plus` method on the left operand. Nothing determines the string
-    // literal's type and its default has no `plus` method, so the
-    // undetermined string type is reported before the number literal's own
-    // conversion is checked.
+    // Both operands of `+` are one type, and nothing determines a type that
+    // is both a string literal's and a number literal's.
     const source =
         \\x = "hello" + 123
     ;
-    try checkTypesModule(source, .fail_first, "Missing Method");
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
 test "check type - string plus string should fail (no plus method)" {
@@ -171,7 +168,7 @@ fn checkLargeBooleanChain(first_term: []const u8, remaining_term: []const u8) Te
 // var unreachable from the enclosing def's signature. Instantiation copies only
 // signature-reachable vars, so that literal var would be shared by every caller
 // and can never adapt per call site. At the generalization boundary it is
-// defaulted (first-satisfier order), the deferred dispatches cascade into the
+// defaulted to Dec, the deferred dispatches cascade into the
 // signature (pinning `x`, `y`, and the return to Dec), and a LITERAL DEFAULTED
 // warning fires per literal—the Haskell §4.3.4 / `-Wtype-defaults` analogue.
 // A signature-reachable literal (binop form `|x| 5 + x`) stays open instead—
@@ -206,102 +203,84 @@ test "check type - literal receiver of method call defaults at generalization bo
 }
 
 test "check type - literal binop receiver stays polymorphic (no boundary defaulting)" {
-    // Guard against over-eager boundary defaulting: the binop form collapses
-    // literal, receiver, and result into the signature's return var
-    // (`ret = lhs`), so the literal IS reachable from the def's type via its
-    // constraint chain and must stay open and polymorphic—no warning.
+    // Guard against over-eager boundary defaulting: an arithmetic operator's
+    // operands and result are one type, so the literal's type is the
+    // parameter's and the result's. It is reachable from the def's type and
+    // must stay open and polymorphic, with no warning.
     const source =
         \\five_plus_binop = |x| 5 + x
     ;
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "a -> b\n" ++
+        "a -> a\n" ++
             "  where [\n" ++
-            "    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),\n" ++
-            "    b.plus : b, a -> b,\n" ++
+            "    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),\n" ++
+            "    a.plus : a, a -> a,\n" ++
             "  ]",
     );
 }
 
-// SURVIVOR-MATRIX GUARD for `numeralCandidateStructurallyRefuted`
-// (src/check/Check.zig): each of the 13 defaulting candidates (canonical order
-// `numeral_default_candidates`) becomes the FIRST satisfier exactly once. `f`
-// stays polymorphic (its literal is signature-reachable, see the binop guard
-// test above), so `y = f(my_val)` probes the literal's candidates against the
-// concrete T pinned by `my_val`—only T survives. A wrong refutation
-// (soundness drift in the pre-filter) flips `y`'s inferred type here;
-// safety-checked builds also crash on the witness probe in
-// `commitLiteralDefault`. Asserts `y` only; every shape type-checks with zero
-// problems (the literal resolves via the pinned argument—like the existing u8
-// shape, which produced no LITERAL DEFAULTED warning).
-test "check type - numeral defaulting survivor matrix - every candidate as first satisfier" {
-    // Same order as `numeral_default_candidates` in src/check/Check.zig.
-    const candidate_type_names = [_][]const u8{
-        "Dec", "I64", "U64", "I128", "U128", "I32", "U32", "I16", "U16", "I8", "U8", "F64", "F32",
-    };
-    inline for (candidate_type_names) |type_name| {
-        const source =
-            "my_val : " ++ type_name ++ "\n" ++
-            "my_val = 7\n" ++
-            "f = |x| 5 + x\n" ++
-            "y = f(my_val)";
-        var test_env = try TestEnv.init("Test", source);
-        defer test_env.deinit();
-        try test_env.assertDefType("y", type_name);
-    }
+// DEC-ONLY DEFAULTING: a number literal nothing else decides becomes `Dec`.
+// No other builtin number type is tried, so a literal whose uses `Dec` cannot
+// satisfy is an error asking for a suffix or an annotation.
+
+test "check type - numeral defaulting - literal with no requirements is Dec" {
+    const source =
+        \\x = 5
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Dec");
 }
 
-// REFUTED-COUNT GUARD (completeness direction) for
-// `numeralCandidateStructurallyRefuted` (src/check/Check.zig): the survivor
-// matrix above catches UNSOUND refutations, but a pre-filter that refutes
-// NOTHING (e.g. an early `return false` regression) is observably identical
-// except for probe cost. So pin the counts: a U8-pinned method-call receiver
-// must refute the 10 candidates before `u8` structurally (dispatcher-position
-// mismatch against the concrete U8 argument) and attempt exactly one probe (the
-// `u8` commit; `f64`/`f32` are never reached). The count is mechanical: 10 =
-// candidates before `u8` in `numeral_default_candidates` (src/check/Check.zig:
-// dec, i64, u64, i128, u128, i32, u32, i16, u16, i8—then u8). Editing that
-// list must update this count to u8's new index.
-// `bench_probe_attempts`/`bench_probe_refuted` are per-instance debug-only fields
-// on the Check struct, compiled out entirely in release builds. A fresh Check
-// instance starts at 0, so no reset is needed.
-test "check type - numeral defaulting pre-filter refutes provably-failing candidates" {
+test "check type - an arithmetic operator gives a literal operand the other operand's type" {
+    // `index` is a `U64`, and both operands of `+` are one type, so the
+    // elements are `U64` with no defaulting involved.
     const source =
-        \\my_u8 : U8
-        \\my_u8 = 7
-        \\h = (5).plus(my_u8)
+        \\result = List.map_with_index([10, 20, 30], |num, index| num + index)
     ;
-    var test_env = try TestEnv.init("Test", source);
-    defer test_env.deinit();
-    // The pinned U8 argument admits exactly one candidate, so the literal
-    // receiver resolves to U8 with zero problems (no LITERAL DEFAULTED warning—
-    // unlike the open `(5).plus(x)` shape above, nothing here falls back to the
-    // canonical default).
-    try test_env.assertDefType("h", "U8");
-
-    if (comptime std.debug.runtime_safety) {
-        try testing.expectEqual(@as(usize, 1), test_env.checker.bench_probe_attempts);
-        try testing.expectEqual(@as(usize, 10), test_env.checker.bench_probe_refuted);
-    }
+    try checkTypesModule(source, .{ .pass = .last_def }, "List(U64)");
 }
 
-// CANDIDATE-ORDER PIN for `numeral_default_candidates` (src/check/Check.zig):
-// `bitwise_and` exists on all 10 builtin integer types but NOT on Dec/F64/F32,
-// and neither argument pins a width—so the boundary-defaulted receiver
-// literal has MULTIPLE surviving candidates and must commit the FIRST integer
-// in canonical order, I64 (Dec is refuted by the method-lookup miss). Compare
-// the `(5).plus(x)` shape above, which commits Dec. Inferring some other integer
-// type here means the candidate order (or the pre-filter's interaction with it)
-// changed.
-test "check type - numeral defaulting candidate order - integer-only method commits I64" {
+test "check type - numeral defaulting - suffix decides the literal needing plus with a U64" {
     const source =
-        \\g = |x| (5).bitwise_and(x)
+        \\result = List.map_with_index([10.U64, 20, 30], |num, index| num + index)
     ;
-    try checkTypesModule(source, .{ .pass_with_warnings = .{
-        .def = .last_def,
-        .warnings = &.{"Literal Defaulted"},
-    } }, "I64 -> I64");
+    try checkTypesModule(source, .{ .pass = .last_def }, "List(U64)");
+}
+
+test "check type - numeral defaulting - method call on a bare literal does not take its argument's type" {
+    // The receiver's only requirement is `plus` taking a `U8`, which `Dec`
+    // does not satisfy.
+    const source =
+        \\some_u8 : U8
+        \\some_u8 = 7
+        \\x = (5).plus(some_u8)
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**Missing Method**
+        \\This number's type never resolved to a concrete type, so it has no `plus` method.
+        \\```roc
+        \\x = (5).plus(some_u8)
+        \\```
+        \\     ^
+        \\
+        \\Its type needs all of these:
+        \\
+        \\    a where [a.plus : a, U8 -> _ret]
+        \\
+        \\Giving the number a suffix, using it somewhere that requires a specific type, or annotating it will give it one.
+        \\
+        \\
+    );
+}
+
+test "check type - numeral defaulting - binop literal takes its concrete operand's type" {
+    const source =
+        \\some_u8 : U8
+        \\some_u8 = 7
+        \\x = 5 + some_u8
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "U8");
 }
 
 test "issue 10296: single quote literals do not emit defaulted warning" {
@@ -2783,7 +2762,7 @@ test "check type - lambda equality - a numeral argument is decided by relating i
     try test_env.assertTypeErrorTitles(&.{"Type Does Not Support Equality"});
 }
 
-test "check type - lambda equality - plus requirements at two types are a method conflict" {
+test "check type - lambda equality - plus operands at two types are a type mismatch" {
     var test_env = try TestEnv.init("Test",
         \\f = |args| {
         \\    n = List.len(args)
@@ -2798,7 +2777,7 @@ test "check type - lambda equality - plus requirements at two types are a method
     );
     defer test_env.deinit();
 
-    try test_env.assertTypeErrorTitles(&.{ "Type Does Not Support Equality", "Type Mismatch" });
+    try test_env.assertTypeErrorTitles(&.{ "Type Mismatch", "Type Does Not Support Equality" });
 }
 
 // anonymous type inequality (desugars to is_eq().not()) //
@@ -4539,8 +4518,8 @@ test "check type - unary not" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
-test "check type - unary not infers Bool argument" {
-    try checkTypesModule("negate = |value| !value", .{ .pass = .last_def }, "Bool -> Bool");
+test "check type - unary not infers a where clause for a generic operand" {
+    try checkTypesModule("negate = |value| !value", .{ .pass = .last_def }, "a -> a where [a.not : a -> a]");
 }
 
 test "check type - unary not mutable boolean in loop" {
@@ -4561,22 +4540,164 @@ test "check type - unary not mutable boolean in loop" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
-test "check type - unary not mismatch" {
+test "check type - unary not on a type without not is a missing method" {
     const source =
         \\x = !"Hello"
+    ;
+    try checkTypesModule(source, .fail, "Missing Method");
+}
+
+test "check type - unary not on a nominal type without not is a missing method" {
+    const source =
+        \\Plain := [On, Off]
+        \\
+        \\p : Plain
+        \\p = Plain.On
+        \\
+        \\result = !p
+    ;
+    try checkTypesModule(source, .fail, "Missing Method");
+}
+
+test "check type - unary not on a tag literal resolves at Bool" {
+    try checkTypesModule("x = !True", .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - unary not on a tag literal compared with a tag" {
+    try checkTypesModule("x = !True == False", .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - unary not twice on a tag literal" {
+    try checkTypesModule("x = !!True", .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - unary not on an unannotated tag binding in an if" {
+    const source =
+        \\go : U64 -> U64
+        \\go = |n| {
+        \\    var $done = False
+        \\    if n > 3 { $done = True }
+        \\    if !$done { n } else { 0 }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "U64 -> U64");
+}
+
+test "check type - unary not on an unannotated tag binding returned unrelated" {
+    const source =
+        \\flip = |_| {
+        \\    done = False
+        \\    !done
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Bool");
+}
+
+test "check type - unary not in a while condition" {
+    const source =
+        \\count : List(U64) -> U64
+        \\count = |items| {
+        \\    var $done = False
+        \\    var $n = 0
+        \\    var $rest = items
+        \\    while !$done {
+        \\        match $rest.first() {
+        \\            Ok(x) => {
+        \\                $n = $n + x
+        \\                $rest = $rest.drop_first(1)
+        \\            }
+        \\            Err(_) => { $done = True }
+        \\        }
+        \\    }
+        \\    $n
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "List(U64) -> U64");
+}
+
+test "check type - unary not on and operands" {
+    try checkTypesModule("x = !True and !False", .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - unary not inside map" {
+    try checkTypesModule("x = [True, False].map(|f| !f)", .{ .pass = .last_def }, "List(Bool)");
+}
+
+test "check type - unary not on a method result" {
+    try checkTypesModule("x = ![1.U8, 2].is_empty()", .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - unary not on a tag union with other tags is a mismatch against Bool" {
+    const source =
+        \\x = !Foo
     ;
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - unary not rejects custom not method" {
+test "check type - unary not of a generic function applied to a tag literal is a missing method" {
     const source =
-        \\Custom := [Value].{
-        \\    not : Custom -> Custom
-        \\    not = |value| value
-        \\}
-        \\result = !Custom.Value
+        \\negate = |value| !value
+        \\x = negate(True)
     ;
-    try checkTypesModule(source, .fail, "Type Mismatch");
+    try checkTypesModule(source, .fail, "Missing Method");
+}
+
+test "check type - unary not on a tag literal an annotation pins to a nominal type" {
+    const source =
+        \\Switch := [On, Off].{
+        \\    not : Switch -> Switch
+        \\    not = |s| match s {
+        \\        On => Off
+        \\        Off => On
+        \\    }
+        \\}
+        \\
+        \\result : Switch
+        \\result = !On
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Switch");
+}
+
+test "check type - unary not on a local tag binding a later annotation pins" {
+    const source =
+        \\Switch := [On, Off].{
+        \\    not : Switch -> Switch
+        \\    not = |s| match s {
+        \\        On => Off
+        \\        Off => On
+        \\    }
+        \\}
+        \\
+        \\result = |_| {
+        \\    v = On
+        \\    flipped = !v
+        \\    pinned : Switch
+        \\    pinned = flipped
+        \\    pinned
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Switch");
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/13001: `!x` is sugar for
+// `x.not()`, so it dispatches to the operand type's `not` method, the same way
+// `-x` dispatches to `negate`.
+test "check type - unary not dispatches to a nominal type's not method" {
+    const source =
+        \\Switch := [On, Off].{
+        \\    not : Switch -> Switch
+        \\    not = |s| match s {
+        \\        On => Off
+        \\        Off => On
+        \\    }
+        \\}
+        \\
+        \\s : Switch
+        \\s = Switch.On
+        \\
+        \\result = !s
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Switch");
 }
 
 // unary minus
@@ -4811,6 +4932,31 @@ test "check type - record - update - fail - missing field" {
         \\
         \\
     );
+}
+
+test "check type - record - update - fail - missing field stored in a tuple" {
+    // The rejected update is poisoned, and the tuple stores it as an element.
+    const source =
+        \\main! = |_| {}
+        \\
+        \\State : { pos : U64 }
+        \\
+        \\step : State -> (U64, State)
+        \\step = |state| (1, { ..state, last: 2 })
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - record - update - fail - missing field stored in a record and a tag payload" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\State : { pos : U64 }
+        \\
+        \\step : State -> { next : State, wrapped : [Wrapped(State)] }
+        \\step = |state| { next: { ..state, last: 2 }, wrapped: Wrapped({ ..state, last: 3 }) }
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
 test "check type - record - update - fail - field mismatch" {
@@ -7552,20 +7698,21 @@ test "check type - range inferred" {
         \\  $answer
         \\}
     ;
-    // The literal `1` must remain overloaded in this generalized helper. Builtin
-    // integer range methods reuse this shape for U8, I8, I16, etc.; defaulting
-    // it once at the template level would make later instantiations invalid.
+    // The literal `1` has the bounds' type and must remain overloaded in this
+    // generalized helper. Builtin integer range methods reuse this shape for
+    // U8, I8, I16, etc.; defaulting it once at the template level would make
+    // later instantiations invalid.
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
         \\a, a -> List(a)
         \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
         \\    a.is_lt : a, a -> Bool,
         \\    a.is_lte : a, a -> Bool,
         \\    a.minus : a, a -> a,
-        \\    a.plus : a, b -> a,
+        \\    a.plus : a, a -> a,
         \\    a.to_u64 : a -> U64,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );
@@ -8374,21 +8521,6 @@ test "check type - mutually recursive functions - is_even and is_odd" {
 }
 
 // self recursive functions - additional //
-
-// A binop whose lhs is a literal and whose rhs is pinned to a concrete type only
-// LATER, through a builtin signature (`index : U64` from
-// `List.map_with_index`'s callback)—the real-world pattern speculative peer
-// resolution used to serve. First-satisfier defaulting keeps it passing: at
-// finalize, the literal's own `plus : (a, U64) -> a` constraint refutes `Dec`
-// and `U64` is the first candidate that satisfies it. (Unconditionally unifying
-// lhs == rhs was tried and refuted—it breaks heterogeneous methods like
-// `times : Duration, I64 -> Duration`; see the custom Num type tests.)
-test "check type - binop literal lhs with signature-pinned rhs - U64 index" {
-    const source =
-        \\result = List.map_with_index([10, 20, 30], |num, index| num + index)
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "List(U64)");
-}
 
 test "check type - self recursive function - returning record" {
     const source =
@@ -12191,19 +12323,33 @@ test "static dispatch - deep finite nested requirement chain stays within resour
 
 // DEF-ORDER INDEPENDENCE PINS for `finalizeLiteralDefaults` (src/check/Check.zig).
 // Hard requirement: top-level def order must NEVER affect whether a program
-// type-checks or which types are inferred. The open-literal worklist is
-// registered in def order, so these tests pin the interference-component
-// machinery that makes defaulting commit the same types regardless of that
-// order. Before it, the first-registered literal's probe could "satisfy" a
-// constraint by speculatively pinning a still-open peer literal while ignoring
-// the peer's own constraints, so exactly one of each pair below type-checked.
+// type-checks, which types are inferred, or which problems are reported. The
+// open-literal worklist is registered in def order, so these tests pin the
+// interference-component machinery that makes defaulting reach the same
+// outcome regardless of that order.
 
-// Repro A: `a` and `b` are mutually constrained open literals (`d = b.plus(a)`
-// links them; `c = a.plus(u8val)` pins the group to U8). Both def orders must
-// accept with identical types. Before the fix, the `b`/`d`-first order committed
-// `b` (and transitively `a`) to Dec before `a`'s U8 constraint was consulted,
-// rejecting the program.
-test "check type - def order independence - cross-literal constraint group (pinning def first)" {
+// `a` and `b` are mutually constrained open literals (`d = b.plus(a)` links
+// them; `c = a.plus(u8val)` requires `a` to have `plus` taking a `U8`). `Dec`
+// does not satisfy that, so both def orders must reject the program with the
+// identical report on `a`, and no report on `b`.
+const cross_literal_group_report =
+    \\**Missing Method**
+    \\This number's type never resolved to a concrete type, so it has no `plus` method.
+    \\```roc
+    \\a = id(1)
+    \\```
+    \\       ^
+    \\
+    \\Its type needs all of these:
+    \\
+    \\    e where [e.plus : e, U8 -> _ret]
+    \\
+    \\Giving the number a suffix, using it somewhere that requires a specific type, or annotating it will give it one.
+    \\
+    \\
+;
+
+test "check type - def order independence - cross-literal constraint group (constraining def first)" {
     const source =
         \\id = |x| x
         \\u8val : U8
@@ -12213,15 +12359,10 @@ test "check type - def order independence - cross-literal constraint group (pinn
         \\b = id(5)
         \\d = b.plus(a)
     ;
-    try checkTypesModuleDefs(source, &.{
-        .{ .def = "a", .expected = "U8" },
-        .{ .def = "b", .expected = "U8" },
-        .{ .def = "c", .expected = "U8" },
-        .{ .def = "d", .expected = "U8" },
-    });
+    try checkTypesModule(source, .fail_with, cross_literal_group_report);
 }
 
-test "check type - def order independence - cross-literal constraint group (pinning def last)" {
+test "check type - def order independence - cross-literal constraint group (constraining def last)" {
     const source =
         \\id = |x| x
         \\u8val : U8
@@ -12231,35 +12372,44 @@ test "check type - def order independence - cross-literal constraint group (pinn
         \\a = id(1)
         \\c = a.plus(u8val)
     ;
-    try checkTypesModuleDefs(source, &.{
-        .{ .def = "a", .expected = "U8" },
-        .{ .def = "b", .expected = "U8" },
-        .{ .def = "c", .expected = "U8" },
-        .{ .def = "d", .expected = "U8" },
-    });
+    try checkTypesModule(source, .fail_with, cross_literal_group_report);
 }
 
-// Repro B: the annotation pins the dispatch return to U8, which must flow
-// through the receiver literal's first-satisfier probe into the ARGUMENT
-// literal—the argument must not be finalized to Dec while the dispatch that
-// would pin it is still in flight.
-test "check type - annotated method-call return pins both receiver and argument literals" {
+// An annotation on a method call's result does not decide the call's receiver
+// literal: the receiver's requirement is `plus` returning `U8`, which `Dec`
+// does not satisfy.
+test "check type - annotated method-call return does not decide the receiver literal" {
     const source =
         \\r : U8
         \\r = (5).plus(1)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "U8");
+    try checkTypesModule(source, .fail_with,
+        \\**Missing Method**
+        \\This number's type never resolved to a concrete type, so it has no `plus` method.
+        \\```roc
+        \\r = (5).plus(1)
+        \\```
+        \\     ^
+        \\
+        \\Its type needs all of these:
+        \\
+        \\    a where [a.plus : a, b -> U8]
+        \\
+        \\Giving the number a suffix, using it somewhere that requires a specific type, or annotating it will give it one.
+        \\
+        \\
+    );
 }
 
-// Repro B's def-order spelling: the argument literal lives in its own def, so
-// its worklist registration moves with def order. Both placements must accept
-// with `one : U8`. Before the fix, the `one`-first order head-committed `one` to
-// Dec before `r`'s receiver probe (which needs a U8 argument) ran.
+// The argument literal lives in its own def, so its worklist registration
+// moves with def order. `U8.plus : U8, U8 -> U8` pins it through the
+// receiver, and both placements must accept with `one : U8`: the argument
+// must not be finalized to Dec ahead of the dispatch that decides it.
 test "check type - def order independence - passive literal def before its constraining dispatch" {
     const source =
         \\one = 1
         \\r : U8
-        \\r = (5).plus(one)
+        \\r = (5.U8).plus(one)
     ;
     try checkTypesModuleDefs(source, &.{
         .{ .def = "one", .expected = "U8" },
@@ -12270,7 +12420,7 @@ test "check type - def order independence - passive literal def before its const
 test "check type - def order independence - passive literal def after its constraining dispatch" {
     const source =
         \\r : U8
-        \\r = (5).plus(one)
+        \\r = (5.U8).plus(one)
         \\one = 1
     ;
     try checkTypesModuleDefs(source, &.{
@@ -12280,43 +12430,37 @@ test "check type - def order independence - passive literal def after its constr
 }
 
 // Heterogeneous multi-driver group: two open literals constrained through
-// DIFFERENT integer-only methods share a component (`a`'s `bitwise_and` mentions
-// `b`). The group policy must (1) pick one candidate for the whole group—Dec
-// is refuted by the method-lookup miss, so the first surviving integer, I64,
-// wins—and (2) exempt passives from the forced assignment: `shl_wrap : T,
-// U8 -> T` pins the shift-amount literal `3` to U8 via the method signature;
-// force-assigning it the group candidate (I64) would fail every candidate and
-// head-default the drivers to Dec, erroring. Both def orders must accept with
-// identical types.
+// DIFFERENT methods share a component (`a`'s `plus` mentions `b`). Both
+// drivers default to Dec, whose `times : Dec, Dec -> Dec` pins the passive
+// literal `3`. Both def orders must accept with identical types.
 test "check type - def order independence - heterogeneous multi-driver group (linking def first)" {
     const source =
-        \\a = (1).bitwise_and(b)
-        \\b = (2).shl_wrap(3)
+        \\a = (1).plus(b)
+        \\b = (2).times(3)
     ;
     try checkTypesModuleDefs(source, &.{
-        .{ .def = "a", .expected = "I64" },
-        .{ .def = "b", .expected = "I64" },
+        .{ .def = "a", .expected = "Dec" },
+        .{ .def = "b", .expected = "Dec" },
     });
 }
 
 test "check type - def order independence - heterogeneous multi-driver group (linking def last)" {
     const source =
-        \\b = (2).shl_wrap(3)
-        \\a = (1).bitwise_and(b)
+        \\b = (2).times(3)
+        \\a = (1).plus(b)
     ;
     try checkTypesModuleDefs(source, &.{
-        .{ .def = "a", .expected = "I64" },
-        .{ .def = "b", .expected = "I64" },
+        .{ .def = "a", .expected = "Dec" },
+        .{ .def = "b", .expected = "Dec" },
     });
 }
 
 // MIXED-KIND multi-driver group: a quote driver and a numeral driver share a
 // component. `"x"`'s `concat` signature mentions `b` (the still-flex result of
 // `(1).to_str()`), and `1`'s `to_str` signature mentions `b` too, so the two
-// drivers interfere. The group policy assigns the quote driver its single
-// candidate (Str) on every attempt while the numeral scan iterates—the head
-// candidate Dec already satisfies the group (`Str.concat` pins `b` to Str;
-// `Dec.to_str : Dec -> Str` agrees), so the group commits on the first attempt.
+// drivers interfere. The group policy assigns the quote driver Str and the
+// numeral driver Dec, which satisfy the group (`Str.concat` pins `b` to Str;
+// `Dec.to_str : Dec -> Str` agrees), so the group commits.
 // Both def orders must accept with identical types.
 test "check type - def order independence - mixed quote+numeral multi-driver group (quote def first)" {
     const source =
@@ -12342,20 +12486,15 @@ test "check type - def order independence - mixed quote+numeral multi-driver gro
 
 // BOUNDARY GROUP DEFAULTING: the same interference-component machinery must run
 // at a def's generalization boundary, not just at module finalize.
-// `(5).plus((2).shl_wrap(3))` puts two DRIVER literals in one component
+// `(5).plus((2).times(3))` puts two DRIVER literals in one component
 // (`5`'s `plus` signature reaches the inner dispatch's return—`2`'s constraint
 // signature's return). At top level this resolves via `finalizeLiteralDefaults`'
-// group policy (Dec refuted by the `shl_wrap` lookup miss; first surviving
-// integer, I64, wins). Wrapped in a function, the literals are NOT
+// group policy. Wrapped in a function, the literals are NOT
 // signature-reachable, so the BOUNDARY must default them—using the same group
-// policy. Before the boundary shared this machinery, it committed literals
-// one-by-one in var-pool order: `5`'s Dec probe speculatively pinned the inner
-// dispatch's return before `2`'s integer-only constraint was consulted, so the
-// def erred (MISSING METHOD `shl_wrap` on Dec) while the identical
-// top-level expression type-checked. Exactly one LITERAL DEFAULTED warning:
+// policy. Exactly one LITERAL DEFAULTED warning:
 // `5`'s `plus` signature reaches the def's return type (the leak), while `2`'s
-// `shl_wrap` signature touches nothing signature-reachable (def-local
-// default, silent) and `3` is a passive pinned to U8 by the fired signature
+// `times` signature touches nothing signature-reachable (def-local
+// default, silent) and `3` is a passive pinned to Dec by the fired signature
 // (never warned).
 //
 // (No within-def STATEMENT-order pair exists for this shape: block locals cannot
@@ -12364,12 +12503,12 @@ test "check type - def order independence - mixed quote+numeral multi-driver gro
 // literal group never spans local statements.)
 test "check type - boundary defaulting - heterogeneous multi-driver group inside a function" {
     const source =
-        \\g = |_x| (5).plus((2).shl_wrap(3))
+        \\g = |_x| (5).plus((2).times(3))
     ;
     try checkTypesModule(source, .{ .pass_with_warnings = .{
         .def = .last_def,
         .warnings = &.{"Literal Defaulted"},
-    } }, "_arg -> I64");
+    } }, "_arg -> Dec");
 }
 
 // Top-level analogue of the boundary group test above, pinned here so the pair
@@ -12377,9 +12516,9 @@ test "check type - boundary defaulting - heterogeneous multi-driver group inside
 // outcome (modulo the boundary's leak warning).
 test "check type - finalize defaulting - heterogeneous multi-driver group at top level" {
     const source =
-        \\top = (5).plus((2).shl_wrap(3))
+        \\top = (5).plus((2).times(3))
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "I64");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Dec");
 }
 
 test "issue 12970: returned callback preserves captured method requirements across a where use" {
@@ -12544,6 +12683,120 @@ test "check type - weak top-level literal rejects second use at different type" 
         \\b = h(n)
     ;
     try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+// design.md "Pending Requirement Copies In Literal Defaulting": a use of a
+// function that calls a method on a weak top-level literal copies that
+// requirement, and the copy counts among the literal's requirements when the
+// literal defaults. The copy's own literals wait for the method it selects.
+test "issue 13055: method on a weak top-level number used through a function called twice" {
+    const source =
+        \\weak = 5
+        \\f = |g| [weak.to_str().repeat(2)].map(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "Dec" },
+        .{ .def = "lengths", .expected = "List(U64)" },
+        .{ .def = "selves", .expected = "List(Str)" },
+    });
+}
+
+test "issue 13055: method on a weak top-level interpolation used through a function called twice" {
+    const source =
+        \\weak = "a${"x"}b"
+        \\f = |g| [weak.repeat(2)].map(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "Str" },
+        .{ .def = "lengths", .expected = "List(U64)" },
+        .{ .def = "selves", .expected = "List(Str)" },
+    });
+}
+
+test "issue 13055: one top-level use of a function that calls a method on a weak literal" {
+    const source =
+        \\f = |{}| weak.to_str().repeat(2)
+        \\a = { v: f({}) }
+        \\weak = 5
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "Dec" },
+        .{ .def = "a", .expected = "{ v: Str }" },
+    });
+}
+
+test "issue 13055: a weak literal's method requirement copied through a second function" {
+    const source =
+        \\weak = 5
+        \\f = |{}| weak.to_str().repeat(2)
+        \\g = |{}| f({})
+        \\a = g({})
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "issue 13055: expect uses a function that calls a method on a weak literal" {
+    const source =
+        \\weak = 5
+        \\f = |{}| weak.to_str().repeat(2)
+        \\
+        \\expect f({}) == "55"
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "Dec" },
+    });
+}
+
+// The copy's argument decides the literal exactly as the direct operation
+// `weak + 3.U8` does: the default must satisfy the copy.
+test "issue 13055: a use's copied requirement chooses the weak literal's type" {
+    const source =
+        \\weak = 5
+        \\f = |x| weak + x
+        \\a = f(3.U8)
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "U8" },
+        .{ .def = "a", .expected = "U8" },
+    });
+}
+
+test "issue 13055: a copied requirement inside a function chooses the weak literal's type" {
+    const source =
+        \\weak = 5
+        \\f = |x| weak + x
+        \\g = |{}| f(3.U8)
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "U8" },
+        .{ .def = "g", .expected = "{} -> U8" },
+    });
+}
+
+// Rejected side: weak means one type, so two copies that need different types
+// for the literal cannot both be satisfied.
+test "issue 13055: copied requirements that need different types for a weak literal are rejected" {
+    const source =
+        \\weak = 5
+        \\f = |x| weak + x
+        \\a = f(3.U8)
+        \\b = f(3.I64)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+// Rejected side: no numeric type has the method the copy needs.
+test "issue 13055: a copied requirement no default satisfies is rejected" {
+    const source =
+        \\weak = 5
+        \\f = |{}| weak.count_utf8_bytes()
+        \\a = f({})
+    ;
+    try checkTypesModule(source, .fail, "Missing Method");
 }
 
 // PRINCIPALITY. Writing an annotation may only ever NARROW an inferred type,
@@ -12821,7 +13074,9 @@ test "check type - principality - literal-constrained lambda parameter remains p
         \\    f = if condition |x| x + offset else |x| x * 2
         \\    f(10)
         \\}
+        \\as_u8 : U8
         \\as_u8 = func(10.U8)
+        \\as_i64 : I64
         \\as_i64 = func(10.I64)
     ;
     try checkTypesModuleDefs(source, &.{
@@ -13341,11 +13596,32 @@ test "check type - dispatch - inferred recursive nominal equality closes a concr
         \\reversed = make({}) == Leaf("a")
         \\different = Expr.Leaf("b") != make({})
         \\method = Expr.Leaf("a").is_eq(make({}))
-        \\bare_method = Leaf("a").is_eq(make({}))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try test_env.assertNoErrors();
+}
+
+test "check type - dispatch - a method called on a tag literal is decided against the plain union" {
+    // A method call on `Leaf("a")` is a requirement on its open row, and
+    // nothing gives that row a nominal type: the row closes as the plain
+    // union, whose derived `is_eq` compares it with itself, not with `Expr`.
+    const source =
+        \\Expr := [Leaf(Str), Next(Expr)].{
+        \\    is_eq = |self, other|
+        \\        match (self, other) {
+        \\            (Leaf(left), Leaf(right)) => left == right
+        \\            (Next(left), Next(right)) => left == right
+        \\            _ => False
+        \\        }
+        \\}
+        \\
+        \\make : {} -> Expr
+        \\make = |_| Leaf("a")
+        \\
+        \\bare_method = Leaf("a").is_eq(make({}))
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - recursive equality method using an enclosing value is a capture" {
@@ -14169,63 +14445,77 @@ test "check type - dispatch - cap-free generational discharge across pending sch
     try testing.expect(scheme_requirement_dispatchers >= hops);
 }
 
-// CONFLICTED-DEFAULT RECORDING DISCIPLINE. A literal joins
-// `conflicted_default_literal_vars` only when validation REJECTED its head
-// default (every numeral candidate failed, or Str failed the quote predicate
-// probe)—the list routes the dispatch pass's failure path through
-// probed-rollback semantics, so a satisfied receiver on it would make every
-// SUCCESSFUL dispatch on that class pay the savepoint bracket and would leave
-// the resolved-root matching exposed to unrelated later merges. The list
-// itself is scoped to the defaulting-rounds invocation that recorded it, so
-// these tests observe the debug-only monotone recording counter.
+// A LITERAL WAITS FOR THE LITERALS WHOSE METHODS REACH IT. A literal defaults
+// only once no other open literal's method signatures reach it, so the methods
+// those literals' defaults select type it first.
 
-test "check type - satisfied quote method constraint records no conflicted default" {
+test "check type - a number literal takes the type a defaulted number's method chain gives it" {
+    // `5` and `1.5` default to Dec, `to_str` gives Str, and `count_utf8_bytes`
+    // gives U64. The `1` and the `0` are the other operand of an operator on
+    // that U64, so they are U64 too, not Dec.
     const source =
-        \\weak = "a,b,c"
-        \\parts = weak.split_on(",")
+        \\c = 5.to_str().count_utf8_bytes() + 1
+        \\b = 1.5.to_str().count_utf8_bytes() > 0
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try test_env.assertNoErrors();
-    if (comptime std.debug.runtime_safety) {
-        try testing.expectEqual(@as(usize, 0), test_env.checker.bench_conflicted_default_records);
-    }
+    try test_env.assertDefType("c", "U64");
+    try test_env.assertDefType("b", "Bool");
 }
 
-test "check type - rejected quote default is recorded once and scoped to its defaulting rounds" {
-    // Same module as "rejected quote default target leaves merged weak
-    // argument polymorphic": Str.concat's return cannot unify with the
-    // Dec-pinned relation, so validation rejects the quote default and the
-    // literal is recorded exactly once. After checking, the list is empty
-    // again—entries live only until the recording rounds' cascade has
-    // consumed them, so a var merging into the (by then concrete) class later
-    // keeps ordinary poison semantics.
+test "check type - a number literal takes the type an interpolated string's method chain gives it" {
+    // The interpolated strings default to Str. `repeat` takes a U64, and
+    // `count_utf8_bytes` returns one, so the `3` and the `0` are U64.
     const source =
-        \\poly : {} -> a
-        \\poly = |_| crash "n"
-        \\helper : c, d -> d where [c.wobble : c -> c]
-        \\helper = |_x, y| y
-        \\weakarg = poly({})
-        \\linked = helper(weakarg, 0)
-        \\r : Dec
-        \\r = ("t").concat(weakarg)
+        \\x = "w"
+        \\s = "a${x}b".repeat(3)
+        \\f = |a| {
+        \\    i = "x${a}"
+        \\    i.count_utf8_bytes() > 0
+        \\}
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    if (comptime std.debug.runtime_safety) {
-        try testing.expectEqual(@as(usize, 1), test_env.checker.bench_conflicted_default_records);
-    }
-    try testing.expectEqual(@as(usize, 0), test_env.checker.conflicted_default_literal_vars.items.len);
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("s", "Str");
 }
 
-test "check type - failed group default records only the rejected driver" {
-    // The quote driver ("az", whose concat obligation Str satisfies) and the
-    // numeral driver (5, whose plus relation is return-pinned to Str so every
-    // numeric candidate fails) interfere through the concat return var, so
-    // they default as one group and the group scan fails. Only the numeral
-    // driver's head default was actually rejected: the quote driver must stay
-    // off the conflicted list and its concat dispatch discharges normally
-    // against Str.
+test "check type - a number literal a method chain types rejects a value that type cannot hold" {
+    // The `1.5` is the other operand of `+` on the U64 `count_utf8_bytes`
+    // returns. It is that U64 rather than a Dec, so its fraction is an error.
+    const source =
+        \\c = 5.to_str().count_utf8_bytes() + 1.5
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try testing.expect(try test_env.typeProblemCount() >= 1);
+}
+
+test "check type - literals whose methods reach each other default together" {
+    // `x`'s `plus` names `y` and `y`'s names `x`, so neither waits for the
+    // other and both default to Dec in the same round.
+    const source =
+        \\x = 1
+        \\y = 2
+        \\a = x + y
+        \\b = y + x
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("x", "Dec");
+    try test_env.assertDefType("y", "Dec");
+    try test_env.assertDefType("a", "Dec");
+    try test_env.assertDefType("b", "Dec");
+}
+
+test "check type - literals defaulted together report only the one whose default is rejected" {
+    // The string literal "az", whose concat obligation Str satisfies, and the
+    // number literal 5, whose plus relation is return-pinned to Str so Dec
+    // rejects it, reach each other through the concat return var and default
+    // in the same round. Only the number literal's default is rejected: the
+    // string literal's concat dispatch discharges normally against Str.
     const source =
         \\poly : {} -> a
         \\poly = |_| crash "n"
@@ -14235,10 +14525,7 @@ test "check type - failed group default records only the rejected driver" {
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    if (comptime std.debug.runtime_safety) {
-        try testing.expectEqual(@as(usize, 1), test_env.checker.bench_conflicted_default_records);
-    }
-    // Only the rejected numeral driver is reported: its type was never
+    // Only the rejected number literal is reported: its type was never
     // determined, so it is reported as undetermined rather than as a mismatch
     // against the default it was given.
     var mismatch_count: usize = 0;
@@ -15329,6 +15616,340 @@ test "check type - row subsumption - a method call widens a forwarded closed res
         \\    }
         \\    n = reader.position()?
         \\    Ok(n)
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+// Methods on open rows (design.md "Methods On Open Rows")
+
+const open_row_tagged_decls =
+    \\Tagged := { id : U64 }.{
+    \\    is_eq : Tagged, Tagged -> Bool
+    \\    is_eq = |_, _| Bool.True
+    \\
+    \\    foo : Tagged, Tagged -> Bool
+    \\    foo = |_, _| Bool.True
+    \\}
+    \\
+    \\Plain := { id : U64 }
+    \\
+    \\one : Tagged
+    \\one = { id: 1 }
+    \\
+    \\two : Tagged
+    \\two = { id: 2 }
+    \\
+    \\p1 : Plain
+    \\p1 = { id: 1 }
+    \\
+    \\p2 : Plain
+    \\p2 = { id: 2 }
+    \\
+    \\same = |l, r| {
+    \\    _ = l.id + r.id
+    \\    l == r
+    \\}
+    \\
+    \\read_foo = |l, r| {
+    \\    _ = l.id + r.id
+    \\    l.foo(r)
+    \\}
+    \\
+    \\is_red = |c| c == Red
+    \\
+;
+
+test "methods on open rows - the requirement is written on the row variable for the whole value" {
+    try checkTypesModuleDefs(open_row_tagged_decls, &.{
+        .{ .def = "same", .expected =
+        \\{ id: a, ..b }, { id: a, ..b } -> Bool
+        \\  where [a.plus : a, a -> a
+        \\     , b.is_eq : b, b -> Bool]
+        },
+        .{ .def = "read_foo", .expected =
+        \\{ id: a, ..b }, { id: a, ..d } -> e
+        \\  where [a.plus : a, a -> a
+        \\     , b.foo : b, { id: a, ..d } -> e]
+        },
+        .{ .def = "is_red", .expected =
+        \\[Red, ..a] -> Bool where [a.is_eq : a, a -> Bool]
+        },
+    });
+}
+
+test "methods on open rows - each call answers the requirement with the type it supplies" {
+    const source = open_row_tagged_decls ++
+        \\a = same(one, two)
+        \\b = same({ id: 1 }, { id: 2 })
+        \\c = read_foo(one, two)
+        \\d = is_red(Green)
+        \\e = is_red(Other("x"))
+        \\generic_foo = |x, y| x.foo(y)
+        \\f = generic_foo(one, two)
+        \\list_eq = |xs, ys| {
+        \\    _ = List.map(xs, |x| x.id)
+        \\    xs == ys
+        \\}
+        \\g = list_eq([one], [two])
+        \\h = list_eq([{ id: 1 }], [{ id: 2 }])
+        \\i = is_red(Wrapped(one))
+        \\anno_eq : { id : U64, ..r }, { id : U64, ..r } -> Bool where [r.is_eq : r, r -> Bool]
+        \\anno_eq = |l, r| l == r
+        \\j = anno_eq(one, two)
+        \\k = anno_eq({ id: 1 }, { id: 2 })
+        \\anno_foo : { id : U64, ..r }, { id : U64, ..r } -> Bool where [r.foo : r, r -> Bool]
+        \\anno_foo = |l, r| l.foo(r)
+        \\m = anno_foo(one, two)
+        \\later = |l, r| {
+        \\    result = l == r
+        \\    _ = l.id + r.id
+        \\    result
+        \\}
+        \\n = later(one, two)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "methods on open rows - a nominal type without the method is rejected at the call" {
+    try checkTypesModule(open_row_tagged_decls ++
+        \\a = same(p1, p2)
+    , .fail_with,
+        \\**Missing Method**
+        \\The value before this `==` operator has a type that doesn't have a `is_eq` method.
+        \\```roc
+        \\a = same(p1, p2)
+        \\```
+        \\    ^^^^^^^^^^^^
+        \\
+        \\The value's type, which does not have a method named `is_eq`, is:
+        \\
+        \\    Plain
+        \\
+        \\**Hint:** The `==` operator calls a method named `is_eq` on the value preceding it, passing the value after the operator as the one argument.
+        \\
+        \\This use needs that because of this code in the definition it uses:
+        \\```roc
+        \\    l == r
+        \\```
+        \\    ^^^^^^
+        \\
+        \\
+        \\
+    );
+}
+
+test "methods on open rows - a plain record without the method is rejected at the call" {
+    try checkTypesModule(open_row_tagged_decls ++
+        \\a = read_foo({ id: 1 }, { id: 2 })
+    , .fail_with,
+        \\**Missing Method**
+        \\This use needs the `foo` method, but the type being used doesn't have that method.
+        \\```roc
+        \\a = read_foo({ id: 1 }, { id: 2 })
+        \\```
+        \\    ^^^^^^^^
+        \\
+        \\The value's type, which does not have a method named `foo`, is:
+        \\
+        \\    { id: Dec }
+        \\
+        \\This use needs that because of this code in the definition it uses:
+        \\```roc
+        \\    l.foo(r)
+        \\```
+        \\    ^^^^^^^^
+        \\
+        \\
+        \\
+    );
+}
+
+test "methods on open rows - a function field is rejected at the call" {
+    try checkTypesModule(open_row_tagged_decls ++
+        \\a = same({ id: 1, f: |x| x }, { id: 1, f: |x| x })
+    , .fail_with,
+        \\**Type Does Not Support Equality**
+        \\This expression is doing an equality check on a type that doesn't support equality.
+        \\```roc
+        \\a = same({ id: 1, f: |x| x }, { id: 1, f: |x| x })
+        \\```
+        \\    ^^^^
+        \\
+        \\The type is:
+        \\
+        \\    { f: b -> b, id: Dec }
+        \\
+        \\This record does not support equality because these fields have types that don't support **is_eq**:
+        \\
+        \\    **f**: _b -> b_
+        \\        Function equality is not supported.
+        \\**Hint:** Anonymous records only have an **is_eq** method if all of their fields have **is_eq** methods.
+        \\
+        \\
+        \\
+    );
+}
+
+test "methods on open rows - a function payload is rejected at the call" {
+    try checkTypesModule(open_row_tagged_decls ++
+        \\a = is_red(Fn(|x| x))
+    , .fail_with,
+        \\**Type Does Not Support Equality**
+        \\This expression is doing an equality check on a type that doesn't support equality.
+        \\```roc
+        \\a = is_red(Fn(|x| x))
+        \\```
+        \\    ^^^^^^
+        \\
+        \\The type is:
+        \\
+        \\    [Fn(b -> b), Red]
+        \\
+        \\This tag union does not support equality because these tags have payload types that don't support **is_eq**:
+        \\
+        \\    **Fn** (_b -> b_)
+        \\        Function equality is not supported.
+        \\**Hint:** Tag unions only have an **is_eq** method if all of their payload types have **is_eq** methods.
+        \\
+        \\
+        \\
+    );
+}
+
+test "methods on open rows - a call inside a function body is decided at that call" {
+    try checkTypesModule(open_row_tagged_decls ++
+        \\check = |_| is_red(Fn(|x| x))
+    , .fail_with,
+        \\**Type Does Not Support Equality**
+        \\This expression is doing an equality check on a type that doesn't support equality.
+        \\```roc
+        \\check = |_| is_red(Fn(|x| x))
+        \\```
+        \\            ^^^^^^
+        \\
+        \\The type is:
+        \\
+        \\    [Fn(a -> a), Red]
+        \\
+        \\This tag union does not support equality because these tags have payload types that don't support **is_eq**:
+        \\
+        \\    **Fn** (_a -> a_)
+        \\        Function equality is not supported.
+        \\**Hint:** Tag unions only have an **is_eq** method if all of their payload types have **is_eq** methods.
+        \\
+        \\
+        \\
+    );
+}
+
+test "methods on open rows - an annotated row variable carries only its where clause" {
+    try checkTypesModule(
+        \\anno_foo : { id : U64, ..r }, { id : U64, ..r } -> Bool
+        \\anno_foo = |l, r| l.foo(r)
+    , .fail_with,
+        \\**Missing Method**
+        \\This `foo` method can't be called on this value, because its type is a record with `..r` in it.
+        \\```roc
+        \\anno_foo = |l, r| l.foo(r)
+        \\```
+        \\                    ^^^
+        \\
+        \\The value's type is:
+        \\
+        \\    { id: U64, ..r }
+        \\
+        \\The `..r` means a caller can pass any type that has these fields, such as a nominal type, and it doesn't necessarily have a `foo` method.
+        \\
+        \\**Hint:** Require `foo` on `r` in the type annotation's `where` clause.
+        \\
+        \\
+    );
+}
+
+test "methods on open rows - a record a function compared cannot become a nominal type" {
+    try checkTypesModule(open_row_tagged_decls ++
+        \\eq_only = |a, b| {
+        \\    left = { id: a }
+        \\    right = { id: b }
+        \\    (left == right, (left, right))
+        \\}
+        \\pair : (Tagged, Tagged)
+        \\pair = eq_only(1, 2).1
+    , .fail_with,
+        \\**Type Mismatch**
+        \\This expression is used in an unexpected way.
+        \\```roc
+        \\pair = eq_only(1, 2).1
+        \\```
+        \\       ^^^^^^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    ({ id: d }, { id: d })
+        \\      where [
+        \\        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+        \\        d.is_eq : d, d -> Bool,
+        \\      ]
+        \\
+        \\But the annotation says it should be:
+        \\
+        \\    (Tagged, Tagged)
+        \\
+        \\The function that built this record compared or hashed it as a plain record, so it can't become `Tagged`.
+        \\
+        \\**Hint:** If you want `Tagged`, you can write `Tagged.{ ... }` instead of `{ ... }` where this record is built, so the function compares it as `Tagged`. You can also give the function that builds it a type annotation that says it's `Tagged`.
+        \\
+        \\
+    );
+}
+
+test "methods on open rows - a row variable joining a built record leaves it plain" {
+    try checkTypesModule(open_row_tagged_decls ++
+        \\keep_eq = |r, n| {
+        \\    other = if n == 0 r else { id: n }
+        \\    (r == other, other)
+        \\}
+        \\kept = keep_eq(one, 2)
+    , .fail_with,
+        \\**Type Mismatch**
+        \\The first argument being passed to this function has the wrong type.
+        \\```roc
+        \\kept = keep_eq(one, 2)
+        \\```
+        \\               ^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    Tagged
+        \\
+        \\But `keep_eq` needs the first argument to be:
+        \\
+        \\    { id: a }
+        \\      where [
+        \\        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\        a.is_eq : a, a -> Bool,
+        \\      ]
+        \\
+        \\The function that built this record compared or hashed it as a plain record, so it can't become `Tagged`.
+        \\
+        \\**Hint:** If you want `Tagged`, you can write `Tagged.{ ... }` instead of `{ ... }` where this record is built, so the function compares it as `Tagged`. You can also give the function that builds it a type annotation that says it's `Tagged`.
+        \\
+        \\
+    );
+}
+
+test "methods on open rows - an annotation decides a built record before it is compared" {
+    const source = open_row_tagged_decls ++
+        \\make_pair : U64, U64 -> (Bool, Tagged)
+        \\make_pair = |a, b| {
+        \\    left = { id: a }
+        \\    right = { id: b }
+        \\    (left == right, left)
         \\}
     ;
     var test_env = try TestEnv.init("Test", source);

@@ -61,7 +61,9 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("monotype/layout_key.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/ast.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/body_shard_test.zig"));
+    std.testing.refAllDecls(@import("monotype_lifted/body_copy.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/lift.zig"));
+    std.testing.refAllDecls(@import("monotype_lifted/sequenced.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/spec_constr.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/inline_crossing.zig"));
     std.testing.refAllDecls(@import("lambda_solved/ast.zig"));

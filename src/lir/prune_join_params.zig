@@ -52,8 +52,10 @@ const Write = struct { stmt: CFStmtId, next: u32 };
 const no_write = std.math.maxInt(u32);
 
 /// Prune one procedure with task-local scratch; rewritten LIR stays in the store.
-pub fn runProc(store: *LirStore, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator) Allocator.Error!void {
-    var pass = Pass.init(store, proc_id, scratch_allocator);
+/// `guarded_reads` holds the static data slots whose reads can fail (see
+/// `ProcPasses.runSegmentTimed`); a read of one is never deleted.
+pub fn runProc(store: *LirStore, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator, guarded_reads: ?*const std.DynamicBitSetUnmanaged) Allocator.Error!void {
+    var pass = Pass.init(store, proc_id, scratch_allocator, guarded_reads);
     defer pass.deinit();
     while (try pass.round()) {}
 }
@@ -88,12 +90,15 @@ const Pass = struct {
     writes: std.ArrayList(Write) = .empty,
     /// Writes this round deletes, mapped to their successor.
     deleted: collections.DenseMap(CFStmtId, CFStmtId),
+    /// Static data slots whose reads can fail.
+    guarded_reads: ?*const std.DynamicBitSetUnmanaged,
 
-    fn init(store: *LirStore, proc_id: LIR.LirProcSpecId, allocator: Allocator) Pass {
+    fn init(store: *LirStore, proc_id: LIR.LirProcSpecId, allocator: Allocator, guarded_reads: ?*const std.DynamicBitSetUnmanaged) Pass {
         return .{
             .store = store,
             .proc_id = proc_id,
             .allocator = allocator,
+            .guarded_reads = guarded_reads,
             .reads = collections.DenseMap(LocalId, u32).init(allocator),
             .params = LocalSet.init(allocator),
             .pinned = LocalSet.init(allocator),
@@ -102,6 +107,20 @@ const Pass = struct {
             .pruned = LocalSet.init(allocator),
             .first_write = collections.DenseMap(LocalId, u32).init(allocator),
             .deleted = collections.DenseMap(CFStmtId, CFStmtId).init(allocator),
+        };
+    }
+
+    /// A read of a compile-time value whose evaluation can fail: the
+    /// compile-time value guards turn it into a crash when it did, so it is a
+    /// failure, not a pure definition.
+    fn readCanFail(self: *const Pass, stmt: LIR.CFStmt) bool {
+        const guarded = self.guarded_reads orelse return false;
+        return switch (stmt) {
+            .assign_literal => |assign| switch (assign.value) {
+                .static_data => |read| guarded.isSet(@backingInt(read.id)),
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bytes_literal, .proc_ref => false,
+            },
+            .init_uninitialized, .assign_ref, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .dyn, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => false,
         };
     }
 
@@ -343,7 +362,8 @@ const DefCollector = struct {
         if (entry.found_existing) {
             entry.value_ptr.* = .none;
         } else {
-            entry.value_ptr.* = if (pureNext(self.pass.store.getCFStmt(self.stmt)) != null) .some(self.stmt) else .none;
+            const stmt = self.pass.store.getCFStmt(self.stmt);
+            entry.value_ptr.* = if (pureNext(stmt) != null and !self.pass.readCanFail(stmt)) .some(self.stmt) else .none;
         }
     }
 };

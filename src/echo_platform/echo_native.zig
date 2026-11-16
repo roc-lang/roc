@@ -93,6 +93,7 @@ pub fn main(init: std.process.Init) EchoNativeError!void {
 
     var extras = std.ArrayList(ExtraFile).empty;
     defer extras.deinit(arena);
+    defer for (extras.items) |extra| gpa.free(extra.content);
 
     const stderr_file: std.Io.File = .stderr();
 
@@ -115,10 +116,12 @@ pub fn main(init: std.process.Init) EchoNativeError!void {
         const name = spec[0..eq];
         const path = spec[eq + 1 ..];
         const content = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited);
+        errdefer gpa.free(content);
         try extras.append(arena, .{ .name = name, .content = content });
     }
 
     const source = try std.Io.Dir.cwd().readFileAlloc(io, app_path, gpa, .unlimited);
+    defer gpa.free(source);
 
     // Use a 128 MiB FBA so the pipeline behaves like the wasm case (single
     // contiguous heap)—this is also what the LIR image migration in
@@ -128,22 +131,6 @@ pub fn main(init: std.process.Init) EchoNativeError!void {
     defer gpa.free(runtime_buffer);
     var runtime_fba = std.heap.FixedBufferAllocator.init(runtime_buffer);
 
-    // ECHO_NATIVE_TARGET env var: "native" (default), "wasm32"—cross-compile
-    // through the same target_usize=.u32 path the wasm uses, while still
-    // running the interpreter natively. Useful to isolate wasm-runtime bugs
-    // from wasm32-target compilation bugs.
-    //
-    // In Zig 0.16 `std.process.getEnvVarOwned` was removed; on POSIX we read
-    // from `init.minimal.environ` via `Environ.getPosix` (no alloc). The
-    // echo native CLI is only built for POSIX targets, so the Windows branch
-    // is just a defensive default.
-    const target_choice: []const u8 = blk: {
-        if (@import("builtin").os.tag == .windows) break :blk "native";
-        const v = std.process.Environ.getPosix(init.minimal.environ, "ECHO_NATIVE_TARGET");
-        break :blk if (v) |s| s else "native";
-    };
-    const is_wasm_target = std.mem.eql(u8, target_choice, "wasm32");
-
     const code = runner.runEcho(.{
         .runtime_fba = &runtime_fba,
         .fallback_io = CoreCtx.default(gpa, arena, io),
@@ -151,8 +138,10 @@ pub fn main(init: std.process.Init) EchoNativeError!void {
         .source = source,
         .extras = extras.items,
         .diagnostics = stderrDiagnostics(),
-        .roc_target = if (is_wasm_target) .wasm32 else roc_target.RocTarget.detectNative(),
-        .target_usize = if (is_wasm_target) .u32 else .native,
+        // The interpreter runs on this host, so the program is compiled for
+        // it; echo.wasm and its test cover the wasm32 target.
+        .roc_target = roc_target.RocTarget.detectNative(),
+        .target_usize = .native,
     }) catch |err| {
         stderr_file.writeStreamingAll(io, "echo_native: pipeline returned error\n") catch {};
         return err;

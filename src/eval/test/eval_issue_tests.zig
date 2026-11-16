@@ -1469,13 +1469,13 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "1" },
     },
     .{
-        .name = "issue 9391: fractional method receiver specializes to F64 argument",
+        .name = "issue 9391: fractional comparison receiver specializes to F64 argument",
         .source_kind = .module,
         .source =
         \\f : U64 -> F64
         \\f = |_n| 0.001
         \\
-        \\main = 0.001.is_lte(f(3))
+        \\main = 0.001 <= f(3)
         ,
         .expected = .{ .inspect_str = "True" },
     },
@@ -4083,9 +4083,8 @@ pub const tests = [_]TestCase{
     .{
         // https://github.com/roc-lang/roc/issues/11668
         // The literal's target `Sql(a)` gets `a` from the record argument, whose
-        // field kind is still open when the literal is lowered, so the
-        // `from_quote` call must lower at the open target instead of demanding
-        // its finished type.
+        // field kind no use pins. `run`'s scheme does not quantify that kind, so
+        // it is decided as required and the conversion is fixed in `run`.
         .name = "issue 11668: from_quote literal argument whose type parameter comes from a record argument",
         .source_kind = .module,
         .source =
@@ -4122,6 +4121,31 @@ pub const tests = [_]TestCase{
         \\run = |_| total(3, { id: 1.I32 })
         \\
         \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "7" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11668
+        // `wrap` returns the record, so its scheme quantifies the field's kind
+        // and the literal's conversion depends on `wrap`'s instance: it is
+        // fixed at the call, which leaves the kind unpinned.
+        .name = "issue 11668: from_numeral literal argument whose record's field kind the enclosing scheme quantifies",
+        .source_kind = .module,
+        .source =
+        \\Tally(a) := { count : I64 }.{
+        \\    from_numeral : Numeral -> Try(Tally(a), [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok(Tally.{ count: 7 })
+        \\}
+        \\
+        \\total : Tally(a), a -> I64
+        \\total = |tally, _| tally.count
+        \\
+        \\wrap = |v| {
+        \\    r = { id: v }
+        \\    (r, total(3, r))
+        \\}
+        \\
+        \\main = wrap(1.I32).1
         ,
         .expected = .{ .inspect_str = "7" },
     },
@@ -4929,10 +4953,10 @@ pub const tests = [_]TestCase{
     },
     .{
         // https://github.com/roc-lang/roc/issues/12100
-        // The two `+` relations merge into one declarative relation once `==`
-        // unifies their receivers; both dispatches must share its checked
+        // The two `plus` relations merge into one declarative relation once
+        // `==` unifies their receivers; both dispatches must share its checked
         // target instantiation, including the target's scheme variable.
-        .name = "issue 12100: two merged operator relations whose target has a scheme variable",
+        .name = "issue 12100: two merged method relations whose target has a scheme variable",
         .source_kind = .module,
         .source =
         \\Unit :: I64.{
@@ -4943,7 +4967,7 @@ pub const tests = [_]TestCase{
         \\}
         \\
         \\check : { a : Unit, b : Unit } -> Bool
-        \\check = |{ a, b }| (a + []) == (b + []) and a == b
+        \\check = |{ a, b }| a.plus([]) == b.plus([]) and a == b
         \\
         \\main = check({ a: Unit.(1), b: Unit.(1) })
         ,

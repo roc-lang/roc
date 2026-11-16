@@ -944,7 +944,7 @@ fn initSnapshotChecker(
     try can.resolveDeferredImports(env, .{
         .imports = .{ .resolved_store = imported_envs },
     });
-    return Check.init(allocator, &env.types, env, imported_envs, module_envs, &env.store.regions, .{
+    return Check.init(allocator, &env.types, env, imported_envs, module_envs, .{
         .bool_stmt = config.builtin_indices.bool_type,
         .try_stmt = config.builtin_indices.try_type,
         .str_stmt = config.builtin_indices.str_type,
@@ -3411,7 +3411,8 @@ fn processDocsSnapshot(
     const BuildEnv = compile.BuildEnv;
     const native_target = roc_target.RocTarget.detectNative();
 
-    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target, config.cwd, app_io) catch |err| {
+    // Documentation has no runtime consumer, as in `roc docs`.
+    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target, config.cwd, app_io, .boxy) catch |err| {
         std.log.err("Failed to init BuildEnv: {}", .{err});
         return false;
     };
@@ -3874,7 +3875,8 @@ fn processDevObjectSnapshot(
     const BuildEnv = compile.BuildEnv;
     const native_target = roc_target.RocTarget.detectNative();
 
-    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target, config.cwd, app_io) catch |err| {
+    // `.lss` is the strategy each target's program lowers under below.
+    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target, config.cwd, app_io, .lss) catch |err| {
         std.log.err("Failed to init BuildEnv: {}", .{err});
         return false;
     };
@@ -5151,7 +5153,7 @@ test "a snapshot reports what a build reports for the same module" {
     defer gpa.free(module_path);
 
     // The reports `roc check` collects.
-    var build_env = try compile.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), dir_path, app_io);
+    var build_env = try compile.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), dir_path, app_io, .boxy);
     defer build_env.deinit();
     try build_env.build(module_path);
     const drained = try build_env.drainReports();
