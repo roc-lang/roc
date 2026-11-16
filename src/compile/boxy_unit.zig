@@ -190,6 +190,7 @@ pub const Built = struct {
         gpa.free(self.function_metadata);
         for (self.exports) |record| {
             gpa.free(record.rc_ret_conditions);
+            gpa.free(record.rc_outcomes);
             gpa.free(record.table_needs);
         }
         gpa.free(self.exports);
@@ -361,6 +362,7 @@ fn recordInterfaces(interfaces: *ExportInterfaces, entry: object_cache.Entry) Al
         .rc_ret_unique_fields = record.rc_ret_unique_fields,
         .rc_ret_conditions = record.rc_ret_conditions,
         .may_leave_pending = record.may_leave_pending,
+        .rc_outcomes = record.rc_outcomes,
         .table_needs = record.table_needs,
     });
 }
@@ -384,6 +386,7 @@ pub fn exportRecords(gpa: Allocator, lowered: *const lir.CheckedPipeline.Lowered
             .rc_ret_unique = interface.rc_ret_unique,
             .may_leave_pending = interface.may_leave_pending,
             .rc_ret_conditions = interface.rc_ret_conditions,
+            .rc_outcomes = interface.rc_outcomes,
             .table_needs = interface.table_needs,
         };
     }
@@ -969,11 +972,14 @@ fn dupeRecords(gpa: Allocator, records: []const object_cache.ExportRecord) Alloc
     var duped: usize = 0;
     errdefer for (copies[0..duped]) |copy| {
         gpa.free(copy.rc_ret_conditions);
+        gpa.free(copy.rc_outcomes);
         gpa.free(copy.table_needs);
     };
     for (records, copies) |record, *copy| {
         copy.rc_ret_conditions = try gpa.dupe(u32, record.rc_ret_conditions);
         errdefer gpa.free(copy.rc_ret_conditions);
+        copy.rc_outcomes = try gpa.dupe(u32, record.rc_outcomes);
+        errdefer gpa.free(copy.rc_outcomes);
         copy.table_needs = try gpa.dupe(u8, record.table_needs);
         duped += 1;
     }
@@ -998,6 +1004,7 @@ fn testRestoredMetadata(gpa: Allocator) (object_cache.DecodeError || error{ Test
                 .rc_ret_unique = false,
                 .may_leave_pending = false,
                 .rc_ret_conditions = &.{ 7, 9 },
+                .rc_outcomes = &.{ 0, 1 },
                 .table_needs = "table inputs",
             }},
             .hosted_symbols = &.{"roc_fx_test"},
@@ -1028,6 +1035,7 @@ fn testRestoredMetadata(gpa: Allocator) (object_cache.DecodeError || error{ Test
     // Both the decoded view and its byte buffer are gone; Built owns its data.
     try std.testing.expectEqualStrings("table inputs", built.exports[0].table_needs);
     try std.testing.expectEqualSlices(u32, &.{ 7, 9 }, built.exports[0].rc_ret_conditions);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 1 }, built.exports[0].rc_outcomes);
     try std.testing.expectEqualStrings("roc_fx_test", built.hosted_symbols[0]);
     try std.testing.expectEqual(@as(u32, 5), built.expect_sites[0].region_start);
     try std.testing.expectEqual(@as(u32, 6), built.test_roots[0].symbol);

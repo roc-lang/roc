@@ -181,6 +181,11 @@ pub const ExportInterface = struct {
     rc_ret_unique_fields: u64 = 0,
     rc_ret_conditions: []const u32 = &.{},
     may_leave_pending: bool = false,
+    /// The outcome table of the outcome-restitution variant the worker's
+    /// object publishes (`LIR.LirProcSpec.rc_outcomes`); empty when it
+    /// publishes none. That variant has an interface of its own, under the
+    /// identity its demand names (`LIR.ProcIdentity.ownershipVariant`).
+    rc_outcomes: []const u32 = &.{},
     /// For a worker that takes a type table: its encoded needs list
     /// (`StoredFn.encodeNeeds`), which an importer fills its tables from.
     table_needs: []const u8 = &.{},
@@ -236,6 +241,7 @@ pub const ExportInterfaces = struct {
         while (entries.next()) |entry| {
             var owned = entry.value_ptr.*;
             owned.rc_ret_conditions = try self.arena.allocator().dupe(u32, owned.rc_ret_conditions);
+            owned.rc_outcomes = try self.arena.allocator().dupe(u32, owned.rc_outcomes);
             owned.table_needs = try self.arena.allocator().dupe(u8, owned.table_needs);
             try self.map.put(self.allocator, entry.key_ptr.*, owned);
         }
@@ -247,6 +253,7 @@ pub const ExportInterfaces = struct {
         defer self.mutex.unlock(self.io);
         var owned = interface;
         owned.rc_ret_conditions = try self.arena.allocator().dupe(u32, interface.rc_ret_conditions);
+        owned.rc_outcomes = try self.arena.allocator().dupe(u32, interface.rc_outcomes);
         owned.table_needs = try self.arena.allocator().dupe(u8, interface.table_needs);
         try self.map.put(self.allocator, identity, owned);
     }
@@ -261,6 +268,9 @@ pub const ExportInterfaces = struct {
         defer self.mutex.unlock(self.io);
         const conditions = try self.arena.allocator().alloc(u32, collections.GuardedList.borrowLen(words));
         for (conditions, 0..) |*word, index| word.* = collections.GuardedList.at(words, index);
+        const outcome_words = store.getU32Span(spec.rc_outcomes);
+        const outcomes = try self.arena.allocator().alloc(u32, collections.GuardedList.borrowLen(outcome_words));
+        for (outcomes, 0..) |*word, index| word.* = collections.GuardedList.at(outcome_words, index);
         const interface: ExportInterface = .{
             .rc_borrowed_params = spec.rc_borrowed_params,
             .rc_ret_borrowed = spec.rc_ret_borrowed,
@@ -270,6 +280,7 @@ pub const ExportInterfaces = struct {
             .rc_ret_unique_fields = spec.rc_ret_unique_fields,
             .rc_ret_conditions = conditions,
             .may_leave_pending = spec.may_leave_pending,
+            .rc_outcomes = outcomes,
             .table_needs = try self.arena.allocator().dupe(u8, table_needs),
         };
         try self.map.put(self.allocator, spec.identity, interface);
@@ -1293,6 +1304,17 @@ pub const Program = struct {
         proc.rc_ret_conditions = self.result.store.addU32Span(interface.rc_ret_conditions) catch |err| switch (err) {
             error.OutOfMemory => invariant("out of memory binding an imported worker's interface"),
         };
+        proc.rc_outcomes = self.result.store.addU32Span(interface.rc_outcomes) catch |err| switch (err) {
+            error.OutOfMemory => invariant("out of memory binding an imported worker's interface"),
+        };
+        if (@import("builtin").mode == .debug and interface.rc_outcomes.len != 0) {
+            // A call here may demand the worker's published outcome variant,
+            // which its object exports under the identity that demand names.
+            var variant = proc.identity.ownershipVariant(@intCast(interface.rc_borrowed_params), @intFromBool(!interface.rc_ret_borrowed), 0);
+            var row: usize = 0;
+            while (row < interface.rc_outcomes.len) : (row += 2) variant.outcome(interface.rc_outcomes[row], @intCast(interface.rc_outcomes[row + 1]));
+            if (unit.imports.get(variant.finish()) == null) invariant("an imported worker publishes an outcome variant its object does not export");
+        }
     }
 
     /// The procedure of an imported worker: body-less, defined by its

@@ -18379,8 +18379,10 @@ and Per-Module Output is the invariant that makes it possible:
   a warm build, and two machines, write the same bytes. It holds everything
   lowered for the module, through the object's machine code, and the few
   words of ARC interface a downstream module compiles against (each exported
-  procedure's solved ownership signature and uniqueness data, which
-  Per-Module Output makes a function of the module and its imports), with
+  procedure's solved ownership signature and uniqueness data, and the
+  outcome table of the outcome-restitution variant it publishes, which is an
+  exported procedure with a record of its own; Per-Module Output makes all
+  of it a function of the module and its imports), with
   the digest of those records (`exportRecordsDigest`). An importer's key
   folds in the module's export digest, which combines that records digest
   with its imports' export digests (`Digests.recordExportsDigest`), so a
