@@ -83,6 +83,7 @@ test "issue 10723: rejected for-loop dispatch reports type errors" {
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;

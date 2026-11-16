@@ -39,7 +39,7 @@ const CycleBuild = struct {
         const root_main = try self.tmp_dir.dir.realPathFileAlloc(io, "main.roc", gpa);
         defer gpa.free(root_main);
 
-        self.build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+        self.build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
         errdefer self.build_env.deinit();
         self.build_env.setSyntheticRootPackageIdentity();
         try self.build_env.build(root_main);

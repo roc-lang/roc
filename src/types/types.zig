@@ -553,6 +553,16 @@ pub const Descriptor = struct {
         };
     }
 
+    /// The constraints a `.flex` or `.rigid` row holds, which both keep in
+    /// the same payload words; none for a row of any other kind.
+    pub inline fn variableConstraints(row: Row) StaticDispatchConstraint.SafeList.Range {
+        const constraints = getRange(StaticDispatchConstraint.SafeList.Range, row.payload, 1);
+        return switch (row.word.kind) {
+            .flex, .rigid => constraints,
+            .alias, .field_presence, .err, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => .empty(),
+        };
+    }
+
     /// The rigid a `.rigid` row holds.
     pub inline fn decodeRigid(row: Row) Rigid {
         std.debug.assert(row.word.kind == .rigid);

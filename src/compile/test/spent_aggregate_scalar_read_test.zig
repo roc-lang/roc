@@ -109,6 +109,7 @@ test "a scalar read through a struct field after its record's units moved certif
         build_options.compiler_compatibility_id,
         &cache_manager,
         roc_ctx,
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;

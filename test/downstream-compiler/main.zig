@@ -62,6 +62,7 @@ pub fn main(init: std.process.Init) SmokeError!void {
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, init.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;

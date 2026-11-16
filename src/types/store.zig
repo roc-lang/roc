@@ -1384,6 +1384,12 @@ pub const Store = struct {
         return Desc.decodeRigid(self.descs.getRow(desc_idx));
     }
 
+    /// The constraints of descriptor `desc_idx` when it is a flex or a
+    /// rigid; none for any other kind.
+    pub inline fn variableConstraintsAt(self: *const Self, desc_idx: DescStore.Idx) StaticDispatchConstraint.SafeList.Range {
+        return Desc.variableConstraints(self.descs.getRow(desc_idx));
+    }
+
     pub inline fn aliasAt(self: *const Self, desc_idx: DescStore.Idx) Alias {
         return Desc.decodeAlias(self.descs.getRow(desc_idx), self);
     }
@@ -1410,6 +1416,12 @@ pub const Store = struct {
 
     pub inline fn tagUnionAt(self: *const Self, desc_idx: DescStore.Idx) TagUnion {
         return Desc.decodeTagUnion(self.descs.getRow(desc_idx));
+    }
+
+    /// The stored row of descriptor `desc_idx`: its word and its content's
+    /// payload, undecoded.
+    pub inline fn rowAt(self: *const Self, desc_idx: DescStore.Idx) Desc.Row {
+        return self.descs.getRow(desc_idx);
     }
 
     /// The identity row a nominal descriptor names: two descriptors naming
@@ -2742,20 +2754,22 @@ pub const Store = struct {
     // generalization marks //
 
     /// Set the `generalizing` mark of descriptor `desc_idx`
-    /// (`types.Descriptor.Word`). A mark is a generalization pass's scratch,
+    /// (`types.Descriptor.Word`) when `condition` holds, and leave it as it
+    /// is otherwise; the word is written either way, so nothing branches on
+    /// `condition`. A mark is a generalization pass's scratch,
     /// which the pass clears before it returns, so a mark write is neither
     /// journaled nor reported to class watches: no probe opens or rolls back
     /// while a pass runs, and a journaled row never carries a mark
     /// (`journalDescRow`).
-    pub fn markGeneralizing(self: *Self, desc_idx: DescStore.Idx) void {
+    pub fn markGeneralizingIf(self: *Self, desc_idx: DescStore.Idx, condition: bool) void {
         self.debugAssertUnsealed();
         var word = self.descs.getWord(desc_idx);
-        word.generalizing = true;
+        word.generalizing = word.generalizing or condition;
         self.descs.setWord(desc_idx, word);
     }
 
     /// Set the `rank_adjusted` mark of descriptor `desc_idx`; see
-    /// `markGeneralizing`.
+    /// `markGeneralizingIf`.
     pub fn markRankAdjusted(self: *Self, desc_idx: DescStore.Idx) void {
         self.debugAssertUnsealed();
         var word = self.descs.getWord(desc_idx);
@@ -2764,7 +2778,7 @@ pub const Store = struct {
     }
 
     /// Clear both generalization marks of descriptor `desc_idx`; see
-    /// `markGeneralizing`.
+    /// `markGeneralizingIf`.
     pub fn clearGeneralizationMarks(self: *Self, desc_idx: DescStore.Idx) void {
         self.debugAssertUnsealed();
         var word = self.descs.getWord(desc_idx);
@@ -2995,7 +3009,7 @@ pub const Store = struct {
 
     /// The backing var of the alias stored at `desc_idx`: the first of its
     /// vars (`getAliasBackingVar`).
-    inline fn aliasBackingVarAt(self: *const Self, desc_idx: DescStore.Idx) Var {
+    pub inline fn aliasBackingVarAt(self: *const Self, desc_idx: DescStore.Idx) Var {
         const row = self.descs.getRow(desc_idx);
         std.debug.assert(row.word.kind == .alias);
         return self.vars.items[row.payload[1]];
@@ -3123,21 +3137,55 @@ pub const Store = struct {
         self.debugAssertUnsealed();
         const a_data = self.findStorageRoot(a_var);
         const b_data = self.findStorageRoot(b_var);
-        const a_word = self.descs.getWord(a_data.desc_idx);
-        const b_word = self.descs.getWord(b_data.desc_idx);
-        var merged_row = self.descs.getRow(switch (kept) {
+        const content = self.descs.getRow(switch (kept) {
             .a => a_data.desc_idx,
             .b => b_data.desc_idx,
         });
+        return self.unionRootsStoringContent(a_data, b_data, content, rank);
+    }
+
+    /// `union_` for a merge whose content is content a class of this store
+    /// held, as it was stored (`rowAt`): the merged class holds `content`'s
+    /// kind and payload, at `rank`, with the flags `union_` gives a merge
+    /// whose descriptor states none. `content`'s own flags and rank are not
+    /// read, and nothing is decoded or encoded.
+    pub fn unionStoringContent(self: *Self, a_var: Var, b_var: Var, content: Desc.Row, rank: Rank) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        return self.unionRootsStoringContent(self.findStorageRoot(a_var), self.findStorageRoot(b_var), content, rank);
+    }
+
+    fn unionRootsStoringContent(self: *Self, a_data: StorageRoot, b_data: StorageRoot, content: Desc.Row, rank: Rank) Allocator.Error!void {
+        const a_word = self.descs.getWord(a_data.desc_idx);
+        const b_word = self.descs.getWord(b_data.desc_idx);
         if (a_word.flags().frozen or b_word.flags().frozen) {
-            return self.unionWithFrozen(a_data, a_word, b_data, b_word, merged_row.word.kind == .err);
+            return self.unionWithFrozen(a_data, a_word, b_data, b_word, content.word.kind == .err);
         }
 
-        // No generalization pass is running, so the kept word is unmarked.
-        std.debug.assert(!merged_row.word.marked());
-        merged_row.word.setFlags(mergedFlags(.{}, merged_row.word.kind, a_word, b_word));
+        self.debugAssertStoredEncoding(content);
+        // No generalization pass is running, so the stored word is unmarked.
+        std.debug.assert(!content.word.marked());
+        var merged_row = content;
+        merged_row.word.setFlags(mergedFlags(.{}, content.word.kind, a_word, b_word));
         merged_row.word.rank = rank;
         return self.unionRows(a_data, a_word, b_data, b_word, merged_row);
+    }
+
+    /// A stored row is its content's encoding: the row `union_` would encode
+    /// from the decoded content, naming the one row that holds its identity.
+    fn debugAssertStoredEncoding(self: *const Self, row: Desc.Row) void {
+        if (!std.debug.runtime_safety) return;
+        const desc = Desc.decode(row, self);
+        const identity: u32 = switch (desc.content) {
+            .alias => |alias| self.alias_identity_index.get(.of(alias)) orelse row.payload[0],
+            .structure => |flat| switch (flat) {
+                .nominal_type => |nominal| self.nominal_identity_index.get(.of(nominal)) orelse row.payload[0],
+                .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => 0,
+            },
+            .flex, .rigid, .field_presence, .err => 0,
+        };
+        if (!DescStore.sameContent(desc.encode(identity, self), row)) {
+            base.invariant("a stored descriptor row is not the encoding of its content", .{});
+        }
     }
 
     /// The flags of the class two classes merge into, given the flags the

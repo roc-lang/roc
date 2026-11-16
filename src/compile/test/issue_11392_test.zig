@@ -165,6 +165,7 @@ fn compileApp(gpa: std.mem.Allocator, files: []const File, entry_rel: []const u8
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;

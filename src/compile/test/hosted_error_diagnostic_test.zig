@@ -176,7 +176,7 @@ fn checkHostErrorDiagnosticWithHost(host_source: []const u8, wrapper: []const u8
     defer gpa.free(cwd);
     const app_path = try tmp.dir.realPathFileAlloc(io, "app.roc", gpa);
     defer gpa.free(app_path);
-    var build_env = try compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
     try build_env.build(app_path);
     const drained = try build_env.drainReports();

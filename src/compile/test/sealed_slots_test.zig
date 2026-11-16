@@ -43,7 +43,7 @@ test "a template's stored sealed slots match the independent scalar oracle" {
     defer gpa.free(cwd);
     const path = tmp.dir.realPathFileAlloc(io, "Sealed.roc", gpa) catch |err| return setupFailed(err);
     defer gpa.free(path);
-    var build = BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io) catch |err| return setupFailed(err);
+    var build = BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss) catch |err| return setupFailed(err);
     defer build.deinit();
     build.build(path) catch |err| return setupFailed(err);
     const reports = build.drainReports() catch |err| return setupFailed(err);

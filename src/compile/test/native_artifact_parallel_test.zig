@@ -411,7 +411,7 @@ fn expectUnitImagesFallible(lowered: *const lir.CheckedPipeline.LoweredProgram) 
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     for ([_]usize{ 2, 4 }) |workers| {
-        var coord = try Coordinator.init(allocator, .multi_threaded, workers, target.detectNative(), &builtins, @import("build_options").compiler_compatibility_id, null, CoreCtx.default(allocator, arena.allocator(), std.testing.io));
+        var coord = try Coordinator.init(allocator, .multi_threaded, workers, target.detectNative(), &builtins, @import("build_options").compiler_compatibility_id, null, CoreCtx.default(allocator, arena.allocator(), std.testing.io), .lss);
         defer coord.deinit();
         try coord.start();
         try coord.coordinatorLoop();
@@ -483,7 +483,7 @@ fn inspectFallible(lowered: *const lir.CheckedPipeline.LoweredProgram, phase: In
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     for ([_]usize{ 2, 4 }) |workers| {
-        var coord = try Coordinator.init(allocator, .multi_threaded, workers, target.detectNative(), &builtins, @import("build_options").compiler_compatibility_id, null, CoreCtx.default(allocator, arena.allocator(), std.testing.io));
+        var coord = try Coordinator.init(allocator, .multi_threaded, workers, target.detectNative(), &builtins, @import("build_options").compiler_compatibility_id, null, CoreCtx.default(allocator, arena.allocator(), std.testing.io), .lss);
         defer coord.deinit();
         try coord.start();
         try coord.coordinatorLoop();
@@ -654,7 +654,7 @@ test "wasm modules are byte identical across worker counts, completion orders, a
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     for ([_]usize{ 2, 4 }) |workers| {
-        var coord = try Coordinator.init(allocator, .multi_threaded, workers, target.detectNative(), &builtins, @import("build_options").compiler_compatibility_id, null, CoreCtx.default(allocator, arena.allocator(), std.testing.io));
+        var coord = try Coordinator.init(allocator, .multi_threaded, workers, target.detectNative(), &builtins, @import("build_options").compiler_compatibility_id, null, CoreCtx.default(allocator, arena.allocator(), std.testing.io), .lss);
         defer coord.deinit();
         try coord.start();
         try coord.coordinatorLoop();

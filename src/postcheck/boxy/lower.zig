@@ -1769,14 +1769,16 @@ pub const Program = struct {
             if (sealed_dispatcher) continue;
             try dictionary_params.append(self.arena.allocator(), @intCast(index));
         }
-        // Each record of the signature whose row ends in a sealed uncommitted
-        // record tail, and each tag union whose row ends in an uncommitted
-        // tag tail, is a row node (design.md "Methods On Open Rows"): it
-        // takes a scheme position after the variables, holding the checked
-        // record or tag union itself, so it converts to its closed type
-        // marked with that position.
+        // Each closed row node of the signature (design.md "Methods On Open
+        // Rows"), which checking publishes
+        // (`CheckedProcedureTemplate.closed_row_nodes`), takes a scheme
+        // position after the variables, holding the checked record or tag
+        // union itself, so it converts to its closed type marked with that
+        // position. An importing unit reads the same list.
         const real_count = scheme_vars.items.len;
-        try self.appendClosedRowNodes(module_index, &template, evidence_params, checked_scheme_vars, sealed_slots, &scheme_vars);
+        const closed_row_nodes = templates.templateClosedRowNodes(&template);
+        if (std.debug.runtime_safety) try self.assertClosedRowNodes(module_index, &template, evidence_params, checked_scheme_vars, sealed_slots, closed_row_nodes);
+        try scheme_vars.appendSlice(self.arena.allocator(), closed_row_nodes);
         const bound = try self.arena.allocator().alloc(TypeId, scheme_vars.items.len);
         for (bound, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
         const env: types.Env = .{ .module = module_index, .vars = scheme_vars.items, .bound = bound };
@@ -2050,116 +2052,30 @@ pub const Program = struct {
         return found.items;
     }
 
-    /// Append to `scheme_vars` a position for each closed row node of
-    /// template `template`'s signature (its root and its evidence parameters'
-    /// types), in the order a walk first reaches them: each record whose row
-    /// ends in a sealed uncommitted record tail (`sealed_slots`), and each tag
-    /// union with a tag whose row ends in an uncommitted tag tail
-    /// (`CheckedTypeStoreView.uncommittedTagTail`). The position holds the
-    /// checked record or tag union itself, so the worker's scope converts it
-    /// to its closed type marked with the position (`Converter.tailNodeAt`).
-    /// A worker's hidden inputs stay a function of its checked signature: an
-    /// importing unit derives the same positions.
-    fn appendClosedRowNodes(
+    /// Debug check that the closed row nodes checking published for
+    /// `template` are those a walk of its signature finds
+    /// (`checked.ClosedRowNodeWalk`).
+    fn assertClosedRowNodes(
         self: *Program,
         module_index: ModuleIndex,
         template: *const checked.CheckedProcedureTemplate,
         evidence_params: []const static_dispatch.EvidenceParamRecord,
         checked_scheme_vars: []const checked.CheckedTypeId,
         sealed_slots: []const u32,
-        scheme_vars: *std.ArrayList(checked.CheckedTypeId),
+        published: []const checked.CheckedTypeId,
     ) Allocator.Error!void {
-        const view = self.module(module_index);
-        const types_view = view.types();
-        var sealed_tails: std.ArrayList(checked.CheckedTypeId) = .empty;
-        defer sealed_tails.deinit(self.allocator);
-        for (sealed_slots) |slot| {
-            const variable = checked_scheme_vars[slot];
-            switch (types_view.payload(variable)) {
-                .flex => |flex| if (flex.row_tail == .uncommitted_record) try sealed_tails.append(self.allocator, variable),
-                .pending, .err, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union, .field_kind => {},
-            }
-        }
-        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
-        defer pending.deinit(self.allocator);
-        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
-        defer seen.deinit(self.allocator);
-        var index = evidence_params.len;
-        while (index > 0) {
-            index -= 1;
-            try pending.append(self.allocator, evidence_params[index].dispatcher_ty);
-            try pending.append(self.allocator, evidence_params[index].callable_ty);
-        }
-        try pending.append(self.allocator, template.checked_fn_root);
-        while (pending.pop()) |ty| {
-            if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
-            if (self.converter().platformIdentity(module_index, ty) != null) continue;
-            const start = pending.items.len;
-            switch (types_view.payload(ty)) {
-                .alias => |alias| try pending.append(self.allocator, alias.backing),
-                .record => |record| {
-                    var fields = record.fields;
-                    var current = record.ext;
-                    while (true) {
-                        for (0..fields.len()) |field_index| try pending.append(self.allocator, fields.get(field_index).ty);
-                        fields = .empty;
-                        switch (types_view.payload(current)) {
-                            .alias => |alias| current = alias.backing,
-                            .record => |ext_record| {
-                                fields = ext_record.fields;
-                                current = ext_record.ext;
-                            },
-                            .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union, .field_kind => break,
-                        }
-                    }
-                    if (std.mem.findScalar(checked.CheckedTypeId, sealed_tails.items, current) != null and
-                        std.mem.findScalar(checked.CheckedTypeId, scheme_vars.items, ty) == null)
-                    {
-                        try scheme_vars.append(self.arena.allocator(), ty);
-                    }
-                },
-                .tag_union => |tag_union| {
-                    var tags = tag_union.tags;
-                    var current = tag_union.ext;
-                    var tag_count: usize = 0;
-                    while (true) {
-                        tag_count += tags.len();
-                        for (0..tags.len()) |tag_index| try pending.appendSlice(self.allocator, tags.get(tag_index).args);
-                        tags = .empty;
-                        switch (types_view.payload(current)) {
-                            .alias => |alias| current = alias.backing,
-                            .tag_union => |ext_union| {
-                                tags = ext_union.tags;
-                                current = ext_union.ext;
-                            },
-                            .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .record, .empty_tag_union, .field_kind => break,
-                        }
-                    }
-                    if (tag_count != 0 and types_view.uncommittedTagTail(current) and
-                        std.mem.findScalar(checked.CheckedTypeId, scheme_vars.items, ty) == null)
-                    {
-                        try scheme_vars.append(self.arena.allocator(), ty);
-                    }
-                },
-                .tuple => |items| try pending.appendSlice(self.allocator, items),
-                .function => |function| {
-                    try pending.appendSlice(self.allocator, function.args);
-                    try pending.append(self.allocator, function.ret);
-                },
-                .nominal => |nominal| try pending.appendSlice(self.allocator, nominal.args),
-                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union, .field_kind => {},
-            }
-            // Children are visited in the order they were listed.
-            std.mem.reverse(checked.CheckedTypeId, pending.items[start..]);
-        }
+        var walk: checked.ClosedRowNodeWalk = .{ .allocator = self.allocator, .types = self.module(module_index).types() };
+        defer walk.deinit();
+        var found: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer found.deinit(self.allocator);
+        try walk.append(template.checked_fn_root, evidence_params, checked_scheme_vars, sealed_slots, &found);
+        std.debug.assert(std.mem.eql(checked.CheckedTypeId, found.items, published));
     }
 
     /// Whether checked type `root` of `module_index` holds a tag union with
     /// a tag whose row ends in an uncommitted tag tail
-    /// (`CheckedTypeStoreView.uncommittedTagTail`). A binding that
-    /// quantifies one is a scheme even when its scheme has no variable: each
-    /// use copies the union, which may lift into a nominal type there
-    /// (design.md "Uncommitted Tag Tails").
+    /// (`CheckedTypeStoreView.uncommittedTagTail`), for a debug check of
+    /// what checking publishes (`DispatchRefScope.holds_uncommitted_tag_tail`).
     pub fn holdsUncommittedTagTail(self: *Program, module_index: ModuleIndex, root: checked.CheckedTypeId) Allocator.Error!bool {
         const types_view = self.module(module_index).types();
         var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
