@@ -510,18 +510,50 @@ pub const Env = struct {
     }
 };
 
+/// A map keyed by checked type ids. Those live in two ranges, source
+/// variables counting up from zero and synthesized types counting up from
+/// the high bit (`check.CheckedTypeIds`), and a `DenseMap`'s chunk directory
+/// spans every chunk between the lowest and highest key it holds, so one
+/// map holding a key of each range would allocate, clear and free a
+/// directory over half the 32-bit id space. This keeps one map per range.
+pub fn CheckedTypeMap(comptime V: type) type {
+    return struct {
+        const Self = @This();
+        const Range = collections.DenseMapUnmanaged(checked.CheckedTypeId, V);
+
+        source: Range = .empty,
+        synthesized: Range = .empty,
+
+        pub const empty: Self = .{};
+
+        pub fn get(self: *const Self, key: checked.CheckedTypeId) ?V {
+            return if (check.CheckedTypeIds.isSynthesized(key)) self.synthesized.get(key) else self.source.get(key);
+        }
+
+        pub fn getOrPut(self: *Self, gpa: Allocator, key: checked.CheckedTypeId) Allocator.Error!Range.GetOrPutResult {
+            const range = if (check.CheckedTypeIds.isSynthesized(key)) &self.synthesized else &self.source;
+            return range.getOrPut(gpa, key);
+        }
+
+        pub fn deinit(self: *Self, gpa: Allocator) void {
+            self.source.deinit(gpa);
+            self.synthesized.deinit(gpa);
+            self.* = undefined;
+        }
+    };
+}
+
 /// The position of each variable of a scope's variable list `vars`, for
 /// `Env.lookup`: a variable listed twice (an enclosing scheme's variable that
 /// a generalized local's scheme lists again) is at its first position, where
 /// a scan finds it.
 pub const VarPositions = struct {
     vars: []const checked.CheckedTypeId,
-    map: collections.DenseMapUnmanaged(checked.CheckedTypeId, u32) = .empty,
+    map: CheckedTypeMap(u32) = .empty,
 
     pub fn init(allocator: Allocator, vars: []const checked.CheckedTypeId) Allocator.Error!VarPositions {
         var positions: VarPositions = .{ .vars = vars };
         errdefer positions.deinit(allocator);
-        try positions.map.ensureTotalCapacity(allocator, vars.len);
         for (vars, 0..) |variable, index| {
             const entry = try positions.map.getOrPut(allocator, variable);
             if (!entry.found_existing) entry.value_ptr.* = @intCast(index);
@@ -1495,7 +1527,7 @@ pub const Converter = struct {
         var found: std.ArrayList(checked.CheckedTypeId) = .empty;
         var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
         defer pending.deinit(scratch);
-        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        var seen: CheckedTypeMap(void) = .empty;
         defer seen.deinit(scratch);
         try pending.append(scratch, root);
         while (pending.pop()) |ty| {

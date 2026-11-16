@@ -2068,7 +2068,7 @@ pub const Program = struct {
         }
         var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
         defer pending.deinit(self.allocator);
-        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        var seen: types.CheckedTypeMap(void) = .empty;
         defer seen.deinit(self.allocator);
         var index = evidence_params.len;
         while (index > 0) {
@@ -2150,7 +2150,7 @@ pub const Program = struct {
         const types_view = self.module(module_index).types();
         var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
         defer pending.deinit(self.allocator);
-        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        var seen: types.CheckedTypeMap(void) = .empty;
         defer seen.deinit(self.allocator);
         try pending.append(self.allocator, root);
         while (pending.pop()) |ty| {

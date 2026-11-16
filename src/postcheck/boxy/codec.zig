@@ -229,7 +229,7 @@ fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.C
     const store = program.module(module).types();
     var vars: std.ArrayList(checked.CheckedTypeId) = .empty;
     defer vars.deinit(allocator);
-    var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+    var seen: types.CheckedTypeMap(void) = .empty;
     defer seen.deinit(allocator);
     var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
     defer pending.deinit(allocator);
