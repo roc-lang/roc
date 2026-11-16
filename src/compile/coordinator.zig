@@ -4236,8 +4236,7 @@ pub const Coordinator = struct {
         if (!self.everyModuleKnown()) return null;
         self.early_plan = try self.buildEarlyPlan();
         self.early_reports.coordinator = self;
-        var options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, &self.ctfe_timing);
-        options.strategy = .boxy;
+        var options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, &self.ctfe_timing, .boxy);
         options.post_check_executor = self.postCheckExecutor();
         options.boxy_objects = objects.source();
         options.cancel_request = self.cancel_request;

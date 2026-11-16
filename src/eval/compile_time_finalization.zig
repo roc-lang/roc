@@ -2568,7 +2568,7 @@ pub const EarlyEvaluation = struct {
         errdefer allocator.free(specialized);
         const classification_started = Timing.startStep(options.timing);
         for (roots.items, specialized) |root, *flag| {
-            flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind != .literal_argument and
+            flag.* = !artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated() and
                 try checked_root_graph.rootHoldsFunction(allocator, &self.function_types, artifacts, lowering, root);
         }
         Timing.finishStep(options.timing, classification_started, .root_classification);
