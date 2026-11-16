@@ -15624,6 +15624,107 @@ test "RC emission units: a call of an external procedure demands the outcome var
     }
 }
 
+test "RC published outcome variant: a failure join reached after a retained sublist hands back the entry list" {
+    // `|bytes| match bytes { [0, .. as rest] => Ok(rest), _ => Err("failed") }`
+    // as a module exports it: the failure join is reached both before the
+    // list is read and after the sublist the success path wraps, so the
+    // variant retains the list for that sublist, releases the sublist on the
+    // mismatch, and hands the list back from the shared failure join. The
+    // worker's object emits the variant whether or not anything calls it.
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const try_list = try f.layouts.putTagUnion(&[_]layout_mod.Idx{ .str, f.list_i64 });
+    const range_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = .i64 },
+        .{ .index = 1, .layout = .i64 },
+    });
+    const bytes = try f.local(f.list_i64);
+    const result = try f.local(try_list);
+    const len = try f.local(.i64);
+    const one = try f.local(.i64);
+    const has_first = try f.local(.i64);
+    const zero = try f.local(.i64);
+    const first = try f.local(.i64);
+    const rest_len = try f.local(.i64);
+    const range = try f.local(range_layout);
+    const rest = try f.local(f.list_i64);
+    const message = try f.local(.str);
+    const success_join = f.freshJoinPointId();
+    const failure_join = f.freshJoinPointId();
+
+    const success_ret = try f.ret(result);
+    const success_jump = try f.store.addCFStmt(.{ .jump = .{ .target = success_join } }, .test_fixture);
+    const ok_tag = try f.assignTag(result, 1, rest, success_jump);
+    const mismatch_jump = try f.store.addCFStmt(.{ .jump = .{ .target = failure_join } }, .test_fixture);
+    const match_first = try f.switchStmt(first, ok_tag, mismatch_jump, null);
+    const sublist = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = rest,
+        .op = .list_sublist,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_sublist.rcEffect()),
+        .args = try f.span(&.{ bytes, range }),
+        .next = match_first,
+    } }, .test_fixture);
+    const make_range = try f.assignStruct(range, &.{ one, rest_len }, sublist);
+    const read_rest_len = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = rest_len,
+        .op = .num_int_sub_wrap,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.num_int_sub_wrap.rcEffect()),
+        .args = try f.span(&.{ len, one }),
+        .next = make_range,
+    } }, .test_fixture);
+    const read_first = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = first,
+        .op = .list_get_unsafe,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_get_unsafe.rcEffect()),
+        .args = try f.span(&.{ bytes, zero }),
+        .next = read_rest_len,
+    } }, .test_fixture);
+    const non_empty = try f.assignI64(zero, 0, read_first);
+    const empty_jump = try f.store.addCFStmt(.{ .jump = .{ .target = failure_join } }, .test_fixture);
+    const check_len = try f.switchStmt(has_first, non_empty, empty_jump, null);
+    const read_has_first = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = has_first,
+        .op = .num_is_gte,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.num_is_gte.rcEffect()),
+        .args = try f.span(&.{ len, one }),
+        .next = check_len,
+    } }, .test_fixture);
+    const failure_remainder = try f.assignI64(one, 1, read_has_first);
+    const failure_jump = try f.store.addCFStmt(.{ .jump = .{ .target = success_join } }, .test_fixture);
+    const err_tag = try f.assignTag(result, 0, message, failure_jump);
+    const failure_body = try f.assignStr(message, "failed", err_tag);
+    const failure = try f.store.addCFStmt(.{ .join = .{
+        .id = failure_join,
+        .params = try f.span(&.{}),
+        .body = failure_body,
+        .remainder = failure_remainder,
+    } }, .test_fixture);
+    const read_len = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = len,
+        .op = .list_len,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_len.rcEffect()),
+        .args = try f.span(&.{bytes}),
+        .next = failure,
+    } }, .test_fixture);
+    const body = try f.store.addCFStmt(.{ .join = .{
+        .id = success_join,
+        .params = try f.span(&.{result}),
+        .body = success_ret,
+        .remainder = read_len,
+    } }, .test_fixture);
+    const worker = try f.addProc(&.{bytes}, body, try_list);
+    f.store.getProcSpecPtr(worker).emission_unit = LIR.EmissionUnit.module(0);
+    f.store.getProcSpecPtr(worker).exported = true;
+
+    const base_proc_count = f.store.procSpecCount();
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = false });
+
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    // The success outcome borrows the list for its sublist, so it hands the
+    // list back too.
+    try expectU32Span(&f.store, f.store.getProcSpec(worker).rc_outcomes, &.{ 0, 1, 1, 1 });
+}
+
 /// A checked mutation of its list parameter: discriminant 1 carries the
 /// mutated list, and discriminant 0, which returns nothing, leaves the list
 /// untouched.
@@ -15691,8 +15792,10 @@ fn addFailureReadingCaller(f: *ArcTest, spec: FailureReadingCaller) Allocator.Er
 /// Expect `span` of `store` to hold exactly `expected`.
 fn expectU32Span(store: *const LirStore, span: LIR.U32Span, expected: []const u32) error{TestExpectedEqual}!void {
     const words = store.getU32Span(span);
-    try testing.expectEqual(expected.len, GuardedList.borrowLen(words));
-    for (expected, 0..) |word, index| try testing.expectEqual(word, GuardedList.at(words, index));
+    var found: [16]u32 = undefined;
+    const len = @min(GuardedList.borrowLen(words), found.len);
+    for (found[0..len], 0..) |*word, index| word.* = GuardedList.at(words, index);
+    try testing.expectEqualSlices(u32, expected, found[0..len]);
 }
 
 /// A callee that hands its `List(Str)` argument back in variant
