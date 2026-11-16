@@ -14442,10 +14442,9 @@ fn runCheckOnly(
     const core = CoreCtx.os(allocator, allocator, std.testing.io);
     var manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = cache }, core);
     defer manager.deinit();
-    var coord = try Coordinator.init(allocator, mode, max_threads, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, core);
+    var coord = try Coordinator.init(allocator, mode, max_threads, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, core, .boxy);
     defer coord.deinit();
     coord.enable_hosted_transform = true;
-    coord.specialization_strategy = .boxy;
     coord.evaluate_during_checking = during_checking;
     coord.boxy_object_lowering = .{
         .target = roc_target.RocTarget.detectNative(),
