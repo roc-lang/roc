@@ -16,12 +16,32 @@ test "issue 12999: a late-validated parser relation whose error row a widened us
         \\    }
         \\}
         \\
-        \\result = parse_with(|n| (n + 1.U64).to_str())
+        \\result = parse_with(|n| (n + n).to_str())
         \\
         \\widen : {} -> Try(Str, [Bad, Other])
         \\widen = |_| result
     );
     defer env.deinit();
-    try env.assertOneTypeProblemMsgContains("Missing Method", "never resolved to a concrete type");
+    try env.assertOneTypeErrorMsg(
+        \\**Missing Method**
+        \\A type this needs never resolved to a concrete type, so it has no `parser_for` method.
+        \\```roc
+        \\result = parse_with(|n| (n + n).to_str())
+        \\```
+        \\         ^^^^^^^^^^
+        \\
+        \\Its type needs all of these:
+        \\
+        \\    p
+        \\      where [
+        \\        p.parser_for : {} -> (Str -> Try({ rest: Str, value: p }, [Bad])),
+        \\        p.plus : p, p -> p,
+        \\        p.to_str : p -> Str,
+        \\      ]
+        \\
+        \\Using the value somewhere that requires a specific type, or annotating it, will give it one.
+        \\
+        \\
+    );
     try env.assertDefTypeOptions("widen", "{} -> Try(Str, [Bad, Other])", .{ .allow_type_errors = true });
 }

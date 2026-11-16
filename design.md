@@ -12676,10 +12676,11 @@ the copy stands a fresh variable at the current rank in its place
 the result position the variable must fit, and the definition's scheme
 quantifies the position with the rest of its annotation. A row's open TAIL
 is not such a variable, whichever scope owns it: the tags the row holds
-relate now, the tail stays shared with the value's own row or is re-opened
-in a copy exactly as above, and every tag the row gains later joins
-through that tail or propagates into the copy (Row Joins,
-`Check.propagateValueRowsToWidenedUses`), so a top-level value forwarded
+relate now, and the tail stays shared with the value's own row, so every
+tag the row gains later joins through that tail (Row Joins). A copy re-opens
+only a row that can gain no tag: a closed row, or one whose extension an
+annotation bounds, which the unifier refuses to extend. A debug assertion in
+`Check.widenedRowCopy` pins this. So a top-level value forwarded
 into several results keeps one row of its own. The variable's
 own relation to that position is recorded (`Check.DeferredResultRelation`)
 for the generalization boundary that owns the variable, which discharges
@@ -14000,13 +14001,8 @@ parked relations before its settled default-materialization fixpoint
 (`checkInstantiatedStaticDispatchConstraints(.settled)`), and a default that
 fixpoint materializes can ground a receiver whose derived codec relation then
 parks. That fixpoint therefore validates whatever is parked before it judges
-another round. Such a late validation needs no further value-row propagation:
-a widened use re-opens only a value row that is closed or bounded when the use
-reads it, and neither kind gains a tag afterwards (a closed row has no tail,
-and the unifier refuses a tag into a bounded extension), so the validation
-cannot add a tag a widened use lacks. A debug assertion
-(`Check.debugAssertWidenedUseRowsComplete`) pins this after each such
-validation.
+another round. A widened use re-opens only a value row that can gain no tag
+(Row Subsumption), so a late validation cannot add a tag a widened use lacks.
 
 The instance's copy of each of the template's variables is that variable
 throughout the instance's derivation (`Check.final_codec_instance_copies`). A
