@@ -5038,7 +5038,14 @@ pub const CheckedTypeStore = struct {
     /// Materialize the public read-form payload for `id`. Slice fields alias the
     /// store's pools or the module's sealed solver store; no allocation.
     pub fn payload(self: *const CheckedTypeStore, id: CheckedTypeId) CheckedTypePayload {
-        return self.view().payload(id);
+        if (!type_ids.isSynthesized(id)) return self.sealedSourceView().payload(type_ids.asVar(id));
+        return reconstructTypeData(CheckedTypePayload, self, &self.payloads.items()[self.synthesizedIndex(id)]);
+    }
+
+    /// The view of the sealed solver store that source ids name.
+    fn sealedSourceView(self: *const CheckedTypeStore) sealed_type_view.SealedTypeView {
+        const env = self.sealed_env orelse checkedArtifactInvariant("a checked source type was read from a store without its sealed solver store", .{});
+        return self.sealedView(env);
     }
 
     /// The entry a synthesized id names.
