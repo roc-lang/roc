@@ -31820,6 +31820,13 @@ restored and built, import images selected and loaded, and slow-root
 progress threads. Its root counts separate the roots an evaluator ran from
 the roots the checked-value writer completed ("Value-Form Roots").
 
+Checked-artifact publication reports its steps (`PublicationTiming.Step`:
+the typed module graph, identity and names, body analyses, sealed type keys,
+checked types, the platform relation, each table it builds in the order it
+builds them, the dispatch resolution and template demand passes, exports,
+public API dependencies, lowering visibility, and artifact assembly), each
+summed over the modules published, beneath "Checked Publication Detail".
+
 Boxy lowering reports setup, unit worker seeding, root workers, worker
 bodies, type table filling, layout and static data requests, export needs,
 names and runtime schemas, and static descriptors, and counts the workers it

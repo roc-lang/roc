@@ -716,6 +716,124 @@ pub const PublishInputs = struct {
     evaluation_phase: enum { immediate, post_frontend } = .immediate,
     problem_store: ?*problem.Store = null,
     validation: can.Can.Validation = .checking,
+    /// Receives the duration of each publication step when detailed timing
+    /// is on (`roc check --timings`).
+    timing: ?*PublicationTiming = null,
+};
+
+/// The duration of each step of checked-artifact publication, summed over
+/// the modules published.
+pub const PublicationTiming = struct {
+    steps_ns: [step_count]u64 = @splat(0),
+
+    pub const step_count = @typeInfo(Step).@"enum".field_names.len;
+
+    /// A step of publication, in the order publication runs them.
+    pub const Step = enum {
+        /// The typed module graph publication reads (`TypedCIR.Modules`).
+        typed_modules,
+        /// Module identity, names, context identity, artifact key, exports,
+        /// and provides.
+        identity,
+        /// The module's body analyses and demand index (`BodyAnalyses`).
+        body_analyses,
+        /// The omitted defaults' names and the sealed types' content keys
+        /// (`SealedTypeKeys`).
+        sealed_type_keys,
+        /// The checked type store and its source-type index
+        /// (`CheckedTypeStore.fromModule`).
+        checked_types,
+        /// Requires metadata, platform type inputs, and the platform-app
+        /// relation's tables and type substitutions.
+        platform_relation,
+        /// Pairing types and default expressions.
+        pairing_defaults,
+        /// The procedure templates, including promoted local procedures.
+        procedure_templates,
+        /// The static dispatch plans (`StaticDispatchPlanTable.fromModule`).
+        dispatch_plans,
+        /// Hosted procedures and bindings, and platform-required bindings.
+        hosted_platform_bindings,
+        /// The compile-time roots (`CompileTimeRootTable.fromModule`).
+        compile_time_roots,
+        /// Const bodies and entry wrappers for the compile-time roots.
+        entry_wrappers,
+        /// The top-level value table.
+        top_level_values,
+        /// Hoisted constants and selected hoisted callables.
+        hoisted_values,
+        /// The resolved value references (`ResolvedValueRefTable`).
+        resolved_value_refs,
+        /// Callable-eval forwarding and retired expressions.
+        callable_forwarding,
+        /// The method registry and finishing the source types.
+        method_registry,
+        /// The ordinary body diagnostics.
+        ordinary_diagnostics,
+        /// Sealing the procedure templates' references.
+        template_refs,
+        /// Resolving the total static dispatch plans.
+        total_dispatch,
+        /// Specializing resolved dispatch plans' callables across artifacts.
+        dispatch_callables,
+        /// Literal conversion and literal argument roots.
+        literal_roots,
+        /// Classifying the templates' dispatch plan references and the
+        /// template demand pass.
+        template_demand,
+        /// The templates' sealed slots.
+        sealed_slots,
+        /// Provided exports and root requests.
+        root_requests,
+        /// Nested procedure sites.
+        nested_proc_sites,
+        /// Const-eval template sealing and exhaustiveness sites.
+        exhaustiveness,
+        /// Evaluation diagnostics, exported procedure templates, bindings,
+        /// and const templates, platform requirement solutions, and
+        /// interface capabilities.
+        exports,
+        /// The public API dependencies.
+        public_api,
+        /// Releasing the source-type index and collecting lowering
+        /// visibility.
+        lowering_visibility,
+        /// Assembling the artifact, and compile-time evaluation when
+        /// publication evaluates immediately.
+        finish,
+    };
+
+    pub fn add(self: *PublicationTiming, other: PublicationTiming) void {
+        for (&self.steps_ns, other.steps_ns) |*sum, ns| sum.* += ns;
+    }
+};
+
+/// Attributes the time between consecutive `lap` calls to publication
+/// steps. Reads no clock when `timing` is null.
+pub const PublicationClock = struct {
+    const freestanding = builtin.os.tag == .freestanding;
+
+    timing: ?*PublicationTiming,
+    io: std.Io,
+    last: if (freestanding) void else std.Io.Timestamp,
+
+    pub fn start(io: std.Io, timing: ?*PublicationTiming) PublicationClock {
+        if (comptime freestanding) return .{ .timing = timing, .io = io, .last = {} };
+        return .{
+            .timing = timing,
+            .io = io,
+            .last = if (timing == null) .{ .nanoseconds = 0 } else std.Io.Timestamp.now(io, .awake),
+        };
+    }
+
+    /// Add the time since the previous lap to `step`.
+    pub fn lap(self: *PublicationClock, step: PublicationTiming.Step) void {
+        if (comptime freestanding) return;
+        const timing = self.timing orelse return;
+        const now = std.Io.Timestamp.now(self.io, .awake);
+        timing.steps_ns[@backingInt(step)] += @intCast(@max(0, self.last.durationTo(now).nanoseconds));
+        self.last = now;
+    }
 };
 
 /// Which of a module's checker-selected compile-time roots its artifact
@@ -35812,6 +35930,7 @@ pub fn publishFromTypedModule(
         base.invariant("a checked artifact was published from a module whose type store checking never sealed", .{});
     }
     const idents = module.identStoreConst();
+    var clock = PublicationClock.start(inputs.io, inputs.timing);
 
     var canonical_names = canonical.CanonicalNameStore.init(allocator);
     errdefer canonical_names.deinit();
@@ -35865,6 +35984,7 @@ pub fn publishFromTypedModule(
     errdefer allocator.free(provides);
 
     const owner_artifact = artifact_key.digest();
+    clock.lap(.identity);
 
     const promoted_local_procedures = module_env.promoted_local_procedures.items();
     const requirement_solutions = module_env.platform_requirement_solutions.items();
@@ -35874,6 +35994,7 @@ pub fn publishFromTypedModule(
     var analyses_owned = true;
     errdefer if (analyses_owned) analyses.destroy();
     const module_index = try analyses.demandIndex();
+    clock.lap(.body_analyses);
 
     // Omitted defaults name their fields and origin modules through the
     // module's names.
@@ -35885,10 +36006,12 @@ pub fn publishFromTypedModule(
     const sealed_keys = try sealed_type_keys.SealedTypeKeys.create(allocator, inputs.io, module_env);
     var sealed_keys_owned = true;
     errdefer if (sealed_keys_owned) sealed_keys.destroy();
+    clock.lap(.sealed_type_keys);
     var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key.digest(), inputs.imports, inputs.available_artifacts, module_index, selected_hoisted_roots, promoted_local_procedures, sealed_keys);
     defer checked_type_publication.deinitIndex(allocator);
     errdefer checked_type_publication.store.deinit(allocator);
     const checked_types = &checked_type_publication.store;
+    clock.lap(.checked_types);
     const requires = try publishRequiresMetadata(allocator, module, &canonical_names, &checked_type_publication);
     errdefer allocator.free(requires);
     var platform_type_inputs = try PlatformTypeInputs.fromModule(allocator, module, &canonical_names, &checked_type_publication, &platform_required_declarations);
@@ -35921,6 +36044,7 @@ pub fn publishFromTypedModule(
         defer relation_type_substitutions.deinit(allocator);
         try relation_type_substitutions.applyToPublication(allocator, &checked_type_publication);
     }
+    clock.lap(.platform_relation);
     var pairing_types = try publicationPairingTypes(allocator, &checked_type_publication);
     errdefer pairing_types.deinit(allocator);
     const default_exprs = try publicationDefaultExprs(allocator, module, &canonical_names, &checked_type_publication);
@@ -35929,6 +36053,7 @@ pub fn publishFromTypedModule(
         .module = owner_artifact,
         .pairing_types = if (pairing_types.images.items().len != 0) &pairing_types else null,
     };
+    clock.lap(.pairing_defaults);
 
     const value_binding_defs = module_env.store.sliceDefs(module_env.value_binding_defs);
 
@@ -35956,6 +36081,7 @@ pub fn publishFromTypedModule(
         promoted_local_procedures,
     );
     const template_lookup = checked_procedure_templates.asLookup(module_idx);
+    clock.lap(.procedure_templates);
 
     var plan_build_data = static_dispatch.PlanTableBuildData{};
     errdefer plan_build_data.deinit(allocator);
@@ -35968,6 +36094,7 @@ pub fn publishFromTypedModule(
         &plan_build_data,
     );
     errdefer static_dispatch_plans.deinit(allocator);
+    clock.lap(.dispatch_plans);
 
     var hosted_procs = try HostedProcTable.fromModule(
         allocator,
@@ -35991,6 +36118,7 @@ pub fn publishFromTypedModule(
         inputs.platform_app_relation,
     );
     errdefer platform_required_bindings.deinit(allocator);
+    clock.lap(.hosted_platform_bindings);
 
     // Value form reads the dispatch plans: a numeral with a `from_numeral`
     // plan is not in value form. A literal with a conversion root always has
@@ -36009,6 +36137,7 @@ pub fn publishFromTypedModule(
         publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, value_form_tables),
     );
     errdefer compile_time_roots.deinit(allocator);
+    clock.lap(.compile_time_roots);
 
     var checked_const_bodies = try CheckedConstBodyTable.fromRoots(allocator, &compile_time_roots);
     errdefer checked_const_bodies.deinit(allocator);
@@ -36024,6 +36153,7 @@ pub fn publishFromTypedModule(
         &entry_wrappers,
         compile_time_roots.roots.items(),
     );
+    clock.lap(.entry_wrappers);
 
     var checked_const_store = ConstStore.init(allocator);
     errdefer checked_const_store.deinit();
@@ -36052,6 +36182,7 @@ pub fn publishFromTypedModule(
         &checked_type_publication,
     );
     errdefer top_level_values.deinit(allocator);
+    clock.lap(.top_level_values);
 
     var hoisted_constants = try HoistedConstTable.fromRoots(
         allocator,
@@ -36074,6 +36205,7 @@ pub fn publishFromTypedModule(
         checked_procedure_templates.promoted.items(),
     );
     defer selected_hoisted_callables.deinit(allocator);
+    clock.lap(.hoisted_values);
 
     var resolved_value_refs = try ResolvedValueRefTable.fromModule(
         allocator,
@@ -36093,6 +36225,7 @@ pub fn publishFromTypedModule(
         module_index,
     );
     errdefer resolved_value_refs.deinit(allocator);
+    clock.lap(.resolved_value_refs);
     var resolved_tables = body_tables;
     resolved_tables.refs = &resolved_value_refs;
     publishCallableEvalForwarding(
@@ -36136,6 +36269,7 @@ pub fn publishFromTypedModule(
         .relation_modules = inputs.relation_artifacts,
     };
     defer method_binding_targets.deinit();
+    clock.lap(.callable_forwarding);
     var method_registry = try static_dispatch.MethodRegistry.fromModule(
         allocator,
         module,
@@ -36148,6 +36282,7 @@ pub fn publishFromTypedModule(
     );
     errdefer method_registry.deinit(allocator);
     checked_type_publication.finishSourceTypes();
+    clock.lap(.method_registry);
 
     resolved_tables.plans = &static_dispatch_plans;
     var ordinary_diagnostics = try body_analyses.diagnosticErrors(
@@ -36156,6 +36291,7 @@ pub fn publishFromTypedModule(
         .ordinary,
     );
     defer ordinary_diagnostics.deinit(allocator);
+    clock.lap(.ordinary_diagnostics);
 
     var template_iterator_refs = TemplateIteratorRefs{};
     errdefer template_iterator_refs.deinit(allocator);
@@ -36175,6 +36311,7 @@ pub fn publishFromTypedModule(
         &template_iterator_refs,
         &plan_build_data,
     );
+    clock.lap(.template_refs);
 
     const platform_requirement_root_evidence = try allocator.alloc(
         artifact_serialize.Span,
@@ -36212,6 +36349,7 @@ pub fn publishFromTypedModule(
         platform_requirement_root_substs,
         template_root_evidence,
     );
+    clock.lap(.total_dispatch);
 
     // Resolutions now carry every direct target (evidence nodes); project the
     // targets' callables across artifacts by content identity and specialize
@@ -36229,6 +36367,7 @@ pub fn publishFromTypedModule(
         &template_iterator_refs,
     );
     resolved_tables.roots = &compile_time_roots;
+    clock.lap(.dispatch_callables);
     try publishLiteralConversionRoots(
         allocator,
         module,
@@ -36261,6 +36400,7 @@ pub fn publishFromTypedModule(
         requirement_solutions,
         platform_requirement_root_substs,
     );
+    clock.lap(.literal_roots);
     try classifyTemplateDispatchPlanRefs(
         allocator,
         &static_dispatch_plans,
@@ -36289,9 +36429,11 @@ pub fn publishFromTypedModule(
         defer demand_pass.deinit();
         try demand_pass.publish();
     }
+    clock.lap(.template_demand);
     try publishSealedSlots(allocator, checked_types.view(), &checked_procedure_templates);
     template_iterator_refs.deinit(allocator);
     plan_build_data.deinit(allocator);
+    clock.lap(.sealed_slots);
 
     var provided_exports = try ProvidedExportTable.fromModule(
         allocator,
@@ -36328,6 +36470,7 @@ pub fn publishFromTypedModule(
         inputs.validation,
     );
     errdefer root_requests.deinit(allocator);
+    clock.lap(.root_requests);
 
     var nested_proc_sites = try NestedProcSiteTable.fromTemplates(
         allocator,
@@ -36342,6 +36485,7 @@ pub fn publishFromTypedModule(
         &resolved_value_refs,
     );
     errdefer nested_proc_sites.deinit(allocator);
+    clock.lap(.nested_proc_sites);
 
     sealConstEvalTemplatesForRoots(
         &const_templates,
@@ -36376,6 +36520,7 @@ pub fn publishFromTypedModule(
         &exhaustiveness_reachability,
     );
     errdefer exhaustiveness_sites.deinit(allocator);
+    clock.lap(.exhaustiveness);
 
     var evaluation_diagnostics = if (module_env.module_kind == .platform and inputs.problem_store != null)
         try EvaluationDiagnostics.fromStore(allocator, inputs.problem_store.?)
@@ -36451,6 +36596,7 @@ pub fn publishFromTypedModule(
         &canonical_names,
     );
     errdefer interface_capabilities.deinit(allocator);
+    clock.lap(.exports);
 
     var public_api_dependencies = try collectPublicApiDependencies(
         allocator,
@@ -36474,6 +36620,7 @@ pub fn publishFromTypedModule(
         &exported_const_templates,
     );
     errdefer public_api_dependencies.deinit(allocator);
+    clock.lap(.public_api);
 
     // All source-to-checked metadata has been consumed. Release its scratch
     // before compile-time evaluation can allocate specialization/backend data.
@@ -36501,6 +36648,7 @@ pub fn publishFromTypedModule(
         &exported_const_templates,
     );
     errdefer lowering_visibility.deinit(allocator);
+    clock.lap(.lowering_visibility);
 
     var artifact = CheckedModuleArtifact{
         .key = artifact_key,
@@ -36574,6 +36722,7 @@ pub fn publishFromTypedModule(
         try artifact.verifyComplete();
     }
     analyses_owned = false;
+    clock.lap(.finish);
     return artifact;
 }
 
