@@ -11,24 +11,54 @@ The issue body and comments were read with
 
 ## Regression
 
-`src/check/test/issue_13079_test.zig` preserves the issue's reduced input,
-including all three top-level expects. It uses the existing checker `TestEnv`
-and asserts no diagnostics, without evaluating the deliberately crashing
-stub functions. It is registered in `src/check/mod.zig`.
-There are no skip or expected-failure flags.
+`test/cli/issue_13079/Repro.roc` preserves the issue's reduced input,
+including all three top-level expects. The case in
+`src/cli/test/parallel_cli_runner.zig` asserts successful `check --no-cache`
+and absence of panic/invariant output. It does not evaluate the deliberately
+crashing stub functions. There are no skip or expected-failure flags.
+
+**Not reproduced on the supplied baseline:** both checker-only and full CLI
+checks pass. This is passing regression coverage, not a confirmed failing repro.
 
 ## Validation
 
 Toolchain: `zig version` reports `0.17.1`.
 
 ```sh
-zig build -j2 run-test-zig -- --test-filter 'issue 13079'
+zig build -j2 run-test-cli -- --filter 'issue 13079'
 ```
 
-Validation is in progress; the result will be recorded here when it finishes.
+Exit 0:
+
+```text
+1 passed (1 total) in 3551ms using 1 worker(s)
+subcommands     1 run,    0 failed,    0 skipped
+```
+
+The original command shape was also checked directly:
 
 ```sh
-zig fmt --check src/check/test/issue_13079_test.zig src/check/mod.zig
+zig-out/bin/roc check --no-cache test/cli/issue_13079/Repro.roc
+```
+
+Exit 0:
+
+```text
+No errors found in 57ms for test/cli/issue_13079/Repro.roc
+```
+
+A checker-only `TestEnv` trial with the same input also passed:
+
+```sh
+zig build -j2 run-test-zig-module-check -Dtest-filter='issue 13079' -- --test-filter 'issue 13079'
+```
+
+That trial was removed in favor of CLI coverage of the actual reported command.
+An earlier broad `run-test-zig` attempt did not reach a usable test result;
+its retry was stopped in favor of the focused checker leaf.
+
+```sh
+zig fmt --check src/cli/test/parallel_cli_runner.zig
 ```
 
 Formatting check passed (exit 0).

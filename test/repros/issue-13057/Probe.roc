@@ -27,7 +27,7 @@ Format := [Default].{
 
     parse_u64 : Format, State -> Try({ value : U64, rest : State }, Error)
     parse_u64 = |_, state| match state {
-        [value, ..rest] => Ok({ value, rest })
+        [value, .. as rest] => Ok({ value, rest })
         [] => Err(InvalidValue)
     }
 

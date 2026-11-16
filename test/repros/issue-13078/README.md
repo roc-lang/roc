@@ -18,10 +18,18 @@ The `issue 13078:` case in `src/cli/test/parallel_cli_runner.zig` checks
 `No errors found`, without skips or expected-failure handling.
 
 ```sh
-zig build run-test-cli -j2 -Dtest-filter='issue 13078:'
+zig build run-test-cli -j2 -Dplatform=none -- --suite subcommands --filter 'issue 13078' --verbose
 ```
 
-Harness validation is pending.
+Observed: exit 1, exactly one selected case, `0 passed, 1 run failed (1 total)`,
+and `subcommands 1 run, 1 failed, 0 skipped`. The compiler terminated with
+signal 6 during type checking and printed the invariant panic quoted below.
+`-Dplatform=none` avoids building unrelated platform hosts; this check-only
+fixture requires no platform. The earlier `-Dtest-filter='issue 13078:'`
+harness attempt did not reach execution and is not counted as reproduction
+evidence.
+
+`zig fmt --check src/cli/test/parallel_cli_runner.zig` passed.
 
 ## Original CLI scenario
 
