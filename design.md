@@ -18509,7 +18509,10 @@ build reuses its table. The compiler's compilation waits for the table, so
 embedding puts the tool's compilation and run (about a minute) on the path
 to the compiler. A Debug compiler therefore embeds nothing unless built
 with `-Dembed-builtin-unit=true`, so iterating on the compiler does not pay
-for it; every other optimize mode embeds by default.
+for it; every other optimize mode embeds by default. MiniCI builds its Debug
+compiler with that option (`minici_build_args` in src/build/minici.zig), so
+the CLI tests, which run `--no-cache` builds and compile-time evaluation,
+serve the Builtin from the table as every released compiler does.
 
 The table also carries the Builtin's digests (`boxy_interface.Digests`):
 its interface digest and its object input, which, since it imports
