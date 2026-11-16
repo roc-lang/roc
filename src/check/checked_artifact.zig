@@ -14204,6 +14204,8 @@ const EvidencePass = struct {
         self.retireUnreachedForwardedCodecCalls();
         if (builtin.mode == .debug) try self.debugVerifyGeneratedCodecContracts();
 
+        self.recordForwardedRequirements();
+
         std.mem.sort(static_dispatch.SiteEvidenceEntry, self.site_evidence.items, {}, siteEvidenceLessThan);
 
         self.plan_table.evidence_nodes = .fromOwnedSlice(try self.evidence_nodes.toOwnedSlice(self.allocator));
@@ -14214,6 +14216,43 @@ const EvidencePass = struct {
         try @import("codec_identity.zig").intern(self.allocator, self.checked_types.store.view(), self.plan_table);
         try @import("codec_identity.zig").digestContents(self.allocator, self.import_views.current_owner, &self.checked_types.store, self.names, self.plan_table);
         if (builtin.mode == .debug) try self.debugVerifyGeneratedCodecRoleAgreement();
+    }
+
+    /// Record, for each captured codec requirement a scheme's body hands on
+    /// from an edge at its own scope, the first such edge
+    /// (`EvidenceParamRecord.forwarded`): a use of a procedure or a dispatch
+    /// edge whose evidence fills a parameter of the scheme it instantiates
+    /// with the requirement. A Boxy caller building the requirement's codec
+    /// enters that edge to reach the instance of the procedure whose body
+    /// declares the codec's local procedures (design.md "Sealed Result
+    /// Rows"). Every edge handing one requirement on instantiates its callee
+    /// at the types the requirement's relation names, with the requirement's
+    /// other dictionaries taken from the same scope, so any of them gives the
+    /// same instance.
+    fn recordForwardedRequirements(self: *EvidencePass) void {
+        const pool = self.templates.evidence_params_pool.items();
+        for (self.site_evidence.items) |site| {
+            recordForwardedFrom(pool, self.evidence_refs.items[site.start..][0..site.len], .{ .use = @fromBackingInt(site.key) });
+        }
+        for (self.evidence_nodes.items, 0..) |node, raw| switch (node.nested) {
+            .resolved => |span| recordForwardedFrom(pool, self.evidence_refs.items[span.start..][0..span.len], .{ .node = @fromBackingInt(@as(u32, @intCast(raw))) }),
+            .from_callable, .through_alias => {},
+        };
+    }
+
+    fn recordForwardedFrom(pool: []static_dispatch.EvidenceParamRecord, entries: []const static_dispatch.CheckedEvidence, edge: static_dispatch.RequirementEdge) void {
+        for (entries, 0..) |entry, index| switch (entry.resolution) {
+            .constraint => |constraint| {
+                // Depth zero is the innermost scope around the edge, the
+                // scope whose parameter `scheme_param` names.
+                if (constraint.index.depth != 0) continue;
+                const owner = constraint.scheme_param orelse continue;
+                const param = &pool[owner];
+                if (param.source != .scheme_requirement or param.forwarded.edge != .none) continue;
+                param.forwarded = .{ .edge = edge, .callee_param = @intCast(index) };
+            },
+            .direct, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
+        };
     }
 
     /// A generated body records one checked edge per source occurrence.
@@ -38159,8 +38198,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xBE, 0xEF, 0x47, 0x94, 0xB2, 0xA7, 0x60, 0x43, 0x9B, 0x2B, 0x7C, 0xC5, 0x5E, 0xA7, 0x4E, 0x28,
-        0xD3, 0xF2, 0x77, 0x97, 0x89, 0x06, 0x66, 0xD2, 0xB0, 0x94, 0x3A, 0x70, 0x8A, 0x16, 0x4C, 0x89,
+        0xA0, 0x86, 0x15, 0xA1, 0x3C, 0xCF, 0x78, 0x0D, 0xA3, 0xCF, 0x37, 0x41, 0xB8, 0x00, 0x67, 0x0D,
+        0x8A, 0xCD, 0xD4, 0xC1, 0x5B, 0x67, 0x58, 0xFE, 0xE6, 0x9A, 0xC5, 0xAB, 0xD1, 0xEE, 0x46, 0x0D,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

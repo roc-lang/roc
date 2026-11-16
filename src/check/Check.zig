@@ -5149,6 +5149,20 @@ fn noteRigidVarLookupForLocalProcedures(self: *Self, rigid_var: CIR.TypeAnno.Idx
     self.markLocalProcedureCandidatesContextualFrom(depth);
 }
 
+/// A type-rooted call or associated lookup through a type variable alias
+/// (`Outer : a`) reads the aliased variable's requirements, so it looks that
+/// variable up, as an annotation naming it does: a local function making one
+/// through an alias of an enclosing function's variable depends on that
+/// function, wherever the alias is declared.
+fn noteTypeVarAliasForLocalProcedures(self: *Self, type_var_anno: CIR.TypeAnno.Idx) Allocator.Error!void {
+    switch (self.cir.store.getTypeAnno(type_var_anno)) {
+        .rigid_var => try self.noteRigidVarLookupForLocalProcedures(type_var_anno),
+        .rigid_var_lookup => |lookup| try self.noteRigidVarLookupForLocalProcedures(lookup.ref),
+        .underscore, .malformed => {},
+        .lookup, .apply, .tag_union, .tag, .tuple, .record, .@"fn", .parens => unreachable, // a type variable alias names a type variable
+    }
+}
+
 /// A reference to a type declared inside a function body depends on its
 /// context (design.md "Body-Local Type Context"): the enclosing type
 /// variables its annotation names, and those its methods name, directly or
@@ -5159,6 +5173,10 @@ fn noteRigidVarLookupForLocalProcedures(self: *Self, rigid_var: CIR.TypeAnno.Idx
 /// local bindings like any other, and a candidate depends on them only
 /// through the references and dispatches recorded for it.
 fn noteTypeDeclReferenceForLocalProcedures(self: *Self, decl_idx: CIR.Statement.Idx) Allocator.Error!void {
+    switch (self.cir.store.getStatement(decl_idx)) {
+        .s_type_var_alias => |alias| return try self.noteTypeVarAliasForLocalProcedures(alias.type_var_anno),
+        .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_decl, .s_var, .s_var_uninitialized, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_type_anno, .s_runtime_error => {},
+    }
     if (try self.isModuleTypeDecl(decl_idx)) return;
     if (self.type_decl_generation_frames.items.len > 0) {
         const frame = &self.type_decl_generation_frames.items[self.type_decl_generation_frames.items.len - 1];

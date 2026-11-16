@@ -1738,6 +1738,30 @@ pub const EvidenceParamRecord = struct {
     structural: collections.OptionalEnum(StructuralKind) = .none,
     source: EvidenceParamSource = .scheme_callable,
     path: EvidencePath = .{},
+    /// For a captured codec requirement (`.scheme_requirement`) that the
+    /// owning scheme's body hands on from an edge at its own scope rather
+    /// than dispatching it itself: that edge, and the evidence parameter of
+    /// the scheme the edge instantiates that this one fills there.
+    forwarded: ForwardedRequirement = .{},
+};
+
+/// An edge inside a scheme's body that instantiates another scheme: a use of
+/// a procedure (the use's lookup expression) or a dispatch edge (its
+/// evidence node).
+pub const RequirementEdge = union(enum(u8)) {
+    none,
+    use: CIR.Expr.Idx,
+    node: EvidenceNodeId,
+};
+
+/// Where a captured codec requirement of a scheme comes from when the
+/// scheme's body hands it on (`EvidenceParamRecord.forwarded`): the edge at
+/// the scheme's own scope whose evidence fills `callee_param` of the
+/// instantiated scheme with this requirement. A requirement the body
+/// dispatches itself has no edge.
+pub const ForwardedRequirement = struct {
+    edge: RequirementEdge = .none,
+    callee_param: u32 = 0,
 };
 
 /// Exact producer-authored source of an evidence parameter's dispatcher.
@@ -1885,7 +1909,7 @@ pub const StaticDispatchCallPlan = struct {
 comptime {
     std.debug.assert(@sizeOf(StaticDispatchCallPlan) == 88);
     std.debug.assert(@sizeOf(EvidenceNode) == 184);
-    std.debug.assert(@sizeOf(EvidenceParamRecord) == 44);
+    std.debug.assert(@sizeOf(EvidenceParamRecord) == 56);
     std.debug.assert(@sizeOf(MethodRegistryEntry) == 176);
 }
 
