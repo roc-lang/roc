@@ -10084,8 +10084,9 @@ Sets preserve `Set` insertion order and parse by inserting the array items.
 JSON dictionaries use object representation only when the key type has a
 lossless object-key codec: strings, bools, numeric types, and zero-payload tags.
 Composite dictionary keys are rejected by static dispatch validation; there is
-no automatic pair-array fallback. Dictionary and set encoders do not sort,
-because Roc does not require keys or items to be sortable.
+no automatic pair-array fallback. A repeated object name keeps the value given
+last (Derived Dict Parser Duplicate Keys). Dictionary and set encoders do not
+sort, because Roc does not require keys or items to be sortable.
 
 Concrete HTTP header parser code has this shape inside `Builtin.Encoding`:
 
@@ -10365,9 +10366,13 @@ call, or the whole value of a non-recursive binding of one name whose only
 reference is the function of a call. A site inside a defaulted-field
 expression never qualifies, since that expression is lowered at every
 construction site that omits its field.
-Monotype stamps the flag on each function template, and a body without a
-procedure-relative return that has it is a source-single-use candidate,
-whether or not it captures. Every call to it in any program is that one site, lowered in some
+Monotype stamps the flag on each function template, and a body that has it
+is a source-single-use candidate, whether or not it captures or holds a
+`return`. A `return` in an inlined body delivers the call's result: the plan
+records which inline bodies hold one (`Plan.bodyReturns`), and lowering such
+a body places one value join in front of the call's continuation, which the
+body's own result and each of its `return`s jump to after writing the call's
+result local. No inlined `return` leaves the caller. Every call to it in any program is that one site, lowered in some
 specialization of the function containing it, so lowering inlines the call
 wherever the function it is lowering is not a wrapper: a wrapper body can be
 lowered more than once into one procedure, which a body with its own locals
@@ -14065,6 +14070,58 @@ result afterward. Such translation occurs outside the spec boundary; custom
 payload validation translates domain errors before returning the format error.
 Checking establishes this through ordinary nominal-argument unification.
 Both lowerers preserve all four parameters in generated spec identities.
+
+### Derived Dict Parser Duplicate Keys
+
+A dict holds one entry per key, and its key type's `is_eq` decides which keys
+are one key: `0.0` and `-0.0` as `F64`, or two spellings of a key whose equality
+ignores case. A wire format can carry two such entries, and what becomes of them
+is the format's decision, so the dict parsing protocol has a required method
+for it, checked and reported missing like the other `parse_dict_*` methods:
+
+```roc
+encoding.parse_dict_duplicate_key : encoding, state -> Try([KeepFirst(state), KeepLast(state)], err)
+```
+
+A derived dict parser reads an entry's key, calls `parse_dict_after_key`, reads
+the value, and adds the entry with the dictionary-owned builtin
+
+```roc
+Dict.insert_fresh : Dict(k, v), k, v -> [Inserted(Dict(k, v)), Occupied({ dict : Dict(k, v), key : k, value : v })]
+```
+
+which probes once and never overwrites. `Inserted` carries the dict with the
+entry added. `Occupied` carries the unchanged dict with the key and value handed
+back, so the caller owns them again without having retained them across the
+call. Only on `Occupied` does the parser call `parse_dict_duplicate_key`, with
+the state after the entry's value. `KeepFirst(state)` continues with the
+unchanged dict, `KeepLast(state)` continues with `Dict.insert` of the returned
+key and value, which replaces both the held key and its value in place, and an
+`Err` is returned from the parser under the same format-owned error rules as
+every other protocol method (Derived Parser Format-Owned Errors). Either way
+parsing continues from the state the method returned. There is no default
+answer and no optional-method discovery: a format without the method cannot
+parse a dict.
+
+Checking validates `with_capacity`, `insert`, and `insert_fresh` on the dict
+(`Check.validateDictConstructionMethods`) and the format method beside the
+other dict protocol methods, and records each as a generated codec call. Both
+lowerers consume those recorded calls: Monotype through
+`prepareDictCollectionCodecCalls` and `prepareParseDictFormatCodecCalls`,
+`.boxy` through the family's checked call table. The `insert_fresh` outcome row
+is built in two places that must agree, `Check.freshDictInsertFreshOutcomeVar`
+and `graphDictInsertFreshOutcome` in the Monotype lowerer.
+
+The builtin JSON format answers `KeepLast`, so a repeated object name keeps the
+value given last.
+
+Pinned by `test/cli/ParserDictDuplicateKey.roc` under both strategies (each
+answer with the collision at the first, a middle, and the last entry, counted
+and terminated dicts, unequal keys, heap-allocated keys and values, a key type
+whose equality is coarser than its wire form, and JSON),
+`test/repros/issue-13057/Probe.roc` (signed zeros as `F64` keys), and
+`test/cli/ParserMissingDictDuplicateKeyMethod.roc` (rejected: a format without
+the method).
 
 ### Parked Codec Relations Validate A Private Instance
 
@@ -22425,7 +22482,9 @@ definition: its report shows the code in the definition that introduced it,
 and, when its type shares a variable with a requirement this boundary related
 from two uses of one method, both of those uses. A relation folded into a retained one selects no target of its own,
 yet its dispatch site still outputs a plan. The unifier journals each fold as
-an exact (dropped, retained) pair of raw constraint function vars, and checking
+an exact (dropped, retained) pair of raw constraint function vars, generalization
+journals the same pair for each requirement its deduplication drops
+(`recordDeduplicatedDispatchRelation`), and checking
 outputs `ModuleEnv.dispatch_relation_merges`, mapping every folded relation
 to the relation on its merge chain whose target was selected. Checked
 module output keys the folded dispatch's evidence to that relation's

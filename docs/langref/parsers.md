@@ -139,6 +139,15 @@ A format that supports required record fields also defines
 `missing_field : encoding, Str -> err`. It receives the missing field's name and constructs
 the format's error. Optional and defaulted fields don't need this method.
 
+A format that supports dictionaries also defines
+`parse_dict_duplicate_key : encoding, state -> Try([KeepFirst(state), KeepLast(state)], err)`.
+It's only called when the input has an entry whose key is equal to one that was already read,
+according to the key type's `is_eq`. (That can happen even when the two keys look different in
+the input: as `F64` keys, `0.0` and `-0.0` are equal.) A dictionary can't hold both entries, so
+the format chooses: `KeepFirst` ignores the later entry, `KeepLast` replaces the earlier one,
+and `Err` rejects the input. JSON keeps the last one. By design there's no default, because
+quietly dropping an entry is exactly the kind of decision some formats need to refuse.
+
 For tag unions, the format receives an
 `Encoding.ParseTagUnionSpec(shape, encoding, state, err)`. Its `parse` method uses
 those same encoding, state, and error types for the payload callbacks. Passing a
