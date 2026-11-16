@@ -1661,7 +1661,27 @@ pub const Builder = struct {
     /// The word of `callee`'s type table at the inputs `inputs`.
     pub fn tableWord(self: *Builder, callee: WorkerId, inputs: []const Word) Allocator.Error!Word {
         if (std.debug.runtime_safety and self.program.inputCount(callee) != inputs.len) invariant("a type table's inputs differ from its worker's");
+        // This worker's table at its own inputs, in order, is the table it
+        // holds, so a call of itself at its own instantiation passes that
+        // table along unchanged (design.md "Tail Return Continuations").
+        if (callee == self.worker_id and self.table_local != null and self.isOwnInputs(inputs)) {
+            return .{ .recipe = try self.recipes.intern(.{ .scope_table = 0 }) };
+        }
         return .{ .recipe = try self.recipes.intern(.{ .table = .{ .worker = callee, .inputs = inputs } }) };
+    }
+
+    /// Whether `inputs` are this worker's own table inputs, each read from
+    /// where the worker received it, in the order it received them.
+    fn isOwnInputs(self: *const Builder, inputs: []const Word) bool {
+        if (inputs.len != self.layout.inputCount()) return false;
+        for (inputs, 0..) |word, index| switch (word) {
+            .static => return false,
+            .recipe => |id| switch (self.recipes.get(self.recipes.resolve(id))) {
+                .input => |input| if (input != index) return false,
+                .inherited, .scope_table, .desc, .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => return false,
+            },
+        };
+        return true;
     }
 
     /// A direct call's arguments: `explicit`, then `callee`'s type table at
@@ -2226,7 +2246,10 @@ pub const Builder = struct {
         proc.body = .some(proc_body);
         proc.shapes = self.store.shapes;
         self.store.shapes = .{};
-        if (has_dynamic_frame) self.tail_calls.self_calls = .replace_frame;
+        // A self call that passes every dynamic parameter along unchanged
+        // reads no argument from the dynamic frame region, so with its
+        // parameters known it loops even when the procedure has a region.
+        if (has_dynamic_frame and self.tail_calls.loop_params.len == 0) self.tail_calls.self_calls = .replace_frame;
         proc.tail_calls = .of(try self.tail_calls.finish(self.store));
     }
 

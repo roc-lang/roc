@@ -10085,18 +10085,26 @@ return. The query has no candidate or path-length limit and never walks unrelate
 control flow. Both Solved and Boxy lowering use this same construction contract.
 
 A proven call to the procedure being built is a self-tail site, recorded as
-described below, except in a `.boxy` procedure with a dynamic frame region:
-there the next call's dynamic arguments live in the region, which a loop
-iteration would allocate again while they are still read, so the call is
+described below, except in the `.boxy` cases that follow, where the call is
 lowered like a tail call to any other procedure and replaces the frame
 (see "Frame-Replacing Calls"), whose dynamic arguments each backend moves out
-of the dying frame. A `.boxy` self call is also lowered that way when it does
+of the dying frame. A `.boxy` self call is lowered that way when it does
 not pass the procedure's own descriptors, dictionaries, and literal arguments
 along unchanged: a polymorphic recursive call at other types needs the
 descriptors its body composes at entry composed again, which a loop jump never
-does. So is one that does not pass each dynamic parameter along unchanged: a
+does. The call passes them unchanged when its callee's type table is the
+procedure's own table at its own inputs, in order, which lowering recognizes
+on the table's recipe and passes as the table the procedure holds. So is one
+that does not pass each dynamic parameter along unchanged: a
 dynamic parameter is the address of storage its caller owns, which a loop jump
 cannot rebind, while a frame-replacing call moves its dynamic arguments. A
+self call that passes every dynamic parameter along unchanged reads no
+argument from the procedure's dynamic frame region, so it loops even when
+the procedure has one: the region is allocated once, in the entry chain, and
+each frame local's slot is written again only by its own definition. Only a
+`.boxy` procedure whose parameters lowering does not record (a generated
+worker other than a template's) replaces its frame on every self call when
+it has a region, since nothing tells it its arguments are not in it. A
 `.boxy` self-tail loop begins after the entry chain that composes those
 descriptors (`TailCalls.entry`), so every iteration shares them and each
 dynamic parameter's descriptor is defined before the loop binds it. A proven call to any other procedure has its continuation
