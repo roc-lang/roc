@@ -137,10 +137,10 @@ fn checkAppUnder(allocator: std.mem.Allocator, app: []const u8, extra: []const S
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(allocator, allocator, io),
+        strategy,
     );
     errdefer coord.deinit();
     coord.enable_hosted_transform = true;
-    coord.specialization_strategy = strategy;
     var arena = base.SingleThreadArena.init(allocator);
     errdefer arena.deinit();
     try coord.start();

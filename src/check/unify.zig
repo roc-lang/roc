@@ -725,10 +725,10 @@ const Unifier = struct {
             .structure => |flat_type| {
                 switch (flat_type) {
                     .record => |record| {
-                        return Content{ .structure = FlatType{ .record = try self.rowForMerge(.record, vars, record) } };
+                        return Content{ .structure = FlatType{ .record = try self.rowForMerge(.record, .of(vars), record) } };
                     },
                     .tag_union => |tag_union| {
-                        return Content{ .structure = FlatType{ .tag_union = try self.rowForMerge(.tag_union, vars, tag_union) } };
+                        return Content{ .structure = FlatType{ .tag_union = try self.rowForMerge(.tag_union, .of(vars), tag_union) } };
                     },
                     .fn_pure => |func| {
                         // A pure function's effect formula is discharged: every
@@ -755,9 +755,14 @@ const Unifier = struct {
 
     /// Create a new type variable *in this pool*
     fn fresh(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) std.mem.Allocator.Error!Var {
+        return self.freshAtRank(Rank.min(vars.a.desc.rank, vars.b.desc.rank), new_content);
+    }
+
+    /// `fresh` for a pair whose merged rank is `rank`.
+    fn freshAtRank(self: *Self, rank: Rank, new_content: Content) std.mem.Allocator.Error!Var {
         const var_ = try self.types_store.register(.{
             .content = new_content,
-            .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
+            .rank = rank,
         });
         _ = try self.scratch.fresh_vars.append(self.scratch.gpa, var_);
         return var_;
@@ -770,8 +775,12 @@ const Unifier = struct {
     /// no variable its own generalization visits, and would be quantified
     /// while the older node still refers to it.
     fn freshParent(self: *Self, vars: *const ResolvedVarDescs, content: Content) std.mem.Allocator.Error!Var {
-        const var_ = try self.fresh(vars, content);
-        const rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank);
+        return self.freshParentAtRank(Rank.min(vars.a.desc.rank, vars.b.desc.rank), content);
+    }
+
+    /// `freshParent` for a pair whose merged rank is `rank`.
+    fn freshParentAtRank(self: *Self, rank: Rank, content: Content) std.mem.Allocator.Error!Var {
+        const var_ = try self.freshAtRank(rank, content);
         switch (content) {
             .flex, .rigid, .field_presence, .err => {},
             .alias => |alias| for (self.types_store.sliceAliasAllArgs(alias)) |arg| try self.lowerRankTo(arg, rank),
@@ -842,7 +851,8 @@ const Unifier = struct {
     /// The in-flight pairs are indexed by their current resolved descriptors,
     /// re-indexed whenever a slot write may have changed a resolution, so a
     /// nested walk does not rescan the whole in-flight path per pair.
-    fn isPairVisited(self: *Self, a_var: Var, b_var: Var) std.mem.Allocator.Error!bool {
+    /// `a_desc` and `b_desc` are the descriptors the pair resolves to now.
+    fn isPairVisited(self: *Self, a_desc: types_mod.DescStoreIdx, b_desc: types_mod.DescStoreIdx) std.mem.Allocator.Error!bool {
         const scratch = self.scratch;
         // Visited vars are stored as pairs: [a1, b1, a2, b2, ...]
         const items = scratch.visited_vars.items();
@@ -851,13 +861,11 @@ const Unifier = struct {
             // Few pairs are in flight in nearly every unification, and
             // scanning them is cheaper than keeping the index in step. The
             // index catches up from `visited_index_pairs` once it is needed.
-            const a = self.types_store.resolveVar(a_var).desc_idx;
-            const b = self.types_store.resolveVar(b_var).desc_idx;
             var i: usize = 0;
             while (i + 1 < items.len) : (i += 2) {
-                const visited_a = self.types_store.resolveVar(items[i]).desc_idx;
-                const visited_b = self.types_store.resolveVar(items[i + 1]).desc_idx;
-                if ((a == visited_a and b == visited_b) or (a == visited_b and b == visited_a)) return true;
+                const visited_a = self.types_store.resolveDescIdx(items[i]);
+                const visited_b = self.types_store.resolveDescIdx(items[i + 1]);
+                if ((a_desc == visited_a and b_desc == visited_b) or (a_desc == visited_b and b_desc == visited_a)) return true;
             }
             return false;
         }
@@ -874,7 +882,7 @@ const Unifier = struct {
         }
         // Unordered keys match both orderings, since unify(A,B) is symmetric
         // with unify(B,A).
-        return scratch.visited_index.contains(self.visitedPairKey(a_var, b_var));
+        return scratch.visited_index.contains(descPairKey(a_desc, b_desc));
     }
 
     /// In-flight pairs up to this many are scanned; more are looked up in
@@ -882,8 +890,14 @@ const Unifier = struct {
     const visited_scan_limit = 16;
 
     fn visitedPairKey(self: *Self, a_var: Var, b_var: Var) VisitedPairKey {
-        const a = @backingInt(self.types_store.resolveVar(a_var).desc_idx);
-        const b = @backingInt(self.types_store.resolveVar(b_var).desc_idx);
+        return descPairKey(self.types_store.resolveDescIdx(a_var), self.types_store.resolveDescIdx(b_var));
+    }
+
+    /// The key of the pair of classes that resolve to `a_desc` and `b_desc`,
+    /// whichever way round.
+    fn descPairKey(a_desc: types_mod.DescStoreIdx, b_desc: types_mod.DescStoreIdx) VisitedPairKey {
+        const a = @backingInt(a_desc);
+        const b = @backingInt(b_desc);
         return .{ .low = @min(a, b), .high = @max(a, b) };
     }
 
@@ -924,7 +938,7 @@ const Unifier = struct {
     };
 
     fn scheduleGuardedPair(self: *Self, a_var: Var, b_var: Var, on_mismatch: MismatchHandling) std.mem.Allocator.Error!void {
-        try self.pushWorkFrame(.{ .mismatch_handler = on_mismatch });
+        try self.pushMismatchHandler(on_mismatch);
         try self.pushWorkFrame(.{ .guarded_pair = .{
             .a = a_var,
             .b = b_var,
@@ -938,7 +952,7 @@ const Unifier = struct {
         relation: RootRelation,
         on_mismatch: MismatchHandling,
     ) std.mem.Allocator.Error!void {
-        try self.pushWorkFrame(.{ .mismatch_handler = on_mismatch });
+        try self.pushMismatchHandler(on_mismatch);
         try self.pushWorkFrame(.{ .root_pair = .{
             .a = a_var,
             .b = b_var,
@@ -946,11 +960,45 @@ const Unifier = struct {
         } });
     }
 
+    /// Push the handler for a mismatch raised by the frames pushed after it.
+    /// A mismatch that propagates gets no frame: unwinding passes over such a
+    /// frame and running it does nothing, so the stack behaves the same
+    /// without it.
+    fn pushMismatchHandler(self: *Self, on_mismatch: MismatchHandling) std.mem.Allocator.Error!void {
+        if (on_mismatch == .propagate) return;
+        try self.pushWorkFrame(.{ .mismatch_handler = on_mismatch });
+    }
+
     fn scheduleMerge(self: *Self, vars: ResolvedVarDescs, content: Content) std.mem.Allocator.Error!void {
         try self.pushWorkFrame(.{ .merge = .{
             .vars = vars,
             .content = content,
         } });
+    }
+
+    /// Schedule the merge of `vars` into the content `kept`'s class stores,
+    /// for content `contentForMerge` returns as it is. `vars` was just
+    /// resolved, so the row stored for that class is still the encoding of
+    /// the content `vars` holds for it, and the frame carries the row in
+    /// place of the two decoded descriptors.
+    fn scheduleStoredMerge(self: *Self, vars: *const ResolvedVarDescs, kept: MergeSide) std.mem.Allocator.Error!void {
+        const kept_resolved = switch (kept) {
+            .a => vars.a,
+            .b => vars.b,
+        };
+        try self.pushWorkFrame(.{ .merge_stored = self.storedMerge(vars, kept_resolved) });
+    }
+
+    /// The merge of `vars` into the content `kept`, one of the two, holds.
+    fn storedMerge(self: *const Self, vars: *const ResolvedVarDescs, kept: ResolvedVarDesc) StoredMerge {
+        const content = self.types_store.rowAt(kept.desc_idx);
+        std.debug.assert(std.meta.eql(types_mod.Descriptor.decode(content, self.types_store).content, kept.desc.content));
+        return .{
+            .a = vars.a.var_,
+            .b = vars.b.var_,
+            .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
+            .content = content,
+        };
     }
 
     fn newMismatchFlag(self: *Self) std.mem.Allocator.Error!u32 {
@@ -1003,7 +1051,7 @@ const Unifier = struct {
             .guarded_pair => |pair| .{ .expected = pair.a, .actual = pair.b },
             .unify_vars => |pair| .{ .expected = pair.a, .actual = pair.b },
             .merge => |merge_frame| .{ .expected = merge_frame.vars.a.var_, .actual = merge_frame.vars.b.var_ },
-            .merge_to_nominal => |merge_frame| .{ .expected = merge_frame.vars.a.var_, .actual = merge_frame.vars.b.var_ },
+            .merge_stored => |merge_frame| .{ .expected = merge_frame.a, .actual = merge_frame.b },
             .mismatch_handler,
             .guard_handler,
             .restore_enclosing_records,
@@ -1030,7 +1078,7 @@ const Unifier = struct {
                 .b = self.types_store.resolvedAtRoot(pair.b, pair.b_desc),
             }),
             .merge => |merge_frame| try self.merge(&merge_frame.vars, merge_frame.content),
-            .merge_to_nominal => |merge_frame| try self.mergeToNominal(&merge_frame.vars, merge_frame.direction),
+            .merge_stored => |merge_frame| try self.types_store.unionStoringContent(merge_frame.a, merge_frame.b, merge_frame.content, merge_frame.rank),
             .same_alias_after_args => |post| try self.processSameAliasAfterArgs(post),
             .shared_fields_after_children => |post| try self.processSharedFieldsAfterChildren(post),
             .shared_tags_after_children => |post| try self.processSharedTagsAfterChildren(post),
@@ -1056,28 +1104,68 @@ const Unifier = struct {
         return constructorBackingIsAnonymous(self.types_store, expected) orelse error.TypeMismatch;
     }
 
-    fn processGuardedPair(self: *Self, a_var: Var, b_var: Var) Error!void {
-        // Only the two classes' words are read here. Their content is decoded
-        // when the pair's `unify_vars` frame runs, if it comes to that.
-        const a = self.types_store.resolveVarWordAndCompressPath(a_var);
-        const b = self.types_store.resolveVarWordAndCompressPath(b_var);
-        if (a.desc_idx == b.desc_idx) return;
+    fn processGuardedPair(self: *Self, first_a_var: Var, first_b_var: Var) Error!void {
+        var a_var = first_a_var;
+        var b_var = first_b_var;
+        while (true) {
+            // Only the two classes' words are read here. Their content is
+            // decoded when the pair's `unify_vars` frame runs, if it comes to
+            // that.
+            const a = self.types_store.resolveVarWordAndCompressPath(a_var);
+            const b = self.types_store.resolveVarWordAndCompressPath(b_var);
+            if (a.desc_idx == b.desc_idx) return;
 
-        // A deferred requirement callable is linked to its copy before
-        // anything relates it.
-        if (a.word.flags().deferred_callable or b.word.flags().deferred_callable) {
-            try self.linkDeferredCallable(a);
-            try self.linkDeferredCallable(b);
-            return self.processGuardedPair(a_var, b_var);
-        }
-        if (try self.isPairVisited(a_var, b_var)) {
+            // A deferred requirement callable is linked to its copy before
+            // anything relates it.
+            if (a.word.flags().deferred_callable or b.word.flags().deferred_callable) {
+                try self.linkDeferredCallable(a);
+                try self.linkDeferredCallable(b);
+                continue;
+            }
+            if (try self.isPairVisited(a.desc_idx, b.desc_idx)) {
+                return;
+            }
+
+            if (self.storedContentMerge(a, b)) |kept| {
+                return self.types_store.unionKeepingContent(a.var_, b.var_, kept, Rank.min(a.word.rank, b.word.rank));
+            }
+
+            switch (try self.relateThroughAlias(a_var, b_var, a, b)) {
+                .related => return,
+                .relate => |pair| {
+                    a_var = pair.a;
+                    b_var = pair.b;
+                    continue;
+                },
+                .not_through_alias => {},
+            }
+            if (try self.relateSameNominalApplications(a_var, b_var, a, b)) return;
+            switch (try self.relateSameTagRows(a_var, b_var, a, b)) {
+                .related => return,
+                .relate_exts => |exts| {
+                    a_var = exts.a;
+                    b_var = exts.b;
+                    continue;
+                },
+                .not_same_rows => {},
+            }
+
+            try self.enterGuardedPair(a_var, b_var);
+            try self.pushWorkFrame(.{ .unify_vars = .{
+                .a = a.var_,
+                .a_desc = a.desc_idx,
+                .b = b.var_,
+                .b_desc = b.desc_idx,
+            } });
             return;
         }
+    }
 
-        if (self.storedContentMerge(a, b)) |kept| {
-            return self.types_store.unionKeepingContent(a.var_, b.var_, kept, Rank.min(a.word.rank, b.word.rank));
-        }
-
+    /// Put the pair `a_var`, `b_var` in flight: until the frames pushed after
+    /// this have run, the pair is not related again, and it is the pair whose
+    /// unresolved variables a deferred constraint or a determined literal
+    /// names.
+    fn enterGuardedPair(self: *Self, a_var: Var, b_var: Var) std.mem.Allocator.Error!void {
         const visited_vars_len: u32 = @intCast(self.scratch.visited_vars.items().len);
         _ = try self.scratch.visited_vars.append(self.scratch.gpa, a_var);
         _ = try self.scratch.visited_vars.append(self.scratch.gpa, b_var);
@@ -1092,12 +1180,250 @@ const Unifier = struct {
             .saved_unresolved_a = saved_unresolved_a,
             .saved_unresolved_b = saved_unresolved_b,
         } });
-        try self.pushWorkFrame(.{ .unify_vars = .{
+    }
+
+    /// What relating a pair comes to when an alias is all that stands
+    /// between it and its parts.
+    const ThroughAlias = union(enum) {
+        /// The pair is related, or its relation is scheduled.
+        related,
+        /// The pair is in flight, and relating it is relating this pair.
+        relate: struct { a: Var, b: Var },
+        /// The pair needs `unifyVars`.
+        not_through_alias,
+    };
+
+    /// Relate the pair `a_var`, `b_var`, resolved as `a` and `b` and not in
+    /// flight, when `unifyVars` would do nothing for it but look through an
+    /// alias. These are its cases with an alias on either side whose other
+    /// side is an alias, a rigid or a structure: no bounded row extension
+    /// is involved and no literal is determined, since neither side is a
+    /// flex.
+    ///
+    /// An alias is transparent, so the pair relates as the alias's backing
+    /// and the other side do (`unifyAlias`, `unifyRigid`, `unifyStructure`),
+    /// except that two uses of one alias relate argument by argument and then
+    /// merge into `b`'s (`unifyTwoAliases`). Two uses whose arguments are
+    /// already the same classes have no argument left to fail, so they go
+    /// straight to what follows the arguments (`processSameAliasAfterArgs`).
+    fn relateThroughAlias(self: *Self, a_var: Var, b_var: Var, a: ResolvedVarWord, b: ResolvedVarWord) std.mem.Allocator.Error!ThroughAlias {
+        const store = self.types_store;
+        if (a.word.kind != .alias) {
+            if (b.word.kind != .alias or !relatesAsAliasBacking(a.word.kind)) return .not_through_alias;
+            try self.enterGuardedPair(a_var, b_var);
+            return .{ .relate = .{ .a = a.var_, .b = store.aliasBackingVarAt(b.desc_idx) } };
+        }
+        if (b.word.kind != .alias) {
+            if (!relatesAsAliasBacking(b.word.kind)) return .not_through_alias;
+            try self.enterGuardedPair(a_var, b_var);
+            return .{ .relate = .{ .a = store.aliasBackingVarAt(a.desc_idx), .b = b.var_ } };
+        }
+
+        const a_alias = store.aliasAt(a.desc_idx);
+        const b_alias = store.aliasAt(b.desc_idx);
+        const a_backing_var = store.getAliasBackingVar(a_alias);
+        const b_backing_var = store.getAliasBackingVar(b_alias);
+        if (!sameAliasIdentity(a_alias, b_alias)) {
+            try self.enterGuardedPair(a_var, b_var);
+            return .{ .relate = .{ .a = a_backing_var, .b = b_backing_var } };
+        }
+
+        var a_args_range = a_alias.vars.nonempty;
+        a_args_range.dropFirstElem();
+        var b_args_range = b_alias.vars.nonempty;
+        b_args_range.dropFirstElem();
+        // A different number of arguments is a mismatch, which `unifyVars`
+        // raises.
+        if (a_args_range.len() != b_args_range.len()) return .not_through_alias;
+
+        const merge_after: StoredMerge = .{
             .a = a.var_,
-            .a_desc = a.desc_idx,
             .b = b.var_,
-            .b_desc = b.desc_idx,
+            .rank = Rank.min(a.word.rank, b.word.rank),
+            .content = store.rowAt(b.desc_idx),
+        };
+        if (!self.sameClasses(a_args_range, b_args_range)) {
+            try self.enterGuardedPair(a_var, b_var);
+            try self.scheduleSameAliasArgs(merge_after, a_args_range, b_args_range, a_backing_var, b_backing_var);
+            return .related;
+        }
+        if (store.resolveDescIdx(a_backing_var) == store.resolveDescIdx(b_backing_var)) {
+            try store.unionStoringContent(merge_after.a, merge_after.b, merge_after.content, merge_after.rank);
+            return .related;
+        }
+        try self.enterGuardedPair(a_var, b_var);
+        try self.pushWorkFrame(.{ .merge_stored = merge_after });
+        try self.pushMismatchHandler(.ignore);
+        return .{ .relate = .{ .a = a_backing_var, .b = b_backing_var } };
+    }
+
+    /// Relate the pair `a_var`, `b_var`, resolved as `a` and `b` and not in
+    /// flight, when they are two applications of one valid declaration with
+    /// the same number of arguments, which is `unifyNominalType`'s successful
+    /// case: the arguments relate pairwise and the pair merges into `b`'s
+    /// application. Applications whose arguments are already the same classes
+    /// merge at once. False when the pair needs `unifyVars`: any other pair,
+    /// including every one that is a mismatch or involves an invalid
+    /// declaration.
+    fn relateSameNominalApplications(self: *Self, a_var: Var, b_var: Var, a: ResolvedVarWord, b: ResolvedVarWord) std.mem.Allocator.Error!bool {
+        const store = self.types_store;
+        if (a.word.kind != .nominal_type or b.word.kind != .nominal_type) return false;
+        // One identity row is one declaration. Two rows can still name one
+        // declaration (`sameNominalIdentity`), which `unifyVars` decides.
+        if (store.nominalIdentityRowAt(a.desc_idx) != store.nominalIdentityRowAt(b.desc_idx)) return false;
+        const a_type = store.nominalAt(a.desc_idx);
+        const b_type = store.nominalAt(b.desc_idx);
+        if (a_type.args.count != b_type.args.count) return false;
+        const decl_idx = store.lookupNominalDecl(a_type);
+        if (decl_idx) |decl| if (!store.getNominalDecl(decl).isValid()) return false;
+
+        const rank = Rank.min(a.word.rank, b.word.rank);
+        if (self.sameClasses(a_type.args, b_type.args)) {
+            try store.unionKeepingContent(a.var_, b.var_, .b, rank);
+            return true;
+        }
+        try self.enterGuardedPair(a_var, b_var);
+        try self.pushWorkFrame(.{ .merge_stored = .{
+            .a = a.var_,
+            .b = b.var_,
+            .rank = rank,
+            .content = store.rowAt(b.desc_idx),
         } });
+        try self.scheduleNominalArgs(a_type, b_type, decl_idx);
+        return true;
+    }
+
+    /// What relating two tag unions comes to when their stored rows hold the
+    /// same tags.
+    const SameTagRows = union(enum) {
+        /// The pair is related.
+        related,
+        /// The pair is in flight with its tags scheduled, and what is left
+        /// is relating these two extensions.
+        relate_exts: struct { a: Var, b: Var },
+        /// The pair needs `unifyVars`.
+        not_same_rows,
+    };
+
+    /// Relate the pair `a_var`, `b_var`, resolved as `a` and `b` and not in
+    /// flight, when they are two tag unions whose stored rows are each a
+    /// whole row, with no further row or alias as extension, and hold the
+    /// same names in the same order, already ordered by name, each with as
+    /// many payloads on both sides. That is `unifyTwoTagUnions` when
+    /// gathering finds each row as it is stored and partitioning finds every
+    /// tag shared: the payloads relate pairwise, then the extensions, and the
+    /// pair merges into a row of the shared tags over `a`'s extension. The
+    /// shared tags are read from the two stored rows, and a pair whose
+    /// payloads and extensions are already the same classes merges at once.
+    fn relateSameTagRows(self: *Self, a_var: Var, b_var: Var, a: ResolvedVarWord, b: ResolvedVarWord) Error!SameTagRows {
+        if (a.word.kind != .tag_union or b.word.kind != .tag_union) return .not_same_rows;
+        const store = self.types_store;
+        const a_row = store.tagUnionAt(a.desc_idx);
+        const b_row = store.tagUnionAt(b.desc_idx);
+        if (a_row.tags.count != b_row.tags.count) return .not_same_rows;
+        if (!self.endsTagRow(a_row.ext) or !self.endsTagRow(b_row.ext)) return .not_same_rows;
+
+        const in_both = &self.scratch.in_both_tags;
+        const both_start: u32 = @intCast(in_both.len());
+        var children_related = store.resolveDescIdx(a_row.ext) == store.resolveDescIdx(b_row.ext);
+        {
+            const a_tags = store.tags.sliceRange(a_row.tags);
+            const b_tags = store.tags.sliceRange(b_row.tags);
+            const a_names = a_tags.items(.name);
+            for (a_names, b_tags.items(.name), a_tags.items(.args), b_tags.items(.args), 0..) |a_name, b_name, a_args, b_args, index| {
+                if (!a_name.eql(b_name) or a_args.count != b_args.count) return .not_same_rows;
+                if (index != 0 and Ident.textOrder(self.ident_store.getText(a_names[index - 1]), self.ident_store.getText(a_name)) == .gt) {
+                    return .not_same_rows;
+                }
+                children_related = children_related and self.sameClasses(a_args, b_args);
+            }
+            try in_both.ensureUnusedCapacity(self.scratch.gpa, a_tags.len);
+            for (0..a_tags.len) |index| {
+                _ = in_both.appendAssumeCapacity(.{ .a = a_tags.get(index), .b = b_tags.get(index) });
+            }
+        }
+        const shared = in_both.rangeToEnd(both_start);
+        const pair: MergePair = .{ .a = a.var_, .b = b.var_, .rank = Rank.min(a.word.rank, b.word.rank) };
+
+        if (children_related) {
+            try self.processSharedTagsAfterChildren(.{
+                .pair = pair,
+                .shared_tags_range = shared,
+                .mb_a_extended_tags = null,
+                .mb_b_extended_tags = null,
+                .ext = a_row.ext,
+            });
+            return .related;
+        }
+        try self.enterGuardedPair(a_var, b_var);
+        try self.unifySharedTags(pair, shared, null, null, a_row.ext);
+        return .{ .relate_exts = .{ .a = a_row.ext, .b = b_row.ext } };
+    }
+
+    /// Whether gathering a tag row stops at `ext`: its class is neither an
+    /// alias, which gathering looks through, nor a further tag row.
+    fn endsTagRow(self: *const Self, ext: Var) bool {
+        return switch (self.types_store.kindOf(ext)) {
+            .alias, .tag_union => false,
+            .flex, .rigid, .field_presence, .err, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => true,
+        };
+    }
+
+    /// Whether a class of this kind relates to an alias as it relates to the
+    /// alias's backing, with nothing else to do first.
+    fn relatesAsAliasBacking(kind: types_mod.types.ContentKind) bool {
+        return switch (kind) {
+            .rigid, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => true,
+            // A flex that reaches here is not plain: it may be a bounded row
+            // extension, carry a literal the relation determines, or defer
+            // constraints. A presence fact never relates to an alias, and an
+            // erroneous type relates to nothing.
+            .flex, .field_presence, .err => false,
+            // Two aliases relate by their identities.
+            .alias => false,
+        };
+    }
+
+    /// Whether each variable of `a_vars` is already in the class of the
+    /// variable of `b_vars` at its position, so that relating the two ranges
+    /// pairwise relates nothing. The ranges have the same length.
+    fn sameClasses(self: *const Self, a_vars: Var.SafeList.Range, b_vars: Var.SafeList.Range) bool {
+        std.debug.assert(a_vars.len() == b_vars.len());
+        for (self.types_store.sliceVars(a_vars), self.types_store.sliceVars(b_vars)) |a_arg, b_arg| {
+            if (self.types_store.resolveDescIdx(a_arg) != self.types_store.resolveDescIdx(b_arg)) return false;
+        }
+        return true;
+    }
+
+    /// Schedule the argument pairs of two uses of one alias, and what follows
+    /// them: `merge` and the relation of the two backings.
+    fn scheduleSameAliasArgs(
+        self: *Self,
+        merge_after: StoredMerge,
+        a_args_range: Var.SafeList.Range,
+        b_args_range: Var.SafeList.Range,
+        a_backing_var: Var,
+        b_backing_var: Var,
+    ) std.mem.Allocator.Error!void {
+        const did_arg_error_flag = try self.newMismatchFlag();
+        // Rust compiler comment:
+        // Don't report real_var mismatches, because they must always be surfaced higher, from the argument types.
+        try self.pushWorkFrame(.{ .same_alias_after_args = .{
+            .merge = merge_after,
+            .a_backing_var = a_backing_var,
+            .b_backing_var = b_backing_var,
+            .did_arg_error_flag = did_arg_error_flag,
+        } });
+
+        var i: u32 = a_args_range.len();
+        while (i > 0) {
+            i -= 1;
+            try self.scheduleGuardedPair(
+                self.types_store.getVarAt(a_args_range, i),
+                self.types_store.getVarAt(b_args_range, i),
+                .{ .set_flag = did_arg_error_flag },
+            );
+        }
     }
 
     /// The side whose stored content is what relating `a` and `b` merges
@@ -1336,6 +1662,14 @@ const Unifier = struct {
         defer trace.end();
 
         try self.scheduleGuardedPair(a_var, b_var, .propagate);
+    }
+
+    /// `unifyGuarded` for the last pair a relation schedules, when nothing
+    /// follows it that can fail. That pair's frame would be the next to run,
+    /// so the pair is related now, above the frames already pushed, and gets
+    /// no frame of its own.
+    fn unifyGuardedNext(self: *Self, a_var: Var, b_var: Var) Error!void {
+        try self.processGuardedPair(a_var, b_var);
     }
 
     /// Unify two vars
@@ -1598,8 +1932,6 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        const did_arg_error_flag = try self.newMismatchFlag();
-
         var a_args_range = a_alias.vars.nonempty;
         a_args_range.dropFirstElem();
         var b_args_range = b_alias.vars.nonempty;
@@ -1609,26 +1941,13 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        // Rust compiler comment:
-        // Don't report real_var mismatches, because they must always be surfaced higher, from the argument types.
-        const a_backing_var = self.types_store.getAliasBackingVar(a_alias);
-        const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
-        try self.pushWorkFrame(.{ .same_alias_after_args = .{
-            .vars = vars.*,
-            .a_backing_var = a_backing_var,
-            .b_backing_var = b_backing_var,
-            .did_arg_error_flag = did_arg_error_flag,
-        } });
-
-        var i: u32 = a_args_range.len();
-        while (i > 0) {
-            i -= 1;
-            try self.scheduleGuardedPair(
-                self.types_store.getVarAt(a_args_range, i),
-                self.types_store.getVarAt(b_args_range, i),
-                .{ .set_flag = did_arg_error_flag },
-            );
-        }
+        try self.scheduleSameAliasArgs(
+            self.storedMerge(vars, vars.b),
+            a_args_range,
+            b_args_range,
+            self.types_store.getAliasBackingVar(a_alias),
+            self.types_store.getAliasBackingVar(b_alias),
+        );
     }
 
     // Unify structure //
@@ -1953,7 +2272,7 @@ const Unifier = struct {
         }
 
         // Unify element types first (recursion guard in unifyGuarded prevents infinite loops)
-        try self.scheduleMerge(vars.*, vars.b.desc.content);
+        try self.scheduleStoredMerge(vars, .b);
         var i: u32 = a_tuple.elems.len();
         while (i > 0) {
             i -= 1;
@@ -1990,7 +2309,18 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        try self.scheduleMerge(vars.*, vars.b.desc.content);
+        try self.scheduleStoredMerge(vars, .b);
+        try self.scheduleNominalArgs(a_type, b_type, decl_idx);
+    }
+
+    /// Schedule the argument pairs of two applications of the declaration
+    /// `decl_idx`, if they have one, with the same number of arguments.
+    fn scheduleNominalArgs(
+        self: *Self,
+        a_type: NominalType,
+        b_type: NominalType,
+        decl_idx: ?types_mod.NominalDecl.Idx,
+    ) std.mem.Allocator.Error!void {
         // A body-local declaration's trailing context arguments (design.md
         // "Body-Local Type Context") name the instantiation of the enclosing
         // functions its values belong to.
@@ -2123,14 +2453,15 @@ const Unifier = struct {
         return .{ .opened = opened };
     }
 
-    /// After a structural value successfully unifies with a nominal's backing,
-    /// merge the result to the nominal side—the nominal "wins" over the
-    /// anonymous record/tag it lifted from.
-    fn mergeToNominal(self: *Self, vars: *const ResolvedVarDescs, direction: NominalDirection) Error!void {
-        switch (direction) {
-            .a_is_nominal => try self.merge(vars, vars.a.desc.content),
-            .b_is_nominal => try self.merge(vars, vars.b.desc.content),
-        }
+    /// Schedule the merge that follows a structural value unifying with a
+    /// nominal's backing, for when the children scheduled after it have been
+    /// related: the result merges to the nominal side, so the nominal "wins"
+    /// over the anonymous record/tag it lifted from.
+    fn scheduleMergeToNominal(self: *Self, vars: *const ResolvedVarDescs, direction: NominalDirection) std.mem.Allocator.Error!void {
+        try self.scheduleStoredMerge(vars, switch (direction) {
+            .a_is_nominal => .a,
+            .b_is_nominal => .b,
+        });
     }
 
     /// A nominal value never lifts into structure written in an opened nominal
@@ -2155,7 +2486,7 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        try self.scheduleMerge(post.vars, post.vars.b.desc.content);
+        try self.pushWorkFrame(.{ .merge_stored = post.merge });
         try self.scheduleGuardedPair(post.a_backing_var, post.b_backing_var, .ignore);
     }
 
@@ -2168,12 +2499,12 @@ const Unifier = struct {
         }
     };
 
-    fn rowExtMergeTargets(self: *Self, vars: *const ResolvedVarDescs) RowMergeTargets {
+    fn rowExtMergeTargets(self: *Self, pair: MergePair) RowMergeTargets {
         // Both equivalence classes acquire the merged content, regardless of
         // which descriptor slot survives the union.
         return .{
-            .a = self.types_store.resolveVar(vars.a.var_).desc_idx,
-            .b = self.types_store.resolveVar(vars.b.var_).desc_idx,
+            .a = self.types_store.resolveDescIdx(pair.a),
+            .b = self.types_store.resolveDescIdx(pair.b),
         };
     }
 
@@ -2214,8 +2545,8 @@ const Unifier = struct {
         return kind.row(entries, ext);
     }
 
-    fn rowForMerge(self: *Self, comptime kind: RowKind, vars: *const ResolvedVarDescs, start: kind.Row()) std.mem.Allocator.Error!kind.Row() {
-        const targets = self.rowExtMergeTargets(vars);
+    fn rowForMerge(self: *Self, comptime kind: RowKind, pair: MergePair, start: kind.Row()) std.mem.Allocator.Error!kind.Row() {
+        const targets = self.rowExtMergeTargets(pair);
         if (!self.rowExtReachesDesc(kind, start.ext, targets)) return start;
 
         var range = try self.scratch.copyGatherFromMultiList(
@@ -2235,14 +2566,14 @@ const Unifier = struct {
             if (targets.contains(resolved.desc_idx)) {
                 const spliced = if (resolved.desc_idx == targets.a) &spliced_a else &spliced_b;
                 if (spliced.*) {
-                    return try self.finishRowForMerge(kind, range, try self.freshParent(vars, resolved.desc.content));
+                    return try self.finishRowForMerge(kind, range, try self.freshParentAtRank(pair.rank, resolved.desc.content));
                 }
 
                 spliced.* = true;
                 const target_row = switch (resolved.desc.content) {
                     .structure => |flat_type| kind.rowOf(flat_type),
                     .flex, .rigid, .alias, .field_presence, .err => null,
-                } orelse return try self.finishRowForMerge(kind, range, try self.freshParent(vars, resolved.desc.content));
+                } orelse return try self.finishRowForMerge(kind, range, try self.freshParentAtRank(pair.rank, resolved.desc.content));
                 try self.mergeRowEntriesIntoScratch(kind, &range, kind.entriesOf(target_row));
                 ext_var = target_row.ext;
                 continue;
@@ -2279,7 +2610,7 @@ const Unifier = struct {
             }});
         }
 
-        try self.mergeRowAppendedFrom(.record, &post.vars, range_start, post.mb_a_extended_fields, post.mb_b_extended_fields, post.ext);
+        try self.mergeRowAppendedFrom(.record, post.pair, range_start, post.mb_a_extended_fields, post.mb_b_extended_fields, post.ext);
     }
 
     fn processSharedTagsAfterChildren(self: *Self, post: SharedTagsAfterChildren) Error!void {
@@ -2296,7 +2627,7 @@ const Unifier = struct {
             }});
         }
 
-        try self.mergeRowAppendedFrom(.tag_union, &post.vars, range_start, post.mb_a_extended_tags, post.mb_b_extended_tags, post.ext);
+        try self.mergeRowAppendedFrom(.tag_union, post.pair, range_start, post.mb_a_extended_tags, post.mb_b_extended_tags, post.ext);
     }
 
     /// Append each side's unshared entries after the shared entries already
@@ -2304,7 +2635,7 @@ const Unifier = struct {
     fn mergeRowAppendedFrom(
         self: *Self,
         comptime kind: RowKind,
-        vars: *const ResolvedVarDescs,
+        pair: MergePair,
         range_start: u32,
         mb_a_extended: ?kind.Entry().SafeList.Range,
         mb_b_extended: ?kind.Entry().SafeList.Range,
@@ -2317,7 +2648,11 @@ const Unifier = struct {
             _ = try kind.appendToStore(self.types_store, self.scratch.rowList(kind, "only_in_b_").sliceRange(extended));
         }
 
-        try self.merge(vars, kind.content(kind.row(kind.storeEntries(self.types_store).rangeToEnd(range_start), ext)));
+        const appended = kind.row(kind.storeEntries(self.types_store).rangeToEnd(range_start), ext);
+        try self.types_store.union_(pair.a, pair.b, .{
+            .content = kind.content(try self.rowForMerge(kind, pair, appended)),
+            .rank = pair.rank,
+        });
     }
 
     /// A fresh row holding `entries` over `ext`.
@@ -2377,10 +2712,7 @@ const Unifier = struct {
             // The anon_tag_union should also be empty for unification to succeed
             if (anon_tag_union.tags.len() == 0) {
                 // Both are empty - unify the extension variables
-                try self.pushWorkFrame(.{ .merge_to_nominal = .{
-                    .vars = vars.*,
-                    .direction = direction,
-                } });
+                try self.scheduleMergeToNominal(vars, direction);
                 switch (direction) {
                     .a_is_nominal => try self.unifyGuarded(nominal_backing_var, anon_tag_union.ext),
                     .b_is_nominal => try self.unifyGuarded(anon_tag_union.ext, nominal_backing_var),
@@ -2430,10 +2762,7 @@ const Unifier = struct {
         }
 
         // Unification succeeded—the nominal type wins.
-        try self.pushWorkFrame(.{ .merge_to_nominal = .{
-            .vars = vars.*,
-            .direction = direction,
-        } });
+        try self.scheduleMergeToNominal(vars, direction);
 
         // Now safe to proceed with full unification, each side keeping the
         // role it has in `vars`.
@@ -2509,10 +2838,7 @@ const Unifier = struct {
             if (anon_record_fields.len() == 0) {
                 // Both are empty—merge to the NOMINAL type, and the anonymous
                 // row's tail commits to the empty record.
-                try self.pushWorkFrame(.{ .merge_to_nominal = .{
-                    .vars = vars.*,
-                    .direction = direction,
-                } });
+                try self.scheduleMergeToNominal(vars, direction);
                 const empty_var = try self.fresh(vars, .{ .structure = .empty_record });
                 try self.unifyGuarded(anon_record_ext, empty_var);
                 return;
@@ -2543,10 +2869,7 @@ const Unifier = struct {
         }
 
         // Unification succeeded—the nominal type wins.
-        try self.pushWorkFrame(.{ .merge_to_nominal = .{
-            .vars = vars.*,
-            .direction = direction,
-        } });
+        try self.scheduleMergeToNominal(vars, direction);
 
         // Unify the record fields
         try self.retainOuterRecordMismatch(vars, opened_backing, direction);
@@ -3551,12 +3874,28 @@ const Unifier = struct {
         const a_entries = gathered.sliceRange(a_range);
         self.sortRowByName(Entry, a_entries);
         const b_entries = gathered.sliceRange(b_range);
-        self.sortRowByName(Entry, b_entries);
 
         // Get the start of index of the new range
         const a_start: u32 = @intCast(only_in_a.len());
         const b_start: u32 = @intCast(only_in_b.len());
         const both_start: u32 = @intCast(in_both.len());
+
+        // Two rows that hold the same names in the same positions are in the
+        // same order, which is `a`'s sorted order, and share every entry. An
+        // identifier is its text's one interned index, so no text is compared
+        // to see this.
+        if (sameNamesInOrder(Entry, a_entries, b_entries)) {
+            try in_both.ensureUnusedCapacity(scratch.gpa, a_entries.len);
+            for (a_entries, b_entries) |a_next, b_next| {
+                _ = in_both.appendAssumeCapacity(.{ .a = a_next, .b = b_next });
+            }
+            return .{
+                .only_in_a = only_in_a.rangeToEnd(a_start),
+                .only_in_b = only_in_b.rangeToEnd(b_start),
+                .in_both = in_both.rangeToEnd(both_start),
+            };
+        }
+        self.sortRowByName(Entry, b_entries);
 
         // Iterate over the entries in order, grouping them
         var a_i: usize = 0;
@@ -3564,7 +3903,11 @@ const Unifier = struct {
         while (a_i < a_entries.len and b_i < b_entries.len) {
             const a_next = a_entries[a_i];
             const b_next = b_entries[b_i];
-            switch (Entry.orderByName(self.ident_store, a_next, b_next)) {
+            const order: std.math.Order = if (a_next.name.eql(b_next.name))
+                .eq
+            else
+                Entry.orderByName(self.ident_store, a_next, b_next);
+            switch (order) {
                 .eq => {
                     _ = try in_both.append(scratch.gpa, .{ .a = a_next, .b = b_next });
                     a_i += 1;
@@ -3597,6 +3940,16 @@ const Unifier = struct {
             .only_in_b = only_in_b.rangeToEnd(b_start),
             .in_both = in_both.rangeToEnd(both_start),
         };
+    }
+
+    /// Whether `a_entries` and `b_entries` hold the same names, position by
+    /// position.
+    fn sameNamesInOrder(comptime Entry: type, a_entries: []const Entry, b_entries: []const Entry) bool {
+        if (a_entries.len != b_entries.len) return false;
+        for (a_entries, b_entries) |a_entry, b_entry| {
+            if (!a_entry.name.eql(b_entry.name)) return false;
+        }
+        return true;
     }
 
     /// Order entries by name text. A row gathered from one built by an
@@ -3747,7 +4100,7 @@ const Unifier = struct {
 
         const did_field_error_flag = try self.newMismatchFlag();
         try self.pushWorkFrame(.{ .shared_fields_after_children = .{
-            .vars = vars.*,
+            .pair = .of(vars),
             .shared_fields_range = shared_fields_range,
             .mb_a_extended_fields = mb_a_extended_fields,
             .mb_b_extended_fields = mb_b_extended_fields,
@@ -3985,7 +4338,7 @@ const Unifier = struct {
                 // Unify shared tags
                 // This copies tags from scratch into type_store
                 try self.unifySharedTags(
-                    vars,
+                    .of(vars),
                     partitioned.in_both,
                     null,
                     null,
@@ -3993,7 +4346,7 @@ const Unifier = struct {
                 );
 
                 // Unify exts
-                try self.unifyGuarded(a_gathered_tags.ext, b_gathered_tags.ext);
+                try self.unifyGuardedNext(a_gathered_tags.ext, b_gathered_tags.ext);
             },
             .a_extends_b => {
                 // Create a new variable of a tag_union with only a's uniq tags
@@ -4003,7 +4356,7 @@ const Unifier = struct {
                 // Unify shared tags
                 // This copies tags from scratch into type_store
                 try self.unifySharedTags(
-                    vars,
+                    .of(vars),
                     partitioned.in_both,
                     null,
                     null,
@@ -4011,7 +4364,7 @@ const Unifier = struct {
                 );
 
                 // Unify the sub tag_union with b's ext
-                try self.unifyGuarded(only_in_a_var, b_gathered_tags.ext);
+                try self.unifyGuardedNext(only_in_a_var, b_gathered_tags.ext);
             },
             .b_extends_a => {
                 // Create a new variable of a tag_union with only b's uniq tags
@@ -4021,7 +4374,7 @@ const Unifier = struct {
                 // Unify shared tags
                 // This copies tags from scratch into type_store
                 try self.unifySharedTags(
-                    vars,
+                    .of(vars),
                     partitioned.in_both,
                     null,
                     null,
@@ -4029,7 +4382,7 @@ const Unifier = struct {
                 );
 
                 // Unify the sub tag_union with a's ext
-                try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
+                try self.unifyGuardedNext(a_gathered_tags.ext, only_in_b_var);
             },
             .both_extend => {
                 // Create a shared extension variable first
@@ -4051,7 +4404,7 @@ const Unifier = struct {
                 // callers see, and the extension chain via only_in_a_var/only_in_b_var
                 // is for proper type equality, not for visibility
                 try self.unifySharedTags(
-                    vars,
+                    .of(vars),
                     partitioned.in_both,
                     partitioned.only_in_a,
                     partitioned.only_in_b,
@@ -4060,7 +4413,7 @@ const Unifier = struct {
 
                 // Unify the sub tag_unions with exts
                 try self.unifyGuarded(only_in_a_var, b_gathered_tags.ext);
-                try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
+                try self.unifyGuardedNext(a_gathered_tags.ext, only_in_b_var);
             },
         }
     }
@@ -4069,7 +4422,7 @@ const Unifier = struct {
     /// Then merge a new tag_union with both shared+extended tags
     fn unifySharedTags(
         self: *Self,
-        vars: *const ResolvedVarDescs,
+        pair: MergePair,
         shared_tags_range: TwoTags.SafeList.Range, // Into scratch.in_both_tags
         mb_a_extended_tags: ?Tag.SafeList.Range, // Into scratch.only_in_a_tags
         mb_b_extended_tags: ?Tag.SafeList.Range, // Into scratch.only_in_b_tags
@@ -4079,7 +4432,7 @@ const Unifier = struct {
         defer trace.end();
 
         try self.pushWorkFrame(.{ .shared_tags_after_children = .{
-            .vars = vars.*,
+            .pair = pair,
             .shared_tags_range = shared_tags_range,
             .mb_a_extended_tags = mb_a_extended_tags,
             .mb_b_extended_tags = mb_b_extended_tags,
@@ -4689,6 +5042,11 @@ pub const DeferredConstraintCheck = struct {
     /// The checker relation that queued this obligation; the problems its
     /// resolution records belong to that relation (`problem.RelationOwner`).
     relation_owner: problem_mod.RelationOwner = .none,
+    /// The source region of `var_`, where the obligation's resolution reports
+    /// and which the variables it instantiates take. A variable's region
+    /// never changes, so the checker reads it once, where the obligation
+    /// enters the deferred queue, and stamps it here.
+    region: base.Region = base.Region.zero(),
 
     pub const SafeList = MkSafeList(@This());
 };
@@ -4707,15 +5065,36 @@ const MismatchHandling = union(enum) {
     record_local_context: types_mod.NominalDecl.Idx,
 };
 
+/// The merge of two classes into content one of them stored when the merge
+/// was scheduled: `content`'s kind and payload, at `rank`.
+const StoredMerge = struct {
+    a: Var,
+    b: Var,
+    rank: Rank,
+    content: types_mod.Descriptor.Row,
+};
+
 const SameAliasAfterArgs = struct {
-    vars: ResolvedVarDescs,
+    /// The merge into `b`'s alias, which runs once the backings are related.
+    merge: StoredMerge,
     a_backing_var: Var,
     b_backing_var: Var,
     did_arg_error_flag: u32,
 };
 
+/// The two classes a merge relates and the rank it merges them at.
+const MergePair = struct {
+    a: Var,
+    b: Var,
+    rank: Rank,
+
+    fn of(vars: *const ResolvedVarDescs) MergePair {
+        return .{ .a = vars.a.var_, .b = vars.b.var_, .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank) };
+    }
+};
+
 const SharedFieldsAfterChildren = struct {
-    vars: ResolvedVarDescs,
+    pair: MergePair,
     shared_fields_range: TwoRecordFieldsSafeList.Range,
     mb_a_extended_fields: ?RecordFieldSafeList.Range,
     mb_b_extended_fields: ?RecordFieldSafeList.Range,
@@ -4724,7 +5103,7 @@ const SharedFieldsAfterChildren = struct {
 };
 
 const SharedTagsAfterChildren = struct {
-    vars: ResolvedVarDescs,
+    pair: MergePair,
     shared_tags_range: TwoTags.SafeList.Range,
     mb_a_extended_tags: ?Tag.SafeList.Range,
     mb_b_extended_tags: ?Tag.SafeList.Range,
@@ -4764,10 +5143,7 @@ const WorkFrame = union(enum) {
         vars: ResolvedVarDescs,
         content: Content,
     },
-    merge_to_nominal: struct {
-        vars: ResolvedVarDescs,
-        direction: NominalDirection,
-    },
+    merge_stored: StoredMerge,
     same_alias_after_args: SameAliasAfterArgs,
     shared_fields_after_children: SharedFieldsAfterChildren,
     shared_tags_after_children: SharedTagsAfterChildren,
@@ -5328,9 +5704,10 @@ pub const Scratch = struct {
         const gathered = self.rowList(kind, "gathered_");
         const start_int = gathered.len();
         const slice = multi_list.sliceRange(range);
+        try gathered.ensureUnusedCapacity(self.gpa, slice.len);
         // Whole entries are copied so a tag's pattern-only mark travels with it.
         for (0..slice.len) |index| {
-            _ = try gathered.append(self.gpa, slice.get(index));
+            _ = gathered.appendAssumeCapacity(slice.get(index));
         }
         return gathered.rangeToEnd(@intCast(start_int));
     }

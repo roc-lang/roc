@@ -1422,6 +1422,100 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.interchangeable_layouts.clearRetainingCapacity();
         }
 
+        /// The fields a fragment lane keeps between fragments: the program
+        /// and target it generates for, and the policy and borrowed tables
+        /// its owner set when it built the lane.
+        const fragment_lane_kept_fields = [_][]const u8{
+            "allocator",                "cpu_level",              "store",                        "layout_store",
+            "static_strings",           "native_static_data",     "stack_plan_indexes",           "owns_stack_plan_indexes",
+            "stmt_histogram",           "generation_mode",        "erased_capture_prefix",        "enable_default_platform_runtime",
+            "relocatable_expect_sites", "hosted_symbol_resolver", "borrowed_static_data_symbols",
+        };
+
+        /// The fields `resetFragmentLane` returns to their initial state.
+        const fragment_lane_reset_fields = [_][]const u8{
+            "codegen",                      "static_data_symbols",       "literal_symbols",            "builtin_symbols",
+            "hosted_symbols",               "local_locations",           "stack_alloca_slots",         "local_location_undo",
+            "vector_local_by_reg",          "vector_local_mask",         "current_proc_args",          "stmt_locations",
+            "line_entries",                 "failure_sites",             "last_call_return_offset",    "proc_registry",
+            "compiled_rc_helpers",          "compiled_rc_helper_log",    "shifted_rc_helpers",         "unwind_functions",
+            "rc_helper_worklist",           "rc_helper_scheduled",       "pending_rc_addrs",           "pending_rc_calls",
+            "compiling_rc_helpers",         "pending_calls",             "pending_proc_addrs",         "code_regions",
+            "code_refs",                    "spliced_helper_offsets",    "spliced_proc_starts",        "assembled_proc_locs",
+            "join_point_jumps",             "join_jump_records",         "join_point_params",          "spare_proc_scope",
+            "in_proc_scope",                "internal_call_patches",     "internal_addr_patches",      "early_return_patches",
+            "tail_exit_patches",            "stmt_states",               "cf_patches",                 "interchangeable_layouts",
+            "interchange_seen",             "interchange_pending",       "prologue_scratch",           "abi_arena",
+            "current_proc_arg_pop",         "caller_drives_slot",        "current_dyn_result",         "proc_has_dyn_region",
+            "carry_slot",                   "pending_cell_slot",         "early_return_result_slot",   "early_return_ret_layout",
+            "current_proc_name",            "current_proc_frame_locals", "current_stmt_id",            "pending_overflow_result_target",
+            "precomputed_overflow_results", "ret_ptr_slot",              "uses_caller_stack_arg_base", "message_pool",
+            "message_pool_index",           "message_pool_runs",         "pending_message_addrs",      "message_pool_placed_len",
+            "image_finished",               "fragment_mode",             "fragment_source_mode",       "fragment_context",
+            "assembled_symbolic_refs",      "owned_symbol_names",        "scratch_arg_locs",           "scratch_arg_infos",
+            "scratch_pass_by_ptr",          "scratch_param_num_regs",
+        };
+
+        comptime {
+            // Every field is either kept or reset by `resetFragmentLane`, so a
+            // new field must be classified before a reused lane can carry it
+            // from one fragment to the next.
+            @setEvalBranchQuota(200_000);
+            for (@typeInfo(Self).@"struct".field_names) |name| {
+                var listed: usize = 0;
+                for (fragment_lane_kept_fields ++ fragment_lane_reset_fields) |field| {
+                    if (std.mem.eql(u8, field, name)) listed += 1;
+                }
+                if (listed != 1) @compileError("LirCodeGen field " ++ name ++ " must be listed exactly once as kept or reset by a fragment lane");
+            }
+        }
+
+        /// Return a generator that emitted fragments (`emitProcFragment`,
+        /// `emitRcHelperFragment`) to the state `initWithCapturePrefix` and
+        /// its owner's setup gave it, keeping container capacity, so the next
+        /// fragment it emits is the one a fresh generator would emit.
+        pub fn resetFragmentLane(self: *Self) void {
+            std.debug.assert(!self.in_proc_scope);
+            self.reset();
+            self.scratch_arg_locs.items.clearRetainingCapacity();
+            self.scratch_arg_infos.items.clearRetainingCapacity();
+            self.scratch_pass_by_ptr.items.clearRetainingCapacity();
+            self.scratch_param_num_regs.items.clearRetainingCapacity();
+            self.static_data_symbols.clearRetainingCapacity();
+            {
+                var names = self.spliced_helper_offsets.keyIterator();
+                while (names.next()) |name| self.allocator.free(name.*);
+                self.spliced_helper_offsets.clearRetainingCapacity();
+            }
+            self.spliced_proc_starts.clearRetainingCapacity();
+            self.assembled_proc_locs.clearRetainingCapacity();
+            self.stack_alloca_slots.clearRetainingCapacity();
+            self.vector_local_by_reg = .initFill(null);
+            self.vector_local_mask = 0;
+            self.current_proc_args = null;
+            self.last_call_return_offset = 0;
+            self.shifted_rc_helpers.clearRetainingCapacity();
+            self.spare_proc_scope.clearRetainingCapacity();
+            self.in_proc_scope = false;
+            self.interchange_seen.clearRetainingCapacity();
+            self.interchange_pending.clearRetainingCapacity();
+            self.prologue_scratch.clearRetainingCapacity();
+            _ = self.abi_arena.reset(.retain_capacity);
+            self.current_proc_arg_pop = 0;
+            self.caller_drives_slot = null;
+            self.current_dyn_result = null;
+            self.proc_has_dyn_region = false;
+            self.carry_slot = null;
+            self.pending_cell_slot = null;
+            self.early_return_result_slot = null;
+            self.early_return_ret_layout = null;
+            self.current_proc_name = null;
+            self.current_proc_frame_locals = LIR.LocalSpan.empty();
+            self.current_stmt_id = null;
+            self.ret_ptr_slot = null;
+            self.uses_caller_stack_arg_base = false;
+        }
+
         fn clearSymbolCaches(self: *Self) void {
             var symbols = self.static_data_symbols.valueIterator();
             while (symbols.next()) |symbol| symbol.symbol = null;

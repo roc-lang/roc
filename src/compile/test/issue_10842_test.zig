@@ -85,6 +85,7 @@ test "issue 10842: where-clause method arity that no target satisfies reports ty
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;

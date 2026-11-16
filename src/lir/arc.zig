@@ -128,6 +128,11 @@ pub const Timing = struct {
         shard_append,
         /// Certifying the inserted reference counts (debug builds).
         certify,
+        /// Elapsed time of the tasks that each prepare, plan and emit one
+        /// procedure, over every wave.
+        procedure_tasks,
+        /// Those tasks' callbacks, summed over workers.
+        procedure_task_workers,
         /// The workers' capacity over the parallel waves: each wave's
         /// elapsed time times the executor's worker count.
         parallel_capacity,
@@ -686,36 +691,50 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     defer for (sources) |*source| source.deinit();
     var inline_tasks = InlineArcTasks.init(store.allocator);
     defer inline_tasks.deinit();
-    const source_prefix = store.captureBodyPrefix();
-    var source_start: usize = 0;
-    while (source_start < sources.len) {
-        const end = @min(source_start + options.emission_wave_size, sources.len);
-        try runArcTasks(SourceCache, sources[source_start..end], .source, &inline_tasks, options);
-        source_start = end;
-    }
-    if (!std.meta.eql(source_prefix, store.captureBodyPrefix())) arcInvariant("ARC source preparation mutated coordinator storage");
-    step_started = timingLap(timing, step_started, .source_prep);
-    var projection_decisions = try CompleteProjectionDecisions.init(store.allocator, store.cfStmtCount(), sources);
-    defer projection_decisions.deinit(store.allocator);
-    inserter.projection_decisions = &projection_decisions;
+    // Without uniqueness proofs, and with every statement in one
+    // procedure's statement list, nothing a procedure's planning or emission
+    // reads depends on another procedure's source preparation, so one task
+    // prepares, plans and emits each procedure (`runFusedWave`). Proving
+    // uniqueness settles against every procedure's prepared projections
+    // first, and a statement two procedures share takes the last source's
+    // decision, so then every source is prepared before any planning.
+    const fused = !options.prove_uniqueness and try procStatementsDisjoint(store.allocator, store, &solution);
+    var projection_decisions: ?CompleteProjectionDecisions = null;
+    defer if (projection_decisions) |*decisions| decisions.deinit(store.allocator);
+    if (fused) {
+        try recordProcedureFacts(store, &solution);
+        step_started = timingLap(timing, step_started, .settle);
+    } else {
+        const source_prefix = store.captureBodyPrefix();
+        var source_start: usize = 0;
+        while (source_start < sources.len) {
+            const end = @min(source_start + options.emission_wave_size, sources.len);
+            try runArcTasks(SourceCache, sources[source_start..end], .source, &inline_tasks, options);
+            source_start = end;
+        }
+        if (!std.meta.eql(source_prefix, store.captureBodyPrefix())) arcInvariant("ARC source preparation mutated coordinator storage");
+        step_started = timingLap(timing, step_started, .source_prep);
+        projection_decisions = try CompleteProjectionDecisions.init(store.allocator, store.cfStmtCount(), sources);
+        inserter.projection_decisions = &projection_decisions.?;
 
-    // Committed takes carry field uniqueness to the locals they define;
-    // the solver settled without them, so re-derive against the takes and
-    // the complete projections emission retains.
-    var take_stmts = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, store.cfStmtCount());
-    defer take_stmts.deinit(store.allocator);
-    var take_iter = dismantles.takes.keyIterator();
-    var any_take = false;
-    while (take_iter.next()) |stmt| {
-        take_stmts.set(@backingInt(stmt.*));
-        any_take = true;
+        // Committed takes carry field uniqueness to the locals they define;
+        // the solver settled without them, so re-derive against the takes and
+        // the complete projections emission retains.
+        var take_stmts = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, store.cfStmtCount());
+        defer take_stmts.deinit(store.allocator);
+        var take_iter = dismantles.takes.keyIterator();
+        var any_take = false;
+        while (take_iter.next()) |stmt| {
+            take_stmts.set(@backingInt(stmt.*));
+            any_take = true;
+        }
+        if (any_take and options.prove_uniqueness) {
+            const planned: arc_solve.PlannedTakes = .{ .takes = &take_stmts, .retaining_projections = &projection_decisions.?.retaining };
+            try arc_solve.settleUniquenessWithOptions(store.allocator, store, layouts, local_contains_refcounted, &solution, .{ .set = planned }, options.consume_dead_boxes, uniqueness_options);
+        }
+        try recordProcedureFacts(store, &solution);
+        step_started = timingLap(timing, step_started, .settle);
     }
-    if (any_take and options.prove_uniqueness) {
-        const planned: arc_solve.PlannedTakes = .{ .takes = &take_stmts, .retaining_projections = &projection_decisions.retaining };
-        try arc_solve.settleUniquenessWithOptions(store.allocator, store, layouts, local_contains_refcounted, &solution, .{ .set = planned }, options.consume_dead_boxes, uniqueness_options);
-    }
-    try recordProcedureFacts(store, &solution);
-    step_started = timingLap(timing, step_started, .settle);
 
     var variants = VariantTable{
         .map = std.AutoHashMap(VariantSelector, LIR.LirProcSpecId).init(store.allocator),
@@ -739,12 +758,16 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     while (base_index < base_proc_count or variant_index < variants.queue.items.len) {
         var count: usize = 0;
         defer for (owners[0..count]) |*owner| owner.deinit();
+        // A fused wave prepares its base owners' sources, which a variant
+        // planned in the same wave could read, so a fused wave holds base
+        // owners or variants, never both.
+        const variants_wait = fused and base_index < base_proc_count;
         while (count < owners.len) {
             const job: QueuedVariant = if (base_index < base_proc_count) blk: {
                 const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_index))));
                 base_index += 1;
                 break :blk .{ .variant = proc, .source = proc, .sig = solution.sigOf(proc) };
-            } else if (variant_index < variants.queue.items.len) blk: {
+            } else if (!variants_wait and variant_index < variants.queue.items.len) blk: {
                 const queued = variants.queue.items[variant_index];
                 variant_index += 1;
                 break :blk queued;
@@ -764,26 +787,17 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         }
         if (count == 0) continue;
         if (options.metrics_out) |metrics| metrics.waves += 1;
-        const planning_prefix = store.captureBodyPrefix();
-        step_started = timingNow(timing);
-        try runArcTasks(EmissionOwner, owners[0..count], .planning, &inline_tasks, options);
-        if (!std.meta.eql(planning_prefix, store.captureBodyPrefix())) arcInvariant("ARC planning mutated coordinator storage");
-        step_started = timingLap(timing, step_started, .planning);
-        for (owners[0..count]) |*owner| {
-            const requests = owner.inserter.variant_requests.items;
-            const resolved = try owner.arena.?.allocator().alloc(LIR.LirProcSpecId, requests.len);
-            const before = variants.sigs.items.len;
-            for (requests, resolved) |request, *target| target.* = try variants.intern(store, request);
-            owner.inserter.resolved_variants = resolved;
-            if (options.metrics_out) |metrics| metrics.variants_reserved += variants.sigs.items.len - before;
+        if (fused) {
+            try runFusedWave(store, owners[0..count], &variants, &inline_tasks, options);
+        } else {
+            try runPhasedWave(store, owners[0..count], &variants, &inline_tasks, options);
         }
-        step_started = timingLap(timing, step_started, .variant_reservation);
-        const prefix = store.captureBodyPrefix();
-        try runArcTasks(EmissionOwner, owners[0..count], .emission, &inline_tasks, options);
-        if (!std.meta.eql(prefix, store.captureBodyPrefix())) arcInvariant("ARC workers mutated coordinator storage");
-        step_started = timingLap(timing, step_started, .emission);
+        step_started = timingNow(timing);
         for (owners[0..count]) |*owner| {
             const shard = &owner.shard.?;
+            // A shard emitted before its wave's variants were reserved has a
+            // shorter procedure prefix than one emitted after.
+            const prefix = shard.captureBodyPrefix();
             const body_shard = shard.captureBodyShard(prefix) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => arcInvariant("ARC emitted unsupported shard metadata"),
@@ -821,6 +835,141 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     }
     return .{ .deferred_erased_calls = deferred_erased_calls };
 }
+
+/// Plan every owner of a wave, reserve the variants their plans request in
+/// owner order, then emit every owner: three executor round trips, used when
+/// uniqueness was settled against every prepared source.
+fn runPhasedWave(store: *LirStore, owners: []EmissionOwner, variants: *VariantTable, inline_tasks: *InlineArcTasks, options: InsertOptions) ResourceError!void {
+    const timing = options.timing;
+    const planning_prefix = store.captureBodyPrefix();
+    var step_started = timingNow(timing);
+    try runArcTasks(EmissionOwner, owners, .planning, inline_tasks, options);
+    if (!std.meta.eql(planning_prefix, store.captureBodyPrefix())) arcInvariant("ARC planning mutated coordinator storage");
+    step_started = timingLap(timing, step_started, .planning);
+    for (owners) |*owner| try reserveVariants(store, owner, variants, options);
+    step_started = timingLap(timing, step_started, .variant_reservation);
+    const prefix = store.captureBodyPrefix();
+    try runArcTasks(EmissionOwner, owners, .emission, inline_tasks, options);
+    if (!std.meta.eql(prefix, store.captureBodyPrefix())) arcInvariant("ARC workers mutated coordinator storage");
+    _ = timingLap(timing, step_started, .emission);
+}
+
+/// Reserve, in request order, the variants `owner`'s plan requests.
+fn reserveVariants(store: *LirStore, owner: *EmissionOwner, variants: *VariantTable, options: InsertOptions) ResourceError!void {
+    const requests = owner.inserter.variant_requests.items;
+    const resolved = try owner.arena.?.allocator().alloc(LIR.LirProcSpecId, requests.len);
+    const before = variants.sigs.items.len;
+    for (requests, resolved) |request, *target| target.* = try variants.intern(store, request);
+    owner.inserter.resolved_variants = resolved;
+    if (options.metrics_out) |metrics| metrics.variants_reserved += variants.sigs.items.len - before;
+}
+
+/// One ordered run in which each task prepares a base owner's source, plans
+/// the owner, and emits it when the plan requests no variant. Variants are
+/// then reserved in owner order, as in a phased wave, and the owners whose
+/// plans requested any are emitted in a second run. The store is frozen
+/// throughout both runs, so nothing is committed until the wave's shards
+/// are appended in owner order.
+fn runFusedWave(store: *LirStore, owners: []EmissionOwner, variants: *VariantTable, inline_tasks: *InlineArcTasks, options: InsertOptions) ResourceError!void {
+    const timing = options.timing;
+    const executor: ?TaskExecutor.Executor = if (options.post_check_executor) |value| value.* else null;
+    const prefix = store.captureBodyPrefix();
+    var wave: FusedWave = .{ .owners = owners, .emit_after_reservation = &.{} };
+    var ordered: ?TaskExecutor.OrderedTiming = if (timing) |active| .{ .std_io = active.std_io } else null;
+    var step_started = timingNow(timing);
+    try TaskExecutor.runOrdered(FusedWave, inline_tasks.allocator, &wave, owners.len, executor, &inline_tasks.ordered_lane, .{
+        .min_chunk_weight = fused_min_chunk_locals,
+        .timing = if (ordered) |*active| active else null,
+    });
+    if (!std.meta.eql(prefix, store.captureBodyPrefix())) arcInvariant("ARC workers mutated coordinator storage");
+    if (timing) |active| {
+        step_started = active.lap(step_started, .procedure_tasks);
+        active.add(.procedure_task_workers, ordered.?.worker_ns);
+        if (executor != null) active.add(.parallel_capacity, ordered.?.capacity_ns);
+    }
+    if (executor != null) {
+        if (options.metrics_out) |metrics| {
+            for (owners) |owner| {
+                if (owner.job.variant == owner.job.source) {
+                    metrics.source_tasks_submitted += 1;
+                    metrics.source_tasks_committed += 1;
+                }
+                metrics.planning_tasks_submitted += 1;
+                metrics.planning_tasks_committed += 1;
+                if (owner.shard != null) metrics.emission_tasks_submitted += 1;
+            }
+        }
+    }
+    var late = std.ArrayList(*EmissionOwner).empty;
+    defer late.deinit(inline_tasks.allocator);
+    for (owners) |*owner| {
+        if (owner.shard != null) continue;
+        try reserveVariants(store, owner, variants, options);
+        try late.append(inline_tasks.allocator, owner);
+    }
+    step_started = timingLap(timing, step_started, .variant_reservation);
+    if (late.items.len == 0) return;
+    const late_prefix = store.captureBodyPrefix();
+    var late_wave: FusedWave = .{ .owners = &.{}, .emit_after_reservation = late.items };
+    var late_ordered: ?TaskExecutor.OrderedTiming = if (timing) |active| .{ .std_io = active.std_io } else null;
+    try TaskExecutor.runOrdered(FusedWave, inline_tasks.allocator, &late_wave, late.items.len, executor, &inline_tasks.ordered_lane, .{
+        .min_chunk_weight = fused_min_chunk_locals,
+        .timing = if (late_ordered) |*active| active else null,
+    });
+    if (!std.meta.eql(late_prefix, store.captureBodyPrefix())) arcInvariant("ARC workers mutated coordinator storage");
+    if (timing) |active| {
+        _ = active.lap(step_started, .emission);
+        active.add(.emission_workers, late_ordered.?.worker_ns);
+        if (executor != null) active.add(.parallel_capacity, late_ordered.?.capacity_ns);
+    }
+    if (executor != null) if (options.metrics_out) |metrics| {
+        metrics.emission_tasks_submitted += late.items.len;
+    };
+}
+
+/// The smallest summed frame size of the procedures one lane claims at a
+/// time in a fused wave.
+const fused_min_chunk_locals = 64;
+
+/// The items of one `runFusedWave` ordered run: the wave's owners, or the
+/// owners left to emit once their variants are reserved.
+const FusedWave = struct {
+    pub const Error = ResourceError;
+
+    owners: []EmissionOwner,
+    emit_after_reservation: []const *EmissionOwner,
+
+    fn owner(self: *const FusedWave, index: usize) *EmissionOwner {
+        return if (self.emit_after_reservation.len != 0) self.emit_after_reservation[index] else &self.owners[index];
+    }
+
+    pub fn weight(self: *const FusedWave, index: usize) u64 {
+        return 1 + @as(u64, self.owner(index).source.frame.len);
+    }
+
+    pub fn runItem(self: *FusedWave, index: usize, worker: TaskExecutor.Worker) Error!void {
+        const emission_owner = self.owner(index);
+        const env: ArcTaskEnv = .{
+            .allocator = worker.allocator,
+            .scratch = worker.scratch,
+            .lane = try ArcLaneScratch.forLane(worker.lane_state),
+        };
+        if (self.emit_after_reservation.len != 0) {
+            emission_owner.phase = .emission;
+            return emission_owner.execute(env);
+        }
+        // A base owner's source is its own procedure, prepared here; a
+        // variant's source was prepared in the base wave that holds it.
+        if (emission_owner.job.variant == emission_owner.job.source) try emission_owner.source.execute(env);
+        emission_owner.phase = .planning;
+        try emission_owner.execute(env);
+        if (emission_owner.inserter.variant_requests.items.len != 0) return;
+        emission_owner.phase = .emission;
+        try emission_owner.execute(env);
+    }
+
+    pub fn commitItem(_: *FusedWave, _: usize) Error!void {}
+};
 
 /// A demand-shaped procedure never consumes a value holding a hole: its
 /// body demands nothing of the hole's type, so its signature borrows every
@@ -977,18 +1126,22 @@ const InlineArcTasks = struct {
     allocator: Allocator,
     scratch: collections.SingleThreadArena,
     lane: ArcLaneScratch,
+    /// The lane an inline ordered run (`runFusedWave`) runs every item on.
+    ordered_lane: TaskExecutor.LaneState,
 
     fn init(allocator: Allocator) InlineArcTasks {
         return .{
             .allocator = allocator,
             .scratch = collections.SingleThreadArena.init(allocator),
             .lane = ArcLaneScratch.init(allocator),
+            .ordered_lane = TaskExecutor.LaneState.init(allocator),
         };
     }
 
     fn deinit(self: *InlineArcTasks) void {
         self.scratch.deinit();
         self.lane.deinit();
+        self.ordered_lane.deinit();
     }
 };
 
@@ -1111,6 +1264,30 @@ const CompleteProjectionDecision = struct {
     stmt: LIR.CFStmtId,
     retains: bool,
     retains_restituting: bool,
+
+    fn lessThan(_: void, a: CompleteProjectionDecision, b: CompleteProjectionDecision) bool {
+        return @backingInt(a.stmt) < @backingInt(b.stmt);
+    }
+
+    /// The decision for a read of one source's sorted `decisions` under the
+    /// given signature's contract, or null for a read whose target only some
+    /// emissions bind owned. Used when every statement belongs to exactly
+    /// one source procedure (`procStatementsDisjoint`), so its source's
+    /// decisions are the only ones that can name it.
+    fn retainsUnder(decisions: []const CompleteProjectionDecision, stmt: LIR.CFStmtId, sig: arc_sig.RcSig) ?bool {
+        var low: usize = 0;
+        var high: usize = decisions.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const mid_stmt = @backingInt(decisions[mid].stmt);
+            if (mid_stmt == @backingInt(stmt)) {
+                const decision = decisions[mid];
+                return if (sig.outcomes.isEmpty()) decision.retains else decision.retains_restituting;
+            }
+            if (mid_stmt < @backingInt(stmt)) low = mid + 1 else high = mid;
+        }
+        return null;
+    }
 };
 
 /// Every source procedure's `CompleteProjectionDecision`s, by statement.
@@ -1156,6 +1333,23 @@ const CompleteProjectionDecisions = struct {
         return if (sig.outcomes.isEmpty()) self.retains.isSet(index) else self.retains_restituting.isSet(index);
     }
 };
+
+/// Whether every statement is in the statement list of at most one
+/// procedure, which lets an emission consult only its own source's
+/// decisions. Procedures may share an ownership-neutral body; then a
+/// statement's decision is the last source's to decide it.
+fn procStatementsDisjoint(allocator: Allocator, store: *const LirStore, solution: *const arc_solve.Solution) Allocator.Error!bool {
+    var owned = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
+    defer owned.deinit(allocator);
+    for (0..store.procSpecCount()) |index| {
+        const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+        for (solution.procStatements(proc)) |stmt| {
+            if (owned.isSet(@backingInt(stmt))) return false;
+            owned.set(@backingInt(stmt));
+        }
+    }
+    return true;
+}
 
 /// The locals whose solved borrowed binding one emission of `source_proc`
 /// with signature `emit_sig` binds owned instead.
@@ -1268,6 +1462,7 @@ const EmissionOwner = struct {
         inserter.current_source_proc = source_proc;
         inserter.current_sig = emit_sig;
         inserter.source_liveness = &self.source.liveness;
+        inserter.source_projections = self.source.projection_decisions;
         inserter.emission_allocator = self.arena.?.allocator();
         self.domain = self.source.domain;
         self.domain.resource_full_masks = try inserter.emission_allocator.dupe(u64, self.source.domain.resource_full_masks);
@@ -1954,8 +2149,13 @@ const Inserter = struct {
     /// Field takes solved against the ownership-neutral bodies; consulted by
     /// statement id, so base and variant emissions share one solve.
     dismantles: *const arc_dismantle.Dismantles = undefined,
-    /// Complete projection reads decided at source preparation.
-    projection_decisions: *const CompleteProjectionDecisions = undefined,
+    /// Every source's complete projection reads, by statement, when
+    /// procedures share statements; null when each statement belongs to one
+    /// procedure, whose own decisions `source_projections` holds.
+    projection_decisions: ?*const CompleteProjectionDecisions = null,
+    /// The complete projection reads source preparation decided for the
+    /// procedure being emitted, sorted by statement.
+    source_projections: []const CompleteProjectionDecision = &.{},
     /// Temporaries synthesized while dismantling containers in the proc
     /// currently being emitted; appended to its frame locals afterward. A
     /// lane buffer grown in `lane_allocator`.
@@ -4795,6 +4995,7 @@ const Inserter = struct {
         }
         const decisions = try allocator.alloc(CompleteProjectionDecision, pending.items.len);
         for (decisions, pending.items) |*decision, entry| decision.* = entry.decision;
+        std.mem.sort(CompleteProjectionDecision, decisions, {}, CompleteProjectionDecision.lessThan);
         return decisions;
     }
 
@@ -4815,7 +5016,11 @@ const Inserter = struct {
     ) ResourceError!AliasBindTransfer {
         const release_old_target = try self.takeRebindTarget(owned, target);
         const unit = self.unitOf(root);
-        const root_used = if (self.projection_decisions.retainsUnder(stmt, self.current_sig)) |retains| decided: {
+        const decision = if (self.projection_decisions) |decisions|
+            decisions.retainsUnder(stmt, self.current_sig)
+        else
+            CompleteProjectionDecision.retainsUnder(self.source_projections, stmt, self.current_sig);
+        const root_used = if (decision) |retains| decided: {
             if (builtin.mode == .debug) {
                 const used_here = try self.ownershipPlaceUsedInPath(next, unit);
                 if (used_here and !retains) arcInvariant("ARC emission used a complete projection's root that source preparation decided unused");
@@ -15434,6 +15639,86 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
     }
     try testing.expect(remaining > 0);
     try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
+}
+
+test "RC emission units: a call demands an outcome-restitution variant only within its callee's unit" {
+    // A checked mutation whose failure outcome leaves its list argument
+    // untouched, called by a caller that reads the list again on failure, with
+    // the two procedures placed in emission units (design.md "Mode
+    // Specialization", emission units) and no optional mode specialization,
+    // as a dev build lowers them. A caller in the callee's unit demands the
+    // outcome variant and hands the list over without a retain; a caller in
+    // another module's unit, or any caller of an isolated callee, as a `.boxy`
+    // app's call of a Builtin `List` worker is, adapts to the callee's base
+    // signature and retains the list across the call, so the mutation sees it
+    // shared.
+    const Case = struct { caller: LIR.EmissionUnit, callee: LIR.EmissionUnit, outcome_variant: bool };
+    const cases = [_]Case{
+        .{ .caller = LIR.EmissionUnit.module(0), .callee = LIR.EmissionUnit.module(0), .outcome_variant = true },
+        .{ .caller = LIR.EmissionUnit.module(1), .callee = LIR.EmissionUnit.module(0), .outcome_variant = false },
+        .{ .caller = LIR.EmissionUnit.module(0), .callee = .isolated, .outcome_variant = false },
+        .{ .caller = .program, .callee = .program, .outcome_variant = true },
+    };
+    for (cases) |case| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+
+        const try_list = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+            try f.layouts.ensureZstLayout(),
+            f.list_i64,
+        });
+        const param = try f.local(f.list_i64);
+        const choose_success = try f.local(.i64);
+        const changed = try f.local(f.list_i64);
+        const callee_result = try f.local(try_list);
+        const success_ret = try f.ret(callee_result);
+        const success_tag = try f.assignTag(callee_result, 1, changed, success_ret);
+        const mutate = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = changed,
+            .op = .list_reverse,
+            .rc_effect = try f.store.addRcEffect(LIR.LowLevel.RcEffect.runtimeUniqueness(1)),
+            .args = try f.span(&.{param}),
+            .next = success_tag,
+        } }, .test_fixture);
+        const failure_ret = try f.ret(callee_result);
+        const failure_tag = try f.assignTag(callee_result, 0, null, failure_ret);
+        const callee_body = try f.switchStmt(choose_success, mutate, failure_tag, null);
+        const callee = try f.addProc(&.{ param, choose_success }, callee_body, try_list);
+
+        const item = try f.local(.i64);
+        const input = try f.local(f.list_i64);
+        const caller_choose = try f.local(.i64);
+        const call_result = try f.local(try_list);
+        const discriminant = try f.local(.u8);
+        const success_value = try f.local(.i64);
+        const failure_value = try f.local(.i64);
+        const caller_success_ret = try f.ret(success_value);
+        const success_body = try f.assignI64(success_value, 1, caller_success_ret);
+        const caller_failure_ret = try f.ret(failure_value);
+        const failure_done = try f.assignI64(failure_value, 0, caller_failure_ret);
+        const failure_body = try f.expectStmt(input, failure_done);
+        const refine = try f.switchStmt(discriminant, success_body, failure_body, null);
+        const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
+        const call = try f.store.addCFStmt(.{ .assign_call = .{
+            .target = call_result,
+            .proc = callee,
+            .args = try f.span(&.{ input, caller_choose }),
+            .next = read_discriminant,
+        } }, .test_fixture);
+        const choose = try f.assignI64(caller_choose, 1, call);
+        const make_input = try f.assignList(input, &.{item}, choose);
+        const caller_body = try f.assignI64(item, 7, make_input);
+        const caller = try f.addProc(&.{}, caller_body, .i64);
+        f.store.getProcSpecPtr(callee).emission_unit = case.callee;
+        f.store.getProcSpecPtr(caller).emission_unit = case.caller;
+
+        const base_proc_count = f.store.procSpecCount();
+        _ = try insert(&f.store, &f.layouts, .{ .specialize = false });
+
+        const variants: usize = if (case.outcome_variant) 1 else 0;
+        try testing.expectEqual(base_proc_count + variants, f.store.procSpecCount());
+        try testing.expectEqual(@as(usize, if (case.outcome_variant) 0 else 1), f.countRc(input, .incref));
+    }
 }
 
 /// A callee that hands its `List(Str)` argument back in variant

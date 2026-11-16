@@ -40,6 +40,11 @@ pub const ValueSchema = struct {
         return .{ .program = try lower.createSchemaProgram(allocator, modules, target_usize) };
     }
 
+    /// Extend the schema to the roots of `views`' modules too.
+    pub fn addModules(self: *ValueSchema, views: []const checked.ImportedModuleView) Allocator.Error!void {
+        try lower.addSchemaModules(self.program, views);
+    }
+
     pub fn deinit(self: *ValueSchema) void {
         lower.destroySchemaProgram(self.program);
         self.* = undefined;

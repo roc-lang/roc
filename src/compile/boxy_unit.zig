@@ -637,7 +637,7 @@ fn recordCodegen(timing: *PipelineTiming, snapshot: backend.ObjectFileCompiler.T
     const steps = [_]struct { Step, u64 }{
         .{ .backend_setup, snapshot.backend_setup_ns },
         .{ .procedure_setup, snapshot.native_setup_ns },
-        .{ .procedure_waves, snapshot.native_waves_ns },
+        .{ .procedure_runs, snapshot.native_runs_ns },
         .{ .procedure_worker_setup, snapshot.native_worker_setup_ns },
         .{ .procedure_emit, snapshot.native_emit_ns },
         .{ .procedure_extract, snapshot.native_extract_ns },

@@ -4792,6 +4792,31 @@ test "check type - record - update - fail - missing field" {
     );
 }
 
+test "check type - record - update - fail - missing field stored in a tuple" {
+    // The rejected update is poisoned, and the tuple stores it as an element.
+    const source =
+        \\main! = |_| {}
+        \\
+        \\State : { pos : U64 }
+        \\
+        \\step : State -> (U64, State)
+        \\step = |state| (1, { ..state, last: 2 })
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - record - update - fail - missing field stored in a record and a tag payload" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\State : { pos : U64 }
+        \\
+        \\step : State -> { next : State, wrapped : [Wrapped(State)] }
+        \\step = |state| { next: { ..state, last: 2 }, wrapped: Wrapped({ ..state, last: 3 }) }
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
 test "check type - record - update - fail - field mismatch" {
     const source =
         \\main! = |_| {}

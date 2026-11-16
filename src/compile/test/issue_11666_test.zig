@@ -91,7 +91,7 @@ fn measureLiteralList(literal_count: usize) TestError!Measurement {
     const path = try tmp.dir.realPathFileAlloc(io, "Repro.roc", gpa);
     defer gpa.free(path);
 
-    var build = try compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build = try compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build.deinit();
     var measure: ProgramMeasure = .{};
     build.boxy_program_observer = .{ .context = &measure, .observe = ProgramMeasure.observe };

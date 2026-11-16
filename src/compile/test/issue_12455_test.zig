@@ -43,7 +43,7 @@ test "issue 12455: a public module that completed with failure is not a compiled
     const root_main = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", gpa);
     defer gpa.free(root_main);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
     build_env.setSyntheticRootPackageIdentity();
     try build_env.build(root_main);
@@ -81,7 +81,7 @@ test "issue 12455: documentation modules carry the checked artifact of each publ
     const root_main = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", gpa);
     defer gpa.free(root_main);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
     build_env.setSyntheticRootPackageIdentity();
     try build_env.build(root_main);
