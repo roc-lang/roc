@@ -78,11 +78,25 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      encode absence as zero.
 /// v72: the string literal store carries its dedup table, combined with
 ///      the v69-v71 changes.
+/// v73: procedure debug names are a column parallel to procedure specs.
+/// v74: procedure shapes are 32 bits and record owned erased calls.
 /// v73: erased calls carry `result_reuse`, `erased_capture_load_borrowed`
 ///      renumbers later LowLevel ops, RC reasons name dead-lender reads,
 ///      procedure shapes widen to 32 bits, and dynamic tag payload reads
 ///      carry `whole`.
-pub const FORMAT_VERSION: u32 = 73;
+/// v74: `list_take_first` and `list_take_last` leave the LowLevel enum,
+///      renumbering later ops.
+/// v75: dynamic tag payload reads lose `whole`; a tag's only payload is an
+///      `assign_ref` `tag_payload_struct` of the dynamic union.
+/// v76: procedure debug names are a column parallel to the procedure
+///      specs, combined with the v73-v75 changes.
+/// v75: combines the v73 and v74 changes above; procedure shapes record
+///      every erased call.
+/// v77: procedure shapes record every erased call, combined with the v73-v76
+///      changes.
+/// v78: a lowering module is named by a failure identity, combined with the
+///      v77 changes.
+pub const FORMAT_VERSION: u32 = 78;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -197,7 +211,7 @@ pub const LirStoreImage = extern struct {
     source_file_qualified_bytes: ArrayRef,
     source_file_qualified_ends: ArrayRef,
     source_file_identities: ArrayRef,
-    lowering_module_keys: ArrayRef,
+    lowering_module_identities: ArrayRef,
     cf_stmt_sources: ArrayRef,
     stmt_sources: ArrayRef,
     cf_stmt_inline_scopes: ArrayRef,
@@ -231,7 +245,7 @@ pub const LirStoreImage = extern struct {
             .source_file_qualified_bytes = try encoder.ref(store.source_file_qualified_bytes.unsafeRawItemsForView()),
             .source_file_qualified_ends = try encoder.ref(store.source_file_qualified_ends.unsafeRawItemsForView()),
             .source_file_identities = try encoder.ref(store.source_file_identities.unsafeRawItemsForView()),
-            .lowering_module_keys = try encoder.ref(store.lowering_module_keys.unsafeRawItemsForView()),
+            .lowering_module_identities = try encoder.ref(store.lowering_module_identities.unsafeRawItemsForView()),
             .cf_stmt_sources = try encoder.ref(store.cf_stmt_sources.unsafeRawItemsForView()),
             .stmt_sources = try encoder.ref(store.stmt_sources.unsafeRawItemsForView()),
             .cf_stmt_inline_scopes = try encoder.ref(store.cf_stmt_inline_scopes.unsafeRawItemsForView()),
@@ -284,7 +298,7 @@ pub const LirStoreImage = extern struct {
             .source_file_qualified_bytes = try guardedListFromRef(u8, "LirStore.source_file_qualified_bytes", base_ptr, image_size, self.source_file_qualified_bytes),
             .source_file_qualified_ends = try guardedListFromRef(u32, "LirStore.source_file_qualified_ends", base_ptr, image_size, self.source_file_qualified_ends),
             .source_file_identities = try guardedListFromRef([32]u8, "LirStore.source_file_identities", base_ptr, image_size, self.source_file_identities),
-            .lowering_module_keys = try guardedListFromRef([32]u8, "LirStore.lowering_module_keys", base_ptr, image_size, self.lowering_module_keys),
+            .lowering_module_identities = try guardedListFromRef([32]u8, "LirStore.lowering_module_identities", base_ptr, image_size, self.lowering_module_identities),
             .cf_stmt_sources = try guardedListFromRef(LirStore.StmtSourceId, "LirStore.cf_stmt_sources", base_ptr, image_size, self.cf_stmt_sources),
             .stmt_sources = try guardedListFromRef(LirStore.StmtSource, "LirStore.stmt_sources", base_ptr, image_size, self.stmt_sources),
             .cf_stmt_inline_scopes = try guardedListFromRef(LIR.InlineScopeId, "LirStore.cf_stmt_inline_scopes", base_ptr, image_size, self.cf_stmt_inline_scopes),
@@ -293,7 +307,7 @@ pub const LirStoreImage = extern struct {
             .body_coordinator = null,
             .body_prefix = std.mem.zeroes(LirStore.BodyPrefix),
             .proc_locs = try guardedListFromRef(base.SourceLoc, "LirStore.proc_locs", base_ptr, image_size, self.proc_locs),
-            .proc_debug_names = try guardedListFromRef(LirStore.ProcDebugName, "LirStore.proc_debug_names", base_ptr, image_size, self.proc_debug_names),
+            .proc_debug_names = try guardedListFromRef(base.StringLiteral.Idx, "LirStore.proc_debug_names", base_ptr, image_size, self.proc_debug_names),
             .local_names = try guardedListFromRef(u32, "LirStore.local_names", base_ptr, image_size, self.local_names),
         };
     }
@@ -896,7 +910,7 @@ const serialized_guarded_fields = [_][]const u8{
     "source_file_qualified_bytes",
     "source_file_qualified_ends",
     "source_file_identities",
-    "lowering_module_keys",
+    "lowering_module_identities",
     "cf_stmt_sources",
     "stmt_sources",
     "cf_stmt_inline_scopes",

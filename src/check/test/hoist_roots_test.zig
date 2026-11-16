@@ -103,6 +103,26 @@ test "hoist roots selected for direct closed ordinary call function body" {
     try expectExprTag(&test_env, roots[0].expr, .e_call);
 }
 
+test "hoist roots selected for a closed interpolation its context types as Str" {
+    // The body's result is annotated `Str` and its one part is a `Str`, so
+    // the interpolation is introduced as the builtin `Str` with no dispatch
+    // variables (design.md "Concrete Builtin Interpolation Introduction"). It
+    // is a compile-time root exactly as one that keeps its conversion is.
+    var test_env = try TestEnv.init("Test",
+        \\show : I64 -> Str
+        \\show = |n| Str.inspect(n)
+        \\
+        \\main : {} -> Str
+        \\main = |_| "${show(41.I64)}!"
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern.get());
+}
+
 test "hoist roots are not selected for ordinary call with dbg in reachable body" {
     var test_env = try TestEnv.init("Test",
         \\dbg_value = || {

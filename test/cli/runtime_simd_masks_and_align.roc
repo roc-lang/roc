@@ -34,7 +34,7 @@ main! = |args| {
 		} else {}
 		$mask = $mask + 1
 	}
-	lo = U8x16.from_u128_bits((20011376718272490338853433276725592320).bitwise_xor(noise))
+	lo = U8x16.from_u128_bits((20011376718272490338853433276725592320.U128).bitwise_xor(noise))
 	hi = lo.bitwise_not()
 	if lo.concat_shift_bytes(hi, 0).to_u128_bits() != aligned_bits(lo.to_u128_bits(), hi.to_u128_bits(), 0) {
 		crash "SIMD immediate byte alignment count 0"

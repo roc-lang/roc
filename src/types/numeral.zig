@@ -567,6 +567,40 @@ pub fn fits(allocator: Allocator, exact: Exact, target: Target) Allocator.Error!
     }
 }
 
+/// The value's bytes at `target` as they lie in memory in `endian` order:
+/// the bits `intBits`, `floatBits` or `decBits` give, in the first
+/// `byteWidth(target)` bytes, the rest zero. Null where `intBits` or
+/// `decBits` is null. Every stage that writes a literal's value as bytes
+/// writes these.
+pub fn encodeBits(allocator: Allocator, exact: Exact, target: Target, endian: std.builtin.Endian) Allocator.Error!?[16]u8 {
+    var out: [16]u8 = @splat(0);
+    switch (target) {
+        inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |int| {
+            const width = comptime byteWidth(int);
+            const wide: u128 = switch (intBits(exact, int) orelse return null) {
+                .i128 => |value| @bitCast(value),
+                .u128 => |value| value,
+            };
+            std.mem.writeInt(@Int(.unsigned, @as(u16, width) * 8), out[0..width], @truncate(wide), endian);
+        },
+        .f32 => std.mem.writeInt(u32, out[0..4], @bitCast(try floatBits(f32, allocator, exact)), endian),
+        .f64 => std.mem.writeInt(u64, out[0..8], @bitCast(try floatBits(f64, allocator, exact)), endian),
+        .dec => std.mem.writeInt(i128, out[0..16], (try decBits(allocator, exact)) orelse return null, endian),
+    }
+    return out;
+}
+
+/// The size in bytes of a value of `target`.
+pub fn byteWidth(target: Target) u8 {
+    return switch (target) {
+        .u8, .i8 => 1,
+        .u16, .i16 => 2,
+        .u32, .i32, .f32 => 4,
+        .u64, .i64, .f64 => 8,
+        .u128, .i128, .dec => 16,
+    };
+}
+
 // tests //
 
 const testing = std.testing;
@@ -659,6 +693,31 @@ test "intBits assembles exact integers with sign handling" {
         const actual = intBits(parsed.exact, case.target);
         try testing.expectEqualDeep(case.expected, actual);
     }
+}
+
+test "encodeBits writes each target's bits at its width in either byte order" {
+    const gpa = testing.allocator;
+    const cases = [_]struct { text: []const u8, target: Target, little: []const u8 }{
+        .{ .text = "255", .target = .u8, .little = &.{0xff} },
+        .{ .text = "-2", .target = .i16, .little = &.{ 0xfe, 0xff } },
+        .{ .text = "305419896", .target = .u32, .little = &.{ 0x78, 0x56, 0x34, 0x12 } },
+        .{ .text = "340282366920938463463374607431768211455", .target = .u128, .little = &(@as([16]u8, @splat(0xff))) },
+        .{ .text = "1.5", .target = .f32, .little = &.{ 0x00, 0x00, 0xc0, 0x3f } },
+        .{ .text = "1", .target = .dec, .little = &.{ 0x00, 0x00, 0x64, 0xa7, 0xb3, 0xb6, 0xe0, 0x0d, 0, 0, 0, 0, 0, 0, 0, 0 } },
+    };
+    for (cases) |case| {
+        const parsed = try testParse(gpa, case.text);
+        defer parsed.deinit(gpa);
+        const little = (try encodeBits(gpa, parsed.exact, case.target, .little)).?;
+        try testing.expectEqual(@as(usize, byteWidth(case.target)), case.little.len);
+        try testing.expectEqualSlices(u8, case.little, little[0..case.little.len]);
+        for (little[case.little.len..]) |byte| try testing.expectEqual(@as(u8, 0), byte);
+        const big = (try encodeBits(gpa, parsed.exact, case.target, .big)).?;
+        for (case.little, 0..) |byte, index| try testing.expectEqual(byte, big[case.little.len - 1 - index]);
+    }
+    const too_big = try testParse(gpa, "256");
+    defer too_big.deinit(gpa);
+    try testing.expectEqual(@as(?[16]u8, null), try encodeBits(gpa, too_big.exact, .u8, .little));
 }
 
 test "fractional literals never fit integer targets" {

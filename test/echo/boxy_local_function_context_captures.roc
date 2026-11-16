@@ -13,7 +13,7 @@ main! = |args| {
 		inner = |w| tag(w)
 		inner(z)
 	}
-	shifted = [1, 2].map(|y| shift(y))
-	echo!("${twice(1).to_str()} ${Str.inspect(shifted)} ${nested(5)}\n")
+	shifted = [1.U64, 2].map(|y| shift(y))
+	echo!("${twice(1.U64).to_str()} ${Str.inspect(shifted)} ${nested(5.U64)}\n")
 	Ok({})
 }

@@ -23,7 +23,7 @@ you can use these operators on any type that has the right method, including you
 | `a ..< b` | `a.range_exclusive_to(b)` |
 | `a ..= b` | `a.range_inclusive_to(b)` |
 | `-a` | `a.negate()` |
-| `!a` | `a.not()` |
+| `!a` | `Bool.not(a)` |
 
 Which method gets called is decided at compile time, based on the type of `a`. (That's what
 [static dispatch](static-dispatch) means.) So there's no runtime cost to the desugaring; `a + b`
@@ -85,11 +85,13 @@ Here, `user_requested_default` is only called if `config_missing` is `False`.
 
 ### Arithmetic Operators
 
-`+`, `-`, `*`, `/`, `//`, and `%` call methods on their left operand. The result has the
-left operand's type. The right operand usually has the same type as the left one, but it doesn't
-have to; that's up to the method. [Static dispatch](static-dispatch#operators) covers how to
-define these methods for your own types, and [numbers](numbers) covers what they do on the
-builtin number types (including what happens on overflow and division by zero).
+`+`, `-`, `*`, `/`, `//`, and `%` call methods on their left operand. Both operands and the
+result all have the same type. That's how a number literal gets its type from whatever it's
+combined with: in `count + 1`, the `1` is whatever type `count` is.
+
+[Static dispatch](static-dispatch#operators) covers how to define these methods for your own
+types, and [numbers](numbers) covers what they do on the builtin number types (including what
+happens on overflow and division by zero).
 
 ### Comparison Operators
 
@@ -193,9 +195,12 @@ expression. Also note that `|>` groups before binary operators like `+`, so `1 +
 
 `-x` is sugar for `x.negate()`. The operand and result have the same type.
 
-### `!` (`.not()`)
+### `!` (`Bool.not`)
 
-`!x` is sugar for `x.not()`. The operand and result have the same type.
+`!x` is sugar for `Bool.not(x)`. The operand and result are both [`Bool`](../Bool).
+
+Unlike `-`, `!` doesn't call a method on its operand, so it only works on a `Bool`. If your own
+type has a `not` method, call it as `x.not()`.
 
 ## Unary Postfix Operators
 

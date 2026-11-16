@@ -1249,7 +1249,7 @@ fn builtinOwnerForRegistryEntry(
     module_env: *const ModuleEnv,
     owner_stmt: CIR.Statement.Idx,
 ) ?BuiltinOwner {
-    const common = module_env.idents;
+    const common = &module_env.idents;
     if (module_env.module_role != .builtin) return null;
 
     const stmt = module_env.store.getStatement(owner_stmt);
@@ -1916,6 +1916,12 @@ pub const GeneratedCodecCallResolution = union(enum(u8)) {
     checked_error,
     callable: EvidenceNodeId,
     structural: GeneratedCodecDerivationId,
+    /// The call's subject is a type variable of the definition whose dispatch
+    /// uses this contract, and its method is that variable's where-clause
+    /// requirement. The index names a `StaticDispatchPlanTable.evidence_refs`
+    /// entry whose resolution is `.constraint`: the enclosing evidence
+    /// parameter each specialization of the definition supplies.
+    forwarded: u32,
 };
 
 /// One exact method edge inside a compiler-generated parser or encoder.
@@ -1945,6 +1951,10 @@ pub const GeneratedCodecDerivation = struct {
     /// recorded it.
     content: GeneratedCodecContentDigest = .{},
     kind: GeneratedCodecDerivationKind,
+    /// Whether this contract, or a contract it nests, has a `.forwarded`
+    /// call. Lowering reads the selecting site's evidence for such a
+    /// contract's forwarded calls; any other contract needs none.
+    forwarded: bool = false,
     source_constructor_ty: CheckedTypeId,
     source_runtime_ty: CheckedTypeId,
     source_shape_ty: CheckedTypeId,
@@ -2305,8 +2315,10 @@ pub const StaticDispatchPlanTable = struct {
                     if (std.meta.activeTag(checked_expr_data) != .interpolation) continue;
                     const args = [_]StaticDispatchOperand{.{ .generated_interpolation_segments = expr_idx }};
                     const from_interpolation = try names.internMethodName("from_interpolation");
-                    const constraint_fn_var = interpolation.constraint_fn_var orelse
-                        base.invariant("checked static dispatch registry invariant violated: checked interpolation has no constraint function variable", .{});
+                    // An interpolation introduced as the builtin `Str` has
+                    // no dispatch, so it has no plan (design.md "Concrete
+                    // Builtin Interpolation Introduction").
+                    const constraint_fn_var = interpolation.constraint_fn_var orelse continue;
                     const dispatcher_var = interpolation.dispatcher_var orelse
                         base.invariant("checked static dispatch registry invariant violated: checked interpolation has no dispatcher variable", .{});
                     const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);
@@ -2811,6 +2823,9 @@ pub const StaticDispatchPlanTable = struct {
             },
             .structural => {
                 base.invariant("structural generated codec call had no callable evidence", .{});
+            },
+            .forwarded => {
+                base.invariant("forwarded generated codec call had no target evidence of its own", .{});
             },
         };
         return self.nestedEvidence(node);

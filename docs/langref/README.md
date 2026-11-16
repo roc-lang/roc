@@ -83,7 +83,7 @@ If you're looking for a beginner tutorial, check out [roc-lang.org/tutorial](htt
     - [`|>` (pipe)](operators#-pipe)
   - [Unary Prefix Operators](operators#unary-prefix-operators)
     - [`-` (`.negate()`)](operators#--negate)
-    - [`!` (`.not()`)](operators#-not)
+    - [`!` (`Bool.not`)](operators#-boolnot)
   - [Unary Postfix Operators](operators#unary-postfix-operators)
     - [`?` (unwrap if `Ok`; early `return` if `Err`)](operators#-unwrap-if-ok-early-return-if-err)
     - [`[…]` (subscript operator)](operators#…-subscript-operator)

@@ -222,6 +222,10 @@ const DeferredSpanPair = struct {
 
 /// Invocation-local work, collected only by tests or developer diagnostics.
 pub const WorkCounters = struct {
+    /// How many times the program's bodies were solved: twice when the
+    /// sharing solve recorded a row join (`solveProgram`). Every other
+    /// counter counts only the solve whose solution the program keeps.
+    body_solves: u64 = 0,
     functions: u64 = 0,
     expansions: u64 = 0,
     clones: u64 = 0,
@@ -259,22 +263,47 @@ pub fn run(
     allocator: Allocator,
     lifted: Lifted.Program,
 ) Common.LowerError!Ast.Program {
+    return runTimed(allocator, lifted, null);
+}
+
+/// Step durations of one solve, recorded only when a caller asks for
+/// detailed timing.
+pub const Timing = struct {
+    std_io: std.Io,
+    /// The analysis solve finding the row-joined types.
+    analysis_ns: u64 = 0,
+    /// Setting up the real solver.
+    setup_ns: u64 = 0,
+    /// The real solve and its finishing passes.
+    solve_ns: u64 = 0,
+
+    fn now(self: *const Timing) i96 {
+        return std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
+    }
+
+    fn lap(self: *const Timing, started: i96, total: *u64) i96 {
+        const finished = self.now();
+        total.* +|= @intCast(@max(0, finished - started));
+        return finished;
+    }
+};
+
+/// `run`, recording its step durations in `timing` when it is given.
+pub fn runTimed(
+    allocator: Allocator,
+    lifted: Lifted.Program,
+    timing: ?*Timing,
+) Common.LowerError!Ast.Program {
     // `Ast.Program.init` cannot fail and takes ownership of `lifted`, so
     // `program.deinit()` is the only cleanup a later error needs.
     var program = Ast.Program.init(allocator, lifted);
     errdefer program.deinit();
 
-    var row_joined = try findRowJoinedTypes(allocator, &program);
-    var solver = Solver.init(allocator, &program) catch |err| {
-        row_joined.deinit(allocator);
-        return err;
-    };
-    defer solver.deinit();
-    solver.setRowJoined(row_joined);
     var counters: WorkCounters = .{};
-    if (diagnostics.isSet(.lambda_solve_stats)) solver.counters = &counters;
-    try solver.solve();
-    if (diagnostics.isSet(.lambda_solve_stats)) {
+    const counted = diagnostics.isSet(.lambda_solve_stats);
+    var solver = try solveProgram(allocator, &program, if (counted) &counters else null, timing);
+    defer solver.deinit();
+    if (counted) {
         var buffer: [2048]u8 = undefined;
         var out = std.Io.Writer.fixed(&buffer);
         out.print("lambda-solve roots={d} literal_roots={d} mono_types={d} solved_types={d}", .{
@@ -290,32 +319,67 @@ pub fn run(
     return program;
 }
 
-/// The lifted Monotypes whose rows a row join can change (design.md "Row
-/// Joins"), closed over structurally equal Monotypes and over every type
-/// containing one. Every other callable-free type solves to its Monotype's
-/// own rows wherever it occurs, so one clone serves all of its occurrences.
+/// The solver holding `program`'s finished solution, with `counters`
+/// counting the work of the solve that produced it.
 ///
-/// An analysis solve finds them: it relates every body exactly as solving
-/// does, but with one clone for every callable-free Monotype, and records
-/// both sides of every unification whose two types were instantiated from
-/// different Monotypes. Sharing a clone only adds relations, so every pair
-/// of different Monotypes the real solve relates, the analysis relates too.
-fn findRowJoinedTypes(allocator: Allocator, program: *Ast.Program) Common.LowerError!std.DynamicBitSetUnmanaged {
-    var found = blk: {
-        var analysis = try Solver.init(allocator, program);
-        defer analysis.deinit();
-        analysis.join_sides = try std.DynamicBitSetUnmanaged.initEmpty(allocator, analysis.lifted.types.types.len);
-        try analysis.solveBodies();
-        var sides = analysis.join_sides.?;
-        analysis.join_sides = null;
+/// A callable-free type whose rows no row join can change (design.md "Row
+/// Joins") solves to its Monotype's own rows wherever it occurs, so one clone
+/// serves all of its occurrences. Which Monotypes those are is found by
+/// solving: the sharing solve relates every body with one clone for every
+/// callable-free Monotype, and records both sides of every unification whose
+/// two types were instantiated from different Monotypes. Sharing a clone only
+/// adds relations, so every pair of different Monotypes a solve with fewer
+/// shared clones relates, the sharing solve relates too.
+///
+/// A sharing solve that records no row-bearing Monotype joined no row, so
+/// every clone it shared is one no row join can change, and its solution is
+/// the program's. Otherwise its solution is discarded, and the bodies are
+/// solved again with every row-joined Monotype (`closeRowJoinedTypes`) cloned
+/// per occurrence.
+fn solveProgram(allocator: Allocator, program: *Ast.Program, counters: ?*WorkCounters, timing: ?*Timing) Common.LowerError!Solver {
+    var step_started: i96 = if (timing) |active| active.now() else 0;
+    var row_joined = joins: {
+        var sharing = try Solver.init(allocator, program);
+        errdefer sharing.deinit();
+        sharing.counters = counters;
+        sharing.join_sides = try std.DynamicBitSetUnmanaged.initEmpty(allocator, sharing.lifted.types.types.len);
+        try sharing.solveBodies();
+        var sides = sharing.join_sides.?;
+        sharing.join_sides = null;
         // Only a row can change under a join; a row-free type is one clone
         // wherever it occurs whatever it meets.
-        sides.setIntersection(analysis.contains_tag_row);
-        break :blk sides;
+        sides.setIntersection(sharing.contains_tag_row);
+        if (sides.findFirstSet() == null) {
+            sides.deinit(allocator);
+            if (timing) |active| step_started = active.lap(step_started, &active.analysis_ns);
+            try sharing.finishSolve();
+            if (timing) |active| _ = active.lap(step_started, &active.solve_ns);
+            return sharing;
+        }
+        sharing.deinit();
+        break :joins sides;
     };
-    errdefer found.deinit(allocator);
-    program.resetSolution();
+    var solver = init: {
+        errdefer row_joined.deinit(allocator);
+        program.resetSolution();
+        if (counters) |counted| counted.* = .{ .body_solves = counted.body_solves };
+        try closeRowJoinedTypes(allocator, program, &row_joined);
+        if (timing) |active| step_started = active.lap(step_started, &active.analysis_ns);
+        break :init try Solver.init(allocator, program);
+    };
+    errdefer solver.deinit();
+    solver.setRowJoined(row_joined);
+    solver.counters = counters;
+    if (timing) |active| step_started = active.lap(step_started, &active.setup_ns);
+    try solver.solve();
+    if (timing) |active| _ = active.lap(step_started, &active.solve_ns);
+    return solver;
+}
 
+/// Close the row-bearing Monotypes a sharing solve recorded (`solveProgram`)
+/// over structurally equal Monotypes and over every type containing one,
+/// giving the Monotypes whose rows a row join can change.
+fn closeRowJoinedTypes(allocator: Allocator, program: *Ast.Program, found: *std.DynamicBitSetUnmanaged) Common.LowerError!void {
     const lifted_types = &program.lifted.types;
     const view = lifted_types.view();
     var rows = try computeReachabilityMasks(allocator, view);
@@ -338,8 +402,7 @@ fn findRowJoinedTypes(allocator: Allocator, program: *Ast.Program) Common.LowerE
     // One clone of a container is one clone of everything inside it.
     var parents = try ParentIndex.build(allocator, view);
     defer parents.deinit(allocator);
-    try parents.markAncestors(allocator, &found);
-    return found;
+    try parents.markAncestors(allocator, found);
 }
 
 const Solver = struct {
@@ -395,11 +458,11 @@ const Solver = struct {
     /// program by type identity rather than by flow.
     contains_tag_row: std.DynamicBitSetUnmanaged,
     /// Per lifted Monotype: whether a row join can change a row reachable
-    /// from it (`findRowJoinedTypes`). A callable-free type holding a tag row
-    /// is clone-invariant exactly when no row join can change it.
+    /// from it (`solveProgram`). A callable-free type holding a tag row is
+    /// clone-invariant exactly when no row join can change it.
     row_joined: std.DynamicBitSetUnmanaged,
-    /// Set only for the analysis solve of `findRowJoinedTypes`: the
-    /// Monotypes a unification related to a different Monotype.
+    /// Set only while the sharing solve of `solveProgram` relates bodies:
+    /// the Monotypes a unification related to a different Monotype.
     join_sides: ?std.DynamicBitSetUnmanaged = null,
     /// Finalization's clone of each lifted Monotype, shared by every
     /// untouched leaf of it.
@@ -697,6 +760,7 @@ const Solver = struct {
             });
         }
 
+        self.countWork(.body_solves, 1);
         self.countWork(.functions, self.lifted.fns.len);
         for (self.lifted.fns, 0..) |fn_, index| {
             const fn_id: Lifted.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
@@ -735,15 +799,18 @@ const Solver = struct {
 
         try self.markForcedDynamicIteratorCallables();
 
+        var unreached_leaves = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(self.allocator);
+        defer unreached_leaves.deinit();
+
         try self.program.expr_tys.ensureTotalCapacity(self.allocator, self.expr_tys.len);
         for (self.expr_tys, 0..) |maybe_ty, index| {
-            const ty = maybe_ty.get() orelse try self.monoLeaf(self.lifted.exprs[index].ty);
+            const ty = maybe_ty.get() orelse try self.unreachedLeaf(&unreached_leaves, self.lifted.exprs[index].ty);
             try self.program.expr_tys.append(self.allocator, self.program.types.rootCompressed(ty));
         }
 
         try self.program.pat_tys.ensureTotalCapacity(self.allocator, self.pat_tys.len);
         for (self.pat_tys, 0..) |maybe_ty, index| {
-            const ty = maybe_ty.get() orelse try self.monoLeaf(self.lifted.pats[index].ty);
+            const ty = maybe_ty.get() orelse try self.unreachedLeaf(&unreached_leaves, self.lifted.pats[index].ty);
             try self.program.pat_tys.append(self.allocator, self.program.types.rootCompressed(ty));
         }
 
@@ -766,6 +833,21 @@ const Solver = struct {
         try self.closeUnfilledCallableSlots();
         try self.canonicalizeCallableMemberOrder();
         if (@import("builtin").mode == .debug) try self.verifyErasedBoundaries();
+    }
+
+    /// The type of an expression or pattern that solving never typed, because
+    /// no function body reaches it: the lazy leaf of its Monotype that every
+    /// such expression and pattern of that Monotype shares. Nothing unifies
+    /// one, and `finalizeMonoLeaves` gives every untouched leaf of one
+    /// Monotype the same clone, so one leaf stands for all of them.
+    fn unreachedLeaf(
+        self: *Solver,
+        leaves: *collections.DenseMap(MonoType.TypeId, Type.TypeVarId),
+        ty: MonoType.TypeId,
+    ) Allocator.Error!Type.TypeVarId {
+        const entry = try leaves.getOrPut(ty);
+        if (!entry.found_existing) entry.value_ptr.* = try self.monoLeaf(ty);
+        return entry.value_ptr.*;
     }
 
     /// Lambda sets key their members by lambda symbol, so two lifted
@@ -2465,13 +2547,16 @@ const Solver = struct {
             const right_tag = std.meta.activeTag(right_content);
             if (left_tag == .unbound or left_tag == .forall or right_tag == .unbound or right_tag == .forall) continue;
             // A named type and a bare structure are a lifted pair, which
-            // unification relates through the named type's backing.
+            // unification relates through the named type's backing when it
+            // may read that backing, and not at all otherwise.
             if (left_tag == .named and right_tag != .named) {
-                if (left_content.named.backing.get()) |backing| try work.append(self.allocator, .{ .first = backing.ty, .second = right });
+                const backing = liftedPairBacking(left_content) orelse return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, committable);
+                try work.append(self.allocator, .{ .first = backing, .second = right });
                 continue;
             }
             if (right_tag == .named and left_tag != .named) {
-                if (right_content.named.backing.get()) |backing| try work.append(self.allocator, .{ .first = left, .second = backing.ty });
+                const backing = liftedPairBacking(right_content) orelse return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, committable);
+                try work.append(self.allocator, .{ .first = left, .second = backing });
                 continue;
             }
             if (left_tag != right_tag) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, committable);
@@ -2612,8 +2697,6 @@ const Solver = struct {
             .list_reserve_for_append,
             .list_drop_at,
             .list_sublist,
-            .list_take_first,
-            .list_take_last,
             => {
                 expectLowLevelArity(op, args, 2);
                 try self.unify(expected, args[0]);
@@ -3421,9 +3504,9 @@ const Solver = struct {
     }
 
     /// Two classes instantiated from different Monotypes are a row join's
-    /// two sides. The analysis solve records both; the real solve never
-    /// relates a shared row-bearing clone that way, since the analysis
-    /// relates every pair the real solve does.
+    /// two sides. The sharing solve of `solveProgram` records both; no
+    /// other solve relates a shared row-bearing clone that way, since the
+    /// sharing solve relates every pair any other does.
     fn noteMonotypePair(self: *Solver, a: Type.TypeVarId, b: Type.TypeVarId) Allocator.Error!void {
         const left = self.leaf_origins.get(a) orelse return;
         const right = self.leaf_origins.get(b) orelse return;
@@ -4512,6 +4595,18 @@ const Solver = struct {
             Common.invariant("private iterator relation received a checked-public backing");
         }
         try self.pushUnifyPair(stack, left_backing.ty, right_backing.ty);
+    }
+
+    /// The backing `unifyRoots` relates a bare structure to when it meets
+    /// this named type: an alias's backing (`transparentAliasBacking`) and an
+    /// inspectable backing (`unifyInspectableNamedBacking`). A named type
+    /// whose backing only fixes its runtime layout relates to no bare
+    /// structure.
+    fn liftedPairBacking(named_content: Type.Content) ?Type.TypeVarId {
+        const named = named_content.named;
+        const backing = named.backing.get() orelse return null;
+        if (named.kind != .alias and backing.use != .inspectable) return null;
+        return backing.ty;
     }
 
     fn transparentAliasBacking(content: Type.Content) ?Type.TypeVarId {
@@ -7061,10 +7156,8 @@ test "lambda solved Try sequences join forwarded error payloads with their resul
             lifted_owned = false;
             lifted = undefined;
             defer program.deinit();
-            var solver = try Solver.init(allocator, &program);
+            var solver = try solveProgram(allocator, &program, null, null);
             defer solver.deinit();
-            solver.setRowJoined(try findRowJoinedTypes(allocator, &program));
-            try solver.solve();
             const input_payloads = try solver.tagPayloadsSpanFor(solver.inferredExpr(input), err, narrow_try);
             const output_payloads = try solver.tagPayloadsSpanFor(solver.inferredExpr(sequence), err, narrow_try);
             const input_error = program.types.spanItem(input_payloads, 0);
@@ -7073,6 +7166,81 @@ test "lambda solved Try sequences join forwarded error payloads with their resul
             try std.testing.expectEqual(@as(usize, 2), (try solver.shapeContent(input_error)).tag_union.count());
         }
     }
+}
+
+test "a program solves its bodies again only when a row join can change a row" {
+    // design.md "Row Joins": the sharing solve's solution is the program's
+    // unless it related a row-bearing Monotype to a different Monotype.
+    const allocator = std.testing.allocator;
+    for ([_]bool{ false, true }) |joins| {
+        var lifted = emptyLiftedProgramForTest(allocator);
+        var lifted_owned = true;
+        errdefer if (lifted_owned) lifted.deinit();
+        const first = try lifted.names.internTagLabel("First");
+        const second = try lifted.names.internTagLabel("Second");
+        const narrow = try lifted.types.add(.{ .tag_union = try lifted.types.addTags(&.{
+            .{ .name = first, .checked_name = first, .payloads = .empty() },
+        }) });
+        const wide = try lifted.types.add(.{ .tag_union = try lifted.types.addTags(&.{
+            .{ .name = first, .checked_name = first, .payloads = .empty() },
+            .{ .name = second, .checked_name = second, .payloads = .empty() },
+        }) });
+        var symbols: Common.SymbolGen = .{};
+        // Only type flow is under test; no execution reads this value.
+        const value = try lifted.addExpr(.{ .ty = narrow, .data = .uninitialized });
+        const body = if (joins) try lifted.addExpr(.{ .ty = wide, .data = .{ .row_widen = .{ .value = value } } }) else value;
+        _ = try lifted.addFn(.{ .symbol = symbols.fresh(), .args = .empty(), .captures = .empty(), .body = .{ .roc = body }, .ret = if (joins) wide else narrow });
+        var program = Ast.Program.init(allocator, lifted);
+        lifted_owned = false;
+        lifted = undefined;
+        defer program.deinit();
+        var counters: WorkCounters = .{};
+        var solver = try solveProgram(allocator, &program, &counters, null);
+        defer solver.deinit();
+        try std.testing.expectEqual(@as(u64, if (joins) 2 else 1), counters.body_solves);
+        try std.testing.expectEqual(@as(u64, 1), counters.functions);
+        try std.testing.expectEqual(joins, solver.row_joined.isSet(@backingInt(narrow)));
+        try std.testing.expectEqual(@as(usize, if (joins) 2 else 1), (try solver.shapeContent(solver.inferredExpr(value))).tag_union.count());
+    }
+}
+
+test "expressions and patterns no function body reaches share one type per Monotype" {
+    const allocator = std.testing.allocator;
+    var var_counts: [2]usize = undefined;
+    for ([_]usize{ 1, 64 }, &var_counts) |unreached, *var_count| {
+        var lifted = emptyLiftedProgramForTest(allocator);
+        var lifted_owned = true;
+        errdefer if (lifted_owned) lifted.deinit();
+        const number = try lifted.types.add(.{ .primitive = .u64 });
+        const items = try lifted.types.add(.{ .list = number });
+        var symbols: Common.SymbolGen = .{};
+        // Only type flow is under test; no execution reads these values.
+        const body = try lifted.addExpr(.{ .ty = number, .data = .uninitialized });
+        _ = try lifted.addFn(.{ .symbol = symbols.fresh(), .args = .empty(), .captures = .empty(), .body = .{ .roc = body }, .ret = number });
+        var first_expr: ?Lifted.ExprId = null;
+        var last_expr: Lifted.ExprId = undefined;
+        var first_pat: ?Lifted.PatId = null;
+        var last_pat: Lifted.PatId = undefined;
+        for (0..unreached) |_| {
+            last_expr = try lifted.addExpr(.{ .ty = items, .data = .uninitialized });
+            if (first_expr == null) first_expr = last_expr;
+            last_pat = try lifted.addPat(.{ .ty = items, .data = .wildcard });
+            if (first_pat == null) first_pat = last_pat;
+        }
+        var program = Ast.Program.init(allocator, lifted);
+        lifted_owned = false;
+        lifted = undefined;
+        defer program.deinit();
+        var solver = try solveProgram(allocator, &program, null, null);
+        defer solver.deinit();
+        const unreached_ty = program.types.root(program.expr_tys.items[@backingInt(first_expr.?)]);
+        try std.testing.expectEqual(unreached_ty, program.types.root(program.expr_tys.items[@backingInt(last_expr)]));
+        try std.testing.expectEqual(unreached_ty, program.types.root(program.pat_tys.items[@backingInt(first_pat.?)]));
+        try std.testing.expectEqual(unreached_ty, program.types.root(program.pat_tys.items[@backingInt(last_pat)]));
+        try std.testing.expect(program.types.get(unreached_ty) == .list);
+        var_count.* = program.types.varCount();
+    }
+    try std.testing.expectEqual(var_counts[0], var_counts[1]);
 }
 
 test "lambda solved return boundaries join rows and propagate callable payloads" {
@@ -7182,6 +7350,65 @@ test "lambda solved row joins keep one label at two payload types as two variant
     try std.testing.expect(program.types.rootCompressed(a_record) != program.types.rootCompressed(b_record));
     try std.testing.expect(program.types.rootContent(a_record) == .record);
     try std.testing.expect(program.types.rootContent(b_record) == .record);
+}
+
+test "lambda solved row joins keep one label apart when one payload names an opaque type and the other its backing" {
+    // design.md "Row Joins": two modules' error rows name `Order` at
+    // `{ expected : Id }` and at `{ expected : U64 }`, where `Id` is an
+    // opaque type whose backing is `U64`. Unification relates `Id` to no bare
+    // `U64`, so the two payloads are two variants of the label.
+    const allocator = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(allocator);
+    const shared_name = try lifted.names.internTagLabel("Shared");
+    const order_name = try lifted.names.internTagLabel("Order");
+    const expected_field = try lifted.names.internRecordFieldLabel("expected");
+    const module = try lifted.names.internModuleIdentity(&(@as([32]u8, @splat(0x3C))));
+    const id_name = try lifted.names.internTypeName("Id");
+    var program = Ast.Program.init(allocator, lifted);
+    defer program.deinit();
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+
+    const u64_ty = try program.types.add(.{ .primitive = .u64 });
+    const id_backing = try program.types.add(.{ .primitive = .u64 });
+    const id_ty = try program.types.add(.{ .named = .{
+        .named_type = .{ .module = .{} },
+        .def = .{ .module = module, .type_name = id_name },
+        .kind = .@"opaque",
+        .args = .empty(),
+        .backing = .some(.{ .ty = id_backing, .use = .runtime_layout_only }),
+    } });
+    const id_record = try program.types.add(.{ .record = try program.types.addFields(&.{
+        .{ .name = expected_field, .ty = id_ty, .default = .none },
+    }) });
+    const u64_record = try program.types.add(.{ .record = try program.types.addFields(&.{
+        .{ .name = expected_field, .ty = u64_ty, .default = .none },
+    }) });
+    const shared = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = shared_name, .checked_name = shared_name, .payloads = .empty() },
+    }) });
+    const id_row = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = order_name, .checked_name = order_name, .payloads = try program.types.addSpan(&.{id_record}) },
+        .{ .name = shared_name, .checked_name = shared_name, .payloads = .empty() },
+    }) });
+    const u64_row = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = order_name, .checked_name = order_name, .payloads = try program.types.addSpan(&.{u64_record}) },
+        .{ .name = shared_name, .checked_name = shared_name, .payloads = .empty() },
+    }) });
+
+    try solver.unify(shared, id_row);
+    try solver.unify(shared, u64_row);
+    try std.testing.expectEqual(program.types.rootCompressed(id_row), program.types.rootCompressed(u64_row));
+    const joined = (try solver.shapeContent(shared)).tag_union;
+    try std.testing.expectEqual(@as(usize, 3), joined.count());
+    var orders: usize = 0;
+    for (0..joined.count()) |index| {
+        if (program.types.tagItem(joined, index).name == order_name) orders += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), orders);
+    try std.testing.expect(program.types.rootCompressed(id_record) != program.types.rootCompressed(u64_record));
+    try std.testing.expect(program.types.rootContent(id_ty) == .named);
+    try std.testing.expect(program.types.rootContent(u64_ty) == .primitive);
 }
 
 test "lambda solved row joins reach every row of a value" {

@@ -1409,6 +1409,8 @@ pub const BoxyObjectLowering = struct {
     /// Whether that link composes the units' pieces (rather than placing
     /// their unit images with a fast dev link), so the units decode them.
     link_reads_pieces: bool = false,
+    /// The unit entries the compiler carries in its binary.
+    embedded: boxy_unit.EmbeddedUnits = .none,
 };
 
 /// The module objects of a `.boxy` compilation, each restored from the
@@ -1501,7 +1503,7 @@ const BoxyObjects = struct {
             .function_cache = .{ .allocator = coordinator.gpa, .io = coordinator.roc_ctx.std_io },
             .lowering = unit_lowering,
             .manager = manager,
-            .digests = .{ .gpa = coordinator.gpa, .io = coordinator.roc_ctx.std_io, .names = .{} },
+            .digests = .{ .gpa = coordinator.gpa, .io = coordinator.roc_ctx.std_io, .names = .{}, .embedded = lowering.embedded },
             .interfaces = undefined,
             .owned_interfaces = if (lowering.interfaces == null) .init(coordinator.gpa, coordinator.roc_ctx.std_io) else null,
             .session = try coordinator.postCheckExecutor().begin(),
@@ -1794,6 +1796,7 @@ const BoxyObjects = struct {
             .cache_manager = self.manager,
             .key = undefined,
             .want_pieces = want_pieces,
+            .embedded = self.lowering.embedded,
         } };
     }
 
@@ -1808,9 +1811,16 @@ const BoxyObjects = struct {
     /// unit's imports recorded, which they had by the time the unit was
     /// ready, and the unit's own part of its digests, hashed here.
     fn keyUnit(self: *BoxyObjects, prepared: *Prepared) Error!void {
+        const CtfeTiming = eval.CompileTimeFinalization.Timing;
+        const started = CtfeTiming.startStep(&self.coordinator.ctfe_timing);
         const unit = &prepared.unit;
         try self.digests.ensurePrepared(unit.artifact);
         unit.key = try boxy_unit.objectKey(self.coordinator.gpa, &self.digests, unit.artifact, unit.platform, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, &.{}, false, false, false);
+        if (CtfeTiming.detailOf(&self.coordinator.ctfe_timing)) |timing| {
+            const elapsed: u64 = @intCast(@max(0, CtfeTiming.startStep(timing) - started));
+            timing.steps_ns[@backingInt(CtfeTiming.Step.unit_keys)].add(elapsed);
+            unit.key_ns = elapsed;
+        }
     }
 
     /// Give the digests `artifact` and its import closure, which checking
@@ -1876,11 +1886,24 @@ const BoxyObjects = struct {
         /// The imports whose objects are not known yet.
         remaining: u32,
         outcome: union(enum) { pending, failed: Error, done: boxy_unit.Built } = .pending,
+        /// Under detailed timing, when the unit was offered and when its
+        /// last import's object became known.
+        offered_ns: i64 = 0,
+        ready_ns: i64 = 0,
 
         fn run(context: *anyopaque, _: post_check_executor.Worker) ?*anyopaque {
             const self: *UnitTask = @ptrCast(@alignCast(context));
+            if (lir.CheckedPipeline.Timing.detailOf(self.prepared.unit.config.timing)) |timing| {
+                const started = lir.CheckedPipeline.Timing.startDetail(timing);
+                self.prepared.unit.import_wait_ns = @intCast(@max(0, self.ready_ns - self.offered_ns));
+                self.prepared.unit.queue_wait_ns = @intCast(@max(0, started - self.ready_ns));
+            }
             self.outcome = if (self.keyAndBuild()) |built| .{ .done = built } else |err| .{ .failed = err };
             return null;
+        }
+
+        fn markReady(self: *UnitTask) void {
+            self.ready_ns = lir.CheckedPipeline.Timing.startDetail(self.prepared.unit.config.timing);
         }
 
         fn keyAndBuild(self: *UnitTask) Error!boxy_unit.Built {
@@ -1921,6 +1944,7 @@ const BoxyObjects = struct {
         const task = try gpa.create(UnitTask);
         errdefer gpa.destroy(task);
         task.* = .{ .objects = self, .artifact = artifact, .prepared = try self.prepare(artifact), .remaining = 0 };
+        task.offered_ns = lir.CheckedPipeline.Timing.startDetail(task.prepared.unit.config.timing);
         errdefer task.prepared.deinit(gpa);
         try self.units.put(gpa, artifact.key.bytes, task);
         errdefer _ = self.units.remove(artifact.key.bytes);
@@ -1936,7 +1960,10 @@ const BoxyObjects = struct {
             try waiting.value_ptr.append(gpa, task);
             task.remaining += 1;
         }
-        if (task.remaining == 0) try self.ready.append(gpa, task);
+        if (task.remaining == 0) {
+            task.markReady();
+            try self.ready.append(gpa, task);
+        }
         try self.submitReady();
     }
 
@@ -2118,6 +2145,7 @@ const BoxyObjects = struct {
             },
             .done => |built| {
                 task.outcome = .pending;
+                eval.CompileTimeFinalization.Timing.addCount(&self.coordinator.ctfe_timing, if (built.restored) .units_restored else .units_built, 1);
                 const object = try self.record(artifact, built);
                 try self.records.put(gpa, artifact.key.bytes, .{ .object = object, .key = task.prepared.unit.key, .restored = built.restored });
             },
@@ -2135,7 +2163,10 @@ const BoxyObjects = struct {
         defer list.deinit(gpa);
         for (list.items) |dependent| {
             dependent.remaining -= 1;
-            if (dependent.remaining == 0) try self.ready.append(gpa, dependent);
+            if (dependent.remaining == 0) {
+                dependent.markReady();
+                try self.ready.append(gpa, dependent);
+            }
         }
     }
 
@@ -2244,6 +2275,9 @@ pub const Coordinator = struct {
     /// Keep compile-time evaluation artifacts so tests can compare them
     /// with the code emitted by a build.
     keep_compile_time_artifacts: bool = false,
+    /// The producer of value-form compile-time roots. Only a test changes
+    /// it, to compare the checked-value writer with the evaluator.
+    value_form_roots: eval.CompileTimeFinalization.Options.ValueFormRoots = .write,
     /// The checked modules whose `expect`s are the developer's own tests, in
     /// the order their test roots join compile-time evaluation. Every command
     /// that checks the program evaluates the same tests' compile-time work.
@@ -2556,8 +2590,8 @@ pub const Coordinator = struct {
     pub fn setDetailedLoweringTiming(self: *Coordinator, enabled: bool) void {
         self.detailed_lowering_timing = enabled;
         if (enabled) {
-            self.ctfe_timing.lowering.enableDetailedMonotypeBody();
-            self.module_ctfe_timing.lowering.enableDetailedMonotypeBody();
+            self.ctfe_timing.lowering.enableDetail();
+            self.module_ctfe_timing.lowering.enableDetail();
         }
     }
 
@@ -3877,8 +3911,7 @@ pub const Coordinator = struct {
             .include_provided_data_exports = config.include_provided_data_exports,
             .include_internal_static_data = config.include_internal_static_data,
         } else .{};
-        var options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, &self.ctfe_timing);
-        options.strategy = self.specialization_strategy;
+        var options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, &self.ctfe_timing, self.specialization_strategy);
         options.post_check_executor = self.postCheckExecutor();
         if (try self.boxyObjects()) |objects| {
             options.boxy_objects = objects.source();
@@ -3889,6 +3922,7 @@ pub const Coordinator = struct {
         }
         options.cancel_request = self.cancel_request;
         options.keep_artifacts = self.keep_compile_time_artifacts;
+        options.value_form_roots = self.value_form_roots;
         options.cached_debug_modules = cached_debug_modules.items;
         if (self.runtime_lowering) |config| {
             const configured = config.compile_time_discovery_roots;
@@ -3928,6 +3962,8 @@ pub const Coordinator = struct {
         );
         // The objects are read by the link and filed by this evaluation;
         // committing the modules below writes what the units read.
+        const CtfeTiming = eval.CompileTimeFinalization.Timing;
+        const units_wait_started = CtfeTiming.startStep(&self.ctfe_timing);
         if (self.boxy_objects) |*objects| {
             if (dependency_root != null) {
                 // Platform-only evaluation can leave app units waiting for
@@ -3939,12 +3975,17 @@ pub const Coordinator = struct {
                 try objects.waitAll();
             }
         }
+        CtfeTiming.finishStep(&self.ctfe_timing, units_wait_started, .units_wait);
         var stores = std.ArrayList(PendingStore).empty;
         defer stores.deinit(self.gpa);
         var report_arena = base.SingleThreadArena.init(self.gpa);
         defer report_arena.deinit();
+        const commit_started = CtfeTiming.startStep(&self.ctfe_timing);
         for (entries.items) |entry| try self.commitPreparedModule(entry.mod, &stores, report_arena.allocator());
+        CtfeTiming.finishStep(&self.ctfe_timing, commit_started, .module_commit);
+        const cache_writes_started = CtfeTiming.startStep(&self.ctfe_timing);
         try self.writePendingStores(stores.items);
+        CtfeTiming.finishStep(&self.ctfe_timing, cache_writes_started, .cache_writes);
         try unfinalized.commit();
     }
 
@@ -4714,7 +4755,8 @@ pub const Coordinator = struct {
                 if (mod.checkedArtifact()) |artifact| try artifacts.append(self.gpa, artifact);
             }
         }
-        return try boxy_interface.Digests.init(self.gpa, self.roc_ctx.std_io, artifacts.items);
+        const embedded: boxy_unit.EmbeddedUnits = if (self.boxy_object_lowering) |lowering| lowering.embedded else .none;
+        return try boxy_interface.Digests.init(self.gpa, self.roc_ctx.std_io, artifacts.items, embedded);
     }
 
     fn checkedModuleCacheKey(
@@ -4743,14 +4785,14 @@ pub const Coordinator = struct {
     /// is by construction the key the probe missed on.
     fn canonicalizedModuleCacheKey(
         self: *const Coordinator,
-        source: []const u8,
+        source_digest: base.SourceDigest,
         module_name: []const u8,
         module_role: ModuleEnv.ModuleRole,
         validation: can.Can.Validation,
         is_entry_module: bool,
     ) [32]u8 {
         return cache_key_mod.canonicalizedModuleCacheKey(.{
-            .source = source,
+            .source_digest = source_digest,
             .module_basename = base.module_path.getModuleBasename(module_name),
             .is_entry_module = is_entry_module,
             .module_role = module_role,
@@ -5204,6 +5246,12 @@ pub const Coordinator = struct {
             cached_env.deinit();
             module_alloc.destroy(cached_env);
         };
+        // The cached env is installed over `source`, whose digest the entry's
+        // key hashed. An entry that records another digest is corrupt.
+        if (!cached_env.source_digest.eql(current_env.source_digest)) {
+            manager.stats.recordInvalidation();
+            return false;
+        }
 
         // Restore the environment's runtime interner and method tables for
         // import checking and diagnostics. The checked columns remain frozen.
@@ -7314,6 +7362,13 @@ pub const Coordinator = struct {
             manager.rejectEntry(.canonicalized, .canonicalized, cache_key, entries_dir, cache_data.stamp, "its module environment fails validation", .{});
             return .{ .delivered_then_missed = delivered };
         };
+        // The entry records the digest of the source it was built from, and
+        // the key that named it hashes this read's digest. An entry whose
+        // record disagrees is corrupt.
+        if (!std.mem.eql(u8, &serialized.source_digest, &source_read.digest.bytes)) {
+            manager.rejectEntry(.canonicalized, .canonicalized, cache_key, entries_dir, cache_data.stamp, "its recorded source digest differs from the source's", .{});
+            return .{ .delivered_then_missed = delivered };
+        }
 
         const env = try module_alloc.create(ModuleEnv);
         env.* = serialized.deserializeInPlace(
@@ -7334,7 +7389,6 @@ pub const Coordinator = struct {
             module_alloc.destroy(env);
         };
         std.debug.assert(env.module_role == task.module_role);
-
         // Read this module's `import "path" as name` file imports, exactly as
         // the canonicalize task does on a miss, so the module's source-input
         // identity is complete before the checked-module cache is probed.
@@ -7443,8 +7497,13 @@ pub const Coordinator = struct {
     fn executeParseFallible(self: *Coordinator, task: ParseTask, task_allocs: WorkerTaskAllocators) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!WorkerResult {
         var parse_timer = startStageTimer(self.roc_ctx.std_io);
 
+        // The source is digested where it is read: here, or by the build
+        // environment that read and parsed it ahead of this task. That digest
+        // is the module's only hash of its source text; the key below, the
+        // env, and every later identity read it.
         const source_read: SourceRead = if (task.discovered) |discovered| .{
             .source = @constCast(discovered.module_env.common.source),
+            .digest = discovered.module_env.source_digest,
             .file_state = discovered.source_file_state,
         } else try self.readModuleSourceForParse(task.path, task_allocs.module);
         const src = source_read.source;
@@ -7455,7 +7514,7 @@ pub const Coordinator = struct {
         // stamp in the entry. A hit checks that stamp, then skips parsing and
         // canonicalization entirely.
         const canonicalized_key = self.canonicalizedModuleCacheKey(
-            src,
+            source_read.digest,
             task.module_name,
             task.module_role,
             task.validation,
@@ -7484,14 +7543,14 @@ pub const Coordinator = struct {
         const parsed = if (task.discovered) |discovered|
             adoptDiscoveredParse(task, discovered, display_module_name)
         else
-            try parseModuleSource(task, task_allocs, src, display_module_name);
+            try parseModuleSource(task, task_allocs, src, source_read.digest, display_module_name);
         const env = parsed.env;
         const parse_ast = parsed.ast;
         errdefer destroyModuleEnvAndSource(env);
         errdefer parse_ast.deinit();
 
         if (self.cache_manager) |manager| {
-            try @import("source_inventory.zig").publishAst(task_allocs.scratch, manager, parse_ast);
+            try @import("source_inventory.zig").publishAst(task_allocs.scratch, manager, parse_ast, source_read.digest);
         }
 
         // The result payloads outlive this task, so they use the result
@@ -7577,11 +7636,13 @@ pub const Coordinator = struct {
         ast: *AST,
     };
 
-    /// Parse `src`, which this takes ownership of, into a new environment.
+    /// Parse `src`, which this takes ownership of and whose digest is
+    /// `source_digest`, into a new environment.
     fn parseModuleSource(
         task: ParseTask,
         task_allocs: WorkerTaskAllocators,
         src: []u8,
+        source_digest: base.SourceDigest,
         display_module_name: []const u8,
     ) Allocator.Error!ParsedModule {
         // Create ModuleEnv using the long-lived module allocator.
@@ -7601,7 +7662,7 @@ pub const Coordinator = struct {
             }
         }
 
-        env.* = try ModuleEnv.init(module_alloc, src);
+        env.* = try ModuleEnv.initWithSourceDigest(module_alloc, src, source_digest);
         env_initialized = true;
         try env.initCIRFields(display_module_name);
         env.module_role = task.module_role;
@@ -7802,10 +7863,10 @@ pub const Coordinator = struct {
         // task-local scratch arena, which is reset after the worker task.
         const check_alloc = result_alloc;
         var local_ctfe_timing = eval.CompileTimeFinalization.Timing.init(self.roc_ctx.std_io);
-        if (self.detailed_lowering_timing) local_ctfe_timing.lowering.enableDetailedMonotypeBody();
+        if (self.detailed_lowering_timing) local_ctfe_timing.lowering.enableDetail();
         const ctfe_timing = &local_ctfe_timing;
-        var ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing);
-        ctfe_options.strategy = self.specialization_strategy;
+        var ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing, self.specialization_strategy);
+        ctfe_options.value_form_roots = self.value_form_roots;
         // Import resolution runs inside the type-check task and records its
         // own diagnostics on the env, after the canonicalize task already
         // reported the ones canonicalization recorded.
@@ -7927,43 +7988,31 @@ pub const Coordinator = struct {
         };
     }
 
-    /// Read module source using the Io abstraction.
+    /// One module's source as read for its parse task.
     const SourceRead = struct {
+        /// The file's bytes with line endings normalized.
         source: []u8,
+        /// The digest of `source`, taken by whoever read the bytes.
+        digest: base.SourceDigest,
         file_state: ?watch_inputs.State,
     };
 
+    /// Read a module's source using the Io abstraction, normalize its line
+    /// endings, and digest it. This is where a module the coordinator reads
+    /// has its source hashed; watch mode's file state is the digest of the
+    /// bytes as read, which is the same hash unless normalization rewrote
+    /// them.
     fn readModuleSourceForParse(self: *Coordinator, path: []const u8, module_alloc: Allocator) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!SourceRead {
-        if (!self.track_watch_inputs) {
-            return .{
-                .source = try self.readModuleSource(path, module_alloc),
-                .file_state = null,
-            };
-        }
-
-        return try self.readModuleSourceWithState(path, module_alloc);
-    }
-
-    fn readModuleSource(self: *Coordinator, path: []const u8, module_alloc: Allocator) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })![]u8 {
         const data = try self.roc_ctx.readFile(path, module_alloc);
-        errdefer module_alloc.free(data);
-
-        // Normalize line endings
-        return base.source_utils.normalizeLineEndingsRealloc(module_alloc, data);
-    }
-
-    fn readModuleSourceWithState(self: *Coordinator, path: []const u8, module_alloc: Allocator) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!SourceRead {
-        const data = try self.roc_ctx.readFile(path, module_alloc);
-        const file_state: watch_inputs.State = .{ .hash = watch_inputs.hashBytes(data) };
-
-        const source = base.source_utils.normalizeLineEndingsRealloc(module_alloc, data) catch |err| {
+        const digested = base.source_utils.normalizeAndDigest(module_alloc, data, self.track_watch_inputs) catch |err| {
             module_alloc.free(data);
             return err;
         };
 
         return .{
-            .source = source,
-            .file_state = file_state,
+            .source = digested.source,
+            .digest = digested.digest,
+            .file_state = if (digested.file_digest) |file_digest| watch_inputs.fileState(file_digest) else null,
         };
     }
 
@@ -10179,6 +10228,7 @@ fn hashPatternExtractionRegionsForView(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .interpolation_conversion,
             .literal_argument,
             .repl_expr,
             => false,
@@ -10214,6 +10264,7 @@ fn hashPatternExtractionRegionsForView(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .interpolation_conversion,
             .literal_argument,
             .repl_expr,
             => unreachable, // is_selected_root skipped every root of these kinds
@@ -11988,7 +12039,7 @@ test "Coordinator package creation" {
     try std.testing.expectEqualStrings(app_identity, retrieved.?.name);
 }
 
-test "Coordinator readModuleSource hashes raw CRLF source bytes" {
+test "Coordinator source read digests the normalized source and, for watch mode, the raw file bytes" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -12017,15 +12068,27 @@ test "Coordinator readModuleSource hashes raw CRLF source bytes" {
     defer coord.deinit();
     coord.setWatchInputTracking(true);
 
-    const read = try coord.readModuleSourceWithState(main_path, allocator);
+    const read = try coord.readModuleSourceForParse(main_path, allocator);
     defer allocator.free(read.source);
 
     try testing.expectEqualStrings("main = 1\n", read.source);
-    const expected_hash = watch_inputs.hashBytes(source);
+    var expected_source_digest: [32]u8 = undefined;
+    std.crypto.hash.Blake3.hash("main = 1\n", &expected_source_digest, .{});
+    try testing.expectEqualSlices(u8, &expected_source_digest, &read.digest.bytes);
+
+    var expected_file_digest: [32]u8 = undefined;
+    std.crypto.hash.Blake3.hash(source, &expected_file_digest, .{});
     switch (read.file_state orelse return error.ExpectedWatchInputState) {
-        .hash => |hash| try testing.expectEqualSlices(u8, &expected_hash, &hash),
+        .hash => |hash| try testing.expectEqualSlices(u8, &expected_file_digest, &hash),
         .missing, .unreadable => try testing.expect(false),
     }
+
+    // Outside watch mode only the normalized source is digested.
+    coord.setWatchInputTracking(false);
+    const untracked = try coord.readModuleSourceForParse(main_path, allocator);
+    defer allocator.free(untracked.source);
+    try testing.expectEqualSlices(u8, &expected_source_digest, &untracked.digest.bytes);
+    try testing.expect(untracked.file_state == null);
 }
 
 test "Coordinator module creation" {

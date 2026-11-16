@@ -1,6 +1,7 @@
 //! Utility functions for processing Roc source code.
 
 const std = @import("std");
+const SourceDigest = @import("SourceDigest.zig");
 
 /// Normalizes line endings and reallocates the buffer to the correct size.
 ///
@@ -51,6 +52,42 @@ pub fn normalizeLineEndingsRealloc(allocator: std.mem.Allocator, source: []u8) s
     allocator.free(source);
 
     return new_buffer;
+}
+
+/// A module's source as the compiler consumes it, with its digest.
+pub const DigestedSource = struct {
+    /// The file's bytes with line endings normalized.
+    source: []u8,
+    /// Digest of `source`.
+    digest: SourceDigest,
+    /// Digest of the file's bytes exactly as read, when it was requested.
+    /// Watch mode compares this against the file on disk.
+    file_digest: ?SourceDigest,
+};
+
+/// Normalize the line endings of `data` exactly like
+/// `normalizeLineEndingsRealloc`, including its ownership rules, and digest
+/// the result.
+///
+/// With `want_file_digest`, the bytes as read are digested too. A file with no
+/// CRLF is byte-identical before and after normalization, so both digests are
+/// one hash of its bytes; only a file that normalization rewrote is hashed in
+/// each form.
+pub fn normalizeAndDigest(
+    allocator: std.mem.Allocator,
+    data: []u8,
+    want_file_digest: bool,
+) std.mem.Allocator.Error!DigestedSource {
+    const file_len = data.len;
+    const file_digest: ?SourceDigest = if (want_file_digest) SourceDigest.of(data) else null;
+    const source = try normalizeLineEndingsRealloc(allocator, data);
+    // Normalization only removes bytes, so an unchanged length means the
+    // bytes are unchanged.
+    const digest = if (file_digest != null and source.len == file_len)
+        file_digest.?
+    else
+        SourceDigest.of(source);
+    return .{ .source = source, .digest = digest, .file_digest = file_digest };
 }
 
 /// Normalizes line endings by allocating a new buffer if needed.
@@ -158,4 +195,24 @@ test "normalizeLineEndingsRealloc - proper memory management" {
         defer allocator.free(result);
         try std.testing.expectEqualStrings("", result);
     }
+}
+
+test "normalizeAndDigest digests the normalized bytes, and the bytes as read on request" {
+    const allocator = std.testing.allocator;
+
+    const lf_only = try normalizeAndDigest(allocator, try allocator.dupe(u8, "a = 1\nb = 2\n"), false);
+    defer allocator.free(lf_only.source);
+    try std.testing.expect(lf_only.digest.eql(SourceDigest.of("a = 1\nb = 2\n")));
+    try std.testing.expect(lf_only.file_digest == null);
+
+    const lf_both = try normalizeAndDigest(allocator, try allocator.dupe(u8, "a = 1\nb = 2\n"), true);
+    defer allocator.free(lf_both.source);
+    try std.testing.expect(lf_both.digest.eql(SourceDigest.of("a = 1\nb = 2\n")));
+    try std.testing.expect(lf_both.file_digest.?.eql(lf_both.digest));
+
+    const crlf_both = try normalizeAndDigest(allocator, try allocator.dupe(u8, "a = 1\r\nb = 2\r\n"), true);
+    defer allocator.free(crlf_both.source);
+    try std.testing.expectEqualStrings("a = 1\nb = 2\n", crlf_both.source);
+    try std.testing.expect(crlf_both.digest.eql(SourceDigest.of("a = 1\nb = 2\n")));
+    try std.testing.expect(crlf_both.file_digest.?.eql(SourceDigest.of("a = 1\r\nb = 2\r\n")));
 }
