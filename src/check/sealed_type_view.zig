@@ -232,6 +232,39 @@ pub const SealedTypeView = struct {
         return self.facts(self.representative(var_)).reached;
     }
 
+    /// The kind of `var_`'s checked type: the tag `payload` returns, read
+    /// without decoding the payload.
+    pub fn payloadTag(self: SealedTypeView, var_: Var) std.meta.Tag(CheckedTypePayload) {
+        const env = self.env;
+        const type_store = self.typeStore();
+        const desc_idx = type_store.resolveDescIdx(var_);
+        const word = type_store.wordAt(desc_idx);
+        const tag: std.meta.Tag(CheckedTypePayload) = if (word.flags().empty_tag_union_is_default) .flex else switch (word.kind) {
+            .err => .err,
+            .field_presence => .field_kind,
+            .flex => .flex,
+            .rigid => .rigid,
+            .alias => .alias,
+            .empty_record => .empty_record,
+            .empty_tag_union => .empty_tag_union,
+            .record => record: {
+                const record = type_store.recordAt(desc_idx);
+                break :record if (record.fields.len() == 0 and checked_artifact.checkedRecordExtIsEmpty(env, record.ext)) .empty_record else .record;
+            },
+            .tuple => .tuple,
+            .nominal_type => .nominal,
+            .fn_pure, .fn_unbound, .fn_effectful => .function,
+            .tag_union => tag_union: {
+                const tag_union = type_store.tagUnionAt(desc_idx);
+                break :tag_union if (tag_union.tags.len() == 0 and checked_artifact.checkedTagUnionExtIsEmpty(env, tag_union.ext)) .empty_tag_union else .tag_union;
+            },
+        };
+        if (std.debug.runtime_safety and std.meta.activeTag(self.payload(var_)) != tag) {
+            invariant("checked type {d}'s payload kind disagreed with its decoded payload", .{@backingInt(var_)});
+        }
+        return tag;
+    }
+
     /// `var_`'s checked type. `var_` is its class's checked representative,
     /// and publication reached it. The content is read by kind from the
     /// stored descriptor, so only the payload of the kind found is decoded.

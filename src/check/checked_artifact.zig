@@ -5048,6 +5048,27 @@ pub const CheckedTypeStore = struct {
         return self.sealedView(env);
     }
 
+    /// The kind of `id`'s checked type: the tag `payload` returns, read
+    /// without decoding the payload.
+    pub fn payloadTag(self: *const CheckedTypeStore, id: CheckedTypeId) std.meta.Tag(CheckedTypePayload) {
+        if (!type_ids.isSynthesized(id)) return self.sealedSourceView().payloadTag(type_ids.asVar(id));
+        return switch (self.payloads.items()[self.synthesizedIndex(id)]) {
+            .pending => .pending,
+            .err => .err,
+            .flex => .flex,
+            .rigid => .rigid,
+            .alias => .alias,
+            .record => .record,
+            .tuple => .tuple,
+            .nominal => .nominal,
+            .function => .function,
+            .empty_record => .empty_record,
+            .tag_union => .tag_union,
+            .empty_tag_union => .empty_tag_union,
+            .field_kind => .field_kind,
+        };
+    }
+
     /// The entry a synthesized id names.
     fn synthesizedIndex(self: *const CheckedTypeStore, id: CheckedTypeId) usize {
         const index = type_ids.synthesizedIndex(id);
@@ -7909,10 +7930,9 @@ fn embedReachableImportedNominalDecls(
     first_payload: usize,
 ) Allocator.Error!void {
     for (source_vars) |var_| {
-        switch (store.payload(type_ids.fromVar(var_))) {
-            .nominal => |nominal| try embedImportedNominalDeclFor(allocator, store, names, imports, nominal.toBuild()),
-            .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => {},
-        }
+        const ty = type_ids.fromVar(var_);
+        if (store.payloadTag(ty) != .nominal) continue;
+        try embedImportedNominalDeclFor(allocator, store, names, imports, store.payload(ty).nominal.toBuild());
     }
     var i = first_payload;
     while (i < store.payloads.items().len) : (i += 1) {
@@ -24718,9 +24738,8 @@ pub const ModuleInterfaceCapabilities = struct {
         defer source_capabilities.deinit(allocator);
 
         for (nominal_types.items) |nominal_ty| {
-            const payload = checked_types.payload(nominal_ty);
-            if (payload != .nominal) continue;
-            const nominal = payload.nominal;
+            if (checked_types.payloadTag(nominal_ty) != .nominal) continue;
+            const nominal = checked_types.payload(nominal_ty).nominal;
             if (nominal.builtin != null) continue;
             if (nominal.origin_module != current_module) continue;
             const nominal_key = checkedNominalTypeKey(nominal);
