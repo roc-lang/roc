@@ -44,7 +44,7 @@ pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.
 const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.CheckedReports.Serialized, 1);
 
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 45 stores reproducible checking
+/// reflected in layout fingerprints. Version 47 stores reproducible checking
 /// and evaluation reports beside paired callable forwarding and request
 /// completion and cached literal argument roots for both strategies,
 /// body-local type context arguments, generated-codec recurrences,
@@ -67,10 +67,13 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// `discarded`, specialization-interface relations that equate no use of a
 /// name a destructuring scheme alias binds with that name's type, and site
 /// evidence that leaves a requirement a use of a constant's scheme alias does
-/// not pin to the stored function's request. It rejects every earlier format,
-/// including the independent version 19 through 45 formats. Platform-pairing
-/// entries share it.
-const checked_envelope_version: u32 = 46;
+/// not pin to the stored function's request, hoisted source-pattern root
+/// wrappers whose requirement paths lie below their return, the bodies of
+/// those roots resolved against no evidence chain, and top-level constants'
+/// right-hand sides resolved against their wrapper's own requirements. It
+/// rejects every earlier format, including the independent version 19
+/// through 46 formats. Platform-pairing entries share it.
+const checked_envelope_version: u32 = 47;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment.
