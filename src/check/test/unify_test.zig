@@ -103,7 +103,7 @@ const TestEnv = struct {
             .unify_scratch = &self.scratch,
             .occurs_scratch = &self.occurs_scratch,
         };
-        return try unify_mod.unify(&env, a, b, .{});
+        return try unify_mod.unify(&env, a, b, .{ .actual_region = base.Region.zero() });
     }
 
     fn unifyWithOptions(self: *Self, a: Var, b: Var, opts: unify_mod.Options) std.mem.Allocator.Error!Result {
@@ -117,7 +117,9 @@ const TestEnv = struct {
             .unify_scratch = &self.scratch,
             .occurs_scratch = &self.occurs_scratch,
         };
-        return try unify_mod.unify(&env, a, b, opts);
+        var region_opts = opts;
+        region_opts.actual_region = base.Region.zero();
+        return try unify_mod.unify(&env, a, b, region_opts);
     }
 
     /// Helper to call the write-no-report unify variant from TestEnv.
@@ -1423,15 +1425,9 @@ test "unify - two empty nominal types" {
 }
 
 test "unify - distinct concrete builtin numeric nominals never unify" {
-    // GUARD for `structurallyIncompatiblePair` in src/check/unify.zig (the
-    // pair classifier behind `numeralCandidateStructurallyRefuted` in
-    // src/check/Check.zig): its dispatcher-position refutation (and the
-    // witness-probe assertion in `commitLiteralDefault`) assumes two
-    // CONCRETE builtin numeric nominals with different identities (origin +
-    // source decl) can never unify—
-    // there is no implicit numeric widening/coercion in the unifier. If such
-    // coercion is ever added, this test fails legibly BEFORE the structural
-    // pre-filter starts skipping probes that would now succeed.
+    // Two concrete builtin numeric nominals with different identities
+    // (origin + source decl) never unify: the unifier has no implicit numeric
+    // widening or coercion.
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();

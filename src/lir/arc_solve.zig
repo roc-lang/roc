@@ -773,8 +773,6 @@ const VisibilityFact = union(enum) {
 };
 
 const UniqueFact = union(enum) {
-    birth: LIR.LocalId,
-    foreign: LIR.LocalId,
     /// A pure same-value alias definition at `stmt`.
     alias: struct { target: LIR.LocalId, source: LIR.LocalId, stmt: LIR.CFStmtId },
     join_target: LIR.LocalId,
@@ -784,7 +782,6 @@ const UniqueFact = union(enum) {
     consume: struct { local: LIR.LocalId, stmt: LIR.CFStmtId },
     destroy: LIR.LocalId,
     read: LIR.LocalId,
-    representation_read: LIR.LocalId,
 };
 
 const UniqueJoinIncoming = struct {
@@ -2033,7 +2030,6 @@ fn solveRepresentationAliases(solver: *const Solver, layouts: *const layout_mod.
             if (target == null or !aliases.isSet(target.?)) try Seed.add(solver, &required, &work, alias.source);
         },
         .join_incoming => |incoming| try Seed.add(solver, &required, &work, incoming.source),
-        .birth, .foreign, .representation_read => {},
     };
     for (solver.unique_calls.items) |call| {
         const args = solver.store.getLocalSpan(call.args);
@@ -2276,16 +2272,9 @@ fn liftReachableStatements(solver: *Solver) SolveError!void {
     for (0..solver.store.procSpecCount()) |proc_index| {
         const proc = solver.store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
         const params = solver.store.getLocalSpan(proc.args);
-        for (0..GuardedList.borrowLen(params)) |param_index| {
-            const param = GuardedList.at(params, param_index);
-            try solver.unique_facts.append(solver.allocator, .{ .foreign = param });
-        }
         try solver.proc_stmts.open(solver.allocator);
         try solver.proc_returns.open(solver.allocator);
         try solver.proc_join_bodies.open(solver.allocator);
-        // Bodyless procedures still have ABI parameter definitions. They
-        // contribute no reachable statements, but their params are foreign
-        // uniqueness origins just like the independent whole-store model.
         const body = proc.arcBody() orelse continue;
         for (0..GuardedList.borrowLen(params)) |param_index| {
             try solver.binding_facts.append(solver.allocator, .{ .fresh = GuardedList.at(params, param_index) });
@@ -2961,11 +2950,9 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 },
                 inline .field, .tag_payload, .tag_payload_struct => {
                     try liftVisibilityLink(solver, assign.target, assign.op.source);
-                    try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
                     try solver.unique_facts.append(allocator, .{ .read = assign.op.source });
                 },
                 .discriminant => {
-                    try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
                     try solver.unique_facts.append(allocator, .{ .read = assign.op.source });
                 },
             }
@@ -2974,18 +2961,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
             if (assign.value == .proc_ref) {
                 solver.address_taken.set(@backingInt(assign.value.proc_ref));
-            } else if (assign.value == .str_literal or assign.value == .static_data or assign.value == .bytes_literal) {
-                try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
-            }
-            switch (assign.value) {
-                .str_literal, .static_data, .bytes_literal => {},
-                .i64_literal,
-                .i128_literal,
-                .f64_literal,
-                .f32_literal,
-                .dec_literal,
-                .proc_ref,
-                => try solver.unique_facts.append(allocator, .{ .birth = assign.target }),
             }
         },
         .init_uninitialized => {},
@@ -3028,7 +3003,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             }
             try liftVisibilitySeed(solver, assign.closure);
             try liftVisibilitySeed(solver, assign_stmt.target);
-            try solver.unique_facts.append(allocator, .{ .foreign = assign_stmt.target });
             if (assign.result_reuse) {
                 try solver.unique_facts.append(allocator, .{ .consume = .{ .local = LIR.erasedCallOwner(assign), .stmt = current } });
             } else {
@@ -3045,7 +3019,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             if (assign.capture) |capture| try solver.binding_facts.append(allocator, .{ .demand = capture });
             if (assign.reuse) |reuse| try solver.binding_facts.append(allocator, .{ .demand = reuse });
             if (assign.capture) |capture| try liftVisibilityLink(solver, assign_stmt.target, capture);
-            try solver.unique_facts.append(allocator, .{ .birth = assign_stmt.target });
             if (assign.capture) |capture| try solver.unique_facts.append(allocator, .{ .destroy = capture });
             if (assign.reuse) |reuse| try solver.unique_facts.append(allocator, .{ .consume = .{ .local = reuse, .stmt = current } });
         },
@@ -3102,10 +3075,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                     }
                 }
             }
-            try solver.unique_facts.append(allocator, if (rc_effect.result_unique)
-                .{ .birth = assign.target }
-            else
-                .{ .foreign = assign.target });
             for (0..GuardedList.borrowLen(args)) |position| {
                 const arg = GuardedList.at(args, position);
                 if (position >= 64) {
@@ -3122,15 +3091,12 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                     try solver.unique_facts.append(allocator, .{ .destroy = arg });
                     read_only = false;
                 }
-                if (read_only) try solver.unique_facts.append(allocator, if ((assign.op.representationArgs() & bit) != 0)
-                    .{ .representation_read = arg }
-                else
-                    .{ .read = arg });
+                if (read_only and (assign.op.representationArgs() & bit) == 0)
+                    try solver.unique_facts.append(allocator, .{ .read = arg });
             }
         },
         .assign_list => |assign| {
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            try solver.unique_facts.append(allocator, .{ .birth = assign.target });
             const elems = store.getLocalSpan(assign.elems);
             for (0..GuardedList.borrowLen(elems)) |index| {
                 const elem = GuardedList.at(elems, index);
@@ -3141,7 +3107,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
         },
         .assign_struct => |assign| {
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            try solver.unique_facts.append(allocator, .{ .birth = assign.target });
             const fields = store.getLocalSpan(assign.fields);
             for (0..GuardedList.borrowLen(fields)) |index| {
                 const field = GuardedList.at(fields, index);
@@ -3152,7 +3117,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
         },
         .assign_tag => |assign| {
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            try solver.unique_facts.append(allocator, .{ .birth = assign.target });
             if (assign.payload) |payload| {
                 try solver.binding_facts.append(allocator, .{ .demand = payload });
                 try liftVisibilityLink(solver, assign.target, payload);
@@ -3192,7 +3156,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                     } });
                 },
                 .replace_existing => {
-                    try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
                     try solver.unique_facts.append(allocator, .{ .destroy = assign.target });
                     try solver.unique_facts.append(allocator, .{ .destroy = assign.value });
                 },
@@ -3227,7 +3190,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                     .view => |local| {
                         try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = local, .source = str_match_stmt.source } });
                         try liftVisibilityLink(solver, local, str_match_stmt.source);
-                        try solver.unique_facts.append(allocator, .{ .foreign = local });
                     },
                 }
             }
@@ -3245,7 +3207,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                         .view => |local| {
                             try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = local, .source = str_match_set.source } });
                             try liftVisibilityLink(solver, local, str_match_set.source);
-                            try solver.unique_facts.append(allocator, .{ .foreign = local });
                         },
                     }
                 }
@@ -3325,12 +3286,10 @@ fn liftDynStmtFacts(solver: *Solver, current: LIR.CFStmtId, target: ?LIR.LocalId
             const defined = target orelse solveInvariant("ARC dyn component read had no target");
             if (solver.domain.indexOf(base) == null) {
                 try solver.binding_facts.append(allocator, .{ .fresh = defined });
-                try solver.unique_facts.append(allocator, .{ .foreign = defined });
                 return;
             }
             try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = defined, .source = base } });
             try liftVisibilityLink(solver, defined, base);
-            try solver.unique_facts.append(allocator, .{ .foreign = defined });
             try solver.unique_facts.append(allocator, .{ .read = base });
         },
         .alias => |source| {
@@ -3340,7 +3299,6 @@ fn liftDynStmtFacts(solver: *Solver, current: LIR.CFStmtId, target: ?LIR.LocalId
             // fresh value.
             if (solver.domain.indexOf(source) == null) {
                 try solver.binding_facts.append(allocator, .{ .fresh = defined });
-                try solver.unique_facts.append(allocator, .{ .birth = defined });
                 return;
             }
             if (defined != source) {
@@ -3355,14 +3313,12 @@ fn liftDynStmtFacts(solver: *Solver, current: LIR.CFStmtId, target: ?LIR.LocalId
         .construct => {
             const defined = target orelse solveInvariant("ARC dyn construction had no target");
             try solver.binding_facts.append(allocator, .{ .fresh = defined });
-            try solver.unique_facts.append(allocator, .{ .birth = defined });
             const lift: Lift = .{ .solver = solver, .target = defined };
             try DynOps.Operands.of(op).each(solver.store, &lift, Lift.consumed);
         },
         .borrow_operands => {
             const defined = target orelse solveInvariant("ARC dyn operand read had no target");
             try solver.binding_facts.append(allocator, .{ .fresh = defined });
-            try solver.unique_facts.append(allocator, .{ .foreign = defined });
             const lift: Lift = .{ .solver = solver, .target = defined };
             try DynOps.Operands.of(op).each(solver.store, &lift, Lift.borrowed);
         },
@@ -3378,7 +3334,6 @@ fn liftDynStmtFacts(solver: *Solver, current: LIR.CFStmtId, target: ?LIR.LocalId
             }
             try liftVisibilitySeed(solver, call.closure);
             try liftVisibilitySeed(solver, defined);
-            try solver.unique_facts.append(allocator, .{ .foreign = defined });
             if (call.result_reuse) {
                 try solver.unique_facts.append(allocator, .{ .consume = .{ .local = LIR.erasedCallOwner(call), .stmt = current } });
             } else {
@@ -5335,9 +5290,9 @@ pub fn settleUniquenessWithOptions(
     const arena = memory.allocator();
     const proc_count = store.procSpecCount();
     const structure = solution.uniqueness_structure orelse solveInvariant("uniqueness settlement ran on a solution without its structure");
-    if (structure.store != store or structure.stmt_count != store.cfStmtCount() or
+    if (builtin.mode == .debug and (structure.store != store or structure.stmt_count != store.cfStmtCount() or
         structure.local_count != store.localCount() or structure.proc_count != proc_count or
-        !sameResourceTable(structure.rc_local, rc_local))
+        !sameResourceTable(structure.rc_local, rc_local)))
     {
         solveInvariant("uniqueness settlement reused a structure built for a different store");
     }

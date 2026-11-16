@@ -426,6 +426,7 @@ const Walker = struct {
                 const ref_id = artifact.resolved_value_refs.lookupIdByExpr(expr) orelse return;
                 try self.walkRef(artifact.resolved_value_refs.records.items()[@backingInt(ref_id)].ref);
             },
+            .requirement => |requirement| try self.pushTemplate(artifact.checked_procedure_templates.templateRef(artifact.key.digest(), requirement.template)),
         }
     }
 
@@ -521,29 +522,61 @@ const Walker = struct {
 /// program storing it keeps what reading function values takes (design.md
 /// "Stored Function Values"). `modules` lists the artifacts `root.module`
 /// indexes; `program` is every module of the program the root is evaluated
-/// in, which holds each nominal's declaring module.
+/// in, which holds each nominal's declaring module. `memo` remembers the
+/// answer for each value type across the roots of one program.
 pub fn rootHoldsFunction(
     allocator: Allocator,
+    memo: *FunctionTypeMemo,
     modules: []const *const checked.CheckedModuleArtifact,
     program: lir.CheckedPipeline.CheckedModuleSet,
     root: Root,
 ) Allocator.Error!bool {
     const artifact = modules[root.module];
     if (artifact.compile_time_roots.root(root.root).kind == .callable_binding) return true;
+    const own_types = artifact.typesView();
+    // The root's checked type is its wrapper's function type; its value is
+    // the wrapper's result.
+    const value_type = switch (own_types.payload(root.request.checked_type)) {
+        .function => |function| function.ret,
+        .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => base.invariant("compile-time finalization invariant violated: a compile-time root's checked type is not a function type", .{}),
+    };
+    const key: FunctionTypeMemo.Key = .{ .key = artifact.key.digest().bytes, .ty = value_type };
+    const entry = try memo.answers.getOrPut(allocator, key);
+    if (!entry.found_existing) {
+        errdefer memo.answers.removeByPtr(entry.key_ptr);
+        entry.value_ptr.* = try typeHoldsFunction(allocator, program, key.key, own_types, value_type);
+    }
+    return entry.value_ptr.*;
+}
+
+/// `rootHoldsFunction`'s answers by value type. A module key names one
+/// checked type store, which does not change once checked, so an answer
+/// holds for every root of a program whose value has that type.
+pub const FunctionTypeMemo = struct {
+    answers: std.AutoHashMapUnmanaged(Key, bool) = .empty,
+
+    const Key = struct { key: [32]u8, ty: checked.CheckedTypeId };
+
+    pub fn deinit(self: *FunctionTypeMemo, allocator: Allocator) void {
+        self.answers.deinit(allocator);
+        self.* = undefined;
+    }
+};
+
+fn typeHoldsFunction(
+    allocator: Allocator,
+    program: lir.CheckedPipeline.CheckedModuleSet,
+    start_key: [32]u8,
+    start_types: checked.CheckedTypeStoreView,
+    start: checked.CheckedTypeId,
+) Allocator.Error!bool {
     const Pending = struct { key: [32]u8, types: checked.CheckedTypeStoreView, ty: checked.CheckedTypeId };
     const Seen = struct { key: [32]u8, ty: checked.CheckedTypeId };
     var seen = std.AutoHashMapUnmanaged(Seen, void).empty;
     defer seen.deinit(allocator);
     var pending = std.ArrayList(Pending).empty;
     defer pending.deinit(allocator);
-    const own_types = artifact.typesView();
-    const own_key = artifact.key.digest().bytes;
-    // The root's checked type is its wrapper's function type; its value is
-    // the wrapper's result.
-    switch (own_types.payload(root.request.checked_type)) {
-        .function => |function| try pending.append(allocator, .{ .key = own_key, .types = own_types, .ty = function.ret }),
-        .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => base.invariant("compile-time finalization invariant violated: a compile-time root's checked type is not a function type", .{}),
-    }
+    try pending.append(allocator, .{ .key = start_key, .types = start_types, .ty = start });
     while (pending.pop()) |item| {
         const seen_entry = try seen.getOrPut(allocator, .{ .key = item.key, .ty = item.ty });
         if (seen_entry.found_existing) continue;
@@ -734,9 +767,62 @@ test "CTFE root classification resolves nominal backings throughout the checked 
         // A nominal can be supplied by the ownership anchor, a platform
         // relation, or an ordinary import. None needs a pending CTFE root.
         const root: Root = .{ .module = 0, .root = request.compile_time_root.get().?, .request = request };
-        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &.{consumer}, .{ .root = checked.loweringView(holder), .imports = &.{checked.importedView(consumer)} }, root));
-        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &.{consumer}, .{ .root = checked.loweringViewWithRelations(consumer, &.{checked.importedView(holder)}) }, root));
-        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &.{consumer}, .{ .root = checked.loweringView(consumer), .imports = &.{checked.importedView(holder)} }, root));
+        // Each program configuration gets its own memo, so each call walks.
+        var memos: [3]FunctionTypeMemo = .{ .{}, .{}, .{} };
+        defer for (&memos) |*memo| memo.deinit(allocator);
+        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &memos[0], &.{consumer}, .{ .root = checked.loweringView(holder), .imports = &.{checked.importedView(consumer)} }, root));
+        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &memos[1], &.{consumer}, .{ .root = checked.loweringViewWithRelations(consumer, &.{checked.importedView(holder)}) }, root));
+        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &memos[2], &.{consumer}, .{ .root = checked.loweringView(consumer), .imports = &.{checked.importedView(holder)} }, root));
+    }
+}
+
+test "a publication's strategy alone decides which evaluator stores a function-holding root" {
+    const allocator = std.testing.allocator;
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var parsed = try @import("inspected.zig").parseProgram(allocator, .module,
+            \\module [table, plain, total]
+            \\add_one : I64 -> I64
+            \\add_one = |x| x + 1
+            \\table : List(I64 -> I64)
+            \\table = [add_one, |x| x * 2]
+            \\plain : I64
+            \\plain = 40 + 2
+            \\total : I64
+            \\total = table.fold(plain, |acc, f| f(acc))
+        , &.{}, .{ .io = std.testing.io, .roots = .published_only, .strategy = strategy });
+        defer parsed.deinit(allocator);
+        try std.testing.expectEqual(@as(usize, 0), parsed.checker.problems.problems.items.len);
+        const module = &parsed.checked_artifact;
+        const views = try allocator.alloc(checked.ImportedModuleView, parsed.import_artifacts.len);
+        defer allocator.free(views);
+        for (parsed.import_artifacts, views) |*artifact, *view| view.* = checked.importedView(artifact);
+        const other: base.SpecializationStrategy = switch (strategy) {
+            .lss => .boxy,
+            .boxy => .lss,
+        };
+        var constants: usize = 0;
+        var holding: usize = 0;
+        var memo: FunctionTypeMemo = .{};
+        defer memo.deinit(allocator);
+        for (module.root_requests.compile_time_requests.items()) |request| {
+            const root_id = request.compile_time_root.get().?;
+            const root = module.compile_time_roots.root(root_id);
+            if (root.kind != .constant) continue;
+            constants += 1;
+            const holds = try rootHoldsFunction(allocator, &memo, &.{module}, .{ .root = checked.loweringView(module), .imports = views }, .{ .module = 0, .root = root_id, .request = request });
+            if (holds) holding += 1;
+            // The publication's strategy has every value.
+            try std.testing.expect(!root.needsEvaluation(strategy));
+            // A value holding no function is the same value under either
+            // strategy, whichever evaluator stored it, a reader of the
+            // function-holding root's among them. A function value exists
+            // only in the representation of the evaluator that stored it.
+            try std.testing.expectEqual(holds, root.needsEvaluation(other));
+            try std.testing.expectEqual(holds and strategy == .boxy, root.boxy_value != null);
+            try std.testing.expectEqual(holds and strategy == .boxy, root.payload == .unevaluated);
+        }
+        try std.testing.expectEqual(@as(usize, 3), constants);
+        try std.testing.expectEqual(@as(usize, 1), holding);
     }
 }
 

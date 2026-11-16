@@ -72,6 +72,7 @@ pub const MatchBranchPart = types.MatchBranchPart;
 pub const MatchAltBinderMissing = types.MatchAltBinderMissing;
 pub const DiscardedVarUpdate = types.DiscardedVarUpdate;
 pub const ComptimeCondition = types.ComptimeCondition;
+pub const GeneralizationNestingTooDeep = types.GeneralizationNestingTooDeep;
 
 // Type declaration errors
 pub const TypeApplyArityMismatch = types.TypeApplyArityMismatch;

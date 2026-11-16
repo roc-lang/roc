@@ -634,8 +634,15 @@ const Builder = struct {
                 // `literal_argument` roots of the instantiations checking
                 // records when it depends on its instance, as a numeral or a
                 // quote is converted by them; any other registers a literal
-                // root whatever the instance.
-                .interpolation => .{ bodies.literalConversionRoot(plan.node), .{ .strict = true } },
+                // root whatever the instance. Its assembler is a function no
+                // root stores, so a body converting a closed interpolation
+                // registers a literal root for it unless its conversion root
+                // rejected it, and a runtime program specialized after
+                // evaluation registers only literal roots the evaluation did.
+                .interpolation => if (bodies.literalConversionRoot(plan.node)) |root_id| return switch (view.compile_time_roots.root(root_id).payload) {
+                    .const_node => .{},
+                    .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => .{ .strict = true },
+                } else .{ bodies.literalConversionRoot(plan.node), .{ .strict = true } },
                 .str_segment,
                 .bytes_literal,
                 .lookup_local,
@@ -892,8 +899,9 @@ pub fn compute(
 /// The flags an instantiation of `template` that checking records no edge
 /// for contributes: such an instantiation converts each of the template's
 /// literal requirements in the specialization, so each contributes its
-/// dependent kind, and an interpolation, which a specialization always
-/// hoists, is strict.
+/// dependent kind, and an interpolation, which a specialization hoists at
+/// any type no validate-only `literal_argument` root converts it at, is
+/// strict.
 fn requirementFlagsOf(view: checked.ImportedModuleView, template: checked.CheckedProcedureTemplate) Flags {
     var flags: Flags = .{};
     for (view.checked_procedure_templates.templateLiteralRequirements(&template)) |requirement| {

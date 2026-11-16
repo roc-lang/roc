@@ -428,7 +428,7 @@ roundtrip = parse_show("hi")
 						(ty-lookup (name "I128") (builtin)))))))
 	(d-let
 		(p-assign (ident "ok_data"))
-		(e-call (constraint-fn-var 389)
+		(e-call (constraint-fn-var 382)
 			(e-lookup-local
 				(p-assign (ident "via_data")))
 			(e-list
@@ -442,7 +442,7 @@ roundtrip = parse_show("hi")
 			(e-block
 				(s-type-var-alias (alias "A") (type-var "a")
 					(ty-rigid-var (name "a")))
-				(e-type-dispatch-call (method "gen") (type-dispatch-stmt 66) (constraint-fn-var 404)
+				(e-type-dispatch-call (method "gen") (type-dispatch-stmt 66) (constraint-fn-var 397)
 					(args
 						(e-empty_record)))))
 		(annotation
@@ -456,7 +456,7 @@ roundtrip = parse_show("hi")
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(d-let
 		(p-assign (ident "unpinned_ret"))
-		(e-call (constraint-fn-var 413)
+		(e-call (constraint-fn-var 406)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-empty_record)))
 	(d-let

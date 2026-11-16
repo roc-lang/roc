@@ -44,7 +44,7 @@ type_id_to_rust = |type_table, duplicate_names, preferred_names, type_id| {
 			if rec.name == "" {
 				"*mut c_void"
 			} else {
-				name_to_struct_name(rec.name)
+				record_struct_name(type_table, duplicate_names, type_id, rec)
 			}
 		RocTagUnion(tu) => resolve_tag_union_type_rust(type_table, duplicate_names, preferred_names, type_id, tu)
 		_ => type_repr_to_rust(type_table, duplicate_names, preferred_names, type_id, type_repr)
@@ -126,16 +126,27 @@ type_repr_to_rust = |type_table, duplicate_names, preferred_names, type_id, type
 		RocF64 => "f64"
 		RocDec => "RocDec"
 		RocList(elem_id) =>
-			if is_type_refcounted(type_table, elem_id) {
-				"RocList<${type_id_to_rust(type_table, duplicate_names, preferred_names, elem_id)}>"
-			} else {
-				"RocListWith<${type_id_to_rust(type_table, duplicate_names, preferred_names, elem_id)}, false>"
-			}
+			match type_table.get(elem_id) {
+				# The item has no layout the host can know, so the list has no
+				# item type.
+				RocUnknown(_) => "RocOpaqueList"
+				_ =>
+					if is_roc_released(type_table, elem_id) {
+						# The items are readable, but the allocation header
+						# depends on whether the opaque values they hold are
+						# refcounted, which only Roc knows.
+						"RocHeldList<${type_id_to_rust(type_table, duplicate_names, preferred_names, elem_id)}>"
+					} else if is_type_refcounted(type_table, elem_id) {
+						"RocList<${type_id_to_rust(type_table, duplicate_names, preferred_names, elem_id)}>"
+					} else {
+						"RocListWith<${type_id_to_rust(type_table, duplicate_names, preferred_names, elem_id)}, false>"
+					}
+				}
 		RocRecord(rec) =>
 			if rec.name == "" {
 				"*mut c_void"
 			} else {
-				name_to_struct_name(rec.name)
+				record_struct_name(type_table, duplicate_names, type_id, rec)
 			}
 		RocTagUnion(tu) => resolve_tag_union_type_rust(type_table, duplicate_names, preferred_names, type_id, tu)
 		# A function stored inside a value is one erased-callable allocation,
@@ -154,7 +165,7 @@ resolve_tag_union_type_rust = |type_table, duplicate_names, preferred_names, typ
 		SingleNoPayload => "*mut c_void"
 		NotSingleVariant =>
 			if tu.name != "" {
-				tag_union_struct_name(preferred_names, duplicate_names, type_id, tu)
+				tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
 			} else {
 				"*mut c_void"
 			}
@@ -164,6 +175,17 @@ resolve_tag_union_type_rust = |type_table, duplicate_names, preferred_names, typ
 ## Refcounted types need 2*ptr_width header space in list allocations.
 is_type_refcounted : TypeTable, U64 -> Bool
 is_type_refcounted = |type_table, type_id| type_table.is_refcounted(type_id)
+
+## True when a host that owns a value of this type cannot release it, because
+## the value holds an opaque Roc value. See `HostRcPlan`.
+is_roc_released : TypeTable, U64 -> Bool
+is_roc_released = |type_table, type_id| type_table.is_roc_released(type_id)
+
+## Comment emitted where a type's `decref` would be, when the type holds an
+## opaque Roc value.
+roc_released_note : Str -> Str
+roc_released_note = |indent|
+	"${indent}// No `decref`: this value holds an opaque Roc value, which only Roc can\n${indent}// release. Release its other parts one at a time and pass the opaque value\n${indent}// to a Roc function that takes ownership of it.\n"
 
 is_repr_refcounted : TypeTable, TypeRepr -> Bool
 is_repr_refcounted = |type_table, type_repr| type_table.repr_is_refcounted(type_repr)
@@ -284,36 +306,39 @@ expect name_to_struct_name("Builder.print_value!") == "BuilderPrintValue"
 ## Checks `name_to_struct_name` for this representative case.
 expect name_to_struct_name("__AnonStruct10") == "AnonStruct10"
 
-## Find named multi-variant tag unions whose Roc name appears more than once in
-## the type table. The result is computed once per glue run and reused while
+## Roc names that more than one host type is emitted under: named multi-variant
+## tag unions and named records whose name appears in the type table with
+## different shapes. The result is computed once per glue run and reused while
 ## rendering type names.
-duplicate_tag_union_names : TypeTable -> List(Str)
-duplicate_tag_union_names = |type_table| type_table.duplicate_tag_union_names()
+duplicate_type_names : TypeTable -> List(Str)
+duplicate_type_names = |type_table|
+	List.concat(type_table.duplicate_tag_union_names(), type_table.duplicate_record_names())
 
 ## Return the default Rust struct name for a multi-variant tag union.
 ##
 ## Generic tag unions used heavily by hosted functions can appear many times in
 ## the type table with different payload layouts. Rust needs a distinct concrete
 ## type for each layout.
-default_tag_union_struct_name : List(Str), U64, TagUnionRepr -> Str
-default_tag_union_struct_name = |duplicate_names, type_id, tu| {
-	base = name_to_struct_name(tu.name)
-
-	if List.contains(duplicate_names, tu.name) {
-		"${base}Type${U64.to_str(type_id)}"
-	} else {
-		base
-	}
+default_tag_union_struct_name : TypeTable, List(Str), U64, TagUnionRepr -> Str
+default_tag_union_struct_name = |type_table, duplicate_names, type_id, tu| {
+	Str.concat(name_to_struct_name(tu.name), type_table.shape_suffix(duplicate_names, tu.name, type_id))
 }
 
+## Return the emitted Rust type name for a named record. Two instantiations of
+## one generic nominal share a Roc name and are different host types, so each
+## shape gets its own name.
+record_struct_name : TypeTable, List(Str), U64, RecordRepr -> Str
+record_struct_name = |type_table, duplicate_names, type_id, rec|
+	Str.concat(name_to_struct_name(rec.name), type_table.shape_suffix(duplicate_names, rec.name, type_id))
+
 ## Return the emitted Rust struct name for a multi-variant tag union.
-tag_union_struct_name : TypeNamePlan.PreferredNames, List(Str), U64, TagUnionRepr -> Str
-tag_union_struct_name = |preferred_names, duplicate_names, type_id, tu| {
+tag_union_struct_name : TypeTable, TypeNamePlan.PreferredNames, List(Str), U64, TagUnionRepr -> Str
+tag_union_struct_name = |type_table, preferred_names, duplicate_names, type_id, tu| {
 	preferred = preferred_names.lookup(type_id)
 	if preferred.found {
 		preferred.name
 	} else {
-		default_tag_union_struct_name(duplicate_names, type_id, tu)
+		default_tag_union_struct_name(type_table, duplicate_names, type_id, tu)
 	}
 }
 
@@ -335,11 +360,11 @@ generated_type_names_rust = |type_table, duplicate_names| {
 		match type_info.repr {
 			RocRecord(rec) =>
 				if rec.name != "" {
-					$names = $names.append(name_to_struct_name(rec.name))
+					$names = $names.append(record_struct_name(type_table, duplicate_names, $type_id, rec))
 				}
 			RocTagUnion(tu) =>
 				if List.len(tu.tags) >= 2 and tu.name != "" {
-					struct_name = default_tag_union_struct_name(duplicate_names, $type_id, tu)
+					struct_name = default_tag_union_struct_name(type_table, duplicate_names, $type_id, tu)
 					$names = $names.append(struct_name)
 					if type_info.layout.tag_union_has_payload() {
 						$names = $names.append("${struct_name}Tag")
@@ -360,17 +385,20 @@ generated_type_names_rust = |type_table, duplicate_names| {
 	$names
 }
 
-type_name_root_alias_base_rust : TypeTable, Str, U64 -> Str
-type_name_root_alias_base_rust = |type_table, fallback, type_id|
+## A named type lends its name to the aliases of the root it is reached
+## from, unless that name is ambiguous: a name several host types are emitted
+## under denotes none of them, so the root keeps its own name.
+type_name_root_alias_base_rust : TypeTable, List(Str), Str, U64 -> Str
+type_name_root_alias_base_rust = |type_table, ambiguous_names, fallback, type_id|
 	match type_table.get(type_id) {
 		RocRecord(rec) =>
-			if rec.name != "" and !rec.anonymous {
+			if rec.name != "" and !rec.anonymous and !List.contains(ambiguous_names, rec.name) {
 				name_to_struct_name(rec.name)
 			} else {
 				fallback
 			}
 		RocTagUnion(tu) =>
-			if tu.name != "" and tu.name != "Try" and tu.name != "IOErr" {
+			if tu.name != "" and tu.name != "Try" and tu.name != "IOErr" and !List.contains(ambiguous_names, tu.name) {
 				name_to_struct_name(tu.name)
 			} else {
 				fallback
@@ -378,29 +406,19 @@ type_name_root_alias_base_rust = |type_table, fallback, type_id|
 		_ => fallback
 	}
 
-record_alias_fields_rust : TypeTable, RecordRepr -> List(RecordField)
-record_alias_fields_rust = |type_table, rec| {
-	var $fields = rec.fields
-	var $found = Bool.False
-
-	if rec.name != "" and !rec.anonymous {
-		for type_info in type_table.entries() {
-			match type_info.repr {
-				RocRecord(candidate) =>
-					if !$found and candidate.name == rec.name {
-						$fields = candidate.fields
-						$found = Bool.True
-					}
-				_ => {}
-			}
+## The fields a record's aliases are named from: those of the row its
+## declaration is emitted from, which is the first row with its shape.
+record_alias_fields_rust : TypeTable, U64 -> List(RecordField)
+record_alias_fields_rust = |type_table, type_id|
+	match type_table.get(type_table.shape_id(type_id)) {
+		RocRecord(declared) => declared.fields
+		_ => {
+			crash "glue invariant violated: a record's shape id named a row that is not a record"
 		}
 	}
 
-	$fields
-}
-
-type_name_roots_rust : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable -> List(TypeNamePlan.Root)
-type_name_roots_rust = |hosted_functions, provides_list, type_table| {
+type_name_roots_rust : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> List(TypeNamePlan.Root)
+type_name_roots_rust = |hosted_functions, provides_list, type_table, ambiguous_names| {
 	var $roots = []
 
 	for func in hosted_functions {
@@ -411,7 +429,7 @@ type_name_roots_rust = |hosted_functions, provides_list, type_table| {
 		for arg_type_id in func.arg_type_ids {
 			arg_fallback = "${base}Arg${U64.to_str($arg_idx)}"
 			$roots = $roots.append({
-				alias_base: type_name_root_alias_base_rust(type_table, arg_fallback, arg_type_id),
+				alias_base: type_name_root_alias_base_rust(type_table, ambiguous_names, arg_fallback, arg_type_id),
 				module_base,
 				type_id: arg_type_id,
 			})
@@ -435,7 +453,7 @@ type_name_roots_rust = |hosted_functions, provides_list, type_table| {
 				for arg_type_id in func.args {
 					arg_fallback = "${base}Arg${U64.to_str($arg_idx)}"
 					$roots = $roots.append({
-						alias_base: type_name_root_alias_base_rust(type_table, arg_fallback, arg_type_id),
+						alias_base: type_name_root_alias_base_rust(type_table, ambiguous_names, arg_fallback, arg_type_id),
 						module_base,
 						type_id: arg_type_id,
 					})
@@ -450,7 +468,7 @@ type_name_roots_rust = |hosted_functions, provides_list, type_table| {
 			}
 			ProvidedData(type_id) => {
 				$roots = $roots.append({
-					alias_base: type_name_root_alias_base_rust(type_table, base, type_id),
+					alias_base: type_name_root_alias_base_rust(type_table, ambiguous_names, base, type_id),
 					module_base,
 					type_id,
 				})
@@ -461,33 +479,33 @@ type_name_roots_rust = |hosted_functions, provides_list, type_table| {
 	$roots
 }
 
-append_type_alias_roots_rust : List(TypeNamePlan.Root), TypeTable, Str, Str, U64, List(U64) -> List(TypeNamePlan.Root)
-append_type_alias_roots_rust = |roots, type_table, alias_base, module_base, type_id, visited_type_ids| {
+append_type_alias_roots_rust : List(TypeNamePlan.Root), TypeTable, List(Str), Str, Str, U64, List(U64) -> List(TypeNamePlan.Root)
+append_type_alias_roots_rust = |roots, type_table, ambiguous_names, alias_base, module_base, type_id, visited_type_ids| {
 	if List.contains(visited_type_ids, type_id) {
 		return roots
 	}
 
 	next_visited = visited_type_ids.append(type_id)
-	root_alias_base = type_name_root_alias_base_rust(type_table, alias_base, type_id)
+	root_alias_base = type_name_root_alias_base_rust(type_table, ambiguous_names, alias_base, type_id)
 
 	var $roots = roots.append({ alias_base: root_alias_base, module_base, type_id })
 
 	match type_table.get(type_id) {
-		RocRecord(rec) => {
-			for field in record_alias_fields_rust(type_table, rec) {
+		RocRecord(_) => {
+			for field in record_alias_fields_rust(type_table, type_id) {
 				field_base = "${root_alias_base}${RocName.from_str(field.name).to_pascal_clean()}"
-				$roots = append_type_alias_roots_rust($roots, type_table, field_base, module_base, field.type_id, next_visited)
+				$roots = append_type_alias_roots_rust($roots, type_table, ambiguous_names, field_base, module_base, field.type_id, next_visited)
 			}
 			$roots
 		}
-		RocList(elem_id) => append_type_alias_roots_rust($roots, type_table, root_alias_base, module_base, elem_id, next_visited)
-		RocBox(inner_id) => append_type_alias_roots_rust($roots, type_table, root_alias_base, module_base, inner_id, next_visited)
+		RocList(elem_id) => append_type_alias_roots_rust($roots, type_table, ambiguous_names, root_alias_base, module_base, elem_id, next_visited)
+		RocBox(inner_id) => append_type_alias_roots_rust($roots, type_table, ambiguous_names, root_alias_base, module_base, inner_id, next_visited)
 		RocTagUnion(tu) => {
 			var $next = $roots
 			for tag in tu.tags {
 				child_base = "${root_alias_base}${RocName.capitalize_first(tag.name)}"
 				for payload_id in tag.payload {
-					$next = append_type_alias_roots_rust($next, type_table, child_base, module_base, payload_id, next_visited)
+					$next = append_type_alias_roots_rust($next, type_table, ambiguous_names, child_base, module_base, payload_id, next_visited)
 				}
 			}
 			$next
@@ -496,8 +514,8 @@ append_type_alias_roots_rust = |roots, type_table, alias_base, module_base, type
 	}
 }
 
-type_alias_roots_rust : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable -> List(TypeNamePlan.Root)
-type_alias_roots_rust = |hosted_functions, provides_list, type_table| {
+type_alias_roots_rust : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> List(TypeNamePlan.Root)
+type_alias_roots_rust = |hosted_functions, provides_list, type_table, ambiguous_names| {
 	var $roots = []
 
 	for func in hosted_functions {
@@ -507,11 +525,11 @@ type_alias_roots_rust = |hosted_functions, provides_list, type_table| {
 		var $arg_idx = 0
 		for arg_type_id in func.arg_type_ids {
 			arg_fallback = "${base}Arg${U64.to_str($arg_idx)}"
-			$roots = append_type_alias_roots_rust($roots, type_table, arg_fallback, module_base, arg_type_id, [])
+			$roots = append_type_alias_roots_rust($roots, type_table, ambiguous_names, arg_fallback, module_base, arg_type_id, [])
 			$arg_idx = $arg_idx + 1
 		}
 
-		$roots = append_type_alias_roots_rust($roots, type_table, base, module_base, func.ret_type_id, [])
+		$roots = append_type_alias_roots_rust($roots, type_table, ambiguous_names, base, module_base, func.ret_type_id, [])
 	}
 
 	for entry in provides_list {
@@ -523,14 +541,14 @@ type_alias_roots_rust = |hosted_functions, provides_list, type_table| {
 				var $arg_idx = 0
 				for arg_type_id in func.args {
 					arg_fallback = "${base}Arg${U64.to_str($arg_idx)}"
-					$roots = append_type_alias_roots_rust($roots, type_table, arg_fallback, module_base, arg_type_id, [])
+					$roots = append_type_alias_roots_rust($roots, type_table, ambiguous_names, arg_fallback, module_base, arg_type_id, [])
 					$arg_idx = $arg_idx + 1
 				}
 
-				$roots = append_type_alias_roots_rust($roots, type_table, base, module_base, func.ret, [])
+				$roots = append_type_alias_roots_rust($roots, type_table, ambiguous_names, base, module_base, func.ret, [])
 			}
 			ProvidedData(type_id) => {
-				$roots = append_type_alias_roots_rust($roots, type_table, base, module_base, type_id, [])
+				$roots = append_type_alias_roots_rust($roots, type_table, ambiguous_names, base, module_base, type_id, [])
 			}
 		}
 	}
@@ -542,7 +560,7 @@ preferred_type_names_rust : List(HostedFunctionInfo), List(ProvidesEntry), TypeT
 preferred_type_names_rust = |hosted_functions, provides_list, type_table, duplicate_names|
 	TypeNamePlan.from_table(type_table).preferred_names(
 		generated_type_names_rust(type_table, duplicate_names),
-		type_name_roots_rust(hosted_functions, provides_list, type_table),
+		type_name_roots_rust(hosted_functions, provides_list, type_table, duplicate_names),
 	)
 
 ## RustGlue must keep distinct concrete structs for generic Roc types such as
@@ -578,7 +596,7 @@ generate_platform_type_aliases_rust = |hosted_functions, provides_list, type_tab
 	var $state = { content: "", seen: generated_type_names_rust(type_table, duplicate_names) }
 	name_plan = TypeNamePlan.from_table(type_table)
 
-	for plan in name_plan.alias_plan(type_alias_roots_rust(hosted_functions, provides_list, type_table)) {
+	for plan in name_plan.alias_plan(type_alias_roots_rust(hosted_functions, provides_list, type_table, duplicate_names)) {
 		target = type_id_to_rust(type_table, duplicate_names, preferred_names, plan.type_id)
 		$state = match plan.kind {
 			PlainAlias => add_type_alias_rust($state, plan.alias, target)
@@ -863,7 +881,7 @@ generate_payload_struct_decl_rust = |doc, struct_name, type_table, duplicate_nam
 ## Generate the complete Rust source file
 generate_rust_file : List(HostedFunctionInfo), TypeTable, List(ProvidesEntry) -> Str
 generate_rust_file = |hosted_functions, type_table, provides_list| {
-	duplicate_names = duplicate_tag_union_names(type_table)
+	duplicate_names = duplicate_type_names(type_table)
 	preferred_names = preferred_type_names_rust(hosted_functions, provides_list, type_table, duplicate_names)
 
 	generate_rust_file_header
@@ -876,6 +894,8 @@ generate_rust_file = |hosted_functions, type_table, provides_list| {
 		.concat(generate_rust_roc_str)
 		.concat("\n")
 		.concat(generate_rust_roc_list)
+		.concat("\n")
+		.concat(generate_rust_roc_held_lists)
 		.concat("\n")
 		.concat(generate_rust_release_support)
 		.concat("\n")
@@ -1743,6 +1763,123 @@ generate_rust_release_support =
 	\\}
 	\\
 
+## Generate the list types for lists a host cannot release (static Rust code)
+generate_rust_roc_held_lists : Str
+generate_rust_roc_held_lists =
+	\\/// A Roc list whose items have a type only the application knows.
+	\\///
+	\\/// This host knows neither the size of an item nor whether items are
+	\\/// refcounted, so it cannot read an item, allocate such a list, or release
+	\\/// one. It can move the list, retain it, and pass it back to Roc. To release
+	\\/// it, pass it to a Roc function that takes ownership of it.
+	\\#[repr(C)]
+	\\#[derive(Clone, Copy)]
+	\\pub struct RocOpaqueList {
+	\\    pub elements: *mut c_void,
+	\\    pub length: usize,
+	\\    pub capacity_or_alloc_ptr: usize,
+	\\}
+	\\
+	\\impl RocOpaqueList {
+	\\    /// Return the number of items in the list.
+	\\    #[inline]
+	\\    pub fn len(&self) -> usize {
+	\\        self.length
+	\\    }
+	\\
+	\\    /// Return true if the list has zero items.
+	\\    #[inline]
+	\\    pub fn is_empty(&self) -> bool {
+	\\        self.length == 0
+	\\    }
+	\\
+	\\    /// Increment the reference count by `amount`.
+	\\    ///
+	\\    /// # Safety
+	\\    /// `self` must point at a live Roc list allocation. The retained references
+	\\    /// must be handed back to Roc.
+	\\    pub unsafe fn incref(self, amount: isize) {
+	\\        unsafe { retain_list_allocation(self.elements as *mut u8, self.capacity_or_alloc_ptr, amount); }
+	\\    }
+	\\}
+	\\
+	\\/// A Roc list whose items hold opaque Roc values.
+	\\///
+	\\/// The items have a known layout, so the host can read them. Whether the
+	\\/// opaque values inside them are refcounted is known only to Roc, and the
+	\\/// list's allocation header depends on it, so the host cannot allocate such
+	\\/// a list or release one. It can move the list, retain it, and pass it back
+	\\/// to Roc. To release it, pass it to a Roc function that takes ownership of
+	\\/// it.
+	\\#[repr(C)]
+	\\pub struct RocHeldList<T> {
+	\\    pub elements: *mut T,
+	\\    pub length: usize,
+	\\    pub capacity_or_alloc_ptr: usize,
+	\\}
+	\\
+	\\impl<T> Clone for RocHeldList<T> {
+	\\    fn clone(&self) -> Self {
+	\\        *self
+	\\    }
+	\\}
+	\\
+	\\impl<T> Copy for RocHeldList<T> {}
+	\\
+	\\impl<T> RocHeldList<T> {
+	\\    /// Return the number of items in the list.
+	\\    #[inline]
+	\\    pub fn len(&self) -> usize {
+	\\        self.length
+	\\    }
+	\\
+	\\    /// Return true if the list has zero items.
+	\\    #[inline]
+	\\    pub fn is_empty(&self) -> bool {
+	\\        self.length == 0
+	\\    }
+	\\
+	\\    /// Return the list items as a slice.
+	\\    pub fn as_slice(&self) -> &[T] {
+	\\        if self.elements.is_null() {
+	\\            &[]
+	\\        } else {
+	\\            unsafe { core::slice::from_raw_parts(self.elements, self.length) }
+	\\        }
+	\\    }
+	\\
+	\\    /// Increment the reference count by `amount`.
+	\\    ///
+	\\    /// # Safety
+	\\    /// `self` must point at a live Roc list allocation. The retained references
+	\\    /// must be handed back to Roc.
+	\\    pub unsafe fn incref(self, amount: isize) {
+	\\        unsafe { retain_list_allocation(self.elements as *mut u8, self.capacity_or_alloc_ptr, amount); }
+	\\    }
+	\\}
+	\\
+	\\/// Add `amount` references to a list's allocation. The refcount slot sits
+	\\/// directly before the allocation's first item whatever the item type is,
+	\\/// and a seamless slice names its allocation in `capacity_or_alloc_ptr`.
+	\\unsafe fn retain_list_allocation(elements: *mut u8, capacity_or_alloc_ptr: usize, amount: isize) {
+	\\    let alloc_ptr = if (capacity_or_alloc_ptr & 1) != 0 {
+	\\        (capacity_or_alloc_ptr & !1) as *mut u8
+	\\    } else {
+	\\        elements
+	\\    };
+	\\    if alloc_ptr.is_null() {
+	\\        return;
+	\\    }
+	\\    let rc = unsafe { (alloc_ptr as *mut AtomicIsize).sub(1) };
+	\\    if unsafe { (*rc).load(Ordering::Relaxed) } == 0 {
+	\\        return; // REFCOUNT_STATIC_DATA
+	\\    }
+	\\    unsafe {
+	\\        (*rc).fetch_add(amount, Ordering::Relaxed);
+	\\    }
+	\\}
+	\\
+
 ## Generate self-contained RocList<T> type (simplified, raw pointer approach)
 generate_rust_roc_list : Str
 generate_rust_roc_list =
@@ -2052,12 +2189,13 @@ generate_element_type_structs_rust : TypeTable, List(Str), TypeNamePlan.Preferre
 generate_element_type_structs_rust = |type_table, duplicate_names, preferred_names| {
 	var $structs = ""
 	var $seen_names = []
+	var $type_id = 0
 
 	for type_info in type_table_entries(type_table) {
 		match type_info.repr {
 			RocRecord(rec) =>
 				if rec.name != "" {
-					struct_name = name_to_struct_name(rec.name)
+					struct_name = record_struct_name(type_table, duplicate_names, $type_id, rec)
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
 						doc = "/// Element type for ${rec.name}\n"
@@ -2069,6 +2207,8 @@ generate_element_type_structs_rust = |type_table, duplicate_names, preferred_nam
 				}
 			_ => {}
 		}
+
+		$type_id = $type_id + 1
 	}
 
 	$structs
@@ -2085,7 +2225,7 @@ generate_tag_union_structs_rust = |type_table, duplicate_names, preferred_names|
 		match type_info.repr {
 			RocTagUnion(tu) =>
 				if List.len(tu.tags) >= 2 and tu.name != "" {
-					struct_name = tag_union_struct_name(preferred_names, duplicate_names, $type_id, tu)
+					struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, $type_id, tu)
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
 						$structs = Str.concat($structs, generate_single_tag_union_rust(type_table, duplicate_names, preferred_names, $type_id, tu, type_info.layout))
@@ -2103,7 +2243,7 @@ generate_tag_union_structs_rust = |type_table, duplicate_names, preferred_names|
 ## Generate Rust code for a single multi-variant tag union.
 generate_single_tag_union_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr, AbiLayout -> Str
 generate_single_tag_union_rust = |type_table, duplicate_names, preferred_names, type_id, tu, abi_layout| {
-	struct_name = tag_union_struct_name(preferred_names, duplicate_names, type_id, tu)
+	struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
 	disc_type = disc_type_for_size(abi_discriminant_size(abi_layout))
 	abi_tags = abi_tag_layouts(abi_layout)
 
@@ -2314,6 +2454,10 @@ box_payload_decref_name_rust = |inner_id| "decref_box_payload_type${U64.to_str(i
 
 release_policy_for_type_id_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64 -> Str
 release_policy_for_type_id_rust = |type_table, duplicate_names, preferred_names, type_id| {
+	if is_roc_released(type_table, type_id) {
+		return ""
+	}
+
 	if !is_type_refcounted(type_table, type_id) {
 		return "RocNoopRelease"
 	}
@@ -2354,7 +2498,7 @@ release_policy_for_type_id_rust = |type_table, duplicate_names, preferred_names,
 			if rec.name == "" {
 				""
 			} else {
-				"${name_to_struct_name(rec.name)}Release"
+				"${record_struct_name(type_table, duplicate_names, type_id, rec)}Release"
 			}
 		RocTagUnion(tu) =>
 			match TypeTable.single_variant_payload(tu) {
@@ -2364,7 +2508,7 @@ release_policy_for_type_id_rust = |type_table, duplicate_names, preferred_names,
 					if tu.name == "" {
 						""
 					} else {
-						"${tag_union_struct_name(preferred_names, duplicate_names, type_id, tu)}Release"
+						"${tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)}Release"
 					}
 				}
 		RocErasedCallable(_) => "RocErasedCallableRelease"
@@ -2388,7 +2532,7 @@ type_ident_rust = |type_table, duplicate_names, preferred_names, type_id|
 			if rec.name == "" {
 				"type${U64.to_str(type_id)}"
 			} else {
-				to_lower_snake_case(name_to_struct_name(rec.name))
+				to_lower_snake_case(record_struct_name(type_table, duplicate_names, type_id, rec))
 			}
 		RocTagUnion(tu) =>
 		# Mirrors `resolve_tag_union_type_rust`, except a single-variant
@@ -2400,7 +2544,7 @@ type_ident_rust = |type_table, duplicate_names, preferred_names, type_id|
 				SingleNoPayload => "type${U64.to_str(type_id)}"
 				NotSingleVariant =>
 					if tu.name != "" {
-						to_lower_snake_case(tag_union_struct_name(preferred_names, duplicate_names, type_id, tu))
+						to_lower_snake_case(tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu))
 					} else {
 						"type${U64.to_str(type_id)}"
 					}
@@ -2417,6 +2561,12 @@ list_decref_helper_name_rust = |type_table, duplicate_names, preferred_names, el
 
 decref_stmt_for_type_id_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, Str -> Str
 decref_stmt_for_type_id_rust = |type_table, duplicate_names, preferred_names, type_id, expr| {
+	if is_roc_released(type_table, type_id) {
+		# Every emitter leaves out the release of a value that holds an opaque
+		# Roc value, so reaching this is a generator bug. It must not compile.
+		return "    compile_error!(\"generated glue released type id ${U64.to_str(type_id)}, which only Roc can release\");\n"
+	}
+
 	type_repr = type_table.get(type_id)
 	decref_stmt_for_repr_rust(type_table, duplicate_names, preferred_names, type_id, type_repr, expr)
 }
@@ -2509,8 +2659,8 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 	}
 }
 
-generate_record_refcount_helpers_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, RecordRepr -> Str
-generate_record_refcount_helpers_rust = |type_table, duplicate_names, preferred_names, rec| {
+generate_record_refcount_helpers_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, Str, RecordRepr -> Str
+generate_record_refcount_helpers_rust = |type_table, duplicate_names, preferred_names, struct_name, rec| {
 	var $fields = []
 	for field in rec.fields {
 		# Padding fields are raw bytes with no Roc type, so they are never
@@ -2520,7 +2670,7 @@ generate_record_refcount_helpers_rust = |type_table, duplicate_names, preferred_
 		}
 	}
 
-	generate_refcount_impl_rust(type_table, duplicate_names, preferred_names, name_to_struct_name(rec.name), $fields)
+	generate_refcount_impl_rust(type_table, duplicate_names, preferred_names, struct_name, $fields)
 }
 
 ## Same impl for a struct whose fields arrive as committed ABI layout entries,
@@ -2541,10 +2691,13 @@ generate_refcount_impl_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames,
 generate_refcount_impl_rust = |type_table, duplicate_names, preferred_names, struct_name, fields| {
 	var $decref_body = ""
 	var $incref_body = ""
+	roc_released = List.any(fields, |field| is_roc_released(type_table, field.type_id))
 
 	for field in fields {
 		field_expr = "value.${field.ident}"
-		$decref_body = Str.concat($decref_body, decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, field.type_id, field_expr))
+		if !roc_released {
+			$decref_body = Str.concat($decref_body, decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, field.type_id, field_expr))
+		}
 		$incref_body = Str.concat($incref_body, incref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, field.type_id, field_expr))
 	}
 
@@ -2559,7 +2712,13 @@ generate_refcount_impl_rust = |type_table, duplicate_names, preferred_names, str
 		$incref_body = indent_lines($incref_body, "    ")
 	}
 
-	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned fields.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted field.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n        let value = self;\n${$decref_body}    }\n\n    /// Increment Roc-owned fields.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let value = self;\n${$incref_body}    }\n}\n\npub struct ${struct_name}Release;\n\nunsafe impl RocRelease<${struct_name}> for ${struct_name}Release {\n    unsafe fn release(value: ${struct_name}, roc_host: &RocHost) {\n        unsafe { value.decref(roc_host); }\n    }\n}\n\n"
+	incref_method = "    /// Increment Roc-owned fields.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let value = self;\n${$incref_body}    }\n"
+
+	if roc_released {
+		"impl ${struct_name} {\n${roc_released_note("    ")}\n${incref_method}}\n\n"
+	} else {
+		"impl ${struct_name} {\n    /// Recursively decrement Roc-owned fields.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted field.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n        let value = self;\n${$decref_body}    }\n\n${incref_method}}\n\npub struct ${struct_name}Release;\n\nunsafe impl RocRelease<${struct_name}> for ${struct_name}Release {\n    unsafe fn release(value: ${struct_name}, roc_host: &RocHost) {\n        unsafe { value.decref(roc_host); }\n    }\n}\n\n"
+	}
 }
 
 generate_tag_payload_refcount_branch_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, Str, TagVariant, AbiTagLayout, Str -> Str
@@ -2625,11 +2784,12 @@ generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, prefer
 
 generate_tag_union_refcount_helpers_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr -> Str
 generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferred_names, type_id, tu| {
-	struct_name = tag_union_struct_name(preferred_names, duplicate_names, type_id, tu)
+	struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
 	if !(type_table.layout(type_id)).tag_union_has_payload() {
 		return "impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted payload.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n        let _ = self;\n        let _ = roc_host;\n    }\n\n    /// Increment Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let _ = self;\n        let _ = amount;\n    }\n}\n\npub struct ${struct_name}Release;\n\nunsafe impl RocRelease<${struct_name}> for ${struct_name}Release {\n    unsafe fn release(value: ${struct_name}, roc_host: &RocHost) {\n        unsafe { value.decref(roc_host); }\n    }\n}\n\n"
 	}
 
+	roc_released = is_roc_released(type_table, type_id)
 	var $decref_branches = ""
 	var $incref_branches = ""
 	var $decref_moves_payload = Bool.False
@@ -2637,9 +2797,11 @@ generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferr
 	var $tag_index = 0
 	for tag in tu.tags {
 		abi_tag = abi_tag_at(abi_tags, $tag_index)
-		$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag, abi_tag, "decref"))
 		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag, abi_tag, "incref"))
-		if abi_tag_has_payload(abi_tag) {
+		if !roc_released {
+			$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag, abi_tag, "decref"))
+		}
+		if !roc_released and abi_tag_has_payload(abi_tag) {
 			$decref_moves_payload = $decref_moves_payload or List.any(
 				tag.payload,
 				|payload_id|
@@ -2655,7 +2817,13 @@ generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferr
 		"        let value = self;\n"
 	}
 
-	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted payload.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n${decref_value_binding}        let _ = roc_host;\n        match value.tag {\n${indent_lines($decref_branches, "    ")}        }\n    }\n\n    /// Increment Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let value = self;\n        let _ = amount;\n        match value.tag {\n${indent_lines($incref_branches, "    ")}        }\n    }\n}\n\npub struct ${struct_name}Release;\n\nunsafe impl RocRelease<${struct_name}> for ${struct_name}Release {\n    unsafe fn release(value: ${struct_name}, roc_host: &RocHost) {\n        unsafe { value.decref(roc_host); }\n    }\n}\n\n"
+	incref_method = "    /// Increment Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let value = self;\n        let _ = amount;\n        match value.tag {\n${indent_lines($incref_branches, "    ")}        }\n    }\n"
+
+	if roc_released {
+		return "impl ${struct_name} {\n${roc_released_note("    ")}\n${incref_method}}\n\n"
+	}
+
+	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted payload.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n${decref_value_binding}        let _ = roc_host;\n        match value.tag {\n${indent_lines($decref_branches, "    ")}        }\n    }\n\n${incref_method}}\n\npub struct ${struct_name}Release;\n\nunsafe impl RocRelease<${struct_name}> for ${struct_name}Release {\n    unsafe fn release(value: ${struct_name}, roc_host: &RocHost) {\n        unsafe { value.decref(roc_host); }\n    }\n}\n\n"
 }
 
 ## Generate one release helper per list type whose elements are refcounted.
@@ -2709,7 +2877,7 @@ generate_box_payload_decref_helpers_rust = |type_table, duplicate_names, preferr
 					match type_table.get(inner_id) {
 						_ => {
 							inner_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, inner_id)
-							if inner_rust != "RocBox" and inner_rust != "*mut c_void" and is_type_refcounted(type_table, inner_id) {
+							if inner_rust != "RocBox" and inner_rust != "*mut c_void" and is_type_refcounted(type_table, inner_id) and !is_roc_released(type_table, inner_id) {
 								stmt = decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, inner_id, "payload")
 								$helpers = Str.concat(
 									$helpers,
@@ -2737,15 +2905,15 @@ generate_refcount_helpers_rust = |type_table, duplicate_names, preferred_names| 
 		match type_info.repr {
 			RocRecord(rec) =>
 				if rec.name != "" {
-					struct_name = name_to_struct_name(rec.name)
+					struct_name = record_struct_name(type_table, duplicate_names, $type_id, rec)
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
-						$helpers = Str.concat($helpers, generate_record_refcount_helpers_rust(type_table, duplicate_names, preferred_names, rec))
+						$helpers = Str.concat($helpers, generate_record_refcount_helpers_rust(type_table, duplicate_names, preferred_names, struct_name, rec))
 					}
 				}
 			RocTagUnion(tu) =>
 				if List.len(tu.tags) >= 2 and tu.name != "" {
-					struct_name = tag_union_struct_name(preferred_names, duplicate_names, $type_id, tu)
+					struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, $type_id, tu)
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
 						$helpers = Str.concat($helpers, generate_tag_union_refcount_helpers_rust(type_table, duplicate_names, preferred_names, $type_id, tu))
@@ -2939,7 +3107,9 @@ hosted_ownership_doc_rust = |type_table, duplicate_names, preferred_names, func|
 
 	for arg_type_id in arg_shape.positional_non_unit_type_ids(func.arg_type_ids) {
 		arg_name = "arg${U64.to_str($idx)}"
-		stmt = if use_args_wrapper {
+		stmt = if is_roc_released(type_table, arg_type_id) {
+			"${arg_name} holds an opaque Roc value, which only Roc can release: pass it back to Roc."
+		} else if use_args_wrapper {
 			if is_type_refcounted(type_table, arg_type_id) {
 				"unsafe { ${arg_name}.decref(roc_host); }"
 			} else {

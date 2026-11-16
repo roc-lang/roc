@@ -408,8 +408,13 @@ pub const StrPatternStep = struct {
 pub const Binder = struct {
     pattern: PatternId,
     reassignable: bool,
-    /// A generalized callable lookup binding.
+    /// A generalized lookup binding: each use lowers the lookup at the
+    /// use's own instantiation.
     is_scheme_alias: bool,
+    /// The destructuring scheme alias declaration that binds it, if one
+    /// does: each use lowers that declaration's lookup and destructuring at
+    /// the use's own instantiation.
+    destructured_alias: ?StatementId,
     /// The binder of a promoted local procedure, which names a top-level
     /// procedure rather than a value of the body declaring it.
     is_promoted: bool,
@@ -808,13 +813,16 @@ pub const CheckedBodies = struct {
     /// it concatenates its parts directly. An open target can instantiate at
     /// a custom `from_interpolation` type and keeps its dispatch. Checking
     /// retires every interpolation whose builtin `Str` dispatch it rejects, so
-    /// one that reaches a checked body was accepted.
+    /// one that reaches a checked body was accepted. An interpolation with no
+    /// constraint function variable was introduced at the builtin `Str`
+    /// without a dispatch (design.md "Concrete Builtin Interpolation
+    /// Introduction").
     pub fn interpolationIsBuiltinStr(self: CheckedBodies, id: ExprId) bool {
         const is_str = checked_artifact.checkedConcreteBuiltinForLiteralTarget(self.types, self.typeOfVar(ModuleEnv.varFrom(id))) == .str;
         if (builtin.mode == .debug and is_str) {
-            const constraint_fn_var = self.store().getExpr(id).e_interpolation.constraint_fn_var orelse
-                invariant("a checked interpolation had no constraint function variable");
-            if (self.env.types.varStaticDispatchRejected(constraint_fn_var)) invariant("a rejected builtin Str interpolation reached a checked body");
+            if (self.store().getExpr(id).e_interpolation.constraint_fn_var) |constraint_fn_var| {
+                if (self.env.types.varStaticDispatchRejected(constraint_fn_var)) invariant("a rejected builtin Str interpolation reached a checked body");
+            }
         }
         return is_str;
     }
@@ -1155,6 +1163,7 @@ pub const CheckedBodies = struct {
             .pattern = pattern_id,
             .reassignable = self.store().getPattern(pattern_id) == .var_assign,
             .is_scheme_alias = module_index.isSchemeAlias(pattern_id),
+            .destructured_alias = module_index.destructuredAliasDecl(pattern_id),
             .is_promoted = module_index.isPromotedPattern(pattern_id),
             .recursive_value = module_index.isRecursiveBinder(pattern_id),
         };
