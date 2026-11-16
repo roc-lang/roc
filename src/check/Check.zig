@@ -19557,6 +19557,10 @@ fn judgeAmbiguityCandidate(
     // An unpinned row tail is closed by its row default, and the empty row
     // satisfies every constraint this one carries.
     if (candidate.position == .row_tail and self.rowDefaultDischargesConstraints(constraints_range)) return;
+    // A private codec instance's copy of a variable its template quantifies
+    // stands for that variable: its requirements are the template's, which
+    // each use of the template answers at its own types.
+    if (self.isFinalCodecInstanceCopy(resolved_var)) return;
 
     const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
     const selection = try self.selectAmbiguityConstraint(
@@ -19628,6 +19632,16 @@ fn judgeAmbiguityCandidate(
         .instantiation_expr = candidate.instantiation_expr,
         .source = candidate.source,
     });
+}
+
+/// Whether `resolved_var` is a private codec instance's copy of a variable its
+/// template quantifies (`finalCodecRelationInstance`), which nothing but that
+/// instance reaches.
+fn isFinalCodecInstanceCopy(self: *Self, resolved_var: Var) bool {
+    for (self.final_codec_instance_copy_pairs.items) |pair| {
+        if (self.types.resolveVar(pair.copy).var_ == resolved_var) return true;
+    }
+    return false;
 }
 
 fn instantiationArgumentsCanPin(

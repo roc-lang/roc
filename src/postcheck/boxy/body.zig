@@ -408,8 +408,26 @@ const Declaration = struct {
     /// The declaration contexts entered through the edges that hand the
     /// callee's captured requirements on, by parameter (`forwardedDeclaration`).
     forwards: std.ArrayListUnmanaged(Forward) = .empty,
+    /// Whose scope the dictionaries are: `worker`'s own, or the scope of
+    /// the first alias of the alias chain a use enters, which reaches
+    /// `worker` and has a slot for each of the alias's requirements.
+    scope: Scope = .procedure,
 
     const Forward = struct { param: u32, declaration: *Declaration };
+
+    const Scope = union(enum) {
+        procedure,
+        alias: AliasUse,
+    };
+
+    /// A use's entry into an alias chain, as `aliasChainInstance` takes it.
+    const AliasUse = struct {
+        first: AliasStep,
+        evidence: []const static_dispatch.CheckedEvidence,
+        literals: []const Word,
+        literal_source: AliasLiterals,
+        call_fn: TypeId,
+    };
 
     const Source = union(enum) {
         /// The evidence of a call, read in `module`'s view `view`.
@@ -5662,10 +5680,10 @@ pub const Builder = struct {
     fn ownerDeclaration(self: *Builder, innermost: *Declaration, owner: TemplateKey) Allocator.Error!*Declaration {
         var next: ?*Declaration = innermost;
         while (next) |declaration| : (next = declaration.outer) {
-            if (self.isTemplateWorker(declaration.worker, owner)) return declaration;
+            if (declaration.scope == .procedure and self.isTemplateWorker(declaration.worker, owner)) return declaration;
         }
         var current = innermost;
-        while (!self.isTemplateWorker(current.worker, owner)) current = try self.forwardedDeclaration(current);
+        while (current.scope != .procedure or !self.isTemplateWorker(current.worker, owner)) current = try self.forwardedDeclaration(current);
         return current;
     }
 
@@ -5704,6 +5722,30 @@ pub const Builder = struct {
             if (forward.param == param) return forward.declaration;
         }
         const arena = self.program.arena.allocator();
+        switch (declaration.scope) {
+            .procedure => {},
+            // The alias chain's first scope hands the requirement on through
+            // each alias's forwarded lookup to the procedure it reaches.
+            .alias => |alias| {
+                const dicts = try arena.alloc(Word, declaration.dicts.len);
+                for (dicts, 0..) |*dict, slot| dict.* = try self.declarationDictionary(declaration, slot);
+                const saved_chain_frame = self.chain_frame;
+                defer self.chain_frame = saved_chain_frame;
+                self.chain_frame = false;
+                const instance = try self.aliasChainInstance(.{
+                    .callee = declaration.worker,
+                    .first = alias.first,
+                    .bound = declaration.bound,
+                    .dicts = dicts,
+                    .literals = alias.literals,
+                    .evidence = alias.evidence,
+                    .literal_source = alias.literal_source,
+                    .chain_frame = false,
+                    .call_fn = alias.call_fn,
+                });
+                return try self.recordForwardedDeclaration(declaration, param, .{ .callee = declaration.worker, .instance = instance, .param = try self.aliasChainParam(alias.first, param) });
+            },
+        }
         const context = self.templateParamContext(declaration.worker, declaration.bound);
         if (param >= context.params.len) invariant("a declaration context's slot names a parameter its scheme does not have");
         const worker = self.program.worker(declaration.worker).*;
@@ -5816,6 +5858,13 @@ pub const Builder = struct {
                 },
             }
         };
+        return try self.recordForwardedDeclaration(declaration, param, reached);
+    }
+
+    /// The declaration context of `reached`'s instance, entered from slot
+    /// `param` of `declaration`, recorded there for later reads.
+    fn recordForwardedDeclaration(self: *Builder, declaration: *Declaration, param: u32, reached: ForwardingTarget) Allocator.Error!*Declaration {
+        const arena = self.program.arena.allocator();
         const callee = reached.callee;
         const instance = reached.instance;
         defer self.allocator.free(instance.hidden);
@@ -7532,7 +7581,10 @@ pub const Builder = struct {
         const saved_declaration = self.declaration;
         self.declaration = declaration;
         defer self.declaration = saved_declaration;
-        const param_index = self.program.worker(declaration.worker).dictionary_params[slot];
+        const param_index: u32 = switch (declaration.scope) {
+            .procedure => self.program.worker(declaration.worker).dictionary_params[slot],
+            .alias => @intCast(slot),
+        };
         const saved_reading = declaration.reading;
         declaration.reading = param_index;
         defer declaration.reading = saved_reading;
@@ -8106,16 +8158,17 @@ pub const Builder = struct {
             try self.fillLiteralArgs(null, edge, literals);
             break :blk .{ .edge = literals };
         } else .derived;
+        const call_fn = try self.convert(node.instantiation.alias);
         return try self.aliasChainInstance(.{
             .callee = callee,
             .first = first,
             .bound = bound,
-            .dicts = if (chain_frame) &.{} else try self.scopeDictionaries(first, bound, evidence),
+            .dicts = if (chain_frame) &.{} else try self.aliasUseDictionaries(callee, bound, .{ .first = first, .evidence = evidence, .literals = &.{}, .literal_source = literal_source, .call_fn = call_fn }),
             .literals = &.{},
             .evidence = evidence,
             .literal_source = literal_source,
             .chain_frame = chain_frame,
-            .call_fn = try self.convert(node.instantiation.alias),
+            .call_fn = call_fn,
         });
     }
 
@@ -8145,14 +8198,21 @@ pub const Builder = struct {
     /// reaching procedure `target`.
     fn aliasStepUseInstance(self: *Builder, first: AliasStep, target: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence, call_fn: TypeId, edge: checked.LiteralEdge) Allocator.Error!CallInstance {
         const bound = try self.aliasScopeBound(first, subst, call_fn);
+        const alias: Declaration.AliasUse = .{
+            .first = first,
+            .evidence = evidence,
+            .literals = try self.aliasLiteralArgs(first, edge),
+            .literal_source = if (edge == .literal) .derived else .scopes,
+            .call_fn = call_fn,
+        };
         return try self.aliasChainInstance(.{
             .callee = target,
             .first = first,
             .bound = bound,
-            .dicts = try self.scopeDictionaries(first, bound, evidence),
-            .literals = try self.aliasLiteralArgs(first, edge),
+            .dicts = try self.aliasUseDictionaries(target, bound, alias),
+            .literals = alias.literals,
             .evidence = evidence,
-            .literal_source = if (edge == .literal) .derived else .scopes,
+            .literal_source = alias.literal_source,
             .chain_frame = false,
             .call_fn = call_fn,
         });
@@ -8412,6 +8472,41 @@ pub const Builder = struct {
 
     /// The dictionaries of the scope of alias `alias_step` whose variables
     /// take `bound`, from `evidence` (one entry per parameter).
+    /// The dictionaries of the scope of the first alias of a chain a use
+    /// enters (`alias`), whose variables take `bound`, reaching procedure
+    /// `target`: built in a declaration context of that scope, since a
+    /// captured codec requirement the chain hands on to `target` has a codec
+    /// that calls `target`'s local procedures, built from the instance the
+    /// chain reaches (`forwardedDeclaration`).
+    fn aliasUseDictionaries(self: *Builder, target: WorkerId, bound: []const TypeId, alias: Declaration.AliasUse) Allocator.Error![]const Word {
+        const params = alias.first.params;
+        if (alias.evidence.len != params.len) invariant("an alias scope's evidence differs from its requirements");
+        const words = try self.program.arena.allocator().alloc(Word, params.len);
+        if (params.len == 0) return words;
+        const dicts = try self.allocator.alloc(?Word, params.len);
+        defer self.allocator.free(dicts);
+        @memset(dicts, null);
+        const building = try self.allocator.alloc(bool, params.len);
+        defer self.allocator.free(building);
+        @memset(building, false);
+        var declaration: Declaration = .{
+            .worker = target,
+            .bound = bound,
+            .words = .{ .descs = &.{}, .literals = alias.literals },
+            .dicts = dicts,
+            .building = building,
+            .source = .{ .call = .{
+                .evidence = alias.evidence,
+                .context = .{ .module = alias.first.module, .params = params, .env = .{ .module = alias.first.module, .vars = alias.first.vars, .bound = bound } },
+                .owner = null,
+            } },
+            .outer = self.declaration,
+            .scope = .{ .alias = alias },
+        };
+        for (words, 0..) |*word, slot| word.* = try self.declarationDictionary(&declaration, slot);
+        return words;
+    }
+
     fn scopeDictionaries(self: *Builder, alias_step: AliasStep, bound: []const TypeId, evidence: []const static_dispatch.CheckedEvidence) Allocator.Error![]const Word {
         if (evidence.len != alias_step.params.len) invariant("an alias scope's evidence differs from its requirements");
         const dicts = try self.program.arena.allocator().alloc(Word, alias_step.params.len);

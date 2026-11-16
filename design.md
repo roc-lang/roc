@@ -13986,6 +13986,17 @@ own, whose receiver the instance's rigid copy then answers without being the
 variable the definition's clause declares. A derivation a format method's own
 requirement asks for reads the copies of the derivation that required it.
 
+The instance's copies stand for the variables the template quantifies, and
+nothing but the instance reaches them, so the ambiguity rule never judges
+one (`Check.isFinalCodecInstanceCopy`): their requirements are the
+template's, which each use answers at its own types. A rigid copy carries its
+variable's `where` clause; an unannotated template's variable carries its
+requirements as constraints on a flex variable, as an unannotated alias of a
+function whose captured codec requirement reads that function's
+requirements does (`fwd = with_custom`, or a local `go = |y| with_custom(y)`),
+and its copy is no more undetermined than the rigid one.
+`test/cli/ForwardedLocalCodecRequirement.roc` runs both forms.
+
 A template relation that also reaches a variable of an enclosing scope
 (`_local = |_| U64.parser_for(Format.Default)(state)` inside a function of
 `state`) states something about that scope's values whether or not anything
@@ -17195,7 +17206,12 @@ variables and with the dictionaries the use's evidence gives its
 requirements, and the edge its own requirement records is read inside it;
 an alias chain is followed to the procedure it reaches, each alias's
 forwarded lookup filling the next scheme's parameter with the alias's own,
-as the lookup's evidence names it. Every generalized scope between an edge
+as the lookup's evidence names it. A use of a procedure alias builds the
+dictionaries of its chain's first scope in a declaration context of that
+scope (`Builder.aliasUseDictionaries`), so a codec those dictionaries build
+for the procedure the chain reaches finds its instance through the chain the
+same way, whether or not anything hands the requirement on further. Every
+generalized scope between an edge
 and the scheme a requirement belongs to captures the requirement in its own
 scheme, since the relation names a variable of a scope outside it, so the
 edge that hands a requirement on is always at the scope whose parameter it
