@@ -10918,7 +10918,7 @@ the moved prefix links to it. These two passes visit only
 stamped procedures, so ordinary dev code pays neither their analysis cost nor
 their structural changes.
 
-A third rewrite, tag-case fusion, runs under lambda-set specialization in every
+A third rewrite, tag-case fusion, runs under both lowering strategies, in every
 inline mode, at every optimization level, and in every procedure: literal tag
 edges bypass a join whose body immediately matches that tag, so the union is
 never materialized. It bounds list copying rather than shaving constant
@@ -11003,8 +11003,15 @@ consumes it, and a list in it is copied each iteration. The rewrite is exact:
   their own current value are unchanged. A pure alias, field read, or
   descriptor-free struct build only carries a differing value into its
   target, field by field for a struct, so an exit that packs the loop state
-  into a tuple and reads back the unchanged field observes nothing; every
-  other statement observes what it reads.
+  into a tuple and reads back the unchanged field observes nothing. A write
+  of a join parameter likewise only carries a differing value into the
+  parameter, whose readers in that join's body observe it, so an exit that
+  carries every loop variable into a join after the loop and reads only the
+  unchanged ones there (as `.boxy` lowering builds a loop's exit) observes
+  nothing. A join parameter is written on every edge into its join, so the
+  walk repeats until no write marks another parameter differing, and reads
+  are checked against that complete set; every other statement observes
+  what it reads.
 
 The rewritten edge keeps its statements except the parameter writes and the
 definitions no remaining statement reads, then jumps to the exit. Any other
