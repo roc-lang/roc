@@ -25150,7 +25150,8 @@ pub const CompileTimeRoot = struct {
     /// an aggregate. Boxy must produce its own capture graph for this root.
     /// Readiness never traverses a stored value or rediscovers its type.
     lss_value_has_functions: bool = false,
-    /// The producer that completes the root (`publishValueFormRoots`).
+    /// The producer that completes the root, decided where the root is
+    /// created (`CompileTimeRootTable.fromModule`).
     completion: CompileTimeRootCompletion = .evaluate,
 
     /// The payload available to this strategy. A completed function in the
@@ -25310,32 +25311,11 @@ fn rootBodyContainsDiagnosticError(diagnostics: *const body_analyses.NodeBits, r
     return false;
 }
 
-/// Mark each constant and hoisted constant root whose checked expression is
-/// in value form (`exprIsValueForm`) for the checked-value writer (design.md
-/// "Value-Form Roots"). It reads the module's dispatch plans and literal
-/// conversion roots, so it runs once both are published. It records a fact
-/// about the checked expression and changes no type.
-fn publishValueFormRoots(allocator: Allocator, roots: *CompileTimeRootTable, bodies: CheckedBodies) Allocator.Error!void {
-    var stack = std.ArrayList(CIR.Expr.Idx).empty;
-    defer stack.deinit(allocator);
-    for (roots.roots.items()) |*root| {
-        switch (root.kind) {
-            .constant, .hoisted_constant => {},
-            .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => continue,
-        }
-        if (root.hoisted_body) |body| switch (body) {
-            .expr => {},
-            .pattern_extraction, .pattern_error, .pattern_validation, .valueless_binding => continue,
-        };
-        const expr = root.expr.get() orelse continue;
-        if (try exprIsValueForm(allocator, bodies, expr, &stack)) root.completion = .write_value;
-    }
-}
-
 /// Whether the checked expression `root` is in value form (design.md
 /// "Value-Form Roots"): a literal whose conversion is the builtin one and
-/// cannot fail, or a list, tuple, record, tag, or nominal construction whose
-/// every part is in value form, with no part read at a row other than its
+/// cannot fail, a list, tuple, record, tag, or nominal construction whose
+/// every part is in value form, or a block with no statements whose final
+/// expression is in value form, with no part read at a row other than its
 /// own. Nothing in it calls, dispatches, reads a definition, or can crash.
 /// `stack` is scratch.
 pub fn exprIsValueForm(allocator: Allocator, bodies: CheckedBodies, root: CIR.Expr.Idx, stack: *std.ArrayList(CIR.Expr.Idx)) Allocator.Error!bool {
@@ -25349,7 +25329,10 @@ pub fn exprIsValueForm(allocator: Allocator, bodies: CheckedBodies, root: CIR.Ex
         const data = valueFormCandidate(bodies, id) orelse return false;
         switch (data) {
             .numeral => {
-                if (bodies.numeralPlan(raw) != null or bodies.literalConversionRoot(raw) != null) return false;
+                // A literal with a conversion root has a `from_numeral` plan
+                // (`publishLiteralConversionRoots`).
+                if (bodies.numeralPlan(raw) != null) return false;
+                if (builtin.mode == .debug) std.debug.assert(bodies.literalConversionRoot(raw) == null);
                 const builtin_type = checkedConcreteBuiltinForLiteralTarget(bodies.types, bodies.exprType(id)) orelse return false;
                 const target = valueFormNumeralTarget(builtin_type) orelse return false;
                 switch (target) {
@@ -25390,10 +25373,28 @@ pub fn exprIsValueForm(allocator: Allocator, bodies: CheckedBodies, root: CIR.Ex
                 };
                 try stack.append(allocator, nominal.backing_expr);
             },
-            .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .match_, .if_, .call, .block, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return false,
+            // A block with no statements is its final expression.
+            .block => |block| {
+                if (block.statements.len != 0) return false;
+                try stack.append(allocator, block.final_expr);
+            },
+            .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .match_, .if_, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return false,
         }
     }
     return true;
+}
+
+/// The expression whose parts a value-form expression's value is built
+/// from: the expression itself, or, for a block with no statements, its
+/// final expression, through any number of such blocks.
+pub fn valueFormValueExpr(bodies: CheckedBodies, expr: CIR.Expr.Idx) CIR.Expr.Idx {
+    var current = expr;
+    while (true) {
+        const data = bodies.exprData(current);
+        if (data != .block) return current;
+        if (data.block.statements.len != 0) checkedArtifactInvariant("a value-form block has statements", .{});
+        current = data.block.final_expr;
+    }
 }
 
 /// The checked body reader's view of `id` when its CIR kind can be part of
@@ -25404,8 +25405,8 @@ pub fn exprIsValueForm(allocator: Allocator, bodies: CheckedBodies, root: CIR.Ex
 /// publication resolves them.
 fn valueFormCandidate(bodies: CheckedBodies, id: CIR.Expr.Idx) ?checked_bodies_mod.ExprData {
     switch (bodies.env.store.getExpr(id)) {
-        .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external => {},
-        .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_block, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
+        .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_block => {},
+        .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
     }
     if (bodies.exprIsRetired(id)) return null;
     return bodies.exprData(id);
@@ -25445,8 +25446,9 @@ fn recordTypeIsClosedAndRequired(view: CheckedTypeStoreView, ty: CheckedTypeId, 
 /// Public `CompileTimeRootTable` declaration.
 ///
 /// This is the durable compile-time root schedule and payload table. It stores
-/// root identities and selected root bodies only; it deliberately does not
-/// store dependency edges, readiness state, request membership caches, or
+/// root identities, selected root bodies, and the selected value-form
+/// expressions that are no roots; it deliberately does not store dependency
+/// edges, readiness state, request membership caches, or
 /// per-expression/per-pattern hoistability facts. Ordinary top-level roots are
 /// published first in canonical order, then sparse selected hoisted roots are
 /// appended in checker-selected dependency-first order. Finalization consumes
@@ -25460,11 +25462,17 @@ pub const CompileTimeRootTable = struct {
     /// the first such root, by pattern, ascending. Every root added after
     /// the module's roots are published binds no pattern.
     roots_by_pattern: collections.SafeList(PatternRoot) = .{},
+    /// The selected expressions in value form that are not roots, ascending:
+    /// their bodies keep them, and lowering reads each one's value from
+    /// static data where it is not an immediate (design.md "Value-Form
+    /// Expressions Stay In Their Bodies").
+    inline_literals: collections.SafeList(CIR.Expr.Idx) = .{},
 
     pub const Serialized = extern struct {
         roots: SerializedSlice(CompileTimeRoot) = .{},
         literal_conversions: SerializedSlice(LiteralConversionRoot) = .{},
         roots_by_pattern: SerializedSlice(PatternRoot) = .{},
+        inline_literals: SerializedSlice(CIR.Expr.Idx) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CompileTimeRootTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -25479,9 +25487,15 @@ pub const CompileTimeRootTable = struct {
         checked_types: *CheckedTypePublication,
         module_index: *const ModuleIndex,
         procedure_templates: *const CheckedProcedureTemplateTable,
+        bodies: CheckedBodies,
     ) Allocator.Error!CompileTimeRootTable {
         var roots = std.ArrayList(CompileTimeRoot).empty;
         errdefer roots.deinit(allocator);
+        var inline_literals = std.ArrayList(CIR.Expr.Idx).empty;
+        errdefer inline_literals.deinit(allocator);
+        // Scratch for `exprIsValueForm`.
+        var value_form_stack = std.ArrayList(CIR.Expr.Idx).empty;
+        defer value_form_stack.deinit(allocator);
 
         // Field defaults get no root of their own (design.md "Defaulted
         // Fields"): every construction site that omits a defaulted field
@@ -25535,14 +25549,16 @@ pub const CompileTimeRootTable = struct {
                     .payload = .pending,
                 });
             } else {
+                const expr = reachedRootExpr(module_index, def.expr.idx);
                 try appendCompileTimeRoot(&roots, allocator, .{
                     .module_idx = module.moduleIndex(),
                     .kind = .constant,
                     .source = .{ .def = def_idx },
                     .pattern = reachedRootPattern(module_index, def.pattern.idx),
-                    .expr = reachedRootExpr(module_index, def.expr.idx),
+                    .expr = expr,
                     .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
                     .payload = .pending,
+                    .completion = if (try exprIsValueForm(allocator, bodies, expr, &value_form_stack)) .write_value else .evaluate,
                 });
             }
         }
@@ -25564,6 +25580,16 @@ pub const CompileTimeRootTable = struct {
                     .callable_binding,
                 .discarded => .hoisted_validation,
             };
+            // A data constant whose expression is in value form computes
+            // nothing (design.md "Value-Form Expressions Stay In Their
+            // Bodies"): it is no root, and its body keeps it, unless it
+            // binds a top-level name or a kept root reads its binding.
+            const value_form = kind == .hoisted_constant and selected.body == .expr and
+                try exprIsValueForm(allocator, bodies, selected.expr, &value_form_stack);
+            if (value_form and !selected.top_level and !selected.read_by_root) {
+                try inline_literals.append(allocator, reachedRootExpr(module_index, selected.expr));
+                continue;
+            }
             const checked_root = try selectedHoistedRootBody(allocator, module, checked_types, module_index, selected);
             const hoisted_body = try hoist_roots.cloneBody(allocator, selected.body);
             try appendCompileTimeRoot(&roots, allocator, .{
@@ -25580,6 +25606,7 @@ pub const CompileTimeRootTable = struct {
                 .checked_type = checked_root.checked_type,
                 .payload = .pending,
                 .guarded = selected.guarded,
+                .completion = if (value_form) .write_value else .evaluate,
             });
         }
 
@@ -25601,10 +25628,33 @@ pub const CompileTimeRootTable = struct {
 
         const roots_by_pattern = try patternRootIndex(allocator, roots.items);
         errdefer allocator.free(roots_by_pattern);
+        std.mem.sort(CIR.Expr.Idx, inline_literals.items, {}, exprIdLessThan);
+        const inline_literal_slice = try inline_literals.toOwnedSlice(allocator);
+        errdefer allocator.free(inline_literal_slice);
         return .{
             .roots = .fromOwnedSlice(try roots.toOwnedSlice(allocator)),
             .roots_by_pattern = .fromOwnedSlice(roots_by_pattern),
+            .inline_literals = .fromOwnedSlice(inline_literal_slice),
         };
+    }
+
+    fn exprIdLessThan(_: void, a: CIR.Expr.Idx, b: CIR.Expr.Idx) bool {
+        return @backingInt(a) < @backingInt(b);
+    }
+
+    /// Whether `expr` is a value-form expression selection kept in its body
+    /// instead of making it a root (`inline_literals`).
+    pub fn isInlineLiteral(self: *const CompileTimeRootTable, expr: CIR.Expr.Idx) bool {
+        const items = self.inline_literals.items();
+        var low: usize = 0;
+        var high: usize = items.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const value = @backingInt(items[mid]);
+            if (value == @backingInt(expr)) return true;
+            if (value < @backingInt(expr)) low = mid + 1 else high = mid;
+        }
+        return false;
     }
 
     fn patternRootIndex(allocator: Allocator, roots: []const CompileTimeRoot) Allocator.Error![]PatternRoot {
@@ -25712,6 +25762,7 @@ pub const CompileTimeRootTable = struct {
         self.roots.deinit(allocator);
         self.literal_conversions.deinit(allocator);
         self.roots_by_pattern.deinit(allocator);
+        self.inline_literals.deinit(allocator);
         self.* = .{};
     }
 
@@ -25728,6 +25779,7 @@ pub const CompileTimeRootTable = struct {
         payload: CompileTimeRootPayload,
         guarded: bool = false,
         literal_argument: ?LiteralArgumentRoot = null,
+        completion: CompileTimeRootCompletion = .evaluate,
     };
 
     /// Collect one top-level `expect` as a test root. Expects evaluated inside
@@ -25777,6 +25829,7 @@ pub const CompileTimeRootTable = struct {
             .payload = entry.payload,
             .guarded = entry.guarded,
             .literal_argument = entry.literal_argument,
+            .completion = entry.completion,
         }) catch |err| {
             if (entry.hoisted_body) |body| hoist_roots.deinitBody(allocator, body);
             return err;
@@ -32080,7 +32133,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 230);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 231);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -35897,6 +35950,11 @@ pub fn publishFromTypedModule(
     );
     errdefer platform_required_bindings.deinit(allocator);
 
+    // Value form reads the dispatch plans: a numeral with a `from_numeral`
+    // plan is not in value form. A literal with a conversion root always has
+    // one, so the conversion roots published later decide nothing here.
+    var value_form_tables = body_tables;
+    value_form_tables.plans = &static_dispatch_plans;
     var compile_time_roots = try CompileTimeRootTable.fromModule(
         allocator,
         module,
@@ -35906,6 +35964,7 @@ pub fn publishFromTypedModule(
         &checked_type_publication,
         module_index,
         &checked_procedure_templates,
+        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, value_form_tables),
     );
     errdefer compile_time_roots.deinit(allocator);
 
@@ -36159,11 +36218,6 @@ pub fn publishFromTypedModule(
         &top_level_values,
         requirement_solutions,
         platform_requirement_root_substs,
-    );
-    try publishValueFormRoots(
-        allocator,
-        &compile_time_roots,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
     );
     try classifyTemplateDispatchPlanRefs(
         allocator,
@@ -38232,8 +38286,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xBE, 0xEF, 0x47, 0x94, 0xB2, 0xA7, 0x60, 0x43, 0x9B, 0x2B, 0x7C, 0xC5, 0x5E, 0xA7, 0x4E, 0x28,
-        0xD3, 0xF2, 0x77, 0x97, 0x89, 0x06, 0x66, 0xD2, 0xB0, 0x94, 0x3A, 0x70, 0x8A, 0x16, 0x4C, 0x89,
+        0x55, 0x0E, 0xDB, 0x1E, 0xFC, 0x72, 0xDF, 0xA1, 0x13, 0xF4, 0x38, 0xB0, 0x9E, 0x10, 0x05, 0x56,
+        0x1F, 0x23, 0x3B, 0x08, 0x69, 0xA1, 0xA8, 0x56, 0xFC, 0xD1, 0xFA, 0x0C, 0x46, 0xBB, 0x26, 0x56,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

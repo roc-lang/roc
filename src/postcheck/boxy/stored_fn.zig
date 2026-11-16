@@ -77,7 +77,7 @@ pub fn captureShape(program: *Program, id: WorkerId) Allocator.Error!CaptureShap
         .lambda, .adapter => .{ worker.capture_types, false },
         .codec => |index| .{ worker.capture_types, program.codec.pieces.items[index].kind == .constructor },
         .method_entry, .structural, .structural_map, .crash_dictionary, .literal_thunk, .root_slot, .callable_eval_entry => .{ &.{}, true },
-        .template, .default, .root, .static_data, .convert => invariant("a worker that is no function value reached a stored function"),
+        .template, .default, .root, .static_data, .inline_literal, .convert => invariant("a worker that is no function value reached a stored function"),
     };
     // A procedure whose calls pass its table captures none.
     if (program.perCall(id)) return .{ .values = values, .inputs = 0, .scope = &.{}, .composed = composed };
@@ -1022,7 +1022,7 @@ pub fn encodeMetadata(retained: *Retained, result: *LirProgram.Result, compiled:
         const id = retained.workers.get(function.identity) orelse continue;
         const record = program.worker(id);
         switch (record.key) {
-            .template, .default, .root, .static_data, .convert => continue,
+            .template, .default, .root, .static_data, .inline_literal, .convert => continue,
             .lambda, .adapter, .method_entry, .structural, .structural_map, .crash_dictionary, .literal_thunk, .root_slot, .callable_eval_entry, .codec => {},
         }
         const shape = try captureShape(program, id);
@@ -1565,7 +1565,7 @@ const Encoder = struct {
                 try self.typeOf(record.ret);
                 try self.typeSpan(record.capture_types);
             },
-            .root, .static_data, .convert => invariant("a worker that is no function value reached a stored function"),
+            .root, .static_data, .inline_literal, .convert => invariant("a worker that is no function value reached a stored function"),
         }
     }
 };
