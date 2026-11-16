@@ -442,6 +442,14 @@ pub fn runAndCollectProcedureUsageWithOptions(allocator: Allocator, program: *As
     return try pass.run();
 }
 
+/// The exact procedure-use inventory of `program` as it is now, for a later
+/// pass that changes which functions bodies reference.
+pub fn collectProcedureUsage(allocator: Allocator, program: *const Ast.Program) Allocator.Error!OwnedProcedureUsage {
+    var usage = try ProgramProcedureUsage.collect(allocator, program);
+    defer usage.deinit(allocator);
+    return .{ .allocator = allocator, .items = usage.takeFnUses() };
+}
+
 /// Normalize constructor and callable shape only along checker-stamped iterator
 /// producer pipelines. This is the `.none`-mode subset of SpecConstr: it emits
 /// no call-pattern workers and does not admit unrelated calls for inlining.
