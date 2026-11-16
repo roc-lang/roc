@@ -3533,7 +3533,8 @@ const Pass = struct {
                 .next = head,
             } }, origin);
         }
-        self.store.getCFStmtPtr(loop_stmt).join.body = try body_clone.declareLoopExits(self.store, exits.items, head, origin);
+        const loop_body = try body_clone.declareLoopExits(self.store, exits.items, head, origin);
+        self.store.getCFStmtPtr(loop_stmt).join.body = loop_body;
     }
 
     /// Emit the dispatch for one chain, continuing at `fits` when its spare
@@ -3755,7 +3756,8 @@ const Pass = struct {
                 .next = head,
             } }, origin);
         }
-        self.store.getCFStmtPtr(loop_stmt).join.body = try body_clone.declareLoopExits(self.store, exits.items, head, origin);
+        const loop_body = try body_clone.declareLoopExits(self.store, exits.items, head, origin);
+        self.store.getCFStmtPtr(loop_stmt).join.body = loop_body;
     }
 };
 

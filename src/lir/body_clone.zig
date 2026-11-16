@@ -3698,7 +3698,9 @@ test "body_clone finds a read of a local before its definition across a jump" {
     defer store.deinit();
     const local = try store.addLocal(.{ .layout_idx = .u64 });
     const other = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @fromBackingInt(0);
+    var join_ids = JoinParamIndex.init(testing.allocator);
+    defer join_ids.deinit();
+    const join_id = join_ids.freshJoinPoint();
     var joins = collections.DenseMap(LIR.JoinPointId, CFStmtId).init(testing.allocator);
     defer joins.deinit();
     var successors = std.ArrayList(CFStmtId).empty;
