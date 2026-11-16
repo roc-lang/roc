@@ -28114,6 +28114,10 @@ the list of instruction sets lives only in `isa.zig`. Code that runs generated
 code in-process asks `isa.host`, never `RocTarget.detectNative`, which maps an
 architecture without a code generator to one that has one.
 
+An explicit reference-count statement on a stack value computes the value's
+address directly into the helper's first argument register and loads an
+incref's count directly into the second; neither passes through a frame slot.
+
 ## Dev Backend Register Lifetimes
 
 `LirCodeGen` is the sole authority for LIR local locations. Every assigned
