@@ -656,6 +656,9 @@ pub const Builder = struct {
     static_parts: std.ArrayList(LIR.StaticDataId) = .empty,
     tasks: std.ArrayList(Task) = .empty,
     region: base.Region = base.Region.zero(),
+    /// The source location `regionLoc` last resolved, with the module and
+    /// region it is the location of.
+    region_loc: ?struct { module: ModuleIndex, region: base.Region, loc: base.SourceLoc } = null,
     result_local: ?LocalId = null,
     /// An erased worker's reuse argument: the erased-callable allocation a
     /// caller transferred to it (design.md "Destination-Passing Results
@@ -1020,13 +1023,24 @@ pub const Builder = struct {
 
     // -- Statements --
 
-    pub fn origin(self: *const Builder, kind: LIR.OriginKind) LIR.StmtOrigin {
+    pub fn origin(self: *Builder, kind: LIR.OriginKind) LIR.StmtOrigin {
         return .{
-            .loc = self.program.sourceLoc(self.module, self.region),
+            .loc = self.regionLoc(),
             .region = self.region,
             .inline_scope = LIR.InlineScopeId.none,
             .kind = kind,
         };
+    }
+
+    /// The source location of the current region, resolved once for a run
+    /// of statements lowered from one region rather than once per statement.
+    fn regionLoc(self: *Builder) base.SourceLoc {
+        if (self.region_loc) |known| {
+            if (known.module == self.module and known.region.eq(self.region)) return known.loc;
+        }
+        const loc = self.program.sourceLoc(self.module, self.region);
+        self.region_loc = .{ .module = self.module, .region = self.region, .loc = loc };
+        return loc;
     }
 
     /// What a failed pattern test at checked exhaustiveness site
@@ -3526,7 +3540,7 @@ pub const Builder = struct {
 
     pub fn expectSite(self: *Builder) Allocator.Error!?LIR.ExpectSiteId {
         if (!self.program.observe_expects) return null;
-        return try self.program.result.addExpectSite(self.program.sourceLoc(self.module, self.region), self.region);
+        return try self.program.result.addExpectSite(self.regionLoc(), self.region);
     }
 
     /// The `{}` value.
