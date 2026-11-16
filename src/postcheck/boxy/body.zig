@@ -4352,7 +4352,7 @@ pub const Builder = struct {
         if (index >= scope.literal_requirements.len) invariant("an edge named a literal argument its scope does not have");
         const forwarded = switch (edge.args[index]) {
             .forwarded => |forwarded| forwarded,
-            .root => return null,
+            .root, .unbound => return null,
         };
         if (position <= (self.foreign_scopes orelse 0)) return null;
         return .{ .position = position - 1, .index = forwarded };
@@ -4387,6 +4387,7 @@ pub const Builder = struct {
                 return switch (edge.args[index]) {
                     .root => |root| try self.composeRootThunk(root),
                     .forwarded => |forwarded| try self.scopeLiteral(.{ .depth = 0, .index = forwarded }),
+                    .unbound => try self.unreadLiteralArg(),
                 };
             },
         }
@@ -4434,11 +4435,13 @@ pub const Builder = struct {
         return switch (source) {
             .root => |root| try self.rootThunk(root),
             .forwarded => |index| try self.scopeLiteral(.{ .depth = 0, .index = index }),
+            .unbound => try self.unreadLiteralArg(),
         };
     }
 
-    /// The literal argument of a generalized lambda no use instantiated:
-    /// like a `from_scheme` dictionary, a crash nothing reads.
+    /// The literal argument of a generalized lambda no use instantiated, or
+    /// of an instantiation whose literal no value reaches (`.unbound`): like
+    /// a `from_scheme` dictionary, a crash nothing reads.
     fn unreadLiteralArg(self: *Builder) Allocator.Error!Word {
         return try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .unreachable_value), &.{});
     }

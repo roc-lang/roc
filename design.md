@@ -9410,11 +9410,17 @@ first, and another module that reuses it need not import that one. A function
 stored in a module's `ConstStore` therefore keeps a codec edge as only the
 contract digest and the checked keys of its dispatcher and callable types
 (`ConstFnStructuralEvidence.storedForm`), so every module its stored values
-name lies in its import closure. Monotype restores such an edge from the first
-module of the storing module's reflexive import closure, breadth-first in
-direct-import order, that holds a contract with that digest and roots with
-those keys, at its first such contract. The stored function was lowered from
-bodies that closure reaches, so one of its modules recorded an equal contract.
+name is one its checked key covers. Monotype restores such an edge from the
+first module of the storing module's stored-value closure that holds a
+contract with that digest and roots with those keys, at its first such
+contract. The stored-value closure is the modules whose bodies the storing
+module's values can come from, breadth first: the module, then each module's
+direct imports in order, and after the lowering root's imports its platform
+relation modules. The relation belongs because a platform's constant can hold
+a value its app supplied for a requirement (`provided = required`), which was
+lowered from the app's bodies, and the platform's checked key covers its
+platform/app relation. The stored function was lowered from bodies that
+closure reaches, so one of its modules recorded an equal contract.
 Boxy resolves a stored function's codec dictionary edge from the same module,
 and builds the generated codec worker in it: the dictionary's requirement comes
 from the template's module and the shape from the use's module, and neither
@@ -12867,8 +12873,10 @@ puts both `Conflict`s in one row. The merge (`Solver.mergeTags`) pairs two
 same-label tags only when their payloads could unify without a structural
 conflict (`Solver.typesCompatible`, which asks ahead of time exactly what
 `unifyRoots` would raise an invariant on: a different kind of type, a
-different primitive, records with different fields, a different arity);
-otherwise both stay, as two variants of one label. That is sound because a
+different primitive, records with different fields, a different arity, a
+named type whose backing unification may not read against a bare structure,
+as an opaque `Id :: U64` against `U64`); otherwise both stay, as two variants
+of one label. That is sound because a
 label names one variant within any static type: a constructor or pattern is
 written at one static type, which lists the label once, and its own payload
 types pick the variant (`Solver.tagPayloadsSpanFor`,
@@ -15130,7 +15138,14 @@ deferred at lowering; the checked module and lowering are both complete):
   selected hoisted-const use whose dispatch requires a concrete Monotype may
   consume the same view as its explicit specialization choice; it immediately
   relates that chosen type back to the live const-use graph, so the required
-  field-kind commitment is producer-visible before body emission.
+  field-kind commitment is producer-visible before body emission. That choice
+  also reads an unresolved variable carrying a row default and no numeric
+  default as that default (`specializationChoiceTypeViewForNode`). A root's
+  type holds such a variable whenever it mentions an implicitly open row
+  nothing widened, as a nominal whose backing names another module's tag-union
+  alias does, and relation freeze closes the variable to that same default, so
+  the root still has exactly one type. Draft specialization lookup does not
+  read row defaults this way: a request with an open row stays graph-local.
 - Where the type lowers: the record arms of `Builder.lowerType` use
   `optionalSlotType` in src/postcheck/monotype/lower.zig, with the instantiation-graph twin
   `optionalSlotNode` (`instFields`, `fieldAccessTypeNode`) building the
@@ -17796,16 +17811,20 @@ strategy).
   the value is one of the enclosing scheme's own literal arguments
   (`.forwarded`). An instantiation at a type naming a variable that no scheme
   around the edge quantifies and that is not decided (a use's constrained or
-  numeric-default copy that nothing relates to the program, as in
-  `_ = local` for a generalized local function nothing calls whose literal's
-  own type is the copy) is fixed by no use, so the variable seals and the
-  edge is where the literal's type stops changing: it is a *sealed* root
-  (`LiteralArgumentRoot.sealed`), a validate-only `literal_argument` root at
-  the sealed type. Its conversion cannot depend on the variable, which no
-  value of the program has, so compile-time evaluation runs it once and
-  reports its rejection, and the runtime program converts the literal
-  through the root's wrapper. A sealed root is always requested, although
-  its type is not concrete. A
+  numeric-default copy that nothing relates to the program) is fixed by no
+  use. When the literal's own type is that copy, as in `_ = local` for a
+  generalized local function nothing calls, the copy is the conversion's
+  dispatcher, which checking left undefaulted, so no value reaches the
+  conversion (the unpinned-dispatch rule, `unpinnedDispatchResolution`)
+  and nothing reads the argument (`.unbound`). Otherwise, as in
+  `x = helper({})` where `helper : {} -> Sql(a)` and nothing fixes `a`, the
+  variable seals and the edge is where the literal's type stops changing: it
+  is a *sealed* root (`LiteralArgumentRoot.sealed`), a validate-only
+  `literal_argument` root at the sealed type. Its conversion cannot depend on
+  the variable, which no value of the program has, so compile-time
+  evaluation runs it once and reports its rejection, and the runtime program
+  converts the literal through the root's wrapper. A sealed root is always
+  requested, although its type is not concrete. A
   template's `literal_argument_demand` lists the
   roots its edges read, so compile-time evaluation orders them before any
   evaluation of the template.
@@ -17922,9 +17941,10 @@ A body reads a
 literal of its own scheme by calling the argument (`lowerInstanceLiteral`); a
 call passes the callee's literal arguments from the edge's
 (`fillLiteralArgs`): a root's thunk or one of the caller's own arguments.
-Each literal argument of a generalized lambda whose construction checking
-recorded no instantiation for (no use instantiated it, so nothing calls it)
-is a crash dictionary nothing reads, as a `from_scheme` dictionary is. A
+An `.unbound` argument, and each literal argument of a generalized lambda
+whose construction checking recorded no instantiation for (no use
+instantiated it, so nothing calls it), is a crash dictionary nothing reads,
+as a `from_scheme` dictionary is. A
 generalized local function's own literal requirements travel with its dictionaries:
 per call for a local procedure, in its captures for any other generalized
 lambda; a nested lambda captures the enclosing scopes' literal arguments as

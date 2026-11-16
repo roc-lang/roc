@@ -22318,7 +22318,7 @@ fn publishLiteralArgumentRoots(
     }
 
     // Instantiation of each edge's callee literal requirements, to a fixpoint.
-    const ArgBuild = union(enum) { root: u32, forwarded: u32 };
+    const ArgBuild = union(enum) { root: u32, forwarded: u32, unbound };
     var edge_args = std.ArrayListUnmanaged(std.ArrayListUnmanaged(ArgBuild)).empty;
     defer {
         for (edge_args.items) |*list| list.deinit(allocator);
@@ -22482,9 +22482,18 @@ fn publishLiteralArgumentRoots(
                 const ty = if (closed) try sealDecidedVariables(allocator, store, instantiated) else instantiated;
                 const key: ObligationKey = .{ .site = obligation.site, .ty = try literalRequirementTypeIdentity(store, &identity_orderer, ty) };
                 // A variable that no scheme around the edge quantifies and
-                // that is not decided is fixed by no use, so it seals: the
-                // edge converts the literal at the sealed type.
-                const sealed = !closed and instance.? == .unbound;
+                // that is not decided is fixed by no use. When that variable
+                // is the literal's own type, it is the conversion's
+                // dispatcher, which checking left undefaulted: no value
+                // reaches the conversion (the unpinned-dispatch rule), so
+                // nothing converts the literal. Otherwise the variable seals:
+                // the edge converts the literal at the sealed type.
+                const unfixed = !closed and instance.? == .unbound;
+                if (unfixed and store.payload(instantiated) == .flex) {
+                    try args.append(allocator, .unbound);
+                    continue;
+                }
+                const sealed = unfixed;
                 if (closed or sealed) {
                     const slot = try root_index.getOrPut(allocator, key);
                     if (!slot.found_existing) {
@@ -22658,6 +22667,7 @@ fn publishLiteralArgumentRoots(
                 try pool.append(allocator, switch (arg) {
                     .root => |ordinal| .{ .root = @fromBackingInt(@intCast(@as(u32, @intCast(first_root + ordinal)))) },
                     .forwarded => |index| .{ .forwarded = index },
+                    .unbound => .unbound,
                 });
                 if (arg == .root) {
                     const id: ComptimeRootId = @fromBackingInt(@intCast(@as(u32, @intCast(first_root + arg.root))));
@@ -25024,6 +25034,12 @@ pub const LiteralRequirement = struct {
 pub const LiteralArgSource = union(enum(u8)) {
     root: ComptimeRootId,
     forwarded: u32,
+    /// The instantiated literal's type is a variable that no scheme around
+    /// the edge quantifies and checking left undefaulted: a use's copy of a
+    /// variable nothing relates to the program, such as `_ = local` taking a
+    /// generalized local function that nothing calls. No value reaches the
+    /// conversion, so nothing reads the argument.
+    unbound,
 };
 
 /// The literal arguments of one edge, in the instantiated scheme's
@@ -38142,8 +38158,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xF5, 0xB1, 0xAA, 0x4E, 0x1E, 0xFA, 0xCE, 0xBB, 0x21, 0x24, 0x76, 0xC6, 0x9F, 0x6C, 0x01, 0xAA,
-        0x51, 0x4B, 0x5A, 0xD0, 0xBB, 0x78, 0x62, 0xA5, 0xD9, 0x74, 0xC2, 0x0A, 0x00, 0x5A, 0x96, 0xE5,
+        0xBE, 0xEF, 0x47, 0x94, 0xB2, 0xA7, 0x60, 0x43, 0x9B, 0x2B, 0x7C, 0xC5, 0x5E, 0xA7, 0x4E, 0x28,
+        0xD3, 0xF2, 0x77, 0x97, 0x89, 0x06, 0x66, 0xD2, 0xB0, 0x94, 0x3A, 0x70, 0x8A, 0x16, 0x4C, 0x89,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

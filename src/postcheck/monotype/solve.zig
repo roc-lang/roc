@@ -5352,7 +5352,7 @@ pub const InstGraph = struct {
     /// requests remain graph-local until explicit recursive-edge identity or
     /// final body sealing resolves them.
     pub fn typeIsResolved(self: *InstGraph, root: NodeId) Allocator.Error!bool {
-        return try self.typeIsResolvedInner(root, false);
+        return try self.typeIsResolvedInner(root, .none);
     }
 
     /// Whether every unresolved part of a specialization request is an
@@ -5360,14 +5360,41 @@ pub const InstGraph = struct {
     /// required default at relation freeze, so specialization lookup may take
     /// a read-only view with that default without mutating the live graph.
     pub fn typeIsSpecializationDefaultable(self: *InstGraph, root: NodeId) Allocator.Error!bool {
-        return try self.typeIsResolvedInner(root, true);
+        return try self.typeIsResolvedInner(root, .field_kinds);
+    }
+
+    /// Whether every unresolved part of a type is a cell that relation freeze
+    /// closes to a default the cell itself declares: an undetermined
+    /// field-kind cell, or a variable carrying a row default and no numeric
+    /// default. Checking outputs an implicitly open row that nothing
+    /// widened as such a variable, so a type no specialization input reaches
+    /// can still hold one.
+    pub fn typeIsSpecializationChoiceDefaultable(self: *InstGraph, root: NodeId) Allocator.Error!bool {
+        return try self.typeIsResolvedInner(root, .field_kinds_and_row_defaults);
+    }
+
+    /// Which unresolved cells a walk reads as their relation-freeze default.
+    const FreezeDefaults = enum {
+        none,
+        /// An undetermined field kind reads as `required`.
+        field_kinds,
+        /// A variable carrying a row default reads as that default, too.
+        field_kinds_and_row_defaults,
+    };
+
+    /// Whether relation freeze closes an unresolved variable to a row
+    /// default it carries.
+    fn variableClosesToRowDefault(variable: InstVariable) bool {
+        return variable.row_default != null and variable.numeric_default_phase == null;
     }
 
     fn typeIsResolvedInner(
         self: *InstGraph,
         root: NodeId,
-        allow_field_kind_defaults: bool,
+        defaults: FreezeDefaults,
     ) Allocator.Error!bool {
+        const allow_field_kind_defaults = defaults != .none;
+        const allow_row_defaults = defaults == .field_kinds_and_row_defaults;
         if (self.rootStampedResolved(root)) return true;
         // The worklist is usually short, so it starts on this frame.
         var pending_buffer: [1024]u8 align(@alignOf(usize)) = undefined;
@@ -5389,7 +5416,7 @@ pub const InstGraph = struct {
                 .redirect => unreachable, // find returns a class root, which is never a redirect
                 // A finished Monotype is resolved throughout.
                 .leaf => {},
-                .unresolved => return false,
+                .unresolved => |variable| if (!allow_row_defaults or !variableClosesToRowDefault(variable)) return false,
                 .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
                 .list, .box => |child| try pending.append(pending_allocator, child),
                 .tuple => |items| try pending.appendSlice(pending_allocator, items),
@@ -5398,12 +5425,12 @@ pub const InstGraph = struct {
                     try pending.append(pending_allocator, function.ret);
                 },
                 .tag_union => |row| {
-                    if (!try self.rowExtensionChainResolved(node, .tag_union)) return false;
+                    if (!try self.rowExtensionChainResolved(node, .tag_union, allow_row_defaults)) return false;
                     for (row.tags) |tag| try pending.appendSlice(pending_allocator, tag.payloads);
                     try pending.append(pending_allocator, row.ext);
                 },
                 .record => |row| {
-                    if (!try self.rowExtensionChainResolved(node, .record)) return false;
+                    if (!try self.rowExtensionChainResolved(node, .record, allow_row_defaults)) return false;
                     for (row.fields) |field| {
                         if (field.kind == .undetermined and self.resolvedFieldKind(field.kind) == null) {
                             if (!allow_field_kind_defaults) return false;
@@ -5429,7 +5456,7 @@ pub const InstGraph = struct {
                 },
             }
         }
-        if (!allow_field_kind_defaults) {
+        if (defaults == .none) {
             // Every class the strict walk visited is resolved throughout.
             var visited = seen.keyIterator();
             while (visited.next()) |node| {
@@ -5520,7 +5547,9 @@ pub const InstGraph = struct {
         return true;
     }
 
-    fn rowExtensionChainResolved(self: *InstGraph, raw_root: NodeId, kind: RowKind) Allocator.Error!bool {
+    /// Whether a row's extension chain ends in the empty row of its kind,
+    /// or, with `row_defaults`, in a variable relation freeze closes to it.
+    fn rowExtensionChainResolved(self: *InstGraph, raw_root: NodeId, kind: RowKind, row_defaults: bool) Allocator.Error!bool {
         var seen = self.node_set_pool.acquire();
         defer self.node_set_pool.release(&seen);
         var current = self.find(raw_root);
@@ -5542,7 +5571,13 @@ pub const InstGraph = struct {
                 },
                 .empty_tag_union => return kind == .tag_union,
                 .empty_record => return kind == .record,
-                .unresolved => return false,
+                .unresolved => |variable| {
+                    if (!row_defaults or !variableClosesToRowDefault(variable)) return false;
+                    return switch (variable.row_default.?) {
+                        .empty_tag_union => kind == .tag_union,
+                        .empty_record => kind == .record,
+                    };
+                },
                 .redirect,
                 .leaf,
                 .primitive,
@@ -9062,6 +9097,21 @@ pub const InstGraph = struct {
         if (try self.settledTypeViewForNode(node)) |settled| return settled;
         if (!try self.typeIsSpecializationDefaultable(node)) {
             Common.invariant("specialization type view requested for a graph type with non-field-kind unresolved evidence");
+        }
+        var snapshot = GraphTypeFinals.initSpecializationSnapshot(self);
+        defer snapshot.deinit();
+        return try snapshot.sealNode(self.find(node));
+    }
+
+    /// Materialize the one type a use of a constant no specialization input
+    /// reaches selects for it. Besides the cells
+    /// `specializationTypeViewForNode` defaults, a variable carrying a row
+    /// default reads as that default, which is what relation freeze closes
+    /// it to. The live cells remain open for the caller to relate.
+    pub fn specializationChoiceTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
+        if (try self.settledTypeViewForNode(node)) |settled| return settled;
+        if (!try self.typeIsSpecializationChoiceDefaultable(node)) {
+            Common.invariant("specialization choice requested for a graph type with unresolved evidence that declares no relation-freeze default");
         }
         var snapshot = GraphTypeFinals.initSpecializationSnapshot(self);
         defer snapshot.deinit();

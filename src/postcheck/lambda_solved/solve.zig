@@ -2547,13 +2547,16 @@ const Solver = struct {
             const right_tag = std.meta.activeTag(right_content);
             if (left_tag == .unbound or left_tag == .forall or right_tag == .unbound or right_tag == .forall) continue;
             // A named type and a bare structure are a lifted pair, which
-            // unification relates through the named type's backing.
+            // unification relates through the named type's backing when it
+            // may read that backing, and not at all otherwise.
             if (left_tag == .named and right_tag != .named) {
-                if (left_content.named.backing.get()) |backing| try work.append(self.allocator, .{ .first = backing.ty, .second = right });
+                const backing = liftedPairBacking(left_content) orelse return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, committable);
+                try work.append(self.allocator, .{ .first = backing, .second = right });
                 continue;
             }
             if (right_tag == .named and left_tag != .named) {
-                if (right_content.named.backing.get()) |backing| try work.append(self.allocator, .{ .first = left, .second = backing.ty });
+                const backing = liftedPairBacking(right_content) orelse return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, committable);
+                try work.append(self.allocator, .{ .first = left, .second = backing });
                 continue;
             }
             if (left_tag != right_tag) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, committable);
@@ -4592,6 +4595,18 @@ const Solver = struct {
             Common.invariant("private iterator relation received a checked-public backing");
         }
         try self.pushUnifyPair(stack, left_backing.ty, right_backing.ty);
+    }
+
+    /// The backing `unifyRoots` relates a bare structure to when it meets
+    /// this named type: an alias's backing (`transparentAliasBacking`) and an
+    /// inspectable backing (`unifyInspectableNamedBacking`). A named type
+    /// whose backing only fixes its runtime layout relates to no bare
+    /// structure.
+    fn liftedPairBacking(named_content: Type.Content) ?Type.TypeVarId {
+        const named = named_content.named;
+        const backing = named.backing.get() orelse return null;
+        if (named.kind != .alias and backing.use != .inspectable) return null;
+        return backing.ty;
     }
 
     fn transparentAliasBacking(content: Type.Content) ?Type.TypeVarId {
@@ -7335,6 +7350,65 @@ test "lambda solved row joins keep one label at two payload types as two variant
     try std.testing.expect(program.types.rootCompressed(a_record) != program.types.rootCompressed(b_record));
     try std.testing.expect(program.types.rootContent(a_record) == .record);
     try std.testing.expect(program.types.rootContent(b_record) == .record);
+}
+
+test "lambda solved row joins keep one label apart when one payload names an opaque type and the other its backing" {
+    // design.md "Row Joins": two modules' error rows name `Order` at
+    // `{ expected : Id }` and at `{ expected : U64 }`, where `Id` is an
+    // opaque type whose backing is `U64`. Unification relates `Id` to no bare
+    // `U64`, so the two payloads are two variants of the label.
+    const allocator = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(allocator);
+    const shared_name = try lifted.names.internTagLabel("Shared");
+    const order_name = try lifted.names.internTagLabel("Order");
+    const expected_field = try lifted.names.internRecordFieldLabel("expected");
+    const module = try lifted.names.internModuleIdentity(&(@as([32]u8, @splat(0x3C))));
+    const id_name = try lifted.names.internTypeName("Id");
+    var program = Ast.Program.init(allocator, lifted);
+    defer program.deinit();
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+
+    const u64_ty = try program.types.add(.{ .primitive = .u64 });
+    const id_backing = try program.types.add(.{ .primitive = .u64 });
+    const id_ty = try program.types.add(.{ .named = .{
+        .named_type = .{ .module = .{} },
+        .def = .{ .module = module, .type_name = id_name },
+        .kind = .@"opaque",
+        .args = .empty(),
+        .backing = .some(.{ .ty = id_backing, .use = .runtime_layout_only }),
+    } });
+    const id_record = try program.types.add(.{ .record = try program.types.addFields(&.{
+        .{ .name = expected_field, .ty = id_ty, .default = .none },
+    }) });
+    const u64_record = try program.types.add(.{ .record = try program.types.addFields(&.{
+        .{ .name = expected_field, .ty = u64_ty, .default = .none },
+    }) });
+    const shared = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = shared_name, .checked_name = shared_name, .payloads = .empty() },
+    }) });
+    const id_row = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = order_name, .checked_name = order_name, .payloads = try program.types.addSpan(&.{id_record}) },
+        .{ .name = shared_name, .checked_name = shared_name, .payloads = .empty() },
+    }) });
+    const u64_row = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = order_name, .checked_name = order_name, .payloads = try program.types.addSpan(&.{u64_record}) },
+        .{ .name = shared_name, .checked_name = shared_name, .payloads = .empty() },
+    }) });
+
+    try solver.unify(shared, id_row);
+    try solver.unify(shared, u64_row);
+    try std.testing.expectEqual(program.types.rootCompressed(id_row), program.types.rootCompressed(u64_row));
+    const joined = (try solver.shapeContent(shared)).tag_union;
+    try std.testing.expectEqual(@as(usize, 3), joined.count());
+    var orders: usize = 0;
+    for (0..joined.count()) |index| {
+        if (program.types.tagItem(joined, index).name == order_name) orders += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), orders);
+    try std.testing.expect(program.types.rootCompressed(id_record) != program.types.rootCompressed(u64_record));
+    try std.testing.expect(program.types.rootContent(id_ty) == .named);
+    try std.testing.expect(program.types.rootContent(u64_ty) == .primitive);
 }
 
 test "lambda solved row joins reach every row of a value" {

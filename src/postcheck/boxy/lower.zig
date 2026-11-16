@@ -101,6 +101,9 @@ pub const Timing = struct {
         roots,
         /// Lowering queued workers' bodies.
         bodies,
+        /// Following descriptor operation demands to the descriptors and
+        /// override callables they reach.
+        demand,
         /// Filling reserved type tables.
         tables,
         /// Layout and static data requests.
@@ -123,9 +126,10 @@ pub const Timing = struct {
         return std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
     }
 
-    /// The time attributed so far to worker bodies and type tables.
+    /// The time attributed so far to worker bodies, descriptor demand and
+    /// type tables.
     fn drainedNs(self: *const Timing) u64 {
-        return self.steps_ns[@backingInt(Step.bodies)] +| self.steps_ns[@backingInt(Step.tables)];
+        return self.steps_ns[@backingInt(Step.bodies)] +| self.steps_ns[@backingInt(Step.demand)] +| self.steps_ns[@backingInt(Step.tables)];
     }
 
     /// Add the time since `started` to `step` and return the current time.
@@ -3996,35 +4000,25 @@ pub const Program = struct {
     /// name. The three alternate until none has work, which completes the
     /// demand closure (design.md "Type Descriptors").
     fn drain(self: *Program) Allocator.Error!void {
-        if (self.input.timing) |timing| return self.drainTimed(timing);
+        const timing = self.input.timing;
+        var started: i96 = if (timing) |t| t.now() else 0;
         while (true) {
             while (self.worklist.pop()) |id| {
                 if (self.worker(id).lowered) continue;
                 self.worker(id).lowered = true;
+                if (timing) |t| t.workers_by_kind[@backingInt(std.meta.activeTag(self.worker(id).key))] += 1;
                 try Body.lowerWorker(self, id);
             }
-            if (try self.static_descs.drainDemand()) continue;
+            if (timing) |t| started = t.lap(started, .bodies);
+            const demanded = try self.static_descs.drainDemand();
+            if (timing) |t| started = t.lap(started, .demand);
+            if (demanded) continue;
             const unfilled = self.static_descs.nextUnfilledTable() orelse return;
             try self.fillTable(unfilled);
-        }
-    }
-
-    /// `drain`, attributing its time to body lowering and table filling and
-    /// counting the workers it lowers by kind.
-    fn drainTimed(self: *Program, timing: *Timing) Allocator.Error!void {
-        var started = timing.now();
-        while (true) {
-            while (self.worklist.pop()) |id| {
-                if (self.worker(id).lowered) continue;
-                self.worker(id).lowered = true;
-                timing.workers_by_kind[@backingInt(std.meta.activeTag(self.worker(id).key))] += 1;
-                try Body.lowerWorker(self, id);
+            if (timing) |t| {
+                t.tables_filled += 1;
+                started = t.lap(started, .tables);
             }
-            started = timing.lap(started, .bodies);
-            const unfilled = self.static_descs.nextUnfilledTable() orelse return;
-            try self.fillTable(unfilled);
-            timing.tables_filled += 1;
-            started = timing.lap(started, .tables);
         }
     }
 
@@ -4364,7 +4358,9 @@ fn registerModules(program: *Program) Allocator.Error!void {
     const input = program.input;
     _ = try program.modules.add(checked.importedView(input.modules.root.module));
     for (input.modules.imports) |view| _ = try program.modules.add(view);
-    for (input.modules.root.relation_modules) |view| _ = try program.modules.add(view);
+    for (input.modules.root.relation_modules) |view| {
+        try program.modules.relations.append(allocator, try program.modules.add(view));
+    }
     program.body_indexed = try allocator.alloc(bool, program.modules.views.items.len);
     @memset(program.body_indexed, false);
     for (program.modules.views.items) |view| {
