@@ -11394,8 +11394,9 @@ the output a clone keeps rather than by how often it retries:
   Its jump sites in enclosing let-of-case joins are dropped, so a join sees
   only the jumps of output that survives. Its program suffix and the ids
   minted for it are rewound too, except when the attempt created a callable
-  worker: a worker is keyed by its template and ABIs alone, the retry and
-  every later clone reuse it, and its body lies in that suffix.
+  worker or committed a prefix split: a worker is keyed by its template and
+  ABIs alone, a split replaces its function's source body, the retry and
+  every later clone read either one, and both lie in that suffix.
 
 Generic analysis follows existing constructor evidence; a structural consumer
 requests a producer's result shape through the separate demand path, which
