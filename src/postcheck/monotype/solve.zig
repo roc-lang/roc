@@ -7245,6 +7245,7 @@ pub const InstGraph = struct {
         }
         try self.migrateGeneratedIteratorRoot(loser, winner);
         self.removeGeneratedIterator(loser);
+        try self.forgetPublicCodecViews(winner, loser);
         const winner_tail = self.class_member_tail.items[@backingInt(winner)];
         const loser_head = self.class_member_head.items[@backingInt(loser)];
         self.class_member_next.items[@backingInt(winner_tail)] = .of(loser_head);
@@ -7265,6 +7266,8 @@ pub const InstGraph = struct {
             self.contentIsNamed(winner_content) != self.contentIsNamed(loser_content);
         const joins_iterator_representations = winner_content == .named and loser_content == .named and
             self.iteratorRelation(winner_content.named, loser_content.named) != .ordinary;
+        const joins_public_with_representation = winner_content != .unresolved and loser_content != .unresolved and
+            self.contentIsGeneratedPrivateRoot(winner_content) != self.contentIsGeneratedPrivateRoot(loser_content);
         self.nodes.items[@backingInt(loser)] = .{ .redirect = winner };
         self.parents.items[@backingInt(loser)] = winner;
         self.versions.items[@backingInt(winner)] +%= 1;
@@ -7275,9 +7278,11 @@ pub const InstGraph = struct {
         // An active snapshot exists only for a resolved class and reaches
         // only resolved classes. A variable never wins a join, and two
         // resolved classes ordinarily unify equal content. Nominal/structural
-        // joins and explicit iterator representation joins can instead select
-        // different content, invalidating snapshots through either class.
-        if (joins_nominal_with_structural or joins_iterator_representations) {
+        // joins, explicit iterator representation joins, and a public named
+        // type joining the generated representation it denotes (a codec
+        // representation's) can instead select different content,
+        // invalidating snapshots through either class.
+        if (joins_nominal_with_structural or joins_iterator_representations or joins_public_with_representation) {
             self.invalidateActiveSnapshots(winner);
         } else {
             // The joined class keeps its current view under its new root.
@@ -7290,6 +7295,30 @@ pub const InstGraph = struct {
             }
         }
         try self.drainNominalBackingCollisions();
+    }
+
+    /// A public named type joining the codec representation it denotes
+    /// stops being the finished Monotype it was imported as: the class's type
+    /// is the representation. Its nodes therefore give up their imported
+    /// views and their class its finished witness before the two classes
+    /// become one, so every later view of them reads the joined class.
+    fn forgetPublicCodecViews(self: *InstGraph, winner: NodeId, loser: NodeId) Allocator.Error!void {
+        const winner_content = self.nodes.items[@backingInt(winner)];
+        const loser_content = self.nodes.items[@backingInt(loser)];
+        if (winner_content == .unresolved or loser_content == .unresolved) return;
+        const winner_private = self.contentIsGeneratedPrivateRoot(winner_content);
+        if (winner_private == self.contentIsGeneratedPrivateRoot(loser_content)) return;
+        const private_content = if (winner_private) winner_content else loser_content;
+        const private_owner = switch (private_content) {
+            .named => |named| named.builtin_owner.get(),
+            .leaf => |leaf| self.types.get(leaf.ty).named.builtin_owner.get(),
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => unreachable, // contentIsGeneratedPrivateRoot holds only for a named type or a leaf of one
+        };
+        if (!isCodecOwner(private_owner)) return;
+        const public_root = if (winner_private) loser else winner;
+        var members = self.classMemberIterator(public_root);
+        while (members.next()) |member| _ = self.imported_monos.remove(member);
+        self.class_finished_monos.items[@backingInt(public_root)] = .none;
     }
 
     /// Whether class content is a named type, including an unread leaf of one.
@@ -13148,6 +13177,59 @@ test "opaque interface relation gives a codec representation's public type the r
     try std.testing.expect(graph.sameClass(joined.named.backing.get().?.node, private_backing));
     try std.testing.expect(!graph.sameClass(public_backing, private_backing));
     try std.testing.expect(graph.sameClass(public_args[0], private_args[0]));
+}
+
+test "a finished public named type joined into its codec representation reads as the representation" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xB0))));
+    const type_name = try name_store.internTypeName("FieldNames");
+    const public_backing = try type_store.add(.{ .record = Type.Span.empty() });
+    const private_backing = try type_store.add(.{ .tuple = Type.Span.empty() });
+    const public_ty = try type_store.add(.{ .named = .{
+        .named_type = .{ .module = .{} },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .@"opaque",
+        .builtin_owner = .some(.fields),
+        .args = Type.Span.empty(),
+        .backing = .some(.{ .ty = public_backing, .use = .runtime_layout_only }),
+    } });
+    const private_ty = try type_store.add(.{ .named = .{
+        .named_type = .{ .module = .{} },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .@"opaque",
+        .builtin_owner = .some(.fields),
+        .args = Type.Span.empty(),
+        .backing = .some(.{ .ty = private_backing, .use = .runtime_layout_only, .authority = .generated_private }),
+    } });
+
+    const public = try graph.importMonoIndependent(public_ty);
+    const private = try graph.importMonoIndependent(private_ty);
+    // A list of the public type holds an active snapshot that reaches it,
+    // and the public node reads as the type it was imported as.
+    const list = try graph.newNode(.{ .list = public });
+    const list_before = try graph.activeTypeViewForNode(list);
+    try std.testing.expect(try type_store.typeEql(&name_store, public_ty, type_store.get(list_before).list));
+    try std.testing.expectEqual(public_ty, try graph.activeTypeViewForNode(public));
+
+    try graph.relateOpaqueInterface(public, private);
+    try std.testing.expect(graph.sameClass(public, private));
+
+    // Neither view outlives the join.
+    const view = try graph.activeTypeViewForNode(public);
+    try std.testing.expect(try type_store.typeEql(&name_store, private_ty, view));
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, type_store.get(view).named.backing.get().?.authority);
+    const list_after = try graph.activeTypeViewForNode(list);
+    try std.testing.expect(try type_store.typeEql(&name_store, private_ty, type_store.get(list_after).list));
 }
 
 test "ordinary unification gives a codec representation's public type the representation" {

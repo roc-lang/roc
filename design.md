@@ -9828,6 +9828,16 @@ takes the representation:
   two the same way. Ordinary unification still rejects every other
   public/private edge.
 
+Such a join changes what the public class denotes, unlike a join of two
+classes with equal content. The graph therefore treats it as it treats a
+nominal/structural join and an iterator representation join: every active
+snapshot and every durable type sealed through either class is invalidated,
+and the public class's nodes give up the finished Monotypes they were
+imported as, together with the class's finished witness. A view of the public
+type taken before the join (a request sealed for a deferred callee, say)
+would otherwise outlive it, and the joined class would still read as the
+public type.
+
 Body lowering relates an expression's checked type to a known Monotype that
 carries generated-private evidence through the opaque relation, just as it
 relates a checked interface to a type cell carrying such evidence; any other
