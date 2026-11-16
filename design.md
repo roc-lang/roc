@@ -18069,6 +18069,12 @@ literal's own closed type, whose evidence names no scope, so a read of an
 unentered scope is a compiler invariant. A frame descriptor is never read: a
 frame's types are its environment.
 
+Forwarding a dictionary through a chain frame still crosses that frame's
+parameter interface. Every frame composes its dictionary through the same
+interface adaptation as an ordinary call; evidence naming a lower frame does
+not imply identical row storage. Frame dependencies are scheduled iteratively,
+so retaining each adaptation does not put the chain on the compiler's stack.
+
 A body reads a
 literal of its own scheme by calling the argument (`lowerInstanceLiteral`); a
 call passes the callee's literal arguments from the edge's
