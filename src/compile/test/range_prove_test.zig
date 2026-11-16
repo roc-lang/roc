@@ -118,19 +118,25 @@ test "a margin too small for the read keeps every bounds check" {
     );
     try std.testing.expect(counted.found_decode_proc);
     // A four-byte margin cannot justify an eight-byte read: the wrapper's
-    // saturating limit and its bound test both survive, as do their
-    // switches.
+    // bound test survives. Its saturating limit `len - 8` subtracts a
+    // literal from a length no pass changes, so the loop's entry tests once
+    // whether the list holds eight bytes, and the copy that test guards
+    // computes the limit unchecked. The loop as written keeps the limit's
+    // overflow test, and both versions keep the bound test and its
+    // switches: three in the loop as written, two in the copy, and the
+    // entry test's own.
     try std.testing.expectEqual(@as(usize, 1), counted.sub_overflows);
-    try std.testing.expectEqual(@as(usize, 1), counted.is_gte);
-    try std.testing.expectEqual(@as(usize, 3), counted.switches);
-    // The margin add still cannot be proven overflow-free: the entry cursor
-    // is caller-controlled. The advance's `+ 7` is provable even here: the
-    // margin fact survives the fallback merge (both edges carry it), and a
-    // cursor bounded by a list length cannot exceed a signed 64-bit count,
-    // so adding seven cannot wrap. The advance's subtraction is provable
-    // too: control past the surviving checked add means its result is exact
-    // and at least seven, which covers the masked subtrahend.
-    try std.testing.expectEqual(@as(usize, 1), counted.plus_checked);
+    try std.testing.expectEqual(@as(usize, 2), counted.is_gte);
+    try std.testing.expectEqual(@as(usize, 6), counted.switches);
+    // The margin add still cannot be proven overflow-free in either
+    // version: the entry cursor is caller-controlled. The advance's `+ 7`
+    // is provable even here: the margin fact survives the fallback merge
+    // (both edges carry it), and a cursor bounded by a list length cannot
+    // exceed a signed 64-bit count, so adding seven cannot wrap. The
+    // advance's subtraction is provable too: control past the surviving
+    // checked add means its result is exact and at least seven, which
+    // covers the masked subtrahend.
+    try std.testing.expectEqual(@as(usize, 2), counted.plus_checked);
     try std.testing.expectEqual(@as(usize, 0), counted.minus_checked);
 }
 
@@ -394,11 +400,17 @@ test "a hash bounded by a guard on entry and a shift on the back edge proves its
         countMeetShape,
     );
     try std.testing.expect(meet_shape.found);
-    try std.testing.expectEqual(@as(usize, 1), meet_shape.get_unsafe);
-    // The entry guard's length test and the loop condition remain, as does
-    // the word read's bound test against its saturating limit, which is not
-    // a `<`; the table read's bounds test is proven away.
-    try std.testing.expectEqual(@as(usize, 2), meet_shape.is_lt);
+    // The word read's saturating limit `len - 4` subtracts a literal from a
+    // length no pass changes, so the loop's entry tests once whether the
+    // input holds four bytes and the copy that test guards computes the
+    // limit unchecked. The table read is unchecked in the loop as written
+    // and in the copy.
+    try std.testing.expectEqual(@as(usize, 2), meet_shape.get_unsafe);
+    // The entry guard's length test remains, as do the loop condition of
+    // each version and the word read's bound test against its saturating
+    // limit, which is not a `<`; the table read's bounds test is proven
+    // away in both.
+    try std.testing.expectEqual(@as(usize, 3), meet_shape.is_lt);
 }
 
 test "a byte merged from a read and a literal keeps its byte range for the overflow proof" {
@@ -2056,11 +2068,15 @@ test "a remainder bounds its divisor only where the remainder ran" {
     const dominated = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| {\n    r = a % b\n    c = if a > 3 { r } else { a }\n    if b == 0 { 1 } else { c }\n}\n", two_bytes, "num_rem_by");
     try std.testing.expectEqual(@as(usize, 0), dominated.is_eq);
     // A loop after the remainder keeps its ordering with the divisor, so
-    // `b - r` in the body is proven where `c - r` is not.
+    // `b - r` in the body is proven in the loop as written. `c - r` is not:
+    // the loop's entry tests `r <= c` once, the copy that test guards
+    // subtracts unchecked, and the loop as written keeps its check. The
+    // copy also repeats the one checked subtraction neither version proves.
     const looped = try ruleCounts("calc : U8, U8, U8 -> U8\ncalc = |a, b, _c| {\n    r = a % b\n    var $acc = 0\n    for x in [a, b] {\n        $acc = $acc.bitwise_xor(x.bitwise_and(b - r))\n    }\n    $acc\n}\n", three_bytes, "num_rem_by");
     const looped_unrelated = try ruleCounts("calc : U8, U8, U8 -> U8\ncalc = |a, b, c| {\n    r = a % b\n    var $acc = 0\n    for x in [a, b] {\n        $acc = $acc.bitwise_xor(x.bitwise_and(c - r))\n    }\n    $acc\n}\n", three_bytes, "num_rem_by");
-    try std.testing.expectEqual(looped_unrelated.sub_proven + 1, looped.sub_proven);
-    try std.testing.expectEqual(looped_unrelated.sub_crash, looped.sub_crash + 1);
+    try std.testing.expectEqual(looped_unrelated.sub_proven, looped.sub_proven);
+    try std.testing.expectEqual(looped_unrelated.sub_crash, looped.sub_crash + 2);
+    try std.testing.expectEqual(looped_unrelated.is_lte, looped.is_lte + 1);
 }
 
 test "a right shift is at most its operand and a left shift by a constant scales its range" {
@@ -2607,13 +2623,17 @@ const StrideShape = struct {
     found: bool = false,
     add_crash: usize = 0,
     add_proven: usize = 0,
+    sub_crash: usize = 0,
+    sub_proven: usize = 0,
+    mul_crash: usize = 0,
+    mul_proven: usize = 0,
     /// Hoisted tests: nothing else in these programs lowers to `<=`.
     is_lte: usize = 0,
 };
 
 var stride_shape: StrideShape = .{};
 
-/// Count the additions and hoisted tests of the one proc that xors, which
+/// Count the arithmetic and hoisted tests of the one proc that xors, which
 /// each program below does in the loop under test.
 fn countStrideShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
     stride_shape = .{};
@@ -2630,6 +2650,10 @@ fn countStrideShape(store: *const lir.LirStore, layouts: *const layout.Store) ha
             .found = true,
             .add_crash = std.mem.count(u8, text, "num_int_add_crash_on_overflow("),
             .add_proven = std.mem.count(u8, text, "num_int_add_proven_cannot_overflow("),
+            .sub_crash = std.mem.count(u8, text, "num_int_sub_crash_on_overflow("),
+            .sub_proven = std.mem.count(u8, text, "num_int_sub_proven_cannot_overflow("),
+            .mul_crash = std.mem.count(u8, text, "num_int_mul_crash_on_overflow("),
+            .mul_proven = std.mem.count(u8, text, "num_int_mul_proven_cannot_overflow("),
             .is_lte = std.mem.count(u8, text, "num_is_lte("),
         };
         return;
@@ -2804,6 +2828,377 @@ test "a length test and a limit test guard one copy of a loop" {
     try std.testing.expectEqual(@as(usize, 2), shape.is_lte);
     try std.testing.expectEqual(@as(usize, 1), shape.add_crash);
     try std.testing.expectEqual(@as(usize, 1), shape.add_proven);
+}
+
+// The loop keeps its counter above a local and subtracts a step it never
+// changes, so one test of the step against that local where the loop is
+// entered keeps the difference from passing zero on every pass.
+test "a checked countdown above a local floor is tested once where the loop is entered" {
+    const shape = try strideShape(
+        \\stride : U64, U64, U64 -> U64
+        \\stride = |start, step, floor| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i > floor {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i - step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n + 50, n + 3, n + 7)");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_proven);
+}
+
+// The same above a literal: the counter is at least 101 in the loop, so the
+// test compares the step against 101.
+test "a checked countdown above a literal floor is tested against the least the counter can be" {
+    const shape = try strideShape(
+        \\stride : U64, U64 -> U64
+        \\stride = |start, step| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i > 100 {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i - step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n + 500, n + 3)");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_proven);
+}
+
+// The same for a narrower counter.
+test "a checked countdown of a byte counter is tested once where the loop is entered" {
+    const shape = try strideShape(
+        \\stride : U8, U8, U8 -> U8
+        \\stride = |start, step, floor| {
+        \\    var $i = start
+        \\    var $acc = 0.U8
+        \\    while $i > floor {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i - step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n.to_u8_wrap().plus_wrap(50), n.to_u8_wrap().plus_wrap(3), n.to_u8_wrap().plus_wrap(7))");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_proven);
+}
+
+// Neither operand of the difference changes in the loop, so the loop's entry
+// compares the two.
+test "a checked difference of two values a loop never changes is tested once where the loop is entered" {
+    const shape = try strideShape(
+        \\stride : U64, U64, U64 -> U64
+        \\stride = |count, high, low| {
+        \\    var $i = 0.U64
+        \\    var $acc = 0.U64
+        \\    while $i < count {
+        \\        $acc = $acc.bitwise_xor($i).plus_wrap(high - low)
+        \\        $i = $i + 1
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n + 4, n + 90, n + 5)");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_proven);
+}
+
+// The loop's own test keeps the counter at or above the step, which proves
+// the difference with no test where the loop is entered.
+test "a countdown its own test proves asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : U64, U64 -> U64
+        \\stride = |start, step| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i > step {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i - step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n + 50, n + 3)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 0), shape.sub_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_proven);
+}
+
+// The loop changes its own step, so the step where the loop is entered is
+// not the one a later pass subtracts.
+test "a subtracted step its loop rebinds asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : U64, U64, U64 -> U64
+        \\stride = |start, first, floor| {
+        \\    var $i = start
+        \\    var $step = first
+        \\    var $acc = 0.U64
+        \\    while $i > floor {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i - $step
+        \\        $step = $step.plus_wrap($acc.bitwise_and(1)).plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n + 50, n + 3, n + 7)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_crash);
+    try std.testing.expectEqual(@as(usize, 0), shape.sub_proven);
+}
+
+// Nothing keeps the counter above anything, so no test of the step keeps
+// the difference from passing zero.
+test "a countdown its loop does not bound asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : U64, U64, U64 -> U64
+        \\stride = |start, step, passes| {
+        \\    var $i = start
+        \\    var $left = passes
+        \\    var $acc = 0.U64
+        \\    while $left != 0 {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i - step
+        \\        $left = $left.shr_zf_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n + 50, n + 3, 5)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_crash);
+    try std.testing.expectEqual(@as(usize, 0), shape.sub_proven);
+}
+
+// The loop keeps its counter above a local it changes on every pass, which
+// the loop's entry cannot compare the step against. The counter is still
+// never zero, so the test compares the step against one.
+test "a countdown above a floor its loop rebinds is tested against one" {
+    const shape = try strideShape(
+        \\stride : U64, U64, U64 -> U64
+        \\stride = |start, step, first| {
+        \\    var $i = start
+        \\    var $floor = first
+        \\    var $acc = 0.U64
+        \\    while $i > $floor {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i - step
+        \\        $floor = $floor.plus_wrap($acc.bitwise_and(1))
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n + 50, n + 1, n + 7)");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_proven);
+}
+
+// Only unsigned integers of at most 64 bits are tracked, so a signed
+// countdown asks for nothing.
+test "a signed countdown asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : I64, I64, I64 -> I64
+        \\stride = |start, step, floor| {
+        \\    var $i = start
+        \\    var $acc = 0.I64
+        \\    while $i > floor {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i - step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n.to_i64_wrap() + 50, n.to_i64_wrap() + 3, n.to_i64_wrap() + 7)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 0), shape.sub_proven);
+}
+
+// The loop keeps its counter below a literal and multiplies it by a value it
+// never changes, so one test of that value where the loop is entered bounds
+// the product on every pass.
+test "a checked product of a counter its loop bounds is tested once where the loop is entered" {
+    const shape = try strideShape(
+        \\stride : U64, U64 -> U64
+        \\stride = |start, scale| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i < 1000 {
+        \\        $acc = $acc.bitwise_xor($i * scale)
+        \\        $i = $i + 1
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n, n + 3)");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_proven);
+}
+
+// The same for a narrower counter: the test compares the widened value
+// against the type's highest value divided by the counter's ceiling.
+test "a checked product of a U16 counter is tested against the U16 range" {
+    const shape = try strideShape(
+        \\stride : U16, U16 -> U16
+        \\stride = |start, scale| {
+        \\    var $i = start
+        \\    var $acc = 0.U16
+        \\    while $i < 100 {
+        \\        $acc = $acc.bitwise_xor($i * scale)
+        \\        $i = $i + 1
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n.to_u16_wrap(), n.to_u16_wrap().plus_wrap(3))");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_proven);
+}
+
+// A counter that is at most one multiplies to at most the other operand,
+// which fits with no test.
+test "a product of a counter that is at most one needs no entry test" {
+    const shape = try strideShape(
+        \\stride : U64, U64 -> U64
+        \\stride = |start, scale| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i < 2 {
+        \\        $acc = $acc.bitwise_xor($i * scale)
+        \\        $i = $i + 1
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n, n + 3)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 0), shape.mul_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_proven);
+}
+
+// The loop changes the value it multiplies by, so the value where the loop
+// is entered is not the one a later pass multiplies by.
+test "a multiplier its loop rebinds asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : U64, U64 -> U64
+        \\stride = |start, first| {
+        \\    var $i = start
+        \\    var $scale = first
+        \\    var $acc = 0.U64
+        \\    while $i < 1000 {
+        \\        $acc = $acc.bitwise_xor($i * $scale)
+        \\        $i = $i + 1
+        \\        $scale = $scale.plus_wrap($acc.bitwise_and(1)).plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n, n + 3)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_crash);
+    try std.testing.expectEqual(@as(usize, 0), shape.mul_proven);
+}
+
+// Nothing bounds the counter, so no limit on the other operand bounds the
+// product.
+test "a product of a counter its loop does not bound asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : U64, U64, U64 -> U64
+        \\stride = |start, scale, passes| {
+        \\    var $i = start
+        \\    var $left = passes
+        \\    var $acc = 0.U64
+        \\    while $left != 0 {
+        \\        $acc = $acc.bitwise_xor($i * scale)
+        \\        $i = $i.plus_wrap(1)
+        \\        $left = $left.minus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n, n + 3, 5)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_crash);
+    try std.testing.expectEqual(@as(usize, 0), shape.mul_proven);
+}
+
+// The counter is kept below a local that may be the type's highest value,
+// which gives the counter no literal ceiling to divide by: no test.
+test "a product of a counter bounded by a full-range local asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : U64, U64, U64 -> U64
+        \\stride = |start, scale, limit| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i < limit {
+        \\        $acc = $acc.bitwise_xor($i * scale)
+        \\        $i = $i + 1
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n, n + 3, n + 1000)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_crash);
+    try std.testing.expectEqual(@as(usize, 0), shape.mul_proven);
+}
+
+// Only unsigned integers of at most 64 bits are tracked, so a signed
+// product asks for nothing.
+test "a signed product asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : I64, I64 -> I64
+        \\stride = |start, scale| {
+        \\    var $i = start
+        \\    var $acc = 0.I64
+        \\    while $i < 1000 {
+        \\        $acc = $acc.bitwise_xor($i * scale)
+        \\        $i = $i + 1
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n.to_i64_wrap(), n.to_i64_wrap() + 3)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 0), shape.mul_proven);
+}
+
+// A sum, a difference and a product in one loop each ask for their own test,
+// and all three guard the one copy.
+test "a sum, a difference and a product are tested together for one copy of a loop" {
+    const shape = try strideShape(
+        \\stride : U64, U64, U64, U64 -> U64
+        \\stride = |start, step, scale, back| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i < 1000 {
+        \\        $acc = $acc.bitwise_xor($i * scale).bitwise_xor(scale - back)
+        \\        $i = $i + step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n, n + 3, n + 5, n + 2)");
+    try std.testing.expectEqual(@as(usize, 3), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.add_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.add_proven);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_proven);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_proven);
 }
 
 // The loop leaves by a `break` that assigns the variable it accumulates

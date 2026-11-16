@@ -15217,3 +15217,108 @@ test "range proving: a loop guarded by a hoisted limit test overflows where the 
     try std.testing.expect(proved_run.events.len >= 6);
     try expectRecordedRunsEqual(plain_run, proved_run);
 }
+
+test "range proving: a countdown guarded by a hoisted test passes zero where the unguarded loop does" {
+    // `down` keeps its counter above a local and subtracts a step it never
+    // changes. The first call passes the entry test and runs the copy whose
+    // subtraction is proved exact. The second and third fail it and run the
+    // loop as written, which makes no pass and then two. The fourth fails
+    // it too and passes zero on its second pass, after that pass's `dbg`.
+    const source =
+        \\down : U64, U64, U64 -> U64
+        \\down = |start, step, floor| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i > floor {
+        \\        dbg $i
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i - step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+        \\show : U64 -> U64
+        \\show = |extra| {
+        \\    dbg down(20 + extra, 3, 5 + extra)
+        \\    dbg down(4 + extra, 9, 5 + extra)
+        \\    dbg down(20 + extra, 9, 5 + extra)
+        \\    dbg down(16 + extra, 9, 5 + extra)
+        \\    extra
+        \\}
+        \\
+        \\main : U64
+        \\main = show(0) + show(1)
+    ;
+    const allocator = std.testing.allocator;
+
+    var plain = try lowerModuleWithOptions(allocator, source, .wrappers, .{});
+    defer plain.deinit(allocator);
+    var proved = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .prove_ranges = true });
+    defer proved.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), hoistedLimitTestCount(&plain.lowered));
+    try std.testing.expectEqual(@as(usize, 1), hoistedLimitTestCount(&proved.lowered));
+
+    var plain_run = try runLoweredWithHostEvents(allocator, &plain.lowered);
+    defer plain_run.deinit(allocator);
+    var proved_run = try runLoweredWithHostEvents(allocator, &proved.lowered);
+    defer proved_run.deinit(allocator);
+
+    // Five passes and a result, a result with no pass, two passes and a
+    // result, then two passes before the crash.
+    try std.testing.expect(proved_run.termination != eval.RuntimeHostEnv.Termination.returned);
+    try std.testing.expect(proved_run.events.len >= 12);
+    try expectRecordedRunsEqual(plain_run, proved_run);
+}
+
+test "range proving: a product guarded by a hoisted limit test overflows where the unguarded loop does" {
+    // `scale` keeps its counter below a literal and multiplies it by a
+    // value it never changes. The first call passes the entry test and runs
+    // the copy whose multiplication is proved exact. The second fails it
+    // and runs the loop as written, which makes no pass. The third fails it
+    // too and overflows on its first pass, after that pass's `dbg`.
+    const source =
+        \\scale : U64, U64 -> U64
+        \\scale = |start, factor| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i < 1000 {
+        \\        dbg $i
+        \\        $acc = $acc.bitwise_xor($i * factor)
+        \\        $i = $i + 1
+        \\    }
+        \\    $acc
+        \\}
+        \\
+        \\show : U64 -> U64
+        \\show = |extra| {
+        \\    dbg scale(997 + extra, 5 + extra)
+        \\    dbg scale(1000 + extra, 9223372036854775808)
+        \\    dbg scale(998 + extra, 9223372036854775808)
+        \\    extra
+        \\}
+        \\
+        \\main : U64
+        \\main = show(0) + show(1)
+    ;
+    const allocator = std.testing.allocator;
+
+    var plain = try lowerModuleWithOptions(allocator, source, .wrappers, .{});
+    defer plain.deinit(allocator);
+    var proved = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .prove_ranges = true });
+    defer proved.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), hoistedLimitTestCount(&plain.lowered));
+    try std.testing.expectEqual(@as(usize, 1), hoistedLimitTestCount(&proved.lowered));
+
+    var plain_run = try runLoweredWithHostEvents(allocator, &plain.lowered);
+    defer plain_run.deinit(allocator);
+    var proved_run = try runLoweredWithHostEvents(allocator, &proved.lowered);
+    defer proved_run.deinit(allocator);
+
+    // Three passes and a result, a result with no pass, then one pass
+    // before the crash.
+    try std.testing.expect(proved_run.termination != eval.RuntimeHostEnv.Termination.returned);
+    try std.testing.expect(proved_run.events.len >= 6);
+    try expectRecordedRunsEqual(plain_run, proved_run);
+}

@@ -70,12 +70,15 @@
 //! branch, and the rounds that follow prove the copy's checks from that
 //! branch's edge exactly as they prove any other, so the failure mode of a
 //! guard that proves nothing is a copy with its checks intact, never
-//! unsoundness. A checked addition on a loop's cycle asks the same way for
-//! one test of a loop-invariant operand against a literal limit, and the
-//! copy's addition is then proved exact. A loop is guarded only when the facts at its undecided
-//! comparison compose with the test into a proof, only when it encloses no
-//! other loop, and at most once, so the pass copies a statement at most
-//! once and only where the copy loses a check.
+//! unsoundness. Checked unsigned arithmetic on a loop's cycle asks the same
+//! way: an addition or a multiplication for one test of a loop-invariant
+//! operand against a literal limit, a subtraction for one test that a
+//! loop-invariant value at or above its right operand is at most one at or
+//! below its left, and the copy's operation is then proved exact. A loop is
+//! guarded only when the facts at its undecided check compose with the test
+//! into a proof, only when it encloses no other loop, and at most once, so
+//! the pass copies a statement at most once and only where the copy loses a
+//! check.
 //!
 //! Only fixed-width unsigned integers up to 64 bits participate. List lengths
 //! are modeled as opaque terms keyed by the list value they measure, so
@@ -1470,20 +1473,28 @@ const HoistBase = union(enum) {
     length: LocalId,
 };
 
-/// A length test that, made once where a loop is entered, decides a
-/// comparison the loop makes on every pass: `base <= len(list) + c`, where
-/// a constant base stands for zero. See "Hoisted length tests".
+/// A test that, made once where a loop is entered, decides a comparison or
+/// a checked operation the loop makes on every pass: `base <= against + c`,
+/// where a constant base stands for zero. See "Hoisted length tests".
 const HoistDemand = struct {
     join: JoinPointId,
-    /// The local whose list the test measures where the loop is entered.
-    /// Without one the test is a limit test, `base <= c`: it compares the
-    /// base against the literal `c`.
-    list: ?LocalId,
-    /// The list is a parameter the loop rebinds, so the test holds on every
-    /// pass only when no back edge passes a shorter list.
-    carried: bool,
+    against: HoistAgainst,
     base: HoistBase,
     c: i128,
+};
+
+/// What a hoisted test compares its base against.
+const HoistAgainst = union(enum) {
+    /// The literal `c` alone: `base <= c`, a limit test.
+    limit,
+    /// The length of the list a local holds where the loop is entered:
+    /// `base <= len(list) + c`. A carried list is a parameter the loop
+    /// rebinds, so the test holds on every pass only when no back edge
+    /// passes a shorter list.
+    length: struct { list: LocalId, carried: bool },
+    /// An integer local that holds one value from the loop's entry to its
+    /// exit: `base <= value + c`, with `c` at most zero.
+    value: LocalId,
 };
 
 /// A guard the proof rounds have yet to confirm: see "Hoisted length tests".
@@ -1505,9 +1516,10 @@ const hoist_term_cap: usize = 8;
 /// against: the test adds or subtracts it, and a length is below `2^63`.
 const hoist_offset_cap: i128 = 1 << 32;
 
-/// A list whose length bounds one side of an undecided comparison:
-/// `value(root) <= side + c`, where `root` is the length's term.
-const HoistLength = struct { list: LocalId, carried: bool, root: NodeId, c: i128 };
+/// A length, an integer local or a literal at or below one side of an
+/// undecided claim: `value(root) <= side + c`. For a literal, `root` is the
+/// value whose least value is the literal.
+const HoistFloor = struct { against: HoistAgainst, root: NodeId, c: i128 };
 /// A value that bounds the other side: `side <= value(root) + c`, where
 /// `root` is the base's value.
 const HoistValue = struct { base: HoistBase, root: NodeId, c: i128 };
@@ -6038,8 +6050,25 @@ const Pass = struct {
     // test and crashes in the loop as written, at the pass and statement
     // it always did.
     //
+    // A checked multiplication asks like an addition. With one operand at
+    // most a literal `ceiling` of two or more and the other at most
+    // `value + c`, the limit test `value <= max / ceiling - c` bounds the
+    // product, and the copy's multiplication is proved from the two
+    // literal bounds the facts then hold (`proveFamilyNoOverflow`). A
+    // ceiling of zero or one needs no test: the product is at most the
+    // other operand.
+    //
+    // A checked subtraction `a - b` is exact when `b <= a`, a claim like a
+    // comparison's, and asks like one: for `base <= floor + c`, where
+    // `base` is at or above `b` and `floor` at or below `a`. The floor may
+    // be a list's length, an integer local held from the loop's entry to
+    // its exit, or a literal: the least value the facts leave `a`, when
+    // that is above zero. A test against a local is asked without a slack
+    // above zero, since `floor + c` could pass the type's highest value;
+    // the test asked then implies the one wanted.
+    //
     // Tests for one loop are conjoined: the copy runs only when all hold.
-    // Two comparisons asking for the same base against the same list ask
+    // Two checks asking for the same base against the same right side ask
     // for the tighter of their tests, which decides both.
     //
     // The rule above predicts that the copy loses a comparison; the proof
@@ -6249,21 +6278,37 @@ const Pass = struct {
         return self.rewrites == 0 and !self.deferred_rewrites and !self.live_pending;
     }
 
-    /// A checked addition no fact proves exact: ask for the limit test that
+    /// Checked arithmetic no fact proves exact: ask for the test that
     /// would. `a + b` fits its type when `a` is at most a literal `ceiling`
     /// and `b` at most `max - ceiling`, so with a literal bound on one
     /// operand from the path's facts, the test bounds a loop-invariant
     /// value at or above the other.
-    fn noteOverflowDemand(self: *Pass, stmt: CFStmtId, lhs: NodeId, rhs: NodeId, max: i128) ResourceError!void {
+    ///
+    /// A checked multiplication asks the same way: `a * b` fits when `a`
+    /// is at most `ceiling` and `b` at most `max / ceiling`. A ceiling of
+    /// zero or one needs no test, since the product is then at most `b`.
+    ///
+    /// A checked subtraction `a - b` is exact when `b <= a`, which is a
+    /// claim like a comparison's. It asks for the test of a loop-invariant
+    /// value at or above `b` against one at or below `a`.
+    fn noteOverflowDemand(self: *Pass, stmt: CFStmtId, operation: CheckedArithmetic.Operation, lhs: NodeId, rhs: NodeId, max: i128) ResourceError!void {
         if (!self.roundMayBeFixpoint()) return;
         const join_id = self.hoistLoopOf(stmt) orelse return;
         const used = self.query_used;
         defer self.query_used = used;
-        if (try self.noteSumDemand(join_id, lhs, rhs, max)) return;
-        _ = try self.noteSumDemand(join_id, rhs, lhs, max);
+        switch (operation) {
+            .add, .mul => {
+                if (try self.noteCeilingDemand(join_id, operation, lhs, rhs, max)) return;
+                _ = try self.noteCeilingDemand(join_id, operation, rhs, lhs, max);
+            },
+            .sub => _ = try self.noteClaimDemand(join_id, rhs, lhs, 0, .values),
+        }
     }
 
-    fn noteSumDemand(self: *Pass, join_id: JoinPointId, bounded_id: NodeId, other_id: NodeId, max: i128) ResourceError!bool {
+    /// Ask for the limit test that keeps `bounded + other` or
+    /// `bounded * other` within `max`, with `bounded` the operand the facts
+    /// give a literal ceiling. Returns whether one was asked for.
+    fn noteCeilingDemand(self: *Pass, join_id: JoinPointId, operation: CheckedArithmetic.Operation, bounded_id: NodeId, other_id: NodeId, max: i128) ResourceError!bool {
         const bounded = self.nodes.items[bounded_id];
         self.work.demand_walks += 1;
         try self.relaxFresh(bounded.root, .forward);
@@ -6282,6 +6327,11 @@ const Pass = struct {
             }
         }
         if (ceiling < 0 or ceiling >= max) return false;
+        const room: i128 = switch (operation) {
+            .add => max - ceiling,
+            .mul => if (ceiling < 2) return false else @divFloor(max, ceiling),
+            .sub => unreachable, // noteOverflowDemand asks a ceiling demand only of sums and products
+        };
 
         // Loop-invariant values at or above the other operand:
         // `other <= value(root) + c`.
@@ -6314,7 +6364,7 @@ const Pass = struct {
             }
         }
         std.mem.sortUnstable(HoistValue, values[0..values_len], {}, hoistValueBefore);
-        // A value's test is `value + c <= max - ceiling`. One test implies
+        // A value's test is `value + c <= room`. One test implies
         // another when the other's value and slack are at most its own;
         // the operation asks for the weakest, the first of those that
         // imply each other.
@@ -6329,14 +6379,13 @@ const Pass = struct {
                 }
             }
             if (!weakest) continue;
-            const limit = max - ceiling - candidate.c;
+            const limit = room - candidate.c;
             // A limit the value's own range already exceeds admits no
             // entry.
             if (self.nodes.items[candidate.root].lo > limit) continue;
             if (try self.addHoistDemand(.{
                 .join = join_id,
-                .list = null,
-                .carried = false,
+                .against = .limit,
                 .base = candidate.base,
                 .c = limit,
             })) return true;
@@ -6365,34 +6414,64 @@ const Pass = struct {
         defer self.query_used = used;
         // One test per comparison: either outcome decides it.
         for (claims) |claim| {
-            if (try self.noteClaimDemand(join_id, claim.x, claim.y, claim.m)) break;
+            if (try self.noteClaimDemand(join_id, claim.x, claim.y, claim.m, .lengths)) break;
         }
     }
 
-    /// Ask for the one test that makes `x <= y + m` hold, if a length test
-    /// can. Returns whether one was asked for.
-    fn noteClaimDemand(self: *Pass, join_id: JoinPointId, x_id: NodeId, y_id: NodeId, m: i128) ResourceError!bool {
-        // Lengths at or below `y`: `root <= y.root + c` puts the length at
+    /// What may stand on the right of a claim's test: only a list's length,
+    /// or any value the path's facts put at or below the claim's right
+    /// side (a length, an integer local, a literal).
+    const ClaimFloors = enum { lengths, values };
+
+    /// Keep `found` among `floors`, one per thing compared against: the
+    /// one that puts the claim's right side highest.
+    fn keepFloor(self: *const Pass, floors: *[hoist_term_cap]HoistFloor, len: *usize, found: HoistFloor) void {
+        for (floors[0..len.*]) |*have| {
+            if (!std.meta.eql(have.against, found.against)) continue;
+            const closer = switch (found.against) {
+                .limit => found.c - self.nodes.items[found.root].lo < have.c - self.nodes.items[have.root].lo,
+                .length, .value => found.c < have.c,
+            };
+            if (closer) have.* = found;
+            return;
+        }
+        if (len.* == hoist_term_cap) return;
+        floors[len.*] = found;
+        len.* += 1;
+    }
+
+    /// Ask for the one test that makes `x <= y + m` hold, if a test of
+    /// `floors` can. Returns whether one was asked for.
+    fn noteClaimDemand(self: *Pass, join_id: JoinPointId, x_id: NodeId, y_id: NodeId, m: i128, floors: ClaimFloors) ResourceError!bool {
+        // Floors at or below `y`: `root <= y.root + c` puts the root at
         // most `c - y.off_lo` above `y`.
         self.work.demand_walks += 1;
         const y = self.nodes.items[y_id];
-        var lengths: [hoist_term_cap]HoistLength = undefined;
+        var lengths: [hoist_term_cap]HoistFloor = undefined;
         var lengths_len: usize = 0;
         try self.relaxFresh(y.root, .backward);
         {
             var it = self.query_best.iterator();
             while (it.next()) |entry| {
-                const term = (try self.hoistLengthOf(join_id, entry.key_ptr.*)) orelse continue;
-                const found: HoistLength = .{ .list = term.list, .carried = term.carried, .root = entry.key_ptr.*, .c = entry.value_ptr.c - y.off_lo };
-                for (lengths[0..lengths_len]) |*have| {
-                    if (have.list == found.list and have.carried == found.carried) {
-                        if (found.c < have.c) have.* = found;
-                        break;
-                    }
-                } else if (lengths_len < hoist_term_cap) {
-                    lengths[lengths_len] = found;
-                    lengths_len += 1;
+                const root = entry.key_ptr.*;
+                const c = entry.value_ptr.c - y.off_lo;
+                switch (floors) {
+                    .lengths => {},
+                    .values => {
+                        // A value's least value, less its distance above
+                        // `y`, is a literal at or below `y`, which folds
+                        // into the slack. Zero is at or below everything
+                        // and says nothing.
+                        if (self.nodes.items[root].lo - c > 0) self.keepFloor(&lengths, &lengths_len, .{ .against = .limit, .root = root, .c = c });
+                        if (self.nodes.items[root].lo == self.nodes.items[root].hi) continue;
+                        if (try self.hoistValueOf(join_id, root)) |local| {
+                            self.keepFloor(&lengths, &lengths_len, .{ .against = .{ .value = local }, .root = root, .c = c });
+                            continue;
+                        }
+                    },
                 }
+                const term = (try self.hoistLengthOf(join_id, root)) orelse continue;
+                self.keepFloor(&lengths, &lengths_len, .{ .against = .{ .length = .{ .list = term.list, .carried = term.carried } }, .root = root, .c = c });
             }
         }
         if (lengths_len == 0) return false;
@@ -6430,12 +6509,12 @@ const Pass = struct {
             }
         }
 
-        // Any one pairing of a length with a value decides the claim, so
-        // the claim asks for one: the first length, in the order of
-        // `hoistLengthBefore`, that has a test worth asking, and for that
-        // length the weakest test, since a test that implies another holds
-        // for fewer lists than the one it implies.
-        std.mem.sortUnstable(HoistLength, lengths[0..lengths_len], {}, hoistLengthBefore);
+        // Any one pairing of a floor with a value decides the claim, so
+        // the claim asks for one: the first floor, in the order of
+        // `hoistFloorBefore`, that has a test worth asking, and for that
+        // floor the weakest test, since a test that implies another holds
+        // for fewer entries than the one it implies.
+        std.mem.sortUnstable(HoistFloor, lengths[0..lengths_len], {}, hoistFloorBefore);
         std.mem.sortUnstable(HoistValue, values[0..values_len], {}, hoistValueBefore);
         for (lengths[0..lengths_len]) |length| {
             // `value(value.root) <= value(length.root) + c` is a value's
@@ -6446,8 +6525,13 @@ const Pass = struct {
             var tests_len: usize = 0;
             for (values[0..values_len]) |value| {
                 if (value.root == length.root) continue;
+                // Two literals have nothing to test.
+                if (value.base == .constant and length.against == .limit) continue;
                 const c = clampSlack(m - value.c - length.c);
                 if (try self.proveLeQuery(length.root, value.root, -c - 1)) continue;
+                // A limit the value's own range already exceeds admits no
+                // entry.
+                if (length.against == .limit and self.nodes.items[value.root].lo > c + self.nodes.items[length.root].lo) continue;
                 tests[tests_len] = .{ .base = value.base, .root = value.root, .c = c };
                 tests_len += 1;
             }
@@ -6465,21 +6549,34 @@ const Pass = struct {
                     }
                 }
                 if (!weakest) continue;
+                // A literal on either side folds its value into the slack.
+                var slack = candidate.c;
+                if (candidate.base == .constant) slack -= self.nodes.items[candidate.root].lo;
+                if (length.against == .limit) slack += self.nodes.items[length.root].lo;
                 if (try self.addHoistDemand(.{
                     .join = join_id,
-                    .list = length.list,
-                    .carried = length.carried,
+                    .against = length.against,
                     .base = candidate.base,
-                    .c = if (candidate.base == .constant) candidate.c - self.nodes.items[candidate.root].lo else candidate.c,
+                    .c = slack,
                 })) return true;
             }
         }
         return false;
     }
 
-    fn hoistLengthBefore(_: void, a: HoistLength, b: HoistLength) bool {
-        if (a.carried != b.carried) return !a.carried;
-        return @backingInt(a.list) < @backingInt(b.list);
+    fn hoistFloorBefore(_: void, a: HoistFloor, b: HoistFloor) bool {
+        return hoistAgainstOrder(a.against) < hoistAgainstOrder(b.against);
+    }
+
+    /// Integer locals, then lengths the loop leaves alone, then lengths it
+    /// carries, each by local, then a literal: a comparison the program
+    /// wrote against a value says more than the least that value can be.
+    fn hoistAgainstOrder(against: HoistAgainst) u64 {
+        return switch (against) {
+            .value => |local| @backingInt(local),
+            .length => |length| (@as(u64, if (length.carried) 2 else 1) << 32) + @backingInt(length.list),
+            .limit => @as(u64, 3) << 32,
+        };
     }
 
     fn hoistValueBefore(_: void, a: HoistValue, b: HoistValue) bool {
@@ -6488,8 +6585,24 @@ const Pass = struct {
 
     /// Record a test a comparison asks for. Returns whether the test is one
     /// a guard can make.
-    fn addHoistDemand(self: *Pass, demand: HoistDemand) ResourceError!bool {
-        if (demand.list == null) {
+    fn addHoistDemand(self: *Pass, asked: HoistDemand) ResourceError!bool {
+        var demand = asked;
+        switch (demand.against) {
+            .limit => {},
+            .length => {},
+            .value => |local| {
+                switch (self.localLayout(local)) {
+                    .u8, .u16, .u32, .u64 => {},
+                    .bool, .str, .i8, .i16, .i32, .i64, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return false,
+                    _ => return false,
+                }
+                // `value + c` could pass the type's highest value for a
+                // slack above zero, so the test asked is the one without
+                // it, which implies the one wanted.
+                demand.c = @min(demand.c, 0);
+            },
+        }
+        if (demand.against == .limit) {
             // A limit below zero admits nothing, and the base is compared
             // as a `U64`.
             if (demand.c < 0 or demand.c > std.math.maxInt(u64)) return false;
@@ -6517,7 +6630,7 @@ const Pass = struct {
             .length => if (demand.c > hoist_offset_cap or -demand.c > hoist_offset_cap) return false,
         }
         for (self.hoist_demands.items) |*have| {
-            if (have.join == demand.join and std.meta.eql(have.list, demand.list) and have.carried == demand.carried and std.meta.eql(have.base, demand.base)) {
+            if (have.join == demand.join and std.meta.eql(have.against, demand.against) and std.meta.eql(have.base, demand.base)) {
                 have.c = @min(have.c, demand.c);
                 return true;
             }
@@ -6537,9 +6650,9 @@ const Pass = struct {
 
     fn hoistDemandBefore(_: void, a: HoistDemand, b: HoistDemand) bool {
         if (a.join != b.join) return @backingInt(a.join) < @backingInt(b.join);
-        const a_list: u64 = if (a.list) |list| @as(u64, @backingInt(list)) + 1 else 0;
-        const b_list: u64 = if (b.list) |list| @as(u64, @backingInt(list)) + 1 else 0;
-        if (a_list != b_list) return a_list < b_list;
+        const a_against = hoistAgainstOrder(a.against);
+        const b_against = hoistAgainstOrder(b.against);
+        if (a_against != b_against) return a_against < b_against;
         return hoistBaseOrder(a.base) < hoistBaseOrder(b.base);
     }
 
@@ -6549,15 +6662,16 @@ const Pass = struct {
         // A carried list some back edge may shorten keeps no bound.
         var kept: usize = 0;
         for (self.hoist_demands.items) |demand| {
-            if (demand.list) |list| {
-                if (demand.carried and self.shrinking_params.contains(demand.join, @backingInt(list))) continue;
+            switch (demand.against) {
+                .length => |length| if (length.carried and self.shrinking_params.contains(demand.join, @backingInt(length.list))) continue,
+                .limit, .value => {},
             }
             self.hoist_demands.items[kept] = demand;
             kept += 1;
         }
         self.hoist_demands.shrinkRetainingCapacity(kept);
         if (kept == 0) return false;
-        // One demand per (loop, list, base), so the order is total.
+        // One demand per (loop, right side, base), so the order is total.
         std.mem.sortUnstable(HoistDemand, self.hoist_demands.items, {}, hoistDemandBefore);
         var start: usize = 0;
         while (start < kept) {
@@ -6629,11 +6743,16 @@ const Pass = struct {
         return head;
     }
 
-    /// The statements of one length test: continue at `holds` when
-    /// `base <= len(list) + c` and enter the loop itself otherwise.
+    /// The statements of one test: continue at `holds` when the test holds
+    /// and enter the loop itself otherwise. Against a length or a value the
+    /// test is `base <= right + c`, with `right` read into `len`.
     fn emitLengthTest(self: *Pass, test_demand: HoistDemand, holds: CFStmtId, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
-        const list = test_demand.list orelse return self.emitLimitTest(test_demand, holds, origin);
-        const len = try self.hoistLocal(.u64);
+        const right: HoistWide = switch (test_demand.against) {
+            .limit => return self.emitLimitTest(test_demand, holds, origin),
+            .length => |length| .{ .local = try self.hoistLocal(.u64), .op = .list_len, .source = length.list },
+            .value => |local| (try self.hoistWide(.{ .local = local })) orelse unreachable, // a local base always has a `U64` form
+        };
+        const len = right.local;
         const fits = try self.hoistLocal(.bool);
         var head = try self.hoistSwitch(fits, holds, test_demand.join, origin);
         const wide = try self.hoistWide(test_demand.base);
@@ -6641,8 +6760,9 @@ const Pass = struct {
             if (test_demand.c == 0) {
                 head = try self.store.addLowLevelStmt(fits, .num_is_lte, &.{ base.local, len }, head, origin);
             } else if (test_demand.c > 0) {
-                // `base <= len + c`: a length is below `2^63` and `c` is
-                // small, so the sum is exact.
+                // `base <= len + c`: only a length has a slack above zero,
+                // a length is below `2^63`, and `c` is small, so the sum
+                // is exact.
                 const slack = try self.hoistLocal(.u64);
                 const reach = try self.hoistLocal(.u64);
                 head = try self.store.addLowLevelStmt(fits, .num_is_lte, &.{ base.local, reach }, head, origin);
@@ -6666,7 +6786,8 @@ const Pass = struct {
             head = try self.store.addLowLevelStmt(fits, .num_is_lte, &.{ least, len }, head, origin);
             head = try self.hoistLiteral(least, -test_demand.c, head, origin);
         }
-        return try self.store.addLowLevelStmt(len, .list_len, &.{list}, head, origin);
+        if (right.op) |op| head = try self.store.addLowLevelStmt(len, op, &.{right.source}, head, origin);
+        return head;
     }
 
     /// Guard one loop with `tests`, all of which name it: see "Hoisted
@@ -8040,12 +8161,9 @@ const Pass = struct {
             }
         }
         const always_overflows = self.familyAlwaysOverflows(entry.operation, lhs, rhs, max.?);
-        if (!proof.proven and !always_overflows) switch (entry.operation) {
-            .add => switch (entry.mode) {
-                .crash_on_overflow, .overflows => try self.noteOverflowDemand(stmt, lhs, rhs, max.?),
-                .wrap, .proven_cannot_overflow => {},
-            },
-            .sub, .mul => {},
+        if (!proof.proven and !always_overflows) switch (entry.mode) {
+            .crash_on_overflow, .overflows => try self.noteOverflowDemand(stmt, entry.operation, lhs, rhs, max.?),
+            .wrap, .proven_cannot_overflow => {},
         };
 
         if (entry.mode == .crash_on_overflow and always_overflows) {
@@ -8462,11 +8580,36 @@ const Pass = struct {
                 }
             },
             .mul => {
-                const result = try self.mulConstExactNodes(lhs, rhs, operand_layout);
-                return .{ .proven = result != null, .result = result };
+                if (try self.mulConstExactNodes(lhs, rhs, operand_layout)) |result| return .{ .proven = true, .result = result };
+                // Two operands the path's facts bound by literals: the
+                // product of the bounds fits. A bound resting on an
+                // assumption proves nothing yet, since a product's range
+                // names no assumption; the round asks for another.
+                if (lhs_lo < 0 or rhs_lo < 0) return .{};
+                if (!self.rootHasFacts(self.rootOf(lhs)) and !self.rootHasFacts(self.rootOf(rhs))) return .{};
+                const lhs_bound = try self.factCeiling(lhs);
+                const rhs_bound = try self.factCeiling(rhs);
+                if (lhs_bound.hi != 0 and rhs_bound.hi > @divFloor(max, lhs_bound.hi)) return .{};
+                if (lhs_bound.assumed or rhs_bound.assumed) {
+                    self.deferred_rewrites = true;
+                    return .{};
+                }
+                // A floor is taken no higher than its ceiling, so the floors'
+                // product fits wherever the ceilings' does.
+                const least = @min(lhs_lo, lhs_bound.hi) * @min(rhs_lo, rhs_bound.hi);
+                return .{ .proven = true, .result = try self.freshRoot(least, lhs_bound.hi * rhs_bound.hi) };
             },
         }
         return .{};
+    }
+
+    /// The least literal the path's facts put a value at or below, and
+    /// whether reaching it passed an unverified assumption.
+    fn factCeiling(self: *Pass, id: NodeId) ResourceError!struct { hi: i128, assumed: bool } {
+        const node = self.nodes.items[id];
+        self.query_used = 0;
+        try self.relaxFresh(node.root, .forward);
+        return .{ .hi = clampSlack(self.hiConstReached(node.root) + node.off_hi), .assumed = self.query_used != 0 };
     }
 
     fn pathNoOverflowFact(

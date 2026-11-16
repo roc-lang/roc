@@ -22381,21 +22381,81 @@ addition. An execution in which the addition overflows fails the test
 crashes at the same pass and the same statement, after the same effects,
 with the same message.
 
-Subtraction and multiplication do not ask. A subtraction is exact when its
-right operand is at most its left, which is an ordering between two
-values and not a limit; a multiplication's bound is a product. Two
-loop-invariant operands with no literal bound on either (a counter below a
-local limit stepped by a local step) would need a test of a sum, which the
-guard does not emit.
+A checked multiplication asks the same way. `a * b` asks when it is an
+unsigned multiplication of at most 64 bits, in its crashing or
+overflow-reporting form, that the fixpoint leaves unproven; one operand has
+a literal `ceiling` under the rule above; and the other is at most
+`value + c` for a loop-invariant `value` the guard can read. The test is
+the limit test `value <= max / ceiling - c`, with the division rounded
+down: `ceiling * (max / ceiling)` is at most `max`, so the product fits on
+every pass, and it is the weakest test of that value that bounds the
+product through that ceiling. A ceiling of zero or one asks for nothing,
+because the product is then at most the other operand and needs no test.
+The copy's multiplication is proved by the rule that two operands the
+path's orderings each put at or below a literal, whose product is at most
+`max`, multiply exactly. That rule applies wherever both bounds are known,
+with or without a guard; a bound that rests on an unverified loop
+assumption proves nothing until the assumption is verified.
+
+A checked subtraction asks for a test of the other kind. `a - b` is exact
+when `b <= a`, which is an ordering between two values, the same claim a
+comparison's outcome is. It asks when:
+
+- it is an unsigned subtraction of at most 64 bits, in its crashing or
+  overflow-reporting form, that the fixpoint leaves unproven;
+- the path's orderings give `b <= base + c1`, with `base` a literal, an
+  integer local or a list's length under the rules for a comparison's base;
+- they give `floor <= a + c2`, where `floor` is an integer local that
+  holds one value from the loop's entry to its exit, a list's length under
+  the rules for a comparison's list, or a literal: the least value the
+  orderings leave `a`, when that is above zero. A literal floor of zero
+  says nothing, and is never tested against.
+
+The test is `base <= floor + (0 - c1 - c2)`, by the same composition as a
+comparison's. A countdown `i - step` in a loop that runs while `i > low`
+asks whether `step <= low`; in one that runs while `i > 100` it asks
+whether `step <= 101`; a difference `high - low` of two values the loop
+never changes asks whether `low <= high`. Where several floors would do,
+the subtraction asks against the first that has a test worth asking (an
+integer local, then a length the loop leaves alone, then one it carries,
+then the literal), and for that floor the weakest test. A test against an
+integer local is asked with no offset above zero, because `floor + c`
+could pass the type's highest value: the test without the offset implies
+the one with it, so a loop that runs while `i > low` is tested for
+`step <= low` although `step <= low + 1` would do. A subtraction the
+loop's own test proves (a countdown that runs while `i >= step`) is proved
+at the fixpoint and asks for nothing.
+
+What a subtraction's or a multiplication's test guarantees is what an
+addition's does. The guard branches; the copy runs only when the test
+holds, and its operation is rewritten to the proven form only after the
+rounds prove it exact from the test's edge. An execution in which the
+operation would overflow, or pass zero, fails the test, runs the loop as
+written, and crashes at the same pass and statement with the same message.
+
+Signed integers ask for nothing, in any of the three operations. The
+prover tracks only unsigned integers of at most 64 bits: a signed local
+has no range, a signed comparison states no ordering, and a difference
+constraint `a <= b + c` between signed values would have to hold in a
+domain where both operands of an operation can be negative and the
+operation can leave its type at either end. Until signed values have
+ranges and orderings of their own, no test the guard could make would be
+followed by a proof. 128-bit integers are untracked for the same reason,
+and because the prover's own arithmetic is 128 bits wide.
+
+Two loop-invariant operands with no literal bound on either (a counter
+below a local limit stepped by a local step, or scaled by a local factor)
+would need a test that a sum or a product of two locals fits, which is not
+a comparison of one value against another and which the guard does not
+emit.
 
 Tests for one loop are conjoined: the copy runs only when every one holds,
-whether they are length tests or limit tests, so a loop still has at most
-one copy.
-Comparisons that ask for the same base against the same list ask for the
-tightest of their tests, which decides all of them. A base that is a
-narrower unsigned integer is widened for the comparison; a nonzero offset is
-applied to the length, after a test that the length covers it when it is
-subtracted.
+whatever they compare, so a loop still has at most one copy.
+Checks that ask for the same base against the same right side ask for the
+tightest of their tests, which decides all of them. A base or a floor that
+is a narrower unsigned integer is widened for the comparison; a nonzero
+offset is applied to the right side, after a test that the right side
+covers it when it is subtracted.
 
 The rule predicts that the copy loses a comparison, and the proof rounds
 decide. The prover's walks and persisted lists are bounded, so in a large
@@ -22411,8 +22471,8 @@ copy was proved from orderings that hold on the path through the loop as
 written, so it stands without the guard.
 
 Which loops are guarded depends only on the procedure: the demands are
-collected in the fixpoint round, sorted by loop, list and base, and applied
-in that order.
+collected in the fixpoint round, sorted by loop, right side and base, and
+applied in that order.
 
 Looking for a test costs fact-graph walks, and only the fixpoint round's
 demands are used. The fixpoint is a round that rewrites nothing, defers
