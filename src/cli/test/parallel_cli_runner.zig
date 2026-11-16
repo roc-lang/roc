@@ -11484,8 +11484,11 @@ fn customBoxyTestPrivateExports(
         // Builtin, ordinary/instrumented Library, Relay, and Main. Main's
         // CTFE seed demands Relay's ordinary code before tests run. Library's
         // test-private nested closures must not invalidate that code, while
-        // its public escaping callback and inline expect still work.
-        if (objects != 5) return customFailure(allocator, timer, "phase {d} created {d} native objects; expected 5 with Relay reused across CTFE and tests", .{ phase, objects });
+        // its public escaping callback and inline expect still work. A `roc`
+        // that embeds the Builtin's unit serves it from its table and files
+        // no object for it (design.md "Embedded Units").
+        const expected: usize = if (@import("cli_test_options").roc_embeds_builtin_unit) 4 else 5;
+        if (objects != expected) return customFailure(allocator, timer, "phase {d} created {d} native objects; expected {d} with Relay reused across CTFE and tests", .{ phase, objects, expected });
     }
     return null;
 }
@@ -11774,9 +11777,12 @@ fn customBoxyModuleObjectCache(
     // function names its modules by link name; the root unit follows because
     // its key covers the app's checked key. The builds of unedited sources
     // produce the same bytes whatever the cache held; an edit's executable is
-    // only required to run.
+    // only required to run. A `roc` that embeds the Builtin's unit serves it
+    // from its table, which the summary counts as cached, even in the cold
+    // build (design.md "Embedded Units").
+    const embeds_builtin = @import("cli_test_options").roc_embeds_builtin_unit;
     const builds = [_]Build{
-        .{ .name = "cold", .no_cache = false, .objects = "Boxy objects: 0 cached, 6 built", .identical = true },
+        .{ .name = "cold", .no_cache = false, .objects = if (embeds_builtin) "Boxy objects: 1 cached, 5 built" else "Boxy objects: 0 cached, 6 built", .identical = true },
         .{ .name = "warm", .no_cache = false, .objects = "Boxy objects: 6 cached, 0 built", .identical = true },
         .{ .name = "nocache", .no_cache = true, .objects = "", .identical = true },
         .{ .name = "app_edit", .no_cache = false, .objects = "Boxy objects: 4 cached, 2 built", .identical = false },

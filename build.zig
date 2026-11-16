@@ -2821,10 +2821,11 @@ pub fn build(b: *std.Build) void {
 
     const main_exe_result = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, dependency_source, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy, test_filters, true, valgrind_support) orelse return;
     const roc_exe = main_exe_result.exe;
+    const roc_embeds_builtin_unit = embed_builtin_unit orelse (optimize != .debug);
     {
         // The table `roc` carries must hold exactly what `roc` files for the
         // same key (src/build/builtin_unit.zig, `--verify`).
-        const units = linkEmbeddedBuiltinUnits(b, roc_modules, write_compiled_builtins, roc_exe, flag_enable_tracy, embed_builtin_unit orelse (optimize != .debug));
+        const units = linkEmbeddedBuiltinUnits(b, roc_modules, write_compiled_builtins, roc_exe, flag_enable_tracy, roc_embeds_builtin_unit);
         const step = b.step("run-test-builtin-unit", "Check that the Builtin unit roc embeds is byte-identical to the one roc builds");
         if (units.verifier) |verifier| {
             const verify = b.addRunArtifact(verifier);
@@ -3123,6 +3124,9 @@ pub fn build(b: *std.Build) void {
 
     const cli_test_options = b.addOptions();
     cli_test_options.addOption(bool, "binaryen", dependency_source.isBundled());
+    // Whether the `roc` the CLI tests run serves the Builtin's unit from its
+    // embedded table (design.md "Embedded Units") instead of building it.
+    cli_test_options.addOption(bool, "roc_embeds_builtin_unit", roc_embeds_builtin_unit);
 
     // CLI integration tests: one harness-backed runner covers platforms,
     // subcommands, echo, and glue. Focus locally with:
