@@ -1308,6 +1308,10 @@ fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
     lifted_owned = false;
     lifted = undefined;
     defer solved.deinit();
+    if ((try postcheck.LambdaSolved.Specialize.run(allocator, &solved)).cloned_fns != 0) {
+        procedure_usage.deinit();
+        procedure_usage = try postcheck.MonotypeLifted.SpecConstr.collectProcedureUsage(allocator, &solved.lifted);
+    }
 
     var inline_plan = try postcheck.SolvedInline.analyze(allocator, .wrappers, procedure_usage.view(), &solved);
     defer inline_plan.deinit();
@@ -15048,7 +15052,7 @@ const LambdaSetCensus = struct {
 /// selects in the pipeline: call-pattern cloning for `.wrappers`, iterator
 /// fusion only for `.none`.
 fn lambdaSolvedSetCensus(source: []const u8, inline_mode: lir.CheckedPipeline.InlineMode) TestError!LambdaSetCensus {
-    return lambdaSolvedSetCensusInOrder(source, inline_mode, .binding_groups, null);
+    return lambdaSolvedSetCensusInOrder(source, inline_mode, .binding_groups, null, null);
 }
 
 /// `lambdaSolvedSetCensus`, solving bodies in `order`. With `classes`, also
@@ -15062,6 +15066,7 @@ fn lambdaSolvedSetCensusInOrder(
     inline_mode: lir.CheckedPipeline.InlineMode,
     order: postcheck.LambdaSolved.Solve.BodyOrder,
     classes: ?*std.ArrayList(u32),
+    specialized: ?*postcheck.LambdaSolved.Specialize.Census,
 ) TestError!LambdaSetCensus {
     const allocator = std.testing.allocator;
     var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
@@ -15110,6 +15115,8 @@ fn lambdaSolvedSetCensusInOrder(
     lifted_owned = false;
     lifted = undefined;
     defer solved.deinit();
+    const specialize_census = try postcheck.LambdaSolved.Specialize.run(allocator, &solved);
+    if (specialized) |out| out.* = specialize_census;
 
     const SolvedType = postcheck.LambdaSolved.Type;
     const types = solved.types.view();
@@ -15157,7 +15164,7 @@ fn lambdaSolvedSetCensusInOrder(
             .erased => |erased| for (types.memberSpan(erased.members)) |member| {
                 for (types.captureSpan(member.captures)) |capture| try pending.append(allocator, capture.ty);
             },
-            .link, .unbound, .forall, .primitive, .zst, .hole, .mono => {},
+            .link, .unbound, .primitive, .zst, .hole, .mono => {},
         }
     }
 
@@ -15192,7 +15199,7 @@ fn lambdaSolvedSetCensusInOrder(
                 .lambda_set => |inner| for (types.memberSpan(inner)) |member| {
                     for (types.captureSpan(member.captures)) |capture| try pending.append(allocator, capture.ty);
                 },
-                .link, .unbound, .forall, .primitive, .erased, .zst, .hole, .mono => {},
+                .link, .unbound, .primitive, .erased, .zst, .hole, .mono => {},
             }
         } else false;
         if (contains_itself) census.self_containing_sets += 1;
@@ -15255,7 +15262,7 @@ fn lambdaSolvedSetCensusInOrder(
                             try children.append(allocator, func.callable);
                             try children.append(allocator, func.ret);
                         },
-                        .link, .unbound, .forall, .primitive, .erased, .zst, .hole, .mono => {},
+                        .link, .unbound, .primitive, .erased, .zst, .hole, .mono => {},
                     }
                     var index = children.items.len;
                     while (index > 0) {
@@ -15395,8 +15402,8 @@ test "MyIter lambda sets: map keep_if chain consumed at once" {
             .name = "next-based",
             .source = my_iter_with_next ++ user_iter_chain_main,
             .dbg = "27",
-            .none = .{ .multi_member_sets = 1, .max_members = 3, .self_containing_sets = 1, .box_box_count = 5 },
-            .wrappers = .{ .multi_member_sets = 1, .max_members = 6, .self_containing_sets = 1, .box_box_count = 10 },
+            .none = user_iter_fused,
+            .wrappers = .{ .multi_member_sets = 3, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
         },
         .{
             .name = "direct",
@@ -15434,14 +15441,14 @@ test "MyIter lambda sets: one adapter at two call sites" {
             .name = "next-based",
             .source = my_iter_with_next ++ user_iter_two_sites_main,
             .dbg = "63",
-            .none = .{ .multi_member_sets = 3, .max_members = 2, .self_containing_sets = 1, .box_box_count = 3 },
+            .none = user_iter_fused,
             .wrappers = user_iter_fused,
         },
         .{
             .name = "direct",
             .source = my_iter_direct ++ user_iter_two_sites_main,
             .dbg = "63",
-            .none = .{ .multi_member_sets = 2, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
+            .none = user_iter_fused,
             .wrappers = user_iter_fused,
         },
     });
@@ -15481,7 +15488,7 @@ test "MyIter lambda sets: callback from iterator to iterator" {
             .source = my_iter_with_next ++ user_iter_callback_main,
             .dbg = "36",
             .none = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 1, .box_box_count = 3 },
-            .wrappers = .{ .multi_member_sets = 1, .max_members = 3, .self_containing_sets = 1, .box_box_count = 3 },
+            .wrappers = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 1, .box_box_count = 0 },
         },
         .{
             .name = "direct",
@@ -15533,9 +15540,10 @@ test "MyIter lambda sets: two chains in one record" {
     }});
 }
 
-// Solving is order-independent: visiting the bodies in `FnId` order solves
-// every program above to the same lambda-set classes as the pipeline's
-// binding-group order.
+// Solving is order-independent: visiting each binding group's bodies in the
+// opposite order solves and specializes every program above to the same
+// lambda-set classes as the pipeline's order. Generalization needs only that
+// callee groups finish first.
 test "MyIter lambda sets: body order does not change the solved classes" {
     const allocator = std.testing.allocator;
     const sources = [_][]const u8{
@@ -15550,11 +15558,11 @@ test "MyIter lambda sets: body order does not change the solved classes" {
         inline for (.{ lir.CheckedPipeline.InlineMode.none, lir.CheckedPipeline.InlineMode.wrappers }) |mode| {
             var by_groups: std.ArrayList(u32) = .empty;
             defer by_groups.deinit(allocator);
-            var by_fn_ids: std.ArrayList(u32) = .empty;
-            defer by_fn_ids.deinit(allocator);
-            _ = try lambdaSolvedSetCensusInOrder(source, mode, .binding_groups, &by_groups);
-            _ = try lambdaSolvedSetCensusInOrder(source, mode, .fn_ids, &by_fn_ids);
-            try std.testing.expectEqualSlices(u32, by_groups.items, by_fn_ids.items);
+            var by_reversed: std.ArrayList(u32) = .empty;
+            defer by_reversed.deinit(allocator);
+            _ = try lambdaSolvedSetCensusInOrder(source, mode, .binding_groups, &by_groups, null);
+            _ = try lambdaSolvedSetCensusInOrder(source, mode, .binding_groups_reversed, &by_reversed, null);
+            try std.testing.expectEqualSlices(u32, by_groups.items, by_reversed.items);
         }
     }
 }
@@ -15597,7 +15605,146 @@ test "MyIter lambda sets: opaque chain" {
         .name = "opaque next-based",
         .source = my_iter_opaque_with_next ++ user_iter_chain_main,
         .dbg = "27",
-        .none = .{ .multi_member_sets = 1, .max_members = 3, .self_containing_sets = 1, .box_box_count = 3 },
-        .wrappers = .{ .multi_member_sets = 1, .max_members = 6, .self_containing_sets = 1, .box_box_count = 6 },
+        .none = .{ .multi_member_sets = 0, .max_members = 1, .self_containing_sets = 0, .box_box_count = 3 },
+        .wrappers = .{ .multi_member_sets = 3, .max_members = 2, .self_containing_sets = 0, .box_box_count = 6 },
     }});
+}
+
+// Lambda-set generalization (design.md "Lambda Set Generalization" and
+// "Lambda Specialize"). Each program is solved and specialized at inline mode
+// `.none`, its census is compared, and it is run.
+
+const PolymorphismExpectation = struct {
+    multi_member_sets: usize,
+    /// Lifted functions Lambda Specialize added.
+    cloned_fns: usize,
+    /// Distinct instances summed over every generalized group, the
+    /// program's lambdas and helpers included.
+    instances: usize,
+};
+
+fn expectPolymorphism(source: []const u8, expected_dbg: []const u8, expected: PolymorphismExpectation) TestError!void {
+    var specialized: postcheck.LambdaSolved.Specialize.Census = .{};
+    const census = try lambdaSolvedSetCensusInOrder(source, .none, .binding_groups, null, &specialized);
+    _ = try lowerAndRunUserIter(source, .none, expected_dbg);
+    const observed: PolymorphismExpectation = .{
+        .multi_member_sets = census.multi_member_sets,
+        .cloned_fns = specialized.cloned_fns,
+        .instances = specialized.instances,
+    };
+    if (std.meta.eql(observed, expected)) return;
+    std.debug.print("polymorphism: observed {any}\n", .{observed});
+    return error.TestUnexpectedResult;
+}
+
+const poly_functions =
+    \\inc : I64 -> I64
+    \\inc = |x| x + 1
+    \\
+    \\double : I64 -> I64
+    \\double = |x| x * 2
+    \\
+    \\apply : (I64 -> I64), I64 -> I64
+    \\apply = |f, v| f(v)
+    \\
+    \\
+;
+
+// A closure that captures a local of its enclosing function is solved in
+// one binding group with that function, so the captured local's type is
+// never quantified on its own: both of `helper`'s callbacks meet in its one
+// parameter set.
+test "lambda set generalization: a capturing closure is not generalized apart from its parent" {
+    try expectPolymorphism(
+        \\main : I64
+        \\main = {
+        \\    k = 3.I64
+        \\    helper = |g| g(k)
+        \\    total = helper(|v| v + 1) + helper(|v| v * 2)
+        \\    dbg total
+        \\    total
+        \\}
+    , "10", .{ .multi_member_sets = 1, .cloned_fns = 0, .instances = 2 });
+}
+
+// A local helper that captures nothing is its own binding group, so each
+// call site instantiates it with its own callback.
+test "lambda set generalization: a local helper applied at two sites with different closures" {
+    try expectPolymorphism(
+        \\main : I64
+        \\main = {
+        \\    helper = |g, v| g(v)
+        \\    total = helper(|v| v + 1, 1) + helper(|v| v * 2, 5)
+        \\    dbg total
+        \\    total
+        \\}
+    , "12", .{ .multi_member_sets = 0, .cloned_fns = 1, .instances = 4 });
+}
+
+// A closure returned from a generalized function is instantiated at each
+// remote use; two uses at equal instantiations share the function itself.
+test "lambda set generalization: an escaping closure instantiated remotely" {
+    try expectPolymorphism(
+        \\make_adder : I64 -> (I64 -> I64)
+        \\make_adder = |n| |x| x + n
+        \\
+        \\main : I64
+        \\main = {
+        \\    a = make_adder(1)
+        \\    b = make_adder(2)
+        \\    total = a(10) + b(20)
+        \\    dbg total
+        \\    total
+        \\}
+    , "33", .{ .multi_member_sets = 0, .cloned_fns = 0, .instances = 1 });
+}
+
+// Two mutually recursive functions are one binding group with one scheme:
+// each instance copies both.
+test "lambda set generalization: mutual recursion shares one instantiation" {
+    try expectPolymorphism(poly_functions ++
+        \\ping : (I64 -> I64), I64 -> I64
+        \\ping = |f, n| if n == 0 { f(n) } else { pong(f, n - 1) }
+        \\
+        \\pong : (I64 -> I64), I64 -> I64
+        \\pong = |f, n| if n == 0 { f(n) } else { ping(f, n - 1) }
+        \\
+        \\main : I64
+        \\main = {
+        \\    total = ping(inc, 4) + pong(double, 3)
+        \\    dbg total
+        \\    total
+        \\}
+    , "1", .{ .multi_member_sets = 0, .cloned_fns = 2, .instances = 4 });
+}
+
+// A function value inside a `Box` is erased in every instance of a
+// generalized function that boxes it.
+test "lambda set generalization: a Box boundary inside a generalized function" {
+    try expectPolymorphism(poly_functions ++
+        \\boxed : (I64 -> I64) -> Box((I64 -> I64))
+        \\boxed = |f| Box.box(f)
+        \\
+        \\main : I64
+        \\main = {
+        \\    first = Box.unbox(boxed(inc))
+        \\    second = Box.unbox(boxed(double))
+        \\    total = first(1) + second(2)
+        \\    dbg total
+        \\    total
+        \\}
+    , "6", .{ .multi_member_sets = 0, .cloned_fns = 3, .instances = 8 });
+}
+
+// Instantiations equal as types are one instance: three calls at two
+// distinct callbacks make one copy of `apply`.
+test "lambda set generalization: equal instantiations share one copy" {
+    try expectPolymorphism(poly_functions ++
+        \\main : I64
+        \\main = {
+        \\    total = apply(inc, 1) + apply(double, 2) + apply(double, 3)
+        \\    dbg total
+        \\    total
+        \\}
+    , "12", .{ .multi_member_sets = 0, .cloned_fns = 1, .instances = 4 });
 }
