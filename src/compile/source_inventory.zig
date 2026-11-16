@@ -1,5 +1,6 @@
 //! Source-only import facts shared by compilation and graph tools. Cache keys
-//! depend on normalized source bytes and compiler compatibility, never paths.
+//! depend on the digest of the normalized source bytes and compiler
+//! compatibility, never paths.
 const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
@@ -10,7 +11,7 @@ const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const CompactWriter = collections.CompactWriter;
 const SafeList = collections.SafeList;
-const scope = "source-import-inventory-v3";
+const scope = "source-import-inventory-v4";
 
 /// All slices belong to the allocator supplied to the producer or decoder.
 /// Callers use an arena for the inventory's lifetime.
@@ -21,11 +22,12 @@ pub const Inventory = struct {
     public: []const discovery.PublicModule,
 };
 
-/// Hash normalized source bytes in the inventory format domain.
-pub fn key(source: []const u8) [32]u8 {
+/// Name a source in the inventory format domain by the digest of its
+/// normalized bytes. The caller took that digest where it read the source.
+pub fn key(source_digest: base.SourceDigest) [32]u8 {
     var hash = base.Sha256.init(.{});
     hash.update(scope);
-    hash.update(source);
+    hash.update(&source_digest.bytes);
     return hash.finalResult();
 }
 
@@ -159,7 +161,8 @@ pub fn store(allocator: Allocator, manager: *CacheManager, source_key: [32]u8, i
 
 /// A successful compiler parse also warms graph-only tools. Invalid syntax
 /// cannot certify a complete import inventory and is never cached here.
-pub fn publishAst(allocator: Allocator, manager: *CacheManager, ast: *const parse.AST) Allocator.Error!void {
+/// `source_digest` is the digest of the source `ast` was parsed from.
+pub fn publishAst(allocator: Allocator, manager: *CacheManager, ast: *const parse.AST, source_digest: base.SourceDigest) Allocator.Error!void {
     if (!manager.config.enabled or ast.tokenize_diagnostics.items.len != 0 or ast.parse_diagnostics.items.len != 0) return;
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
@@ -167,7 +170,7 @@ pub fn publishAst(allocator: Allocator, manager: *CacheManager, ast: *const pars
         error.OutOfMemory => return error.OutOfMemory,
         error.ImportEscapesPackageRoot => return, // The compiler reports the invalid import; it cannot be cached.
     };
-    try store(allocator, manager, key(ast.env.source), inventory);
+    try store(allocator, manager, key(source_digest), inventory);
 }
 
 test "loc inventory roundtrip preserves relative imports and public aliases and rejects truncation" {
@@ -193,5 +196,5 @@ test "loc inventory roundtrip preserves relative imports and public aliases and 
     const header: *Serialized = @ptrCast(corrupt.ptr);
     header.is_application = 2;
     try std.testing.expectError(error.CorruptParseStageRecord, decode(a, corrupt));
-    try std.testing.expect(!std.mem.eql(u8, &key("import Foo"), &key("import Bar")));
+    try std.testing.expect(!std.mem.eql(u8, &key(base.SourceDigest.of("import Foo")), &key(base.SourceDigest.of("import Bar"))));
 }

@@ -198,8 +198,12 @@ pub const Modules = struct {
     /// The names of a module unit's link. A whole program links nothing, and
     /// names each module by its content identity.
     link_names: ?*const ModuleNames = null,
+    /// The platform relation modules of the lowering's root, which is the
+    /// first module: the app whose values fill the root's requirements.
+    relations: std.ArrayList(ModuleIndex) = .empty,
 
     pub fn deinit(self: *Modules) void {
+        self.relations.deinit(self.allocator);
         self.views.deinit(self.allocator);
         self.by_key.deinit(self.allocator);
         self.by_identity.deinit(self.allocator);
@@ -472,6 +476,10 @@ pub const Env = struct {
     module: ModuleIndex,
     vars: []const checked.CheckedTypeId,
     bound: []const TypeId,
+    /// The position of each of `vars`, when the environment's owner built
+    /// one (`VarPositions`): a worker's environment carries its scheme's, so
+    /// its conversions' lookups do not scan the scheme.
+    positions: ?*const VarPositions = null,
 
     pub const empty_bindings: []const checked.CheckedTypeId = &.{};
 
@@ -483,10 +491,38 @@ pub const Env = struct {
     /// The scheme position `id` is bound at, if any.
     pub fn lookupIndex(self: Env, module: ModuleIndex, id: checked.CheckedTypeId) ?usize {
         if (module != self.module) return null;
+        if (self.positions) |positions| {
+            std.debug.assert(positions.vars.ptr == self.vars.ptr and positions.vars.len == self.vars.len);
+            return positions.map.get(id) orelse return null;
+        }
         for (self.vars, 0..) |variable, index| {
             if (variable == id) return index;
         }
         return null;
+    }
+};
+
+/// The position of each variable of a scope's variable list `vars`, for
+/// `Env.lookup`: a variable listed twice (an enclosing scheme's variable that
+/// a generalized local's scheme lists again) is at its first position, where
+/// a scan finds it.
+pub const VarPositions = struct {
+    vars: []const checked.CheckedTypeId,
+    map: collections.DenseMapUnmanaged(checked.CheckedTypeId, u32) = .empty,
+
+    pub fn init(allocator: Allocator, vars: []const checked.CheckedTypeId) Allocator.Error!VarPositions {
+        var positions: VarPositions = .{ .vars = vars };
+        errdefer positions.deinit(allocator);
+        try positions.map.ensureTotalCapacity(allocator, vars.len);
+        for (vars, 0..) |variable, index| {
+            const entry = try positions.map.getOrPut(allocator, variable);
+            if (!entry.found_existing) entry.value_ptr.* = @intCast(index);
+        }
+        return positions;
+    }
+
+    pub fn deinit(self: *VarPositions, allocator: Allocator) void {
+        self.map.deinit(allocator);
     }
 };
 
@@ -552,6 +588,9 @@ pub const Store = struct {
     scoped_memo: std.AutoHashMapUnmanaged(ScopedKey, TypeId) = .empty,
     /// Each distinct list of bindings a scoped conversion read, by its bytes.
     bindings_keys: std.StringHashMapUnmanaged(u32) = .empty,
+    /// Converted checked types under a worker's own scheme environment (one
+    /// carrying `Env.positions`), by module, checked id and environment.
+    scheme_memo: std.AutoHashMapUnmanaged(SchemeKey, TypeId) = .empty,
     /// The scheme position of each closed record or tag union that is a row
     /// node of the converting worker's signature: one whose row ends in a
     /// quantified uncommitted tail (design.md "Methods On Open Rows"). Such a
@@ -599,6 +638,11 @@ pub const Store = struct {
     const ReachSpan = struct { start: u32 = 0, len: u32 = 0 };
 
     const ScopedKey = struct { module: ModuleIndex, ty: checked.CheckedTypeId, bindings: u32 };
+
+    /// A checked type under an environment that carries `Env.positions`.
+    /// Its positions and bindings are never freed or changed while the
+    /// store lives, so their addresses name the environment.
+    pub const SchemeKey = struct { module: ModuleIndex, ty: checked.CheckedTypeId, env_module: ModuleIndex, positions: usize, bound: usize, bound_len: usize };
 
     pub const InternKey = struct { start: u32, len: u32 };
 
@@ -657,6 +701,7 @@ pub const Store = struct {
         self.reached_nodes.deinit(self.allocator);
         self.scoped_memo.deinit(self.allocator);
         self.bindings_keys.deinit(self.allocator);
+        self.scheme_memo.deinit(self.allocator);
         self.tail_node_of.deinit(self.allocator);
         self.backing_memo.deinit(self.allocator);
         self.representation_closed.deinit(self.allocator);
@@ -1266,8 +1311,14 @@ pub const Converter = struct {
             pending.shrinkRetainingCapacity(frame.pending_start);
             // A type with no identity variables converts the same under every
             // scope that binds its closed row node candidates alike.
-            if (!self.seal_undetermined_kinds and !try rootHasIdentityVariables(self.modules.get(frame.module), frame.ty)) {
-                try self.memoize(frame.module, frame.ty, env, reach_pool.items[built_reach.start..][0..built_reach.len], built);
+            // A type with identity variables converts the same only under
+            // the one worker scheme environment that converted it.
+            if (!self.seal_undetermined_kinds) {
+                if (!try rootHasIdentityVariables(self.modules.get(frame.module), frame.ty)) {
+                    try self.memoize(frame.module, frame.ty, env, reach_pool.items[built_reach.start..][0..built_reach.len], built);
+                } else if (schemeKey(frame.module, frame.ty, env)) |key| {
+                    try self.store.scheme_memo.put(allocator, key, built);
+                }
             }
             if (frames.items.len == 0) return built;
             try results.append(allocator, built);
@@ -1277,6 +1328,13 @@ pub const Converter = struct {
     }
 
     const Child = struct { module: ModuleIndex, ty: checked.CheckedTypeId };
+
+    /// The `Store.scheme_memo` key of `ty` under `env`, when `env` is a
+    /// worker's own scheme environment.
+    fn schemeKey(module: ModuleIndex, ty: checked.CheckedTypeId, env: Env) ?Store.SchemeKey {
+        const positions = env.positions orelse return null;
+        return .{ .module = module, .ty = ty, .env_module = env.module, .positions = @intFromPtr(positions), .bound = @intFromPtr(env.bound.ptr), .bound_len = env.bound.len };
+    }
 
     /// The app type the program solves platform requirement identity
     /// variable `ty` to, or null for any other type.
@@ -1413,6 +1471,11 @@ pub const Converter = struct {
                     }
                     return done;
                 }
+            }
+        }
+        if (!self.seal_undetermined_kinds) {
+            if (schemeKey(module, ty, env)) |key| {
+                if (self.store.scheme_memo.get(key)) |memo| return memo;
             }
         }
         return switch (view.types().payload(ty)) {

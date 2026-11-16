@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const Sha256 = @import("base").Sha256;
+const SourceDigest = @import("base").SourceDigest;
 const can = @import("can");
 const CheckedModuleArtifactKey = @import("check").CheckedArtifact.CheckedModuleArtifactKey;
 const cache_versioning = @import("cache_versioning.zig");
@@ -23,8 +24,9 @@ pub const CanonicalizedModuleCacheKey = struct {
 /// field that names a package, a path, an import, or the root module would
 /// break that property, so the key deliberately has no way to express one.
 pub const CanonicalizedCacheKeyInput = struct {
-    /// The module's source bytes, after line-ending normalization.
-    source: []const u8,
+    /// The digest of the module's source bytes, after line-ending
+    /// normalization. The source text reaches the key only through it.
+    source_digest: SourceDigest,
     /// The file name a type module's main type must match. Not the logical
     /// module path, which carries the module's location inside its package.
     module_basename: []const u8,
@@ -47,12 +49,12 @@ pub const CanonicalizedCacheKeyInput = struct {
 /// Compute the canonicalized-module cache key for one module.
 pub fn canonicalizedModuleCacheKey(input: CanonicalizedCacheKeyInput) CanonicalizedModuleCacheKey {
     var hasher = Sha256.init(.{});
-    hasher.update("roc-canonicalized-module-key-v2");
+    hasher.update("roc-canonicalized-module-key-v3");
     hasher.update(&@import("build_options").compiler_compatibility_hash);
     hasher.update(&input.entry_version_hash);
     hashLengthPrefixed(&hasher, input.compiler_version);
     hashLengthPrefixed(&hasher, input.module_basename);
-    hashLengthPrefixed(&hasher, input.source);
+    hasher.update(&input.source_digest.bytes);
     hasher.update(&[_]u8{@intFromBool(input.is_entry_module)});
     hasher.update(&[_]u8{@backingInt(input.validation)});
     hasher.update(&[_]u8{@backingInt(input.module_role)});
@@ -95,7 +97,7 @@ fn hashWithByte(byte: u8) [32]u8 {
 
 fn canonicalizedTestInput() CanonicalizedCacheKeyInput {
     return .{
-        .source = "main = 42",
+        .source_digest = SourceDigest.of("main = 42"),
         .module_basename = "Main.roc",
         .is_entry_module = true,
         .module_role = .user,
@@ -112,7 +114,7 @@ test "canonicalized module cache key is a function of exactly its declared input
     try std.testing.expect(canonicalizedKeyEql(baseline, canonicalizedModuleCacheKey(canonicalizedTestInput())));
 
     var changed_source = canonicalizedTestInput();
-    changed_source.source = "main = 43";
+    changed_source.source_digest = SourceDigest.of("main = 43");
     try std.testing.expect(!canonicalizedKeyEql(baseline, canonicalizedModuleCacheKey(changed_source)));
 
     var changed_basename = canonicalizedTestInput();
@@ -143,14 +145,34 @@ test "canonicalized module cache key is a function of exactly its declared input
 test "canonicalized module cache key cannot be split differently by its variable-length inputs" {
     // A length prefix on every variable-length input keeps one field's tail
     // from reading as the next field's head.
+    var whole = canonicalizedTestInput();
+    whole.compiler_version = "roc-test-v1";
+    whole.module_basename = "Main.roc";
     var moved_boundary = canonicalizedTestInput();
-    moved_boundary.module_basename = "Main.ro";
-    moved_boundary.source = "cmain = 42";
+    moved_boundary.compiler_version = "roc-test-v";
+    moved_boundary.module_basename = "1Main.roc";
 
     try std.testing.expect(!canonicalizedKeyEql(
-        canonicalizedModuleCacheKey(canonicalizedTestInput()),
+        canonicalizedModuleCacheKey(whole),
         canonicalizedModuleCacheKey(moved_boundary),
     ));
+}
+
+test "canonicalized module cache key reads the source through its digest alone" {
+    const input = canonicalizedTestInput();
+
+    var expected = Sha256.init(.{});
+    expected.update("roc-canonicalized-module-key-v3");
+    expected.update(&@import("build_options").compiler_compatibility_hash);
+    expected.update(&input.entry_version_hash);
+    hashLengthPrefixed(&expected, input.compiler_version);
+    hashLengthPrefixed(&expected, input.module_basename);
+    expected.update(&SourceDigest.of("main = 42").bytes);
+    expected.update(&[_]u8{@intFromBool(input.is_entry_module)});
+    expected.update(&[_]u8{@backingInt(input.validation)});
+    expected.update(&[_]u8{@backingInt(input.module_role)});
+
+    try std.testing.expectEqualSlices(u8, &expected.finalResult(), &canonicalizedModuleCacheKey(input).bytes);
 }
 
 test "canonicalized module cache key input names nothing outside the module" {

@@ -56,6 +56,8 @@ const Allocator = std.mem.Allocator;
 
 const ResolvedVarDescs = types_mod.ResolvedVarDescs;
 const ResolvedVarDesc = types_mod.ResolvedVarDesc;
+const ResolvedVarWord = types_mod.Store.ResolvedVarWord;
+const MergeSide = types_mod.Store.MergeSide;
 
 const Var = types_mod.Var;
 const Rank = types_mod.Rank;
@@ -353,6 +355,10 @@ pub const Options = struct {
     /// What a relation does when a row repeats a label whose occurrences do
     /// not relate.
     repeated_label_rows: RepeatedLabelRows = .mismatch,
+    /// The region of the actual operand, which a reported mismatch records,
+    /// when the caller has it at hand. A caller that leaves it unset gives
+    /// the mismatch its region once one is reported.
+    actual_region: ?base.Region = null,
 };
 
 /// What a relation does when one operand's row repeats a label along its
@@ -451,6 +457,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
                 .actual_var = b,
                 .actual_snapshot = actual_snapshot,
             },
+            .actual_region = opts.actual_region orelse base.Region.zero(),
             .context = opts.context,
             .evidence = evidence,
             .leaf = leaf,
@@ -756,15 +763,57 @@ const Unifier = struct {
         return var_;
     }
 
+    /// A fresh node holding existing children: `content`'s direct children
+    /// may come from the younger operand, so each is lowered to the node's
+    /// rank. Ranks never increase going deeper (design.md "Def Checking
+    /// Order"); a younger child left under this older node would be reached by
+    /// no variable its own generalization visits, and would be quantified
+    /// while the older node still refers to it.
+    fn freshParent(self: *Self, vars: *const ResolvedVarDescs, content: Content) std.mem.Allocator.Error!Var {
+        const var_ = try self.fresh(vars, content);
+        const rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank);
+        switch (content) {
+            .flex, .rigid, .field_presence, .err => {},
+            .alias => |alias| for (self.types_store.sliceAliasAllArgs(alias)) |arg| try self.lowerRankTo(arg, rank),
+            .structure => |flat_type| switch (flat_type) {
+                .empty_record, .empty_tag_union => {},
+                .tuple => |tuple| for (self.types_store.sliceVars(tuple.elems)) |elem| try self.lowerRankTo(elem, rank),
+                .nominal_type => |nominal| for (self.types_store.sliceNominalArgs(nominal)) |arg| try self.lowerRankTo(arg, rank),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    for (self.types_store.sliceVars(func.args)) |arg| try self.lowerRankTo(arg, rank);
+                    for (self.types_store.sliceVars(func.effect_deps)) |dep| try self.lowerRankTo(dep, rank);
+                    try self.lowerRankTo(func.ret, rank);
+                },
+                .record => |record| {
+                    for (self.types_store.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                        try self.lowerRankTo(presence.typeVar(), rank);
+                        if (presence.presenceVar()) |presence_var| try self.lowerRankTo(presence_var, rank);
+                    }
+                    try self.lowerRankTo(record.ext, rank);
+                },
+                .tag_union => |tag_union| {
+                    for (self.types_store.getTagsSlice(tag_union.tags).items(.args)) |args| {
+                        for (self.types_store.sliceVars(args)) |arg| try self.lowerRankTo(arg, rank);
+                    }
+                    try self.lowerRankTo(tag_union.ext, rank);
+                },
+            },
+        }
+        return var_;
+    }
+
+    fn lowerRankTo(self: *Self, var_: Var, rank: Rank) std.mem.Allocator.Error!void {
+        const resolved = self.types_store.resolveVar(var_);
+        if (@backingInt(resolved.desc.rank) > @backingInt(rank)) {
+            try self.types_store.setDescRank(resolved.desc_idx, rank);
+        }
+    }
+
     /// Record a deferred constraint check for later verification.
     /// Always uses b's var for error regions (via unresolved_b) because b represents
     /// the "actual" type from the user's code, while a represents the "expected" type
     /// (e.g., from a function signature). When constraints aren't satisfied, we want
     /// to highlight where the user's code is, not the constraint's origin.
-    /// NOTE: if flex-side dispatch constraints ever start FIRING mid-unify
-    /// instead of deferring here, revisit `structurallyIncompatiblePair` (bottom
-    /// of this module)—the defaulting pre-filter's soundness fence relies on
-    /// this deferral.
     fn recordDeferredConstraint(
         self: *Self,
         vars: *const ResolvedVarDescs,
@@ -952,7 +1001,7 @@ const Unifier = struct {
         return switch (frame) {
             .root_pair => |pair| .{ .expected = pair.a, .actual = pair.b },
             .guarded_pair => |pair| .{ .expected = pair.a, .actual = pair.b },
-            .unify_vars => |vars| .{ .expected = vars.a.var_, .actual = vars.b.var_ },
+            .unify_vars => |pair| .{ .expected = pair.a, .actual = pair.b },
             .merge => |merge_frame| .{ .expected = merge_frame.vars.a.var_, .actual = merge_frame.vars.b.var_ },
             .merge_to_nominal => |merge_frame| .{ .expected = merge_frame.vars.a.var_, .actual = merge_frame.vars.b.var_ },
             .mismatch_handler,
@@ -976,7 +1025,10 @@ const Unifier = struct {
                 self.unresolved_b = handler.saved_unresolved_b;
             },
             .restore_enclosing_records => |saved| self.enclosing_records = saved,
-            .unify_vars => |vars| try self.unifyVars(&vars),
+            .unify_vars => |pair| try self.unifyVars(&.{
+                .a = self.types_store.resolvedAtRoot(pair.a, pair.a_desc),
+                .b = self.types_store.resolvedAtRoot(pair.b, pair.b_desc),
+            }),
             .merge => |merge_frame| try self.merge(&merge_frame.vars, merge_frame.content),
             .merge_to_nominal => |merge_frame| try self.mergeToNominal(&merge_frame.vars, merge_frame.direction),
             .same_alias_after_args => |post| try self.processSameAliasAfterArgs(post),
@@ -1005,37 +1057,129 @@ const Unifier = struct {
     }
 
     fn processGuardedPair(self: *Self, a_var: Var, b_var: Var) Error!void {
-        switch (self.types_store.checkVarsEquiv(a_var, b_var)) {
-            .equiv => return,
-            .not_equiv => |vars| {
-                // A deferred requirement callable is linked to its copy
-                // before anything relates it.
-                if (vars.a.desc.flags.deferred_callable or vars.b.desc.flags.deferred_callable) {
-                    try self.linkDeferredCallable(vars.a);
-                    try self.linkDeferredCallable(vars.b);
-                    return self.processGuardedPair(a_var, b_var);
-                }
-                if (try self.isPairVisited(a_var, b_var)) {
-                    return;
-                }
+        // Only the two classes' words are read here. Their content is decoded
+        // when the pair's `unify_vars` frame runs, if it comes to that.
+        const a = self.types_store.resolveVarWordAndCompressPath(a_var);
+        const b = self.types_store.resolveVarWordAndCompressPath(b_var);
+        if (a.desc_idx == b.desc_idx) return;
 
-                const visited_vars_len: u32 = @intCast(self.scratch.visited_vars.items().len);
-                _ = try self.scratch.visited_vars.append(self.scratch.gpa, a_var);
-                _ = try self.scratch.visited_vars.append(self.scratch.gpa, b_var);
-
-                const saved_unresolved_a = self.unresolved_a;
-                const saved_unresolved_b = self.unresolved_b;
-                self.unresolved_a = a_var;
-                self.unresolved_b = b_var;
-
-                try self.pushWorkFrame(.{ .guard_handler = .{
-                    .visited_vars_len = visited_vars_len,
-                    .saved_unresolved_a = saved_unresolved_a,
-                    .saved_unresolved_b = saved_unresolved_b,
-                } });
-                try self.pushWorkFrame(.{ .unify_vars = vars });
-            },
+        // A deferred requirement callable is linked to its copy before
+        // anything relates it.
+        if (a.word.flags().deferred_callable or b.word.flags().deferred_callable) {
+            try self.linkDeferredCallable(a);
+            try self.linkDeferredCallable(b);
+            return self.processGuardedPair(a_var, b_var);
         }
+        if (try self.isPairVisited(a_var, b_var)) {
+            return;
+        }
+
+        if (self.storedContentMerge(a, b)) |kept| {
+            return self.types_store.unionKeepingContent(a.var_, b.var_, kept, Rank.min(a.word.rank, b.word.rank));
+        }
+
+        const visited_vars_len: u32 = @intCast(self.scratch.visited_vars.items().len);
+        _ = try self.scratch.visited_vars.append(self.scratch.gpa, a_var);
+        _ = try self.scratch.visited_vars.append(self.scratch.gpa, b_var);
+
+        const saved_unresolved_a = self.unresolved_a;
+        const saved_unresolved_b = self.unresolved_b;
+        self.unresolved_a = a_var;
+        self.unresolved_b = b_var;
+
+        try self.pushWorkFrame(.{ .guard_handler = .{
+            .visited_vars_len = visited_vars_len,
+            .saved_unresolved_a = saved_unresolved_a,
+            .saved_unresolved_b = saved_unresolved_b,
+        } });
+        try self.pushWorkFrame(.{ .unify_vars = .{
+            .a = a.var_,
+            .a_desc = a.desc_idx,
+            .b = b.var_,
+            .b_desc = b.desc_idx,
+        } });
+    }
+
+    /// The side whose stored content is what relating `a` and `b` merges
+    /// them into, when the relation is nothing more than that merge; null
+    /// when the pair needs `unifyVars`.
+    ///
+    /// These are the `unifyVars` cases that end in `merge` with one side's
+    /// own content and do nothing else. Either one side is a plain flex
+    /// (`isPlainFlex`), so no constraint is deferred, no literal is
+    /// determined and no row bound is checked, and the other side's content
+    /// is one `contentForMerge` returns as it is (`mergeStoresContentOf`);
+    /// or the two sides store the same content, of a kind that unifies with
+    /// itself by merging (`sameContentMerges`).
+    fn storedContentMerge(self: *Self, a: ResolvedVarWord, b: ResolvedVarWord) ?MergeSide {
+        const a_plain = self.isPlainFlex(a);
+        const b_plain = self.isPlainFlex(b);
+        if (a_plain and b_plain) {
+            // Two flexes merge into a flex with `a`'s name if it has one, else
+            // `b`'s, and with the canonical empty constraint range.
+            const a_flex = self.types_store.flexAt(a.desc_idx);
+            const b_flex = self.types_store.flexAt(b.desc_idx);
+            const kept: MergeSide = if (a_flex.name == null) .b else .a;
+            const kept_constraints = switch (kept) {
+                .a => a_flex.constraints,
+                .b => b_flex.constraints,
+            };
+            const empty = StaticDispatchConstraint.SafeList.Range.empty();
+            return if (kept_constraints.start == empty.start) kept else null;
+        }
+        if (a_plain) return if (self.mergeStoresContentOf(b, a)) .b else null;
+        if (b_plain) return if (self.mergeStoresContentOf(a, b)) .a else null;
+        return if (self.sameContentMerges(a, b)) .b else null;
+    }
+
+    /// Whether `a` and `b` store the same content and relating them merges
+    /// them into it, relating nothing else and failing nowhere.
+    fn sameContentMerges(self: *const Self, a: ResolvedVarWord, b: ResolvedVarWord) bool {
+        if (a.word.kind != b.word.kind) return false;
+        switch (a.word.kind) {
+            .empty_record, .empty_tag_union => return true,
+            // The same presence merges into itself.
+            .field_presence => return self.types_store.sameStoredContent(a.desc_idx, b.desc_idx),
+            // One application with the same arguments: every argument pair
+            // is one variable. An application of an invalid declaration
+            // merges to an erroneous type instead.
+            .nominal_type => return self.types_store.sameStoredContent(a.desc_idx, b.desc_idx) and
+                !self.types_store.nominalDeclIsInvalid(self.types_store.nominalAt(a.desc_idx)),
+            // Two rigids never unify, two erroneous types do not merge, and
+            // every other kind relates its parts or rewrites what it merges.
+            .rigid, .err, .flex, .alias, .tuple, .record, .tag_union, .fn_pure, .fn_effectful, .fn_unbound => return false,
+        }
+    }
+
+    /// Whether `resolved` is a flex that states nothing: it has no
+    /// constraints and no literal marker, and it is not a bounded row
+    /// extension or an uncommitted record tail (design.md "Uncommitted Record
+    /// Tails").
+    fn isPlainFlex(self: *const Self, resolved: ResolvedVarWord) bool {
+        if (resolved.word.kind != .flex or resolved.word.literal() != .none) return false;
+        const flags = resolved.word.flags();
+        if (flags.bounded_row_ext or flags.uncommitted_record_tail or flags.uncommitted_copy) return false;
+        return self.types_store.flexAt(resolved.desc_idx).constraints.len() == 0;
+    }
+
+    /// Whether the plain flex `flex` merging with `other` merges into
+    /// `other`'s stored content exactly.
+    fn mergeStoresContentOf(self: *Self, other: ResolvedVarWord, flex: ResolvedVarWord) bool {
+        const targets: RowMergeTargets = .{ .a = flex.desc_idx, .b = other.desc_idx };
+        return switch (other.word.kind) {
+            .nominal_type, .tuple, .empty_record, .empty_tag_union, .alias, .rigid, .fn_effectful, .fn_unbound => true,
+            // The merge discharges a pure function's effect dependencies.
+            .fn_pure => self.types_store.funcAt(other.desc_idx).effect_deps.start == Var.SafeList.Range.empty().start,
+            // A row is rewritten when its extension reaches the merged class.
+            .record => !self.rowExtReachesDesc(.record, self.types_store.recordAt(other.desc_idx).ext, targets),
+            .tag_union => !self.rowExtReachesDesc(.tag_union, self.types_store.tagUnionAt(other.desc_idx).ext, targets),
+            // A default is stripped from a committed value as it merges.
+            .field_presence => self.types_store.fieldPresenceAt(other.desc_idx) != .defaulted,
+            // An erroneous type merges only with a flex that states no
+            // requirement, and a flex that is not plain has constraints or a
+            // literal to carry over.
+            .err, .flex => false,
+        };
     }
 
     /// How a handler absorbed a mismatch instead of propagating it.
@@ -1091,7 +1235,7 @@ const Unifier = struct {
     }
 
     fn isBoundedRowExt(self: *Self, var_: Var) bool {
-        return self.types_store.resolveVar(var_).desc.flags.bounded_row_ext;
+        return self.types_store.flagsOf(var_).bounded_row_ext;
     }
 
     /// The bounded extension a row reaches along its extension chain, so that
@@ -1171,6 +1315,22 @@ const Unifier = struct {
         return error.TypeMismatch;
     }
 
+    /// The deferred-literal marker of `content`, which only a flex carries.
+    fn flexLiteral(content: Content) Flex.Literal {
+        return switch (content) {
+            .flex => |flex| flex.literal,
+            .rigid, .alias, .structure, .field_presence, .err => .none,
+        };
+    }
+
+    /// Whether a flex states a requirement of its own: a constraint, or the
+    /// conversion a deferred literal's marker stands for (design.md "Deferred
+    /// Literal Conversion"). An erroneous type relates to such a variable
+    /// without replacing it.
+    fn flexStatesRequirement(flex: Flex) bool {
+        return flex.constraints.len() != 0 or flex.literal != .none;
+    }
+
     fn unifyGuarded(self: *Self, a_var: Var, b_var: Var) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
@@ -1186,6 +1346,15 @@ const Unifier = struct {
 
         try self.refuseTagsIntoBoundedExt(vars.a, vars.b.var_);
         try self.refuseTagsIntoBoundedExt(vars.b, vars.a.var_);
+
+        // An erroneous type determines nothing: it leaves a marked variable
+        // as it is.
+        if (flexLiteral(vars.a.desc.content) != flexLiteral(vars.b.desc.content) and
+            (vars.a.desc.content != .flex or vars.b.desc.content != .flex) and
+            vars.a.desc.content != .err and vars.b.desc.content != .err)
+        {
+            _ = try self.scratch.determined_literals.append(self.scratch.gpa, self.unresolved_b orelse vars.b.var_);
+        }
 
         switch (vars.a.desc.content) {
             .flex => |flex| {
@@ -1205,7 +1374,7 @@ const Unifier = struct {
             },
             .err => switch (vars.b.desc.content) {
                 .flex => |b_flex| {
-                    if (b_flex.constraints.len() != 0) return error.ErroneousType;
+                    if (flexStatesRequirement(b_flex)) return error.ErroneousType;
                     try self.merge(vars, .err);
                 },
                 .rigid, .alias, .field_presence, .structure, .err => return error.ErroneousType,
@@ -1306,6 +1475,7 @@ const Unifier = struct {
                 try self.merge(vars, Content{ .flex = .{
                     .name = mb_ident,
                     .constraints = merged_constraints,
+                    .literal = a_flex.literal.merged(b_flex.literal),
                 } });
             },
             .rigid => |b_rigid| {
@@ -1333,7 +1503,7 @@ const Unifier = struct {
                 try self.recordDeferredConstraint(vars, a_flex.constraints);
             },
             .err => {
-                if (a_flex.constraints.len() != 0) return error.ErroneousType;
+                if (flexStatesRequirement(a_flex)) return error.ErroneousType;
                 try self.merge(vars, .err);
             },
         }
@@ -1526,24 +1696,24 @@ const Unifier = struct {
                 }
             },
             .nominal_type => |a_type| {
-                // NOTE: this arm short-circuits applications of INVALID
-                // declarations to a SUCCESSFUL `.err` merge (the declaration
-                // error was already reported); if that changes, revisit
-                // `structurallyIncompatiblePair` (bottom of this module)—the
-                // defaulting pre-filter's soundness fence encodes it.
-                if (self.types_store.nominalDeclIsInvalid(a_type)) {
+                // An application of an invalid declaration merges to `.err`
+                // successfully: the declaration error was already reported.
+                const a_decl = self.types_store.lookupNominalDecl(a_type);
+                if (a_decl) |decl| if (!self.types_store.getNominalDecl(decl).isValid()) {
                     try self.merge(vars, .err);
                     return;
-                }
+                };
 
                 switch (b_flat_type) {
                     .nominal_type => |b_type| {
-                        if (self.types_store.nominalDeclIsInvalid(b_type)) {
+                        // Two applications of one declaration share `a`'s
+                        // declaration, which is valid.
+                        if (!sameNominalIdentity(a_type, b_type) and self.types_store.nominalDeclIsInvalid(b_type)) {
                             try self.merge(vars, .err);
                             return;
                         }
 
-                        try self.unifyNominalType(vars, a_type, b_type);
+                        try self.unifyNominalType(vars, a_type, b_type, a_decl);
                     },
                     .tag_union => |b_tag_union| {
                         // Try to unify nominal tag union (a) with anonymous tag union (b)
@@ -1800,15 +1970,18 @@ const Unifier = struct {
     /// Unify two nominal type applications: identity, arity, then actual
     /// args pairwise. Backing types are never inspected here—nominal
     /// identity is the whole contract (callers already short-circuited
-    /// applications of invalid declarations to `.err`).
-    fn unifyNominalType(self: *Self, vars: *const ResolvedVarDescs, a_type: NominalType, b_type: NominalType) Error!void {
+    /// applications of invalid declarations to `.err`). `decl_idx` is `a`'s
+    /// declaration, if it has one.
+    fn unifyNominalType(
+        self: *Self,
+        vars: *const ResolvedVarDescs,
+        a_type: NominalType,
+        b_type: NominalType,
+        decl_idx: ?types_mod.NominalDecl.Idx,
+    ) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        // NOTE: if distinct nominal identities ever start unifying (e.g.
-        // implicit numeric coercion), revisit `structurallyIncompatiblePair`
-        // (bottom of this module)—its refutation theorem is exactly this
-        // check.
         if (!sameNominalIdentity(a_type, b_type)) {
             return error.TypeMismatch;
         }
@@ -1821,7 +1994,6 @@ const Unifier = struct {
         // A body-local declaration's trailing context arguments (design.md
         // "Body-Local Type Context") name the instantiation of the enclosing
         // functions its values belong to.
-        const decl_idx = self.types_store.lookupNominalDecl(a_type);
         const context_len: u32 = if (decl_idx) |idx| self.types_store.getNominalDecl(idx).flags.context_len else 0;
         const declared_len = a_type.args.len() - context_len;
         var i: u32 = a_type.args.len();
@@ -2063,14 +2235,14 @@ const Unifier = struct {
             if (targets.contains(resolved.desc_idx)) {
                 const spliced = if (resolved.desc_idx == targets.a) &spliced_a else &spliced_b;
                 if (spliced.*) {
-                    return try self.finishRowForMerge(kind, range, try self.fresh(vars, resolved.desc.content));
+                    return try self.finishRowForMerge(kind, range, try self.freshParent(vars, resolved.desc.content));
                 }
 
                 spliced.* = true;
                 const target_row = switch (resolved.desc.content) {
                     .structure => |flat_type| kind.rowOf(flat_type),
                     .flex, .rigid, .alias, .field_presence, .err => null,
-                } orelse return try self.finishRowForMerge(kind, range, try self.fresh(vars, resolved.desc.content));
+                } orelse return try self.finishRowForMerge(kind, range, try self.freshParent(vars, resolved.desc.content));
                 try self.mergeRowEntriesIntoScratch(kind, &range, kind.entriesOf(target_row));
                 ext_var = target_row.ext;
                 continue;
@@ -2151,7 +2323,7 @@ const Unifier = struct {
     /// A fresh row holding `entries` over `ext`.
     fn freshRow(self: *Self, comptime kind: RowKind, vars: *const ResolvedVarDescs, entries: []const kind.Entry(), ext: Var) std.mem.Allocator.Error!Var {
         const range = try kind.appendToStore(self.types_store, entries);
-        return try self.fresh(vars, kind.content(kind.row(range, ext)));
+        return try self.freshParent(vars, kind.content(kind.row(range, ext)));
     }
 
     fn unifyTagUnionWithNominal(
@@ -4064,8 +4236,8 @@ const Unifier = struct {
         } });
     }
 
-    fn linkDeferredCallable(self: *Self, resolved: ResolvedVarDesc) std.mem.Allocator.Error!void {
-        if (!resolved.desc.flags.deferred_callable) return;
+    fn linkDeferredCallable(self: *Self, resolved: ResolvedVarWord) std.mem.Allocator.Error!void {
+        if (!resolved.word.flags().deferred_callable) return;
         const hook = self.deferred_callables orelse base.invariant("a deferred requirement callable reached a unification with no checker to link it", .{});
         try hook.link(hook.ctx, resolved.var_);
     }
@@ -4578,7 +4750,16 @@ const WorkFrame = union(enum) {
     /// Restores the enclosing record pair once a record relation's scheduled
     /// children have drained. Pushed before those children so it pops after them.
     restore_enclosing_records: ?[2]Var,
-    unify_vars: ResolvedVarDescs,
+    /// The checked representatives of two classes to relate and their
+    /// descriptors, decoded when the frame runs: it runs right after it is
+    /// pushed, so nothing has changed them, and the frame need not carry the
+    /// decoded descriptors.
+    unify_vars: struct {
+        a: Var,
+        a_desc: types_mod.DescStoreIdx,
+        b: Var,
+        b_desc: types_mod.DescStoreIdx,
+    },
     merge: struct {
         vars: ResolvedVarDescs,
         content: Content,
@@ -4843,6 +5024,11 @@ pub const Scratch = struct {
 
     // constraints
     deferred_constraints: DeferredConstraintCheck.SafeList,
+    /// For each type this unification determined that was a deferred
+    /// literal's (`Flex.literal`), the variable a conversion constraint on
+    /// the literal would have been deferred on. The literal can now be
+    /// decided.
+    determined_literals: VarSafeList,
     only_in_a_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
     only_in_b_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
     in_both_static_dispatch_constraints: TwoStaticDispatchConstraints.SafeList,
@@ -5001,6 +5187,7 @@ pub const Scratch = struct {
         return .{
             .gpa = gpa,
             .fresh_vars = try VarSafeList.initCapacity(gpa, 8),
+            .determined_literals = try VarSafeList.initCapacity(gpa, 2),
             .effect_dependency_seen = collections.DenseMap(Var, void).init(gpa),
             .unify_work_stack = try WorkFrame.SafeList.initCapacity(gpa, 32),
             .mismatch_flags = try MkSafeList(bool).initCapacity(gpa, 8),
@@ -5041,6 +5228,7 @@ pub const Scratch = struct {
     /// Deinit scratch
     pub fn deinit(self: *Self) void {
         self.fresh_vars.deinit(self.gpa);
+        self.determined_literals.deinit(self.gpa);
         self.effect_dependency_seen.deinit();
         self.effect_dependencies.deinit(self.gpa);
         self.pure_demands.deinit(self.gpa);
@@ -5100,6 +5288,7 @@ pub const Scratch = struct {
         self.only_in_b_tags.clearRetainingCapacity();
         self.in_both_tags.clearRetainingCapacity();
         self.deferred_constraints.clearRetainingCapacity();
+        self.determined_literals.clearRetainingCapacity();
         self.only_in_a_static_dispatch_constraints.clearRetainingCapacity();
         self.only_in_b_static_dispatch_constraints.clearRetainingCapacity();
         self.in_both_static_dispatch_constraints.clearRetainingCapacity();
@@ -5245,7 +5434,10 @@ fn sameAliasIdentity(a: Alias, b: Alias) bool {
     return a.ident.ident_idx.eql(b.ident.ident_idx);
 }
 
-fn sameNominalIdentity(a: NominalType, b: NominalType) bool {
+/// Whether two nominal types name one declaration: the same origin module
+/// and the same declaring statement, or the same name when neither records a
+/// statement.
+pub fn sameNominalIdentity(a: NominalType, b: NominalType) bool {
     if (a.origin_module != b.origin_module) return false;
     const a_source_decl = a.sourceDecl();
     const b_source_decl = b.sourceDecl();
@@ -5273,144 +5465,6 @@ fn inPlaceMergeRow(comptime Entry: type, items: []Entry, left_len: usize, ident_
             j -= 1;
         }
         items[j] = key;
-    }
-}
-
-// Structural pre-filter pair classification (numeral defaulting) //
-//
-// This lives in THIS module because it is a theorem about this module's
-// behavior: any change to the err short-circuits, the `sameNominalIdentity`
-// requirement, the no-backing-unification rule, or flex-side constraint
-// deferral must land in the same review diff as this classifier. Each such
-// unify internal carries a pointer comment back here. Called from
-// `numeralCandidateStructurallyRefuted` in Check.zig.
-
-/// Classification of one (method position, constraint position) pair by
-/// `structurallyIncompatiblePair`.
-pub const StructuralPairInspection = enum {
-    /// This pair proves the probe's method unify must fail.
-    refuting,
-    /// This pair cannot soften another pair's refutation (it either fails—
-    /// which also fails the probe—or merges without spreading `.err`), but
-    /// proves nothing by itself.
-    safe,
-    /// Outside the closed world the soundness argument covers; the whole
-    /// candidate must fall through to the full probe.
-    uninspectable,
-};
-
-/// Classify one (method signature position, dispatch-constraint position)
-/// pair for the numeral-defaulting structural pre-filter. Pure and read-only:
-/// resolves vars in `method_types` and `constraint_types` respectively,
-/// mutating neither; no Check or Unifier state is consulted.
-///
-/// CONTRACT: returns `.refuting` only when `unify` on this pair MUST fail,
-/// given the fence conditions hold across the whole constraint range—see
-/// `numeralCandidateStructurallyRefuted` in Check.zig for the range-wide
-/// fence (it classifies every argument/return position of EVERY constraint in
-/// the range, requires matching arities, and abandons refutation for the
-/// whole candidate on any `.uninspectable`).
-///
-/// The refutation core is ONE theorem about this module: distinct zero-arg
-/// builtin nominal identities never unify (`unifyNominalType` requires
-/// `sameNominalIdentity`, and there is no implicit numeric coercion). A
-/// `.refuting` pair is a dispatcher position—the method side is the
-/// candidate's own concrete builtin nominal—whose constraint side is a
-/// CONCRETE builtin numeric nominal with a different source decl, so that
-/// position's unify must throw and the probe cannot succeed.
-///
-/// SOUNDNESS FENCE: the theorem is decisive only if no successful earlier
-/// unify in the probe can soften the mismatching pair by merging `.err` into
-/// either side (this module short-circuits applications of INVALID
-/// declarations to a SUCCESSFUL err merge—see the `.nominal_type` arms of
-/// `unifyFlatType`). The method side is freshly instantiated per
-/// constraint, so its only err sources are its own positions; the constraint
-/// side shares vars across the range. Both are closed off by requiring, for
-/// every pair across the range, that
-///   - every method position is exactly a builtin numeric nominal: builtin
-///     origin, ZERO type args (so a same-identity merge unifies no argument
-///     pairs), and a VALID declaration (declaration validity is fixed before
-///     value checking begins and cannot change mid-probe; applications carry
-///     no backing at all, so nothing else about the position can soften);
-///   - every constraint position resolves to a flex var, a rigid var, or a
-///     nominal whose declaration is valid (terminal-or-failing shapes
-///     whose pairwise unifies either fail outright—which also fails the
-///     probe, consistent with refutation—or merge without creating or
-///     spreading err; flex-side dispatch constraints are deferred by
-///     `recordDeferredConstraint`, never fired mid-unify);
-///   - arities match (so every pair above is actually the pair `unifyFunc`
-///     visits)—enforced by the range-wide caller.
-/// Any deviation—aliases, records, tag unions, tuples, err content,
-/// polymorphic method positions, non-fn shapes—returns `.uninspectable`,
-/// making the whole candidate fall through to the probe rather than weakening
-/// soundness.
-pub fn structurallyIncompatiblePair(
-    method_types: *const types_mod.Store,
-    constraint_types: *const types_mod.Store,
-    candidate_source_decl: u32,
-    method_pos_var: Var,
-    constraint_pos_var: Var,
-) StructuralPairInspection {
-    // Method side: exactly a builtin numeric nominal (builtin origin, no type
-    // args, backing root not `.err`). The dispatcher-position check below is
-    // made per position, not assumed—but the pre-filter's EFFECTIVENESS
-    // comes from builtin numeric methods being homogeneous (`T, T -> T`, e.g.
-    // `Dec.plus : Dec, Dec -> Dec`): every position of such a method IS the
-    // dispatcher type, so a concrete mismatch at any position refutes the
-    // candidate.
-    const method_content = method_types.resolveVar(method_pos_var).desc.content;
-    const method_nominal = method_content.unwrapNominalType() orelse return .uninspectable;
-    if (!method_nominal.originIsBuiltin()) return .uninspectable;
-    const method_decl = method_nominal.sourceDeclOptional() orelse return .uninspectable;
-    if (method_types.sliceNominalArgs(method_nominal).len != 0) return .uninspectable;
-    if (method_types.nominalDeclIsInvalid(method_nominal)) return .uninspectable;
-
-    // Whether this method position IS the dispatcher type C: source-decl
-    // equality alone, no origin-module comparison. Both sides are
-    // builtin-origin nominals (the method via the `originIsBuiltin` gate
-    // above, the candidate by construction in
-    // `numeralCandidateStructurallyRefuted`), there is exactly one builtin
-    // module, and every builtin-origin source decl is a statement index into
-    // that single module's store—so equal decls name the same declaration.
-    // `copyVar` and instantiation preserve the packed source bits verbatim,
-    // making this exactly the `source_decl.eql` the post-copy
-    // `sameNominalIdentity` evaluates for present decls. Soundness never
-    // rested on origin modules anyway: `.refuting` below also requires
-    // `constraint_decl != candidate_source_decl`, hence method_decl !=
-    // constraint_decl (both present, both builtin), which already forces
-    // `sameNominalIdentity`—and therefore `unifyNominalType`—to fail
-    // regardless of the origin idents.
-    const is_dispatcher_pos = method_decl == candidate_source_decl;
-
-    const constraint_content = constraint_types.resolveVar(constraint_pos_var).desc.content;
-    switch (constraint_content) {
-        // Flex merges with the concrete method position (its dispatch
-        // constraints are deferred, not fired mid-probe); rigid vs concrete
-        // fails the probe outright. Neither can spread `.err`.
-        .flex, .rigid => return .safe,
-        .structure => |flat| switch (flat) {
-            .nominal_type => |constraint_nominal| {
-                // An application of an invalid declaration unifies
-                // SUCCESSFULLY into `.err` and can contaminate shared vars—
-                // outside the closed world.
-                if (constraint_types.nominalDeclIsInvalid(constraint_nominal)) return .uninspectable;
-                if (!is_dispatcher_pos) return .safe;
-                if (!constraint_nominal.originIsBuiltin()) return .safe;
-                const constraint_decl = constraint_nominal.sourceDeclOptional() orelse return .safe;
-                if (constraint_decl != candidate_source_decl) return .refuting;
-                return .safe;
-            },
-            .record,
-            .tuple,
-            .fn_pure,
-            .fn_effectful,
-            .fn_unbound,
-            .empty_record,
-            .tag_union,
-            .empty_tag_union,
-            => return .uninspectable,
-        },
-        .alias, .field_presence, .err => return .uninspectable,
     }
 }
 

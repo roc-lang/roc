@@ -159,19 +159,7 @@ const Builder = struct {
             .pending, .layout_only => invariant("incomplete const plan reached native root export"),
             .boxy_fn => invariant("a function value's root was published to a slot"),
             .zst => {},
-            .scalar => {
-                if (physical.tag != .scalar or physical.getScalar().tag == .opaque_ptr or physical.getScalar().tag == .str) invariant("scalar export plan did not name pointer-free scalar bytes");
-                const dest = self.graph.bytes(job.dest, self.graph.size(job.layout_idx));
-                @memcpy(dest, job.source.readBytes(self.graph.size(job.layout_idx)));
-                // Frozen data is canonical: a NaN keeps whatever bits the
-                // evaluation produced until here, where it becomes Roc's one
-                // NaN.
-                if (job.layout_idx == .f32) {
-                    std.mem.writeInt(u32, dest[0..4], builtins.float_bits.normalizeF32NanBits(std.mem.readInt(u32, dest[0..4], .little)), .little);
-                } else if (job.layout_idx == .f64) {
-                    std.mem.writeInt(u64, dest[0..8], builtins.float_bits.normalizeF64NanBits(std.mem.readInt(u64, dest[0..8], .little)), .little);
-                }
-            },
+            .scalar => self.scalars(job.layout_idx, job.source, job.dest, 1),
             .str => try self.string(job),
             .list => |element| try self.list(job, element),
             .box => |element| switch (physical.tag) {
@@ -219,6 +207,39 @@ const Builder = struct {
                 try self.erased(job, step.erased_fn, sequence);
             },
         }
+    }
+
+    /// Copy `count` adjacent scalars of layout `idx` from `source` to `dest`.
+    /// Frozen data is canonical: a NaN keeps whatever bits the evaluation
+    /// produced until here, where it becomes Roc's one NaN.
+    fn scalars(self: *Builder, idx: layout.Idx, source: Value, dest: Destination, count: usize) void {
+        const physical = self.graph.program.layouts.getLayout(idx);
+        if (physical.tag != .scalar or physical.getScalar().tag == .opaque_ptr or physical.getScalar().tag == .str) invariant("scalar export plan did not name pointer-free scalar bytes");
+        const byte_count = self.graph.size(idx) * count;
+        const out = self.graph.bytes(dest, byte_count);
+        @memcpy(out, source.readBytes(byte_count));
+        if (idx == .f32) {
+            for (0..count) |index| {
+                const bits = out[index * 4 ..][0..4];
+                std.mem.writeInt(u32, bits, builtins.float_bits.normalizeF32NanBits(std.mem.readInt(u32, bits, .little)), .little);
+            }
+        } else if (idx == .f64) {
+            for (0..count) |index| {
+                const bits = out[index * 8 ..][0..8];
+                std.mem.writeInt(u64, bits, builtins.float_bits.normalizeF64NanBits(std.mem.readInt(u64, bits, .little)), .little);
+            }
+        }
+    }
+
+    /// Whether a value of `plan` is one scalar: a scalar plan, or a named
+    /// type over one, which stores its backing's bytes.
+    fn isScalarPlan(self: *const Builder, plan: Program.ConstPlanId) bool {
+        var current = plan;
+        while (true) switch (self.graph.program.const_plans.items[@backingInt(current)]) {
+            .scalar => return true,
+            .named => |named| current = named.backing,
+            .pending, .layout_only, .zst, .str, .list, .box, .boxed_sequence, .tuple, .record, .tag_union, .fn_value, .erased_fn, .boxy_fn => return false,
+        };
     }
 
     fn string(self: *Builder, job: Job) Allocator.Error!void {
@@ -269,10 +290,12 @@ const Builder = struct {
             .kind = .list,
         }, element_size * list_value.len(), self.graph.alignment(element_layout), self.graph.program.layouts.layoutContainsRefcounted(self.graph.program.layouts.getLayout(element_layout)), list_value.len());
         try self.graph.relocate(job.dest, result.dest);
-        if (result.fresh) {
-            for (0..list_value.len()) |index| {
-                try self.enqueue(element, element_layout, .{ .ptr = ptr + index * element_size }, result.dest.offsetBy(index * element_size), .value);
-            }
+        if (!result.fresh) return;
+        // A list of scalars holds no pointer and nothing to visit: its items
+        // are one run of bytes.
+        if (self.isScalarPlan(element)) return self.scalars(element_layout, .{ .ptr = ptr }, result.dest, list_value.len());
+        for (0..list_value.len()) |index| {
+            try self.enqueue(element, element_layout, .{ .ptr = ptr + index * element_size }, result.dest.offsetBy(index * element_size), .value);
         }
     }
 

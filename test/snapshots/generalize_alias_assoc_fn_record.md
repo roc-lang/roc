@@ -137,7 +137,7 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 301)
+				(e-call (constraint-fn-var 280)
 					(e-field-access
 						(receiver
 							(e-lookup-local
@@ -149,7 +149,7 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 							(e-runtime-error (tag "erroneous_value_expr"))
 							(e-runtime-error (tag "erroneous_value_expr"))
 							(e-runtime-error (tag "erroneous_value_expr")))))
-				(e-call (constraint-fn-var 325)
+				(e-call (constraint-fn-var 288)
 					(e-field-access
 						(receiver
 							(e-lookup-local

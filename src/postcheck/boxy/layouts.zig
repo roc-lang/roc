@@ -39,6 +39,8 @@ pub const Layouts = struct {
     component_targets: std.ArrayList([]const TypeId) = .empty,
     /// The type variables of each recursive member asked about.
     member_vars: collections.DenseMapUnmanaged(TypeId, []const TypeId) = .empty,
+    /// `onSizeCycle`'s answer for each type asked about.
+    size_cycles: collections.DenseMapUnmanaged(TypeId, bool) = .empty,
 
     const Committed = struct { idx: layout.Idx, digest: ?layout.GraphDigest };
 
@@ -74,6 +76,7 @@ pub const Layouts = struct {
         var vars = self.member_vars.valueIterator();
         while (vars.next()) |slice| self.allocator.free(slice.*);
         self.member_vars.deinit(self.allocator);
+        self.size_cycles.deinit(self.allocator);
     }
 
     /// The components `ty`'s descriptor composes from: those it stores
@@ -137,6 +140,13 @@ pub const Layouts = struct {
     /// Whether the closed type `ty` stores itself inline, through its
     /// components: the cycles a committed layout breaks with recursion boxes.
     pub fn onSizeCycle(self: *Layouts, ty: TypeId) Allocator.Error!bool {
+        if (self.size_cycles.get(ty)) |answer| return answer;
+        const answer = try self.findSizeCycle(ty);
+        try self.size_cycles.put(self.allocator, ty, answer);
+        return answer;
+    }
+
+    fn findSizeCycle(self: *Layouts, ty: TypeId) Allocator.Error!bool {
         var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
         defer seen.deinit(self.allocator);
         var pending: std.ArrayList(TypeId) = .empty;
@@ -357,7 +367,9 @@ pub const Layouts = struct {
 
     /// The committed layout of the closed type `ty`.
     pub fn layoutOf(self: *Layouts, ty: TypeId) Allocator.Error!layout.Idx {
-        if (!try self.converter.representationClosed(ty)) types.invariant("asked for the committed layout of an open type");
+        if (std.debug.runtime_safety) {
+            if (!try self.converter.representationClosed(ty)) types.invariant("asked for the committed layout of an open type");
+        }
         if (self.memo.get(ty)) |committed| return committed.idx;
         if (try self.directLayout(ty)) |idx| {
             try self.memo.put(self.allocator, ty, .{ .idx = idx, .digest = null });

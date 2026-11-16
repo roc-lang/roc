@@ -10,6 +10,11 @@ trigger_pinned = |state| {
 	{ ..state, num: val }
 }
 
+trigger_methods = |state| {
+	val = state.num.times(10.U32).plus(5.U32)
+	{ ..state, num: val }
+}
+
 Counter := { count : U32 }.{
 	times : Counter, U32 -> Counter
 	times = |c, n| { count: c.count * n }
@@ -19,4 +24,4 @@ Counter := { count : U32 }.{
 
 expect trigger({ num: 1.U32 }).num == 15.U32
 expect trigger_pinned({ num: 1.U32 }).num == 15.U32
-expect trigger_pinned({ num: Counter.{ count: 1 } }).num.count == 15.U32
+expect trigger_methods({ num: Counter.{ count: 1 } }).num.count == 15.U32

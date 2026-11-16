@@ -196,7 +196,7 @@ main! = |args| {
 	outer : Outer
 	outer = { i: { b: 1, a: long }, n: 9 }
 	add = |x| x + outer.n
-	echo!("${outer.i.a} ${Str.inspect(outer.n)} ${Str.inspect(outer.i.b)} ${Str.inspect(add(1))} ${Str.inspect(outer)}\n")
+	echo!("${outer.i.a} ${Str.inspect(outer.n)} ${Str.inspect(outer.i.b)} ${Str.inspect(add(1.U64))} ${Str.inspect(outer)}\n")
 	constructed = Outer.{ i: { b: 2, a: "constructed" }, n: 10 }
 	echo!("${constructed.i.a} ${Str.inspect(constructed.i.b + 1)}\n")
 	hidden = Hidden.new(1, 2)
@@ -238,7 +238,7 @@ main! = |args| {
 	tagged = Has(plain)
 	plains : List(Plain)
 	plains = [plain, plain, plain]
-	echo!("${Str.inspect(closed_param(plain))} ${Str.inspect(read_each([plain, plain]))} ${Str.inspect(list_param(plains))} ${Str.inspect(tag_param(tagged))} ${Str.inspect(tuple_param((plain, 7)))} ${Str.inspect(plain.both(plain))}\n")
+	echo!("${Str.inspect(closed_param(plain))} ${Str.inspect(read_each([plain, plain]))} ${Str.inspect(list_param(plains))} ${Str.inspect(tag_param(tagged))} ${Str.inspect(tuple_param((plain, 7.U8)))} ${Str.inspect(plain.both(plain))}\n")
 
 	read_value : Plain -> U32
 	read_value = read_z

@@ -225,9 +225,9 @@ Vec := { x : I64, y : I64 }.{
 sum = Vec.{ x: 1, y: 2 } + Vec.{ x: 3, y: 4 } # calls Vec.plus
 ```
 
-The result of an arithmetic operator has the left operand's type. The right operand usually has
-the same type, but it doesn't have to; that's up to the method. For example, it can make sense to
-multiply a `Duration` by a plain number:
+Both operands of an arithmetic operator, and its result, all have the same type. So an operator
+can only call a method that takes two values of one type and returns that type, like `Vec.plus`
+above. A method that mixes types still works as an ordinary method call, but not as an operator:
 
 ```roc
 Duration := { millis : I64 }.{
@@ -235,8 +235,15 @@ Duration := { millis : I64 }.{
     times = |duration, scale| { millis: duration.millis * scale }
 }
 
-longer = Duration.{ millis: 10 } * 3
+longer = Duration.{ millis: 10 }.times(3)
+
+# ERROR! Both operands of * must have the same type.
+also_longer = Duration.{ millis: 10 } * 3
 ```
+
+That's because having one type on both sides is what lets an operator work out the type of a
+number literal. In `total + 1`, the `1` is whatever type `total` is. If the two sides could
+differ, there would be nothing to say what type the `1` should be.
 
 The comparison operators (`<`, `<=`, `>`, `>=`) call methods that return a `Bool`, and both
 operands must have the same type.
@@ -412,18 +419,16 @@ field. (`Encoding : encoding` is explained in
 
 ### Number Literal Defaulting
 
-When nothing says what type a number literal should be, the compiler picks the first type in this
-list that works with everything the literal is used for:
+When nothing says what type a number literal should be, it becomes a `Dec` (see
+[Defaulting to `Dec`](numbers#defaulting-to-dec)).
 
-`Dec`, `I64`, `U64`, `I128`, `U128`, `I32`, `U32`, `I16`, `U16`, `I8`, `U8`, `F64`, `F32`
+If that literal is used in a way `Dec` doesn't support, like calling a method `Dec` doesn't have,
+you get a compile error. You can fix it by saying which type you want, with a type annotation or a
+suffix (like `5.U64`).
 
-So a plain `5` becomes a `Dec` (see [Defaulting to `Dec`](numbers#defaulting-to-dec)), but a `5`
-that's used in a way `Dec` doesn't support moves on down the list to the first type that does
-support it.
-
-If picking a default this way makes a function's inferred type more specific than it would
-otherwise be, the compiler gives a `LITERAL DEFAULTED` warning. To choose a type yourself, add a
-type annotation or a suffix (like `5.U64`).
+If defaulting to `Dec` makes a function's inferred type more specific than it would otherwise be,
+the compiler gives a `LITERAL DEFAULTED` warning. To choose a type yourself, add a type annotation
+or a suffix.
 
 ## Where Clauses
 

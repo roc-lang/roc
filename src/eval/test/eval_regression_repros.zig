@@ -291,7 +291,7 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Blah" },
     },
     .{
-        .name = "regression B046: heterogeneous custom times dispatch lowers RHS as I64",
+        .name = "regression B046: heterogeneous custom times dispatch lowers its argument as I64",
         .source_kind = .module,
         .source =
         \\Duration := { seconds: I64 }.{
@@ -303,7 +303,7 @@ pub const tests = [_]TestCase{
         \\my_duration = { seconds: 60 }
         \\
         \\result : Duration
-        \\result = my_duration * 5
+        \\result = my_duration.times(5)
         \\
         \\main = result.seconds
         ,

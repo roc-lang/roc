@@ -226,6 +226,7 @@ const ContentDigester = struct {
             .checked_error => {},
             .callable => |node| try self.tasks.append(self.allocator, .{ .evidence = @backingInt(node) }),
             .structural => |nested| try self.appendNestedCodec(@backingInt(nested)),
+            .forwarded => {},
         };
         while (self.tasks.pop()) |task| switch (task) {
             .codec => unreachable, // this walk queues only evidence and refs tasks; nested codecs go through appendNestedCodec
@@ -317,6 +318,7 @@ const ContentDigester = struct {
                 .checked_error => {},
                 .callable => |node| try self.children.append(self.allocator, .{ .evidence = @backingInt(node) }),
                 .structural => |nested| try self.children.append(self.allocator, .{ .codec = @backingInt(nested) }),
+                .forwarded => |ref_index| try self.children.append(self.allocator, .{ .refs = .{ .start = ref_index, .len = 1 } }),
             }
         }
     }
@@ -499,6 +501,7 @@ pub fn callsEquivalent(
         .checked_error => {},
         .callable => |id| try comparer.work.append(allocator, .{ .kind = .evidence, .left = @backingInt(id), .right = @backingInt(right.resolution.callable) }),
         .structural => |id| if (!try comparer.codecs(id, right.resolution.structural)) return false,
+        .forwarded => |index| if (!comparer.forwardedEql(index, right.resolution.forwarded)) return false,
     }
     return try comparer.run();
 }
@@ -598,6 +601,15 @@ const Comparer = struct {
         self.right_types.clearRetainingCapacity();
     }
 
+    /// Two forwarded calls are equal when they name the same enclosing
+    /// evidence parameter the same way.
+    fn forwardedEql(self: *const Comparer, left: u32, right: u32) bool {
+        return std.meta.eql(
+            self.table.evidence_refs.items()[left].resolution.constraint,
+            self.table.evidence_refs.items()[right].resolution.constraint,
+        );
+    }
+
     fn equal(self: *Comparer, left: u32, right: u32) Allocator.Error!bool {
         self.reset();
         try self.work.append(self.allocator, .{ .kind = .codec, .left = left, .right = right });
@@ -626,6 +638,7 @@ const Comparer = struct {
                             .checked_error => {},
                             .callable => |id| try self.work.append(self.allocator, .{ .kind = .evidence, .left = @backingInt(id), .right = @backingInt(bc.resolution.callable) }),
                             .structural => |id| if (!try self.codecs(id, bc.resolution.structural)) return false,
+                            .forwarded => |index| if (!self.forwardedEql(index, bc.resolution.forwarded)) return false,
                         }
                     }
                 },
