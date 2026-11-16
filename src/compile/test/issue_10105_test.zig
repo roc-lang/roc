@@ -31,7 +31,7 @@ test "issue 10105: package header resolves a local sibling package" {
     const dep_main = try tmp_dir.dir.realPathFileAlloc(io, "dep/main.roc", gpa);
     defer gpa.free(dep_main);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
 
     try build_env.discoverDependencies(root_main);

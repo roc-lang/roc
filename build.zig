@@ -2014,13 +2014,16 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     .{ .app = "issue_13017_empty_utf8_concat_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_13017_empty_utf8_concat_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" } },
     .{ .app = "str_to_utf8_shapes_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "str_to_utf8_shapes_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" } },
     .{ .app = "str_to_utf8_shapes_static_lib_app.roc", .options = &.{"--opt=speed"}, .output = "str_to_utf8_shapes_speed_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" } },
-    .{ .app = "issue_13020_drop_last_releases_items_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_13020_drop_last_releases_items_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--max-allocs", "2" } },
+    // The issue 13020 and list rest pattern dev carts count the dev Wasm
+    // backend's sublist ownership outcomes in the specialized lowering, which
+    // `--opt=dev` selects only when asked.
+    .{ .app = "issue_13020_drop_last_releases_items_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=yes" }, .output = "issue_13020_drop_last_releases_items_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--max-allocs", "2" } },
     .{ .app = "issue_13020_drop_last_releases_items_static_lib_app.roc", .options = &.{"--opt=speed"}, .output = "issue_13020_drop_last_releases_items_speed_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--max-allocs", "2" } },
-    .{ .app = "issue_13020_empty_view_releases_source_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_13020_empty_view_releases_source_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--max-allocs", "2" } },
+    .{ .app = "issue_13020_empty_view_releases_source_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=yes" }, .output = "issue_13020_empty_view_releases_source_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--max-allocs", "2" } },
     .{ .app = "issue_13020_empty_view_releases_source_static_lib_app.roc", .options = &.{"--opt=speed"}, .output = "issue_13020_empty_view_releases_source_speed_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--max-allocs", "2" } },
     .{ .app = "drop_last_in_place_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "drop_last_in_place_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--max-allocs", "2" } },
     .{ .app = "drop_last_in_place_static_lib_app.roc", .options = &.{"--opt=speed"}, .output = "drop_last_in_place_speed_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--max-allocs", "2" } },
-    .{ .app = "list_rest_patterns_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "list_rest_patterns_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--max-allocs", "4" } },
+    .{ .app = "list_rest_patterns_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=yes" }, .output = "list_rest_patterns_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--max-allocs", "4" } },
     .{ .app = "list_rest_patterns_static_lib_app.roc", .options = &.{"--opt=speed"}, .output = "list_rest_patterns_speed_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--max-allocs", "4" } },
     .{ .app = "release_excess_capacity_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "release_excess_capacity_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" } },
     .{ .app = "release_excess_capacity_static_lib_app.roc", .options = &.{"--opt=speed"}, .output = "release_excess_capacity_speed_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" } },
@@ -2113,6 +2116,8 @@ pub fn build(b: *std.Build) void {
     const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo/echo.wasm");
     const echo_wasm_archive_step = b.step("build-echo-wasm-archive", "Build echo.wasm and zstd-compress it under zig-out/lib/echo");
     const build_test_echo_wasm_runner_step = b.step("build-test-echo-wasm-runner", "Build the echo.wasm integration test runner");
+    const build_test_echo_native_runner_step = b.step("build-test-echo-native-runner", "Build the native echo platform driver that run-test-echo-native runs");
+    const run_test_echo_native_step = b.step("run-test-echo-native", "Run echo programs through the native echo platform driver");
     const check_echo_wasm_size_step = b.step("run-check-echo-wasm-size", "Check echo.wasm against the website's asset size limit");
     const build_glue_release_step = b.step("build-glue-release", "Build release-ready glue specs");
 
@@ -3768,6 +3773,41 @@ pub fn build(b: *std.Build) void {
         run_echo_cmd.step.dependOn(&echo_native_install.step);
         run_echo_step.dependOn(&run_echo_cmd.step);
 
+        // test-echo-native: runs echo programs through the native driver,
+        // which reads the synthetic app and the embedded platform from its
+        // virtual tree while every other path reaches the host filesystem.
+        build_test_echo_native_runner_step.dependOn(&echo_native_exe.step);
+        const EchoNativeCase = struct {
+            app: []const u8,
+            with_files: []const [2][]const u8 = &.{},
+            stdout: []const u8,
+        };
+        const echo_native_cases = [_]EchoNativeCase{
+            .{ .app = "test/echo/alias_of_function_field.roc", .stdout = "ok" },
+            .{
+                .app = "test/echo/issue_12189_imported_generic_tuple_nominal.roc",
+                .with_files = &.{.{ "Issue12189Mod", "test/echo/Issue12189Mod.roc" }},
+                .stdout = "15\n",
+            },
+            .{
+                .app = "test/echo/imported_generic_nominal_reads.roc",
+                .with_files = &.{.{ "ImportedGenericNominals", "test/echo/ImportedGenericNominals.roc" }},
+                .stdout = "field: 2\ndestructured: 1\nannotated: 3\nconcrete export: 3\nnested path: 6\ntag payload: 7\nlocal nested path: 9\n",
+            },
+        };
+        for (echo_native_cases) |case| {
+            const run_case = b.addRunArtifact(echo_native_exe);
+            run_case.setName(b.fmt("echo_native {s}", .{case.app}));
+            run_case.addFileArg(b.path(case.app));
+            for (case.with_files) |with_file| {
+                run_case.addArg("--with-file");
+                run_case.addPrefixedFileArg(b.fmt("{s}=", .{with_file[0]}), b.path(with_file[1]));
+            }
+            run_case.expectStdOutEqual(case.stdout);
+            run_case.expectExitCode(0);
+            run_test_echo_native_step.dependOn(&run_case.step);
+        }
+
         // test-echo-wasm: bytebox-driven integration test that loads the
         // declared echo.wasm artifact, supplies in-process js_echo + js_stderr,
         // and asserts the tutorial example produces the expected output.
@@ -5050,6 +5090,7 @@ pub fn build(b: *std.Build) void {
     // MiniCI, so their native runners are built here with the modules.
     build_ci_step.dependOn(build_test_repl_wasm_runner_step);
     build_ci_step.dependOn(build_test_echo_wasm_runner_step);
+    build_ci_step.dependOn(build_test_echo_native_runner_step);
     build_ci_step.dependOn(build_test_playground_runner_step);
     build_ci_step.dependOn(build_test_cli_runners_step);
     build_ci_step.dependOn(build_test_hosts_step);

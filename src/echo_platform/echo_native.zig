@@ -128,22 +128,6 @@ pub fn main(init: std.process.Init) EchoNativeError!void {
     defer gpa.free(runtime_buffer);
     var runtime_fba = std.heap.FixedBufferAllocator.init(runtime_buffer);
 
-    // ECHO_NATIVE_TARGET env var: "native" (default), "wasm32"—cross-compile
-    // through the same target_usize=.u32 path the wasm uses, while still
-    // running the interpreter natively. Useful to isolate wasm-runtime bugs
-    // from wasm32-target compilation bugs.
-    //
-    // In Zig 0.16 `std.process.getEnvVarOwned` was removed; on POSIX we read
-    // from `init.minimal.environ` via `Environ.getPosix` (no alloc). The
-    // echo native CLI is only built for POSIX targets, so the Windows branch
-    // is just a defensive default.
-    const target_choice: []const u8 = blk: {
-        if (@import("builtin").os.tag == .windows) break :blk "native";
-        const v = std.process.Environ.getPosix(init.minimal.environ, "ECHO_NATIVE_TARGET");
-        break :blk if (v) |s| s else "native";
-    };
-    const is_wasm_target = std.mem.eql(u8, target_choice, "wasm32");
-
     const code = runner.runEcho(.{
         .runtime_fba = &runtime_fba,
         .fallback_io = CoreCtx.default(gpa, arena, io),
@@ -151,8 +135,10 @@ pub fn main(init: std.process.Init) EchoNativeError!void {
         .source = source,
         .extras = extras.items,
         .diagnostics = stderrDiagnostics(),
-        .roc_target = if (is_wasm_target) .wasm32 else roc_target.RocTarget.detectNative(),
-        .target_usize = if (is_wasm_target) .u32 else .native,
+        // The interpreter runs on this host, so the program is compiled for
+        // it; echo.wasm and its test cover the wasm32 target.
+        .roc_target = roc_target.RocTarget.detectNative(),
+        .target_usize = .native,
     }) catch |err| {
         stderr_file.writeStreamingAll(io, "echo_native: pipeline returned error\n") catch {};
         return err;

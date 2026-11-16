@@ -63,6 +63,9 @@ pub const Context = union(enum) {
     // Control flow contexts
     /// Condition of an if expression
     if_condition,
+    /// Operand of a unary `!` that is a structural tag union, which resolves
+    /// at Bool (design.md "Logical Negation Of Tag Literals")
+    logical_negation_operand,
     /// Branch of an if expression
     if_branch: IfBranchContext,
     /// Pattern in a match branch

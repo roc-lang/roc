@@ -191,6 +191,10 @@ pub const InputLayout = struct {
     }
 };
 
+/// The descriptor-guided operations a worker's body performs on the
+/// descriptor table word `word` holds.
+pub const Demand = struct { word: u32, ops: StaticDescs.OpSet };
+
 /// A worker's needs list: what each word of its table is.
 pub const Needs = struct {
     /// How many inputs lead the table.
@@ -199,6 +203,11 @@ pub const Needs = struct {
     recipes: []const Recipe,
     /// The recipe of table word `input_count + index`.
     slots: []const RecipeId,
+    /// The descriptor-guided operations the worker's body performs on the
+    /// descriptor table words name, by ascending word (design.md "Type
+    /// Descriptors"): filling a table demands each operation of the
+    /// descriptor its word holds there.
+    demand: []const Demand = &.{},
 
     /// The recipe of table word `word`; null for an input.
     pub fn slotRecipe(self: Needs, word: u32) ?RecipeId {
@@ -314,8 +323,9 @@ pub const Recipes = struct {
     /// The needs list of a worker with `input_count` inputs, whose table's remaining words
     /// are `slots`, allocated in `allocator`: the recipes the slots reach,
     /// numbered in the order a walk from the slots first reaches them, so
-    /// equal lists are equal data.
-    pub fn needs(self: *const Recipes, allocator: Allocator, scratch: Allocator, input_count: u32, slots: []const RecipeId) Allocator.Error!Needs {
+    /// equal lists are equal data. `demand` names table words, sorted by
+    /// word.
+    pub fn needs(self: *const Recipes, allocator: Allocator, scratch: Allocator, input_count: u32, slots: []const RecipeId, demand: []const Demand) Allocator.Error!Needs {
         var numbers = try collections.OptionalIndexColumn(RecipeId).initFilled(scratch, self.items.items.len);
         defer numbers.deinit(scratch);
         var order: std.ArrayList(RecipeId) = .empty;
@@ -383,7 +393,11 @@ pub const Recipes = struct {
         };
         const numbered_slots = try allocator.alloc(RecipeId, slots.len);
         for (numbered_slots, slots) |*out, slot| out.* = numbers.get(@backingInt(self.resolve(slot))).?;
-        return .{ .input_count = input_count, .recipes = recipes, .slots = numbered_slots };
+        for (demand, 0..) |entry, index| {
+            if (entry.word >= input_count + slots.len) invariant("a descriptor demand names a word past its worker's table");
+            if (index != 0 and demand[index - 1].word >= entry.word) invariant("a needs list's demand is not sorted by word");
+        }
+        return .{ .input_count = input_count, .recipes = recipes, .slots = numbered_slots, .demand = try allocator.dupe(Demand, demand) };
     }
 
     /// `recipe` with its slices copied into the arena.
@@ -1111,7 +1125,7 @@ test "recipes are interned by content, reserved ones included" {
     // the callable it captures.
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const needs = try recipes.needs(arena.allocator(), std.testing.allocator, 2, &.{ table, alias });
+    const needs = try recipes.needs(arena.allocator(), std.testing.allocator, 2, &.{ table, alias }, &.{});
     try std.testing.expectEqual(@as(u32, 4), needs.wordCount());
     try std.testing.expectEqual(@as(usize, 5), needs.recipes.len);
     try std.testing.expectEqual(@as(?RecipeId, null), needs.slotRecipe(1));

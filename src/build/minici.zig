@@ -296,6 +296,9 @@ const jobs = [_]Job{
     // The modules these load are WebAssembly, so one host is enough.
     .{ .name = "run-test-repl-wasm", .placement = .primary_host },
     .{ .name = "run-test-echo-wasm", .placement = .primary_host },
+    // The native echo driver reads the host filesystem for every path outside
+    // its virtual tree, so it runs on every host.
+    .{ .name = "run-test-echo-native" },
     // www.roc-lang.org refuses an echo.wasm over Cloudflare's 25 MiB asset
     // limit; this catches growth before the website's nightly bump does.
     .{ .name = "run-check-echo-wasm-size", .placement = .primary_host },

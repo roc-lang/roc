@@ -12,6 +12,7 @@ platform ""
         "roc_init": init_for_host,
         "roc_update": update_for_host!,
         "roc_render": render_for_host,
+        "roc_release_model": release_model_for_host,
     }
     targets: {
         inputs_dir: "targets/",
@@ -43,3 +44,9 @@ render_for_host = |boxed_model| {
     model = Box.unbox(boxed_model)
     (program.render)(model)
 }
+
+## The host cannot release a `Box(Model)`: only Roc knows the model's layout.
+## It hands the box to this function instead, which takes ownership and drops
+## it.
+release_model_for_host : Box(Model) -> {}
+release_model_for_host = |_| {}

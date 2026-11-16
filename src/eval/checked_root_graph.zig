@@ -369,7 +369,9 @@ const Walker = struct {
                 for (derivation.callsSlice(plans)) |call| switch (call.resolution) {
                     .callable => |node| try self.nodes.append(self.allocator, node),
                     .structural => |nested| try self.derivations.append(self.allocator, nested),
-                    .pending, .checked_error => {},
+                    // The enclosing definition's evidence supplies the target,
+                    // and that evidence is reached from its own sites.
+                    .pending, .checked_error, .forwarded => {},
                 };
                 continue;
             }
@@ -424,6 +426,7 @@ const Walker = struct {
                 const ref_id = artifact.resolved_value_refs.lookupIdByExpr(expr) orelse return;
                 try self.walkRef(artifact.resolved_value_refs.records.items()[@backingInt(ref_id)].ref);
             },
+            .requirement => |requirement| try self.pushTemplate(artifact.checked_procedure_templates.templateRef(artifact.key.digest(), requirement.template)),
         }
     }
 

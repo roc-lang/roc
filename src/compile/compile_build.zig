@@ -233,7 +233,7 @@ pub const BuildEnv = struct {
     runtime_lowering: ?RuntimeLoweringConfig = null,
     /// The strategy whose compile-time evaluator completes every module's
     /// compile-time roots (`Coordinator.specialization_strategy`).
-    specialization_strategy: base.SpecializationStrategy = .lss,
+    specialization_strategy: base.SpecializationStrategy,
     debug_observer: ?eval.CompileTimeFinalization.DebugObserver = null,
     /// Instrumentation only (`Coordinator.boxy_program_observer`).
     boxy_program_observer: ?eval.CompileTimeFinalization.BoxyProgramObserver = null,
@@ -381,7 +381,7 @@ pub const BuildEnv = struct {
     discovered_entry_parse: ?DiscoveredParse = null,
     discovered_platform_parse: ?DiscoveredParse = null,
 
-    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8, std_io: std.Io) InitError!BuildEnv {
+    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8, std_io: std.Io, specialization_strategy: base.SpecializationStrategy) InitError!BuildEnv {
         // Allocate builtin modules on heap to prevent moves that would invalidate internal pointers
         const builtin_modules = try gpa.create(BuiltinModules);
         errdefer gpa.destroy(builtin_modules);
@@ -389,7 +389,7 @@ pub const BuildEnv = struct {
         builtin_modules.* = try BuiltinModules.init(gpa, std_io);
         errdefer builtin_modules.deinit();
 
-        return initWithBuiltinModules(gpa, mode, max_threads, target, cwd, std_io, builtin_modules, true);
+        return initWithBuiltinModules(gpa, mode, max_threads, target, cwd, std_io, builtin_modules, true, specialization_strategy);
     }
 
     pub fn initBorrowingBuiltinModules(
@@ -400,8 +400,9 @@ pub const BuildEnv = struct {
         cwd: []const u8,
         std_io: std.Io,
         builtin_modules: *BuiltinModules,
+        specialization_strategy: base.SpecializationStrategy,
     ) BuildEnv {
-        return initWithBuiltinModules(gpa, mode, max_threads, target, cwd, std_io, builtin_modules, false);
+        return initWithBuiltinModules(gpa, mode, max_threads, target, cwd, std_io, builtin_modules, false, specialization_strategy);
     }
 
     fn initWithBuiltinModules(
@@ -413,6 +414,7 @@ pub const BuildEnv = struct {
         std_io: std.Io,
         builtin_modules: *BuiltinModules,
         owns_builtin_modules: bool,
+        specialization_strategy: base.SpecializationStrategy,
     ) BuildEnv {
         var env = BuildEnv{
             .gpa = gpa,
@@ -425,6 +427,7 @@ pub const BuildEnv = struct {
             .builtin_modules = builtin_modules,
             .owns_builtin_modules = owns_builtin_modules,
             .filesystem = CoreCtx.default(gpa, gpa, std_io),
+            .specialization_strategy = specialization_strategy,
         };
 
         // On native targets, enable HTTP downloads for URL packages.
@@ -945,8 +948,8 @@ pub const BuildEnv = struct {
             self.compiler_version,
             self.cache_manager,
             self.filesystem,
+            self.specialization_strategy,
         );
-        coord.specialization_strategy = self.specialization_strategy;
         coord.source_pin_version = self.source_pin_version;
         if (self.staged_entry_user_path) |user_path| {
             if (self.discovered_root_abs) |staged_path| coord.staged_entry = .{ .staged_path = staged_path, .user_path = user_path };
@@ -963,13 +966,6 @@ pub const BuildEnv = struct {
         coord.boxy_object_lowering = self.boxy_object_lowering;
         if (self.detailed_monotype_diagnostics) coord.ctfe_timing.lowering.enableDetail();
         self.coordinator = coord;
-    }
-
-    /// Set the strategy whose compile-time evaluator completes every
-    /// module's compile-time roots, before any module is checked.
-    pub fn setSpecializationStrategy(self: *BuildEnv, strategy: base.SpecializationStrategy) void {
-        if (self.coordinator) |coordinator| coordinator.specialization_strategy = strategy;
-        self.specialization_strategy = strategy;
     }
 
     pub fn setRuntimeLowering(self: *BuildEnv, config: RuntimeLoweringConfig) void {
@@ -3844,6 +3840,7 @@ pub const BuildEnv = struct {
                 try collectDbgRegionsInExpr(allocator, env, regions, binop.rhs);
             },
             .e_unary_minus => |unary| try collectDbgRegionsInExpr(allocator, env, regions, unary.expr),
+            .e_unary_not => |unary| try collectDbgRegionsInExpr(allocator, env, regions, unary.expr),
             .e_field_access => |field| try collectDbgRegionsInExpr(allocator, env, regions, field.receiver),
             inline .e_method_call, .e_dispatch_call => |call| {
                 try collectDbgRegionsInExpr(allocator, env, regions, call.receiver);
@@ -3924,7 +3921,7 @@ test "BuildEnv coordinator initialization releases every failed allocation" {
     defer builtins.deinit();
     try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
         fn run(allocator: Allocator, borrowed: *BuiltinModules) Allocator.Error!void {
-            var env = BuildEnv.initBorrowingBuiltinModules(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), ".", std.testing.io, borrowed);
+            var env = BuildEnv.initBorrowingBuiltinModules(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), ".", std.testing.io, borrowed, .lss);
             defer env.deinit();
             try env.initCoordinator();
         }
@@ -3945,6 +3942,7 @@ test "BuildEnv collectWatchInputStates includes package root state" {
         roc_target.RocTarget.detectNative(),
         cwd,
         testing.io,
+        .lss,
     );
     defer env.deinit();
     env.setWatchInputTracking(true);
@@ -4001,6 +3999,7 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
         roc_target.RocTarget.detectNative(),
         tmp_root,
         testing.io,
+        .lss,
     );
     defer env.deinit();
     env.setWatchInputTracking(true);
@@ -4024,6 +4023,7 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
         build_options.compiler_compatibility_id,
         null,
         env.filesystem,
+        .lss,
     );
     coord.setWatchInputTracking(true);
     env.coordinator = coord;
@@ -4082,6 +4082,7 @@ test "BuildEnv header watch state hashes raw CRLF source bytes" {
         roc_target.RocTarget.detectNative(),
         tmp_root,
         testing.io,
+        .lss,
     );
     defer env.deinit();
     env.setWatchInputTracking(true);
@@ -4514,6 +4515,7 @@ test "discoverDependencies rejects absolute platform spec with Absolute Platform
         roc_target.RocTarget.detectNative(),
         tmp_root,
         testing.io,
+        .lss,
     );
     defer env.deinit();
 

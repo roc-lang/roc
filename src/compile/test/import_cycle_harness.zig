@@ -78,6 +78,7 @@ pub fn expectImportCycleReport(files: []const SourceFile) ImportCycleTestError!v
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
