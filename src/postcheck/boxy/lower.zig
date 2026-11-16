@@ -885,6 +885,18 @@ pub const HostedEntry = struct { symbol: []const u8, dispatch_index: ?u32 };
 /// A worker and a type of its scope, keying `Program.row_node_reads`.
 const RowNodeRead = struct { worker: WorkerId, ty: TypeId };
 
+/// The conversion of each checked type of `module` asked about under the
+/// worker scope environment whose positions are `env`. A scope environment
+/// never changes once built (`Program.scopeEnv`), so neither do its
+/// conversions; this answers them without the converter's own memo probes.
+/// One map serves every body in turn, cleared when the environment changes,
+/// so a body pays only for the entries it adds.
+pub const ScopeConversions = struct {
+    types: types.CheckedTypeMap(TypeId) = .empty,
+    env: ?*const types.VarPositions = null,
+    module: ModuleIndex = undefined,
+};
+
 /// One `.boxy` lowering: its workers, types, layouts, and output.
 pub const Program = struct {
     pub const StoredValueKey = struct { module: ModuleIndex, node: checked.ConstNodeId, ty: TypeId };
@@ -914,6 +926,8 @@ pub const Program = struct {
     /// and interned nodes are immutable, so the rewrite of a type is the
     /// same every time.
     row_node_reads: std.AutoHashMapUnmanaged(RowNodeRead, TypeId) = .empty,
+    /// `Builder.convert`'s conversions under one worker scope environment.
+    scope_conversions: ScopeConversions = .{},
     /// The Builtin module, found on first use (`builtinModule`).
     builtin_module: ?ModuleIndex = null,
     /// The templates the Builtin module registers as methods of `List`,
@@ -1594,6 +1608,7 @@ pub const Program = struct {
         self.worklist.deinit(self.allocator);
         self.type_contents.deinit(self.allocator);
         self.row_node_reads.deinit(self.allocator);
+        self.scope_conversions.types.deinit(self.allocator);
         if (self.list_methods) |*methods| methods.deinit(self.allocator);
         self.list_item_slots.deinit(self.allocator);
         self.by_module_idx.deinit(self.allocator);

@@ -892,7 +892,17 @@ pub const Builder = struct {
     }
 
     pub fn convert(self: *Builder, ty: checked.CheckedTypeId) Allocator.Error!TypeId {
-        return self.program.converter().convert(self.module, ty, self.env);
+        const positions = self.env.positions orelse return self.program.converter().convert(self.module, ty, self.env);
+        const memo = &self.program.scope_conversions;
+        if (memo.env != positions or memo.module != self.module) {
+            memo.types.clearRetainingCapacity();
+            memo.env = positions;
+            memo.module = self.module;
+        }
+        if (memo.types.get(ty)) |known| return known;
+        const converted = try self.program.converter().convert(self.module, ty, self.env);
+        (try memo.types.getOrPut(self.program.allocator, ty)).value_ptr.* = converted;
+        return converted;
     }
 
     /// The type of `expr`'s own value.
