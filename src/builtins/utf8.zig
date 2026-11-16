@@ -78,12 +78,13 @@ pub const target_kernel: Kernel = if (x86_floor or builtin.zig_backend == .stage
 /// 90), `EncodesSurrogateHalf` (ED from A0), or `CodepointTooLarge` (F4 from 90,
 /// F5-F7).
 ///
-/// The 64-bit LLVM builtins bitcode is compiled for wasm64 and retargeted, so
-/// it cannot select a kernel when it is compiled: it calls `validate_symbol`,
-/// which the LLVM backend defines by linking `utf8_kernel_lib.zig` compiled for
-/// the kernel the target's CPU features select.
+/// The LLVM builtins bitcode is compiled for wasm64 or wasm32 and retargeted,
+/// so it cannot select a kernel when it is compiled: it calls
+/// `validate_symbol`, which the LLVM backend defines by linking
+/// `utf8_kernel_lib.zig` compiled for the kernel the target's CPU features
+/// select.
 pub fn validate(bytes: []const u8) ?Utf8Error {
-    if (comptime builtin.cpu.arch == .wasm64) return validateLinked(bytes);
+    if (comptime llvm_payload) return validateLinked(bytes);
     return validateWith(target_kernel, bytes);
 }
 
@@ -97,13 +98,19 @@ pub fn validateWith(comptime kernel: Kernel, bytes: []const u8) ?Utf8Error {
     };
 }
 
-/// The C ABI of the validation function the 64-bit LLVM builtins bitcode links
+/// Whether this code is the LLVM builtins bitcode: the 64-bit payload, the only
+/// code compiled for wasm64, or a 32-bit payload, whose root (an `llvm32_*`
+/// wrapper) declares `roc_llvm_payload`.
+const llvm_payload = builtin.cpu.arch == .wasm64 or
+    (@hasDecl(@import("root"), "roc_llvm_payload") and @import("root").roc_llvm_payload);
+
+/// The C ABI of the validation function the LLVM builtins bitcode links
 /// in for its target: validates `len` bytes at `bytes`, returns `valid_code`
 /// for well-formed input, and otherwise stores the error's index in `index` and
 /// returns its `Utf8ByteProblem`.
 pub const ValidateAbi = fn (bytes: [*]const u8, len: usize, index: *usize) callconv(.c) u8;
 
-/// The symbol the 64-bit LLVM builtins bitcode references for its validation
+/// The symbol the LLVM builtins bitcode references for its validation
 /// function, defined by `utf8_kernel_lib.zig` compiled for the target's `Kernel`.
 pub const validate_symbol = "roc_builtins_utf8_validate";
 

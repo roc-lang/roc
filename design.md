@@ -119,7 +119,9 @@ compiled decides what each backend runs:
   kernel the target machine's CPU features select (the DFA, x86 SSSE3, or
   AArch64 NEON), each compiled for exactly the features its kernel needs. The
   default x86-64 level (x86-64-v3) gets SSSE3, `x64v1` targets the DFA, and
-  both AArch64 levels NEON. The 32-bit payload keeps the DFA inline.
+  both AArch64 levels NEON. The 32-bit payload, rooted at the `llvm32_*`
+  wrappers that mark it (`roc_llvm_payload`), links the same way: `wasm32`
+  gets the simd128 kernel, and `wasm32v1` and the arm32 targets the DFA.
 - The interpreter and compile-time evaluator run the compiler's own builtins,
   whose kernel its compile target selects. The x86-64 Debug floor that adds
   SSSE3 to the generic CPU model for the SHA-256 extension is not a promise
@@ -3056,10 +3058,10 @@ SHA-256 state is the builtin's own versioned format (the chaining words, the
 pending partial block, and the message length), independent of which rounds
 produced it, so saved states resume identically on every target.
 
-The 64-bit LLVM payload links its UTF-8 validation kernel the same way: it
-references `roc_builtins_utf8_validate`, and the LLVM backend links the payload
-built for the kernel the target machine's CPU features select (see "UTF-8
-validation").
+Both LLVM payload families link their UTF-8 validation kernel the same way:
+they reference `roc_builtins_utf8_validate`, and the LLVM backend links the
+payload built for the kernel the target machine's CPU features select (see
+"UTF-8 validation").
 
 LLVM object emission must request function and data sections, and the final
 target linker must use section garbage collection where the target format

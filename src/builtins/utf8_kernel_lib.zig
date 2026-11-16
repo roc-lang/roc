@@ -1,9 +1,10 @@
-//! The UTF-8 validation function the 64-bit LLVM builtins bitcode links in for
-//! its target. The bitcode is compiled for wasm64 and retargeted, so it cannot
-//! pick its kernel when it is compiled; build.zig compiles this file once per
-//! `utf8.Kernel` the 64-bit targets use (for wasm64 with the DFA, for x86_64
-//! with SSSE3, and for aarch64 with NEON), and the LLVM backend links the one
-//! the target's CPU features select.
+//! The UTF-8 validation function the LLVM builtins bitcode links in for its
+//! target. The bitcode is compiled for wasm64 or wasm32 and retargeted, so it
+//! cannot pick its kernel when it is compiled; build.zig compiles this file
+//! once per `utf8.Kernel` and pointer width (for wasm64 with the DFA, for
+//! x86_64 with SSSE3, for aarch64 with NEON, for WebAssembly 1.0 with the DFA,
+//! and for wasm32 with simd128), and the LLVM backend links the one the
+//! target's CPU features select.
 
 const std = @import("std");
 const builtin = @import("builtin");

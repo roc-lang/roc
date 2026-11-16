@@ -356,6 +356,8 @@ const llvm_embedded = if (llvm_available) @import("llvm_embedded") else struct {
     pub const utf8_dfa_bc: []const u8 = "";
     pub const utf8_x86_ssse3_bc: []const u8 = "";
     pub const utf8_aarch64_neon_bc: []const u8 = "";
+    pub const utf8_dfa32_bc: []const u8 = "";
+    pub const utf8_wasm_simd128_bc: []const u8 = "";
     pub const PrivateRuntime = struct { target: target.RocTarget, bitcode: []const u8 };
     pub const private_runtimes = [_]PrivateRuntime{};
 };
@@ -410,9 +412,8 @@ fn selectSha256RoundsBitcode(ptr_width: u16, rounds: builtins.sha256.Rounds) ?[]
     };
 }
 
-/// The payload defining the 64-bit builtin bitcode's UTF-8 validation for
-/// `kernel`. The 32-bit payload carries its DFA inline: it serves wasm32
-/// together with targets without a 16-lane byte table lookup.
+/// The payload defining the builtin bitcode's UTF-8 validation for `kernel`
+/// at `ptr_width`.
 fn selectUtf8KernelBitcode(ptr_width: u16, kernel: builtins.utf8.Kernel) ?[]const u8 {
     return switch (ptr_width) {
         64 => switch (kernel) {
@@ -420,6 +421,11 @@ fn selectUtf8KernelBitcode(ptr_width: u16, kernel: builtins.utf8.Kernel) ?[]cons
             .x86_ssse3 => llvm_embedded.utf8_x86_ssse3_bc,
             .aarch64_neon => llvm_embedded.utf8_aarch64_neon_bc,
             .wasm_simd128 => unreachable, // no 64-bit target has the wasm instruction set
+        },
+        32 => switch (kernel) {
+            .dfa => llvm_embedded.utf8_dfa32_bc,
+            .wasm_simd128 => llvm_embedded.utf8_wasm_simd128_bc,
+            .x86_ssse3, .aarch64_neon => unreachable, // no 32-bit target has these instruction sets
         },
         else => null,
     };

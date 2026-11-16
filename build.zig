@@ -3048,16 +3048,16 @@ pub fn build(b: *std.Build) void {
     const builtins64_core_bc_file = addBuiltinsBitcode(b, roc_modules, "64_core_bc", "src/builtins/static_lib_core.zig", builtins64_target, false);
 
     const builtins32_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
-    const builtins32_bc_file = addBuiltinsBitcode(b, roc_modules, "32_bc", "src/builtins/static_lib.zig", builtins32_target, null);
-    const builtins32_core_bc_file = addBuiltinsBitcode(b, roc_modules, "32_core_bc", "src/builtins/static_lib_core.zig", builtins32_target, null);
+    const builtins32_bc_file = addBuiltinsBitcode(b, roc_modules, "32_bc", "src/builtins/llvm32_static_lib.zig", builtins32_target, null);
+    const builtins32_core_bc_file = addBuiltinsBitcode(b, roc_modules, "32_core_bc", "src/builtins/llvm32_static_lib_core.zig", builtins32_target, null);
     const builtins64_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "64_extern_bc", "src/builtins/extern_static_lib.zig", builtins64_target, null);
     const builtins64_core_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "64_core_extern_bc", "src/builtins/extern_static_lib_core.zig", builtins64_target, null);
-    const builtins32_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "32_extern_bc", "src/builtins/extern_static_lib.zig", builtins32_target, null);
-    const builtins32_core_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "32_core_extern_bc", "src/builtins/extern_static_lib_core.zig", builtins32_target, null);
+    const builtins32_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "32_extern_bc", "src/builtins/llvm32_extern_static_lib.zig", builtins32_target, null);
+    const builtins32_core_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "32_core_extern_bc", "src/builtins/llvm32_extern_static_lib_core.zig", builtins32_target, null);
     // Linked instead of the two above when a wasm platform reserves low memory
     // (see src/builtins/stack_guard.zig).
-    const builtins32_extern_stack_checked_bc_file = addBuiltinsBitcode(b, roc_modules, "32_extern_stack_checked_bc", "src/builtins/extern_static_lib_stack_checked.zig", builtins32_target, null);
-    const builtins32_core_extern_stack_checked_bc_file = addBuiltinsBitcode(b, roc_modules, "32_core_extern_stack_checked_bc", "src/builtins/extern_static_lib_core_stack_checked.zig", builtins32_target, null);
+    const builtins32_extern_stack_checked_bc_file = addBuiltinsBitcode(b, roc_modules, "32_extern_stack_checked_bc", "src/builtins/llvm32_extern_static_lib_stack_checked.zig", builtins32_target, null);
+    const builtins32_core_extern_stack_checked_bc_file = addBuiltinsBitcode(b, roc_modules, "32_core_extern_stack_checked_bc", "src/builtins/llvm32_extern_static_lib_core_stack_checked.zig", builtins32_target, null);
 
     // The 64-bit builtins bitcode references its SHA-256 compression by name
     // (see `Sha256` in src/builtins/crypto.zig), and the LLVM backend links the
@@ -3087,6 +3087,11 @@ pub fn build(b: *std.Build) void {
         break :x86_ssse3 query;
     });
     const utf8_aarch64_neon_bc_file = addUtf8KernelBitcode(b, "aarch64_neon", .{ .cpu_arch = .aarch64, .os_tag = .freestanding, .abi = .none, .cpu_model = .baseline });
+    // The 32-bit builtins bitcode (rooted at the `llvm32_*` wrappers) does the
+    // same with these: the DFA for WebAssembly 1.0, which also serves arm32,
+    // and simd128 for the `wasm32` contract.
+    const utf8_dfa32_bc_file = addUtf8KernelBitcode(b, "dfa32", roc_target.RocTarget.wasm32v1.llvmTargetQuery());
+    const utf8_wasm_simd128_bc_file = addUtf8KernelBitcode(b, "wasm_simd128", roc_target.RocTarget.wasm32.llvmTargetQuery());
 
     const llvm_embedded_files = b.addWriteFiles();
     _ = llvm_embedded_files.addCopyFile(builtins32_bc_file, "builtins32.bc");
@@ -3104,6 +3109,8 @@ pub fn build(b: *std.Build) void {
     _ = llvm_embedded_files.addCopyFile(utf8_dfa_bc_file, "utf8_dfa.bc");
     _ = llvm_embedded_files.addCopyFile(utf8_x86_ssse3_bc_file, "utf8_x86_ssse3.bc");
     _ = llvm_embedded_files.addCopyFile(utf8_aarch64_neon_bc_file, "utf8_aarch64_neon.bc");
+    _ = llvm_embedded_files.addCopyFile(utf8_dfa32_bc_file, "utf8_dfa32.bc");
+    _ = llvm_embedded_files.addCopyFile(utf8_wasm_simd128_bc_file, "utf8_wasm_simd128.bc");
     _ = llvm_embedded_files.addCopyFile(sha256_aarch64_sha2_bc_file, "sha256_aarch64_sha2.bc");
 
     // The private runtime every native LLVM object links, one per target that
@@ -3133,6 +3140,8 @@ pub fn build(b: *std.Build) void {
         \\pub const utf8_dfa_bc = @embedFile("utf8_dfa.bc");
         \\pub const utf8_x86_ssse3_bc = @embedFile("utf8_x86_ssse3.bc");
         \\pub const utf8_aarch64_neon_bc = @embedFile("utf8_aarch64_neon.bc");
+        \\pub const utf8_dfa32_bc = @embedFile("utf8_dfa32.bc");
+        \\pub const utf8_wasm_simd128_bc = @embedFile("utf8_wasm_simd128.bc");
         \\pub const builtins_bc = builtins64_bc;
         \\pub const PrivateRuntime = struct { target: @import("roc_target").RocTarget, bitcode: []const u8 };
         \\pub const private_runtimes = [_]PrivateRuntime{
