@@ -22586,9 +22586,15 @@ plain source `for` loop binds nothing from it and simply continues with `rest`.
 the step field the owner's `IteratorRepresentationTopology` names from the
 iterator it owns and makes an owned erased call of it (Destination-Passing
 Results and Allocation Reuse). The loop dismantles the dying iterator into
-that call, so the thunk receives its own allocation unique and repacks it
-with the next step's captures; an iterator over a list is then advanced
-without an allocation. The call is made where the loop matches its result, so
+that call, so the thunk receives its own allocation unique, and it repacks
+that allocation with the next step's captures when its own body packs the
+next step's closure at its own capture layout (Function Values). A thunk
+that builds its successor through a call of another procedure cannot hand
+it the allocation: `List.iter`'s and `List.iter_rev`'s thunks call their
+local `make`, whose closure the thunk packs again before the call, and
+`Iter.custom`'s calls `Iter.custom`, so stepping such an iterator value
+allocates on every step. A `for` loop over a list never steps one: it runs
+the list as a chain source (below). The call is made where the loop matches its result, so
 no pending call is left for the loop to drive. Every other `next`, including
 `Stream.next!`, is dispatched to as the plan resolves it.
 
