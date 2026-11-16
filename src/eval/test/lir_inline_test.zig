@@ -12241,6 +12241,94 @@ test "a field take assigned into a join result cell keeps a loop list unique" {
     try std.testing.expectEqual(@as(usize, 0), main_sets.?.checked);
 }
 
+// The `Try` is bound to a name and matched afterwards, so specialization
+// delivers it through a join point. The jump that supplies it must build the
+// tag in the join's parameter, where fusion sees it; otherwise the fallback
+// list stays alive across `List.set` and every set copies.
+test "a Try bound to a name before its match keeps a fallback loop list unique" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    var $list = List.repeat(0.U16, 8)
+        \\    var $i = 0.U64
+        \\    while $i < n {
+        \\        result = List.set($list, $i, 1)
+        \\        $list = match result {
+        \\            Ok(updated) => updated
+        \\            Err(_) => $list
+        \\        }
+        \\        $i = $i + 1
+        \\    }
+        \\    (List.get($list, 3) ?? 0).to_u64()
+        \\}
+    ;
+
+    var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+        .proc_debug_names = true,
+        .tag_reachability = true,
+    });
+    defer lowered.deinit(allocator);
+
+    const store = &lowered.lowered.lir_result.store;
+    var main_sets: ?ListSetCounts = null;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+        const name = store.procDebugName(proc_id) orelse continue;
+        if (!std.mem.eql(u8, name, "main")) continue;
+        if (store.getProcSpecImmediate(proc_id).body == .none) continue;
+        const sets = listSetCounts(store, proc_id);
+        var total = main_sets orelse ListSetCounts{};
+        total.checked += sets.checked;
+        total.check_free += sets.check_free;
+        main_sets = total;
+    }
+    try std.testing.expect(main_sets != null);
+    try std.testing.expect(main_sets.?.check_free >= 1);
+    try std.testing.expectEqual(@as(usize, 0), main_sets.?.checked);
+}
+
+// `mid` never constrains its list parameter, so it is generalized: the call
+// from `outer` is checked at an instance of its type and its recursive call at
+// the type itself. Both name one specialization, whose body declares `leaf`
+// once.
+test "a recursive call in a generalized local function reuses the specialization in progress" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : U64 -> U64
+        \\main = |start| {
+        \\    outer = |list, i| {
+        \\        if i >= 4 {
+        \\            list
+        \\        } else if i > 100 {
+        \\            outer(list, i + 1)
+        \\        } else {
+        \\            step = i + 3
+        \\            mid = |s, cs| {
+        \\                if s >= 8 {
+        \\                    cs
+        \\                } else {
+        \\                    leaf = |c, cp| {
+        \\                        if c >= 8 {
+        \\                            cp
+        \\                        } else {
+        \\                            leaf(c + step, cp)
+        \\                        }
+        \\                    }
+        \\                    mid(s + step, leaf(s, cs))
+        \\                }
+        \\            }
+        \\            outer(mid(i, list), i + 1)
+        \\        }
+        \\    }
+        \\    List.len(outer(List.repeat(0.U8, 8), start))
+        \\}
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
+}
+
 // `put` returns its `Try` from nested branches. Binding that result before
 // matching on it, with the loop list as the `Err` arm's result, must send
 // each branch straight to the arm it selects: a `Try` rebuilt at a join would
@@ -14941,4 +15029,312 @@ test "sealed result rows: an annotated result row is a static worker and widenin
         }
     }
     try runtime_env.checkForLeaks();
+}
+
+/// The number of length tests range proving hoisted to loop entries: each
+/// reads its list's length in a statement the prover made.
+fn hoistedLengthTestCount(lowered: *const lir.CheckedPipeline.LoweredProgram) usize {
+    const store = &lowered.lir_result.store;
+    var count: usize = 0;
+    for (store.getCFStmts(), 0..) |stmt, index| {
+        if (stmt != .assign_low_level) continue;
+        if (stmt.assign_low_level.op != .list_len) continue;
+        const id: LIR.CFStmtId = @fromBackingInt(@as(u32, @intCast(index)));
+        if (store.stmtOrigin(id).kind == .range_prove) count += 1;
+    }
+    return count;
+}
+
+test "range proving: loops guarded by a hoisted length test observe what the unguarded loops do" {
+    // Each walk stops at a bound that is not its list's length, and `show`
+    // runs each on lists shorter than the bound, exactly as long, longer,
+    // and empty, so both the guarded copy and the loop as written run, and
+    // every out-of-bounds index takes its miss arm. `grow` appends to the
+    // list it reads and `shrink` drops from it.
+    const source =
+        \\mark : List(U8), U64, U64 -> List(U8)
+        \\mark = |list, start, step| {
+        \\    var $i = start
+        \\    var $out = list
+        \\    while $i < 16 {
+        \\        $out = match List.get($out, $i) {
+        \\            Ok(old) => List.set($out, $i, old.bitwise_or(128)) ?? $out
+        \\            Err(_) => List.append($out, 255)
+        \\        }
+        \\        $i = $i.plus_wrap(step)
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\bump : List(U64), U64, U64 -> List(U64)
+        \\bump = |list, i, limit| {
+        \\    if i >= limit {
+        \\        list
+        \\    } else {
+        \\        next = match List.get(list, i) {
+        \\            Ok(old) => List.set(list, i, old + 1) ?? list
+        \\            Err(_) => list
+        \\        }
+        \\        bump(next, i + 1, limit)
+        \\    }
+        \\}
+        \\
+        \\sum : List(U64), U64 -> U64
+        \\sum = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $total = 0.U64
+        \\    while $i < limit {
+        \\        $total = $total + (List.get(list, $i) ?? 1000)
+        \\        $i = $i + 1
+        \\    }
+        \\    $total
+        \\}
+        \\
+        \\dot : List(U64), List(U64) -> U64
+        \\dot = |xs, ys| {
+        \\    count = List.len(xs)
+        \\    var $i = 0.U64
+        \\    var $total = 0.U64
+        \\    while $i < count {
+        \\        $total = $total + (List.get(xs, $i) ?? 0) * (List.get(ys, $i) ?? 7)
+        \\        $i = $i + 1
+        \\    }
+        \\    $total
+        \\}
+        \\
+        \\grow : List(U64), U64 -> List(U64)
+        \\grow = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $out = list
+        \\    while $i < limit {
+        \\        $out = List.append($out, (List.get($out, $i) ?? 500) + 1)
+        \\        $i = $i + 1
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\shrink : List(U64), U64 -> U64
+        \\shrink = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $rest = list
+        \\    var $total = 0.U64
+        \\    while $i < limit {
+        \\        $total = $total + (List.get($rest, $i) ?? 100)
+        \\        $rest = List.drop_last($rest, 1)
+        \\        $i = $i + 1
+        \\    }
+        \\    $total
+        \\}
+        \\
+        \\show : U64 -> U64
+        \\show = |extra| {
+        \\    dbg mark(List.repeat(1.U8, 10 + extra), 0, 3)
+        \\    dbg mark(List.repeat(1.U8, extra), 1, 7)
+        \\    dbg mark(List.repeat(1.U8, 4 + extra), 40, 7)
+        \\    dbg bump(List.repeat(5.U64, 3 + extra), 0, 6)
+        \\    dbg bump(List.repeat(5.U64, extra), 2, 6)
+        \\    dbg sum(List.repeat(2.U64, 3 + extra), 5)
+        \\    dbg sum(List.repeat(2.U64, extra), 5)
+        \\    dbg dot(List.repeat(3.U64, 5 + extra), List.repeat(2.U64, 3 + extra * 2))
+        \\    dbg dot(List.repeat(3.U64, extra), List.repeat(2.U64, extra))
+        \\    dbg grow(List.repeat(9.U64, 2 + extra), 6)
+        \\    dbg grow(List.repeat(9.U64, extra), 3)
+        \\    dbg shrink(List.repeat(4.U64, 3 + extra), 5)
+        \\    extra
+        \\}
+        \\
+        \\main : U64
+        \\main = show(0) + show(2) + show(3) + show(6) + show(16)
+    ;
+    const allocator = std.testing.allocator;
+
+    var plain = try lowerModuleWithOptions(allocator, source, .wrappers, .{});
+    defer plain.deinit(allocator);
+    var proved = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .prove_ranges = true });
+    defer proved.deinit(allocator);
+
+    // `mark`, `bump`, `sum`, `dot` and `grow` each have a loop a length test
+    // guards; `shrink` shortens its list, so its loop has none.
+    try std.testing.expectEqual(@as(usize, 0), hoistedLengthTestCount(&plain.lowered));
+    try std.testing.expectEqual(@as(usize, 5), hoistedLengthTestCount(&proved.lowered));
+
+    var plain_run = try runLoweredWithHostEvents(allocator, &plain.lowered);
+    defer plain_run.deinit(allocator);
+    var proved_run = try runLoweredWithHostEvents(allocator, &proved.lowered);
+    defer proved_run.deinit(allocator);
+
+    try std.testing.expectEqual(eval.RuntimeHostEnv.Termination.returned, proved_run.termination);
+    try std.testing.expectEqual(@as(usize, 60), proved_run.events.len);
+    try expectRecordedRunsEqual(plain_run, proved_run);
+}
+
+/// The number of limit tests range proving hoisted to loop entries: each
+/// compares in a statement the prover made.
+fn hoistedLimitTestCount(lowered: *const lir.CheckedPipeline.LoweredProgram) usize {
+    const store = &lowered.lir_result.store;
+    var count: usize = 0;
+    for (store.getCFStmts(), 0..) |stmt, index| {
+        if (stmt != .assign_low_level) continue;
+        if (stmt.assign_low_level.op != .num_is_lte) continue;
+        const id: LIR.CFStmtId = @fromBackingInt(@as(u32, @intCast(index)));
+        if (store.stmtOrigin(id).kind == .range_prove) count += 1;
+    }
+    return count;
+}
+
+test "range proving: a loop guarded by a hoisted limit test overflows where the unguarded loop does" {
+    // `stride` keeps its counter below a literal and adds a step it never
+    // changes. The first call passes the entry test and runs the copy
+    // whose addition is proved exact. The second fails it, runs the loop
+    // as written, and overflows on its first pass, after that pass's
+    // `dbg`.
+    const source =
+        \\stride : U64, U64 -> U64
+        \\stride = |start, step| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i < 1000 {
+        \\        dbg $i
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i + step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+        \\show : U64 -> U64
+        \\show = |extra| {
+        \\    dbg stride(extra, 400 + extra)
+        \\    dbg stride(1000 + extra, 18446744073709551000)
+        \\    dbg stride(990 + extra, 18446744073709551000)
+        \\    extra
+        \\}
+        \\
+        \\main : U64
+        \\main = show(0) + show(1)
+    ;
+    const allocator = std.testing.allocator;
+
+    var plain = try lowerModuleWithOptions(allocator, source, .wrappers, .{});
+    defer plain.deinit(allocator);
+    var proved = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .prove_ranges = true });
+    defer proved.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), hoistedLimitTestCount(&plain.lowered));
+    try std.testing.expectEqual(@as(usize, 1), hoistedLimitTestCount(&proved.lowered));
+
+    var plain_run = try runLoweredWithHostEvents(allocator, &plain.lowered);
+    defer plain_run.deinit(allocator);
+    var proved_run = try runLoweredWithHostEvents(allocator, &proved.lowered);
+    defer proved_run.deinit(allocator);
+
+    // Three passes and a result, a result with no pass, then one pass
+    // before the crash.
+    try std.testing.expect(proved_run.termination != eval.RuntimeHostEnv.Termination.returned);
+    try std.testing.expect(proved_run.events.len >= 6);
+    try expectRecordedRunsEqual(plain_run, proved_run);
+}
+
+test "range proving: a countdown guarded by a hoisted test passes zero where the unguarded loop does" {
+    // `down` keeps its counter above a local and subtracts a step it never
+    // changes. The first call passes the entry test and runs the copy whose
+    // subtraction is proved exact. The second and third fail it and run the
+    // loop as written, which makes no pass and then two. The fourth fails
+    // it too and passes zero on its second pass, after that pass's `dbg`.
+    const source =
+        \\down : U64, U64, U64 -> U64
+        \\down = |start, step, floor| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i > floor {
+        \\        dbg $i
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i - step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+        \\show : U64 -> U64
+        \\show = |extra| {
+        \\    dbg down(20 + extra, 3, 5 + extra)
+        \\    dbg down(4 + extra, 9, 5 + extra)
+        \\    dbg down(20 + extra, 9, 5 + extra)
+        \\    dbg down(16 + extra, 9, 5 + extra)
+        \\    extra
+        \\}
+        \\
+        \\main : U64
+        \\main = show(0) + show(1)
+    ;
+    const allocator = std.testing.allocator;
+
+    var plain = try lowerModuleWithOptions(allocator, source, .wrappers, .{});
+    defer plain.deinit(allocator);
+    var proved = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .prove_ranges = true });
+    defer proved.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), hoistedLimitTestCount(&plain.lowered));
+    try std.testing.expectEqual(@as(usize, 1), hoistedLimitTestCount(&proved.lowered));
+
+    var plain_run = try runLoweredWithHostEvents(allocator, &plain.lowered);
+    defer plain_run.deinit(allocator);
+    var proved_run = try runLoweredWithHostEvents(allocator, &proved.lowered);
+    defer proved_run.deinit(allocator);
+
+    // Five passes and a result, a result with no pass, two passes and a
+    // result, then two passes before the crash.
+    try std.testing.expect(proved_run.termination != eval.RuntimeHostEnv.Termination.returned);
+    try std.testing.expect(proved_run.events.len >= 12);
+    try expectRecordedRunsEqual(plain_run, proved_run);
+}
+
+test "range proving: a product guarded by a hoisted limit test overflows where the unguarded loop does" {
+    // `scale` keeps its counter below a literal and multiplies it by a
+    // value it never changes. The first call passes the entry test and runs
+    // the copy whose multiplication is proved exact. The second fails it
+    // and runs the loop as written, which makes no pass. The third fails it
+    // too and overflows on its first pass, after that pass's `dbg`.
+    const source =
+        \\scale : U64, U64 -> U64
+        \\scale = |start, factor| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i < 1000 {
+        \\        dbg $i
+        \\        $acc = $acc.bitwise_xor($i * factor)
+        \\        $i = $i + 1
+        \\    }
+        \\    $acc
+        \\}
+        \\
+        \\show : U64 -> U64
+        \\show = |extra| {
+        \\    dbg scale(997 + extra, 5 + extra)
+        \\    dbg scale(1000 + extra, 9223372036854775808)
+        \\    dbg scale(998 + extra, 9223372036854775808)
+        \\    extra
+        \\}
+        \\
+        \\main : U64
+        \\main = show(0) + show(1)
+    ;
+    const allocator = std.testing.allocator;
+
+    var plain = try lowerModuleWithOptions(allocator, source, .wrappers, .{});
+    defer plain.deinit(allocator);
+    var proved = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .prove_ranges = true });
+    defer proved.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), hoistedLimitTestCount(&plain.lowered));
+    try std.testing.expectEqual(@as(usize, 1), hoistedLimitTestCount(&proved.lowered));
+
+    var plain_run = try runLoweredWithHostEvents(allocator, &plain.lowered);
+    defer plain_run.deinit(allocator);
+    var proved_run = try runLoweredWithHostEvents(allocator, &proved.lowered);
+    defer proved_run.deinit(allocator);
+
+    // Three passes and a result, a result with no pass, then one pass
+    // before the crash.
+    try std.testing.expect(proved_run.termination != eval.RuntimeHostEnv.Termination.returned);
+    try std.testing.expect(proved_run.events.len >= 6);
+    try expectRecordedRunsEqual(plain_run, proved_run);
 }

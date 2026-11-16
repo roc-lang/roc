@@ -299,6 +299,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
+      - name: Enlarge pagefile (Windows)
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/enlarge-windows-pagefile
+
       # `use-tool-cache` installs Zig at $RUNNER_TOOL_CACHE/zig/<version>/<arch>,
       # the same path in this build job and in every shard of its OS. Without
       # it Zig lands in a random per-job directory, and Run steps that invoke
@@ -366,7 +370,7 @@ jobs:
       - name: Build MiniCI binaries
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build build-ci
+          command: zig build build-ci -Dembed-builtin-unit=true
           retry_count: 3
 
       # zstd on all cores, instead of upload-artifact's single-threaded zip
@@ -491,6 +495,10 @@ jobs:
     steps: &minici_shard_steps
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
+      - name: Enlarge pagefile (Windows)
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/enlarge-windows-pagefile
 
       # Same deterministic Zig path as the build job (see `use-tool-cache` in
       # `minici-build-linux`), so the restored cache hits.
