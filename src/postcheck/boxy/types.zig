@@ -1996,6 +1996,7 @@ pub const Converter = struct {
     /// whatever its text (design.md "Name Identity"): the runtime node's id
     /// digests the declaring module's link name and the declaration.
     fn declName(self: Converter, decl: NominalDeclKey, text: []const u8) Allocator.Error!NameId {
+        if (self.store.decl_name_ids.get(decl)) |existing| return existing;
         const view = self.modules.get(decl.module);
         const declaration = view.types().nominalDeclarationById(decl.decl);
         // Declarations sharing a name are told apart by their order, which
