@@ -108,19 +108,20 @@ features carry a 16-lane byte table lookup (x86 SSSE3 `pshufb`, AArch64 NEON
 each lookup kernel names with its target's instruction. Where builtins are
 compiled decides what each backend runs:
 
-- A dev builtins object gets the kernel its own compile target selects. A
-  `v1` target links its default twin's object, so native objects carry no
-  instruction above the architecture baseline: x86-64 objects run the DFA
-  (SSE2 has no `pshufb`), AArch64 objects run the NEON kernel (NEON is part of
-  Armv8.0-A), and the `wasm32` object, compiled for Zig's default Wasm CPU
-  without simd128, runs the DFA.
+- A dev builtins object is compiled for its Roc target's CPU contract (see
+  "Backend Builtins"), so it gets the kernel that contract selects: default
+  x86-64 objects (x86-64-v3) the SSSE3 kernel, `x64v1` objects the DFA,
+  AArch64 objects at both levels the NEON kernel, the `wasm32` object the
+  simd128 kernel, and the `wasm32v1` object the DFA.
 - The 64-bit LLVM payload is compiled before its target is known, so it
   references its validation function by symbol, and the LLVM backend links one
   of three separate payloads into it before pruning: the one built for the
   kernel the target machine's CPU features select (the DFA, x86 SSSE3, or
   AArch64 NEON), each compiled for exactly the features its kernel needs. The
   default x86-64 level (x86-64-v3) gets SSSE3, `x64v1` targets the DFA, and
-  both AArch64 levels NEON. The 32-bit payload keeps the DFA inline.
+  both AArch64 levels NEON. The 32-bit payload, rooted at the `llvm32_*`
+  wrappers that mark it (`roc_llvm_payload`), links the same way: `wasm32`
+  gets the simd128 kernel, and `wasm32v1` and the arm32 targets the DFA.
 - The interpreter and compile-time evaluator run the compiler's own builtins,
   whose kernel its compile target selects. The x86-64 Debug floor that adds
   SSSE3 to the generic CPU model for the SHA-256 extension is not a promise
@@ -3126,6 +3127,20 @@ ordinary object-symbol references resolved by linking the target's
 `roc_builtins.o`. The dev backend keeps using target-specific builtin object
 files because it does not produce LLVM bitcode.
 
+Every object `roc` embeds for a dev link (the builtins, the Boxy runtime, their
+stack-checked wasm twins, the unit image built from them, and the default
+platform's runtime, executable and compiler-rt objects) is compiled for the
+query `RocTarget.llvmTargetQuery` derives from its Roc target's CPU contract,
+so it carries exactly the instructions that target declares and no others.
+Each `v1` target has objects of its own, compiled for the `v1` floor; no
+target links objects compiled for another CPU level. `dev_object_targets` in
+build.zig lists the targets with objects, and `EmbeddedTargetObjects.forTarget`
+in src/cli/main.zig hands a generic Linux target its glibc twin's objects and a
+freestanding ELF target its musl twin's, each with the same CPU contract,
+architecture and operating system. The native objects the interpreter host
+links run on the machine running `roc` and are compiled for the compiler's own
+target.
+
 The LLVM backend emits application LLVM bitcode. LLVM builds must not link
 `roc_builtins.o`. Instead, the compiler selects builtin LLVM bitcode by the
 target pointer width, links that builtin module with the application module
@@ -3173,9 +3188,10 @@ extension), and with portable rounds otherwise; `Rounds.forCpu` in
 `src/builtins/sha256.zig` is the one rule. Code compiled into Roc programs
 never selects rounds at runtime with CPUID or any other probe; only the
 compiler binary's own hashing dispatches at runtime. A dev builtins object gets
-the rounds its own compile target selects, and since a `v1` target links its
-default twin's object, those objects carry no instruction above the
-architecture baseline (the native objects drop the compiler's SHA-256 floor).
+the rounds its Roc target's CPU contract selects: the default-level AArch64
+objects, `arm64mac`'s included, compress with `sha2`, and every other dev
+object, the `v1` objects included, with the portable rounds. The native objects drop the
+compiler's SHA-256 floor, which is not a promise about the machine.
 The 64-bit LLVM payload cannot choose, because it is compiled before its target
 is known, so it references its compression function by symbol, and the LLVM
 backend links one of three separate compression payloads into it before
@@ -3187,10 +3203,10 @@ SHA-256 state is the builtin's own versioned format (the chaining words, the
 pending partial block, and the message length), independent of which rounds
 produced it, so saved states resume identically on every target.
 
-The 64-bit LLVM payload links its UTF-8 validation kernel the same way: it
-references `roc_builtins_utf8_validate`, and the LLVM backend links the payload
-built for the kernel the target machine's CPU features select (see "UTF-8
-validation").
+Both LLVM payload families link their UTF-8 validation kernel the same way:
+they reference `roc_builtins_utf8_validate`, and the LLVM backend links the
+payload built for the kernel the target machine's CPU features select (see
+"UTF-8 validation").
 
 LLVM object emission must request function and data sections, and the final
 target linker must use section garbage collection where the target format
@@ -31788,10 +31804,9 @@ Every input of a wasm32v1 module is WebAssembly 1.0, not only Roc's own code.
 Emitting a vector instruction, a `v128` local, or a `v128` function type at
 the v1 level is a compiler invariant violation. The builtins, Boxy runtime,
 and compiler-rt objects a wasm32v1 build links are built for the
-WebAssembly 1.0 CPU (Zig's wasm baseline includes later proposals, so
-wasm32v1 does not share wasm32's objects the way other v1 targets share
-their default twins'), and Binaryen optimizes a wasm32v1 module with every
-proposal disabled. The evaluator's wasm backend runs each eval program at
+WebAssembly 1.0 CPU, as every `v1` target's objects are built for its floor,
+and Binaryen optimizes a wasm32v1 module with every proposal disabled. The
+`wasm32` objects are built for its contract, simd128 included. The evaluator's wasm backend runs each eval program at
 both CPU levels and requires the same result, which puts the full SIMD
 differential corpus through the v1 lowering.
 
