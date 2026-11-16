@@ -79,6 +79,11 @@ pub const SelectedHoistedRoot = struct {
     /// Whether the root materializes a top-level binding. Checking records it
     /// with the root in `ModuleEnv.selected_hoisted_roots`.
     top_level: bool = false,
+    /// Whether a root that checking kept reads this root's binding
+    /// (`pattern`). Such a reader evaluates on its own and reads the binding
+    /// by reference, so the binding stays a compile-time root whatever its
+    /// right-hand side is.
+    read_by_root: bool = false,
 };
 
 comptime {
