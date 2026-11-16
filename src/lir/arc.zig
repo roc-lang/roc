@@ -4314,8 +4314,8 @@ const Inserter = struct {
         var redecide = DeadUnitRedecide{ .inserter = self, .result = &result };
         try result.source.entries.differenceWith(&base.source.entries, &redecide, DeadUnitRedecide.entryDiffers);
         try base.source.entries.differenceWith(&result.source.entries, &redecide, DeadUnitRedecide.entryDiffers);
-        try result.reads.words.differenceWith(&base.reads.words, &redecide, DeadUnitRedecide.wordDiffers);
-        try base.reads.words.differenceWith(&result.reads.words, &redecide, DeadUnitRedecide.wordDiffers);
+        try result.reads.differenceWith(&base.reads, &redecide, DeadUnitRedecide.wordDiffers);
+        try base.reads.differenceWith(&result.reads, &redecide, DeadUnitRedecide.wordDiffers);
         return result;
     }
 
@@ -12567,11 +12567,13 @@ test "RC persistent-set work grows linearly with loop nesting depth" {
     // Liveness rows and keep-sets each hold every enclosing loop's list.
     // Keep-set construction, the liveness certificate, and every other
     // structural set operation must touch only where related sets differ.
-    const small = try loopNestStructuralWork(32);
-    const large = try loopNestStructuralWork(64);
+    // Each level holds two lists, so both depths give domains wider than the
+    // inline forms, which use the persistent trees whose work this measures.
+    const small = try loopNestStructuralWork(128);
+    const large = try loopNestStructuralWork(256);
     if (large > small * 3) {
         std.debug.print(
-            "loop-nest structural set work grew nonlinearly: {d} at depth 32, {d} at depth 64\n",
+            "loop-nest structural set work grew nonlinearly: {d} at depth 128, {d} at depth 256\n",
             .{ small, large },
         );
     }

@@ -25,39 +25,79 @@ const invariant = base.invariant;
 const Allocator = std.mem.Allocator;
 const LoopForest = collections.LoopForest;
 
-/// A persistent bit row over an exact bit domain. Copies share structure;
-/// changing a bit allocates only that bit's path, in the allocator the change
-/// names.
+/// A persistent bit row over an exact bit domain. A domain of at most
+/// `inline_bits` bits is held inline, by value, in the space a tree's root
+/// takes: it copies as plain words and changes without allocating. A wider
+/// domain is a persistent tree whose copies share structure; changing a bit
+/// allocates only that bit's path, in the allocator the change names. Both
+/// forms give every operation the same answer.
 pub const Row = struct {
-    words: ArcSnapshot(u64, 0),
+    storage: Storage,
     bit_len: u32,
+
+    const Words = ArcSnapshot(u64, 0);
+    const inline_word_count = 2;
+    pub const inline_bits = 64 * inline_word_count;
+
+    /// `inline_words` exactly when the domain fits `inline_bits`; words past
+    /// the domain stay zero.
+    const Storage = union {
+        inline_words: [inline_word_count]u64,
+        tree: Words,
+    };
+
+    comptime {
+        std.debug.assert(@sizeOf([inline_word_count]u64) <= @sizeOf(Words));
+    }
 
     /// A domain wider than `u32` bits is a compiler invariant violation: ARC
     /// bit domains are bounded by a procedure's frame.
     pub fn initEmpty(bit_len: usize) Row {
         std.debug.assert(bit_len <= std.math.maxInt(u32));
+        if (bit_len <= inline_bits) return .{ .bit_len = @intCast(bit_len), .storage = .{ .inline_words = @splat(0) } };
         const word_len = (bit_len + 63) / 64;
-        return .{ .bit_len = @intCast(bit_len), .words = ArcSnapshot(u64, 0).init(word_len) };
+        return .{ .bit_len = @intCast(bit_len), .storage = .{ .tree = Words.init(word_len) } };
+    }
+
+    fn isInline(self: *const Row) bool {
+        return self.bit_len <= inline_bits;
+    }
+
+    fn wordLen(self: *const Row) usize {
+        return (@as(usize, self.bit_len) + 63) / 64;
     }
 
     pub fn set(self: *Row, allocator: Allocator, bit: usize) Allocator.Error!void {
         std.debug.assert(bit < self.bit_len);
         const word: u32 = @intCast(bit / 64);
         const mask = @as(u64, 1) << @intCast(bit % 64);
-        try self.words.put(allocator, word, self.words.get(word) | mask);
+        if (self.isInline()) {
+            self.storage.inline_words[word] |= mask;
+            return;
+        }
+        try self.storage.tree.put(allocator, word, self.storage.tree.get(word) | mask);
     }
 
     pub fn unset(self: *Row, allocator: Allocator, bit: usize) Allocator.Error!void {
         std.debug.assert(bit < self.bit_len);
         const word: u32 = @intCast(bit / 64);
         const mask = @as(u64, 1) << @intCast(bit % 64);
-        try self.words.put(allocator, word, self.words.get(word) & ~mask);
+        if (self.isInline()) {
+            self.storage.inline_words[word] &= ~mask;
+            return;
+        }
+        try self.storage.tree.put(allocator, word, self.storage.tree.get(word) & ~mask);
+    }
+
+    /// The word holding bits `64 * index` up to `64 * index + 64`.
+    fn wordAt(self: *const Row, index: u32) u64 {
+        if (self.isInline()) return self.storage.inline_words[index];
+        return self.storage.tree.get(index);
     }
 
     pub fn isSet(self: *const Row, bit: usize) bool {
         std.debug.assert(bit < self.bit_len);
-        const word: u32 = @intCast(bit / 64);
-        return self.words.get(word) & (@as(u64, 1) << @intCast(bit % 64)) != 0;
+        return self.wordAt(@intCast(bit / 64)) & (@as(u64, 1) << @intCast(bit % 64)) != 0;
     }
 
     /// Exact range existence, without enumerating either members or live bits.
@@ -68,40 +108,81 @@ pub const Row = struct {
         const last_word: u32 = @intCast((end - 1) / 64);
         const first_mask = @as(u64, std.math.maxInt(u64)) << @as(u6, @intCast(start % 64));
         const last_mask = @as(u64, std.math.maxInt(u64)) >> @as(u6, @intCast(63 - (end - 1) % 64));
-        if (first_word == last_word) return self.words.get(first_word) & first_mask & last_mask != 0;
-        if (self.words.get(first_word) & first_mask != 0) return true;
-        if (self.words.get(last_word) & last_mask != 0) return true;
-        return self.words.hasNonEmptyInRange(first_word + 1, last_word);
+        if (first_word == last_word) return self.wordAt(first_word) & first_mask & last_mask != 0;
+        if (self.wordAt(first_word) & first_mask != 0) return true;
+        if (self.wordAt(last_word) & last_mask != 0) return true;
+        if (self.isInline()) {
+            for (self.storage.inline_words[first_word + 1 .. last_word]) |word| if (word != 0) return true;
+            return false;
+        }
+        return self.storage.tree.hasNonEmptyInRange(first_word + 1, last_word);
     }
 
     pub fn unsetAll(self: *Row) void {
-        self.words.clear();
+        if (self.isInline()) {
+            self.storage.inline_words = @splat(0);
+            return;
+        }
+        self.storage.tree.clear();
     }
 
     pub fn setUnion(self: *Row, allocator: Allocator, other: *const Row) Allocator.Error!void {
         std.debug.assert(self.bit_len == other.bit_len);
-        _ = try self.words.joinWith(allocator, &other.words, {}, unionWord);
+        if (self.isInline()) {
+            for (&self.storage.inline_words, other.storage.inline_words) |*word, other_word| word.* |= other_word;
+            return;
+        }
+        _ = try self.storage.tree.joinWith(allocator, &other.storage.tree, {}, unionWord);
     }
 
     pub fn setIntersection(self: *Row, allocator: Allocator, other: *const Row) Allocator.Error!void {
         std.debug.assert(self.bit_len == other.bit_len);
-        _ = try self.words.meetWith(allocator, &other.words, {}, intersectWord);
+        if (self.isInline()) {
+            for (&self.storage.inline_words, other.storage.inline_words) |*word, other_word| word.* &= other_word;
+            return;
+        }
+        _ = try self.storage.tree.meetWith(allocator, &other.storage.tree, {}, intersectWord);
     }
 
     /// Whether any bit is set. The snapshot answers from its structure, so
     /// this costs the tree depth rather than the domain's width.
     pub fn isEmpty(self: *const Row) bool {
-        return !self.words.hasNonEmptyInRange(0, (@as(usize, self.bit_len) + 63) / 64);
+        if (self.isInline()) {
+            for (self.storage.inline_words) |word| if (word != 0) return false;
+            return true;
+        }
+        return !self.storage.tree.hasNonEmptyInRange(0, self.wordLen());
     }
 
     pub fn count(self: *const Row) usize {
         var total: usize = 0;
-        for (0..(@as(usize, self.bit_len) + 63) / 64) |word| total += @popCount(self.words.get(@intCast(word)));
+        for (0..self.wordLen()) |word| total += @popCount(self.wordAt(@intCast(word)));
         return total;
     }
 
     pub fn eql(self: *const Row, other: *const Row) bool {
-        return self.bit_len == other.bit_len and self.words.eql(&other.words);
+        if (self.bit_len != other.bit_len) return false;
+        if (self.isInline()) return std.mem.eql(u64, &self.storage.inline_words, &other.storage.inline_words);
+        return self.storage.tree.eql(&other.storage.tree);
+    }
+
+    /// Calls `emitFn` with the index and both words of every word that may
+    /// differ between this row and `other`, among this row's nonempty words,
+    /// in ascending order. `emitFn` must treat equal words as no difference.
+    pub fn differenceWith(
+        self: *const Row,
+        other: *const Row,
+        context: anytype,
+        comptime emitFn: fn (@TypeOf(context), u32, u64, u64) Allocator.Error!void,
+    ) Allocator.Error!void {
+        std.debug.assert(self.bit_len == other.bit_len);
+        if (self.isInline()) {
+            for (self.storage.inline_words, other.storage.inline_words, 0..) |word, other_word, index| {
+                if (word != 0) try emitFn(context, @intCast(index), word, other_word);
+            }
+            return;
+        }
+        try self.storage.tree.differenceWith(&other.storage.tree, context, emitFn);
     }
 
     /// Set bits in ascending order, skipping absent subtrees.
@@ -113,28 +194,54 @@ pub const Row = struct {
     /// subtrees rather than looking up every word in the domain.
     pub fn iteratorRange(self: *const Row, start: usize, end: usize) Iterator {
         std.debug.assert(start <= end and end <= self.bit_len);
+        if (self.isInline()) {
+            // The inline words, masked to the range, are the whole row.
+            var words = self.storage.inline_words;
+            for (&words, 0..) |*word, index| {
+                const word_start = index * 64;
+                if (end <= word_start or start >= word_start + 64) {
+                    word.* = 0;
+                    continue;
+                }
+                if (start > word_start) word.* &= @as(u64, std.math.maxInt(u64)) << @as(u6, @intCast(start - word_start));
+                if (end < word_start + 64) word.* &= ~(@as(u64, std.math.maxInt(u64)) << @as(u6, @intCast(end - word_start)));
+            }
+            return .{ .source = .{ .inline_words = .{ .words = words } }, .start = start, .end = end };
+        }
         return .{
-            .words = self.words.iteratorRange(@intCast(start / 64), if (start == end) start / 64 else @as(u64, @intCast(end / 64)) + @intFromBool(end % 64 != 0)),
+            .source = .{ .tree = self.storage.tree.iteratorRange(@intCast(start / 64), if (start == end) start / 64 else @as(u64, @intCast(end / 64)) + @intFromBool(end % 64 != 0)) },
             .start = start,
             .end = end,
         };
     }
 
     pub const Iterator = struct {
-        words: ArcSnapshot(u64, 0).RangeIterator,
+        /// Where the words after `pending` come from.
+        source: union(enum) {
+            inline_words: struct { words: [inline_word_count]u64, next: u8 = 0 },
+            tree: Words.RangeIterator,
+        },
         start: usize,
         end: usize,
         base: usize = 0,
         pending: u64 = 0,
 
         pub fn next(self: *Iterator) ?usize {
-            while (self.pending == 0) {
-                const entry = self.words.next() orelse return null;
-                self.base = @as(usize, entry.index) * 64;
-                self.pending = entry.value;
-                if (self.start > self.base) self.pending &= @as(u64, std.math.maxInt(u64)) << @as(u6, @intCast(self.start - self.base));
-                if (self.end - self.base < 64) self.pending &= @as(u64, std.math.maxInt(u64)) >> @as(u6, @intCast(64 - (self.end - self.base)));
-            }
+            while (self.pending == 0) switch (self.source) {
+                .inline_words => |*inline_source| {
+                    if (inline_source.next == inline_word_count) return null;
+                    self.base = @as(usize, inline_source.next) * 64;
+                    self.pending = inline_source.words[inline_source.next];
+                    inline_source.next += 1;
+                },
+                .tree => |*words| {
+                    const entry = words.next() orelse return null;
+                    self.base = @as(usize, entry.index) * 64;
+                    self.pending = entry.value;
+                    if (self.start > self.base) self.pending &= @as(u64, std.math.maxInt(u64)) << @as(u6, @intCast(self.start - self.base));
+                    if (self.end - self.base < 64) self.pending &= @as(u64, std.math.maxInt(u64)) >> @as(u6, @intCast(64 - (self.end - self.base)));
+                },
+            };
             const bit = self.base + @ctz(self.pending);
             self.pending &= self.pending - 1;
             return bit;
@@ -708,5 +815,77 @@ test "rows preserve operations across persistent forks" {
         // A domain whose width is not a whole number of words must not
         // enumerate the padding bits above it.
         try expectRowBits(&cloned, &.{bit_len - 1});
+    }
+}
+
+test "an inline row answers every operation as a tree row does" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var rng = std.Random.DefaultPrng.init(0x7264);
+    const random = rng.random();
+    // Each bit of an inline row is mirrored by the same bit of a tree row
+    // over a wider domain, whose other bits stay clear.
+    const width = Row.inline_bits;
+    const Pair = struct { small: Row, wide: Row };
+    var pairs: [4]Pair = undefined;
+    for (&pairs) |*pair| pair.* = .{ .small = Row.initEmpty(width), .wide = Row.initEmpty(width + 66) };
+    const WordDiff = struct {
+        words: std.ArrayList(u64) = .empty,
+        allocator: Allocator,
+        fn note(self: *@This(), index: u32, lhs: u64, rhs: u64) Allocator.Error!void {
+            if (lhs != rhs) try self.words.append(self.allocator, @as(u64, index) << 32 | @as(u64, @truncate(lhs ^ rhs)));
+        }
+    };
+    for (0..2000) |_| {
+        const target = &pairs[random.uintLessThan(usize, pairs.len)];
+        const other = &pairs[random.uintLessThan(usize, pairs.len)];
+        switch (random.uintLessThan(u3, 6)) {
+            0, 1 => {
+                const bit = random.uintLessThan(usize, width);
+                try target.small.set(allocator, bit);
+                try target.wide.set(allocator, bit);
+            },
+            2 => {
+                const bit = random.uintLessThan(usize, width);
+                try target.small.unset(allocator, bit);
+                try target.wide.unset(allocator, bit);
+            },
+            3 => {
+                try target.small.setUnion(allocator, &other.small);
+                try target.wide.setUnion(allocator, &other.wide);
+            },
+            4 => {
+                try target.small.setIntersection(allocator, &other.small);
+                try target.wide.setIntersection(allocator, &other.wide);
+            },
+            else => if (random.uintLessThan(u4, 8) == 0) {
+                target.small.unsetAll();
+                target.wide.unsetAll();
+            } else {
+                target.* = other.*;
+            },
+        }
+        for (pairs) |pair| {
+            try std.testing.expectEqual(pair.wide.count(), pair.small.count());
+            try std.testing.expectEqual(pair.wide.isEmpty(), pair.small.isEmpty());
+            for (0..width) |bit| try std.testing.expectEqual(pair.wide.isSet(bit), pair.small.isSet(bit));
+            const start = random.uintLessThan(usize, width + 1);
+            const end = start + random.uintLessThan(usize, width + 1 - start);
+            try std.testing.expectEqual(pair.wide.anySetInRange(start, end), pair.small.anySetInRange(start, end));
+            var small_bits = pair.small.iteratorRange(start, end);
+            var wide_bits = pair.wide.iteratorRange(start, end);
+            while (true) {
+                const expected = wide_bits.next();
+                try std.testing.expectEqual(expected, small_bits.next());
+                if (expected == null) break;
+            }
+        }
+        try std.testing.expectEqual(other.wide.eql(&target.wide), other.small.eql(&target.small));
+        var small_diff = WordDiff{ .allocator = allocator };
+        var wide_diff = WordDiff{ .allocator = allocator };
+        try target.small.differenceWith(&other.small, &small_diff, WordDiff.note);
+        try target.wide.differenceWith(&other.wide, &wide_diff, WordDiff.note);
+        try std.testing.expectEqualSlices(u64, wide_diff.words.items, small_diff.words.items);
     }
 }
