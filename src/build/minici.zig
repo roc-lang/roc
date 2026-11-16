@@ -1733,6 +1733,14 @@ fn skipCommand(
     };
 }
 
+/// `zig build` options every MiniCI command passes, `build-ci` included, so
+/// the jobs reuse what `build-ci` built. `.github/workflows/ci_manager.yml`
+/// runs `build-ci` with exactly these options.
+///
+/// The Debug `roc` the harness jobs run embeds the Builtin module's Boxy unit,
+/// as every non-Debug compiler does (design.md "Embedded Units").
+const minici_build_args = [_][]const u8{"-Dembed-builtin-unit=true"};
+
 fn buildCommand(
     allocator: std.mem.Allocator,
     zig_exe: []const u8,
@@ -1752,6 +1760,9 @@ fn buildCommand(
     try argv.append(allocator, "off");
     if (max_jobs) |jobs_count| {
         try argv.append(allocator, try std.fmt.allocPrint(allocator, "-j{d}", .{jobs_count}));
+    }
+    for (minici_build_args) |arg| {
+        try argv.append(allocator, arg);
     }
     for (build_args) |arg| {
         try argv.append(allocator, arg);
@@ -2402,11 +2413,35 @@ fn handRunJob(command: []const u8) ?[]const u8 {
     return job;
 }
 
+/// The first of `minici_build_args` that a `zig build` command line running
+/// `build-ci` leaves out, or null when it passes them all or does not run
+/// `build-ci`. `command` is the text after `zig build`.
+fn missingBuildCiArg(command: []const u8) ?[]const u8 {
+    var runs_build_ci = false;
+    var tokens = std.mem.tokenizeAny(u8, command, " \t");
+    while (tokens.next()) |token| {
+        if (std.mem.eql(u8, token, "--")) break;
+        if (std.mem.eql(u8, token, "build-ci")) runs_build_ci = true;
+    }
+    if (!runs_build_ci) return null;
+    for (minici_build_args) |arg| {
+        var passed = false;
+        tokens = std.mem.tokenizeAny(u8, command, " \t");
+        while (tokens.next()) |token| {
+            if (std.mem.eql(u8, token, "--")) break;
+            if (std.mem.eql(u8, token, arg)) passed = true;
+        }
+        if (!passed) return arg;
+    }
+    return null;
+}
+
 /// Returns one message per way `text` departs from running MiniCI as `runs`
 /// says: a shard named wrongly (see `WorkflowRuns`), a lane invocation missing,
-/// repeated or naming the wrong lane, or a `zig build` command that runs a
-/// MiniCI job by hand. Comment lines are skipped. An empty result means the
-/// file runs MiniCI exactly as declared.
+/// repeated or naming the wrong lane, a `zig build` command that runs a
+/// MiniCI job by hand, or one that runs `build-ci` without the options MiniCI
+/// builds with (`minici_build_args`). Comment lines are skipped. An empty
+/// result means the file runs MiniCI exactly as declared.
 fn workflowProblems(allocator: std.mem.Allocator, text: []const u8, runs: WorkflowRuns) ![]const []const u8 {
     var problems = std.ArrayList([]const u8).empty;
     errdefer problems.deinit(allocator);
@@ -2463,6 +2498,13 @@ fn workflowProblems(allocator: std.mem.Allocator, text: []const u8, runs: Workfl
                     allocator,
                     "runs MiniCI job `{s}` by hand; MiniCI already runs it",
                     .{job},
+                ));
+            }
+            if (missingBuildCiArg(rest[0..command_end])) |arg| {
+                try problems.append(allocator, try std.fmt.allocPrint(
+                    allocator,
+                    "runs `build-ci` without `{s}`, which every MiniCI command passes",
+                    .{arg},
                 ));
             }
         }
@@ -2971,6 +3013,29 @@ test "workflowProblems reports missing, duplicate and unknown shards" {
     // A sharded workflow runs no whole lane and no MiniCI job by hand.
     try text.appendSlice(std.testing.allocator, "run: zig build minici -- --minici-lane secondary\nrun: zig build run-test-cli\n");
     try expectWorkflowProblems(text.items, 4);
+}
+
+test "workflowProblems requires build-ci to pass MiniCI's build options" {
+    var text = std.ArrayList(u8).empty;
+    defer text.deinit(std.testing.allocator);
+    for (shards) |shard| {
+        const line = try std.fmt.allocPrint(std.testing.allocator, "minici_shard: {s}\n", .{shard.name});
+        defer std.testing.allocator.free(line);
+        try text.appendSlice(std.testing.allocator, line);
+    }
+    const shard_lines = text.items.len;
+
+    try text.appendSlice(std.testing.allocator, "  command: zig build build-ci");
+    for (minici_build_args) |arg| {
+        try text.append(std.testing.allocator, ' ');
+        try text.appendSlice(std.testing.allocator, arg);
+    }
+    try text.appendSlice(std.testing.allocator, "\n  run: zig build build-test-eval-runner\n");
+    try expectWorkflowProblems(text.items, 0);
+
+    text.shrinkRetainingCapacity(shard_lines);
+    try text.appendSlice(std.testing.allocator, "  command: zig build build-ci\n");
+    try expectWorkflowProblems(text.items, 1);
 }
 
 test "workflowProblems accepts a nightly file that runs its lane once" {
