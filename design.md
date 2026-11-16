@@ -28118,6 +28118,16 @@ An explicit reference-count statement on a stack value computes the value's
 address directly into the helper's first argument register and loads an
 incref's count directly into the second; neither passes through a frame slot.
 
+The x86-64 encoder picks each instruction's encoding from the operand values it
+is handed, all of which are final when it is emitted: a memory operand takes a
+one-byte displacement when the displacement fits a signed byte, a group-1
+arithmetic or compare instruction takes the sign-extended imm8 form when its
+immediate fits one, and an immediate load is the zero-extending 32-bit move,
+the sign-extending one or `movabs`, whichever is shortest. An instruction whose
+bytes are patched after emission keeps a fixed-form encoder: `call`, `jmp` and
+`jcc` with rel32, the RIP-relative `lea`, and the seven-byte `REX.W C7`
+immediate load whose field a relocatable expect site's relocation names.
+
 ## Dev Backend Register Lifetimes
 
 `LirCodeGen` is the sole authority for LIR local locations. Every assigned

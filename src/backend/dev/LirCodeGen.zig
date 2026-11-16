@@ -16294,7 +16294,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
                         .x86_64 => {
                             const stack_offset = self.codegen.allocStackSlot(4);
-                            try self.codegen.emit.movRegImm64(.R11, bits);
+                            try self.codegen.emit.movRegImm(.R11, bits);
                             try self.codegen.emit.movMemReg(.w32, .RBP, stack_offset, .R11);
                             try self.codegen.emit.movssRegMem(reg, .RBP, stack_offset);
                         },
@@ -16324,7 +16324,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             },
                             .x86_64 => {
                                 const stack_offset = self.codegen.allocStackSlot(8);
-                                try self.codegen.emit.movRegImm64(.R11, @bitCast(bits));
+                                try self.codegen.emit.movRegImm(.R11, @bitCast(bits));
                                 try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset, .R11);
                                 try self.codegen.emit.movsdRegMem(reg, .RBP, stack_offset);
                             },
