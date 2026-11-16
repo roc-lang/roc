@@ -23520,6 +23520,11 @@ reuse it, and a repack of it allocates afresh. Debug builds assert after
 lowering that no capture-free `assign_packed_erased_fn` remains. If no explicit erased requirement reaches a callable
 slot and no box holds it, finite lambda-set dispatch is used.
 
+A nominal or opaque type is laid out as its backing. A value holding a
+callable is boxed or erased only at the boundaries above and where layout's
+recursion analysis boxes a recursive slot; opacity alone never boxes a record
+that holds a callable, since an opaque type never crosses the host boundary.
+
 No ordinary source expression becomes erased because direct lowering finds
 finite dispatch inconvenient. Erasure is introduced only by explicit checked
 boundary data or the explicit Monotype forced-dynamic iterator tier.

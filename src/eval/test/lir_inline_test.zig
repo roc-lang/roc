@@ -14957,10 +14957,6 @@ test "sealed result rows: an annotated result row is a static worker and widenin
 // function shared by its call sites, and after the `.wrappers` variant, which
 // also clones functions per known call pattern.
 //
-// The nominal form (`:=`) is the measured one: layout boxes every non-builtin
-// *opaque* record that holds a callable, so an opaque `MyIter` is boxed for a
-// reason that has nothing to do with lambda sets (see the opaque test).
-//
 // The adapters come in two forms. `next`-based adapters call one shared
 // `MyIter.next`, as the builtin adapters call `Iter.next`, so every iterator
 // value of the program reaches that one function. Direct adapters read
@@ -15612,17 +15608,16 @@ test "MyIter lambda sets: chain grown in a loop" {
     }});
 }
 
-// The opaque form of the next-based chain. Layout boxes an opaque record
-// holding a callable unless it is the builtin `Iter` or `Stream`, so this
-// program's box count includes those boxes whatever Lambda Solved decides;
-// its lambda-set census matches the nominal form's.
+// The opaque form of the next-based chain. An opaque record is laid out as
+// its backing, like a nominal one, so it fuses exactly as the nominal form
+// does.
 test "MyIter lambda sets: opaque chain" {
     try expectUserIterCases(&.{.{
         .name = "opaque next-based",
         .source = my_iter_opaque_with_next ++ user_iter_chain_main,
         .dbg = "27",
-        .none = .{ .multi_member_sets = 0, .max_members = 1, .self_containing_sets = 0, .box_box_count = 3 },
-        .wrappers = .{ .multi_member_sets = 3, .max_members = 2, .self_containing_sets = 0, .box_box_count = 6 },
+        .none = user_iter_fused,
+        .wrappers = .{ .multi_member_sets = 3, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
     }});
 }
 

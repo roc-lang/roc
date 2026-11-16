@@ -2435,7 +2435,7 @@ const TypeTable = struct {
     /// artifact that owns it, and that lowering's layout store is the only
     /// authority for every layout fact glue emits. A root's own layout is the
     /// type's intrinsic layout, so a root whose layout is a box over a
-    /// by-value repr (an opaque record holding a callable) becomes a box over
+    /// by-value repr becomes a box over
     /// a payload entry before any walk starts. From each root the walk then
     /// descends the entry graph in lockstep with the committed layout: struct
     /// fields by original index, tag payloads by discriminant, list elements

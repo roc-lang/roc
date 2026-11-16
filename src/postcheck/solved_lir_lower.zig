@@ -14167,14 +14167,6 @@ const Lowerer = struct {
             if (content == .box) return true;
             if (content != .named) return false;
             const backing = content.named.backing.get() orelse return false;
-            if (content.named.kind == .@"opaque" and
-                content.named.builtin_owner.get() != .iter and content.named.builtin_owner.get() != .stream and
-                backing.authority != .generated_private and
-                self.solved.types.rootContent(backing.ty) == .record and
-                try self.solvedTypeContainsCallable(backing.ty))
-            {
-                return true;
-            }
             current = backing.ty;
         }
     }
@@ -14199,14 +14191,6 @@ const Lowerer = struct {
             if (content == .box) return true;
             if (content != .named) return false;
             const backing = content.named.backing.get() orelse return false;
-            if (content.named.kind == .@"opaque" and
-                content.named.builtin_owner.get() != .iter and content.named.builtin_owner.get() != .stream and
-                backing.authority != .generated_private and
-                self.types.get(backing.ty) == .record and
-                try self.typeContainsCallable(backing.ty))
-            {
-                return true;
-            }
             current = backing.ty;
         }
     }
@@ -14641,84 +14625,8 @@ const Lowerer = struct {
         return owner == .fields or owner == .parse_tag_union_spec;
     }
 
-    fn typeContainsCallable(self: *Lowerer, ty: Type.TypeId) Common.LowerError!bool {
-        var visited = collections.DenseMap(Type.TypeId, void).init(self.allocator);
-        defer visited.deinit();
-        var pending: std.ArrayList(Type.TypeId) = .empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, ty);
-        while (pending.pop()) |current| {
-            if (visited.contains(current)) continue;
-            try visited.put(current, {});
-            // Children are pushed last-first so the first child is visited
-            // next.
-            const children_start = pending.items.len;
-            switch (self.types.get(current)) {
-                .callable, .erased_fn => return true,
-                .primitive, .zst, .hole, .erased_capture_ptr => {},
-                .list, .box => |elem| try pending.append(self.allocator, elem),
-                .tuple => |items| try self.appendTypeSpan(&pending, items),
-                .record => |fields| {
-                    const field_span = self.types.fieldSpan(fields);
-                    for (0..field_span.len) |index| try pending.append(self.allocator, GuardedList.at(field_span, index).ty);
-                },
-                .capture_record => |fields| {
-                    const field_span = self.types.captureFieldSpan(fields);
-                    for (0..field_span.len) |index| try pending.append(self.allocator, GuardedList.at(field_span, index).ty);
-                },
-                .tag_union => |tags| {
-                    const tag_span = self.types.tagSpan(tags);
-                    for (0..tag_span.len) |index| try self.appendTypeSpan(&pending, GuardedList.at(tag_span, index).payloads);
-                },
-                .named => |named| if (named.backing.get()) |backing| try pending.append(self.allocator, backing.ty),
-            }
-            std.mem.reverse(Type.TypeId, pending.items[children_start..]);
-        }
-        return false;
-    }
-
     fn appendTypeSpan(self: *Lowerer, out: *std.ArrayList(Type.TypeId), span: Type.Span) Common.LowerError!void {
         const values = self.types.span(span);
-        for (0..values.len) |index| try out.append(self.allocator, GuardedList.at(values, index));
-    }
-
-    fn solvedTypeContainsCallable(self: *Lowerer, ty: SolvedType.TypeVarId) Common.LowerError!bool {
-        var visited = collections.DenseMap(SolvedType.TypeVarId, void).init(self.allocator);
-        defer visited.deinit();
-        var pending: std.ArrayList(SolvedType.TypeVarId) = .empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, ty);
-        while (pending.pop()) |next| {
-            const root = self.solved.types.root(next);
-            if (visited.contains(root)) continue;
-            try visited.put(root, {});
-            // Children are pushed last-first so the first child is visited
-            // next.
-            const children_start = pending.items.len;
-            switch (self.solved.types.get(root)) {
-                .func, .lambda_set, .erased => return true,
-                .mono => Common.invariant("callable scan saw an unfinalized lazy Monotype leaf"),
-                .link, .unbound => Common.invariant("callable scan saw unresolved Lambda Solved type"),
-                .primitive, .zst, .hole => {},
-                .list, .box => |elem| try pending.append(self.allocator, elem),
-                .tuple => |items| try self.appendSolvedTypeSpan(&pending, items),
-                .record => |fields| {
-                    const field_span = self.solved_types.fieldSpan(fields);
-                    for (0..field_span.len) |index| try pending.append(self.allocator, GuardedList.at(field_span, index).ty);
-                },
-                .tag_union => |tags| {
-                    const tag_span = self.solved_types.tagSpan(tags);
-                    for (0..tag_span.len) |index| try self.appendSolvedTypeSpan(&pending, GuardedList.at(tag_span, index).payloads);
-                },
-                .named => |named| if (named.backing.get()) |backing| try pending.append(self.allocator, backing.ty),
-            }
-            std.mem.reverse(SolvedType.TypeVarId, pending.items[children_start..]);
-        }
-        return false;
-    }
-
-    fn appendSolvedTypeSpan(self: *Lowerer, out: *std.ArrayList(SolvedType.TypeVarId), span: SolvedType.Span) Common.LowerError!void {
-        const values = self.solved_types.span(span);
         for (0..values.len) |index| try out.append(self.allocator, GuardedList.at(values, index));
     }
 
@@ -14845,8 +14753,6 @@ const Lowerer = struct {
             kind: union(enum) {
                 /// A node reserved for `ty`, filled from its content.
                 node: struct { ty: Type.TypeId, node: layout.GraphNodeId },
-                /// A node boxing an opaque callable-bearing record backing.
-                opaque_box: struct { node: layout.GraphNodeId, backing: Type.TypeId },
                 /// A declared-order nominal node filled from its fields.
                 declared_order: struct { node: layout.GraphNodeId, declared_order: Type.Span, backing: Type.TypeId },
                 /// A named type taking its backing's input.
@@ -14875,7 +14781,7 @@ const Lowerer = struct {
                         };
                         allocator.free(refs.payloads);
                     },
-                    .node, .opaque_box, .declared_order, .named_backing, .payload_tuple => {},
+                    .node, .declared_order, .named_backing, .payload_tuple => {},
                 }
             }
         };
@@ -14922,19 +14828,6 @@ const Lowerer = struct {
 
             switch (lowerer.types.get(ty)) {
                 .named => |named| if (named.backing.get()) |backing| {
-                    if (named.kind == .@"opaque" and
-                        named.builtin_owner.get() != .iter and named.builtin_owner.get() != .stream and
-                        // Generated-private backing is the checked producer's
-                        // explicit runtime representation, not source opacity.
-                        backing.authority != .generated_private and
-                        lowerer.types.get(backing.ty) == .record and
-                        try lowerer.typeContainsCallable(backing.ty))
-                    {
-                        const node = try self.graph.reserveNode(allocator);
-                        try self.local_nodes.put(ty, node);
-                        return .{ .push = .{ .kind = .{ .opaque_box = .{ .node = node, .backing = backing.ty } } } };
-                    }
-
                     // An unnamed field explicitly opts a nominal or opaque record
                     // into declared-order layout. Without that marker the named
                     // type reuses its structural backing layout directly.
@@ -14969,11 +14862,6 @@ const Lowerer = struct {
         fn resumeBuild(self: *LayoutGraphBuilder, frame: *BuildFrame, result: ?BuildResult) Common.LowerError!BuildStep {
             const allocator = self.lowerer.allocator;
             switch (frame.kind) {
-                .opaque_box => |box| {
-                    const finished = result orelse return .{ .child = box.backing };
-                    self.graph.setNode(box.node, .{ .box = finished.input });
-                    return .{ .done = .{ .input = layout.localGraphInput(box.node) } };
-                },
                 .declared_order => |declared| {
                     const finished = result orelse return .{ .push = try self.declaredOrderFieldsFrame(declared.declared_order, declared.backing) };
                     self.graph.setNode(declared.node, .{ .struct_ = self.graph.declaredOrder(finished.fields) });
