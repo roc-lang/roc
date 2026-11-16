@@ -675,6 +675,7 @@ const CustomCase = enum {
     boxy_build_and_run_cache_what_check_caches,
     boxy_compile_time_objects,
     boxy_module_object_cache,
+    boxy_published_restitution,
     boxy_platform_evaluation,
     boxy_platform_bindings,
     boxy_interface_edits,
@@ -4072,6 +4073,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no platform object cache distinguishes app bindings", .timeout_ms = 180_000, .body = .{ .custom = .boxy_platform_bindings } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no platform evaluation retains app units waiting for later roots", .timeout_ms = 120_000, .body = .{ .custom = .boxy_platform_evaluation } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no build files one object per module and rebuilds only edited modules", .timeout_ms = 600_000, .body = .{ .custom = .boxy_module_object_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy per-module objects: a module's object is the same whether or not an importer calls its published outcome variant", .timeout_ms = 600_000, .body = .{ .custom = .boxy_published_restitution } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no objects depend on their imports' interfaces, not their implementations", .timeout_ms = 900_000, .body = .{ .custom = .boxy_interface_edits } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12220: shared object cache keeps each module's list literals in a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_12220_shared_object_cache_literals } },
@@ -4667,13 +4669,12 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12841: a closure taken from a tag's record of closures updates its shared list in place through a borrowed wrapper (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_closure_pair_capture.roc", .contains = &.{.{ .stream = .stderr, .text = "1000 updates: inline loop 2 allocations, through update 2 allocations" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12841: a closure taken from a tag's record of closures updates its shared list in place through a borrowed wrapper (size)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--no-cache" }, .roc_file = "test/alloc-count/app_closure_pair_capture.roc", .contains = &.{.{ .stream = .stderr, .text = "1000 updates: inline loop 2 allocations, through update 2 allocations" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     // https://github.com/roc-lang/roc/issues/13012: a closure that captures a list updates it in place when the closure is unboxed and called, and when a value of its type is boxed elsewhere.
-    // The `xs.set(...) ?? xs` bodies of the box and shared programs keep the list in place only through `List.set`'s outcome-restitution variant, which a `.boxy` call into the Builtin module never demands (design.md "Emission units"), so their dev and size runs, whose default strategy is `.boxy`, select `--specialize=yes`; the shared program's `.boxy` runs check only its values, and the append program, whose body needs no restitution, checks allocations under `.boxy` too.
-    .{ .id = 0, .suite = .subcommands, .name = "issue 13012: a closure capturing a list updates it in place through a box and beside a box (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=yes" }, .roc_file = "test/alloc-count/app_closure_capture_box.roc", .contains = &.{ .{ .stream = .stderr, .text = "1000 calls through a box: same allocations" }, .{ .stream = .stderr, .text = "1000 direct calls: same allocations" } }, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13012: a closure capturing a list updates it in place through a box and beside a box (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_closure_capture_box.roc", .contains = &.{ .{ .stream = .stderr, .text = "1000 calls through a box: same allocations" }, .{ .stream = .stderr, .text = "1000 direct calls: same allocations" } }, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 13012: a closure capturing a list updates it in place through a box and beside a box (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_closure_capture_box.roc", .contains = &.{ .{ .stream = .stderr, .text = "1000 calls through a box: same allocations" }, .{ .stream = .stderr, .text = "1000 direct calls: same allocations" } }, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 13012: a closure capturing a list updates it in place through a box and beside a box (size)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--no-cache", "--specialize=yes" }, .roc_file = "test/alloc-count/app_closure_capture_box.roc", .contains = &.{ .{ .stream = .stderr, .text = "1000 calls through a box: same allocations" }, .{ .stream = .stderr, .text = "1000 direct calls: same allocations" } }, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 13012: a shared closure lends its captures and a dying closure with several captures hands them over (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=yes" }, .roc_file = "test/alloc-count/app_closure_capture_shared.roc", .contains = &.{.{ .stream = .stderr, .text = "shared closure total: 1000000; dying closure with several captures: same allocations" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13012: a closure capturing a list updates it in place through a box and beside a box (size)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--no-cache" }, .roc_file = "test/alloc-count/app_closure_capture_box.roc", .contains = &.{ .{ .stream = .stderr, .text = "1000 calls through a box: same allocations" }, .{ .stream = .stderr, .text = "1000 direct calls: same allocations" } }, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13012: a shared closure lends its captures and a dying closure with several captures hands them over (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_closure_capture_shared.roc", .contains = &.{.{ .stream = .stderr, .text = "shared closure total: 1000000; dying closure with several captures: same allocations" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 13012: a shared closure lends its captures and a dying closure with several captures hands them over (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_closure_capture_shared.roc", .contains = &.{.{ .stream = .stderr, .text = "shared closure total: 1000000; dying closure with several captures: same allocations" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 13012: a shared closure lends its captures and a dying closure with several captures hands them over (size)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--no-cache", "--specialize=yes" }, .roc_file = "test/alloc-count/app_closure_capture_shared.roc", .contains = &.{.{ .stream = .stderr, .text = "shared closure total: 1000000; dying closure with several captures: same allocations" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13012: a shared closure lends its captures and a dying closure with several captures hands them over (size)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--no-cache" }, .roc_file = "test/alloc-count/app_closure_capture_shared.roc", .contains = &.{.{ .stream = .stderr, .text = "shared closure total: 1000000; dying closure with several captures: same allocations" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 13012: a shared closure lends its captures and a dying closure with several captures reads them all (dev, --specialize=no)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_closure_capture_shared.roc", .contains = &.{.{ .stream = .stderr, .text = "shared closure total: 1000000;" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 13012: a shared closure lends its captures and a dying closure with several captures reads them all (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/alloc-count/app_closure_capture_shared.roc", .contains = &.{.{ .stream = .stderr, .text = "shared closure total: 1000000;" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 13012: a dying erased closure hands its captured list to the body, which appends in place (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_closure_capture_append.roc", .contains = &.{.{ .stream = .stderr, .text = "1000 erased calls appending to a captured list: same allocations as a scalar closure" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
@@ -6913,6 +6914,7 @@ fn runCustomCase(
         .boxy_platform_bindings => customBoxyPlatformBindings(io, allocator, &env, &timer, timeout_ms),
         .boxy_platform_evaluation => customBoxyPlatformEvaluation(io, allocator, &env, &timer, timeout_ms),
         .boxy_module_object_cache => customBoxyModuleObjectCache(io, allocator, &env, &timer, timeout_ms),
+        .boxy_published_restitution => customBoxyPublishedRestitution(io, allocator, &env, &timer, timeout_ms),
         .boxy_interface_edits => customBoxyInterfaceEdits(io, allocator, &env, &timer, timeout_ms),
         .issue_11710_shared_object_cache => customIssue11710SharedObjectCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12220_shared_object_cache_literals => customIssue12220SharedObjectCacheLiterals(io, allocator, &env, &timer, timeout_ms),
@@ -11846,6 +11848,101 @@ fn customBoxyModuleObjectCache(
         if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{ .args = &.{}, .stdout_exact = "", .stderr_exact = "" })) |failure| return failure;
     }
     return null;
+}
+
+/// A module publishes the outcome-restitution variant of a worker whose
+/// failure outcome leaves its list untouched, whether or not an importer
+/// calls it (design.md "Outcome-Conditioned Argument Restitution"), so its
+/// object is a function of its own bodies alone: an app whose call demands
+/// the variant and an app whose call is at the base signature build the same
+/// bytes for every module object they share (`Lib`, the platform's module,
+/// and the Builtin when the compiler does not embed it).
+fn customBoxyPublishedRestitution(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const source_dir = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "boxy_published_restitution" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the source dir: {}", .{err});
+    std.Io.Dir.cwd().createDirPath(io, source_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create the source dir: {}", .{err});
+    for ([_][]const u8{ "Lib.roc", "demands.roc", "ignores.roc" }) |name| {
+        const from = std.fs.path.join(allocator, &.{ "test/cli/boxy_published_restitution", name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate a fixture path: {}", .{err});
+        const contents = std.Io.Dir.cwd().readFileAlloc(io, from, allocator, .limited(1024 * 1024)) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read {s}: {}", .{ from, err });
+        const to = std.fs.path.join(allocator, &.{ source_dir, name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate a source path: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = to, .data = contents }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ to, err });
+    }
+
+    const App = struct { file: []const u8, stdout: []const u8 };
+    const apps = [_]App{
+        .{ .file = "demands.roc", .stdout = "45" },
+        .{ .file = "ignores.roc", .stdout = "7" },
+    };
+    var objects: [apps.len][]const BoxyObjectFile = undefined;
+    for (apps, &objects) |app, *app_objects| {
+        var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err| return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
+        defer isolated.env_map.deinit();
+        const cache_name = std.fmt.allocPrint(allocator, "boxy_published_restitution_cache_{s}", .{app.file}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate the cache name: {}", .{err});
+        const cache_root = std.fs.path.join(allocator, &.{ env.dirs.work_dir, cache_name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate the cache root: {}", .{err});
+        for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+            isolated.env_map.put(key, cache_root) catch |err| return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
+        }
+        const app_path = std.fs.path.join(allocator, &.{ source_dir, app.file }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate the app path: {}", .{err});
+        const output = std.fs.path.join(allocator, &.{ env.dirs.work_dir, app.file[0 .. app.file.len - ".roc".len] }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate the output path: {}", .{err});
+        const out_arg = outputArg(allocator, output) catch |err| return customInfraFailure(allocator, timer, "output argument: {}", .{err});
+        const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "published restitution test timed out");
+        const run = runRocInEnv(io, allocator, &isolated, &.{ "build", "--opt=dev", "--no-color", out_arg }, app_path, .absolute, &.{}, null, remaining) catch |err|
+            return customInfraFailure(allocator, timer, "build: {}", .{err});
+        if (!processSucceeded(run.term)) return failureFromRun(allocator, timer, run, "the build failed");
+        const exe = runnableOutputPath(io, allocator, output) catch |err| return customInfraFailure(allocator, timer, "executable: {}", .{err});
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{ .args = &.{}, .stdout_exact = app.stdout, .stderr_exact = "" })) |failure| return failure;
+        app_objects.* = boxyObjectFiles(io, allocator, cache_root) catch |err| return customInfraFailure(allocator, timer, "read the cached objects: {}", .{err});
+    }
+    var shared: usize = 0;
+    for (objects[0]) |first| {
+        for (objects[1]) |second| {
+            if (!std.mem.eql(u8, &first.key, &second.key)) continue;
+            if (!std.mem.eql(u8, first.bytes, second.bytes)) return customFailure(allocator, timer, "the object filed under key {x} differs between an app that demands its published variant and one that does not", .{first.key[0..8]});
+            shared += 1;
+        }
+    }
+    if (shared < 2) return customFailure(allocator, timer, "the two apps share {d} module objects, expected at least Lib's and the platform module's", .{shared});
+    return null;
+}
+
+const BoxyObjectFile = struct { key: [32]u8, bytes: []const u8 };
+
+/// Every module object the cache at `cache_root` holds, with its file's bytes.
+fn boxyObjectFiles(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError![]const BoxyObjectFile {
+    var store = try artifact_store.Store.init(allocator, io, cache_root);
+    defer store.deinit();
+    var dir = try std.Io.Dir.cwd().openDir(io, store.root, .{ .iterate = true });
+    defer dir.close(io);
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+    var files = std.ArrayList(BoxyObjectFile).empty;
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".data")) continue;
+        var parts = std.mem.tokenizeAny(u8, entry.path, "/\\");
+        _ = parts.next() orelse continue;
+        const family = std.meta.stringToEnum(artifact_store.Family, parts.next() orelse continue) orelse continue;
+        if (family != .boxy_object) continue;
+        var file: BoxyObjectFile = .{ .key = undefined, .bytes = undefined };
+        _ = std.fmt.hexToBytes(&file.key, entry.basename[0 .. entry.basename.len - 5]) catch continue;
+        file.bytes = try dir.readFileAlloc(io, entry.path, allocator, .limited(512 * 1024 * 1024));
+        try files.append(allocator, file);
+    }
+    return files.toOwnedSlice(allocator);
 }
 
 /// Replace the only occurrence of `from` in the file at `path` with `to`.

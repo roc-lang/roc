@@ -4258,7 +4258,16 @@ const Certifier = struct {
                         }
                     }
                 },
-                .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
+                .jump => |jump_stmt| {
+                    // A jump to a join whose body returns is a restitution
+                    // boundary (`applyOutcomeRestitution`): it hands the
+                    // restituted parameters back exactly as that return
+                    // does, so its region names them.
+                    if (self.join_bodies.get(jump_stmt.target)) |target_body| {
+                        if (self.store.getCFStmtImmediate(target_body).* == .ret) try self.noteRestitutedParams();
+                    }
+                },
+                .runtime_error, .comptime_exhaustiveness_failed => {},
             }
             // Every other statement's successors stay in its region.
             successors.clearRetainingCapacity();
