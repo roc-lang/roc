@@ -1129,7 +1129,7 @@ pub const Program = struct {
                         .template => |owner| owner.module == outer_key.module and owner.template == outer_key.template,
                         .default => false,
                     },
-                    .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => false,
+                    .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => false,
                 };
                 if (own_template) {
                     hasher.update(&[_]u8{0});
@@ -5036,7 +5036,7 @@ fn recordExports(program: *Program) Allocator.Error!void {
     for (program.workers.items, 0..) |worker, index| switch (worker.key) {
         .default => try visit.worker(@fromBackingInt(@intCast(index))),
         .lambda, .method_entry => if (worker.needs != null) try visit.worker(@fromBackingInt(@intCast(index))),
-        .template, .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => {},
+        .template, .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => {},
     };
     while (pending.pop()) |id| {
         const needs = program.worker(id).needs orelse continue;
@@ -5053,7 +5053,7 @@ fn recordExports(program: *Program) Allocator.Error!void {
         if (worker.imported or !Program.exportableKind(worker.key)) continue;
         const template: u32 = switch (worker.key) {
             .template => |key| @backingInt(key.template),
-            .lambda, .method_entry, .default, .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => LirProgram.BoxyExport.no_template,
+            .lambda, .method_entry, .default, .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => LirProgram.BoxyExport.no_template,
         };
         program.result.boxy_exports.putAssumeCapacity(program.result.store.getProcSpec(worker.proc).identity, .{ .template = template, .visible = is_visible });
     }
