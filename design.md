@@ -13124,7 +13124,12 @@ its checked signature alone, which importing and defining units read alike,
 and no analysis of a body decides them. Checking publishes each template's
 closed row nodes in the order they take positions
 (`CheckedProcedureTemplate.closed_row_nodes`), and Boxy reads that list
-rather than searching the signature. A closed row node stores its values
+rather than searching the signature. Boxy shares the conversion of a checked
+type with no type variable between scopes that bind the closed row node
+candidates it reaches alike (records and tag unions whose rows end in an
+uncommitted tail): those bindings are the only part of a scope such a
+conversion reads, since a scope names only variables and its closed row
+nodes, so the key is exact. A closed row node stores its values
 exactly as the plain record or tag union does: its scheme position holds the
 checked record or tag union itself, which the worker's scope converts to its
 closed type marked with the position (`Store.tailNode`, a distinct type only
