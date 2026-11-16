@@ -15,6 +15,7 @@ const Arc = @import("arc.zig");
 const ImmortalLocals = @import("immortal_locals.zig");
 const TailDrive = @import("tail_drive.zig");
 const ProcPasses = @import("proc_passes.zig");
+const RangeProve = @import("range_prove.zig");
 const ReturnSlot = @import("return_slot.zig");
 const ErasedOwner = @import("erased_owner.zig");
 const StrAppend = @import("str_append.zig");
@@ -150,6 +151,8 @@ pub const WorkMetrics = struct {
     monotype_runs: u32 = 0,
     solved_runs: u32 = 0,
     lir_continuations: u32 = 0,
+    /// What the range prover's work on the lowered procedures cost.
+    range_prove: RangeProve.WorkStats = .{},
 };
 
 /// Dev keeps standalone procedures eligible for reuse in other programs.
@@ -1864,7 +1867,7 @@ pub fn prepareCheckedModulesMonotype(
             modules,
             rootRequests(roots, layout_requests, static_data_requests),
             .{
-                .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled(),
+                .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled() or base.dev_diagnostics.isSet(.range_prove_stats),
                 .post_check_executor = target.post_check_executor,
                 .comptime_value_reads = target.comptime_value_reads,
                 .demand_driven_comptime_roots = target.demand_driven_comptime_roots,
@@ -2161,7 +2164,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .inline_expects = target.inline_expects,
         .list_in_place_map = target.list_in_place_map,
         .dict_seed_mode = if (target.zero_dict_seed) .comptime_zero else .runtime,
-        .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled(),
+        .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled() or base.dev_diagnostics.isSet(.range_prove_stats),
         .host_boundary_digests = target.host_boundary_digests,
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = prepared.test_plan_metadata,
@@ -2224,6 +2227,7 @@ fn runProcedureSegment(
         target.post_check_executor,
         target.lir_pass_parallel_metrics_out,
         timing,
+        if (target.work_metrics) |metrics| &metrics.range_prove else null,
         guarded_reads,
     );
 }
@@ -2497,7 +2501,7 @@ pub const PreparedBoxy = struct {
                 .run => .run,
                 .omit => .omit,
             },
-            .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled(),
+            .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled() or base.dev_diagnostics.isSet(.range_prove_stats),
             .list_in_place_map = target.list_in_place_map,
             .host_boundary_digests = target.host_boundary_digests,
             .compile_time = target.boxy_compile_time,
