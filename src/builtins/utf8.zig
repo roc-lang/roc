@@ -463,14 +463,15 @@ inline fn bytesBefore(bytes: []const u8, pos: usize) V {
     return before;
 }
 
-// 16-lane byte table lookups. Every index is below 16.
+// 16-lane byte table lookups. Every index is below 16. x86 uses inline
+// assembly: an LLVM intrinsic declared as an extern function takes its vector
+// arguments by reference under the Windows x64 calling convention, which does
+// not match the intrinsic's signature.
 
-extern fn @"llvm.x86.ssse3.pshuf.b.128"(V, V) V;
 extern fn @"llvm.aarch64.neon.tbl1.v16i8"(V, V) V;
 extern fn @"llvm.wasm.swizzle"(V, V) V;
 
 fn lookupX86Ssse3(table: V, index: V) V {
-    if (builtin.zig_backend == .stage2_llvm) return @"llvm.x86.ssse3.pshuf.b.128"(table, index);
     return asm ("pshufb %[index], %[table]"
         : [ret] "=x" (-> V),
         : [table] "0" (table),

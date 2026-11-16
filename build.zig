@@ -259,33 +259,37 @@ fn copyWindowsRuntimeToTestPlatform(
     return null;
 }
 
-/// BSD cross-compile targets
-const bsd_cross_targets = [_]CrossTarget{
-    .{ .name = "x64freebsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .freebsd, .abi = .none } },
-    .{ .name = "x64openbsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .openbsd, .abi = .none } },
-    .{ .name = "x64netbsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .netbsd, .abi = .none } },
-};
-
 /// All Linux cross-compile targets (musl + glibc)
 const linux_cross_targets = musl_cross_targets ++ glibc_cross_targets;
 
+/// The Roc targets with embedded dev objects of their own: the builtins, the
+/// Boxy runtime, and, where the target has one, the default platform that
+/// `roc build --opt=dev --target=X` links. Each object is compiled for the
+/// query `RocTarget.llvmTargetQuery` derives from its target's CPU contract,
+/// so it carries exactly the instructions that target declares. The targets
+/// that reuse another target's objects (`EmbeddedTargetObjects.forTarget` in
+/// src/cli/main.zig) name one with the same CPU contract, architecture and
+/// operating system.
+const dev_object_targets = [_]roc_target.RocTarget{
+    .x64musl,    .x64v1musl,    .arm64musl,  .arm64v1musl,
+    .x64glibc,   .x64v1glibc,   .arm64glibc, .arm64v1glibc,
+    .wasm32,     .wasm32v1,     .x64win,     .x64v1win,
+    .x64mingw,   .x64v1mingw,   .arm64win,   .arm64v1win,
+    .arm64mingw, .arm64v1mingw, .x64freebsd, .x64v1freebsd,
+    .x64openbsd, .x64v1openbsd, .x64netbsd,  .x64v1netbsd,
+    .x64mac,     .x64v1mac,     .arm64mac,
+};
+
 comptime {
-    // The prebuilt builtins objects these targets produce are what
-    // `roc build --opt=dev --target=X` links, and `BuiltinsObjects.forTarget`
-    // hands the same object to a `v1` target as to its default twin. That is
-    // only sound while these queries name no CPU model, because Zig then
-    // resolves them to the architecture baseline. Naming a model here would
-    // put instructions the baseline lacks into every `v1` binary, so it has to
-    // come with per-CPU-level objects instead.
-    for (musl_cross_targets ++ glibc_cross_targets ++ windows_cross_targets ++ bsd_cross_targets) |cross_target| {
-        if (cross_target.query.cpu_model != .determined_by_arch_os) {
-            @compileError("cross-compile target " ++ cross_target.name ++
-                " names a CPU model; baseline (v1) targets would link non-baseline builtins");
-        }
-        if (!cross_target.query.cpu_features_add.isEmpty()) {
-            @compileError("cross-compile target " ++ cross_target.name ++
-                " adds CPU features; baseline (v1) targets would link non-baseline builtins");
-        }
+    // A program links the dev objects of its own CPU level: every target in
+    // the list has its `v1` twin's objects next to its own, and the twin's
+    // query (derived from its contract) is a different CPU.
+    for (dev_object_targets) |dev_target| {
+        const twin = dev_target.baselineCpuTarget() orelse continue;
+        for (dev_object_targets) |listed| {
+            if (listed == twin) break;
+        } else @compileError("dev object target " ++ @tagName(dev_target) ++
+            " has no objects for its v1 twin " ++ @tagName(twin));
     }
 }
 
@@ -591,12 +595,12 @@ fn withSha256Floor(b: *std.Build, target: ResolvedTarget, optimize: std.builtin.
 }
 
 /// `target` without the SHA-256 instructions `withSha256Floor` adds, for the
-/// native builtins objects. Those objects are linked into programs for Roc
-/// targets whose CPU contract may lack the instructions (`BuiltinsObjects.forTarget`
-/// in src/cli/main.zig hands a `v1` target its default twin's object), and the
-/// `Crypto` builtins compress with the SHA-256 instructions exactly when their
-/// object is compiled with them (see `Rounds` in src/builtins/sha256.zig). A
-/// `-Dcpu` choice stands, as it does for `withSha256Floor`.
+/// native builtins objects. Those objects run on the machine running `roc`
+/// (the interpreter host links them), whose CPU the floor does not promise,
+/// and the `Crypto` builtins compress with the SHA-256 instructions exactly
+/// when their object is compiled with them (see `Rounds` in
+/// src/builtins/sha256.zig). A `-Dcpu` choice stands, as it does for
+/// `withSha256Floor`.
 fn withoutSha256Floor(b: *std.Build, target: ResolvedTarget) ResolvedTarget {
     var query = target.query;
     switch (query.cpu_model) {
@@ -1847,6 +1851,12 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     .{ .app = "issue_12785_big_record_match_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12785_big_record_match_static_lib_app.wasm", .run_args = &.{ "--expected", "1.0 4.0 9.0 21" } },
     .{ .app = "issue_12785_big_record_match_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no" }, .output = "issue_12785_big_record_match_boxy_static_lib_app.wasm", .run_args = &.{ "--expected", "1.0 4.0 9.0 21" } },
     .{ .app = "issue_12785_big_record_match_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12785_big_record_match_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "1.0 4.0 9.0 21" } },
+    // UTF-8 and UTF-16 decoding report the same errors and lossy output with
+    // the wasm32 builtins' simd128 kernels as with wasm32v1's scalar ones.
+    .{ .app = "utf_errors_at_every_position_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "utf_errors_at_every_position_static_lib_app.wasm", .run_args = &.{ "--expected", "ok" } },
+    .{ .app = "utf_errors_at_every_position_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "utf_errors_at_every_position_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "ok" } },
+    .{ .app = "utf_errors_at_every_position_static_lib_app.roc", .options = &.{"--opt=speed"}, .output = "utf_errors_at_every_position_speed_static_lib_app.wasm", .run_args = &.{ "--expected", "ok" } },
+    .{ .app = "utf_errors_at_every_position_static_lib_app.roc", .options = &.{"--opt=speed"}, .output = "utf_errors_at_every_position_speed_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "ok" } },
     .{ .app = "issue_12785_big_record_match_static_lib_app.roc", .options = &.{"--opt=size"}, .output = "issue_12785_big_record_match_size_static_lib_app.wasm", .run_args = &.{ "--expected", "1.0 4.0 9.0 21" } },
     // The same programs with every procedure split into fragments of a few
     // bytes: a split procedure computes what its direct emission computes.
@@ -2607,7 +2617,8 @@ pub fn build(b: *std.Build) void {
 
     // Build wasm32 builtins object at build time so the eval/REPL pipeline can
     // merge real compiled builtins into WASM modules (instead of using host imports).
-    const wasm32_resolved_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
+    // It is compiled for the `wasm32` target's CPU contract, simd128 included.
+    const wasm32_resolved_target = b.resolveTargetQuery(roc_target.RocTarget.wasm32.llvmTargetQuery());
     const wasm32_eval_runtime = addEvalWasmRuntimeModules(b, roc_modules, wasm32_resolved_target, "wasm32", optimize);
     const wasm32_builtins_module = wasm32_eval_runtime.builtins;
     roc_modules.eval.addImport("wasm32_builtins", wasm32_builtins_module);
@@ -6358,30 +6369,12 @@ fn addMainExe(
     // Add tracy support (required by parse/can/check modules)
     add_tracy(b, roc_modules.build_options, interpreter_shim_lib, b.graph.host, false, flag_enable_tracy);
 
-    // Cross-compile builtins objects for all supported targets.
-    // These are needed by `roc build --opt=dev --target=X` to link the app object with builtins.
-    // The interpreter shim is built only for the native host target above.
-    const cross_compile_builtins_targets = [_]struct { name: []const u8, query: std.Target.Query }{
-        .{ .name = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
-        .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
-        .{ .name = "x64glibc", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } },
-        .{ .name = "arm64glibc", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu } },
-        .{ .name = "wasm32", .query = .{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none } },
-        // WebAssembly 1.0: a wasm32v1 program links objects that use no
-        // instruction-set extension.
-        .{ .name = "wasm32v1", .query = roc_target.RocTarget.wasm32v1.llvmTargetQuery() },
-        .{ .name = "x64win", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc } },
-        .{ .name = "x64mingw", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu } },
-        .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc } },
-        .{ .name = "arm64mingw", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .gnu } },
-        .{ .name = "x64freebsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .freebsd, .abi = .none } },
-        .{ .name = "x64openbsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .openbsd, .abi = .none } },
-        .{ .name = "x64netbsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .netbsd, .abi = .none } },
-        .{ .name = "x64mac", .query = roc_target.macos_deployment.query(.x86_64) },
-        .{ .name = "arm64mac", .query = roc_target.macos_deployment.query(.aarch64) },
-    };
-
-    for (cross_compile_builtins_targets) |cross_target| {
+    // Dev objects for every target in `dev_object_targets`, each compiled for
+    // its target's CPU contract. `roc build --opt=dev --target=X` links them
+    // into the app. The interpreter shim is built only for the native host
+    // target above.
+    for (dev_object_targets) |dev_target| {
+        const cross_target: CrossTarget = .{ .name = @tagName(dev_target), .query = dev_target.llvmTargetQuery() };
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
         // The extern-ABI builtins object (linked by `roc build --opt=dev`)
         // must carry compiler-rt so its float math libcalls (sqrt, sin,
