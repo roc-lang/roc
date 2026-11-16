@@ -40,5 +40,5 @@ run! = |input| {
     # Geometric list growth needs only a handful of allocations for 512
     # appends. Allow growth-policy variation, but not a copy on every append.
     bounded = allocations <= 32
-    "length: ${len.to_str()}, bounded allocations: ${bounded.to_inspect()}, allocations: ${allocations.to_str()}"
+    "length: ${len.to_str()}, bounded allocations: ${Str.inspect(bounded)}, allocations: ${allocations.to_str()}"
 }

@@ -10253,9 +10253,13 @@ call, or the whole value of a non-recursive binding of one name whose only
 reference is the function of a call. A site inside a defaulted-field
 expression never qualifies, since that expression is lowered at every
 construction site that omits its field.
-Monotype stamps the flag on each function template, and a body without a
-procedure-relative return that has it is a source-single-use candidate,
-whether or not it captures. Every call to it in any program is that one site, lowered in some
+Monotype stamps the flag on each function template, and a body that has it
+is a source-single-use candidate, whether or not it captures or holds a
+`return`. A `return` in an inlined body delivers the call's result: the plan
+records which inline bodies hold one (`Plan.bodyReturns`), and lowering such
+a body places one value join in front of the call's continuation, which the
+body's own result and each of its `return`s jump to after writing the call's
+result local. No inlined `return` leaves the caller. Every call to it in any program is that one site, lowered in some
 specialization of the function containing it, so lowering inlines the call
 wherever the function it is lowering is not a wrapper: a wrapper body can be
 lowered more than once into one procedure, which a body with its own locals
@@ -11356,8 +11360,10 @@ the output a clone keeps rather than by how often it retries:
   Its jump sites in enclosing let-of-case joins are dropped, so a join sees
   only the jumps of output that survives. Its program suffix and the ids
   minted for it are rewound too, except when the attempt created a callable
-  worker: a worker is keyed by its template and ABIs alone, the retry and
-  every later clone reuse it, and its body lies in that suffix.
+  worker or committed a prefix split: a worker is keyed by its template and
+  ABIs alone, the retry and every later clone reuse it, and its body lies in
+  that suffix; a split function's new source body, and each prefix function's
+  parameters and template, lie there too, and every later clone reads them.
 
 Generic analysis follows existing constructor evidence; a structural consumer
 requests a producer's result shape through the separate demand path, which
@@ -21875,7 +21881,9 @@ definition: its report shows the code in the definition that introduced it,
 and, when its type shares a variable with a requirement this boundary related
 from two uses of one method, both of those uses. A relation folded into a retained one selects no target of its own,
 yet its dispatch site still outputs a plan. The unifier journals each fold as
-an exact (dropped, retained) pair of raw constraint function vars, and checking
+an exact (dropped, retained) pair of raw constraint function vars, generalization
+journals the same pair for each requirement its deduplication drops
+(`recordDeduplicatedDispatchRelation`), and checking
 outputs `ModuleEnv.dispatch_relation_merges`, mapping every folded relation
 to the relation on its merge chain whose target was selected. Checked
 module output keys the folded dispatch's evidence to that relation's
