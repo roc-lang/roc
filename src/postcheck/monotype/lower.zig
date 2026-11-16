@@ -13820,6 +13820,33 @@ const Builder = struct {
                 }
             } else Common.invariant("draft function ownership ancestry contained a cycle");
         }
+        // A generalized function's recursive reference is checked at the
+        // function's own type, while the use that requested the body in
+        // progress was checked at an instance of it, so the two carry
+        // different source keys and the reference's family has no
+        // specialization of its own. It still names the in-progress
+        // specialization of its site on its ownership chain.
+        if (!family_exists and recursive_reference) {
+            for (source_ctx.draft.nested_specs.items, 0..) |*spec, raw_spec_usize| {
+                if (spec.state != .lowering) continue;
+                if (spec.request_fn_ty != .none) continue;
+                if (signature_relation == .exact_graph and
+                    source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation != .exact_graph)
+                {
+                    continue;
+                }
+                if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, source_fn_key), family)) continue;
+                if (!try evidenceChainEql(self.allocator, spec.evidence, requested_evidence)) continue;
+                if (!substitutionsShareClasses(source_ctx.graph, spec.evidence.subst, requested_evidence.subst)) continue;
+                if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
+                if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
+                if (!source_ctx.draft.ownerDescendsFromDraftFn(request_owner, spec.fn_id)) continue;
+                const raw_spec: u32 = @intCast(raw_spec_usize);
+                if (!selection.add(raw_spec, false)) {
+                    Common.invariant("checked recursive nested reference matched more than one in-progress specialization of its site on its ownership chain");
+                }
+            }
+        }
         if (selection.selected()) |raw_spec| {
             self.count("nested_hits");
             // As for template requests, a partially overlapping in-progress
