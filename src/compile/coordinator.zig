@@ -3957,8 +3957,7 @@ pub const Coordinator = struct {
             .include_provided_data_exports = config.include_provided_data_exports,
             .include_internal_static_data = config.include_internal_static_data,
         } else .{};
-        var options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, &self.ctfe_timing);
-        options.strategy = self.specialization_strategy;
+        var options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, &self.ctfe_timing, self.specialization_strategy);
         options.post_check_executor = self.postCheckExecutor();
         if (try self.boxyObjects()) |objects| {
             options.boxy_objects = objects.source();
@@ -4237,8 +4236,7 @@ pub const Coordinator = struct {
         if (!self.everyModuleKnown()) return null;
         self.early_plan = try self.buildEarlyPlan();
         self.early_reports.coordinator = self;
-        var options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, &self.ctfe_timing);
-        options.strategy = .boxy;
+        var options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, &self.ctfe_timing, .boxy);
         options.post_check_executor = self.postCheckExecutor();
         options.boxy_objects = objects.source();
         options.cancel_request = self.cancel_request;
@@ -8276,8 +8274,7 @@ pub const Coordinator = struct {
         var local_ctfe_timing = eval.CompileTimeFinalization.Timing.init(self.roc_ctx.std_io);
         if (self.detailed_lowering_timing) local_ctfe_timing.lowering.enableDetail();
         const ctfe_timing = &local_ctfe_timing;
-        var ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing);
-        ctfe_options.strategy = self.specialization_strategy;
+        var ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing, self.specialization_strategy);
         ctfe_options.value_form_roots = self.value_form_roots;
         // Import resolution runs inside the type-check task and records its
         // own diagnostics on the env, after the canonicalize task already
@@ -10643,6 +10640,7 @@ fn hashPatternExtractionRegionsForView(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .interpolation_conversion,
             .literal_argument,
             .repl_expr,
             => false,
@@ -10678,6 +10676,7 @@ fn hashPatternExtractionRegionsForView(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .interpolation_conversion,
             .literal_argument,
             .repl_expr,
             => unreachable, // is_selected_root skipped every root of these kinds

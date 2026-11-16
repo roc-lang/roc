@@ -403,7 +403,22 @@ pub const Constants = struct {
     /// 195: combines the three independent 194 entries.
     /// 194: checked artifacts index their compile-time roots by pattern.
     /// 196: combines the 194 entry above with the 195 entry.
-    pub const CACHE_VERSION = 196;
+    /// 194: two independent entries. A type descriptor is stored as a 16-byte
+    ///      row: one word of kind, flags, a flex's literal marker, two
+    ///      generalization marks that are always clear in a stored row and a
+    ///      14-bit rank, and a payload of three words. A type store interns
+    ///      the identities of its nominal types and aliases, which their
+    ///      descriptors name by row, and every vars range has its length in
+    ///      the pool slot just before it, so a stored descriptor keeps only a
+    ///      range's start. And checked artifacts index their compile-time
+    ///      roots by pattern.
+    /// 195: combines the two independent 194 entries.
+    /// 197: combines the 196 entry with the 195 entry above, and a stored
+    ///      descriptor's word packs its flags by kind.
+    /// 195: unary `!` canonicalizes to its own node and checks as a dispatch
+    ///      of the operand's `not` method.
+    /// 198: combines the 197 entry with the 195 entry above.
+    pub const CACHE_VERSION = 198;
 };
 
 /// Configuration for the Roc cache system.

@@ -6211,8 +6211,6 @@ const Pass = struct {
             .list_replace_unsafe,
             .list_swap,
             .list_prepend,
-            .list_take_first,
-            .list_take_last,
             .list_reverse,
             .list_release_excess_capacity,
             .list_map_can_reuse,

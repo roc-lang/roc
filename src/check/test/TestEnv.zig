@@ -226,7 +226,6 @@ fn initWithImportLeaving(
         imported_envs.items,
         transitive_envs,
         &module_envs,
-        &module_env.store.regions,
         module_builtin_ctx,
     );
     checker.fixupTypeWriter();
@@ -273,12 +272,30 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
     return initConfigured(module_name, source, explicit_root_names, false, .sealed);
 }
 
+/// Check a whole file with generalization scopes given no rank deeper than
+/// `deepest_rank`, so a test reaches the nesting limit (`Rank.deepest` in
+/// every compiler build) with a few nested definitions.
+pub fn initWithDeepestRank(module_name: []const u8, source: []const u8, deepest_rank: types.Rank) TestEnvError!TestEnv {
+    return initConfiguredWithDeepestRank(module_name, source, &.{}, false, .sealed, deepest_rank);
+}
+
 fn initConfigured(
     module_name: []const u8,
     source: []const u8,
     explicit_root_names: []const []const u8,
     hosted: bool,
     comptime store_after_check: StoreAfterCheck,
+) TestEnvError!TestEnv {
+    return initConfiguredWithDeepestRank(module_name, source, explicit_root_names, hosted, store_after_check, .deepest);
+}
+
+fn initConfiguredWithDeepestRank(
+    module_name: []const u8,
+    source: []const u8,
+    explicit_root_names: []const []const u8,
+    hosted: bool,
+    comptime store_after_check: StoreAfterCheck,
+    deepest_rank: types.Rank,
 ) TestEnvError!TestEnv {
     const gpa = std.testing.allocator;
 
@@ -371,7 +388,6 @@ fn initConfigured(
         module_env,
         imported_envs.items,
         &module_envs,
-        &module_env.store.regions,
         module_builtin_ctx,
     );
     checker.fixupTypeWriter();
@@ -380,6 +396,7 @@ fn initConfigured(
         try checker.addExecutableRootDef(root_def_idx);
     }
     errdefer checker.deinit();
+    checker.env_pool.deepest_rank = deepest_rank;
 
     try runChecker(&checker, store_after_check);
     _ = try checker.problems.flushAllPendingStaticExhaustiveness();
@@ -745,7 +762,7 @@ pub fn assertLastDefTypeWithWarnings(
 }
 
 /// Construct a ReportBuilder wired to this TestEnv's allocator, module env,
-/// checker snapshots, problems, and regions. All test call sites are
+/// checker snapshots and problems. All test call sites are
 /// identical, so this single helper avoids repeating the nine arguments.
 fn initReportBuilder(self: *TestEnv) Allocator.Error!report_mod.ReportBuilder {
     return report_mod.ReportBuilder.init(
@@ -757,7 +774,6 @@ fn initReportBuilder(self: *TestEnv) Allocator.Error!report_mod.ReportBuilder {
         "test",
         &.{},
         &self.checker.import_mapping,
-        &self.checker.regions,
         null,
     );
 }

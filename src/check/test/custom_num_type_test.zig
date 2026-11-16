@@ -257,7 +257,7 @@ test "A method with mixed parameter types is called by name" {
     try test_env.assertNoErrors();
 }
 
-test "An operator's operands must be one type: Duration * I64 is a mismatch" {
+test "An operator whose method mixes types reports the method: Duration * I64" {
     const source =
         \\Duration := { seconds: I64 }.{
         \\    times : Duration, I64 -> Duration
@@ -277,7 +277,45 @@ test "An operator's operands must be one type: Duration * I64 is a mismatch" {
     var test_env = try TestEnv.init("Duration", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("Type Mismatch");
+    try test_env.assertOneTypeProblemMsgContains("Type Mismatch", "The `times` method on `Duration` has an incompatible type.");
+}
+
+test "An operator whose method mixes types reports once for a literal operand: Duration * 3" {
+    const source =
+        \\Duration := { seconds: I64 }.{
+        \\    times : Duration, I64 -> Duration
+        \\    times = |d, n| { seconds: d.seconds * n }
+        \\}
+        \\
+        \\my_duration : Duration
+        \\my_duration = { seconds: 60 }
+        \\
+        \\result = my_duration * 3
+    ;
+
+    var test_env = try TestEnv.init("Duration", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeProblemMsgContains("Type Mismatch", "The `times` method on `Duration` has an incompatible type.");
+}
+
+test "A comparison whose method does not return Bool reports once for a literal operand" {
+    const source =
+        \\Rank := [Low, High].{
+        \\    is_lt : Rank, Rank -> Str
+        \\    is_lt = |_, _| "no"
+        \\}
+        \\
+        \\low : Rank
+        \\low = Low
+        \\
+        \\result = low < 3
+    ;
+
+    var test_env = try TestEnv.init("Rank", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeProblemMsgContains("Type Mismatch", "The `is_lt` method on `Rank` has an incompatible type.");
 }
 
 test "A mismatching operator use leaves the method's other uses intact" {

@@ -110,11 +110,14 @@ pub const Options = struct {
     timing: ?*Timing = null,
     /// Retain each stage's native excerpts for in-memory consumers.
     keep_artifacts: bool = false,
-    /// The strategy whose evaluator lowers and runs the compile-time roots:
-    /// `.lss` specializes them into a Solved program and evaluates it in
-    /// dependency-ordered stages; `.boxy` lowers each dependency level as a
-    /// Boxy program (design.md "Caching Under `.boxy`").
-    strategy: base.SpecializationStrategy = .lss,
+    /// The strategy whose evaluator completes the roots holding function
+    /// values and the roots reading them: `.lss` specializes those into a
+    /// Solved program and evaluates it in dependency-ordered stages; `.boxy`
+    /// lowers them as Boxy programs, as either strategy lowers every other
+    /// root (design.md "Compile-Time Evaluation Strategy"). Every producer of
+    /// checked modules names it: the strategy of the runtime program that
+    /// consumes the modules, or `.boxy` when nothing lowers them for runtime.
+    strategy: base.SpecializationStrategy,
     /// Produce both strategies' representations, including literal argument
     /// roots under `.lss` (design.md "Literal Arguments").
     /// Set for an artifact no later compilation reopens, the baked Builtin,
@@ -1067,7 +1070,10 @@ pub fn finalizeProgram(
     try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, &function_types, .before_solved);
     var plan = try planRoots(allocator, modules, lowering_modules, program_roots, options.discovery_roots, lss_runtime, options.timing);
     defer plan.deinit(allocator);
-    var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, &plan, runtime_target, options, &debug_events, demand_driven);
+    var evaluated_literals: LiteralRootIdentities = .empty;
+    defer evaluated_literals.deinit(allocator);
+    const verify_literals = builtin.mode == .debug and lss_runtime and !plan.continued;
+    var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, &plan, runtime_target, options, &debug_events, demand_driven, if (verify_literals) .{ .record = &evaluated_literals } else .none);
     errdefer specialized.deinit();
     try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, &function_types, .after_solved);
     var runtime_stages: ProgramSession.RuntimeStages = .evaluation;
@@ -1087,8 +1093,9 @@ pub fn finalizeProgram(
         // such a compilation specializes it: every read of a completed value
         // restores the value as a constant. Only the literal roots that
         // specialization registers evaluate again; their outcomes were
-        // reported when the evaluation above ran them. The discovery roots
-        // that evaluation specialized contribute no runtime entrypoint.
+        // reported when the evaluation above ran them, which debug builds
+        // verify (`LiteralRootCheck`). The discovery roots that evaluation
+        // specialized contribute no runtime entrypoint.
         const quiet_modules = try allocator.alloc(ProgramModule, modules.len);
         defer allocator.free(quiet_modules);
         for (modules, quiet_modules) |entry, *quiet| quiet.* = .{ .module = entry.module, .problem_store = null };
@@ -1117,6 +1124,7 @@ pub fn finalizeProgram(
             quiet_options,
             &quiet_events,
             demand_driven,
+            if (verify_literals) .{ .verify = &evaluated_literals } else .none,
         );
         runtime_prepared = respecialized.prepared;
         respecialized.prepared = null;
@@ -1195,7 +1203,7 @@ fn evaluateBoxyRoots(
             const root_id = compileTimeRootForRequest(entry.module, request);
             const root = entry.module.compile_time_roots.root(root_id);
             if (root.payload != .pending) continue;
-            if (root.kind == .literal_argument) any_literal = true;
+            if (root.isBoxyEvaluated()) any_literal = true;
             try pending.append(allocator, .{ .module = @intCast(index), .root = root_id, .request = request });
         }
     }
@@ -1218,7 +1226,7 @@ fn evaluateBoxyRoots(
         // or through other roots.
         .before_solved => {
             for (pending.items, chosen, graph.unavailable_boxy_reads) |root, *flag, unavailable| {
-                flag.* = !unavailable and (artifacts[root.module].compile_time_roots.root(root.root).kind == .literal_argument or
+                flag.* = !unavailable and (artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated() or
                     !try checked_root_graph.rootHoldsFunction(allocator, function_types, artifacts, lowering_modules, root));
             }
             var changed = true;
@@ -1238,7 +1246,7 @@ fn evaluateBoxyRoots(
             var work = std.ArrayList(u32).empty;
             defer work.deinit(allocator);
             for (pending.items, chosen, 0..) |root, *flag, ordinal| {
-                flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind == .literal_argument;
+                flag.* = artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated();
                 if (flag.*) try work.append(allocator, @intCast(ordinal));
             }
             while (work.pop()) |ordinal| for (graph.deps[ordinal]) |dep| {
@@ -1275,6 +1283,21 @@ const QuietUnfinalizedReports = struct {
         destination.problem_store = null;
         return destination;
     }
+};
+
+/// The literal roots a specialization registered, each by its definition's
+/// content identity: one literal converted at one type.
+const LiteralRootIdentities = std.AutoHashMapUnmanaged([32]u8, void);
+
+/// What a specialization does with the identities of the literal roots it
+/// registers. A runtime program specialized after its evaluation completed
+/// reports no literal root outcome, so it must register only literal roots
+/// that evaluation registered, and so reported: debug builds record the
+/// evaluation's and verify the runtime program's against them.
+const LiteralRootCheck = union(enum) {
+    none,
+    record: *LiteralRootIdentities,
+    verify: *const LiteralRootIdentities,
 };
 
 /// What one specialization of a program and the evaluation of its
@@ -1358,10 +1381,10 @@ fn planRoots(
             // evaluated are read from its store like any other module's.
             const root_id = compileTimeRootForRequest(entry.module, request);
             if (!entry.module.compile_time_roots.root(root_id).needsEvaluation(.lss)) continue;
-            // A literal argument root is the `.boxy` evaluator's, which
-            // evaluates it beside this program (design.md "Literal
-            // Arguments").
-            if (entry.module.compile_time_roots.root(root_id).kind == .literal_argument) continue;
+            // A literal argument root and an interpolation conversion root
+            // are the `.boxy` evaluator's, which evaluates them beside this
+            // program (design.md "Literal Arguments").
+            if (entry.module.compile_time_roots.root(root_id).isBoxyEvaluated()) continue;
             try plan.requests.append(allocator, request);
             try plan.source_modules.append(allocator, entry.module.key.digest());
         }
@@ -1446,6 +1469,7 @@ fn specializeAndEvaluate(
     options: Options,
     debug_events: *DebugEvents,
     demand_driven: bool,
+    literal_check: LiteralRootCheck,
 ) FinalizeError!SpecializedProgram {
     const requests = &plan.requests;
     const source_modules = &plan.source_modules;
@@ -1507,6 +1531,20 @@ fn specializeAndEvaluate(
     };
     var monotype_owned = true;
     errdefer if (monotype_owned) monotype.deinit();
+    switch (literal_check) {
+        .none => {},
+        .record => |evaluated| {
+            var identities = monotype.program.literalRootIdentities();
+            while (identities.next()) |identity| try evaluated.put(allocator, identity.bytes, {});
+        },
+        .verify => |evaluated| {
+            var identities = monotype.program.literalRootIdentities();
+            while (identities.next()) |identity| {
+                if (!evaluated.contains(identity.bytes))
+                    finalizationInvariant("a runtime program specialized after its evaluation completed registered a literal root that evaluation did not");
+            }
+        },
+    }
     demand = monotype.takeComptimeDemand();
     const compile_time_root_count = demand.?.root_reads.len;
     result.compile_time_root_count = compile_time_root_count;
@@ -2295,13 +2333,13 @@ fn evaluateRootsBoxy(
             std.debug.print("boxy-work: pending root {d} {s} {s} #{d}: {s} (deps {any})\n", .{ ordinal, artifact.moduleEnvConst().module_name, @tagName(compile_time_root.kind), @backingInt(root.root), label.snippet, graph.deps[ordinal] });
         }
     }
-    // A literal argument root is the `.boxy` evaluator's whatever its
-    // value: one holding a function is validated and discarded
-    // (design.md "Literal Arguments").
+    // A literal argument root and an interpolation conversion root are the
+    // `.boxy` evaluator's whatever their value: one holding a function is
+    // validated and discarded (design.md "Literal Arguments").
     const classification_step_started = Timing.startStep(options.timing);
     const classification_started = if (base.dev_diagnostics.isSet(.trace_boxy_work)) (if (options.timing) |timing| nowNs(timing.std_io) else 0) else 0;
     for (roots, specialized) |root, *flag| {
-        flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind != .literal_argument and
+        flag.* = !artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated() and
             try checked_root_graph.rootHoldsFunction(allocator, function_types, artifacts, lowering_modules, root);
     }
     Timing.finishStep(options.timing, classification_step_started, .root_classification);
@@ -2530,7 +2568,7 @@ pub const EarlyEvaluation = struct {
         errdefer allocator.free(specialized);
         const classification_started = Timing.startStep(options.timing);
         for (roots.items, specialized) |root, *flag| {
-            flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind != .literal_argument and
+            flag.* = !artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated() and
                 try checked_root_graph.rootHoldsFunction(allocator, &self.function_types, artifacts, lowering, root);
         }
         Timing.finishStep(options.timing, classification_started, .root_classification);
@@ -2950,9 +2988,10 @@ const ModuleEvaluation = struct {
                     if (!shared.states[roots[dep].module].isDone(roots[dep].root)) finalizationInvariant("a compile-time root reads a value of a module evaluated after its own");
                     continue;
                 }
-                // A literal argument root is the `.boxy` evaluator's whatever
-                // reads it (design.md "Literal Arguments").
-                if (chosen[dep] or shared.modules[roots[dep].module].module.compile_time_roots.root(roots[dep].root).kind == .literal_argument) continue;
+                // A literal argument root and an interpolation conversion root
+                // are the `.boxy` evaluator's whatever reads them (design.md
+                // "Literal Arguments").
+                if (chosen[dep] or shared.modules[roots[dep].module].module.compile_time_roots.root(roots[dep].root).isBoxyEvaluated()) continue;
                 chosen[dep] = true;
                 try work.append(allocator, dep);
             }
@@ -3639,7 +3678,7 @@ fn isLiteralArgumentRequest(
     const owner = if (set.source_modules.len == 0) root_key else set.source_modules[index];
     for (modules) |entry| {
         if (!entry.module.key.digest().eql(owner)) continue;
-        return entry.module.compile_time_roots.root(root_id).kind == .literal_argument;
+        return entry.module.compile_time_roots.root(root_id).isBoxyEvaluated();
     }
     return false;
 }
@@ -4799,12 +4838,8 @@ const TimingPhase = enum {
     store_results,
 };
 
-/// Return the checking finalizer that evaluates compile-time roots.
-pub fn finalizer() checked.CompileTimeFinalizer {
-    return .{ .finalize = finalize };
-}
-
-/// Return a checking finalizer configured with caller-provided CTFE options.
+/// Return the checking finalizer that evaluates compile-time roots under the
+/// caller's CTFE options, which name the evaluation strategy.
 pub fn finalizerWithOptions(options: *const Options) checked.CompileTimeFinalizer {
     return .{
         .context = @ptrCast(@constCast(options)),
@@ -4821,10 +4856,8 @@ fn finalize(
     relation_modules: []const checked.ImportedModuleView,
     problem_store: ?*check.problem.Store,
 ) FinalizeError!void {
-    const options: Options = if (context) |raw|
-        @as(*const Options, @ptrCast(@alignCast(raw))).*
-    else
-        .{};
+    const raw_options = context orelse finalizationInvariant("the checking finalizer was installed without its options");
+    const options = @as(*const Options, @ptrCast(@alignCast(raw_options))).*;
     const requests = module.root_requests.compile_time_requests.items();
     const total_started_ns = if (requests.len != 0) if (options.timing) |timing| timing.start() else 0 else 0;
     if (requests.len != 0) {
@@ -7880,6 +7913,7 @@ fn failedRootPayload(
         .callable_binding,
         .numeral_conversion,
         .quote_conversion,
+        .interpolation_conversion,
         .repl_expr,
         .literal_argument,
         => .{ .const_node = try appendFailureConst(module, message, failure) },
@@ -8080,7 +8114,7 @@ fn compileTimeRootForRequest(
     }
     const root = module.compile_time_roots.roots.items()[raw];
     const kind_matches = switch (request.kind) {
-        .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .hoisted_validation or root.kind == .numeral_conversion or root.kind == .quote_conversion or root.kind == .literal_argument,
+        .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .hoisted_validation or root.kind == .numeral_conversion or root.kind == .quote_conversion or root.kind == .interpolation_conversion or root.kind == .literal_argument,
         .compile_time_callable => root.kind == .callable_binding,
         .repl_expr => root.kind == .repl_expr,
         .runtime_entrypoint,
@@ -8099,8 +8133,7 @@ fn compileTimeRootForRequest(
 }
 
 /// Store an evaluated root's value; a hoisted validation keeps no value,
-/// nor does a literal argument root whose value holds a function (design.md
-/// "Literal Arguments").
+/// nor does a validate-only root (design.md "Literal Arguments").
 fn storeRootValue(
     writer: *ConstStoreWriter.Writer,
     root: LirProgram.ConstRootPlan,
@@ -8108,7 +8141,7 @@ fn storeRootValue(
     value: @import("value.zig").Value,
 ) ConstStoreWriter.Error!checked.CompileTimeRootPayload {
     if (compile_time_root.kind == .hoisted_validation) return .discarded;
-    if (compile_time_root.literal_argument) |argument| if (argument.validate_only) return .discarded;
+    if (compile_time_root.validateOnly()) return .discarded;
     return writer.storeRoot(root, value);
 }
 
@@ -8139,6 +8172,7 @@ fn completeRoot(
         .expect,
         .numeral_conversion,
         .quote_conversion,
+        .interpolation_conversion,
         .repl_expr,
         .literal_argument,
         => null,
@@ -8206,6 +8240,7 @@ pub fn finishConstRoot(
         .expect,
         .numeral_conversion,
         .quote_conversion,
+        .interpolation_conversion,
         .repl_expr,
         .literal_argument,
         => unreachable, // finishConstRoot returned above for every kind other than constant and hoisted_constant
@@ -8556,7 +8591,7 @@ test "CTFE native emission uses worker callbacks and retains reusable code witho
         defer strings.deinit();
         var codegen = try backend.HostLirCodeGen.init(allocator, &program.store, &program.layouts, strings.view(), roc_target.host_cpu.level());
         defer codegen.deinit();
-        var artifacts = try DevProgram.compileProcedures(allocator, &codegen, &.{proc}, &.{}, .{ .post_check_executor = executor.executor(), .timing = &timing });
+        var artifacts = try DevProgram.compileProcedures(allocator, &codegen, &.{proc}, &.{}, .{ .strategy = .lss, .post_check_executor = executor.executor(), .timing = &timing });
         errdefer artifacts.deinit();
         try std.testing.expect(executor.callbacks > 0);
         try std.testing.expect(timing.snapshot().native_emission.procedures_emitted > 0);
@@ -8628,7 +8663,7 @@ test "shared compile-time debug replay sorts module root and event identities" {
         }
     };
     var output = Output{};
-    try events.replay(.{ .stderr = .{ .context = &output, .write = Output.write } });
+    try events.replay(.{ .strategy = .lss, .stderr = .{ .context = &output, .write = Output.write } });
     try std.testing.expectEqualStrings("[dbg] first\n[dbg] second\n[dbg] third\n[dbg] last\n", output.bytes[0..output.len]);
 }
 

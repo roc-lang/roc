@@ -198,8 +198,12 @@ pub const Modules = struct {
     /// The names of a module unit's link. A whole program links nothing, and
     /// names each module by its content identity.
     link_names: ?*const ModuleNames = null,
+    /// The platform relation modules of the lowering's root, which is the
+    /// first module: the app whose values fill the root's requirements.
+    relations: std.ArrayList(ModuleIndex) = .empty,
 
     pub fn deinit(self: *Modules) void {
+        self.relations.deinit(self.allocator);
         self.views.deinit(self.allocator);
         self.by_key.deinit(self.allocator);
         self.by_identity.deinit(self.allocator);

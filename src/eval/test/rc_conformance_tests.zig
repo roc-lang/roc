@@ -1029,8 +1029,8 @@ const cases = [_]Case{
         ,
     },
     .{
-        // List rest patterns lower to `list_take_first`/`list_take_last` over
-        // the matched list, and to `list_get_unsafe` for the fixed elements.
+        // A list rest pattern lowers to one `list_sublist` of the matched
+        // list, and its fixed items to `list_get_unsafe`.
         .name = "list rest patterns slice the matched list",
         .source_kind = .module,
         .source =

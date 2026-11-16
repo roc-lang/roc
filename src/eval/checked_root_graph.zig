@@ -369,7 +369,9 @@ const Walker = struct {
                 for (derivation.callsSlice(plans)) |call| switch (call.resolution) {
                     .callable => |node| try self.nodes.append(self.allocator, node),
                     .structural => |nested| try self.derivations.append(self.allocator, nested),
-                    .pending, .checked_error => {},
+                    // The enclosing definition's evidence supplies the target,
+                    // and that evidence is reached from its own sites.
+                    .pending, .checked_error, .forwarded => {},
                 };
                 continue;
             }
@@ -424,6 +426,7 @@ const Walker = struct {
                 const ref_id = artifact.resolved_value_refs.lookupIdByExpr(expr) orelse return;
                 try self.walkRef(artifact.resolved_value_refs.records.items()[@backingInt(ref_id)].ref);
             },
+            .requirement => |requirement| try self.pushTemplate(artifact.checked_procedure_templates.templateRef(artifact.key.digest(), requirement.template)),
         }
     }
 
@@ -770,6 +773,56 @@ test "CTFE root classification resolves nominal backings throughout the checked 
         try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &memos[0], &.{consumer}, .{ .root = checked.loweringView(holder), .imports = &.{checked.importedView(consumer)} }, root));
         try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &memos[1], &.{consumer}, .{ .root = checked.loweringViewWithRelations(consumer, &.{checked.importedView(holder)}) }, root));
         try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &memos[2], &.{consumer}, .{ .root = checked.loweringView(consumer), .imports = &.{checked.importedView(holder)} }, root));
+    }
+}
+
+test "a publication's strategy alone decides which evaluator stores a function-holding root" {
+    const allocator = std.testing.allocator;
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var parsed = try @import("inspected.zig").parseProgram(allocator, .module,
+            \\module [table, plain, total]
+            \\add_one : I64 -> I64
+            \\add_one = |x| x + 1
+            \\table : List(I64 -> I64)
+            \\table = [add_one, |x| x * 2]
+            \\plain : I64
+            \\plain = 40 + 2
+            \\total : I64
+            \\total = table.fold(plain, |acc, f| f(acc))
+        , &.{}, .{ .io = std.testing.io, .roots = .published_only, .strategy = strategy });
+        defer parsed.deinit(allocator);
+        try std.testing.expectEqual(@as(usize, 0), parsed.checker.problems.problems.items.len);
+        const module = &parsed.checked_artifact;
+        const views = try allocator.alloc(checked.ImportedModuleView, parsed.import_artifacts.len);
+        defer allocator.free(views);
+        for (parsed.import_artifacts, views) |*artifact, *view| view.* = checked.importedView(artifact);
+        const other: base.SpecializationStrategy = switch (strategy) {
+            .lss => .boxy,
+            .boxy => .lss,
+        };
+        var constants: usize = 0;
+        var holding: usize = 0;
+        var memo: FunctionTypeMemo = .{};
+        defer memo.deinit(allocator);
+        for (module.root_requests.compile_time_requests.items()) |request| {
+            const root_id = request.compile_time_root.get().?;
+            const root = module.compile_time_roots.root(root_id);
+            if (root.kind != .constant) continue;
+            constants += 1;
+            const holds = try rootHoldsFunction(allocator, &memo, &.{module}, .{ .root = checked.loweringView(module), .imports = views }, .{ .module = 0, .root = root_id, .request = request });
+            if (holds) holding += 1;
+            // The publication's strategy has every value.
+            try std.testing.expect(!root.needsEvaluation(strategy));
+            // A value holding no function is the same value under either
+            // strategy, whichever evaluator stored it, a reader of the
+            // function-holding root's among them. A function value exists
+            // only in the representation of the evaluator that stored it.
+            try std.testing.expectEqual(holds, root.needsEvaluation(other));
+            try std.testing.expectEqual(holds and strategy == .boxy, root.boxy_value != null);
+            try std.testing.expectEqual(holds and strategy == .boxy, root.payload == .unevaluated);
+        }
+        try std.testing.expectEqual(@as(usize, 3), constants);
+        try std.testing.expectEqual(@as(usize, 1), holding);
     }
 }
 

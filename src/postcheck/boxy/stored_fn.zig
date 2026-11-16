@@ -2273,6 +2273,11 @@ pub fn encodeNeeds(allocator: Allocator, program: *Program, needs: Tables.Needs)
     }
     try encoder.word(@intCast(needs.slots.len));
     for (needs.slots) |slot| try encoder.word(@backingInt(slot));
+    try encoder.word(@intCast(needs.demand.len));
+    for (needs.demand) |entry| {
+        try encoder.word(entry.word);
+        try encoder.bytes.append(allocator, @intCast(entry.ops.bits.mask));
+    }
     return try encoder.finish();
 }
 
@@ -2365,7 +2370,14 @@ pub fn decodeNeeds(program: *Program, bytes: []const u8) Allocator.Error!Tables.
     }
     const slots = try arena.alloc(Tables.RecipeId, decoder.word());
     for (slots) |*slot| slot.* = @fromBackingInt(decoder.word());
-    return .{ .input_count = input_count, .recipes = recipes, .slots = slots };
+    const demand = try arena.alloc(Tables.Demand, decoder.word());
+    for (demand) |*entry| {
+        const word = decoder.word();
+        var ops: StaticDescs.OpSet = .empty;
+        ops.bits.mask = @intCast(decoder.byte());
+        entry.* = .{ .word = word, .ops = ops };
+    }
+    return .{ .input_count = input_count, .recipes = recipes, .slots = slots, .demand = demand };
 }
 
 fn decodeOperands(decoder: *Decoder) Allocator.Error![]const Tables.Operand {

@@ -137,7 +137,7 @@ NO CHANGE
 					(e-num (value "2"))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call (constraint-fn-var 268)
+		(e-call (constraint-fn-var 266)
 			(e-lookup-local
 				(p-assign (ident "process!")))
 			(e-num (value "42"))))

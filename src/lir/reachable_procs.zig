@@ -248,7 +248,6 @@ const Pass = struct {
         try self.remapFrozenExports();
         try self.remapErasedFns();
         self.remapComptimeSites();
-        self.remapProcDebugNames();
         self.compactProcSpecs();
         try self.compactCFStmts();
         self.compactStaticDataValues();
@@ -749,10 +748,6 @@ const Pass = struct {
                 site.proc = proc;
             }
         }
-    }
-
-    fn remapProcDebugNames(self: *Pass) void {
-        self.store.compactProcDebugNames(&self.old_to_new);
     }
 
     fn compactProcSpecs(self: *Pass) void {

@@ -1045,8 +1045,9 @@ body_symbol_base: u64 = 0,
 proc_rewrite: ?ProcRewrite = null,
 /// Source location per proc, parallel to `proc_specs`.
 proc_locs: GuardedList.List(base.SourceLoc, "LirStore.proc_locs"),
-/// Source-level debug name per proc, parallel to `proc_specs`: a string in
-/// `strings`, or `none` for a proc without a source name.
+/// Source-level debug name per proc, parallel to `proc_specs`: the name to
+/// use when presenting a specialized LIR proc in debug output, or `.none`
+/// for a proc with no source name.
 proc_debug_names: GuardedList.List(base.StringLiteral.Idx, "LirStore.proc_debug_names"),
 /// Source-level name per local, parallel to `locals`: an index into
 /// `strings`, or `no_local_name` for compiler-generated temporaries.
@@ -1220,14 +1221,14 @@ pub fn localName(self: *const Self, id: LocalId) ?[]const u8 {
 /// Record the source-level debug name of a proc.
 pub fn setProcDebugName(self: *Self, id: LirProcSpecId, name: []const u8) Allocator.Error!void {
     if (name.len == 0) return;
-    try self.setProcDebugNameIndex(id, try self.insertString(name));
+    self.setProcDebugNameIndex(id, try self.insertString(name));
 }
 
 /// Copy proc source metadata from one proc to another, for compiler-generated variants.
 pub fn copyProcDebugInfo(self: *Self, dst: LirProcSpecId, src: LirProcSpecId) Allocator.Error!void {
     self.proc_locs.set(@backingInt(dst), self.proc_locs.get(@backingInt(src)));
     if (self.procDebugNameIndex(src)) |idx| {
-        try self.setProcDebugNameIndex(dst, idx);
+        self.setProcDebugNameIndex(dst, idx);
     }
 }
 
@@ -1258,17 +1259,13 @@ pub fn procDebugNameString(self: *const Self, id: LirProcSpecId) base.StringLite
 }
 
 fn procDebugNameIndex(self: *const Self, id: LirProcSpecId) ?base.StringLiteral.Idx {
-    const proc = @backingInt(id);
-    // A body worker holds no procedure metadata of its own, so it sees no
-    // procedure's name.
-    if (proc >= self.proc_debug_names.len()) return null;
-    const string = self.proc_debug_names.get(proc);
-    return if (string == .none) null else string;
+    if (self.body_coordinator) |coordinator| return coordinator.procDebugNameIndex(id);
+    const string = self.proc_debug_names.get(@backingInt(id));
+    return if (string == base.StringLiteral.Idx.none) null else string;
 }
 
-fn setProcDebugNameIndex(self: *Self, id: LirProcSpecId, string: base.StringLiteral.Idx) Allocator.Error!void {
-    self.assertBodyMetadataImmutable();
-    std.debug.assert(string != .none);
+fn setProcDebugNameIndex(self: *Self, id: LirProcSpecId, string: base.StringLiteral.Idx) void {
+    std.debug.assert(self.body_coordinator == null);
     self.proc_debug_names.set(@backingInt(id), string);
 }
 
@@ -2162,7 +2159,7 @@ pub fn addProcSpec(self: *Self, proc: LirProcSpec, loc: base.SourceLoc) Allocato
     if (spec.body != .none) spec.shapes = spec.shapes.merged(self.shapes);
     try self.proc_specs.append(self.allocator, spec);
     try self.proc_locs.append(self.allocator, loc);
-    try self.proc_debug_names.append(self.allocator, .none);
+    try self.proc_debug_names.append(self.allocator, base.StringLiteral.Idx.none);
     return @fromBackingInt(@intCast(@as(u32, @intCast(idx))));
 }
 
@@ -2937,38 +2934,27 @@ pub fn getLocalNameRaw(self: *const Self, id: LocalId) u32 {
     return self.local_names.get(index);
 }
 
-/// Moves each retained proc's debug name to its compact id and drops the
-/// names of pruned procs. Compact ids preserve proc order, so the column
-/// compacts in place.
-pub fn compactProcDebugNames(self: *Self, old_to_new: *const collections.OptionalIndexColumn(LirProcSpecId)) void {
-    std.debug.assert(old_to_new.len() == self.proc_debug_names.len());
-    var write: usize = 0;
-    const names = self.proc_debug_names.unsafeRawItemsMutForStore();
-    for (names, 0..) |string, old_proc| {
-        const new_proc = old_to_new.get(old_proc) orelse continue;
-        std.debug.assert(@backingInt(new_proc) == write);
-        names[write] = string;
-        write += 1;
-    }
-    self.proc_debug_names.shrinkRetainingCapacity(write);
-}
-
-/// Compacts proc specs and their parallel source-location table in place.
+/// Compacts proc specs and their parallel source-location and debug-name
+/// tables in place.
 pub fn compactProcSpecs(self: *Self, reachable: []const bool) void {
     std.debug.assert(reachable.len == self.proc_specs.len());
     std.debug.assert(self.proc_specs.len() == self.proc_locs.len());
+    std.debug.assert(self.proc_specs.len() == self.proc_debug_names.len());
 
     var write: usize = 0;
     const proc_specs = self.proc_specs.unsafeRawItemsMutForStore();
     const proc_locs = self.proc_locs.unsafeRawItemsMutForStore();
-    for (proc_specs, proc_locs, 0..) |proc, loc, index| {
+    const proc_debug_names = self.proc_debug_names.unsafeRawItemsMutForStore();
+    for (proc_specs, proc_locs, proc_debug_names, 0..) |proc, loc, debug_name, index| {
         if (!reachable[index]) continue;
         proc_specs[write] = proc;
         proc_locs[write] = loc;
+        proc_debug_names[write] = debug_name;
         write += 1;
     }
     self.proc_specs.shrinkRetainingCapacity(write);
     self.proc_locs.shrinkRetainingCapacity(write);
+    self.proc_debug_names.shrinkRetainingCapacity(write);
 }
 
 /// Compacts control-flow statements and their parallel debug metadata in place,

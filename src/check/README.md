@@ -21,4 +21,6 @@ cold diagnostics follow the same presentation path.
 
 Host-boundary validation uses the same scoped read-only views so generic user
 types cannot hide an unboxed callable or lose a parameter's boxing position.
-Only directly boxed functions and opaque iterator handles cross that boundary.
+Functions cross that boundary only inside a `Box`, either as its immediate
+payload or inside a boxed value the host only holds; `Iter` and `Stream` cross
+only as the immediate payload of their own `Box`.

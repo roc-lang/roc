@@ -994,6 +994,13 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
     var typed_cir_modules = try check.TypedCIR.Modules.init(allocator, &source_modules);
     defer typed_cir_modules.deinit();
 
+    // The strategy the expression's runtime program lowers under, which is
+    // therefore the one whose evaluator completes the modules' compile-time
+    // roots. The program runs on the LIR interpreter, as an
+    // `--opt=interpreter` program does, and lowers under the same strategy.
+    const strategy: base.SpecializationStrategy = .boxy;
+    const ctfe_options: eval.CompileTimeFinalization.Options = .{ .strategy = strategy };
+
     var builtin_artifact = try check.CheckedArtifact.publishFromTypedModule(
         allocator,
         &typed_cir_modules,
@@ -1002,7 +1009,7 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
             .module_env_storage = .{ .static_builtin = builtin_module.env },
             .hoisted_roots = .none,
             .io = @as(std.Io, undefined),
-            .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
+            .compile_time_finalizer = eval.CompileTimeFinalization.finalizerWithOptions(&ctfe_options),
         },
     );
     errdefer builtin_artifact.deinitRetainingModuleEnv(allocator);
@@ -1031,13 +1038,13 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
             .io = @as(std.Io, undefined),
             .imports = &publish_imports,
             .explicit_roots = &explicit_roots,
-            .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
+            .compile_time_finalizer = eval.CompileTimeFinalization.finalizerWithOptions(&ctfe_options),
         },
     );
     errdefer root_artifact.deinitRetainingModuleEnv(allocator);
 
     var import_artifacts = [_]check.CheckedArtifact.CheckedModuleArtifact{builtin_artifact};
-    const lowered = try eval.Inspected.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32, .{});
+    const lowered = try eval.Inspected.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32, .{ .specialization_strategy = strategy });
 
     root_artifact.deinitRetainingModuleEnv(allocator);
     import_artifacts[0].deinitRetainingModuleEnv(allocator);
@@ -1427,7 +1434,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         try can.resolveDeferredImports(type_can_ir, .{ .imports = .{ .resolved_store = imported_envs } });
 
         // Use pointer to the stored CIR to ensure solver references valid memory
-        result.solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, auto_imported_types, &type_can_ir.store.regions, module_builtin_ctx);
+        result.solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, auto_imported_types, module_builtin_ctx);
         var solver = &result.solver.?;
         solver.fixupTypeWriter();
 

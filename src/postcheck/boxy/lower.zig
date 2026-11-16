@@ -101,6 +101,9 @@ pub const Timing = struct {
         roots,
         /// Lowering queued workers' bodies.
         bodies,
+        /// Following descriptor operation demands to the descriptors and
+        /// override callables they reach.
+        demand,
         /// Filling reserved type tables.
         tables,
         /// Layout and static data requests.
@@ -123,9 +126,10 @@ pub const Timing = struct {
         return std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
     }
 
-    /// The time attributed so far to worker bodies and type tables.
+    /// The time attributed so far to worker bodies, descriptor demand and
+    /// type tables.
     fn drainedNs(self: *const Timing) u64 {
-        return self.steps_ns[@backingInt(Step.bodies)] +| self.steps_ns[@backingInt(Step.tables)];
+        return self.steps_ns[@backingInt(Step.bodies)] +| self.steps_ns[@backingInt(Step.demand)] +| self.steps_ns[@backingInt(Step.tables)];
     }
 
     /// Add the time since `started` to `step` and return the current time.
@@ -3502,7 +3506,7 @@ pub const Program = struct {
         var kept: std.ArrayList(checked.CheckedCapture) = .empty;
         for (listed) |capture| {
             const binder = bodies.binder(capture.pattern);
-            if (binder.is_scheme_alias or binder.is_promoted) continue;
+            if (binder.is_scheme_alias or binder.is_promoted or binder.destructured_alias != null) continue;
             try kept.append(self.arena.allocator(), capture);
         }
         return kept.items;
@@ -4197,43 +4201,40 @@ pub const Program = struct {
         };
     }
 
-    /// Lower every queued worker, and fill every reserved type table, each
-    /// once its worker's needs are known; filling a table reserves the
-    /// tables its words name, so the two alternate until neither has work.
+    /// Lower every queued worker, follow every descriptor demand, and fill
+    /// every reserved type table, each once its worker's needs are known.
+    /// Lowering a worker and filling a table demand descriptor operations;
+    /// following a demand builds override callables, which reserve tables
+    /// and queue workers; filling a table reserves the tables its words
+    /// name. The three alternate until none has work, which completes the
+    /// demand closure (design.md "Type Descriptors").
     fn drain(self: *Program) Allocator.Error!void {
-        if (self.input.timing) |timing| return self.drainTimed(timing);
+        const timing = self.input.timing;
+        var started: i96 = if (timing) |t| t.now() else 0;
         while (true) {
             while (self.worklist.pop()) |id| {
                 if (self.worker(id).lowered) continue;
                 self.worker(id).lowered = true;
+                if (timing) |t| t.workers_by_kind[@backingInt(std.meta.activeTag(self.worker(id).key))] += 1;
                 try Body.lowerWorker(self, id);
             }
+            if (timing) |t| started = t.lap(started, .bodies);
+            const demanded = try self.static_descs.drainDemand();
+            if (timing) |t| started = t.lap(started, .demand);
+            if (demanded) continue;
             const unfilled = self.static_descs.nextUnfilledTable() orelse return;
             try self.fillTable(unfilled);
-        }
-    }
-
-    /// `drain`, attributing its time to body lowering and table filling and
-    /// counting the workers it lowers by kind.
-    fn drainTimed(self: *Program, timing: *Timing) Allocator.Error!void {
-        var started = timing.now();
-        while (true) {
-            while (self.worklist.pop()) |id| {
-                if (self.worker(id).lowered) continue;
-                self.worker(id).lowered = true;
-                timing.workers_by_kind[@backingInt(std.meta.activeTag(self.worker(id).key))] += 1;
-                try Body.lowerWorker(self, id);
+            if (timing) |t| {
+                t.tables_filled += 1;
+                started = t.lap(started, .tables);
             }
-            started = timing.lap(started, .bodies);
-            const unfilled = self.static_descs.nextUnfilledTable() orelse return;
-            try self.fillTable(unfilled);
-            timing.tables_filled += 1;
-            started = timing.lap(started, .tables);
         }
     }
 
     /// Fill the reserved table `unfilled`: its worker's inputs, then each
-    /// slot's recipe evaluated at them.
+    /// slot's recipe evaluated at them. Each descriptor operation the
+    /// worker's needs demand of a word is demanded of the descriptor the
+    /// word holds here.
     fn fillTable(self: *Program, unfilled: StaticDescs.UnfilledTable) Allocator.Error!void {
         // Tables are filled once the worklist is empty, so every worker
         // something called is lowered or imported.
@@ -4259,6 +4260,10 @@ pub const Program = struct {
         defer evaluation.deinit();
         for (words[needs.input_count..], needs.slots) |*slot_word, recipe| slot_word.* = try evaluation.word(recipe);
         try self.static_descs.fillTable(unfilled, words);
+        for (needs.demand) |entry| {
+            var ops = entry.ops.iterator();
+            while (ops.next()) |op| try self.static_descs.demandWord(words[entry.word], op);
+        }
     }
 
     /// The environment worker `id`'s body converts its checked types in:
@@ -4563,7 +4568,9 @@ fn registerModules(program: *Program) Allocator.Error!void {
     const input = program.input;
     _ = try program.modules.add(checked.importedView(input.modules.root.module));
     for (input.modules.imports) |view| _ = try program.modules.add(view);
-    for (input.modules.root.relation_modules) |view| _ = try program.modules.add(view);
+    for (input.modules.root.relation_modules) |view| {
+        try program.modules.relations.append(allocator, try program.modules.add(view));
+    }
     program.body_indexed = try allocator.alloc(bool, program.modules.views.items.len);
     @memset(program.body_indexed, false);
     try indexModules(program, 0);
@@ -4687,13 +4694,13 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         // root as a procedure producing the value.
         if (request.abi == .compile_time and input.compile_time) {
             const ret = program.worker(worker_id).ret;
-            // A literal argument root whose value holds a function is
-            // validated and discarded: nothing stores its value (design.md
-            // "Literal Arguments").
-            const validate_only = if (request.compile_time_root.get()) |root_id| blk: {
-                const root = program.module(source_module).view.compile_time_roots.root(root_id);
-                break :blk if (root.literal_argument) |argument| argument.validate_only else false;
-            } else false;
+            // A validate-only root is evaluated for its outcome and
+            // discarded: nothing stores its value (design.md "Literal
+            // Arguments").
+            const validate_only = if (request.compile_time_root.get()) |root_id|
+                program.module(source_module).view.compile_time_roots.root(root_id).validateOnly()
+            else
+                false;
             const stored_ty = if (validate_only) try program.store.emptyRecord() else ret;
             try program.result.const_roots.append(allocator, .{
                 .root_order = @intCast(index),
@@ -5012,8 +5019,11 @@ fn templateRejected(program: *Program, view: *const types.ModuleView, template: 
 
 /// Whether a module unit emits `template` (design.md "Per-Module Output"):
 /// every template another object may call or compose, which leaves out the
-/// wrappers of `expect` and REPL roots. Nothing reaches those but a test
-/// plan's or a REPL's own roots, and each of those lowers as one program.
+/// wrappers of `expect` and REPL roots and of interpolation conversion roots.
+/// Nothing reaches the first two but a test plan's or a REPL's own roots, and
+/// each of those lowers as one program; nothing calls an interpolation
+/// conversion root's wrapper at all, since every use converts its literal in
+/// place (design.md "Literal Arguments").
 /// Exact procedure aliases forward to their targets without evaluator wrappers.
 fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedProcedureTemplate, forwarded_roots: []const bool) bool {
     return switch (template.body) {
@@ -5022,7 +5032,7 @@ fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedPro
             const root_id = view.view.entry_wrappers.get(wrapper_id).root;
             if (forwarded_roots[@backingInt(root_id)]) break :blk false;
             break :blk switch (view.view.compile_time_roots.root(root_id).kind) {
-                .expect, .repl_expr => false,
+                .expect, .repl_expr, .interpolation_conversion => false,
                 .callable_binding, .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => true,
             };
         },
