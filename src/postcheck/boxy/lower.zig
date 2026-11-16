@@ -882,6 +882,9 @@ pub const TemplateKey = struct { module: ModuleIndex, template: checked_names.Ch
 /// table, or null when the platform's hosted section omits it.
 pub const HostedEntry = struct { symbol: []const u8, dispatch_index: ?u32 };
 
+/// A worker and a type of its scope, keying `Program.row_node_reads`.
+const RowNodeRead = struct { worker: WorkerId, ty: TypeId };
+
 /// One `.boxy` lowering: its workers, types, layouts, and output.
 pub const Program = struct {
     pub const StoredValueKey = struct { module: ModuleIndex, node: checked.ConstNodeId, ty: TypeId };
@@ -906,6 +909,11 @@ pub const Program = struct {
     scope_envs: std.ArrayList(?*const types.Env) = .empty,
     /// Each type's content digest (`typeContent`), once computed.
     type_contents: collections.DenseMapUnmanaged(TypeId, [32]u8) = .empty,
+    /// `rowNodesAsVariables` of each worker with row nodes and type asked
+    /// about. A worker's row nodes and scope never change once it exists,
+    /// and interned nodes are immutable, so the rewrite of a type is the
+    /// same every time.
+    row_node_reads: std.AutoHashMapUnmanaged(RowNodeRead, TypeId) = .empty,
     /// The Builtin module, found on first use (`builtinModule`).
     builtin_module: ?ModuleIndex = null,
     /// The templates the Builtin module registers as methods of `List`,
@@ -1585,6 +1593,7 @@ pub const Program = struct {
         self.scope_envs.deinit(self.allocator);
         self.worklist.deinit(self.allocator);
         self.type_contents.deinit(self.allocator);
+        self.row_node_reads.deinit(self.allocator);
         if (self.list_methods) |*methods| methods.deinit(self.allocator);
         self.list_item_slots.deinit(self.allocator);
         self.by_module_idx.deinit(self.allocator);
@@ -2226,10 +2235,14 @@ pub const Program = struct {
     pub fn rowNodesAsVariables(self: *Program, id: WorkerId, ty: TypeId) Allocator.Error!TypeId {
         const target = self.worker(id).*;
         if (target.row_nodes.len == 0) return ty;
+        const key: RowNodeRead = .{ .worker = id, .ty = ty };
+        if (self.row_node_reads.get(key)) |known| return known;
         const identity = try self.allocator.alloc(TypeId, target.scheme_vars.len);
         defer self.allocator.free(identity);
         for (identity, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
-        return try self.rewriteTypeWithRowNodes(self.allocator, ty, .{ .dense = identity }, null, target.row_nodes, .keep);
+        const read = try self.rewriteTypeWithRowNodes(self.allocator, ty, .{ .dense = identity }, null, target.row_nodes, .keep);
+        try self.row_node_reads.put(self.allocator, key, read);
+        return read;
     }
 
     /// A type of worker `id`'s signature at the instantiation `bound`, its
