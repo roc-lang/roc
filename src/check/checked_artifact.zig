@@ -14424,15 +14424,18 @@ const EvidencePass = struct {
         }
     }
 
-    /// Whether `template` is the wrapper of a top-level binding whose scheme
-    /// is the binding's own: a callable binding's or a constant's.
+    /// Whether `template` is the wrapper of a binding whose scheme is the
+    /// binding's own: a callable binding's or a constant's, or a hoisted
+    /// source-pattern root's, whose wrapper yields the value its pattern
+    /// binds.
     fn wrapperReturnsBindingValue(self: *EvidencePass, template: CheckedProcedureTemplate) bool {
         return switch (template.body) {
             .entry_wrapper => |wrapper_id| blk: {
                 const root = self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root);
-                break :blk root.source_pattern == .none and switch (root.kind) {
+                break :blk switch (root.kind) {
                     .callable_binding, .constant => true,
-                    .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .interpolation_conversion, .literal_argument, .expect, .repl_expr => false,
+                    .hoisted_constant => root.source_pattern != .none,
+                    .hoisted_validation, .numeral_conversion, .quote_conversion, .interpolation_conversion, .literal_argument, .expect, .repl_expr => false,
                 };
             },
             .checked_body, .intrinsic_wrapper, .unimplemented => false,
@@ -14476,14 +14479,15 @@ const EvidencePass = struct {
     }
 
     /// Procedure definitions, hoisted source-pattern roots, callable bindings
-    /// and constants bind an evidence chain. A callable binding's or a
-    /// constant's wrapper produces the binding's value for a use, which
-    /// supplies the binding's dispatch parameters exactly as a use of a
-    /// procedure does: a constant whose type keeps a variable is computed at
-    /// each instantiation it is read at, and a requirement on that variable
-    /// has no implementation until a read fixes it. A constant whose type is
-    /// closed has no such parameter. Expression entry wrappers evaluate their
-    /// values without dispatch parameters.
+    /// and constants take their scheme's dispatch parameters. A callable
+    /// binding's, a constant's or a hoisted source-pattern root's wrapper
+    /// produces the binding's value for a use, which supplies the binding's
+    /// dispatch parameters exactly as a use of a procedure does: a constant
+    /// whose type keeps a variable is computed at each instantiation it is
+    /// read at, and a requirement on that variable has no implementation
+    /// until a read fixes it. A constant whose type is closed has no such
+    /// parameter. Expression entry wrappers evaluate their values without
+    /// dispatch parameters.
     fn templateEvidenceSchemeVar(
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
@@ -14503,12 +14507,21 @@ const EvidencePass = struct {
         };
     }
 
-    /// The template's own params as the outermost evidence chain level.
+    /// The template's own params as the outermost evidence chain level. A
+    /// hoisted source-pattern root's body matches the destructure's base
+    /// expression, which the root of every name the destructure binds shares,
+    /// so that body's evidence resolves against no one name's params: a
+    /// requirement the root's instantiation fixes resolves as an unpinned one
+    /// does at that read.
     fn templateChainLevel(
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
         template_defs: *const collections.DenseMap(u32, Var),
     ) Allocator.Error!ChainLevel {
+        switch (template.body) {
+            .entry_wrapper => |wrapper_id| if (self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root).source_pattern != .none) return .empty,
+            .checked_body, .intrinsic_wrapper, .unimplemented => {},
+        }
         const scheme_var = self.templateEvidenceSchemeVar(template, template_defs) orelse return .empty;
         const schema = try self.schemeSchema(scheme_var);
         return .{ .params = schema.params, .by_dispatcher = schema.by_dispatcher };

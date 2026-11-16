@@ -8806,8 +8806,9 @@ the source requirements.
 Procedure definitions, hoisted source-pattern roots, callable bindings, and
 constants carry evidence parameters on their procedure templates; expression
 entry wrappers do not, because they evaluate a value without a caller's
-dispatch parameters. A callable binding's or a constant's entry wrapper is a
-zero-argument procedure returning the binding's value, and a use that computes
+dispatch parameters. A callable binding's, a constant's or a hoisted
+source-pattern root's entry wrapper is a zero-argument procedure returning the
+binding's value, and a use that computes
 the binding calls it, supplying the binding's evidence as any procedure use
 does. Its parameters are the binding's scheme parameters in the binding's
 order, and each scheme-callable path is the binding's path below the wrapper's
@@ -9367,9 +9368,12 @@ including its captured codec requirements, from the request's root evidence.
 
 A constant's entry wrapper retains the evaluated value's quantified type
 variables and accepts the requirements on them as wrapper arguments, as a
-callable binding's does. Procedure definitions, hoisted source-pattern roots,
-callable bindings, and constants bind evidence chains; expression wrappers
-resolve their bodies without caller-supplied evidence. Call-edge evidence
+callable binding's does. Procedure definitions, callable bindings, and
+constants bind evidence chains; expression wrappers resolve their bodies
+without caller-supplied evidence. A hoisted source-pattern root's wrapper
+takes its name's requirements too, but its body resolves against no chain:
+the body matches a destructure's base expression, which the root of every
+name the destructure binds shares (Procedure Aliases). Call-edge evidence
 analysis and use-site enumeration consume the same explicit root
 classification.
 
@@ -21398,6 +21402,21 @@ destructuring one with a tuple pattern (including one name at two types and
 a pattern over a local name for the constant), with a record pattern, with a
 record pattern over an optional field, and over a local name for the
 constant.
+
+The same names at top level are compile-time roots. A top-level name for the
+constant (`p = Hooks.pair`) is a constant whose type keeps a variable: its
+entry wrapper takes its scheme's requirements and each read supplies them
+from its evidence, so its right-hand side's requirements resolve against the
+wrapper's own parameters, never through a representative use of the name. A
+name a top-level destructuring binds is the source pattern of a hoisted root
+whose wrapper yields that name's value; the wrapper takes the name's
+scheme's requirements below its return as a constant's does, and a read of
+the name, a callable binding when the name is a function, supplies them from
+its evidence under both strategies. Every name the destructuring binds has
+such a root, and each root's body matches the same base expression, so that
+body's evidence is resolved against no one name's parameters: the lookup's
+requirements resolve from the root's instantiation (`from_callable`).
+`test/cli/ImportedGenericTopLevelAlias.roc` runs both forms.
 
 A call through a forwarding alias is a direct call. Monotype enters the
 alias's scope with the call's use-site evidence and substitution, and requests

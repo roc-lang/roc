@@ -185,8 +185,10 @@ pub const Task = union(enum) {
     /// of a failed root's value then fails as that root did, reported once
     /// by the root (`CrashExtra.failed_value`).
     restore: struct { source: lower.ConstSource, node: checked.ConstNodeId, ty: TypeId, root: ?checked.ComptimeRootId = null },
-    /// Push the function value a callable-eval binding stored.
-    restore_callable_eval: struct { module: ModuleIndex, template: checked.CallableEvalTemplateId, ty: TypeId },
+    /// Push the function value a callable-eval binding stored. `use` is the
+    /// lookup that reads the binding, whose evidence supplies the
+    /// requirements its entry wrapper takes.
+    restore_callable_eval: struct { module: ModuleIndex, template: checked.CallableEvalTemplateId, ty: TypeId, use: ?ExprId = null },
     /// Pop a restored closure's capture values and build it.
     /// `worker_ty` is the closure's type as its worker stores it, and `ty`
     /// the restored value's.
@@ -3383,9 +3385,21 @@ pub const Builder = struct {
                             invariant("a callable-eval binding's root has no entry wrapper");
                         const callee = try self.program.templateRefWorker(wrapper);
                         const callee_worker = self.program.worker(callee).*;
-                        if (callee_worker.params.len != 0 or callee_worker.dictionary_params.len != 0) invariant("a callable-eval entry wrapper takes arguments");
+                        if (callee_worker.params.len != 0) invariant("a callable-eval entry wrapper takes arguments");
                         const bound = try self.relateWorkerVariables(callee, callee_worker.ret, eval.ty);
                         defer self.allocator.free(bound);
+                        if (callee_worker.dictionary_params.len != 0) {
+                            // The binding's type keeps a variable a
+                            // requirement is on: the read's evidence supplies
+                            // it, as it does a polymorphic constant's.
+                            const use = eval.use orelse invariant("a callable-eval binding whose entry wrapper takes requirements was read without a use site");
+                            const evidence = self.view.view.static_dispatch_plans.siteEvidence(use) orelse
+                                invariant("a read of a callable-eval binding whose entry wrapper takes requirements has no evidence");
+                            const instance = try self.callInstanceBound(callee, try self.program.arena.allocator().dupe(TypeId, bound), evidence, .literal);
+                            defer self.allocator.free(instance.hidden);
+                            try self.finishCall(callee, instance.hidden, instance.bound, &.{}, instance.ret, eval.ty);
+                            return;
+                        }
                         const hidden = try self.allocator.alloc(Word, bound.len + callee_worker.literal_params);
                         defer self.allocator.free(hidden);
                         for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
@@ -6018,7 +6032,7 @@ pub const Builder = struct {
     /// hidden arguments.
     pub fn procedureValue(self: *Builder, expr_id: ExprId, use: checked.ProcedureUseTemplate, required: ?checked.PlatformRequiredProcedureResolvedRef, use_ty: TypeId) Allocator.Error!void {
         const callee = try self.procedureUseCallee(use);
-        if (callee == .callable_eval) return try self.push(.{ .restore_callable_eval = .{ .module = callee.callable_eval.module, .template = callee.callable_eval.template, .ty = use_ty } });
+        if (callee == .callable_eval) return try self.push(.{ .restore_callable_eval = .{ .module = callee.callable_eval.module, .template = callee.callable_eval.template, .ty = use_ty, .use = expr_id } });
         const target = callee.target();
         const instance = try self.procedureUseInstance(callee, expr_id, required, use_ty);
         defer self.allocator.free(instance.hidden);
@@ -7034,7 +7048,7 @@ pub const Builder = struct {
             const eval = callee.callable_eval;
             try self.push(.{ .finish_erased_call = .{ .fn_ty = call_fn, .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id) } });
             try self.pushExprsReversed(call.args);
-            try self.push(.{ .restore_callable_eval = .{ .module = eval.module, .template = eval.template, .ty = call_fn } });
+            try self.push(.{ .restore_callable_eval = .{ .module = eval.module, .template = eval.template, .ty = call_fn, .use = call.func } });
             return;
         }
         // A platform requirement's call of the app's binding is checked
