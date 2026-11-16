@@ -9469,7 +9469,7 @@ and the method's own codec requirements are read at what that relation binds.
 A variable of the template that built a stored nested function can reach neither
 the function's type nor its captures, as the format of an encoder a generic method
 returned does not, so the function keeps its template specialization's concrete
-type (`ConstFn.owner_fn_ty`) and Boxy relates the template to it. Relating a
+type (`ConstFn.owner_fn_ty`) and Boxy and Monotype relate the template to it. Relating a
 requirement to its selected method then binds the variables only that requirement
 names, for dictionaries and descriptors alike. A
 generated codec runtime body reads its edge in that body's module when that
@@ -20334,6 +20334,21 @@ that selection. Boxy reads the same list and builds an unpromoted sibling
 method's capture as that procedure's function value. A hoisted constant's
 binder contributes none either: it is a frame local only while its own root
 lowers and is otherwise read through the ConstStore.
+A stored function's captures are the lifted capture slots of the specialization
+that was evaluated, so it holds a value for each enclosing-frame binder that
+specialization's body reads. A binder the source body names only in code the
+specialization's types leave unreachable (an arm matching a value of a type
+with no values, the body of a lambda taking one) has no stored value, although
+the stored function's checked site lists it. The body restored from the stored
+function is that same specialization, so such a binder contributes nothing to
+any procedure the restored body builds: no entry guard, no capture operand, and
+no declaration-context binding. Every other unbound frame value is an invariant
+failure. The restored body is the same specialization because restoring the
+root evidence frame of the template that built the function relates that
+template's checked function type to the specialization's concrete type
+(`ConstFn.owner_fn_ty`): a variable of the template can reach neither the
+stored function's type, nor a capture it stores, nor a retained method
+contract, and still decides which of the body's arms are reachable.
 Stored function evidence remains graph-free across root and cache boundaries.
 Entering a restored nested body recreates its lexical substitutions in that
 body's instantiation context, consuming saved callable/capture interfaces and
@@ -25813,7 +25828,10 @@ representation conversions. A deferred call is not made. Everything else the
 frame owns is released first, the call is recorded as pending together with
 its packed arguments, one owned reference to its closure, and the layout and
 result descriptor the statement calls with, and the procedure returns. Its
-target holds no value.
+target holds no value. The reference is retained through the closure local, so
+when the call's reuse source is an outer wrapper of the closure, the wrapper's
+unit is one of the units released first; Debug LIR certification requires a
+deferred call's reuse source to be live only when the call transfers it.
 
 Whoever awaits that procedure's result makes the pending call and repeats
 while the call it made leaves another pending. The pending record owns one
