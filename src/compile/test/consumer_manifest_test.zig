@@ -229,6 +229,7 @@ test "a build evaluates every compile-time value and materializes the ones its p
         build_options.compiler_compatibility_id,
         null,
         ctx,
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -323,6 +324,7 @@ test "one evaluated root has one completed-value slot however many places read i
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(allocator, allocator, io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -443,6 +445,7 @@ test "a separate compile-time consumer lowers no runtime-only procedure" {
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(allocator, allocator, io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -533,6 +536,7 @@ test "a separate runtime consumer keeps the producer's root order and test-plan 
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(allocator, allocator, io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;

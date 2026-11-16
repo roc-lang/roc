@@ -34,7 +34,7 @@ fn expectChecksWithoutErrors(files: []const SourceFile, root: []const u8) Forwar
     const root_path = try tmp_dir.dir.realPathFileAlloc(io, root, gpa);
     defer gpa.free(root_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
     try build_env.build(root_path);
 

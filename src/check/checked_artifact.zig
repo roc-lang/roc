@@ -5088,9 +5088,7 @@ pub const CheckedTypeStore = struct {
         // content identity.
         var reached: std.ArrayList(Var) = .empty;
         defer reached.deinit(allocator);
-        for (store.sealed_var_facts.items(), 0..) |var_facts, raw| {
-            if (var_facts.reached) try reached.append(allocator, @fromBackingInt(@intCast(raw)));
-        }
+        try sealed_type_view.appendReached(Var, allocator, &reached, store.sealed_var_facts.items(), sealed_type_view.sameVar);
         try embedReachableImportedNominalDecls(allocator, &store, names, import_views, reached.items, 0);
 
         return .{
@@ -8795,18 +8793,12 @@ pub fn numericDefaultPhaseForConstraints(
 
 /// Whether a record's extension is the closed empty record.
 pub fn checkedRecordExtIsEmpty(module_env: *const ModuleEnv, ext: Var) bool {
-    return switch ((&module_env.types).resolveVar(ext).desc.content) {
-        .structure => |flat| flat == .empty_record,
-        .flex, .rigid, .alias, .field_presence, .err => false,
-    };
+    return (&module_env.types).kindOf(ext) == .empty_record;
 }
 
 /// Whether a tag union's extension is the closed empty tag union.
 pub fn checkedTagUnionExtIsEmpty(module_env: *const ModuleEnv, ext: Var) bool {
-    return switch ((&module_env.types).resolveVar(ext).desc.content) {
-        .structure => |flat| flat == .empty_tag_union,
-        .flex, .rigid, .alias, .field_presence, .err => false,
-    };
+    return (&module_env.types).kindOf(ext) == .empty_tag_union;
 }
 
 /// Imported origin modules a type publication has resolved, by the
@@ -13083,10 +13075,14 @@ pub const DispatchRefScope = struct {
     scheme_vars: artifact_serialize.Span = .{},
     /// The scope scheme's literal requirements, as a template's.
     literal_requirements: artifact_serialize.Span = .{},
+    /// Whether the scope's scheme holds an uncommitted tag tail, which each
+    /// use copies and may lift (design.md "Uncommitted Tag Tails"), as the
+    /// scheme's publication walk found.
+    holds_uncommitted_tag_tail: bool = false,
 };
 
 comptime {
-    std.debug.assert(@sizeOf(DispatchRefScope) == 40);
+    std.debug.assert(@sizeOf(DispatchRefScope) == 44);
 }
 
 /// Stable identity of a generalized-local dispatch scope within a checked
@@ -13470,6 +13466,10 @@ fn sealCheckedProcedureTemplateRefs(
                 .local_mutable_version,
                 .pattern_binder,
                 => |binding| {
+                    // A name a destructuring scheme alias binds is
+                    // generalized: each use instantiates its type, so no
+                    // equality relates a use to the name.
+                    if (bodies.index().destructuredAliasDecl(binding.binder) != null) continue;
                     try collector.specialization_relations.append(allocator, .{
                         .scope = use_scope,
                         .data = .{ .type_equality = .{
@@ -13719,6 +13719,9 @@ const EvidencePass = struct {
         /// The nodes `params` name their paths by.
         path_nodes: []const static_dispatch.EvidencePathNode,
         identity_vars: []const Var,
+        /// Whether the scheme's walk reached an uncommitted tag tail
+        /// (`TypeWriter.lastSchemeHeldUncommittedTagTail`).
+        holds_uncommitted_tag_tail: bool,
         published: ?PublishedScheme = null,
     };
 
@@ -14011,6 +14014,7 @@ const EvidencePass = struct {
         for (self.templates.templates.items()) |*template| {
             if (self.templateEvidenceSchemeVar(template.*, &template_defs)) |scheme_var| {
                 const schema = try self.publishScheme(scheme_var);
+                template.uncommitted_tag_tail = if ((try self.schemeSchema(scheme_var)).holds_uncommitted_tag_tail) .held else .none;
                 template.scheme_vars = schema.vars;
                 template.evidence_params = if (self.wrapperReturnsBindingValue(template.*))
                     try self.appendReturnedValueEvidenceParams(schema.params)
@@ -14031,12 +14035,18 @@ const EvidencePass = struct {
                 // An expression root's wrapper retains its value's type
                 // variables, but nothing reads the root at another
                 // instantiation, so it has no dispatch parameters.
-                template.scheme_vars = try self.appendSchemeVars(self.templateSchemeVar(template.*, &template_defs));
+                const scheme_var = self.templateSchemeVar(template.*, &template_defs);
+                template.scheme_vars = try self.appendSchemeVars(scheme_var);
+                template.uncommitted_tag_tail = if (scheme_var) |root|
+                    (if ((try self.schemeSchema(root)).holds_uncommitted_tag_tail) .held else .none)
+                else
+                    .no_scheme;
                 template.evidence_params = .{};
             }
         }
         for (self.templates.dispatch_scopes.items()) |*scope| {
             const schema = try self.publishScheme(scope.scheme_var);
+            scope.holds_uncommitted_tag_tail = (try self.schemeSchema(scope.scheme_var)).holds_uncommitted_tag_tail;
             scope.scheme_vars = schema.vars;
             scope.evidence_params = schema.params;
         }
@@ -14428,15 +14438,18 @@ const EvidencePass = struct {
         }
     }
 
-    /// Whether `template` is the wrapper of a top-level binding whose scheme
-    /// is the binding's own: a callable binding's or a constant's.
+    /// Whether `template` is the wrapper of a binding whose scheme is the
+    /// binding's own: a callable binding's or a constant's, or a hoisted
+    /// source-pattern root's, whose wrapper yields the value its pattern
+    /// binds.
     fn wrapperReturnsBindingValue(self: *EvidencePass, template: CheckedProcedureTemplate) bool {
         return switch (template.body) {
             .entry_wrapper => |wrapper_id| blk: {
                 const root = self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root);
-                break :blk root.source_pattern == .none and switch (root.kind) {
+                break :blk switch (root.kind) {
                     .callable_binding, .constant => true,
-                    .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .interpolation_conversion, .literal_argument, .expect, .repl_expr => false,
+                    .hoisted_constant => root.source_pattern != .none,
+                    .hoisted_validation, .numeral_conversion, .quote_conversion, .interpolation_conversion, .literal_argument, .expect, .repl_expr => false,
                 };
             },
             .checked_body, .intrinsic_wrapper, .unimplemented => false,
@@ -14480,14 +14493,15 @@ const EvidencePass = struct {
     }
 
     /// Procedure definitions, hoisted source-pattern roots, callable bindings
-    /// and constants bind an evidence chain. A callable binding's or a
-    /// constant's wrapper produces the binding's value for a use, which
-    /// supplies the binding's dispatch parameters exactly as a use of a
-    /// procedure does: a constant whose type keeps a variable is computed at
-    /// each instantiation it is read at, and a requirement on that variable
-    /// has no implementation until a read fixes it. A constant whose type is
-    /// closed has no such parameter. Expression entry wrappers evaluate their
-    /// values without dispatch parameters.
+    /// and constants take their scheme's dispatch parameters. A callable
+    /// binding's, a constant's or a hoisted source-pattern root's wrapper
+    /// produces the binding's value for a use, which supplies the binding's
+    /// dispatch parameters exactly as a use of a procedure does: a constant
+    /// whose type keeps a variable is computed at each instantiation it is
+    /// read at, and a requirement on that variable has no implementation
+    /// until a read fixes it. A constant whose type is closed has no such
+    /// parameter. Expression entry wrappers evaluate their values without
+    /// dispatch parameters.
     fn templateEvidenceSchemeVar(
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
@@ -14507,12 +14521,21 @@ const EvidencePass = struct {
         };
     }
 
-    /// The template's own params as the outermost evidence chain level.
+    /// The template's own params as the outermost evidence chain level. A
+    /// hoisted source-pattern root's body matches the destructure's base
+    /// expression, which the root of every name the destructure binds shares,
+    /// so that body's evidence resolves against no one name's params: a
+    /// requirement the root's instantiation fixes resolves as an unpinned one
+    /// does at that read.
     fn templateChainLevel(
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
         template_defs: *const collections.DenseMap(u32, Var),
     ) Allocator.Error!ChainLevel {
+        switch (template.body) {
+            .entry_wrapper => |wrapper_id| if (self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root).source_pattern != .none) return .empty,
+            .checked_body, .intrinsic_wrapper, .unimplemented => {},
+        }
         const scheme_var = self.templateEvidenceSchemeVar(template, template_defs) orelse return .empty;
         const schema = try self.schemeSchema(scheme_var);
         return .{ .params = schema.params, .by_dispatcher = schema.by_dispatcher };
@@ -14629,8 +14652,6 @@ const EvidencePass = struct {
             entry.value_ptr.* = record_idx;
         }
 
-        const global_value_defs = module_env.store.sliceDefs(module_env.global_value_defs);
-
         // Generalized local VALUE decls and one representative use record per
         // looked-up pattern (see `local_value_scheme_by_var`).
         for (module_env.scheme_uses.items(), 0..) |record, i| {
@@ -14650,14 +14671,6 @@ const EvidencePass = struct {
                 const statement_data = self.module.getStatement(statement);
                 if (statement_data != .s_decl) continue;
                 try self.mapValueSchemeParams(statement_data.s_decl.pattern, statement_data.s_decl.expr, &scheme_params);
-            }
-            // Top-level generalized VALUE defs (e.g. an `if` choosing between
-            // closures) lower inline at their single use type exactly like
-            // local value decls; their body plans resolve through use records
-            // the same way.
-            for (global_value_defs) |def_idx| {
-                const def = module_env.store.getDef(def_idx);
-                try self.mapValueSchemeParams(def.pattern, def.expr, &scheme_params);
             }
         }
     }
@@ -15011,6 +15024,7 @@ const EvidencePass = struct {
         }
         const identity_vars = try self.identity_writer.identityVarsFromScheme(root, relation_roots.items);
         errdefer self.allocator.free(identity_vars);
+        const holds_uncommitted_tag_tail = self.identity_writer.lastSchemeHeldUncommittedTagTail();
         var dispatcher_row_count: usize = 0;
         for (params.items) |param| {
             if (param.source != .scheme_requirement) dispatcher_row_count += 1;
@@ -15031,6 +15045,7 @@ const EvidencePass = struct {
             .by_dispatcher = .{ .rows = dispatcher_rows },
             .path_nodes = try arena.dupe(static_dispatch.EvidencePathNode, self.enum_scratch.paramPathNodes()),
             .identity_vars = identity_vars,
+            .holds_uncommitted_tag_tail = holds_uncommitted_tag_tail,
         };
         try self.schemas_by_root.put(owner, schema);
         return schema;
@@ -16870,13 +16885,18 @@ const EvidencePass = struct {
                 return;
             }
             // A constant's value can hold functions as data, which a read
-            // hands on before any of them is requested at a concrete type.
-            const constant_value = switch (rec.ref) {
+            // hands on before any of them is requested at a concrete type. A
+            // local alias of a constant reads that constant: the lookup its
+            // alias chain reaches says what the use reads.
+            const constant_value = switch (self.resolved_value_refs.callableTarget(ref_id).ref) {
                 .top_level_const,
                 .imported_const,
                 .selected_hoisted_const,
                 .platform_required_const,
                 => true,
+                // A scheme alias of a constant reads that constant at each
+                // use of the alias.
+                .local_proc => |local| local.is_alias and !bindsProcedureAlias(self.module, local.binder, local.expr),
                 .top_level_proc,
                 .imported_proc,
                 .hosted_proc,
@@ -16886,7 +16906,6 @@ const EvidencePass = struct {
                 .local_value,
                 .local_mutable_version,
                 .pattern_binder,
-                .local_proc,
                 .platform_required_declaration,
                 .platform_required_checked_error,
                 => false,
@@ -18180,6 +18199,20 @@ pub const ProcTarget = union(enum) {
     comptime_only,
 };
 
+/// Whether a procedure template's signature may hold an uncommitted tag tail
+/// (`CheckedProcedureTemplate.uncommitted_tag_tail`).
+pub const TemplateTagTail = enum(u8) {
+    /// The scheme's publication walk reached none.
+    none,
+    /// The scheme's publication walk reached one.
+    held,
+    /// The template has no scheme of its own (an entry wrapper of an
+    /// expression, statement, hoisted or literal root, or a body no
+    /// definition owns), so no scheme walk says; publication walks its
+    /// signature for closed row nodes.
+    no_scheme,
+};
+
 /// Public `CheckedProcedureTemplate` declaration.
 pub const CheckedProcedureTemplate = struct {
     proc_base: canonical.ProcBaseKeyRef,
@@ -18241,6 +18274,17 @@ pub const CheckedProcedureTemplate = struct {
     /// `CheckedProcedureTemplateTable.sealed_slots_pool`). Boxy binds such a
     /// variable to the empty row and passes no descriptor for it.
     sealed_slots: artifact_serialize.Span = .{},
+    /// What the template's scheme says about uncommitted tag tails (design.md
+    /// "Uncommitted Tag Tails").
+    uncommitted_tag_tail: TemplateTagTail = .no_scheme,
+    /// The closed row nodes of the template's signature (design.md "Methods
+    /// On Open Rows"), in the order Boxy gives them scheme positions: each
+    /// record whose row ends in a sealed uncommitted record tail and each
+    /// tag union with a tag whose row ends in an uncommitted tag tail, as a
+    /// walk of the signature and then of its evidence parameters' types
+    /// first reaches them (a range into
+    /// `CheckedProcedureTemplateTable.closed_row_nodes_pool`).
+    closed_row_nodes: artifact_serialize.Span = .{},
 };
 
 fn checkedTypeIsClosedTagRow(
@@ -18376,6 +18420,8 @@ pub const CheckedProcedureTemplateTable = struct {
     demand_pool: collections.SafeList(SchemeVarDemand) = .{},
     /// Flat pool backing each template's `sealed_slots` span.
     sealed_slots_pool: collections.SafeList(u32) = .{},
+    /// Flat pool backing each template's `closed_row_nodes` span.
+    closed_row_nodes_pool: collections.SafeList(CheckedTypeId) = .{},
 
     pub const Serialized = extern struct {
         templates: SerializedSlice(CheckedProcedureTemplate) = .{},
@@ -18397,6 +18443,7 @@ pub const CheckedProcedureTemplateTable = struct {
         specialization_interface_types: SerializedSlice(CheckedTypeId) = .{},
         demand_pool: SerializedSlice(SchemeVarDemand) = .{},
         sealed_slots_pool: SerializedSlice(u32) = .{},
+        closed_row_nodes_pool: SerializedSlice(CheckedTypeId) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckedProcedureTemplateTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -18690,6 +18737,12 @@ pub const CheckedProcedureTemplateTable = struct {
     /// The `scheme_vars` slots of a template that are sealed, ascending.
     pub fn templateSealedSlots(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const u32 {
         return self.sealed_slots_pool.items()[template.sealed_slots.start .. template.sealed_slots.start + template.sealed_slots.len];
+    }
+
+    /// The closed row nodes of a template's signature, in the order Boxy
+    /// gives them scheme positions (`CheckedProcedureTemplate.closed_row_nodes`).
+    pub fn templateClosedRowNodes(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const CheckedTypeId {
+        return self.closed_row_nodes_pool.items()[template.closed_row_nodes.start .. template.closed_row_nodes.start + template.closed_row_nodes.len];
     }
 
     /// A template's evidence parameters, in canonical order.
@@ -24544,9 +24597,7 @@ pub const ModuleInterfaceCapabilities = struct {
         var nominal_types = std.ArrayList(CheckedTypeId).empty;
         defer nominal_types.deinit(allocator);
         for (0..checked_types.payloads.items().len) |index| try nominal_types.append(allocator, type_ids.fromSynthesized(index));
-        for (checked_types.sealed_var_facts.items(), 0..) |var_facts, raw| {
-            if (var_facts.reached) try nominal_types.append(allocator, type_ids.fromVar(@fromBackingInt(@intCast(raw))));
-        }
+        try sealed_type_view.appendReached(CheckedTypeId, allocator, &nominal_types, checked_types.sealed_var_facts.items(), type_ids.fromVar);
         var source_capabilities = std.ArrayList(sealed_type_view.SealedCapabilityRow).empty;
         defer source_capabilities.deinit(allocator);
 
@@ -26262,6 +26313,136 @@ fn publishSealedSlots(allocator: Allocator, checked_types: CheckedTypeStoreView,
     templates.sealed_slots_pool.deinit(allocator);
     templates.sealed_slots_pool = .fromOwnedSlice(try slots.toOwnedSlice(allocator));
 }
+
+/// Give every procedure template the closed row nodes of its signature
+/// (`CheckedProcedureTemplate.closed_row_nodes`). Only a template whose
+/// scheme holds an uncommitted tag tail, or has a sealed uncommitted record
+/// tail (`sealed_slots`), or that has no scheme of its own
+/// (`TemplateTagTail.no_scheme`) can have one, so only those signatures are
+/// walked.
+fn publishClosedRowNodes(allocator: Allocator, checked_types: CheckedTypeStoreView, templates: *CheckedProcedureTemplateTable) Allocator.Error!void {
+    var walk = ClosedRowNodeWalk{ .allocator = allocator, .types = checked_types };
+    defer walk.deinit();
+    var nodes: std.ArrayList(CheckedTypeId) = .empty;
+    errdefer nodes.deinit(allocator);
+    for (templates.templates.items()) |*template| {
+        const start: u32 = @intCast(nodes.items.len);
+        const scheme_vars = templates.templateSchemeVars(template);
+        const sealed_slots = templates.templateSealedSlots(template);
+        const seals_record_tail = for (sealed_slots) |slot| {
+            if (recordTailCandidate(checked_types.payload(scheme_vars[slot]))) break true;
+        } else false;
+        if (template.uncommitted_tag_tail != .none or seals_record_tail) {
+            try walk.append(template.checked_fn_root, templates.templateEvidenceParams(template), scheme_vars, sealed_slots, &nodes);
+        }
+        template.closed_row_nodes = .{ .start = start, .len = @intCast(nodes.items.len - start) };
+    }
+    templates.closed_row_nodes_pool.deinit(allocator);
+    templates.closed_row_nodes_pool = .fromOwnedSlice(try nodes.toOwnedSlice(allocator));
+}
+
+/// The walk that finds a signature's closed row nodes, in the order Boxy
+/// gives them scheme positions (`CheckedProcedureTemplate.closed_row_nodes`).
+pub const ClosedRowNodeWalk = struct {
+    allocator: Allocator,
+    types: CheckedTypeStoreView,
+    sealed_tails: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty,
+    pending: std.ArrayList(CheckedTypeId) = .empty,
+    seen: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty,
+
+    pub fn deinit(self: *ClosedRowNodeWalk) void {
+        self.sealed_tails.deinit(self.allocator);
+        self.pending.deinit(self.allocator);
+        self.seen.deinit(self.allocator);
+    }
+
+    /// Append to `out` each closed row node of the signature `fn_root` with
+    /// `evidence_params`, whose scheme is `scheme_vars` with `sealed_slots`
+    /// sealed: each record whose row ends in a sealed uncommitted record
+    /// tail, and each tag union with a tag whose row ends in an uncommitted
+    /// tag tail, in the order a walk first reaches them, the root before the
+    /// evidence parameters' callable and dispatcher types.
+    pub fn append(
+        self: *ClosedRowNodeWalk,
+        fn_root: CheckedTypeId,
+        evidence_params: []const static_dispatch.EvidenceParamRecord,
+        scheme_vars: []const CheckedTypeId,
+        sealed_slots: []const u32,
+        out: *std.ArrayList(CheckedTypeId),
+    ) Allocator.Error!void {
+        self.sealed_tails.clearRetainingCapacity();
+        self.pending.clearRetainingCapacity();
+        self.seen.clearRetainingCapacity();
+        for (sealed_slots) |slot| {
+            const variable = scheme_vars[slot];
+            switch (self.types.payload(variable)) {
+                .flex => |flex| if (flex.row_tail == .uncommitted_record) try self.sealed_tails.put(self.allocator, variable, {}),
+                .pending, .err, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union, .field_kind => {},
+            }
+        }
+        var index = evidence_params.len;
+        while (index > 0) {
+            index -= 1;
+            try self.pending.append(self.allocator, evidence_params[index].dispatcher_ty);
+            try self.pending.append(self.allocator, evidence_params[index].callable_ty);
+        }
+        try self.pending.append(self.allocator, fn_root);
+        // `seen` visits each type once, so each closed row node is appended
+        // once.
+        while (self.pending.pop()) |ty| {
+            if ((try self.seen.getOrPut(self.allocator, ty)).found_existing) continue;
+            const start = self.pending.items.len;
+            switch (self.types.payload(ty)) {
+                .alias => |alias| try self.pending.append(self.allocator, alias.backing),
+                .record => |record| {
+                    var fields = record.fields;
+                    var current = record.ext;
+                    while (true) {
+                        for (0..fields.len()) |field_index| try self.pending.append(self.allocator, fields.get(field_index).ty);
+                        fields = .empty;
+                        switch (self.types.payload(current)) {
+                            .alias => |alias| current = alias.backing,
+                            .record => |ext_record| {
+                                fields = ext_record.fields;
+                                current = ext_record.ext;
+                            },
+                            .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union, .field_kind => break,
+                        }
+                    }
+                    if (self.sealed_tails.contains(current)) try out.append(self.allocator, ty);
+                },
+                .tag_union => |tag_union| {
+                    var tags = tag_union.tags;
+                    var current = tag_union.ext;
+                    var tag_count: usize = 0;
+                    while (true) {
+                        tag_count += tags.len();
+                        for (0..tags.len()) |tag_index| try self.pending.appendSlice(self.allocator, tags.get(tag_index).args);
+                        tags = .empty;
+                        switch (self.types.payload(current)) {
+                            .alias => |alias| current = alias.backing,
+                            .tag_union => |ext_union| {
+                                tags = ext_union.tags;
+                                current = ext_union.ext;
+                            },
+                            .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .record, .empty_tag_union, .field_kind => break,
+                        }
+                    }
+                    if (tag_count != 0 and self.types.uncommittedTagTail(current)) try out.append(self.allocator, ty);
+                },
+                .tuple => |items| try self.pending.appendSlice(self.allocator, items),
+                .function => |function| {
+                    try self.pending.appendSlice(self.allocator, function.args);
+                    try self.pending.append(self.allocator, function.ret);
+                },
+                .nominal => |nominal| try self.pending.appendSlice(self.allocator, nominal.args),
+                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union, .field_kind => {},
+            }
+            // Children are visited in the order they were listed.
+            std.mem.reverse(CheckedTypeId, self.pending.items[start..]);
+        }
+    }
+};
 
 /// Whether a scheme variable is an uncommitted record tail that may seal.
 fn recordTailCandidate(payload: CheckedTypePayload) bool {
@@ -30301,7 +30482,7 @@ pub const ExportedProcedureTemplate = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(ExportedProcedureTemplate) == 296);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(ExportedProcedureTemplate) == 304);
 }
 
 /// Read-only view of a closure-bearing export table: its rows plus the pool
@@ -32133,7 +32314,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 231);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 232);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -36248,6 +36429,7 @@ pub fn publishFromTypedModule(
         try demand_pass.publish();
     }
     try publishSealedSlots(allocator, checked_types.view(), &checked_procedure_templates);
+    try publishClosedRowNodes(allocator, checked_types.view(), &checked_procedure_templates);
     template_iterator_refs.deinit(allocator);
     plan_build_data.deinit(allocator);
 
@@ -38286,8 +38468,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x55, 0x0E, 0xDB, 0x1E, 0xFC, 0x72, 0xDF, 0xA1, 0x13, 0xF4, 0x38, 0xB0, 0x9E, 0x10, 0x05, 0x56,
-        0x1F, 0x23, 0x3B, 0x08, 0x69, 0xA1, 0xA8, 0x56, 0xFC, 0xD1, 0xFA, 0x0C, 0x46, 0xBB, 0x26, 0x56,
+        0x28, 0xF1, 0xC4, 0xC2, 0x55, 0x94, 0x26, 0x71, 0xF7, 0x99, 0x9F, 0xBE, 0xF8, 0x36, 0x06, 0x1C,
+        0xD8, 0xEB, 0x74, 0x85, 0x35, 0x91, 0xE6, 0xA9, 0x26, 0x0A, 0x33, 0x6F, 0x48, 0x8D, 0x3B, 0xB8,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

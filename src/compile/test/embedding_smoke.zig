@@ -91,6 +91,7 @@ fn runEmbeddingSequence(
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;

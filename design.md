@@ -5184,7 +5184,10 @@ is a CIR node has its node's region; every later variable is given its region
 once, when it is created, so consecutive variables sharing a region are one
 run; and a variable an instantiation copied from a same-module definition
 records the variable it was copied from and has that variable's region. A
-variable an instantiation maps to without creating it keeps its own. The snapshots keep
+variable an instantiation maps to without creating it keeps its own. A
+variable's region never changes once given, so a deferred static-dispatch
+obligation carries its receiver's region from where it enters the deferred
+queue, and resolving it reads that instead of looking the region up again. The snapshots keep
 their frozen captures and node formats beside the text the miss rendered, so a
 snapshot whose text was never rendered renders on demand with the module's
 names, the stored import display names and the module's default sources, the
@@ -6240,6 +6243,28 @@ union of its signature with a tag whose row ends in one is a row node instead
 (Methods On Open Rows), described by one hidden descriptor of the whole value
 as each use has it, so printing it renders the nominal type a use lifted it
 into in both lowering modes.
+
+Checked-module output records which schemes hold such a tail. The walk that
+publishes a scheme (its identity variables and evidence parameters) visits
+every node of the scheme's type, so it notes an uncommitted tag tail as it
+passes one; each procedure template and each generalized local scope records
+the result (`CheckedProcedureTemplate.uncommitted_tag_tail`,
+`DispatchRefScope.holds_uncommitted_tag_tail`). A template with no scheme of
+its own (an entry wrapper of an expression, statement, hoisted or literal
+root) records that instead (`TemplateTagTail.no_scheme`), since no scheme
+walk speaks for its signature. A template that holds one, that has no
+scheme of its own, or that seals an uncommitted record tail (Sealed Result
+Rows), has its signature walked once more at publication for its closed row
+nodes, in the order Boxy gives them scheme positions
+(`CheckedProcedureTemplate.closed_row_nodes`, by `ClosedRowNodeWalk`); no
+other template's signature is walked for them. Boxy reads the list, and an
+importing unit reads the imported artifact's list, so both derive a worker's
+hidden inputs from the same checked data, and the Boxy interface digest
+hashes the list's length beside the scheme's variable count. A scheme alias
+whose scheme has no variable but holds an uncommitted tag tail is lowered at
+each use, as a generalized alias is, since each use copies the union and may
+lift it; Boxy reads that from its scope's flag. Debug builds check both
+against a walk of the checked type.
 
 The accepted and rejected sides of both tails are pinned by
 `src/check/test/uncommitted_record_tail_test.zig` (literal, `{}`, and
@@ -8886,8 +8911,9 @@ the source requirements.
 Procedure definitions, hoisted source-pattern roots, callable bindings, and
 constants carry evidence parameters on their procedure templates; expression
 entry wrappers do not, because they evaluate a value without a caller's
-dispatch parameters. A callable binding's or a constant's entry wrapper is a
-zero-argument procedure returning the binding's value, and a use that computes
+dispatch parameters. A callable binding's, a constant's or a hoisted
+source-pattern root's entry wrapper is a zero-argument procedure returning the
+binding's value, and a use that computes
 the binding calls it, supplying the binding's evidence as any procedure use
 does. Its parameters are the binding's scheme parameters in the binding's
 order, and each scheme-callable path is the binding's path below the wrapper's
@@ -9447,9 +9473,12 @@ including its captured codec requirements, from the request's root evidence.
 
 A constant's entry wrapper retains the evaluated value's quantified type
 variables and accepts the requirements on them as wrapper arguments, as a
-callable binding's does. Procedure definitions, hoisted source-pattern roots,
-callable bindings, and constants bind evidence chains; expression wrappers
-resolve their bodies without caller-supplied evidence. Call-edge evidence
+callable binding's does. Procedure definitions, callable bindings, and
+constants bind evidence chains; expression wrappers resolve their bodies
+without caller-supplied evidence. A hoisted source-pattern root's wrapper
+takes its name's requirements too, but its body resolves against no chain:
+the body matches a destructure's base expression, which the root of every
+name the destructure binds shares (Procedure Aliases). Call-edge evidence
 analysis and use-site enumeration consume the same explicit root
 classification.
 
@@ -11439,8 +11468,9 @@ the output a clone keeps rather than by how often it retries:
   Its jump sites in enclosing let-of-case joins are dropped, so a join sees
   only the jumps of output that survives. Its program suffix and the ids
   minted for it are rewound too, except when the attempt created a callable
-  worker: a worker is keyed by its template and ABIs alone, the retry and
-  every later clone reuse it, and its body lies in that suffix.
+  worker or committed a prefix split: a worker is keyed by its template and
+  ABIs alone, a split replaces its function's source body, the retry and
+  every later clone read either one, and both lie in that suffix.
 
 Generic analysis follows existing constructor evidence; a structural consumer
 requests a producer's result shape through the separate demand path, which
@@ -14187,7 +14217,10 @@ whole value as the use has it: the nominal type a caller supplied, or the
 plain record or tag union. The last two are closed rows, so they are row nodes
 whatever the body does with them: a worker's hidden inputs stay a function of
 its checked signature alone, which importing and defining units read alike,
-and no analysis of a body decides them. A closed row node stores its values
+and no analysis of a body decides them. Checking publishes each template's
+closed row nodes in the order they take positions
+(`CheckedProcedureTemplate.closed_row_nodes`), and Boxy reads that list
+rather than searching the signature. A closed row node stores its values
 exactly as the plain record or tag union does: its scheme position holds the
 checked record or tag union itself, which the worker's scope converts to its
 closed type marked with the position (`Store.tailNode`, a distinct type only
@@ -15121,6 +15154,45 @@ The kind rules:
   Subsumption, "Deferred result relations"), so the owner's judgment,
   including a kind another statement of the owner makes optional, is what
   the relation sees.
+  Scheme alias destructure binding: a declaration whose value generalized
+  on its own (a value alias, local or top level; Value Bindings Generalize
+  By Expression) is a commitment point for its own pattern. The value is a
+  scheme before the pattern meets it, so the pattern is the generalized
+  binding (Procedure Aliases) and no later boundary owns it: every
+  destructure of that pattern whose kind the scheme's row decides is bound
+  right after the pattern is related to the value, before any use of its
+  name (`Check.bindSchemeAliasDestructs`, called from `resumeStatement` and
+  `finishDef`, which binds only when the value's variable is a binding
+  scheme). The name's type is then part of the scheme, and a
+  use instantiates it, exactly as it instantiates a name a tuple pattern
+  binds. For a `required` or `defaulted` field that type is the scheme's
+  own field type. For an `optional` field it is `Try(payload,
+  [MissingField])` built generalized over the scheme's field type
+  (`Check.optionalDestructBinderType`): the same type built at the
+  declaration's rank would be one type every use shares, with the scheme's
+  variables inside it. A binder left for a later judgment would likewise be
+  one variable every use shares, and that judgment would relate the
+  scheme's quantified variables to those uses' types: a string or number
+  literal passed to such a name would get the scheme's variable as its
+  type, which no boundary defaults. Binding there decides nothing a later
+  judgment could decide otherwise: a decided kind never changes
+  (`required ~ optional` is a mismatch, and `required` and `defaulted`
+  bind alike), a kind the value leaves undetermined still waits for the
+  boundary that owns it, and so does every other pattern's destructure. A
+  use that does not fit the field's type is an ordinary mismatch at that
+  use and does not reject the declaration. A value that did not generalize
+  (a weak value, or a lookup of one) is not a scheme: its destructures are
+  judged at the commitment points above and the name has one type, shared
+  by every use. This is a policy: a record-destructured name of a scheme is
+  accepted at more than one type, and a bare literal passed to one is
+  settled by its use, where binding at a later commitment point rejects the
+  first and leaves the second unsettled. `destructured_scheme_alias_test.zig`
+  pins the accepted side (a required and an optional field's name used at
+  two types, a nested pattern, a pattern over a local name for the
+  constant, a top-level pattern, a bare literal argument) and the rejected
+  side (a weak value's name used at two types, for a tuple pattern, a
+  record pattern and an optional field, and a misuse reported at the use
+  alone).
   Binding a destructure can also ground a deferred static-dispatch receiver
   without adding an ordinary equality constraint. Every literal-defaulting
   boundary therefore begins with a ROUND-ZERO constraint quiescence: ordinary
@@ -16296,6 +16368,15 @@ Other solved-graph mutations:
   Introduction (above). Uses the existing `unifyWith` descriptor-introduction
   mechanism for a proved concrete builtin conversion; does not mutate the
   context's type or introduce a redirect rule.
+- `bindSchemeAliasDestructs` / `optionalDestructBinderType`—policy: Field
+  Kinds, scheme alias destructure binding (above). A probe of whether a
+  declaration's value is a binding scheme, and of whether each field kind of
+  its pattern is decided, gates the ordinary binder unification
+  `judgeRecordDestructBinds` runs at its commitment points, run at the
+  declaration instead. Over a generalized field value an optional kind's
+  `Try(payload, [MissingField])` is created generalized
+  (`Store.freshFromContentWithRank`) before that unification. It writes
+  nothing else outside unification and introduces no redirect rule.
 - `groundUnquantifiedLiteralParameters`—policy: Unquantified Literal Type
   Parameters Default To `[]` (above). An ordinary `unify` of each
   unconstrained, unreached variable of a custom literal's type with a fresh
@@ -16943,8 +17024,9 @@ A worker's hidden inputs are, in order:
 - one descriptor per quantified variable of its scheme, in the scheme's
   checked `scheme_vars` order (a field kind variable's describes the field's
   slot, Field Kinds), then one per row node of its signature (Methods On
-  Open Rows), the closed ones first, each describing the whole value of a
-  record or tag union as the use has it;
+  Open Rows), the closed ones first in the checked `closed_row_nodes` order,
+  each describing the whole value of a record or tag union as the use has
+  it;
 - one dictionary per evidence parameter of its scheme, in the checked
   `evidence_params` order the checker records;
 - one literal argument per literal requirement of its scheme, in the checked
@@ -17042,7 +17124,9 @@ the record, so every instantiation stores whatever holds the tail as the
 sealed worker does, wherever the tail sits in the worker's interface, and no
 use converts a value crossing the worker's boundary. Sealing the tail leaves
 its record a row node of the worker's signature (Methods On Open Rows): the
-record's descriptor, not the tail's, is the hidden input.
+record's descriptor, not the tail's, is the hidden input. Checking lists
+that record among the template's closed row nodes
+(`CheckedProcedureTemplate.closed_row_nodes`, Uncommitted Tag Tails).
 
 Checked-module output computes all of a template's sealed slots together. It first
 collects the bounded candidates, then traverses its current immutable checked
@@ -17099,14 +17183,14 @@ of a recursion's levels are one table.
 The rule holds for every scope whose requirement discharges another's, not
 only for a worker's own. A scope the lowering enters while it lowers a body
 (a scheme alias's or an exact procedure alias's scope at one of its uses, a
-literal chain's frame, a declaration context) holds each dictionary at the
-interface its own requirement names, at the types the scope was entered with
+literal chain's frame) holds each dictionary at the interface its own
+requirement names, at the types the scope was entered with
 (`AliasScope.requirements`): the edge that entered the scope built the
 dictionary for exactly that parameter. Evidence read inside the scope that
 hands the dictionary on (an alias's forwarded lookup, a frame's edge into the
-next frame, the requirements of a literal conversion's target, a local
-procedure's own scheme) adapts it from that interface to the consumer's, and
-a dispatch through it calls it at that interface (`Builder.scopeInterface`).
+next frame, the requirements of a literal conversion's target) adapts it from
+that interface to the consumer's, and a dispatch through it calls it at that
+interface (`Builder.scopeInterface`).
 An alias can state its requirement at a narrower row than the procedure it
 forwards to requires (`narrow : b -> [Ok(Str), Err(Str), Extra] where
 [b.status : b -> [Ok(Str), Err(Str)]]` bound to a procedure whose requirement
@@ -17120,6 +17204,43 @@ at its scope's interface all the same.
 `test/cli/WidenClosedTryImplAliasScope.roc`, and
 `test/cli/WidenClosedImplLiteralChain.roc` run the alias scopes and the
 literal chain frames.
+
+A requirement resolved from its dispatcher's type rather than from checked
+evidence (callable-derived evidence, a nominal's override in a descriptor,
+and the requirements of the targets those select; design.md "Dictionaries")
+that lands on a scope variable takes the worker's dictionary for that
+variable by the same rule, adapted from the interface the worker's own
+requirement names to the requirement's callable
+(`Builder.variableDictionary`). `Holder(a)`'s `is_eq` can require
+`a.status : a -> [Ok(Str), Err(Str), Extra]`, and the descriptor of a record
+holding a `Holder(b)` reaches that override inside a function whose
+requirement on `b` names `[Ok(Str), Err(Str)]`.
+`test/cli/WidenClosedImplOverrideScope.roc` runs an override's requirement
+and the requirement of a target an override's requirement selects.
+
+A declaration context (design.md "Structural Serialization Methods") is the
+one entered scope that hands no dictionary on. Its dictionaries are the
+hidden words of the local procedures built from it, which hand them on inside
+their own bodies, from their workers' own scopes. No evidence read while its
+frame is entered names one, by what checking publishes. A type declared in a
+function body leaves that body only in a captured codec requirement of the
+function's scheme, so a local procedure is built from a declaration context
+only for a generated codec contract's call, or for evidence nested under one.
+Checked-module output publishes every contract call's evidence node, nested
+evidence included, before it walks any template
+(`EvidencePass.linkGeneratedCodecCalls`), so with no evidence chain in scope:
+each nested requirement is resolved totally to a target, a derivation, or an
+unreachable value, and never to an enclosing scope's evidence parameter. A
+contract's variables are unquantified copies besides, so a requirement of a
+local procedure's own scheme that lands on one is a missing method in
+checking, not a requirement the callee's dictionary fills: a format method
+stating `where [s.status : s -> [Ok(Str), Err(Str), Extra]]` checks only
+where the contract fixes `s` to a closed type, whose own method fills the
+requirement, adapted to that interface as any other target's dictionary is.
+`Builder.frameDictionary` asserts that no evidence names a declaration
+context's dictionary. `test/cli/WidenClosedImplDeclarationContext.roc` runs
+local procedures built from a declaration context whose own requirements and
+bodies call a method at a wider row.
 
 A conversion between two CLOSED types is a static row conversion: a worker
 of the converting module (`WorkerKey.convert`, keyed by the source and
@@ -17834,9 +17955,11 @@ with that method's own requirements resolved the same way; a structural
 derivation where the owner registers none; a crashing dictionary where no
 value of the dispatcher can exist; and for a scope variable, a structural
 method over its descriptor for a method descriptors carry, or else its
-scope's dictionary. A target's scheme variables its callable leaves open are
-fixed by relating each resolved requirement's method back to the requirement's
-callable. A nominal override is instantiated at its method's interface:
+scope's dictionary, adapted from the interface its scope's requirement names
+to the requirement's callable (Sealed Result Rows). A target's scheme
+variables its callable leaves open are fixed by relating each resolved
+requirement's method back to the requirement's callable. A nominal override
+is instantiated at its method's interface:
 `is_eq` at `T, T -> Bool`, `to_hash` at `T, Hasher -> Hasher` with the
 Builtin hasher every runtime hash threads, and `to_inspect` at `T -> Str`. A
 SIMD vector's descriptor carries its builtin `to_inspect`.
@@ -18022,6 +18145,12 @@ evidence reads through them. A conversion reads the requirements of the
 literal's own closed type, whose evidence names no scope, so a read of an
 unentered scope is a compiler invariant. A frame descriptor is never read: a
 frame's types are its environment.
+
+Forwarding a dictionary through a chain frame still crosses that frame's
+parameter interface. Every frame composes its dictionary through the same
+interface adaptation as an ordinary call; evidence naming a lower frame does
+not imply identical row storage. Frame dependencies are scheduled iteratively,
+so retaining each adaptation does not put the chain on the compiler's stack.
 
 A body reads a
 literal of its own scheme by calling the argument (`lowerInstanceLiteral`); a
@@ -18667,10 +18796,12 @@ session (the baked Builtin's among them), is a program of that module alone
 and splits its roots between the two evaluators the same way.
 
 Every producer of checked modules names its strategy; the finalization option
-has no default. One rule decides it everywhere: the strategy of the runtime
-program that consumes the modules, and `.boxy` when nothing lowers them for
-runtime. The coordinator's compilations take it from their command
-(`BuildEnv.setSpecializationStrategy`). The REPL session
+has no default, and neither do the `BuildEnv` and `Coordinator` that drive a
+compilation, which take the strategy as a parameter of `init`. One rule
+decides it everywhere: the strategy of the runtime program that consumes the
+modules, and `.boxy` when nothing lowers them for runtime. The coordinator's
+compilations take it from their command (`CliBuildEnvOptions.specialization_strategy`).
+The REPL session
 (`roc repl` and the REPL WebAssembly module) evaluates each expression as a
 compile-time root and lowers no runtime program, so it names `.boxy`. The
 playground runs each expression as a `.boxy` runtime program on the LIR
@@ -21566,10 +21697,21 @@ that scope at the use's instantiation, under both strategies. The name can
 therefore be used at more than one type, and the constant's requirements are
 met at each.
 
+A value use of a scheme alias of a constant reads that constant, whichever
+alias of a chain it names (`rec = Hooks.rec`, then `again = rec`): its site
+evidence is published as the constant's own read is, so a requirement
+nothing pins that is reachable through a stored function's callable type
+resolves from that function's eventual request (`from_callable`) and does
+not commit to `unreachable` (`EvidencePass.emitSiteEvidence`, which
+classifies the use by the alias's final `alias_target`).
+
 A local declaration that takes such a lookup apart (`(shout, _) =
-Hooks.pair`) is a destructuring scheme alias
+Hooks.pair`, `{ twice } = Hooks.rec`), or takes apart a local name for one
+(`{ twice } = rec`), is a destructuring scheme alias
 (`body_analyses.bindsDestructuredSchemeAlias`). Its pattern is the
-generalized binding, so the names it binds have no scope of their own. Boxy
+generalized binding, so the names it binds have no scope of their own, and
+each use of one instantiates the name's type. A record pattern's names take
+their field types at the declaration for that reason (Field Kinds). Boxy
 lowers a use of one of those names by fixing the declaration's variables from
 the use's type through the name's type, lowering the lookup and the
 destructuring at those types, and reading the name
@@ -21577,9 +21719,36 @@ destructuring at those types, and reading the name
 mention seals as a variable no use relates, the lookup resolves its
 requirements from those types (`from_callable`), and the declaration itself
 computes nothing. A closure that reads such a name lowers the declaration in
-its own body and does not capture the name. The `.lss` strategy needs no such
-step: a specialization lowers the declaration at the types it fixes.
-`test/cli/ImportedGenericLocalAlias.roc` runs both forms.
+its own body and does not capture the name. The `.lss` strategy follows the
+same rule: Monotype lowers a use of one of those names as a block whose one
+statement is the declaration and whose value is the name's
+(`BodyContext.stepDestructuredAlias`), in a fresh instantiation context that
+relates the name's type to the use's type. A variable the name's type does
+not mention stays a variable of that context, the lookup resolves its
+requirements there as any lookup does, the declaration itself computes
+nothing, and a closure that reads such a name does not capture it. Each use
+instantiates the name's type, so the specialization-interface relation table
+records no equality between a use of one of those names and the name's own
+type. `test/cli/ImportedGenericLocalAlias.roc` runs both forms, the
+destructuring one with a tuple pattern (including one name at two types and
+a pattern over a local name for the constant), with a record pattern, with a
+record pattern over an optional field, and over a local name for the
+constant.
+
+The same names at top level are compile-time roots. A top-level name for the
+constant (`p = Hooks.pair`) is a constant whose type keeps a variable: its
+entry wrapper takes its scheme's requirements and each read supplies them
+from its evidence, so its right-hand side's requirements resolve against the
+wrapper's own parameters, never through a representative use of the name. A
+name a top-level destructuring binds is the source pattern of a hoisted root
+whose wrapper yields that name's value; the wrapper takes the name's
+scheme's requirements below its return as a constant's does, and a read of
+the name, a callable binding when the name is a function, supplies them from
+its evidence under both strategies. Every name the destructuring binds has
+such a root, and each root's body matches the same base expression, so that
+body's evidence is resolved against no one name's parameters: the lookup's
+requirements resolve from the root's instantiation (`from_callable`).
+`test/cli/ImportedGenericTopLevelAlias.roc` runs both forms.
 
 A call through a forwarding alias is a direct call. Monotype enters the
 alias's scope with the call's use-site evidence and substitution, and requests

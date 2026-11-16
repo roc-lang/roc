@@ -34278,6 +34278,8 @@ const BodyContext = struct {
         inspect_only: InspectOnlyTask,
         /// A generalized callable alias's aliased callable.
         scheme_alias: SchemeAliasTask,
+        /// A use of a name a destructuring scheme alias binds.
+        destructured_alias: DestructuredAliasTask,
         /// A call-site intrinsic's arguments, then its generated body.
         callsite_intrinsic: CallsiteIntrinsicTask,
         /// An interpolation: its compile-time conversion, then its assembler
@@ -34369,6 +34371,34 @@ const BodyContext = struct {
     const SchemeAliasSavedScope = struct {
         instantiation: TypeInstantiationContext,
         evidence: EvidenceChain,
+    };
+
+    /// A use of a name a destructuring scheme alias binds
+    /// (`body_analyses.bindsDestructuredSchemeAlias`). The declaration
+    /// computes nothing where it stands: each use lowers it as a block of its
+    /// own, whose one statement is the declaration and whose value is the
+    /// name's. The pattern is the generalized binding, so the block lowers in
+    /// a fresh type-only scope that the use's type determines through the
+    /// name's type; the declaration's lookup resolves its own requirements at
+    /// those types. Runtime binder and declaration-context tables remain
+    /// shared with the enclosing body, which binds the declaration's names
+    /// only while this block lowers.
+    const DestructuredAliasTask = struct {
+        binder: BinderId,
+        use_expr: CIR.Expr.Idx,
+        expected_node: NodeId,
+        /// The enclosing scope's instantiation and the declaration's
+        /// binders, restored once the block is lowered. Boxed: an
+        /// instantiation context is far larger than every task.
+        saved: ?*DestructuredAliasSavedScope = null,
+    };
+
+    const DestructuredAliasSavedScope = struct {
+        instantiation: TypeInstantiationContext,
+        /// The block's one statement.
+        declaration: CIR.Statement.Idx,
+        /// The declaration's binders as the enclosing body had them. Owned.
+        binders: []BinderRestore,
     };
 
     /// A function value `Str.inspect` renders without consuming: the source
@@ -34471,6 +34501,9 @@ const BodyContext = struct {
         /// Its final expression's value paired with the state of the
         /// binders it reassigns.
         state_result: struct { state: @FieldType(BranchOutput, "state_result"), result_node: NodeId },
+        /// The value its one statement, a destructuring scheme alias's
+        /// declaration, binds to a name (`DestructuredAliasTask`).
+        alias_binder: BinderId,
     };
 
     /// A pattern statement that binds several block statements rather than
@@ -37191,6 +37224,7 @@ const BodyContext = struct {
             .materialize => |*task| self.releaseMaterializeTask(task),
             .branch_body, .return_value, .inspected, .divergent, .field_access, .direct_structural, .inspect_only => {},
             .scheme_alias => |*task| self.restoreSchemeAliasScope(task),
+            .destructured_alias => |*task| self.restoreDestructuredAliasScope(task),
             .callsite_intrinsic => |*task| {
                 self.allocator.free(task.args);
                 task.args = &.{};
@@ -37261,6 +37295,7 @@ const BodyContext = struct {
             .direct_structural => |*task| return self.stepDirectStructural(task, input),
             .inspect_only => |*task| return self.stepInspectOnly(task, input),
             .scheme_alias => |*task| return self.stepSchemeAlias(task, input),
+            .destructured_alias => |*task| return self.stepDestructuredAlias(task, input),
             .callsite_intrinsic => |*task| return self.stepCallsiteIntrinsic(task, input),
             .interpolation => |*task| return self.stepInterpolationLower(task, input),
             .inline_literal => |*task| return self.stepInlineLiteral(frame, task, input),
@@ -48231,7 +48266,7 @@ const BodyContext = struct {
         errdefer bindings.deinit(self.allocator);
         for (captures) |capture| {
             const entry = switch (runtimeCaptureKind(view, capture.pattern)) {
-                .scheme_alias, .promoted_proc, .local_method => continue,
+                .scheme_alias, .destructured_alias, .promoted_proc, .local_method => continue,
                 .hoisted_constant => declarationContextEntry(context.entries, capture.pattern) orelse continue,
                 .frame_value => declarationContextEntry(context.entries, capture.pattern) orelse
                     Common.invariant("local procedure runtime capture was not bound in its declaration context"),
@@ -48250,8 +48285,10 @@ const BodyContext = struct {
     /// How Monotype reads a binder listed in a site's
     /// `NestedProcSite.runtime_captures`. Only a frame value is read from the
     /// enclosing frame. A scheme alias owns no value: each use lowers the
-    /// callable it names, whose own captures the site already lists. A
-    /// method of a type declared in a function body is listed when another
+    /// callable it names, whose own captures the site already lists. A name
+    /// a destructuring scheme alias binds owns no value either: each use
+    /// lowers the declaration (`stepDestructuredAlias`). A method of a
+    /// type declared in a function body is listed when another
     /// local procedure refers to it, and owns no value either: a promoted one
     /// is a top-level procedure, and each use of an unpromoted one lowers the
     /// procedure from its declaration context, whose runtime captures the
@@ -48259,11 +48296,12 @@ const BodyContext = struct {
     /// constant's binder is a frame local only while its own root lowers;
     /// every other read goes through the ConstStore, so it adds nothing the
     /// enclosing frame decides.
-    const RuntimeCaptureKind = enum { frame_value, scheme_alias, promoted_proc, local_method, hoisted_constant };
+    const RuntimeCaptureKind = enum { frame_value, scheme_alias, destructured_alias, promoted_proc, local_method, hoisted_constant };
 
     fn runtimeCaptureKind(view: ModuleView, binder: BinderId) RuntimeCaptureKind {
         const facts = view.bodies.binder(binder);
         if (facts.is_scheme_alias) return .scheme_alias;
+        if (facts.destructured_alias != null) return .destructured_alias;
         if (facts.is_promoted) return .promoted_proc;
         if (view.hoisted_constants.lookupByPattern(binder) != null) return .hoisted_constant;
         if (bindsLocalMethod(view, binder)) return .local_method;
@@ -48427,7 +48465,9 @@ const BodyContext = struct {
             .local_value,
             .local_mutable_version,
             .pattern_binder,
-            => |local| .{
+            // A name a destructuring scheme alias binds is no local of the
+            // body: each use lowers the declaration (`stepDestructuredAlias`).
+            => |local| if (self.destructuredAliasDecl(local.binder) != null) null else .{
                 .binder = local.binder,
                 .local = self.binders.get(local.binder) orelse
                     Common.invariant("local lookup referenced an unbound pattern binder"),
@@ -48948,6 +48988,7 @@ const BodyContext = struct {
         expected_node: NodeId,
     ) Allocator.Error!LowerStep {
         if (self.schemeAliasLookupTask(maybe_ref, expected_node)) |task| return requestLowerTask(self, task);
+        if (self.destructuredAliasLookupTask(maybe_ref, expected_node)) |task| return requestLowerTask(self, task);
         return loweredExprStep(try self.lowerLookupExprAtNode(checked_expr, maybe_ref, expected_node));
     }
 
@@ -48961,9 +49002,77 @@ const BodyContext = struct {
             .local_proc => |local| if (local.is_alias) {
                 return requestLowerTask(self, self.schemeAliasLookupTask(maybe_ref, try self.activeNodeFromType(ty)).?);
             },
-            .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => {},
+            .local_param, .local_value, .local_mutable_version, .pattern_binder => |local| if (self.destructuredAliasDecl(local.binder) != null) {
+                return requestLowerTask(self, self.destructuredAliasLookupTask(maybe_ref, try self.activeNodeFromType(ty)).?);
+            },
+            .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => {},
         };
         return loweredExprStep(try self.lowerLookupExprAtType(checked_ty, maybe_ref, ty));
+    }
+
+    /// The destructuring scheme alias declaration that binds `binder`, if
+    /// one does.
+    fn destructuredAliasDecl(self: *const BodyContext, binder: BinderId) ?CIR.Statement.Idx {
+        return self.view.bodies.index().destructuredAliasDecl(binder);
+    }
+
+    /// The task a lookup of `maybe_ref` lowers through at `expected_node`,
+    /// when it names a binder of a destructuring scheme alias.
+    fn destructuredAliasLookupTask(self: *BodyContext, maybe_ref: ?ResolvedUse, expected_node: NodeId) ?LowerTask {
+        const ref_id = maybe_ref orelse return null;
+        const record = resolvedRecord(self.view, ref_id);
+        return switch (record.ref) {
+            .local_param, .local_value, .local_mutable_version, .pattern_binder => |local| if (self.destructuredAliasDecl(local.binder) != null) .{ .destructured_alias = .{
+                .binder = local.binder,
+                .use_expr = record.lookupExpr(),
+                .expected_node = expected_node,
+            } } else null,
+            .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => null,
+        };
+    }
+
+    fn stepDestructuredAlias(self: *BodyContext, task: *DestructuredAliasTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        if (input) |lowered| {
+            self.restoreDestructuredAliasScope(task);
+            return .{ .ret = lowered };
+        }
+        const declaration = self.destructuredAliasDecl(task.binder) orelse
+            Common.invariant("a destructured alias use named a binder no destructuring scheme alias binds");
+        const decl = switch (self.view.bodies.statement(declaration).data) {
+            .decl => |decl| decl,
+            .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .rejected_method_decl, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => Common.invariant("a destructured alias binder's declaration is not a declaration"),
+        };
+        {
+            var binders = std.ArrayList(BinderRestore).empty;
+            errdefer binders.deinit(self.allocator);
+            try self.savePatternBinders(decl.pattern, &binders);
+            const saved = try self.allocator.create(DestructuredAliasSavedScope);
+            errdefer self.allocator.destroy(saved);
+            const saved_binders = try binders.toOwnedSlice(self.allocator);
+            errdefer self.allocator.free(saved_binders);
+            const instantiation = try TypeInstantiationContext.initPooled(self.builder, self.builder.allocateInstantiationScope(), self.view.key.bytes);
+            saved.* = .{ .instantiation = self.instantiation, .declaration = declaration, .binders = saved_binders };
+            task.saved = saved;
+            self.instantiation = instantiation;
+        }
+        const saved = task.saved.?;
+        try relateRequestComponent(self.graph, try self.instNode(checkedBinderType(self.view, task.binder)), task.expected_node);
+        return requestLowerTask(self, .{ .block = try self.boxLowerTask(BlockTask, .{
+            .statements = (&saved.declaration)[0..1],
+            .final_expr = ExprSite.read(task.use_expr),
+            .result_cell = DraftTypeCell.fromGraphNode(task.expected_node),
+            .tail = .{ .alias_binder = task.binder },
+        }) });
+    }
+
+    fn restoreDestructuredAliasScope(self: *BodyContext, task: *DestructuredAliasTask) void {
+        const saved = task.saved orelse return;
+        self.restoreBinders(saved.binders);
+        self.allocator.free(saved.binders);
+        self.instantiation.deinit();
+        self.instantiation = saved.instantiation;
+        self.allocator.destroy(saved);
+        task.saved = null;
     }
 
     fn stepSchemeAlias(self: *BodyContext, task: *SchemeAliasTask, input: ?LowerResult) Allocator.Error!LowerStep {
@@ -53468,7 +53577,7 @@ const BodyContext = struct {
         for (captures) |capture_idx| {
             const binder = self.view.bodies.capture(capture_idx).pattern;
             const local = switch (runtimeCaptureKind(self.view, binder)) {
-                .scheme_alias, .promoted_proc, .local_method => continue,
+                .scheme_alias, .destructured_alias, .promoted_proc, .local_method => continue,
                 .hoisted_constant => self.binders.get(binder) orelse continue,
                 .frame_value => self.binders.get(binder) orelse
                     Common.invariant("closure capture was not bound where the closure is built"),
@@ -53529,7 +53638,7 @@ const BodyContext = struct {
         defer bindings.deinit(self.allocator);
         for (captures) |capture| {
             const local = switch (runtimeCaptureKind(self.view, capture.pattern)) {
-                .scheme_alias, .promoted_proc, .local_method => continue,
+                .scheme_alias, .destructured_alias, .promoted_proc, .local_method => continue,
                 .hoisted_constant => self.binders.get(capture.pattern) orelse continue,
                 .frame_value => self.binders.get(capture.pattern) orelse
                     Common.invariant("nested procedure runtime capture was not bound where the procedure is built"),
@@ -67213,6 +67322,10 @@ const BodyContext = struct {
         while (task.index < task.statements.len) {
             const statement = task.statements[task.index];
             task.index += 1;
+            // A destructuring scheme alias's declaration computes nothing
+            // where it stands: each use of a name it binds lowers it as the
+            // one statement of a block of its own (`stepDestructuredAlias`).
+            if (task.tail != .alias_binder and self.view.bodies.index().isDestructuredAliasDecl(statement)) continue;
             var snapshots: std.ArrayList(DraftStmtId) = .empty;
             defer snapshots.deinit(self.allocator);
             try self.registerLocalAssociatedProcedures(statement, &snapshots);
@@ -67267,6 +67380,18 @@ const BodyContext = struct {
         task.stage = .final_expr;
         switch (task.tail) {
             .value => {},
+            .alias_binder => |binder| {
+                task.result_node = try task.result_cell.toGraphNode(self.graph);
+                return self.finishBlockValue(task, switch (task.lowered.termination) {
+                    .checked_control_transfer => try self.addExprWithTypeCell(task.result_cell, .@"unreachable"),
+                    .uninhabited => |scrutinee| try self.zeroBranchMatchAtTypeCell(scrutinee, task.result_cell),
+                    .none => read: {
+                        const local = self.binders.get(binder) orelse
+                            Common.invariant("a destructuring scheme alias's declaration did not bind the name its use reads");
+                        break :read try self.lowerLocalAtRequestedNode(local, self.localTypeCell(local), task.result_node);
+                    },
+                });
+            },
             .loop_continue, .state_only => {
                 if (!statementTerminationIsNone(task.lowered.termination)) return self.finishDiscardingBlock(task);
                 task.stage = .discarded_final;
@@ -67335,6 +67460,7 @@ const BodyContext = struct {
             .value => self.finishBlockValue(task, final_expr),
             .state_result => self.finishStatementsBlock(task, final_expr),
             .loop_continue, .state_only => unreachable, // beginBlockTail moves loop_continue and state_only tails to the discarded_final stage
+            .alias_binder => unreachable, // beginBlockTail finishes an alias_binder tail itself, without a final expression
         };
     }
 
@@ -67352,7 +67478,7 @@ const BodyContext = struct {
                 else
                     try self.continueWithCurrentState(cell, loop.carries),
                 .state_only => |state| try self.stateOnlyTupleExprAtTypeCell(cell, state.merge_binders),
-                .value, .state_result => unreachable, // finishDiscardingBlock runs only for loop_continue and state_only tails
+                .value, .state_result, .alias_binder => unreachable, // finishDiscardingBlock runs only for loop_continue and state_only tails
             },
         };
         return loweredExprStep(try self.addExprWithTypeCell(cell, .{ .block = .{

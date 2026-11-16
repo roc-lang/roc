@@ -231,10 +231,10 @@ test "a module unit fills an imported generic worker's tables with its own descr
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(allocator, allocator, io),
+        .boxy,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
-    coord.specialization_strategy = .boxy;
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     try coord.start();

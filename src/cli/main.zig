@@ -292,7 +292,7 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     // Arena-owned so the path outlives the returned BuildEnv, which borrows it.
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.arena);
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.host_cpu.nativeTarget(), cwd, ctx.io.std_io);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.host_cpu.nativeTarget(), cwd, ctx.io.std_io, opts.specialization_strategy);
     errdefer build_env.deinit();
 
     build_env.compiler_version = build_options.compiler_compatibility_id;
@@ -301,7 +301,6 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     build_env.resolution_config = opts.resolution_config;
     build_env.setWatchInputTracking(opts.track_watch_inputs);
     build_env.setPostCheckPublicationMode(opts.post_check_publication_mode);
-    build_env.setSpecializationStrategy(opts.specialization_strategy);
     const object_target = roc_target.host_cpu.nativeTarget();
     build_env.boxy_object_lowering = lowering_policy.compileTimeObjectLowering(object_target);
     build_env.boxy_object_lowering.?.embedded = embeddedBoxyUnits();

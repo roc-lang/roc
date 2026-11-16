@@ -28,7 +28,7 @@ fn renderedErrors(gpa: std.mem.Allocator, source: []const u8) BuildTestError![]u
     const module_path = try tmp_dir.dir.realPathFileAlloc(io, "Item.roc", gpa);
     defer gpa.free(module_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
     try build_env.build(module_path);
 
