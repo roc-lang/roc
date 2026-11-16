@@ -25677,11 +25677,14 @@ accepts neither and only follows the explicit decisions.
 Exact ownership and certifier path snapshots use persistent sparse proc-local
 state. A control-flow fork shares the unchanged state root, and a transition
 stores only bounded-depth paths to changed `OwnedEntry` values, liveness words,
-or certifier `State` entries. A procedure whose domain is small keeps its rows
+or certifier `State` entries. A procedure whose domain is small keeps that state
 by value instead: a liveness, dead-unit or resource row over at most 128 bits
-is held inline in two words, so a fork copies the words and a transition
-neither allocates nor follows a pointer. The two forms give every operation the
-same answer, so which one a procedure uses never changes a decision.
+is held inline in two words, and an ownership set over at most 128 resources
+holds its present resources in an inline mask, with only the nonzero residual
+masks of dismantlable aggregates in its persistent tree. A fork then copies
+words, and a transition neither allocates nor follows a pointer. The two forms
+give every operation the same answer, so which one a procedure uses never
+changes a decision.
 Fresh one-owner states update their paths in place until the first fork; meets
 share equal subtrees and allocate only changed subtrees. Procedure width is
 therefore paid once by the producer-owned domains and summaries, not once per
