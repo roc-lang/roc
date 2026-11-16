@@ -146,6 +146,7 @@ Due to a [Zig bug](https://github.com/ziglang/zig/issues/17652) related to extra
 - `bash` on `PATH`, for example by running it from Git Bash.
 - `objdump` on `PATH`, for `run-check-match-extension-codegen`.
 - The x64 and ARM64 MSVC build tools and the Windows SDK, for `run-check-glue-abi` and the linking tests.
-- Rust with the `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`), for `run-check-glue-abi`.
+- Rust with the `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`), for `run-check-glue-abi` and the glue cases of `run-test-cli`.
+- Node.js on `PATH`, for `run-test-repl-wasm`.
 
 Run it from a desktop session rather than over OpenSSH: there Windows refuses to follow symlinks that a non-administrator created, which breaks the rustup proxies, Zig's versioned shared-library links and roc's LSP symlink tests.
