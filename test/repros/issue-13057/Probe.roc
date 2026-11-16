@@ -22,6 +22,9 @@ Format := [Default].{
     parse_dict_after_entry : Format, State -> Try([Continue(State), Done(State)], Error)
     parse_dict_after_entry = |_, _| Err(InvalidValue)
 
+    parse_dict_duplicate_key : Format, State -> Try([KeepFirst(State), KeepLast(State)], Error)
+    parse_dict_duplicate_key = |_, _| Err(InvalidValue)
+
     parse_key_start : Format, State -> Try(State, Error)
     parse_key_start = |_, state| Ok(state)
 

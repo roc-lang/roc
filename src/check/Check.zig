@@ -62320,7 +62320,8 @@ fn validateEncodeFormatMethod(
 /// The dict protocol, mirroring the list one: `parse_dict_start` may declare
 /// the entry count, `parse_dict_next` reports whether an entry follows,
 /// `parse_dict_after_key` consumes whatever sits between a key and its value,
-/// and `parse_dict_after_entry` reports whether more entries follow.
+/// `parse_dict_after_entry` reports whether more entries follow, and
+/// `parse_dict_duplicate_key` settles an entry whose key the dict already holds.
 fn validateEncodeDictProtocolMethod(
     self: *Self,
     subject_var: Var,
@@ -62367,12 +62368,14 @@ fn beginParseDictProtocolMethod(
         .parse_dict_next => try self.freshParseArrayEventTryVar(state_var, err_var, "Entry", "Done", env, region),
         .parse_dict_after_key, .parse_key_start => try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region),
         .parse_dict_after_entry => try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region),
+        .parse_dict_duplicate_key => try self.freshParseArrayEventTryVar(state_var, err_var, "KeepFirst", "KeepLast", env, region),
     };
     const method_name = switch (protocol_method) {
         inline .parse_dict_start,
         .parse_dict_next,
         .parse_dict_after_key,
         .parse_dict_after_entry,
+        .parse_dict_duplicate_key,
         .parse_key_start,
         => |known| try self.protocolMethodName(@tagName(known)),
     };
@@ -63153,6 +63156,7 @@ const DictParseMethod = enum {
     parse_dict_next,
     parse_dict_after_key,
     parse_dict_after_entry,
+    parse_dict_duplicate_key,
     parse_key_start,
 };
 
@@ -63808,6 +63812,7 @@ fn stepDerivedParseNominal(
             .{ .dict_protocol = .{ .subject_var = nominal_var, .method = .parse_dict_next } },
             .{ .dict_protocol = .{ .subject_var = nominal_var, .method = .parse_dict_after_key } },
             .{ .dict_protocol = .{ .subject_var = nominal_var, .method = .parse_dict_after_entry } },
+            .{ .dict_protocol = .{ .subject_var = nominal_var, .method = .parse_dict_duplicate_key } },
         });
     }
     if (self.nominalIsBuiltinDecl(nominal, .try_type)) {
@@ -64121,7 +64126,7 @@ fn validateDictConstructionMethods(
         env,
         region,
     ))) |result| return result;
-    return try self.validateGeneratedNominalMethodCall(
+    if (derivedCodecFailed(try self.validateGeneratedNominalMethodCall(
         dict_var,
         dict_nominal,
         "insert",
@@ -64130,7 +64135,46 @@ fn validateDictConstructionMethods(
         constraint,
         env,
         region,
+    ))) |result| return result;
+    return try self.validateGeneratedNominalMethodCall(
+        dict_var,
+        dict_nominal,
+        "insert_fresh",
+        &.{ dict_var, key_var, value_var },
+        try self.freshDictInsertFreshOutcomeVar(dict_var, key_var, value_var, env, region),
+        constraint,
+        env,
+        region,
     );
+}
+
+/// What `Dict.insert_fresh` returns: the dict with the entry added, or, for a
+/// key the dict already holds, the unchanged dict with the key and value handed
+/// back. `graphDictInsertFreshOutcome` in postcheck/monotype/lower.zig builds
+/// the same row.
+fn freshDictInsertFreshOutcomeVar(
+    self: *Self,
+    dict_var: Var,
+    key_var: Var,
+    value_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const dict_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("dict"));
+    const key_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("key"));
+    const value_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("value"));
+    const occupied_record = try self.freshClosedRecordVar(&.{
+        .{ .name = dict_name, .presence = .required(dict_var) },
+        .{ .name = key_name, .presence = .required(key_var) },
+        .{ .name = value_name, .presence = .required(value_var) },
+    }, env, region);
+
+    const inserted_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Inserted"));
+    const occupied_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Occupied"));
+    return try self.freshClosedTagUnionVar(&.{
+        try self.types.mkTag(inserted_ident, &.{dict_var}),
+        try self.types.mkTag(occupied_ident, &.{occupied_record}),
+    }, env, region);
 }
 
 fn validateGeneratedNominalMethodCall(
