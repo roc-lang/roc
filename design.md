@@ -2233,6 +2233,10 @@ CIR kinds (as the checked body reader presents them) and checked types:
   required, and whose every field value is in value form;
 - a nominal construction whose backing expression is in value form, unless
   its type is a builtin nominal other than `Bool` and `Try`;
+- a block with no statements whose final expression is in value form: its
+  value is that expression's, so `if n == 0 { [] } else { ["a", "b"] }`
+  has two value-form branches (`valueFormValueExpr` names the expression a
+  writer reads the value from);
 
 and no part other than the root itself is read at a row other than its own
 (`CheckedBodies.rowCoercion`). The root's own coercion belongs to the site
@@ -2257,7 +2261,8 @@ Everything else stays with the evaluator, deliberately:
 - String interpolation, a record update, a record whose type stores a field
   by its presence or fills it from a default, a call, a dispatch, an
   operator (unary minus included), a lookup of any definition, a field or
-  tuple access, a block, a branch, `dbg`, `expect`, and `crash`.
+  tuple access, a block with a statement, a branch, `dbg`, `expect`, and
+  `crash`.
 - A reference to another root's completed value. Its value is complete when
   the root runs, but writing it would copy or share another root's nodes,
   which this rule leaves to a later step.
@@ -2340,10 +2345,14 @@ any other image data.
   (`WorkerKey.inline_literal`, `Program.inlineLiteralSlot`), one per
   expression per program; the initializer lowers the expression's own value
   (`Builder.inlineLiteralRead`).
-- Monotype lowers a listed expression as a static data candidate whose
-  initializer is the expression's own value (`InlineLiteralTask`), requested
-  by module and expression (`StaticDataValue.inline_literal`); LIR lowering
-  then treats it exactly as a stored constant's candidate.
+- Monotype builds a listed number, string, tag with no payload, or empty
+  record in place, through any nominal wrapping or block with no statements,
+  exactly as it restores a stored constant of that shape, so branch folding
+  and range proofs see the literal (`inlineLiteralUsesStaticData`). It lowers
+  every other listed expression as a static data candidate whose initializer
+  is the expression's own value (`InlineLiteralTask`), requested by module
+  and expression (`StaticDataValue.inline_literal`); LIR lowering then treats
+  it exactly as a stored constant's candidate.
 
 A listed expression in a function called from many places is one static
 datum per program, read at every call. Equal listed expressions in one

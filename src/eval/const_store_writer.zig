@@ -976,8 +976,9 @@ pub const Writer = struct {
             .str, .opaque_ptr, .vector => writerInvariant("a value-form numeral's layout is not a number"),
         };
         const bodies = self.checkedValues().bodies;
-        if (bodies.exprData(expr) != .numeral) writerInvariant("a value-form scalar is not a numeral");
-        const exact = bodies.env.exactNumeral(bodies.numeralLiteral(@backingInt(expr)));
+        const value_expr = checked.valueFormValueExpr(bodies, expr);
+        if (bodies.exprData(value_expr) != .numeral) writerInvariant("a value-form scalar is not a numeral");
+        const exact = bodies.env.exactNumeral(bodies.numeralLiteral(@backingInt(value_expr)));
         return (try exact_numeral.encodeBits(self.allocator, exact, target, builtin.cpu.arch.endian())) orelse
             writerInvariant("a value-form numeral does not fit its type");
     }
@@ -996,7 +997,8 @@ pub const Writer = struct {
 
     /// The items of a value-form list.
     fn checkedListItems(self: *const Writer, expr: CIR.Expr.Idx) []const CIR.Expr.Idx {
-        const data = self.checkedValues().bodies.exprData(expr);
+        const bodies = self.checkedValues().bodies;
+        const data = bodies.exprData(checked.valueFormValueExpr(bodies, expr));
         if (data == .empty_list) return &.{};
         if (data != .list) writerInvariant("a value-form list is not a list literal");
         return data.list;
@@ -1007,8 +1009,10 @@ pub const Writer = struct {
     /// where the checked type names the nominal and the expression builds
     /// its backing (a `Bool` or `Try` tag).
     fn checkedBacking(self: *const Writer, expr: CIR.Expr.Idx) CIR.Expr.Idx {
-        const data = self.checkedValues().bodies.exprData(expr);
-        return if (data == .nominal) data.nominal.backing_expr else expr;
+        const bodies = self.checkedValues().bodies;
+        const value_expr = checked.valueFormValueExpr(bodies, expr);
+        const data = bodies.exprData(value_expr);
+        return if (data == .nominal) data.nominal.backing_expr else value_expr;
     }
 
     /// The packed bytes of value-form numerals `items` at element layout
@@ -1078,7 +1082,7 @@ pub const Writer = struct {
     fn checkedComponents(self: *Writer, plan: LirProgram.ConstPlanId, expr: CIR.Expr.Idx, count: usize) Allocator.Error![]const CIR.Expr.Idx {
         const values = self.checkedValues();
         const bodies = values.bodies;
-        const data = bodies.exprData(expr);
+        const data = bodies.exprData(checked.valueFormValueExpr(bodies, expr));
         if (data == .tuple) {
             if (data.tuple.len != count) writerInvariant("a value-form tuple does not have its plan's components");
             return data.tuple;
@@ -1130,7 +1134,7 @@ pub const Writer = struct {
     ) Allocator.Error![]const u8 {
         const values = self.checkedValues();
         const bodies = values.bodies;
-        const data = bodies.exprData(expr);
+        const data = bodies.exprData(checked.valueFormValueExpr(bodies, expr));
         const name: []const u8, const args: []const CIR.Expr.Idx = if (data == .tag)
             .{ bodies.names.tagLabelText(bodies.tagLabel(data.tag.name)), data.tag.args }
         else if (data == .zero_argument_tag)
@@ -1595,7 +1599,7 @@ fn checkedU32(value: usize) Allocator.Error!u32 {
 
 /// The segments of value-form string `expr`.
 fn checkedStrSegments(bodies: checked.CheckedBodies, expr: CIR.Expr.Idx) []const CIR.Expr.Idx {
-    const data = bodies.exprData(expr);
+    const data = bodies.exprData(checked.valueFormValueExpr(bodies, expr));
     if (data != .str) writerInvariant("a value-form string is not a string literal");
     return data.str;
 }

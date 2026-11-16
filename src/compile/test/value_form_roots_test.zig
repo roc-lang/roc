@@ -142,6 +142,8 @@ const corpus =
     \\nested_lists = [["x"], [], ["y", "z"]]
     \\
     \\unit = {}
+    \\block_constant : List(U8)
+    \\block_constant = { [1, 2] }
     \\record : { b : Str, a : U64, c : List(U8) }
     \\record = { b: "bee", a: 7, c: [9] }
     \\nested : { inner : { deep : (U8, Str, List([A, B])) }, other : List({ p : I64 }) }
@@ -190,9 +192,22 @@ const corpus =
     \\    List.len(input) + total + List.len(List.concat(labels, [Str.inspect(List.len(input))]))
     \\}
     \\
+    \\branches : U64 -> List(Str)
+    \\branches = |n| if n == 0 { [] } else { ["a", "b"] }
+    \\
+    \\counted : U64 -> List(U64)
+    \\counted = |n| if n == 0 {
+    \\    one = 1.U64
+    \\    [one]
+    \\} else {
+    \\    []
+    \\}
+    \\
     \\main! = |args| {
     \\    Echo.line!(Str.inspect(parse([])))
     \\    Echo.line!(Str.inspect(measure([])))
+    \\    Echo.line!(Str.inspect(branches(List.len(args))))
+    \\    Echo.line!(Str.inspect(counted(List.len(args))))
     \\    Echo.line!(Str.inspect(List.len(args)))
     \\    Ok({})
     \\}
@@ -452,21 +467,37 @@ fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMat
             return err;
         };
     }
-    try std.testing.expectEqual(@as(usize, 51), constants);
+    try std.testing.expectEqual(@as(usize, 52), constants);
     // `base` in `measure`, which the root `List.len(base)` reads.
     try std.testing.expectEqual(@as(usize, 1), hoisted);
     if (written.rootsCompletedDirectly() < constants + hoisted) {
         std.debug.print("{d} roots were completed directly, fewer than {d}\n", .{ written.rootsCompletedDirectly(), constants + hoisted });
         return error.TooFewRootsCompletedDirectly;
     }
-    // The two lists `parse` concatenates with runtime data, and the
-    // right-hand side of `labels`, which only runtime code reads. The blocks
-    // `parse` returns from its branches are not in value form, so they stay
-    // evaluated roots.
+    // The two lists `parse` concatenates with runtime data, the right-hand
+    // side of `labels`, which only runtime code reads, and the two
+    // statement-less blocks `branches` returns. The block of `counted` that
+    // binds `one` is not in value form, so it stays an evaluated root.
     for ([_]*const Artifact{ left, right }) |artifact| {
+        const env = artifact.moduleEnvConst();
         const inline_literals = artifact.compile_time_roots.inline_literals.items();
-        if (inline_literals.len != 3) {
-            std.debug.print("{d} value-form expressions are kept in their bodies, not 3\n", .{inline_literals.len});
+        var listed_blocks: usize = 0;
+        for (inline_literals) |expr| {
+            if (env.store.getExpr(expr) == .e_block) listed_blocks += 1;
+        }
+        if (inline_literals.len < 5 or listed_blocks < 2) {
+            std.debug.print("{d} value-form expressions are kept in their bodies, {d} of them blocks\n", .{ inline_literals.len, listed_blocks });
+            return error.WrongInlineLiteralCount;
+        }
+        var evaluated_blocks: usize = 0;
+        for (artifact.compile_time_roots.roots.items()) |root| {
+            if (root.kind != .hoisted_constant or root.completion != .evaluate) continue;
+            const expr = root.expr.get() orelse continue;
+            const data = env.store.getExpr(expr);
+            if (data == .e_block and env.store.sliceStatements(data.e_block.stmts).len != 0) evaluated_blocks += 1;
+        }
+        if (evaluated_blocks == 0) {
+            std.debug.print("no block with a statement stays an evaluated root\n", .{});
             return error.WrongInlineLiteralCount;
         }
         for (artifact.compile_time_roots.roots.items()) |root| {

@@ -25313,8 +25313,9 @@ fn rootBodyContainsDiagnosticError(diagnostics: *const body_analyses.NodeBits, r
 
 /// Whether the checked expression `root` is in value form (design.md
 /// "Value-Form Roots"): a literal whose conversion is the builtin one and
-/// cannot fail, or a list, tuple, record, tag, or nominal construction whose
-/// every part is in value form, with no part read at a row other than its
+/// cannot fail, a list, tuple, record, tag, or nominal construction whose
+/// every part is in value form, or a block with no statements whose final
+/// expression is in value form, with no part read at a row other than its
 /// own. Nothing in it calls, dispatches, reads a definition, or can crash.
 /// `stack` is scratch.
 pub fn exprIsValueForm(allocator: Allocator, bodies: CheckedBodies, root: CIR.Expr.Idx, stack: *std.ArrayList(CIR.Expr.Idx)) Allocator.Error!bool {
@@ -25372,10 +25373,28 @@ pub fn exprIsValueForm(allocator: Allocator, bodies: CheckedBodies, root: CIR.Ex
                 };
                 try stack.append(allocator, nominal.backing_expr);
             },
-            .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .match_, .if_, .call, .block, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return false,
+            // A block with no statements is its final expression.
+            .block => |block| {
+                if (block.statements.len != 0) return false;
+                try stack.append(allocator, block.final_expr);
+            },
+            .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .match_, .if_, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return false,
         }
     }
     return true;
+}
+
+/// The expression whose parts a value-form expression's value is built
+/// from: the expression itself, or, for a block with no statements, its
+/// final expression, through any number of such blocks.
+pub fn valueFormValueExpr(bodies: CheckedBodies, expr: CIR.Expr.Idx) CIR.Expr.Idx {
+    var current = expr;
+    while (true) {
+        const data = bodies.exprData(current);
+        if (data != .block) return current;
+        if (data.block.statements.len != 0) checkedArtifactInvariant("a value-form block has statements", .{});
+        current = data.block.final_expr;
+    }
 }
 
 /// The checked body reader's view of `id` when its CIR kind can be part of
@@ -25386,8 +25405,8 @@ pub fn exprIsValueForm(allocator: Allocator, bodies: CheckedBodies, root: CIR.Ex
 /// publication resolves them.
 fn valueFormCandidate(bodies: CheckedBodies, id: CIR.Expr.Idx) ?checked_bodies_mod.ExprData {
     switch (bodies.env.store.getExpr(id)) {
-        .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external => {},
-        .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_block, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
+        .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_block => {},
+        .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
     }
     if (bodies.exprIsRetired(id)) return null;
     return bodies.exprData(id);

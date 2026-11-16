@@ -5906,6 +5906,23 @@ fn constStaticDataStorage(view: ModuleView, node: checked.ConstNodeId) Common.St
     };
 }
 
+/// Whether the value of a value-form expression its body keeps is read
+/// from a static data candidate, by the rule a restored constant follows
+/// (`constValueMayUseStaticDataCandidate`): a number, a string, a tag with
+/// no payload, or an empty record, through any nominal wrapping or block
+/// with no statements, is built in place as the literal it is, so branch
+/// folding and range proofs see it; every other value is a candidate.
+fn inlineLiteralUsesStaticData(view: ModuleView, expr: CIR.Expr.Idx) bool {
+    var current = expr;
+    while (true) switch (view.bodies.exprData(current)) {
+        .nominal => |nominal| current = nominal.backing_expr,
+        .block => |block| current = block.final_expr,
+        .numeral, .str, .str_segment, .zero_argument_tag, .empty_record => return false,
+        .list, .empty_list, .tuple, .record, .tag => return true,
+        .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .match_, .if_, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("a value-form expression a body keeps is not a literal or construction"),
+    };
+}
+
 /// The storage a value-form expression its body keeps needs: a string's
 /// backing for a string literal, possibly inside nominal wrappers, and an
 /// aggregate otherwise.
@@ -5913,12 +5930,13 @@ fn inlineLiteralStorage(view: ModuleView, expr: CIR.Expr.Idx) Common.StaticDataS
     var current = expr;
     while (true) switch (view.bodies.exprData(current)) {
         .nominal => |nominal| current = nominal.backing_expr,
+        .block => |block| current = block.final_expr,
         .str => |segments| {
             var len: u64 = 0;
             for (segments) |segment| len += view.bodies.text(view.bodies.exprData(segment).str_segment).len;
             return .{ .string_backing = len };
         },
-        .numeral, .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return .aggregate,
+        .numeral, .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return .aggregate,
     };
 }
 
@@ -37262,15 +37280,15 @@ const BodyContext = struct {
     };
 
     /// Whether `expr_id` is a value-form expression its body keeps that is
-    /// read as a static data candidate here, rather than built in place: it
-    /// is not the value its own candidate's initializer is lowering.
+    /// read as a static data candidate here, rather than built in place: its
+    /// value has a part a restored constant reads from static data
+    /// (`inlineLiteralUsesStaticData`), and it is not the value its own
+    /// candidate's initializer is lowering.
     fn inlineLiteralSite(self: *BodyContext, expr_id: ExprSite) bool {
         const node = exprSourceNode(self.view, expr_id) orelse return false;
         if (!self.view.compile_time_roots.isInlineLiteral(node)) return false;
-        if (self.inline_literal_inner) |inner| if (inner == expr_id) {
-            self.inline_literal_inner = null;
-            return false;
-        };
+        if (!inlineLiteralUsesStaticData(self.view, node)) return false;
+        if (self.inline_literal_inner) |inner| if (inner == expr_id) return false;
         return true;
     }
 
@@ -37290,7 +37308,7 @@ const BodyContext = struct {
                 .own => requestLowerTask(self, .{ .expr_inner = .{ .expr = task.expr } }),
             };
         }
-        if (self.inline_literal_inner != null) Common.invariant("a value-form expression's initializer never lowered its own value");
+        self.inline_literal_inner = null;
         const lowered = input.?.exprValue();
         const node = exprSourceNode(self.view, task.expr).?;
         const cell = self.exprTypeCell(lowered);

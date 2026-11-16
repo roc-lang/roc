@@ -16,6 +16,10 @@ names = |n| if n == 0 [] else ["first", "a string literal that is far too long t
 points : U64 -> List({ x : I64, y : I64 })
 points = |n| if n == 0 [] else [{ x: 1, y: 2 }, { x: 3, y: 4 }]
 
+# A block with no statements is its final expression.
+blocks : U64 -> List(Str)
+blocks = |n| if n == 0 { [] } else { ["one", "a block's string literal that is far too long to be held inline"] }
+
 nested : U64 -> List(List(U8))
 nested = |n| if n == 0 [] else [[1, 2], [], [3]]
 
@@ -41,7 +45,7 @@ run! = |input| {
 	var $sum = 0
 	var $i = 0
 	while $i < 1000 {
-		$sum = $sum + List.len(names(n)) + List.len(points(n)) + List.len(nested(n)) + total(tree(n))
+		$sum = $sum + List.len(names(n)) + List.len(points(n)) + List.len(nested(n)) + List.len(blocks(n)) + total(tree(n))
 		$i = $i + 1
 	}
 	read_allocs = Host.alloc_count!() - start
