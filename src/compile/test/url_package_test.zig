@@ -43,7 +43,7 @@ test "URL dependency resolves from a warm cache with no network, and its modules
     const cwd = try tmp_dir.dir.realPathFileAlloc(io, ".", gpa);
     defer gpa.free(cwd);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
     build_env.package_cache_dir = try gpa.dupe(u8, cache_dir);
     build_env.setWatchInputTracking(true);
@@ -177,7 +177,7 @@ test "transitive URL dependency compiles through the orchestration core from a w
     const cwd = try tmp_dir.dir.realPathFileAlloc(io, ".", gpa);
     defer gpa.free(cwd);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
     build_env.package_cache_dir = try gpa.dupe(u8, cache_dir);
 

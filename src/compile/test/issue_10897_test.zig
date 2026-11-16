@@ -52,6 +52,7 @@ fn compileWithCache(
         build_options.compiler_compatibility_id,
         &cache_manager,
         roc_ctx,
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;

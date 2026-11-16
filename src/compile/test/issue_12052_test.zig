@@ -39,7 +39,7 @@ test "issue 12052: a Builtin.roc copy below an ancestor default-app main.roc is 
     const builtin_path = try tmp.dir.realPathFileAlloc(io, "sub/Builtin.roc", gpa);
     defer gpa.free(builtin_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
 
     build_env.buildResolvingMain(builtin_path, null) catch {};
@@ -93,7 +93,7 @@ test "issue 12052: the owning main.roc of an explicit-roots entry build keeps or
     const child_path = try tmp.dir.realPathFileAlloc(io, "Child.roc", gpa);
     defer gpa.free(child_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
 
     // `roc test --main=main.roc Child.roc` relaxes validation for the tested

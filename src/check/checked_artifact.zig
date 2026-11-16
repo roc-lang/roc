@@ -5088,9 +5088,7 @@ pub const CheckedTypeStore = struct {
         // content identity.
         var reached: std.ArrayList(Var) = .empty;
         defer reached.deinit(allocator);
-        for (store.sealed_var_facts.items(), 0..) |var_facts, raw| {
-            if (var_facts.reached) try reached.append(allocator, @fromBackingInt(@intCast(raw)));
-        }
+        try sealed_type_view.appendReached(Var, allocator, &reached, store.sealed_var_facts.items(), sealed_type_view.sameVar);
         try embedReachableImportedNominalDecls(allocator, &store, names, import_views, reached.items, 0);
 
         return .{
@@ -8795,18 +8793,12 @@ pub fn numericDefaultPhaseForConstraints(
 
 /// Whether a record's extension is the closed empty record.
 pub fn checkedRecordExtIsEmpty(module_env: *const ModuleEnv, ext: Var) bool {
-    return switch ((&module_env.types).resolveVar(ext).desc.content) {
-        .structure => |flat| flat == .empty_record,
-        .flex, .rigid, .alias, .field_presence, .err => false,
-    };
+    return (&module_env.types).kindOf(ext) == .empty_record;
 }
 
 /// Whether a tag union's extension is the closed empty tag union.
 pub fn checkedTagUnionExtIsEmpty(module_env: *const ModuleEnv, ext: Var) bool {
-    return switch ((&module_env.types).resolveVar(ext).desc.content) {
-        .structure => |flat| flat == .empty_tag_union,
-        .flex, .rigid, .alias, .field_presence, .err => false,
-    };
+    return (&module_env.types).kindOf(ext) == .empty_tag_union;
 }
 
 /// Imported origin modules a type publication has resolved, by the
@@ -13470,6 +13462,10 @@ fn sealCheckedProcedureTemplateRefs(
                 .local_mutable_version,
                 .pattern_binder,
                 => |binding| {
+                    // A name a destructuring scheme alias binds is
+                    // generalized: each use instantiates its type, so no
+                    // equality relates a use to the name.
+                    if (bodies.index().destructuredAliasDecl(binding.binder) != null) continue;
                     try collector.specialization_relations.append(allocator, .{
                         .scope = use_scope,
                         .data = .{ .type_equality = .{
@@ -14428,15 +14424,18 @@ const EvidencePass = struct {
         }
     }
 
-    /// Whether `template` is the wrapper of a top-level binding whose scheme
-    /// is the binding's own: a callable binding's or a constant's.
+    /// Whether `template` is the wrapper of a binding whose scheme is the
+    /// binding's own: a callable binding's or a constant's, or a hoisted
+    /// source-pattern root's, whose wrapper yields the value its pattern
+    /// binds.
     fn wrapperReturnsBindingValue(self: *EvidencePass, template: CheckedProcedureTemplate) bool {
         return switch (template.body) {
             .entry_wrapper => |wrapper_id| blk: {
                 const root = self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root);
-                break :blk root.source_pattern == .none and switch (root.kind) {
+                break :blk switch (root.kind) {
                     .callable_binding, .constant => true,
-                    .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .interpolation_conversion, .literal_argument, .expect, .repl_expr => false,
+                    .hoisted_constant => root.source_pattern != .none,
+                    .hoisted_validation, .numeral_conversion, .quote_conversion, .interpolation_conversion, .literal_argument, .expect, .repl_expr => false,
                 };
             },
             .checked_body, .intrinsic_wrapper, .unimplemented => false,
@@ -14480,14 +14479,15 @@ const EvidencePass = struct {
     }
 
     /// Procedure definitions, hoisted source-pattern roots, callable bindings
-    /// and constants bind an evidence chain. A callable binding's or a
-    /// constant's wrapper produces the binding's value for a use, which
-    /// supplies the binding's dispatch parameters exactly as a use of a
-    /// procedure does: a constant whose type keeps a variable is computed at
-    /// each instantiation it is read at, and a requirement on that variable
-    /// has no implementation until a read fixes it. A constant whose type is
-    /// closed has no such parameter. Expression entry wrappers evaluate their
-    /// values without dispatch parameters.
+    /// and constants take their scheme's dispatch parameters. A callable
+    /// binding's, a constant's or a hoisted source-pattern root's wrapper
+    /// produces the binding's value for a use, which supplies the binding's
+    /// dispatch parameters exactly as a use of a procedure does: a constant
+    /// whose type keeps a variable is computed at each instantiation it is
+    /// read at, and a requirement on that variable has no implementation
+    /// until a read fixes it. A constant whose type is closed has no such
+    /// parameter. Expression entry wrappers evaluate their values without
+    /// dispatch parameters.
     fn templateEvidenceSchemeVar(
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
@@ -14507,12 +14507,21 @@ const EvidencePass = struct {
         };
     }
 
-    /// The template's own params as the outermost evidence chain level.
+    /// The template's own params as the outermost evidence chain level. A
+    /// hoisted source-pattern root's body matches the destructure's base
+    /// expression, which the root of every name the destructure binds shares,
+    /// so that body's evidence resolves against no one name's params: a
+    /// requirement the root's instantiation fixes resolves as an unpinned one
+    /// does at that read.
     fn templateChainLevel(
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
         template_defs: *const collections.DenseMap(u32, Var),
     ) Allocator.Error!ChainLevel {
+        switch (template.body) {
+            .entry_wrapper => |wrapper_id| if (self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root).source_pattern != .none) return .empty,
+            .checked_body, .intrinsic_wrapper, .unimplemented => {},
+        }
         const scheme_var = self.templateEvidenceSchemeVar(template, template_defs) orelse return .empty;
         const schema = try self.schemeSchema(scheme_var);
         return .{ .params = schema.params, .by_dispatcher = schema.by_dispatcher };
@@ -14629,8 +14638,6 @@ const EvidencePass = struct {
             entry.value_ptr.* = record_idx;
         }
 
-        const global_value_defs = module_env.store.sliceDefs(module_env.global_value_defs);
-
         // Generalized local VALUE decls and one representative use record per
         // looked-up pattern (see `local_value_scheme_by_var`).
         for (module_env.scheme_uses.items(), 0..) |record, i| {
@@ -14650,14 +14657,6 @@ const EvidencePass = struct {
                 const statement_data = self.module.getStatement(statement);
                 if (statement_data != .s_decl) continue;
                 try self.mapValueSchemeParams(statement_data.s_decl.pattern, statement_data.s_decl.expr, &scheme_params);
-            }
-            // Top-level generalized VALUE defs (e.g. an `if` choosing between
-            // closures) lower inline at their single use type exactly like
-            // local value decls; their body plans resolve through use records
-            // the same way.
-            for (global_value_defs) |def_idx| {
-                const def = module_env.store.getDef(def_idx);
-                try self.mapValueSchemeParams(def.pattern, def.expr, &scheme_params);
             }
         }
     }
@@ -16870,13 +16869,18 @@ const EvidencePass = struct {
                 return;
             }
             // A constant's value can hold functions as data, which a read
-            // hands on before any of them is requested at a concrete type.
-            const constant_value = switch (rec.ref) {
+            // hands on before any of them is requested at a concrete type. A
+            // local alias of a constant reads that constant: the lookup its
+            // alias chain reaches says what the use reads.
+            const constant_value = switch (self.resolved_value_refs.callableTarget(ref_id).ref) {
                 .top_level_const,
                 .imported_const,
                 .selected_hoisted_const,
                 .platform_required_const,
                 => true,
+                // A scheme alias of a constant reads that constant at each
+                // use of the alias.
+                .local_proc => |local| local.is_alias and !bindsProcedureAlias(self.module, local.binder, local.expr),
                 .top_level_proc,
                 .imported_proc,
                 .hosted_proc,
@@ -16886,7 +16890,6 @@ const EvidencePass = struct {
                 .local_value,
                 .local_mutable_version,
                 .pattern_binder,
-                .local_proc,
                 .platform_required_declaration,
                 .platform_required_checked_error,
                 => false,
@@ -24544,9 +24547,7 @@ pub const ModuleInterfaceCapabilities = struct {
         var nominal_types = std.ArrayList(CheckedTypeId).empty;
         defer nominal_types.deinit(allocator);
         for (0..checked_types.payloads.items().len) |index| try nominal_types.append(allocator, type_ids.fromSynthesized(index));
-        for (checked_types.sealed_var_facts.items(), 0..) |var_facts, raw| {
-            if (var_facts.reached) try nominal_types.append(allocator, type_ids.fromVar(@fromBackingInt(@intCast(raw))));
-        }
+        try sealed_type_view.appendReached(CheckedTypeId, allocator, &nominal_types, checked_types.sealed_var_facts.items(), type_ids.fromVar);
         var source_capabilities = std.ArrayList(sealed_type_view.SealedCapabilityRow).empty;
         defer source_capabilities.deinit(allocator);
 

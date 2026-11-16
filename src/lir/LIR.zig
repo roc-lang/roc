@@ -985,9 +985,9 @@ pub const ProcAbi = enum {
     /// procedure has at most one explicit argument, the packed argument
     /// record itself (a closed struct, or a `param` dynamic local whose
     /// address is the `args` pointer), its capture pointer in
-    /// `erased_capture_arg`, and its result written to the `ret` pointer (a
-    /// `dyn_result` local when the result is dynamic). It takes no reuse
-    /// input and writes no `out_desc`.
+    /// `erased_capture_arg`, its reuse input in `erased_reuse_arg`, and its
+    /// result written to the `ret` pointer (a `dyn_result` local when the
+    /// result is dynamic). It writes no `out_desc`.
     erased_record,
 };
 
