@@ -50,7 +50,7 @@ const callers =
     \\
 ;
 
-const combined_app =
+const combined_helper =
     \\helper : [A, B, C], U64 -> U64
     \\helper = |mode, n| {
     \\
@@ -62,7 +62,9 @@ const combined_app =
     \\    }
     \\}
     \\
-++ callers;
+;
+
+const combined_app = combined_helper ++ callers;
 
 const redundant_return_app =
     \\helper : [A, B, C], U64 -> U64
@@ -289,4 +291,27 @@ test "issue 13026: splitting is deterministic across schedules" {
         .inline_mode = .wrappers,
         .spec_constr_clone_inlining = .all_calls,
     }, &.{});
+}
+
+test "issue 13026: a split first made inside a rejected loop attempt outlives the attempt" {
+    // The loop's first attempt assumes `$mode` stays `A`, so both calls copy
+    // the helper's body and split it; the reassignment then rejects the
+    // attempt, and the retry reads the split body.
+    const app = combined_helper ++
+        \\main! = |args| {
+        \\    n = args.len()
+        \\    var $mode = A
+        \\    var $total = 0
+        \\    var $k = 0
+        \\    while $k < n {
+        \\        $total = $total + helper($mode, n + $k) + helper($mode, n + $k + 1)
+        \\        $mode = if $total % 2 == 0 B else C
+        \\        $k = $k + 1
+        \\    }
+        \\    echo!($total.to_str())
+        \\    Ok({})
+        \\}
+        \\
+    ;
+    try std.testing.expect(try prefixFunctionCount(app) > try prefixFunctionCount(baseline_app));
 }

@@ -14111,6 +14111,7 @@ const Cloner = struct {
     const LoopAttemptMark = struct {
         analysis: Pass.AnalysisMark,
         callable_workers: usize,
+        prefix_fns: usize,
         rebased_inline_scope_changes: usize,
         recorded_value_keys: usize,
         clone_templates: usize,
@@ -14141,6 +14142,7 @@ const Cloner = struct {
         return .{
             .analysis = self.pass.markAnalysis(),
             .callable_workers = self.pass.callable_workers.count(),
+            .prefix_fns = self.pass.prefix_fns.count(),
             .rebased_inline_scope_changes = self.rebased_inline_scope_changes.items.len,
             .recorded_value_keys = self.recorded_value_keys.items.len,
             .clone_templates = self.clone_templates.items.len,
@@ -14182,7 +14184,12 @@ const Cloner = struct {
             if (!removed) Common.invariant("recorded value change had no map entry");
         }
 
-        if (self.pass.callable_workers.count() == mark.callable_workers) {
+        // A callable worker or a prefix split the attempt committed is
+        // program state every later clone reads, so the suffix holding it
+        // stays, unreferenced by the next attempt.
+        if (self.pass.callable_workers.count() == mark.callable_workers and
+            self.pass.prefix_fns.count() == mark.prefix_fns)
+        {
             self.rewindProgramSuffix(mark);
         }
 
