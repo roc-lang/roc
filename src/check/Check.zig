@@ -968,6 +968,11 @@ relation_owner: problem.RelationOwner = .none,
 /// callable var, so a copy is never a key; merging keeps the retained
 /// constraint's callable var.
 own_dispatch_exprs: collections.DenseMap(Var, CIR.Expr.Idx),
+/// The call whose callee each value use is, keyed by the use's expression,
+/// for a callee whose check registered a use (`use_instances`). The call
+/// relates that use's instance to its arguments and result, so it owns the
+/// relation of every requirement the use copied (`calleeUseConsumer`).
+callee_use_calls: collections.DenseMap(CIR.Expr.Idx, CIR.Expr.Idx),
 /// The iterable of the `for` loop whose `iter` or `next` dispatch each raw
 /// callable var is. A loop's dispatch has no expression of its own to own a
 /// relation, but an obligation derived from it (a requirement its selected
@@ -2080,6 +2085,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .use_owned_fns = .keyed,
     .use_instance_by_fn_var = .keyed,
     .own_dispatch_exprs = .keyed,
+    .callee_use_calls = .keyed,
     .loop_dispatch_iterables = .keyed,
     .reach_free_schemes = .keyed,
     .use_deferred_callables = .keyed,
@@ -4951,6 +4957,7 @@ fn initAssumePrepared(
         .pinnable_vars = collections.DenseMap(Var, void).init(gpa),
         .use_instance_by_fn_var = collections.DenseMap(Var, u32).init(gpa),
         .own_dispatch_exprs = collections.DenseMap(Var, CIR.Expr.Idx).init(gpa),
+        .callee_use_calls = collections.DenseMap(CIR.Expr.Idx, CIR.Expr.Idx).init(gpa),
         .loop_dispatch_iterables = collections.DenseMap(Var, CIR.Expr.Idx).init(gpa),
         .reach_free_schemes = collections.DenseMap(Var, void).init(gpa),
         .link_var_map = collections.DenseMap(Var, Var).init(gpa),
@@ -10446,7 +10453,11 @@ fn schemeUseExpr(self: *const Self, record_index: u32) CIR.Expr.Idx {
             .value_use, .nested_function_use, .platform_requirement => return @fromBackingInt(record.node_idx),
             .dispatch_target => {
                 const fn_var: Var = @fromBackingInt(record.slot_data);
-                if (self.dispatchSiteOfFn(fn_var)) |site| return site.expr;
+                if (self.dispatchSiteOfFn(fn_var)) |site| switch (site.kind) {
+                    .own, .own_derived, .loop_derived => return site.expr,
+                    // The copying use's own expression is found below.
+                    .use_owned => {},
+                };
                 current = for (self.use_instances.items) |use| {
                     const owned = self.use_owned_fns.items[use.owned_start..][0..use.owned_len];
                     const linked = self.use_owned_fns.items[use.linked_owned_start..][0..use.linked_owned_len];
@@ -18131,13 +18142,22 @@ const DispatchSite = struct {
         /// reports at the loop's iterable `expr` and poisons nothing, since
         /// the loop's checked iterator evidence carries the rejection.
         loop_derived,
+        /// A requirement a value use's instantiation copied, or one derived
+        /// from such a copy, when that use is the callee of the call `expr`:
+        /// it resolves under the call's relation over its operands, which
+        /// relates the use's instance to its arguments and result, whichever
+        /// later unification grounds it; its queued entry decides where it
+        /// fails.
+        use_owned,
     };
 };
 
 /// The site where `constraint` fails, or null for a constraint whose entry
-/// decides it (a copy that instantiation or import made, a loop's own
-/// dispatch, or what derives from a copy) or that fails at its source
-/// literals (`poisonSourceLiteralConversionFailure`). An
+/// decides it (a copy that an import or an instantiation which is not a
+/// call's callee made, a loop's own dispatch, or what derives from such a
+/// copy) or that fails at its source literals
+/// (`poisonSourceLiteralConversionFailure`). A copy a call's callee use made
+/// belongs to that call (`calleeUseConsumer`). An
 /// obligation derived from a dispatch, which its selected target's
 /// instantiation left behind (`dispatch_derivation_by_child_fn_var`) or which
 /// a structural comparison derived for a component
@@ -18149,6 +18169,7 @@ fn dispatchSiteOf(self: *const Self, constraint: StaticDispatchConstraint) ?Disp
 
 fn dispatchSiteOfFn(self: *const Self, constraint_fn_var: Var) ?DispatchSite {
     if (self.own_dispatch_exprs.get(constraint_fn_var)) |expr| return .{ .expr = expr, .kind = .own };
+    if (self.calleeUseConsumer(constraint_fn_var)) |call| return .{ .expr = call, .kind = .use_owned };
     var fn_var = constraint_fn_var;
     var guard = types_mod.debug.IterationGuard.init("dispatchSiteOf");
     while (true) {
@@ -18157,7 +18178,18 @@ fn dispatchSiteOfFn(self: *const Self, constraint_fn_var: Var) ?DispatchSite {
             self.component_derivation_by_child_fn_var.get(fn_var) orelse return null;
         if (self.own_dispatch_exprs.get(fn_var)) |expr| return .{ .expr = expr, .kind = .own_derived };
         if (self.loop_dispatch_iterables.get(fn_var)) |iterable| return .{ .expr = iterable, .kind = .loop_derived };
+        if (self.calleeUseConsumer(fn_var)) |call| return .{ .expr = call, .kind = .use_owned };
     }
+}
+
+/// The call whose callee is the value use that copied the requirement with
+/// callable `fn_var` (`callee_use_calls`), or null for a callable no such use
+/// copied.
+fn calleeUseConsumer(self: *const Self, fn_var: Var) ?CIR.Expr.Idx {
+    if (self.callee_use_calls.count() == 0) return null;
+    const use_idx = self.use_instance_by_fn_var.get(fn_var) orelse return null;
+    const record = self.cir.scheme_uses.items()[self.use_instances.items[use_idx].record];
+    return self.callee_use_calls.get(@fromBackingInt(record.node_idx));
 }
 
 /// The relation that owns the dispatch `expr`'s own checking step created:
@@ -18840,14 +18872,17 @@ fn deferredConstraintFailureExpr(self: *Self, deferred: DeferredConstraintCheck)
 /// itself; the site's expression for an obligation derived from a dispatch;
 /// or else that of the queued entry carrying it.
 fn constraintFailureExpr(self: *const Self, deferred: DeferredConstraintCheck, constraint: StaticDispatchConstraint) ?CIR.Expr.Idx {
-    if (self.dispatchSiteOf(constraint)) |site| return siteFailureExpr(site);
+    if (self.dispatchSiteOf(constraint)) |site| return siteFailureExpr(site, deferred);
     return explicitDeferredConstraintFailureExpr(deferred);
 }
 
-fn siteFailureExpr(site: DispatchSite) ?CIR.Expr.Idx {
+/// The failure expression a constraint with dispatch site `site` resolves
+/// under, while the queued entry `entry` carries it.
+fn siteFailureExpr(site: DispatchSite, entry: DeferredConstraintCheck) ?CIR.Expr.Idx {
     return switch (site.kind) {
         .own => null,
         .own_derived, .loop_derived => site.expr,
+        .use_owned => explicitDeferredConstraintFailureExpr(entry),
     };
 }
 
@@ -18887,11 +18922,11 @@ fn enterDeferredEntryConstraint(
         try self.claimRecordedProblems();
         ownership.site = site;
         self.relation_owner = if (site) |current| switch (current.kind) {
-            .own, .own_derived => ownDispatchRelation(current.expr),
+            .own, .own_derived, .use_owned => ownDispatchRelation(current.expr),
             .loop_derived => ownership.entry.relation_owner,
         } else ownership.entry.relation_owner;
     }
-    if (site) |current| return siteFailureExpr(current);
+    if (site) |current| return siteFailureExpr(current, ownership.entry);
     return explicitDeferredConstraintFailureExpr(ownership.entry);
 }
 
@@ -18909,10 +18944,10 @@ fn leaveDeferredEntryConstraints(self: *Self, env: *Env, ownership: *DeferredEnt
 fn passOnDeferredEntryFailureExpr(self: *Self, env: *Env, ownership: *DeferredEntryOwnership) void {
     const queued = env.deferred_static_dispatch_constraints.items().len;
     if (queued > ownership.children_start) {
-        const failure_expr: StaticDispatchConstraint.Provenance.OptExprIdx = if (ownership.site) |site|
-            if (siteFailureExpr(site)) |expr| .from(@backingInt(expr)) else .none
-        else
-            self.deferredEntryChildFailureExpr(ownership.entry);
+        const failure_expr: StaticDispatchConstraint.Provenance.OptExprIdx = if (ownership.site) |site| switch (site.kind) {
+            .own, .own_derived, .loop_derived => if (siteFailureExpr(site, ownership.entry)) |expr| .from(@backingInt(expr)) else .none,
+            .use_owned => self.deferredEntryChildFailureExpr(ownership.entry),
+        } else self.deferredEntryChildFailureExpr(ownership.entry);
         inheritDeferredConstraintFailureExpr(env, ownership.children_start, failure_expr);
     }
     ownership.children_start = queued;
@@ -19127,6 +19162,8 @@ fn poisonConstraintFailure(
     if (self.dispatchSiteOf(constraint)) |site| switch (site.kind) {
         .own, .own_derived => return self.poisonConstraintFailureSource(dispatcher_var, constraint, site.expr),
         .loop_derived => return,
+        // The entry decides where a copy a call's callee use made fails.
+        .use_owned => {},
     };
     // A source literal's conversion, and what derives from it, fails at the
     // literal, whichever queued entry carries it: an explicit owner here is
@@ -35096,6 +35133,8 @@ fn resumeClosureCheck(self: *Self, task: *ExprTask, state: *ClosureCheck, env: *
 const CallCheck = struct {
     phase: enum { start, func, args, derived_args } = .start,
     saved_direct_callee_expr: ?CIR.Expr.Idx = null,
+    /// The number of registered uses when the callee's check began.
+    uses_start: u32 = 0,
     /// The scheme the callee's type is an instance of, when it is one.
     callee_scheme: ?Var = null,
     derived: DerivedMethodCallee = undefined,
@@ -35156,12 +35195,14 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
             state.saved_direct_callee_expr = self.direct_callee_expr;
             self.direct_callee_expr = call.func;
             self.direct_callee_scheme = null;
+            state.uses_start = @intCast(self.use_instances.items.len);
             state.phase = .func;
             return .{ .child = .{ .expr = call.func, .expected = child_expected } };
         },
         .func => {
             std.debug.assert(child_done);
             self.direct_callee_expr = state.saved_direct_callee_expr;
+            try self.recordCalleeUseConsumer(state.uses_start, call.func, expr_idx);
             state.callee_scheme = self.direct_callee_scheme;
             self.direct_callee_scheme = null;
             if (self.derived_method_callee) |callee| {
@@ -41557,16 +41598,16 @@ const RelationOperands = struct {
     /// literal's items or a call's arguments) rather than a run of
     /// `relation_operand_pool`.
     in_store: bool,
-    /// Checking retires the expression itself when one of these is erroneous
-    /// (`retireCallLikeExprWithErroneousOperands`), so its own value is then
-    /// erroneous too.
-    retired_with_operands: bool,
+    /// The expression evaluates every one of these before it produces its
+    /// value, so its value is erroneous when one of them is (a conditional's
+    /// or match's branch values are not: only one branch runs).
+    evaluates_operands: bool,
 };
 
 /// Capture the values an expression's relations read, before its checking
 /// begins (`relation_operands`).
 fn recordRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) Allocator.Error!void {
-    const retired_with_operands = switch (expr) {
+    const evaluates_operands = switch (expr) {
         .e_call,
         .e_run_low_level,
         .e_method_call,
@@ -41578,14 +41619,14 @@ fn recordRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) A
         .e_method_eq,
         .e_interpolation,
         .e_for,
-        => true,
-        .e_record => |record| record.ext != null,
+        .e_record,
         .e_structural_eq,
         .e_structural_hash,
         .e_str,
         .e_field_access,
         .e_tuple_access,
         .e_list,
+        => true,
         .e_if,
         .e_match,
         => false,
@@ -41633,7 +41674,7 @@ fn recordRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) A
     const pool = &self.relation_operand_pool;
     const start: u32 = @intCast(pool.items.len);
     switch (expr) {
-        .e_list => |list| return self.recordStoreRelationOperands(expr_idx, list.elems, retired_with_operands),
+        .e_list => |list| return self.recordStoreRelationOperands(expr_idx, list.elems, evaluates_operands),
         .e_if => |if_| {
             for (self.cir.store.sliceIfBranches(if_.branches)) |branch_idx| {
                 try pool.append(self.gpa, self.cir.store.getIfBranch(branch_idx).body);
@@ -41645,7 +41686,7 @@ fn recordRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) A
         },
         // A call relates its arguments to its callee's instantiated type; the
         // callee is the relation's other side, not a value it reads.
-        .e_call => |call| return self.recordStoreRelationOperands(expr_idx, call.args, retired_with_operands),
+        .e_call => |call| return self.recordStoreRelationOperands(expr_idx, call.args, evaluates_operands),
         .e_run_low_level,
         .e_method_call,
         .e_dispatch_call,
@@ -41708,16 +41749,16 @@ fn recordRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) A
         .start = start,
         .len = @as(u32, @intCast(pool.items.len)) - start,
         .in_store = false,
-        .retired_with_operands = retired_with_operands,
+        .evaluates_operands = evaluates_operands,
     });
 }
 
-fn recordStoreRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, span: CIR.Expr.Span, retired_with_operands: bool) Allocator.Error!void {
+fn recordStoreRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, span: CIR.Expr.Span, evaluates_operands: bool) Allocator.Error!void {
     try self.relation_operands.put(self.gpa, expr_idx, .{
         .start = span.span.start,
         .len = span.span.len,
         .in_store = true,
-        .retired_with_operands = retired_with_operands,
+        .evaluates_operands = evaluates_operands,
     });
 }
 
@@ -41827,19 +41868,21 @@ const SettledValueCause = struct {
 /// How a value is erroneous at the settled state. A use of a name is
 /// erroneous through that name when the name's source value
 /// (`binder_source_exprs`) is erroneous in any way, or when the name binds
-/// nothing; an expression checking retires with its operands
-/// (`RelationOperands.retired_with_operands`) is erroneous the way its
-/// operands are. Memoized in `settled`.
+/// nothing; an expression that evaluates its operands before it produces its
+/// value (`settledCauseSources`) is erroneous the way its operands are.
+/// Memoized in `settled`.
 fn settledValueCause(self: *Self, root: CIR.Expr.Idx, settled: *SettledValueCauses) Allocator.Error!SettledValueCause {
     if (settled.causes.get(root)) |cause| return cause;
     const Visit = struct { expr: CIR.Expr.Idx, expanded: bool };
     var stack = std.ArrayList(Visit).empty;
     defer stack.deinit(self.gpa);
     try stack.append(self.gpa, .{ .expr = root, .expanded = false });
+    var scratch = std.ArrayList(CIR.Expr.Idx).empty;
+    defer scratch.deinit(self.gpa);
     var guard = types_mod.debug.IterationGuard.init("settledValueCause");
     while (stack.pop()) |visit| {
         guard.tick();
-        const sources = self.settledCauseSources(visit.expr, settled);
+        const sources = try self.settledCauseSources(visit.expr, settled, &scratch);
         if (!visit.expanded) {
             if (settled.causes.contains(visit.expr)) continue;
             // An expression reached again while its own cause is being
@@ -41883,8 +41926,15 @@ const SettledCauseSources = struct {
 
 /// What a value's erroneousness follows from (`settledValueCause`): a local
 /// name's source value, or the name's binder when it records no source, or
-/// the operands of an expression checking retires with them.
-fn settledCauseSources(self: *const Self, expr_idx: CIR.Expr.Idx, settled: *const SettledValueCauses) SettledCauseSources {
+/// the operands an expression evaluates before it produces its value, which
+/// never produces that value when one of them crashes. The values may live in
+/// `scratch`, valid until the next call.
+fn settledCauseSources(
+    self: *const Self,
+    expr_idx: CIR.Expr.Idx,
+    settled: *const SettledValueCauses,
+    scratch: *std.ArrayList(CIR.Expr.Idx),
+) Allocator.Error!SettledCauseSources {
     const pattern = settled.lookup_patterns.get(expr_idx) orelse lookup: {
         const expr = self.cir.store.getExpr(expr_idx);
         break :lookup if (expr == .e_lookup_local) expr.e_lookup_local.pattern_idx else null;
@@ -41896,9 +41946,77 @@ fn settledCauseSources(self: *const Self, expr_idx: CIR.Expr.Idx, settled: *cons
         return .{ .values = &.{}, .is_name = true, .unlinked_pattern = binder };
     }
     const none: SettledCauseSources = .{ .values = &.{}, .is_name = false, .unlinked_pattern = null };
-    const operands = self.relation_operands.get(expr_idx) orelse return none;
-    if (!operands.retired_with_operands) return none;
-    return .{ .values = self.relationOperandValues(operands), .is_name = false, .unlinked_pattern = null };
+    if (self.relation_operands.get(expr_idx)) |operands| {
+        if (!operands.evaluates_operands) return none;
+        return .{ .values = self.relationOperandValues(operands), .is_name = false, .unlinked_pattern = null };
+    }
+    // A construction owns no relation, so its operands are read from the
+    // store; a use among them that checking replaced keeps its node.
+    scratch.clearRetainingCapacity();
+    const store = &self.cir.store;
+    switch (store.getExpr(expr_idx)) {
+        .e_tuple => |tuple| try scratch.appendSlice(self.gpa, store.sliceExpr(tuple.elems)),
+        .e_tag => |tag| try scratch.appendSlice(self.gpa, store.sliceExpr(tag.args)),
+        .e_nominal => |nominal| try scratch.append(self.gpa, nominal.backing_expr),
+        .e_nominal_external => |nominal| try scratch.append(self.gpa, nominal.backing_expr),
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str_segment,
+        .e_str,
+        .e_bytes_literal,
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_deferred_import_ref,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
+        .e_lookup_required,
+        .e_list,
+        .e_empty_list,
+        .e_match,
+        .e_if,
+        .e_call,
+        .e_record,
+        .e_empty_record,
+        .e_block,
+        .e_zero_argument_tag,
+        .e_closure,
+        .e_lambda,
+        .e_binop,
+        .e_unary_minus,
+        .e_field_access,
+        .e_method_call,
+        .e_dispatch_call,
+        .e_interpolation,
+        .e_structural_eq,
+        .e_structural_hash,
+        .e_method_eq,
+        .e_type_method_call,
+        .e_type_dispatch_call,
+        .e_tuple_access,
+        .e_runtime_error,
+        .e_crash,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_derived_method,
+        .e_return,
+        .e_break,
+        .e_for,
+        .e_hosted_lambda,
+        .e_run_low_level,
+        => return none,
+    }
+    return .{ .values = scratch.items, .is_name = false, .unlinked_pattern = null };
 }
 
 /// A use of a name reads its value through that name's own binder pattern,
@@ -41985,7 +42103,11 @@ fn retireParamsOfRejectedDispatches(self: *Self) Allocator.Error!void {
     defer operands.deinit(self.gpa);
     for (self.cir.rejectedStaticDispatches()) |dispatch| {
         const site = self.dispatchSiteOfFn(@fromBackingInt(dispatch.constraint_fn_var)) orelse continue;
-        if (site.kind == .loop_derived) continue;
+        switch (site.kind) {
+            .own, .own_derived => {},
+            // Neither retires the site expression's operands.
+            .loop_derived, .use_owned => continue,
+        }
         operands.clearRetainingCapacity();
         const site_expr = self.cir.store.getExpr(site.expr);
         if (site_expr == .e_runtime_error) {
@@ -52536,6 +52658,19 @@ fn registerUseInstance(self: *Self, scheme_root: Var, instance_root: Var, record
         .owned_start = owned_start,
         .owned_len = @intCast(owned.len),
     });
+}
+
+/// Record `call` as the consumer of the use its callee `callee` registered,
+/// if the callee's check (which began with `uses_start` uses registered)
+/// registered one: the call relates that use's instance to its arguments and
+/// result, so it owns the use's copied requirements (`calleeUseConsumer`).
+fn recordCalleeUseConsumer(self: *Self, uses_start: u32, callee: CIR.Expr.Idx, call: CIR.Expr.Idx) Allocator.Error!void {
+    const scheme_uses = self.cir.scheme_uses.items();
+    for (self.use_instances.items[uses_start..]) |use| {
+        if (scheme_uses[use.record].node_idx != @backingInt(callee)) continue;
+        try self.callee_use_calls.put(callee, call);
+        return;
+    }
 }
 
 /// Save what the use just registered needs to link the requirement
