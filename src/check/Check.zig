@@ -869,10 +869,7 @@ widened_use_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty,
 /// row's own tail, paired with that row (`liftKeptTailSources`).
 widened_kept_tail_rows: std.ArrayListUnmanaged(KeptTailRow) = .empty,
 /// Every row a use's widening copy re-opened, paired with the value's row it
-/// copies (`WidenedUseRow`). A value's row can still gain tags after a use
-/// copied it (a generated codec's validation adds its error tags during
-/// finalize), so `propagateValueRowsToWidenedUses` carries them into the
-/// copies once constraints settle.
+/// copies (`WidenedUseRow`), which `settleUnwidenedResults` compares.
 widened_use_rows: std.ArrayListUnmanaged(WidenedUseRow) = .empty,
 /// Every value expression recorded as a row-coerced result, with the range of
 /// `widened_use_rows` its copy re-opened (`settleUnwidenedResults`).
@@ -20070,7 +20067,6 @@ fn checkInstantiatedStaticDispatchConstraints(
             // validation pass has already run, so this phase validates it and
             // judges whatever that validation grounds in another round.
             try self.checkFinalGeneratedCodecConstraints(env);
-            if (builtin.mode == .debug) try self.debugAssertWidenedUseRowsComplete();
             continue;
         }
         if (self.instantiation_dispatchers_checked == self.instantiation_dispatchers.items.len and
@@ -25495,29 +25491,6 @@ fn codecDemandRejectsAuditedTag(
     return self.tagRowHasTag(entry.ext.var_, tag_name);
 }
 
-/// Whether the late audit will reject `tag_name` in `row` as a tag a
-/// generated codec produces on behalf of the definition whose annotation
-/// bounds `row` (`runLateImplicitOpenExtAudit`). That definition is then
-/// retired and never produces a value.
-fn rowTagIsRejectedCodecProduction(self: *const Self, row: Var, tag_name: Ident.Idx) bool {
-    if (self.codec_row_demands.items.len == 0) return false;
-    const tail = self.tagRowTail(row);
-    for (self.late_implicit_open_ext_audits.items) |entry| {
-        if (entry.owner_rhs.isEmpty()) continue;
-        if (!self.implicitOpenExtCarriesTags(entry.ext)) continue;
-        if (self.tagRowTail(entry.ext.var_) != tail) continue;
-        for (self.codec_row_demands.items) |demand| {
-            if (self.tagRowTail(demand.row) != tail) continue;
-            const tags = self.codec_row_demand_tags.items[demand.tags_start..][0..demand.tags_len];
-            for (tags) |demanded| {
-                if (!demanded.eql(tag_name)) continue;
-                if (self.codecDemandRejectsAuditedTag(demand, entry, tag_name)) return true;
-            }
-        }
-    }
-    return false;
-}
-
 /// The resolved extension a tag row ends in, through aliases and extension
 /// chains. Rows related by unification share it.
 /// Mark the positions of `root` that the row coercion reaches
@@ -25663,7 +25636,7 @@ fn widenedReachCopy(self: *Self, root: Var, use_expr: CIR.Expr.Idx, env: *Env, r
                 break :blk if (backing_copy == self.types.resolveVar(backing).var_) resolved.var_ else backing_copy;
             },
             .structure => |flat| switch (flat) {
-                .tag_union => try self.widenedRowCopy(resolved.var_, use_expr, env, region),
+                .tag_union => try self.widenedRowCopy(resolved.var_, env, region),
                 .nominal_type => |nominal| blk: {
                     // Copying appends to the type store, so read the arguments
                     // out of it first.
@@ -25773,7 +25746,7 @@ fn appendWidenedReachChildren(self: *Self, var_: Var, children: *std.ArrayListUn
 /// ends in a rigid, or in a tail that is still open, is not the value's to
 /// re-open: the copy keeps that tail, and is the row itself unless a payload's
 /// copy widens.
-fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, region: Region) std.mem.Allocator.Error!Var {
+fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
     const tags_start = self.widened_use_tags.items.len;
     defer self.widened_use_tags.shrinkRetainingCapacity(tags_start);
     var current = row;
@@ -25807,9 +25780,8 @@ fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, regi
                 // an enclosing scope owns is shared the same way, never stood
                 // in for by a placeholder: the tags the row holds relate now,
                 // and every tag the row gains later joins through the shared
-                // tail or propagates into the copy (design.md "Row Joins",
-                // `propagateValueRowsToWidenedUses`), so the value's own row
-                // stays its own at every use.
+                // tail (design.md "Row Joins"), so the value's own row stays
+                // its own at every use.
                 if (self.widen_closed_rows_only and !resolved.desc.flags.bounded_row_ext) kept_tail = resolved.var_;
                 break;
             },
@@ -25851,7 +25823,19 @@ fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, regi
     }
     const ext = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
     const copy = try self.freshFromContent(try self.types.mkTagUnion(tags, ext), env, region);
-    try self.widened_use_rows.append(self.gpa, .{ .value_row = self.types.resolveVar(row).var_, .use_row = copy, .use_expr = use_expr });
+    // Only a row that can gain no tag is re-opened: one that is closed, or
+    // whose extension an annotation bounds, which the unifier refuses to
+    // extend (`unify.refuseTagsIntoBoundedExt`). So the value's row never
+    // gains a tag its widened copy lacks.
+    if (builtin.mode == .debug) {
+        const tail = self.types.resolveVar(self.tagRowTail(row));
+        std.debug.assert(switch (tail.desc.content) {
+            .flex => tail.desc.flags.bounded_row_ext,
+            .structure => |flat| flat == .empty_tag_union,
+            .alias, .rigid, .field_presence, .err => false,
+        });
+    }
+    try self.widened_use_rows.append(self.gpa, .{ .value_row = self.types.resolveVar(row).var_, .use_row = copy });
     return copy;
 }
 
@@ -26119,125 +26103,7 @@ const WidenedUseRow = struct {
     value_row: Var,
     /// The use's copy of it.
     use_row: Var,
-    /// The use that relates to the copy, retired when the copy cannot take
-    /// a tag the value's row gained.
-    use_expr: CIR.Expr.Idx,
-    /// Set once the copy needs nothing more: the use's type was found not to
-    /// admit a tag of the value's row (that mismatch is reported and the use
-    /// retired), the tag is one the value's definition was rejected for
-    /// producing (the use is retired), or the copy is no longer a tag row
-    /// because the use related it to a nominal type, whose declared backing
-    /// that relation already checked.
-    settled: bool = false,
 };
-
-/// Add to every widening copy each tag its value's row gained after the copy
-/// was made, with the value's own payloads, so the copy still lists every tag
-/// the value can have (design.md "Row Subsumption"). A result whose type no
-/// longer admits such a tag is a type mismatch at the result. Returns whether
-/// any copy gained a tag, since unifying one can introduce constraints of its
-/// own.
-/// Every row a use's widening copy re-opened copies a value row that was
-/// closed or bounded when the use read it (`widenedRowCopy` re-opens no other
-/// row), and neither kind gains a tag afterwards: a closed row has no tail,
-/// and the unifier refuses a tag into a bounded extension
-/// (`unify.refuseTagsIntoBoundedExt`). So a relation validated after value
-/// rows propagated, such as a derived codec relation parked by settled
-/// default materialization, cannot add a tag a widened use lacks.
-fn debugAssertWidenedUseRowsComplete(self: *Self) std.mem.Allocator.Error!void {
-    var missing: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
-    defer missing.deinit(self.gpa);
-    for (self.widened_use_rows.items) |pair| {
-        if (pair.settled or !self.varIsTagRow(pair.use_row)) continue;
-        try self.collectTagsMissingFromUse(pair, &missing);
-        std.debug.assert(missing.items.len == 0);
-    }
-}
-
-fn propagateValueRowsToWidenedUses(self: *Self, env: *Env) std.mem.Allocator.Error!bool {
-    var changed = false;
-    var missing: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
-    defer missing.deinit(self.gpa);
-    var index: usize = 0;
-    while (index < self.widened_use_rows.items.len) : (index += 1) {
-        const pair = self.widened_use_rows.items[index];
-        if (pair.settled) continue;
-        if (!self.varIsTagRow(pair.use_row)) {
-            self.widened_use_rows.items[index].settled = true;
-            continue;
-        }
-        try self.collectTagsMissingFromUse(pair, &missing);
-        if (missing.items.len == 0) continue;
-        // A tag the value's own definition is rejected for producing is not
-        // one the value can have: the definition is retired, so the use is a
-        // use of a rejected declaration, erroneous at the use and reported
-        // once, at the definition.
-        const rejected_production = for (missing.items) |tag| {
-            if (self.rowTagIsRejectedCodecProduction(pair.value_row, tag.name)) break true;
-        } else false;
-        if (rejected_production) {
-            try self.markErroneousValueExpr(pair.use_expr);
-            self.widened_use_rows.items[index].settled = true;
-            continue;
-        }
-        const region = self.getRegionAt(pair.use_row);
-        const ext = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
-        const extra = try self.freshFromContent(try self.types.mkTagUnion(missing.items, ext), env, region);
-        // A relation that fails reports its mismatch at the use, retires the
-        // use, and settles the pair. One that succeeds gives the copy every
-        // missing tag, which a second look confirms; a copy the relation did
-        // not extend settles too, so this loop always ends.
-        if ((try self.unify(self.tagRowTail(pair.use_row), extra, env)).isProblem()) {
-            try self.markErroneousValueExpr(pair.use_expr);
-            self.widened_use_rows.items[index].settled = true;
-            continue;
-        }
-        try self.collectTagsMissingFromUse(pair, &missing);
-        if (missing.items.len == 0) {
-            changed = true;
-        } else {
-            self.widened_use_rows.items[index].settled = true;
-        }
-    }
-    return changed;
-}
-
-/// The tags of `pair`'s value row that its use's copy does not list, into
-/// `missing`.
-fn collectTagsMissingFromUse(self: *Self, pair: WidenedUseRow, missing: *std.ArrayListUnmanaged(types_mod.Tag)) std.mem.Allocator.Error!void {
-    missing.clearRetainingCapacity();
-    const tags_start = self.widened_use_tags.items.len;
-    defer self.widened_use_tags.shrinkRetainingCapacity(tags_start);
-    try self.appendRowTags(pair.value_row);
-    const value_end = self.widened_use_tags.items.len;
-    try self.appendRowTags(pair.use_row);
-    const value_tags = self.widened_use_tags.items[tags_start..value_end];
-    const use_tags = self.widened_use_tags.items[value_end..];
-    for (value_tags) |value_tag| {
-        for (use_tags) |use_tag| {
-            if (value_tag.name.eql(use_tag.name)) break;
-        } else try missing.append(self.gpa, value_tag);
-    }
-}
-
-/// Whether `var_`'s extension chain is made of tag unions (through aliases),
-/// ending in an open or empty tail.
-fn varIsTagRow(self: *const Self, var_: Var) bool {
-    var current = var_;
-    while (true) {
-        const resolved = self.types.resolveVar(current);
-        switch (resolved.desc.content) {
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .structure => |flat| switch (flat) {
-                .tag_union => |union_| current = union_.ext,
-                .empty_tag_union => return true,
-                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
-            },
-            .flex => return true,
-            .rigid, .field_presence, .err => return false,
-        }
-    }
-}
 
 /// Append every tag on `row`'s extension chain to `widened_use_tags`.
 fn appendRowTags(self: *Self, row: Var) std.mem.Allocator.Error!void {
@@ -44358,9 +44224,6 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     }
     try self.validateResolvedOpenNumeralLiterals(env);
     try self.finalizeGeneratedCodecConstraintsToQuiescence(env, if (scope == .module) .all else .none);
-    while (try self.propagateValueRowsToWidenedUses(env)) {
-        try self.finalizeGeneratedCodecConstraintsToQuiescence(env, if (scope == .module) .all else .none);
-    }
     try self.settleUnwidenedResults();
     try self.resolvePendingTupleAccesses(env, true);
     try self.checkAllConstraints(env);
