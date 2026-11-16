@@ -75,6 +75,10 @@ pub const Var = enum {
     /// readable name a lowering of the process recorded (`notePerfName`),
     /// otherwise by symbol.
     perf_map,
+    /// Print one line of deterministic work counts for every procedure the
+    /// range prover walks: its proof rounds and restarts, its loop guards,
+    /// its loop-invariant assumptions, and its walks and sum refreshes.
+    range_prove_stats,
     /// Print when `roc` starts a program it built and when it has released
     /// the build's state, so the order of the two is visible.
     trace_run_order,
@@ -103,6 +107,7 @@ pub const Var = enum {
             .dump_wasm_unit_images => "ROC_DUMP_WASM_UNIT_IMAGES",
             .storage_work => "ROC_STORAGE_WORK",
             .perf_map => "ROC_PERF_MAP",
+            .range_prove_stats => "ROC_RANGE_PROVE_STATS",
             .trace_run_order => "ROC_TRACE_RUN_ORDER",
         };
     }

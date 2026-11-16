@@ -118,19 +118,25 @@ test "a margin too small for the read keeps every bounds check" {
     );
     try std.testing.expect(counted.found_decode_proc);
     // A four-byte margin cannot justify an eight-byte read: the wrapper's
-    // saturating limit and its bound test both survive, as do their
-    // switches.
+    // bound test survives. Its saturating limit `len - 8` subtracts a
+    // literal from a length no pass changes, so the loop's entry tests once
+    // whether the list holds eight bytes, and the copy that test guards
+    // computes the limit unchecked. The loop as written keeps the limit's
+    // overflow test, and both versions keep the bound test and its
+    // switches: three in the loop as written, two in the copy, and the
+    // entry test's own.
     try std.testing.expectEqual(@as(usize, 1), counted.sub_overflows);
-    try std.testing.expectEqual(@as(usize, 1), counted.is_gte);
-    try std.testing.expectEqual(@as(usize, 3), counted.switches);
-    // The margin add still cannot be proven overflow-free: the entry cursor
-    // is caller-controlled. The advance's `+ 7` is provable even here: the
-    // margin fact survives the fallback merge (both edges carry it), and a
-    // cursor bounded by a list length cannot exceed a signed 64-bit count,
-    // so adding seven cannot wrap. The advance's subtraction is provable
-    // too: control past the surviving checked add means its result is exact
-    // and at least seven, which covers the masked subtrahend.
-    try std.testing.expectEqual(@as(usize, 1), counted.plus_checked);
+    try std.testing.expectEqual(@as(usize, 2), counted.is_gte);
+    try std.testing.expectEqual(@as(usize, 6), counted.switches);
+    // The margin add still cannot be proven overflow-free in either
+    // version: the entry cursor is caller-controlled. The advance's `+ 7`
+    // is provable even here: the margin fact survives the fallback merge
+    // (both edges carry it), and a cursor bounded by a list length cannot
+    // exceed a signed 64-bit count, so adding seven cannot wrap. The
+    // advance's subtraction is provable too: control past the surviving
+    // checked add means its result is exact and at least seven, which
+    // covers the masked subtrahend.
+    try std.testing.expectEqual(@as(usize, 2), counted.plus_checked);
     try std.testing.expectEqual(@as(usize, 0), counted.minus_checked);
 }
 
@@ -394,11 +400,17 @@ test "a hash bounded by a guard on entry and a shift on the back edge proves its
         countMeetShape,
     );
     try std.testing.expect(meet_shape.found);
-    try std.testing.expectEqual(@as(usize, 1), meet_shape.get_unsafe);
-    // The entry guard's length test and the loop condition remain, as does
-    // the word read's bound test against its saturating limit, which is not
-    // a `<`; the table read's bounds test is proven away.
-    try std.testing.expectEqual(@as(usize, 2), meet_shape.is_lt);
+    // The word read's saturating limit `len - 4` subtracts a literal from a
+    // length no pass changes, so the loop's entry tests once whether the
+    // input holds four bytes and the copy that test guards computes the
+    // limit unchecked. The table read is unchecked in the loop as written
+    // and in the copy.
+    try std.testing.expectEqual(@as(usize, 2), meet_shape.get_unsafe);
+    // The entry guard's length test remains, as do the loop condition of
+    // each version and the word read's bound test against its saturating
+    // limit, which is not a `<`; the table read's bounds test is proven
+    // away in both.
+    try std.testing.expectEqual(@as(usize, 3), meet_shape.is_lt);
 }
 
 test "a byte merged from a read and a literal keeps its byte range for the overflow proof" {
@@ -619,7 +631,13 @@ test "the lazy matchfinder's search proves every chain read against its entry gu
         countSearchShape,
     );
     try std.testing.expect(search_shape.found);
-    try std.testing.expectEqual(@as(usize, 4), search_shape.get_unsafe);
+    // The chain walk makes a four-byte read whose bounds test nothing
+    // before the loop decides. A test of the current position against the
+    // input's length where the walk is entered decides it, which guards a
+    // copy of the walk. The chain read the walk makes on every pass
+    // appears in both versions; the read made once the walk has exited is
+    // shared.
+    try std.testing.expectEqual(@as(usize, 5), search_shape.get_unsafe);
     // Only the two entry guards and the two loop conditions compare with
     // `<`; every chain read's bounds test is proven away.
     try std.testing.expectEqual(@as(usize, 4), search_shape.is_lt);
@@ -1017,8 +1035,11 @@ test "the deflate fastloop proves every refill guard" {
     try std.testing.expect(counted.found_decode_proc);
     // The one surviving greater-than comparison is the match-offset
     // validation, which tests decoded data and must stay. Every refill
-    // bounds test proved against the 24-byte margin.
-    try std.testing.expectEqual(@as(usize, 1), counted.is_gt);
+    // bounds test proved against the 24-byte margin. The fastloop's table
+    // reads are tested once where it is entered, which guards a copy of
+    // it. The validation runs on every pass through the fastloop, so it
+    // is part of the loop and appears in both versions.
+    try std.testing.expectEqual(@as(usize, 2), counted.is_gt);
 }
 
 fn countRealShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
@@ -1565,11 +1586,15 @@ test "a length invariant survives an inner loop that never touches the table" {
         countMarkedShape,
     );
     try std.testing.expect(marked_shape.found);
-    try std.testing.expectEqual(@as(usize, 2), marked_shape.get_unsafe);
-    // Three `<` tests remain: the entry guard, the inner loop's head, and
-    // the `lens` read's bounds test. The read one back from the end of the
-    // table proved.
-    try std.testing.expectEqual(@as(usize, 3), marked_shape.is_lt);
+    // The inner loop stops at a literal, so a test of `lens` against it
+    // guards a copy of that loop that reads `lens` unchecked. The rest of
+    // the outer pass runs after the inner loop has exited, so both
+    // versions share it: `lens` is read twice and the table once.
+    try std.testing.expectEqual(@as(usize, 3), marked_shape.get_unsafe);
+    // Four `<` tests remain: the entry guard, the inner loop's head in
+    // both versions, and the `lens` read's bounds test in the loop as
+    // written. The read one back from the end of the table proved.
+    try std.testing.expectEqual(@as(usize, 4), marked_shape.is_lt);
 }
 
 // A guard on `pos + span` against the length, with `span` known to be at
@@ -2043,11 +2068,15 @@ test "a remainder bounds its divisor only where the remainder ran" {
     const dominated = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| {\n    r = a % b\n    c = if a > 3 { r } else { a }\n    if b == 0 { 1 } else { c }\n}\n", two_bytes, "num_rem_by");
     try std.testing.expectEqual(@as(usize, 0), dominated.is_eq);
     // A loop after the remainder keeps its ordering with the divisor, so
-    // `b - r` in the body is proven where `c - r` is not.
+    // `b - r` in the body is proven in the loop as written. `c - r` is not:
+    // the loop's entry tests `r <= c` once, the copy that test guards
+    // subtracts unchecked, and the loop as written keeps its check. The
+    // copy also repeats the one checked subtraction neither version proves.
     const looped = try ruleCounts("calc : U8, U8, U8 -> U8\ncalc = |a, b, _c| {\n    r = a % b\n    var $acc = 0\n    for x in [a, b] {\n        $acc = $acc.bitwise_xor(x.bitwise_and(b - r))\n    }\n    $acc\n}\n", three_bytes, "num_rem_by");
     const looped_unrelated = try ruleCounts("calc : U8, U8, U8 -> U8\ncalc = |a, b, c| {\n    r = a % b\n    var $acc = 0\n    for x in [a, b] {\n        $acc = $acc.bitwise_xor(x.bitwise_and(c - r))\n    }\n    $acc\n}\n", three_bytes, "num_rem_by");
-    try std.testing.expectEqual(looped_unrelated.sub_proven + 1, looped.sub_proven);
-    try std.testing.expectEqual(looped_unrelated.sub_crash, looped.sub_crash + 1);
+    try std.testing.expectEqual(looped_unrelated.sub_proven, looped.sub_proven);
+    try std.testing.expectEqual(looped_unrelated.sub_crash, looped.sub_crash + 2);
+    try std.testing.expectEqual(looped_unrelated.is_lte, looped.is_lte + 1);
 }
 
 test "a right shift is at most its operand and a left shift by a constant scales its range" {
@@ -2132,4 +2161,1289 @@ test "a guard on one sum bounds a read whose index sums values each bounded by o
     );
     try std.testing.expect(marked_shape.found);
     try std.testing.expectEqual(unproven.is_lt - 1, marked_shape.is_lt);
+}
+
+const HoistShape = struct {
+    found: bool = false,
+    /// Loop heads and bounds tests.
+    is_lt: usize = 0,
+    is_gte: usize = 0,
+    /// Hoisted length tests: nothing else in these programs lowers to `<=`.
+    is_lte: usize = 0,
+    get_unsafe: usize = 0,
+};
+
+var hoist_shape: HoistShape = .{};
+
+/// Count the comparisons and unchecked reads of the one proc that xors,
+/// which each program below does in the loop under test.
+fn countHoistShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    hoist_shape = .{};
+    const gpa = std.testing.allocator;
+    const buf = try gpa.alloc(u8, 1 << 22);
+    defer gpa.free(buf);
+    for (0..store.getProcSpecs().len) |index| {
+        var writer = std.Io.Writer.fixed(buf);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
+        const text = writer.buffered();
+        if (std.mem.count(u8, text, "num_bitwise_xor(") == 0) continue;
+        if (std.c.getenv("RANGE_PROVE_DUMP") != null) std.debug.print("\n===== hoist proc =====\n{s}\n", .{text});
+        hoist_shape = .{
+            .found = true,
+            .is_lt = std.mem.count(u8, text, "num_is_lt("),
+            .is_gte = std.mem.count(u8, text, "num_is_gte("),
+            .is_lte = std.mem.count(u8, text, "num_is_lte("),
+            .get_unsafe = std.mem.count(u8, text, "list_get_unsafe("),
+        };
+        return;
+    }
+}
+
+/// The shape of `walk` after range proving an app that calls it twice, so
+/// it stays a procedure of its own.
+fn hoistShape(comptime walk: []const u8, comptime call: []const u8) (harness.LowerToLirHarnessError || error{TestExpectedTrue})!HoistShape {
+    try harness.expectLirInspectionWithOptions(
+        walk ++
+            "\nmain! : List(Str) => Try({}, [Exit(I8), ..])\n" ++
+            "main! = |args| {\n" ++
+            "    bytes = Str.to_utf8(Str.join_with(args, \",\"))\n" ++
+            "    n = List.len(args)\n" ++
+            "    echo!(Str.inspect((" ++ call ++ ", " ++ call ++ ")))\n" ++
+            "    Ok({})\n" ++
+            "}\n",
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countHoistShape,
+    );
+    try std.testing.expect(hoist_shape.found);
+    return hoist_shape;
+}
+
+// The loop stops at `limit`, which nothing relates to the list's length, so
+// the read tests its index on every pass. One test of `limit` against the
+// length where the loop is entered decides that test for the whole loop.
+test "a read stopped at a local bound is tested once where its loop is entered" {
+    const shape = try hoistShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $acc = 0.U8
+        \\    while $i < limit {
+        \\        $acc = $acc.bitwise_xor(List.get(list, $i) ?? 7)
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, n)");
+    // The guard's one test, and the loop twice.
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 2), shape.get_unsafe);
+    // The loop keeps its head and its bounds test; the copy keeps only its
+    // head.
+    try std.testing.expectEqual(@as(usize, 3), shape.is_lt);
+}
+
+// The list is a parameter of the loop: every pass replaces it with the
+// result of an overwrite, which keeps its length, so the bound the entry
+// test states still holds on every later pass.
+test "a carried list its loop only overwrites keeps the bound its entry test states" {
+    const shape = try hoistShape(
+        \\walk : List(U8), U64 -> List(U8)
+        \\walk = |list, start| {
+        \\    var $i = start
+        \\    var $out = list
+        \\    while $i < 16 {
+        \\        $out = match List.get($out, $i) {
+        \\            Ok(old) => List.set($out, $i, old.bitwise_xor(1)) ?? $out
+        \\            Err(_) => $out
+        \\        }
+        \\        $i = $i.plus_wrap(3)
+        \\    }
+        \\    $out
+        \\}
+        \\
+    , "walk(bytes, n)");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    // Loop append promotion already runs this loop in two versions, one
+    // for a list it owns, and the guard copies the owned one. All three
+    // keep their head; only the two that are not the guard's copy keep the
+    // read's bounds test, which also covers the write.
+    try std.testing.expectEqual(@as(usize, 5), shape.is_lt);
+}
+
+// A tail-recursive walk's limit is an argument every recursive call passes
+// along unchanged, so it is a parameter of the loop that the loop never
+// rebinds, and the entry test may read it.
+test "a tail-recursive walk's pass-through limit is a bound its entry test reads" {
+    const shape = try hoistShape(
+        \\walk : List(U8), U64, U64 -> List(U8)
+        \\walk = |list, i, limit| {
+        \\    if i >= limit {
+        \\        list
+        \\    } else {
+        \\        next = match List.get(list, i) {
+        \\            Ok(old) => List.set(list, i, old.bitwise_xor(1)) ?? list
+        \\            Err(_) => list
+        \\        }
+        \\        walk(next, i.plus_wrap(2), limit)
+        \\    }
+        \\}
+        \\
+    , "walk(bytes, 0, n)");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    // The head of each of the three versions (see the test above).
+    try std.testing.expectEqual(@as(usize, 3), shape.is_gte);
+    // The two versions that are not the guard's copy keep the bounds test.
+    try std.testing.expectEqual(@as(usize, 2), shape.is_lt);
+}
+
+// Two lists walked by one index that stops at the first one's length: the
+// second list's read asks whether it is at least as long as the first.
+test "a second list read at the first one's index is tested against the first one's length" {
+    const shape = try hoistShape(
+        \\walk : List(U8), List(U8) -> U8
+        \\walk = |xs, ys| {
+        \\    count = List.len(xs)
+        \\    var $i = 0.U64
+        \\    var $acc = 0.U8
+        \\    while $i < count {
+        \\        $acc = $acc.bitwise_xor(List.get(xs, $i) ?? 1).bitwise_xor(List.get(ys, $i) ?? 2)
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, List.repeat(3.U8, n))");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 4), shape.get_unsafe);
+    // `xs` is read unchecked in both versions; only the loop itself tests
+    // the read of `ys`.
+    try std.testing.expectEqual(@as(usize, 3), shape.is_lt);
+}
+
+// An append makes the carried list one longer, so a lower bound on its
+// length survives the pass and the read keeps its entry test.
+test "a carried list its loop appends to keeps the bound its entry test states" {
+    const shape = try hoistShape(
+        \\walk : List(U8), U64 -> List(U8)
+        \\walk = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $out = list
+        \\    while $i < limit {
+        \\        $out = List.append($out, (List.get($out, $i) ?? 9).bitwise_xor(1))
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    $out
+        \\}
+        \\
+    , "walk(bytes, n)");
+    // The append's own capacity test in the loop and in its copy, and the
+    // guard's test.
+    try std.testing.expectEqual(@as(usize, 3), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 2), shape.get_unsafe);
+    // Both heads, and the loop's bounds test.
+    try std.testing.expectEqual(@as(usize, 3), shape.is_lt);
+}
+
+// Dropping an item shortens the carried list, so a bound that held where
+// the loop was entered says nothing about a later pass: no test is hoisted
+// and the loop is not copied.
+test "a carried list its loop shortens asks for no entry test" {
+    const shape = try hoistShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $rest = list
+        \\    var $acc = 0.U8
+        \\    while $i < limit {
+        \\        $acc = $acc.bitwise_xor(List.get($rest, $i) ?? 7)
+        \\        $rest = List.drop_last($rest, 1)
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, n)");
+    // The one `<=` is the drop's own.
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.get_unsafe);
+    try std.testing.expectEqual(@as(usize, 2), shape.is_lt);
+}
+
+// The loop lowers its own bound, so the bound where the loop is entered is
+// not the one a later pass compares against.
+test "a bound its loop rebinds asks for no entry test" {
+    const shape = try hoistShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, start| {
+        \\    var $i = 0.U64
+        \\    var $limit = start
+        \\    var $acc = 0.U8
+        \\    while $i < $limit {
+        \\        $acc = $acc.bitwise_xor(List.get(list, $i) ?? 7)
+        \\        $limit = $limit.shr_zf_wrap($acc.bitwise_and(1))
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, n)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.get_unsafe);
+}
+
+// Nothing in the loop compares against a length, so no test would remove
+// anything and the loop is emitted once.
+test "a loop with no indexed check is not copied" {
+    const shape = try hoistShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $acc = List.len(list).to_u8_wrap()
+        \\    while $i < limit {
+        \\        $acc = $acc.bitwise_xor($i.to_u8_wrap())
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, n)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lt);
+}
+
+// The loop already stops at the list's own length, which decides the read:
+// there is nothing left for an entry test to decide.
+test "a loop stopped at its list's own length is not copied" {
+    const shape = try hoistShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, start| {
+        \\    var $i = start
+        \\    var $acc = 0.U8
+        \\    while $i < List.len(list) {
+        \\        $acc = $acc.bitwise_xor(List.get(list, $i) ?? 7)
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, n)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.get_unsafe);
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lt);
+}
+
+// Only a loop that encloses no other loop is copied: the inner loop's read
+// is tested where the inner loop is entered, and the outer loop's own read
+// stays checked.
+test "a loop that encloses another is not copied and the inner one is" {
+    const shape = try hoistShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $acc = 0.U8
+        \\    while $i < limit {
+        \\        $acc = $acc.bitwise_xor(List.get(list, $i) ?? 7)
+        \\        var $j = 0.U64
+        \\        while $j < limit {
+        \\            $acc = $acc.bitwise_xor(List.get(list, $j) ?? 5)
+        \\            $j = $j.plus_wrap(1)
+        \\        }
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, n)");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    // The outer read once, the inner read in the inner loop and its copy.
+    try std.testing.expectEqual(@as(usize, 3), shape.get_unsafe);
+}
+
+const ExitShape = struct {
+    found: bool = false,
+    one_bits: usize = 0,
+    leading_zeros: usize = 0,
+    is_lte: usize = 0,
+    get_unsafe: usize = 0,
+    unsafe_appends: usize = 0,
+};
+
+var exit_shape: ExitShape = .{};
+var exit_marker: []const u8 = "";
+
+/// Count, in the one proc that contains `exit_marker`, the operations the
+/// programs below run after their loops and the ones that show a loop was
+/// emitted twice.
+fn countExitShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    exit_shape = .{};
+    const gpa = std.testing.allocator;
+    const buf = try gpa.alloc(u8, 1 << 22);
+    defer gpa.free(buf);
+    for (0..store.getProcSpecs().len) |index| {
+        var writer = std.Io.Writer.fixed(buf);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
+        const text = writer.buffered();
+        if (std.mem.count(u8, text, exit_marker) == 0) continue;
+        if (std.c.getenv("RANGE_PROVE_DUMP") != null) std.debug.print("\n===== exit proc =====\n{s}\n", .{text});
+        exit_shape = .{
+            .found = true,
+            .one_bits = std.mem.count(u8, text, "num_count_one_bits("),
+            .leading_zeros = std.mem.count(u8, text, "num_count_leading_zero_bits("),
+            .is_lte = std.mem.count(u8, text, "num_is_lte("),
+            .get_unsafe = std.mem.count(u8, text, "list_get_unsafe("),
+            .unsafe_appends = std.mem.count(u8, text, "list_append_unsafe("),
+        };
+        return;
+    }
+}
+
+fn exitShape(comptime walk: []const u8, comptime call: []const u8, marker: []const u8, options: harness.LirLoweringOptions) (harness.LowerToLirHarnessError || error{TestExpectedTrue})!ExitShape {
+    exit_marker = marker;
+    try harness.expectLirInspectionWithOptions(
+        walk ++
+            "\nmain! : List(Str) => Try({}, [Exit(I8), ..])\n" ++
+            "main! = |args| {\n" ++
+            "    bytes = Str.to_utf8(Str.join_with(args, \",\"))\n" ++
+            "    n = List.len(args)\n" ++
+            "    echo!(Str.inspect((" ++ call ++ ", " ++ call ++ ")))\n" ++
+            "    Ok({})\n" ++
+            "}\n",
+        options,
+        countExitShape,
+    );
+    try std.testing.expect(exit_shape.found);
+    return exit_shape;
+}
+
+// The loop is guarded and copied, and the statement after it is reached
+// only once the loop has exited, so both versions continue into the one
+// copy of it.
+test "the statements after a guarded loop are emitted once" {
+    const shape = try exitShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $acc = 0.U8
+        \\    while $i < limit {
+        \\        $acc = $acc.bitwise_xor(List.get(list, $i) ?? 7)
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    bits = $acc.count_one_bits()
+        \\    bits.plus_wrap(bits.shr_zf_wrap(1)).bitwise_and(15)
+        \\}
+        \\
+    , "walk(bytes, n)", "num_bitwise_xor(", .{ .inline_mode = .wrappers, .prove_ranges = true });
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 2), shape.get_unsafe);
+    try std.testing.expectEqual(@as(usize, 1), shape.one_bits);
+}
+
+// The loop leaves by an early return and by its head. Each exit's
+// statements are emitted once and entered from both versions of the loop.
+test "each exit of a guarded loop with two exits is emitted once" {
+    const shape = try exitShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, limit| {
+        \\    var $i = 0.U64
+        \\    var $acc = 0.U8
+        \\    while $i < limit {
+        \\        byte = List.get(list, $i) ?? 7
+        \\        if byte == 0 {
+        \\            bits = $acc.count_one_bits()
+        \\            return bits.plus_wrap(bits.shr_zf_wrap(1)).bitwise_and(15)
+        \\        } else {
+        \\        }
+        \\        $acc = $acc.bitwise_xor(byte)
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    zeros = $acc.count_leading_zero_bits()
+        \\    zeros.plus_wrap(zeros.shr_zf_wrap(1)).bitwise_and(15)
+        \\}
+        \\
+    , "walk(bytes, n)", "num_bitwise_xor(", .{ .inline_mode = .wrappers, .prove_ranges = true });
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 2), shape.get_unsafe);
+    try std.testing.expectEqual(@as(usize, 1), shape.one_bits);
+    try std.testing.expectEqual(@as(usize, 1), shape.leading_zeros);
+}
+
+// Loop append promotion runs this loop in two versions, one for a list it
+// owns. The statement after the loop is not part of either.
+test "the statements after an ownership-versioned loop are emitted once" {
+    const shape = try exitShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, start| {
+        \\    var $i = start
+        \\    var $out = list
+        \\    while $i < 16 {
+        \\        $out = match List.get($out, $i) {
+        \\            Ok(old) => List.set($out, $i, old.bitwise_xor(1)) ?? $out
+        \\            Err(_) => $out
+        \\        }
+        \\        $i = $i.plus_wrap(3)
+        \\    }
+        \\    bits = List.len($out).to_u8_wrap().count_one_bits()
+        \\    bits.plus_wrap(bits.shr_zf_wrap(1)).bitwise_and(15)
+        \\}
+        \\
+    , "walk(bytes, n)", "num_bitwise_xor(", .{ .inline_mode = .wrappers });
+    // One read per version of the loop.
+    try std.testing.expectEqual(@as(usize, 2), shape.get_unsafe);
+    try std.testing.expectEqual(@as(usize, 1), shape.one_bits);
+}
+
+// The counted fill is versioned on its spare capacity. The statement after
+// it is not part of either version.
+test "the statements after a slack-versioned loop are emitted once" {
+    const shape = try exitShape(
+        \\fill : U64, U8 -> U8
+        \\fill = |count, x| {
+        \\    var $out = List.with_capacity(count)
+        \\    var $i = 0
+        \\    while $i < count {
+        \\        $out = List.append($out, x)
+        \\        $i = $i + 1
+        \\    }
+        \\    bits = List.len($out).to_u8_wrap().count_one_bits()
+        \\    bits.plus_wrap(bits.shr_zf_wrap(1)).bitwise_and(15)
+        \\}
+        \\
+        \\tail : List(U8), U8 -> U64
+        \\tail = |xs, x| List.len(List.append(xs, x))
+        \\
+    , "fill(n, 3).to_u64() + tail(bytes, 4)", "list_with_capacity", .{ .inline_mode = .wrappers });
+    // The checked append of the loop as promoted and the unchecked one of
+    // its copy.
+    try std.testing.expectEqual(@as(usize, 2), shape.unsafe_appends);
+    try std.testing.expectEqual(@as(usize, 1), shape.one_bits);
+}
+
+const StrideShape = struct {
+    found: bool = false,
+    add_crash: usize = 0,
+    add_proven: usize = 0,
+    sub_crash: usize = 0,
+    sub_proven: usize = 0,
+    mul_crash: usize = 0,
+    mul_proven: usize = 0,
+    /// Hoisted tests: nothing else in these programs lowers to `<=`.
+    is_lte: usize = 0,
+};
+
+var stride_shape: StrideShape = .{};
+
+/// Count the arithmetic and hoisted tests of the one proc that xors, which
+/// each program below does in the loop under test.
+fn countStrideShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    stride_shape = .{};
+    const gpa = std.testing.allocator;
+    const buf = try gpa.alloc(u8, 1 << 22);
+    defer gpa.free(buf);
+    for (0..store.getProcSpecs().len) |index| {
+        var writer = std.Io.Writer.fixed(buf);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
+        const text = writer.buffered();
+        if (std.mem.count(u8, text, "num_bitwise_xor(") == 0) continue;
+        if (std.c.getenv("RANGE_PROVE_DUMP") != null) std.debug.print("\n===== stride proc =====\n{s}\n", .{text});
+        stride_shape = .{
+            .found = true,
+            .add_crash = std.mem.count(u8, text, "num_int_add_crash_on_overflow("),
+            .add_proven = std.mem.count(u8, text, "num_int_add_proven_cannot_overflow("),
+            .sub_crash = std.mem.count(u8, text, "num_int_sub_crash_on_overflow("),
+            .sub_proven = std.mem.count(u8, text, "num_int_sub_proven_cannot_overflow("),
+            .mul_crash = std.mem.count(u8, text, "num_int_mul_crash_on_overflow("),
+            .mul_proven = std.mem.count(u8, text, "num_int_mul_proven_cannot_overflow("),
+            .is_lte = std.mem.count(u8, text, "num_is_lte("),
+        };
+        return;
+    }
+}
+
+/// The shape of `stride` after range proving an app that calls it twice, so
+/// it stays a procedure of its own.
+fn strideShape(comptime stride: []const u8, comptime call: []const u8) (harness.LowerToLirHarnessError || error{TestExpectedTrue})!StrideShape {
+    try harness.expectLirInspectionWithOptions(
+        stride ++
+            "\nmain! : List(Str) => Try({}, [Exit(I8), ..])\n" ++
+            "main! = |args| {\n" ++
+            "    n = List.len(args)\n" ++
+            "    echo!(Str.inspect((" ++ call ++ ", " ++ call ++ ")))\n" ++
+            "    Ok({})\n" ++
+            "}\n",
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countStrideShape,
+    );
+    try std.testing.expect(stride_shape.found);
+    return stride_shape;
+}
+
+// The loop keeps its counter below a literal and adds a step it never
+// changes, so one test of the step where the loop is entered bounds the sum
+// on every pass.
+test "a checked step of a counter its loop bounds is tested once where the loop is entered" {
+    const shape = try strideShape(
+        \\stride : U64, U64 -> U64
+        \\stride = |start, step| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i < 1000 {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i + step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n, n + 3)");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    // The loop as written keeps its check; the copy's addition is proved.
+    try std.testing.expectEqual(@as(usize, 1), shape.add_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.add_proven);
+}
+
+// The same for a narrower counter: the test compares the widened step
+// against what is left below the type's highest value.
+test "a checked step of a byte counter is tested against the byte range" {
+    const shape = try strideShape(
+        \\stride : U8, U8 -> U8
+        \\stride = |start, step| {
+        \\    var $i = start
+        \\    var $acc = 0.U8
+        \\    while $i < 200 {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i + step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n.to_u8_wrap(), n.to_u8_wrap().plus_wrap(3))");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.add_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.add_proven);
+}
+
+// The loop changes its own step, so the step where the loop is entered is
+// not the one a later pass adds.
+test "a step its loop rebinds asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : U64, U64 -> U64
+        \\stride = |start, first| {
+        \\    var $i = start
+        \\    var $step = first
+        \\    var $acc = 0.U64
+        \\    while $i < 1000 {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i + $step
+        \\        $step = $step.plus_wrap($acc.bitwise_and(1)).plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n, n + 3)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.add_crash);
+    try std.testing.expectEqual(@as(usize, 0), shape.add_proven);
+}
+
+// Nothing bounds the counter, so no limit on the step bounds the sum.
+test "a counter its loop does not bound asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : U64, U64, U64 -> U64
+        \\stride = |start, step, passes| {
+        \\    var $i = start
+        \\    var $left = passes
+        \\    var $acc = 0.U64
+        \\    while $left != 0 {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i + step
+        \\        $left = $left.minus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n, n + 3, 5)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.add_crash);
+    try std.testing.expectEqual(@as(usize, 0), shape.add_proven);
+}
+
+// The counter is kept below a local that may be the type's highest value,
+// which bounds the counter only by one less than that: no ceiling, and no
+// test.
+test "a counter bounded by a full-range local asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : U64, U64, U64 -> U64
+        \\stride = |start, step, limit| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i < limit {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i + step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n, n + 3, n + 1000)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.add_crash);
+    try std.testing.expectEqual(@as(usize, 0), shape.add_proven);
+}
+
+// Only unsigned integers of at most 64 bits are tracked, so a signed
+// counter asks for nothing.
+test "a signed counter asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : I64, I64 -> I64
+        \\stride = |start, step| {
+        \\    var $i = start
+        \\    var $acc = 0.I64
+        \\    while $i < 1000 {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i + step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n.to_i64_wrap(), n.to_i64_wrap() + 3)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 0), shape.add_proven);
+}
+
+// A loop that reads a list at a stepped index asks for a length test and a
+// limit test, and both guard the one copy.
+test "a length test and a limit test guard one copy of a loop" {
+    const shape = try strideShape(
+        \\stride : List(U8), U64, U64 -> U8
+        \\stride = |list, start, step| {
+        \\    var $i = start
+        \\    var $acc = 0.U8
+        \\    while $i < 1000 {
+        \\        $acc = $acc.bitwise_xor(List.get(list, $i) ?? 7)
+        \\        $i = $i + step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(Str.to_utf8(Str.join_with(args, \",\")), n, n + 3)");
+    try std.testing.expectEqual(@as(usize, 2), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.add_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.add_proven);
+}
+
+// The loop keeps its counter above a local and subtracts a step it never
+// changes, so one test of the step against that local where the loop is
+// entered keeps the difference from passing zero on every pass.
+test "a checked countdown above a local floor is tested once where the loop is entered" {
+    const shape = try strideShape(
+        \\stride : U64, U64, U64 -> U64
+        \\stride = |start, step, floor| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i > floor {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i - step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n + 50, n + 3, n + 7)");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_proven);
+}
+
+// The same above a literal: the counter is at least 101 in the loop, so the
+// test compares the step against 101.
+test "a checked countdown above a literal floor is tested against the least the counter can be" {
+    const shape = try strideShape(
+        \\stride : U64, U64 -> U64
+        \\stride = |start, step| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i > 100 {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i - step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n + 500, n + 3)");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_proven);
+}
+
+// The same for a narrower counter.
+test "a checked countdown of a byte counter is tested once where the loop is entered" {
+    const shape = try strideShape(
+        \\stride : U8, U8, U8 -> U8
+        \\stride = |start, step, floor| {
+        \\    var $i = start
+        \\    var $acc = 0.U8
+        \\    while $i > floor {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i - step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n.to_u8_wrap().plus_wrap(50), n.to_u8_wrap().plus_wrap(3), n.to_u8_wrap().plus_wrap(7))");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_proven);
+}
+
+// Neither operand of the difference changes in the loop, so the loop's entry
+// compares the two.
+test "a checked difference of two values a loop never changes is tested once where the loop is entered" {
+    const shape = try strideShape(
+        \\stride : U64, U64, U64 -> U64
+        \\stride = |count, high, low| {
+        \\    var $i = 0.U64
+        \\    var $acc = 0.U64
+        \\    while $i < count {
+        \\        $acc = $acc.bitwise_xor($i).plus_wrap(high - low)
+        \\        $i = $i + 1
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n + 4, n + 90, n + 5)");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_proven);
+}
+
+// The loop's own test keeps the counter at or above the step, which proves
+// the difference with no test where the loop is entered.
+test "a countdown its own test proves asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : U64, U64 -> U64
+        \\stride = |start, step| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i > step {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i - step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n + 50, n + 3)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 0), shape.sub_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_proven);
+}
+
+// The loop changes its own step, so the step where the loop is entered is
+// not the one a later pass subtracts.
+test "a subtracted step its loop rebinds asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : U64, U64, U64 -> U64
+        \\stride = |start, first, floor| {
+        \\    var $i = start
+        \\    var $step = first
+        \\    var $acc = 0.U64
+        \\    while $i > floor {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i - $step
+        \\        $step = $step.plus_wrap($acc.bitwise_and(1)).plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n + 50, n + 3, n + 7)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_crash);
+    try std.testing.expectEqual(@as(usize, 0), shape.sub_proven);
+}
+
+// Nothing keeps the counter above anything, so no test of the step keeps
+// the difference from passing zero.
+test "a countdown its loop does not bound asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : U64, U64, U64 -> U64
+        \\stride = |start, step, passes| {
+        \\    var $i = start
+        \\    var $left = passes
+        \\    var $acc = 0.U64
+        \\    while $left != 0 {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i - step
+        \\        $left = $left.shr_zf_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n + 50, n + 3, 5)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_crash);
+    try std.testing.expectEqual(@as(usize, 0), shape.sub_proven);
+}
+
+// The loop keeps its counter above a local it changes on every pass, which
+// the loop's entry cannot compare the step against. The counter is still
+// never zero, so the test compares the step against one.
+test "a countdown above a floor its loop rebinds is tested against one" {
+    const shape = try strideShape(
+        \\stride : U64, U64, U64 -> U64
+        \\stride = |start, step, first| {
+        \\    var $i = start
+        \\    var $floor = first
+        \\    var $acc = 0.U64
+        \\    while $i > $floor {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i - step
+        \\        $floor = $floor.plus_wrap($acc.bitwise_and(1))
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n + 50, n + 1, n + 7)");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_proven);
+}
+
+// Only unsigned integers of at most 64 bits are tracked, so a signed
+// countdown asks for nothing.
+test "a signed countdown asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : I64, I64, I64 -> I64
+        \\stride = |start, step, floor| {
+        \\    var $i = start
+        \\    var $acc = 0.I64
+        \\    while $i > floor {
+        \\        $acc = $acc.bitwise_xor($i)
+        \\        $i = $i - step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n.to_i64_wrap() + 50, n.to_i64_wrap() + 3, n.to_i64_wrap() + 7)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 0), shape.sub_proven);
+}
+
+// The loop keeps its counter below a literal and multiplies it by a value it
+// never changes, so one test of that value where the loop is entered bounds
+// the product on every pass.
+test "a checked product of a counter its loop bounds is tested once where the loop is entered" {
+    const shape = try strideShape(
+        \\stride : U64, U64 -> U64
+        \\stride = |start, scale| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i < 1000 {
+        \\        $acc = $acc.bitwise_xor($i * scale)
+        \\        $i = $i + 1
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n, n + 3)");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_proven);
+}
+
+// The same for a narrower counter: the test compares the widened value
+// against the type's highest value divided by the counter's ceiling.
+test "a checked product of a U16 counter is tested against the U16 range" {
+    const shape = try strideShape(
+        \\stride : U16, U16 -> U16
+        \\stride = |start, scale| {
+        \\    var $i = start
+        \\    var $acc = 0.U16
+        \\    while $i < 100 {
+        \\        $acc = $acc.bitwise_xor($i * scale)
+        \\        $i = $i + 1
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n.to_u16_wrap(), n.to_u16_wrap().plus_wrap(3))");
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_proven);
+}
+
+// A counter that is at most one multiplies to at most the other operand,
+// which fits with no test.
+test "a product of a counter that is at most one needs no entry test" {
+    const shape = try strideShape(
+        \\stride : U64, U64 -> U64
+        \\stride = |start, scale| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i < 2 {
+        \\        $acc = $acc.bitwise_xor($i * scale)
+        \\        $i = $i + 1
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n, n + 3)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 0), shape.mul_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_proven);
+}
+
+// The loop changes the value it multiplies by, so the value where the loop
+// is entered is not the one a later pass multiplies by.
+test "a multiplier its loop rebinds asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : U64, U64 -> U64
+        \\stride = |start, first| {
+        \\    var $i = start
+        \\    var $scale = first
+        \\    var $acc = 0.U64
+        \\    while $i < 1000 {
+        \\        $acc = $acc.bitwise_xor($i * $scale)
+        \\        $i = $i + 1
+        \\        $scale = $scale.plus_wrap($acc.bitwise_and(1)).plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n, n + 3)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_crash);
+    try std.testing.expectEqual(@as(usize, 0), shape.mul_proven);
+}
+
+// Nothing bounds the counter, so no limit on the other operand bounds the
+// product.
+test "a product of a counter its loop does not bound asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : U64, U64, U64 -> U64
+        \\stride = |start, scale, passes| {
+        \\    var $i = start
+        \\    var $left = passes
+        \\    var $acc = 0.U64
+        \\    while $left != 0 {
+        \\        $acc = $acc.bitwise_xor($i * scale)
+        \\        $i = $i.plus_wrap(1)
+        \\        $left = $left.minus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n, n + 3, 5)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_crash);
+    try std.testing.expectEqual(@as(usize, 0), shape.mul_proven);
+}
+
+// The counter is kept below a local that may be the type's highest value,
+// which gives the counter no literal ceiling to divide by: no test.
+test "a product of a counter bounded by a full-range local asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : U64, U64, U64 -> U64
+        \\stride = |start, scale, limit| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i < limit {
+        \\        $acc = $acc.bitwise_xor($i * scale)
+        \\        $i = $i + 1
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n, n + 3, n + 1000)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_crash);
+    try std.testing.expectEqual(@as(usize, 0), shape.mul_proven);
+}
+
+// Only unsigned integers of at most 64 bits are tracked, so a signed
+// product asks for nothing.
+test "a signed product asks for no entry test" {
+    const shape = try strideShape(
+        \\stride : I64, I64 -> I64
+        \\stride = |start, scale| {
+        \\    var $i = start
+        \\    var $acc = 0.I64
+        \\    while $i < 1000 {
+        \\        $acc = $acc.bitwise_xor($i * scale)
+        \\        $i = $i + 1
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n.to_i64_wrap(), n.to_i64_wrap() + 3)");
+    try std.testing.expectEqual(@as(usize, 0), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 0), shape.mul_proven);
+}
+
+// A sum, a difference and a product in one loop each ask for their own test,
+// and all three guard the one copy.
+test "a sum, a difference and a product are tested together for one copy of a loop" {
+    const shape = try strideShape(
+        \\stride : U64, U64, U64, U64 -> U64
+        \\stride = |start, step, scale, back| {
+        \\    var $i = start
+        \\    var $acc = 0.U64
+        \\    while $i < 1000 {
+        \\        $acc = $acc.bitwise_xor($i * scale).bitwise_xor(scale - back)
+        \\        $i = $i + step
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "stride(n, n + 3, n + 5, n + 2)");
+    try std.testing.expectEqual(@as(usize, 3), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.add_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.add_proven);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.sub_proven);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_crash);
+    try std.testing.expectEqual(@as(usize, 1), shape.mul_proven);
+}
+
+// The loop leaves by a `break` that assigns the variable it accumulates
+// into and by its head. Both exits run on into the same code after the
+// loop, which assigns the variable again. That code is one exit that both
+// lead to; it is emitted once and takes the variable's value from
+// whichever version of the loop ran.
+test "code after a guarded loop that two exits run into and that reassigns a variable is emitted once" {
+    const shape = try exitShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, limit| {
+        \\    var $acc = 0.U8
+        \\    var $i = 0.U64
+        \\    while $i < limit {
+        \\        byte = List.get(list, $i) ?? 7
+        \\        if byte == 9 {
+        \\            $acc = $acc.plus_wrap(1)
+        \\            break
+        \\        } else {
+        \\        }
+        \\        $acc = $acc.bitwise_xor(byte)
+        \\        $i = $i.plus_wrap(1)
+        \\    }
+        \\    if $acc > 100 {
+        \\        $acc = $acc.count_one_bits()
+        \\    } else {
+        \\        $acc = $acc.plus_wrap(3)
+        \\    }
+        \\    $acc = $acc.plus_wrap($acc.shr_zf_wrap(1)).bitwise_and(15)
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, n)", "num_bitwise_xor(", .{ .inline_mode = .wrappers, .prove_ranges = true });
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 2), shape.get_unsafe);
+    try std.testing.expectEqual(@as(usize, 1), shape.one_bits);
+}
+
+// The same shape under loop append promotion's ownership versioning.
+test "code after an ownership-versioned loop that two exits run into and that reassigns a variable is emitted once" {
+    const shape = try exitShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, start| {
+        \\    var $i = start
+        \\    var $out = list
+        \\    var $acc = 0.U8
+        \\    while $i < 16 {
+        \\        old = List.get($out, $i) ?? 7
+        \\        if old == 9 {
+        \\            $acc = $acc.plus_wrap(1)
+        \\            break
+        \\        } else {
+        \\        }
+        \\        $out = List.set($out, $i, old.bitwise_xor(1)) ?? $out
+        \\        $acc = $acc.plus_wrap(old)
+        \\        $i = $i.plus_wrap(3)
+        \\    }
+        \\    if $acc > 100 {
+        \\        $acc = $acc.count_one_bits()
+        \\    } else {
+        \\        $acc = $acc.plus_wrap(List.len($out).to_u8_wrap())
+        \\    }
+        \\    $acc = $acc.plus_wrap($acc.shr_zf_wrap(1)).bitwise_and(15)
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, n)", "num_bitwise_xor(", .{ .inline_mode = .wrappers });
+    try std.testing.expectEqual(@as(usize, 1), shape.one_bits);
+}
+
+// And under its slack versioning, whose loop has the one exit.
+test "code after a slack-versioned loop that reassigns a variable the loop assigns is emitted once" {
+    const shape = try exitShape(
+        \\fill : U64, U8 -> U8
+        \\fill = |count, x| {
+        \\    var $out = List.with_capacity(count)
+        \\    var $i = 0
+        \\    var $acc = x
+        \\    while $i < count {
+        \\        $out = List.append($out, $acc)
+        \\        $acc = $acc.plus_wrap(3)
+        \\        $i = $i + 1
+        \\    }
+        \\    if $acc > 100 {
+        \\        $acc = $acc.count_one_bits()
+        \\    } else {
+        \\        $acc = $acc.plus_wrap(List.len($out).to_u8_wrap())
+        \\    }
+        \\    $acc = $acc.plus_wrap($acc.shr_zf_wrap(1)).bitwise_and(15)
+        \\    $acc
+        \\}
+        \\
+        \\tail : List(U8), U8 -> U64
+        \\tail = |xs, x| List.len(List.append(xs, x))
+        \\
+    , "fill(n, 3).to_u64() + tail(bytes, 4)", "list_with_capacity", .{ .inline_mode = .wrappers });
+    try std.testing.expectEqual(@as(usize, 2), shape.unsafe_appends);
+    try std.testing.expectEqual(@as(usize, 1), shape.one_bits);
+}
+
+// The code after the inner loop assigns a variable the outer loop reads on
+// its next pass. It hands the outer loop the value in the outer loop's own
+// parameter, so what it leaves in the local it was handed is dead and the
+// code is still one shared exit.
+test "code after an inner loop that reassigns a variable the outer loop reads is emitted once" {
+    const shape = try exitShape(
+        \\walk : List(U8), U64 -> U8
+        \\walk = |list, limit| {
+        \\    var $pass = 0.U64
+        \\    var $acc = 0.U8
+        \\    while $pass < 3 {
+        \\        var $i = 0.U64
+        \\        while $i < limit {
+        \\            byte = List.get(list, $i) ?? 7
+        \\            if byte == 9 {
+        \\                $acc = $acc.plus_wrap(1)
+        \\                break
+        \\            } else {
+        \\            }
+        \\            $acc = $acc.bitwise_xor(byte)
+        \\            $i = $i.plus_wrap(1)
+        \\        }
+        \\        if $acc > 100 {
+        \\            $acc = $acc.count_one_bits()
+        \\        } else {
+        \\            $acc = $acc.plus_wrap(3)
+        \\        }
+        \\        $acc = $acc.plus_wrap($acc.shr_zf_wrap(1)).bitwise_and(15)
+        \\        $pass = $pass.plus_wrap(1)
+        \\    }
+        \\    $acc
+        \\}
+        \\
+    , "walk(bytes, n)", "num_bitwise_xor(", .{ .inline_mode = .wrappers, .prove_ranges = true });
+    try std.testing.expectEqual(@as(usize, 1), shape.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), shape.one_bits);
+}
+
+/// The range prover's work on an app whose `main!` echoes `call`, summed
+/// over the app's procedures. `countMarkedShape` records the shape of the
+/// procedure holding `marked_op`.
+fn proverWork(comptime body: []const u8, comptime call: []const u8) harness.LowerToLirHarnessError!lir.RangeProve.WorkStats {
+    var metrics: lir.CheckedPipeline.WorkMetrics = .{};
+    try harness.expectLirInspectionWithOptions(
+        body ++
+            "\nmain! : List(Str) => Try({}, [Exit(I8), ..])\n" ++
+            "main! = |args| {\n" ++
+            "    bytes = Str.to_utf8(Str.join_with(args, \",\"))\n" ++
+            "    echo!(Str.inspect(" ++ call ++ "))\n" ++
+            "    Ok({})\n" ++
+            "}\n",
+        .{ .inline_mode = .wrappers, .prove_ranges = true, .work_metrics_out = &metrics },
+        countMarkedShape,
+    );
+    return metrics.range_prove;
+}
+
+// Each pass reads the list's length at its top and appends three items, so
+// the back edge proves the new length is at least that read plus three. The
+// read is a local the loop's body defines, so the bound is no candidate for
+// an invariant of the head: the loop assumes nothing it cannot verify, and
+// no sum refresh meets a bound that says a value is below itself and runs
+// to its pass cap.
+test "a bound against a length read inside the loop is not assumed of the loop's list" {
+    marked_op = "list_append_unsafe";
+    const work = try proverWork(
+        \\fill : List(U8), U64 -> List(U8)
+        \\fill = |acc, n| {
+        \\    if n == 0 {
+        \\        acc
+        \\    } else {
+        \\        len = List.len(acc)
+        \\        next = if len > n { acc.append(7) } else { acc.append(9) }
+        \\        b = (len + n).to_u8_wrap()
+        \\        fill(next.append(b).append(2), n - 1)
+        \\    }
+        \\}
+        \\
+    , "List.len(fill(bytes, 5))");
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expectEqual(@as(usize, 0), work.capped_refreshes);
+    // The app's procedures prove in seven rounds between them; assuming the
+    // bound costs the loop an eighth, in which thirty refreshes are capped.
+    try std.testing.expectEqual(@as(usize, 7), work.rounds);
+}
+
+// The mapped list is read through an alias on the arm that leaves the
+// mapping loop, and that alias names the list's length for the pass that is
+// ending. The back edge's append puts the new length one above it, which is
+// a bound against a local the loop's body defines although its cycle does
+// not, and it is not assumed either.
+test "a bound against the loop's own list read where the loop is left is not assumed" {
+    marked_op = "list_append_unsafe";
+    const work = try proverWork(
+        \\build : List(U64), U64 -> U64
+        \\build = |seed, n| {
+        \\    var $acc = seed
+        \\    var $i = List.len(seed)
+        \\    var $sum = 0.U64
+        \\    while $i < n {
+        \\        $acc = List.append($acc, $i)
+        \\        $i = $i + 1
+        \\        last = List.get($acc, $i.minus_wrap(1)) ?? 0
+        \\        $sum = $sum.plus_wrap(last)
+        \\    }
+        \\    $sum
+        \\}
+        \\
+    , "build(List.map(bytes, |b| b.to_u64()), List.len(args) + 9)");
+    try std.testing.expect(marked_shape.found);
+    // Assuming the bound caps thirteen refreshes.
+    try std.testing.expectEqual(@as(usize, 0), work.capped_refreshes);
+    try std.testing.expectEqual(@as(usize, 8), work.rounds);
+}
+
+// The list starts at `start` items and only grows, so every edge into the
+// loop proves its length is at least `start`. `start` is defined before the
+// loop is entered: the bound is assumed, verifies, and proves the read just
+// below `start` on every pass without a test where the loop is entered.
+test "a bound against a length read before the loop is assumed and proves the read it bounds" {
+    marked_op = "num_bitwise_xor";
+    const work = try proverWork(
+        \\grow : List(U64), U64 -> U64
+        \\grow = |seed, n| {
+        \\    start = List.len(seed)
+        \\    if start == 0 {
+        \\        return 0
+        \\    } else {
+        \\    }
+        \\    var $acc = seed
+        \\    var $k = 0.U64
+        \\    var $sum = 0.U64
+        \\    while $k < n {
+        \\        $acc = List.append($acc, $k)
+        \\        $sum = $sum.bitwise_xor(List.get($acc, start - 1) ?? 0)
+        \\        $k = $k + 1
+        \\    }
+        \\    $sum
+        \\}
+        \\
+    , "(grow(List.map(bytes, |b| b.to_u64()), List.len(args) + 9), grow([1, 2], List.len(args)))");
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expect(work.invariants_verified > 0);
+    try std.testing.expectEqual(@as(usize, 0), work.guards);
+    // The loop head's test is the one `<` left: the read's bounds test folded.
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.is_lt);
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.get_unsafe);
 }

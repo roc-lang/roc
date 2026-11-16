@@ -192,6 +192,7 @@ const TaskContext = struct {
     /// The first phase that changed the procedure.
     first_changed: ?Phase = null,
     trmc_report: ?Trmc.Report = null,
+    range_work: RangeProve.WorkStats = .{},
     first_fresh_join: u32 = 0,
     fresh_join_count: u32 = 0,
     timing: ?*Timing = null,
@@ -266,7 +267,7 @@ const TaskContext = struct {
                 var joins = BodyClone.JoinParamIndex.init(scratch_allocator);
                 defer joins.deinit();
                 joins.next_join_point = next_join.*;
-                try RangeProve.runProcWithScratch(shard, self.layouts, self.proc, try laneScratch(RangeProve.LaneScratch, lane), analysis.?, &joins);
+                self.range_work = try RangeProve.runProcWithScratch(shard, self.layouts, self.proc, try laneScratch(RangeProve.LaneScratch, lane), analysis.?, &joins);
                 next_join.* = joins.next_join_point;
             },
             .box_reuse => try BoxReuse.runProcWithScratch(shard, self.layouts, self.proc, scratch_allocator, analysis.?),
@@ -306,11 +307,13 @@ pub fn run(
     executor: ?TaskExecutor.Executor,
     metrics: ?*ParallelMetrics,
 ) Allocator.Error!void {
-    return runSegmentTimed(allocator, store, layouts, &.{phase}, executor, metrics, null, null);
+    return runSegmentTimed(allocator, store, layouts, &.{phase}, executor, metrics, null, null, null);
 }
 
 /// `run`, recording the phase's durations and procedure counts in `timing`
-/// when it is given.
+/// when it is given, and adding to `range_work` what the range prover's work
+/// on each procedure the range phase admits cost. Serial and parallel
+/// execution count the same work.
 pub fn runTimed(
     allocator: Allocator,
     store: *LirStore,
@@ -319,8 +322,9 @@ pub fn runTimed(
     executor: ?TaskExecutor.Executor,
     metrics: ?*ParallelMetrics,
     timing: ?*Timing,
+    range_work: ?*RangeProve.WorkStats,
 ) Allocator.Error!void {
-    return runSegmentTimed(allocator, store, layouts, &.{phase}, executor, metrics, timing, null);
+    return runSegmentTimed(allocator, store, layouts, &.{phase}, executor, metrics, timing, range_work, null);
 }
 
 /// Apply a segment of phases in order: one task per procedure clones it once,
@@ -334,6 +338,9 @@ pub fn runTimed(
 /// that reads compile-time values, holds each static data slot whose reads
 /// `comptime_value_guards.insert` will guard: such a read fails when the
 /// value's evaluation failed, so it is never a pure definition to delete.
+///
+/// `range_work` receives what the range prover's work on each procedure the
+/// range phase admits cost (`runTimed`).
 pub fn runSegmentTimed(
     allocator: Allocator,
     store: *LirStore,
@@ -342,6 +349,7 @@ pub fn runSegmentTimed(
     executor: ?TaskExecutor.Executor,
     metrics: ?*ParallelMetrics,
     timing: ?*Timing,
+    range_work: ?*RangeProve.WorkStats,
     guarded_reads: ?*const std.DynamicBitSetUnmanaged,
 ) Allocator.Error!void {
     std.debug.assert(phases.len != 0);
@@ -511,6 +519,8 @@ pub fn runSegmentTimed(
             counts.appended_statements +|= @intCast(shard.cf_stmts.len());
         };
         if (context.trmc_report) |report| Trmc.reportProc(store, layouts, context.proc, report);
+        if ((context.visited & phaseMask(.range)) != 0) RangeProve.reportWork(store, context.proc, context.range_work);
+        if (range_work) |work| work.add(context.range_work);
         shard.deinit();
         context.shard = null;
     }
