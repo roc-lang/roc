@@ -94,7 +94,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      every erased call.
 /// v77: procedure shapes record every erased call, combined with the v73-v76
 ///      changes.
-pub const FORMAT_VERSION: u32 = 77;
+/// v78: procedure specs carry the outcome table of a published
+///      outcome-restitution variant (`rc_outcomes`).
+pub const FORMAT_VERSION: u32 = 78;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.

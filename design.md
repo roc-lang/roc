@@ -18260,9 +18260,13 @@ Nothing a module emits depends on a module that imports it:
   directs every use to the referenced procedure rather than an evaluated value;
 - its conversion workers are its own and memoized within it alone;
 - ARC solves each of its procedures' ownership signatures from the procedure's
-  body and its callees, and a call from another module never demands an
-  ownership variant of it (Mode Specialization, emission units), so the
-  variants a module carries are demanded only by its own calls.
+  body and its callees, and a call from another module demands no ownership
+  variant of it except the outcome-restitution variant of an exported worker
+  with a nonempty restitution capability, which the module always emits and
+  publishes whether or not any module calls it (Mode Specialization, emission
+  units; Outcome-Conditioned Argument Restitution). That capability is a
+  function of the worker's own body, so the variants a module carries are
+  its published outcome variants and the variants its own calls demand.
 
 This is the invariant the per-module Boxy cache (Caching Under `.boxy`) rests
 on, and it is the reason modules can be lowered independently and in
@@ -25622,10 +25626,14 @@ not by the theoretical vector space.
 **Emission units.** Every procedure carries an emission unit
 (`LirProcSpec.emission_unit`, an `LIR.EmissionUnit`), and a direct call
 demands a variant of its callee—mandatory or optional—only when the caller
-and the callee share a unit; a call across units adapts to the callee's
+and the callee share a unit, with one exception: a call of a procedure whose
+object publishes its outcome-restitution variant may demand exactly that
+variant from any unit (Outcome-Conditioned Argument Restitution, "Published
+outcome variants"). Otherwise a call across units adapts to the callee's
 solved base signature
 (it keeps its ownership of a borrowed position, selects no outcome span, and
-seeds no uniqueness). The specialized lowering puts every procedure in the
+seeds no uniqueness), and even a call that demands a published outcome
+variant demands nothing else of it. The specialized lowering puts every procedure in the
 one `program` unit, so its behavior is unchanged. `.boxy` gives each
 template worker, lambda worker, conversion worker, and template dictionary
 entry its module's unit, and every worker that is not one module's (a
@@ -25637,10 +25645,10 @@ it owns every argument it unpacks and its one direct call is of the template,
 in the template's own module, so that call demands the template's owned
 field-take variant exactly as a direct call written in the module does. A function value therefore hands its arguments to its target
 with the ownership a direct call would. A module's object therefore
-carries only the variants its own calls demanded, and a procedure's solved
-base signature and uniqueness data—functions of its body and its
-callees—are the whole of what another module compiles against (Per-Module
-Output). Imports are acyclic, so no same-SCC tail call crosses a unit.
+carries only its published outcome variants and the variants its own calls
+demanded, and a procedure's solved base signature, uniqueness data and
+published outcome table—functions of its body and its callees—are the whole
+of what another module compiles against (Per-Module Output). Imports are acyclic, so no same-SCC tail call crosses a unit.
 Variants inherit their source's unit.
 
 Ownership solving and field-take analysis finish before parallel emission
@@ -25650,8 +25658,9 @@ emitted ARC body. Mutable residual masks, ownership overrides, plans, and
 materialization scratch belong to one emission.
 
 Planning produces ownership-demand variant requests without allocating procedure
-identities. A coordinator reserves those identities in FIFO procedure/request
-order, then materialization consumes the fixed call targets and appends only
+identities. Before any planning, the coordinator reserves each published
+outcome variant in procedure order; it then reserves the planned identities
+in FIFO procedure/request order, then materialization consumes the fixed call targets and appends only
 to private body shards. Ordered commit relocates generated locals, statements,
 and join spans before committing each procedure's metadata. Bounded waves use
 the same schedule with or without workers, so worker count and completion order
@@ -25712,12 +25721,50 @@ positions whose exact entry units are present again after that outcome. The
 rows cover every normally returned discriminant admitted by the signature;
 an absent or incomplete span means that the procedure has no restitution
 capability. Pinned, hosted, erased, dictionary-dispatched, bodyless, and
-address-escaping procedures never carry restitution rows, except a procedure
+address-escaping procedures never solve restitution rows, except a procedure
 pinned only because it is stable (`LIR.LirProcSpec.stable_signature`): its
 body is the program's, so callers compiled with that body, which are exactly
 the callers with a code key, may demand its outcome variant
 (`Solution.outcomeSpanForCall`), while every other caller uses its pinned
-base.
+base. A body-less external procedure carries exactly the rows its defining
+object published, and no others ("Published outcome variants" below).
+
+**Published outcome variants.** Under `.boxy` each module is its own
+emission unit, and a call into another module would otherwise never select
+an outcome span, so `xs.set(i, v) ?? xs` in an app would retain `xs` for the
+failure path and `List.set` would copy it on every call. Every exported
+worker (`LIR.LirProcSpec.exported`: the template, integer list, lambda,
+dictionary-entry and default workers a module unit defines for other
+objects, of which the erased-ABI dictionary entries are pinned) whose
+signature nothing pins and whose solved capability is nonempty therefore
+publishes its outcome-restitution variant
+(`Solution.publishesOutcomeVariant`). ARC reserves that variant before any
+planning, with exactly the worker's base signature and its complete
+capability as its demand, so the module always emits it, whether or not any
+call demands it; marks it exported, so its symbol is global and it is a root
+of reachability; and records the capability on the worker
+(`LIR.LirProcSpec.rc_outcomes`, one discriminant word and one mask word per
+row). The unit's export record for the worker carries that table, and the
+variant has an export record of its own under the identity its demand names
+(`LIR.ProcIdentity.ownershipVariant`). Since the capability is a function of
+the worker's own body, the module's output still depends only on its own
+bodies and its imports, never on whether an importer calls the variant
+(Per-Module Output).
+
+An importing unit binds the table onto the worker's body-less external
+procedure with the rest of its interface. Its solve gives that procedure the
+published table as its available span, and any direct call of it, from any
+unit, may demand the span exactly as a same-unit call does: the call admits
+the convention by the same refinement proof, and its demand is the base
+signature with the complete published span, because a call across units
+demands nothing else (it seeds no uniqueness and owns no borrowed position).
+Variant reservation turns that demand into a body-less linked procedure
+under the identity the demand names, which is the identity the defining
+object exported, so the link resolves the call to the published variant. No
+other variant of an external procedure can be demanded. A Debug compiler
+asserts that the identity the demand names is among the imported records.
+The owned field-take variant and every optional variant stay within their
+callee's unit.
 
 A complete outcome table whose restitution masks are all zero declares no
 additional ownership convention. The solver commits an empty capability for

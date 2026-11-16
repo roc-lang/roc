@@ -2342,6 +2342,7 @@ fn finishLoweredOutput(
             try arc_roots.append(allocator, proc);
         };
     }
+    const procs_before_arc = lowered.lir_result.store.procSpecCount();
     const arc_result = try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = arc_roots.items,
         .specialize = target.specialize_arc_modes,
@@ -2352,6 +2353,13 @@ fn finishLoweredOutput(
         .metrics_out = arc_metrics,
         .timing = if (arc_detail) |*detail| detail else null,
     });
+    // The only procedures ARC exports are the outcome-restitution variants
+    // it publishes, which every importer may call (design.md
+    // "Outcome-Conditioned Argument Restitution").
+    for (procs_before_arc..lowered.lir_result.store.procSpecCount()) |index| {
+        const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
+        if (lowered.lir_result.store.getProcSpec(proc).exported) try lowered.lir_result.exported_procs.append(lowered.lir_result.store.allocator, proc);
+    }
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
     if (arc_detail) |*detail| target.timing.?.addArc(detail);
     arc_timing_scope.end();

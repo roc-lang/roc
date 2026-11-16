@@ -558,12 +558,26 @@ pub const Solution = struct {
     /// The outcome span a call from `caller` to `callee` may demand. A stable
     /// procedure's outcome rows follow its current body, which code without
     /// a code key does not change with, so only a caller with one may demand
-    /// them.
+    /// them. A call within the callee's emission unit may demand them, and
+    /// so may every call of a procedure whose object publishes its outcome
+    /// variant (`publishesOutcomeVariant`).
     pub fn outcomeSpanForCall(self: *const Solution, store: *const LirStore, caller: LIR.LirProcSpecId, callee: LIR.LirProcSpecId) arc_sig.OutcomeSpan {
         const index = @backingInt(callee);
         if (index < self.stability_pinned.capacity() and self.stability_pinned.isSet(index) and store.getProcSpec(caller).code_key == null) return .empty;
-        if (!sharesEmissionUnit(store, caller, callee)) return .empty;
+        if (!sharesEmissionUnit(store, caller, callee) and !self.publishesOutcomeVariant(store, callee)) return .empty;
         return self.availableOutcomeSpanOf(callee);
+    }
+
+    /// Whether `proc`'s object always emits its outcome-restitution variant
+    /// and publishes it, so that a call from any emission unit may demand it
+    /// (design.md "Outcome-Conditioned Argument Restitution"): an exported
+    /// worker this program emits whose solved capability is nonempty and
+    /// whose signature nothing pins, or an external procedure whose object
+    /// published one (`LIR.LirProcSpec.rc_outcomes`).
+    pub fn publishesOutcomeVariant(self: *const Solution, store: *const LirStore, proc: LIR.LirProcSpecId) bool {
+        if (self.availableOutcomeSpanOf(proc).isEmpty()) return false;
+        const spec = store.getProcSpec(proc);
+        return spec.external or (spec.exported and !self.isPinnedProc(proc));
     }
 
     pub fn availableOutcomeSpanOf(self: *const Solution, proc: LIR.LirProcSpecId) arc_sig.OutcomeSpan {
@@ -1596,8 +1610,14 @@ fn computeOutcomeRestitution(
 
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        if (solution.isPinnedProc(proc_id) and !solution.stability_pinned.isSet(proc_index)) continue;
         const proc = store.getProcSpec(proc_id);
+        if (proc.external) {
+            // Another object defines this procedure and the outcome variant
+            // it publishes; its capability is that variant's outcome table.
+            try appendPublishedOutcomes(allocator, store, proc, &all_outcomes, &solution.available_outcome_spans[proc_index]);
+            continue;
+        }
+        if (solution.isPinnedProc(proc_id) and !solution.stability_pinned.isSet(proc_index)) continue;
         const body = proc.arcBody() orelse continue;
         if (layouts.getLayout(proc.ret_layout).tag != .tag_union) continue;
 
@@ -1990,6 +2010,38 @@ fn computeOutcomeRestitution(
     }
 
     solution.outcomes = try all_outcomes.toOwnedSlice(allocator);
+}
+
+/// Append the outcome table an external procedure's object published with
+/// its outcome-restitution variant (`LIR.LirProcSpec.rc_outcomes`) and
+/// record it as the procedure's available span; a procedure that publishes
+/// none keeps an empty span.
+fn appendPublishedOutcomes(
+    allocator: Allocator,
+    store: *const LirStore,
+    proc: LIR.LirProcSpec,
+    all_outcomes: *std.ArrayList(arc_sig.Outcome),
+    span: *arc_sig.OutcomeSpan,
+) Allocator.Error!void {
+    const words = store.getU32Span(proc.rc_outcomes);
+    const word_count = GuardedList.borrowLen(words);
+    if (word_count == 0) return;
+    if (word_count % 2 != 0) solveInvariant("ARC read a published outcome table with an incomplete row");
+    const start = all_outcomes.items.len;
+    var restituted: arc_sig.ParamMask = 0;
+    var row: usize = 0;
+    while (row < word_count) : (row += 2) {
+        const mask = GuardedList.at(words, row + 1);
+        if (mask > std.math.maxInt(arc_sig.ParamMask)) solveInvariant("ARC read a published outcome row naming an untracked parameter");
+        const outcome: arc_sig.Outcome = .{ .discriminant = GuardedList.at(words, row), .restituted_params = @intCast(mask) };
+        if (all_outcomes.items.len > start and !outcomeLessThan({}, all_outcomes.items[all_outcomes.items.len - 1], outcome)) {
+            solveInvariant("ARC read a published outcome table out of discriminant order");
+        }
+        restituted |= outcome.restituted_params;
+        try all_outcomes.append(allocator, outcome);
+    }
+    if (restituted == 0) solveInvariant("ARC read a published outcome table that restitutes nothing");
+    span.* = .{ .start = @intCast(start), .len = @intCast(all_outcomes.items.len - start) };
 }
 
 /// Allocation demand over the already-lifted occurrence inventory. Each local
@@ -7789,7 +7841,8 @@ test "ARC shared predicates have one definition across the ARC stage" {
 /// Whether a direct call from `caller` to `callee` may demand an ownership
 /// variant of `callee`: the two share an emission unit (design.md "Mode
 /// Specialization", emission units). A call across units adapts to the
-/// callee's solved base signature.
+/// callee's solved base signature, except that it may demand an outcome
+/// variant the callee's object publishes (`Solution.outcomeSpanForCall`).
 pub fn sharesEmissionUnit(store: *const LirStore, caller: LIR.LirProcSpecId, callee: LIR.LirProcSpecId) bool {
     return LIR.EmissionUnit.shares(store.getProcSpec(caller).emission_unit, store.getProcSpec(callee).emission_unit);
 }
