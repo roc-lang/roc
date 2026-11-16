@@ -197,6 +197,9 @@ pub const LirLoweringOptions = struct {
     /// Include backend symbol identities, which the compact LIR printer omits.
     dump_proc_identities: bool = false,
     prove_ranges: bool = false,
+    /// Receives the pipeline's deterministic producer-side work counts, the
+    /// range prover's among them.
+    work_metrics_out: ?*lir.CheckedPipeline.WorkMetrics = null,
     allow_user_errors: bool = false,
     /// Require a report with this title once checking finishes. A rejected
     /// program uses this to pin that it reports its diagnostic and still
@@ -1207,6 +1210,7 @@ fn loweringTarget(opts: LirLoweringOptions) lir.CheckedPipeline.TargetConfig {
         .list_in_place_map = opts.list_in_place_map,
         .proc_debug_names = opts.proc_debug_names,
         .prove_ranges = opts.prove_ranges,
+        .work_metrics = opts.work_metrics_out,
         .replay_interface_summaries = .{ .value = opts.replay_interface_summaries },
         .lifted_expr_count_out = opts.lifted_expr_count_out,
         .solved_lir_parallel_metrics_out = opts.solved_lir_parallel_metrics_out,

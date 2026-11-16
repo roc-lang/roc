@@ -2805,3 +2805,114 @@ test "a length test and a limit test guard one copy of a loop" {
     try std.testing.expectEqual(@as(usize, 1), shape.add_crash);
     try std.testing.expectEqual(@as(usize, 1), shape.add_proven);
 }
+
+/// The range prover's work on an app whose `main!` echoes `call`, summed
+/// over the app's procedures. `countMarkedShape` records the shape of the
+/// procedure holding `marked_op`.
+fn proverWork(comptime body: []const u8, comptime call: []const u8) harness.LowerToLirHarnessError!lir.RangeProve.WorkStats {
+    var metrics: lir.CheckedPipeline.WorkMetrics = .{};
+    try harness.expectLirInspectionWithOptions(
+        body ++
+            "\nmain! : List(Str) => Try({}, [Exit(I8), ..])\n" ++
+            "main! = |args| {\n" ++
+            "    bytes = Str.to_utf8(Str.join_with(args, \",\"))\n" ++
+            "    echo!(Str.inspect(" ++ call ++ "))\n" ++
+            "    Ok({})\n" ++
+            "}\n",
+        .{ .inline_mode = .wrappers, .prove_ranges = true, .work_metrics_out = &metrics },
+        countMarkedShape,
+    );
+    return metrics.range_prove;
+}
+
+// Each pass reads the list's length at its top and appends three items, so
+// the back edge proves the new length is at least that read plus three. The
+// read is a local the loop's body defines, so the bound is no candidate for
+// an invariant of the head: the loop assumes nothing it cannot verify, and
+// no sum refresh meets a bound that says a value is below itself and runs
+// to its pass cap.
+test "a bound against a length read inside the loop is not assumed of the loop's list" {
+    marked_op = "list_append_unsafe";
+    const work = try proverWork(
+        \\fill : List(U8), U64 -> List(U8)
+        \\fill = |acc, n| {
+        \\    if n == 0 {
+        \\        acc
+        \\    } else {
+        \\        len = List.len(acc)
+        \\        next = if len > n { acc.append(7) } else { acc.append(9) }
+        \\        b = (len + n).to_u8_wrap()
+        \\        fill(next.append(b).append(2), n - 1)
+        \\    }
+        \\}
+        \\
+    , "List.len(fill(bytes, 5))");
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expectEqual(@as(usize, 0), work.capped_refreshes);
+    // The app's procedures prove in seven rounds between them; assuming the
+    // bound costs the loop an eighth, in which thirty refreshes are capped.
+    try std.testing.expectEqual(@as(usize, 7), work.rounds);
+}
+
+// The mapped list is read through an alias on the arm that leaves the
+// mapping loop, and that alias names the list's length for the pass that is
+// ending. The back edge's append puts the new length one above it, which is
+// a bound against a local the loop's body defines although its cycle does
+// not, and it is not assumed either.
+test "a bound against the loop's own list read where the loop is left is not assumed" {
+    marked_op = "list_append_unsafe";
+    const work = try proverWork(
+        \\build : List(U64), U64 -> U64
+        \\build = |seed, n| {
+        \\    var $acc = seed
+        \\    var $i = List.len(seed)
+        \\    var $sum = 0.U64
+        \\    while $i < n {
+        \\        $acc = List.append($acc, $i)
+        \\        $i = $i + 1
+        \\        last = List.get($acc, $i.minus_wrap(1)) ?? 0
+        \\        $sum = $sum.plus_wrap(last)
+        \\    }
+        \\    $sum
+        \\}
+        \\
+    , "build(List.map(bytes, |b| b.to_u64()), List.len(args) + 9)");
+    try std.testing.expect(marked_shape.found);
+    // Assuming the bound caps thirteen refreshes.
+    try std.testing.expectEqual(@as(usize, 0), work.capped_refreshes);
+    try std.testing.expectEqual(@as(usize, 8), work.rounds);
+}
+
+// The list starts at `start` items and only grows, so every edge into the
+// loop proves its length is at least `start`. `start` is defined before the
+// loop is entered: the bound is assumed, verifies, and proves the read just
+// below `start` on every pass without a test where the loop is entered.
+test "a bound against a length read before the loop is assumed and proves the read it bounds" {
+    marked_op = "num_bitwise_xor";
+    const work = try proverWork(
+        \\grow : List(U64), U64 -> U64
+        \\grow = |seed, n| {
+        \\    start = List.len(seed)
+        \\    if start == 0 {
+        \\        return 0
+        \\    } else {
+        \\    }
+        \\    var $acc = seed
+        \\    var $k = 0.U64
+        \\    var $sum = 0.U64
+        \\    while $k < n {
+        \\        $acc = List.append($acc, $k)
+        \\        $sum = $sum.bitwise_xor(List.get($acc, start - 1) ?? 0)
+        \\        $k = $k + 1
+        \\    }
+        \\    $sum
+        \\}
+        \\
+    , "(grow(List.map(bytes, |b| b.to_u64()), List.len(args) + 9), grow([1, 2], List.len(args)))");
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expect(work.invariants_verified > 0);
+    try std.testing.expectEqual(@as(usize, 0), work.guards);
+    // The loop head's test is the one `<` left: the read's bounds test folded.
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.is_lt);
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.get_unsafe);
+}

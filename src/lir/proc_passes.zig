@@ -106,6 +106,7 @@ const TaskContext = struct {
     completed: bool = false,
     changed: bool = false,
     trmc_report: ?Trmc.Report = null,
+    range_work: RangeProve.WorkStats = .{},
     first_fresh_join: u32 = 0,
     fresh_join_count: u32 = 0,
 
@@ -150,7 +151,7 @@ const TaskContext = struct {
                 var joins = BodyClone.JoinParamIndex.init(scratch_allocator);
                 defer joins.deinit();
                 joins.next_join_point = self.first_fresh_join;
-                try RangeProve.runProcWithScratch(&shard, self.layouts, self.proc, try laneScratch(RangeProve.LaneScratch, lane), analysis.?, &joins);
+                self.range_work = try RangeProve.runProcWithScratch(&shard, self.layouts, self.proc, try laneScratch(RangeProve.LaneScratch, lane), analysis.?, &joins);
                 self.fresh_join_count = joins.next_join_point - self.first_fresh_join;
             },
             .box_reuse => try BoxReuse.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
@@ -169,6 +170,21 @@ pub fn run(
     phase: Phase,
     executor: ?TaskExecutor.Executor,
     metrics: ?*ParallelMetrics,
+) Allocator.Error!void {
+    try runCountingRangeWork(allocator, store, layouts, phase, executor, metrics, null);
+}
+
+/// `run`, adding to `range_work` what the range prover's work on each
+/// procedure the range phase admits cost. Serial and parallel execution
+/// count the same work.
+pub fn runCountingRangeWork(
+    allocator: Allocator,
+    store: *LirStore,
+    layouts: *layout.Store,
+    phase: Phase,
+    executor: ?TaskExecutor.Executor,
+    metrics: ?*ParallelMetrics,
+    range_work: ?*RangeProve.WorkStats,
 ) Allocator.Error!void {
     switch (phase) {
         .trmc => try Trmc.prepareLayouts(store, layouts),
@@ -296,6 +312,8 @@ pub fn run(
             counts.appended_statements +|= @intCast(shard.cf_stmts.len());
         };
         if (context.trmc_report) |report| Trmc.reportProc(store, layouts, context.proc, report);
+        if (phase == .range) RangeProve.reportWork(store, context.proc, context.range_work);
+        if (range_work) |work| work.add(context.range_work);
         shard.deinit();
         context.shard = null;
     }

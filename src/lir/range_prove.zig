@@ -158,6 +158,12 @@ const region_seed_nodes: usize = merge_env_persist_cap * (1 + 2 * 2 * meet_bound
 
 /// Prove and rewrite qualifying checks in every proc.
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
+    _ = try runWithStats(store, layouts);
+}
+
+/// `run`, reporting the deterministic work every procedure cost together.
+pub fn runWithStats(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!WorkStats {
+    var total: WorkStats = .{};
     var analysis = BodyClone.AnalysisScratch.init(store.allocator);
     defer analysis.deinit();
     var joins = BodyClone.JoinParamIndex.init(store.allocator);
@@ -170,8 +176,12 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!voi
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
-        try pass.transformProc(@fromBackingInt(@intCast(proc_index)));
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(proc_index));
+        try pass.transformProc(proc_id);
+        reportWork(store, proc_id, pass.work);
+        total.add(pass.work);
     }
+    return total;
 }
 
 /// Prove one procedure with task-local scratch; rewritten LIR stays in the store.
@@ -183,7 +193,7 @@ pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.
     joins.next_join_point = BodyClone.firstFreshJoinPoint(store);
     var lane = LaneScratch.init(scratch_allocator);
     defer lane.deinit();
-    try runProcWithScratch(store, layouts, proc_id, &lane, &analysis, &joins);
+    _ = try runProcWithScratch(store, layouts, proc_id, &lane, &analysis, &joins);
 }
 
 /// Proof storage one executor lane retains across procedures: every map,
@@ -204,66 +214,77 @@ pub const LaneScratch = struct {
 /// Retain counting and traversal capacity across procedures and proof rounds.
 /// Joins split by Bool-flag threading take their identities from `joins`,
 /// which the caller starts above every join id in the store: a join nested in
-/// a body the prover never enters still occupies its id.
-pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, lane: *LaneScratch, analysis: *BodyClone.AnalysisScratch, joins: *BodyClone.JoinParamIndex) ResourceError!void {
+/// a body the prover never enters still occupies its id. Returns the
+/// deterministic work the procedure cost.
+pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, lane: *LaneScratch, analysis: *BodyClone.AnalysisScratch, joins: *BodyClone.JoinParamIndex) ResourceError!WorkStats {
     const pass = &lane.pass;
     pass.attach(store, layouts, analysis, joins);
     defer pass.release();
     try pass.transformProc(proc_id);
+    return pass.work;
 }
 
-/// Deterministic work counters for one procedure (`ROC_RANGE_PROVE_STATS`).
-/// Selected at compile time, so a compiler that does not read developer
-/// diagnostics carries none of it.
-const Stats = if (!dev_diagnostics.available) struct {
-    inline fn add(_: *@This(), comptime _: Counter, _: usize) void {}
-    fn report(_: *@This(), _: *const LirStore, _: LIR.LirProcSpecId) void {}
-} else struct {
-    counts: [@typeInfo(Counter).@"enum".field_names.len]u64 = @splat(0),
-
-    inline fn add(self: *@This(), comptime counter: Counter, amount: usize) void {
-        self.counts[@backingInt(counter)] += amount;
-    }
-
-    fn report(self: *@This(), store: *const LirStore, proc_id: LIR.LirProcSpecId) void {
-        defer self.counts = @splat(0);
-        if (!dev_diagnostics.isSet(.range_prove_stats)) return;
-        std.debug.print("range-prove-stats: p{d} {s}", .{ @backingInt(proc_id), store.procDebugName(proc_id) orelse "?" });
-        inline for (@typeInfo(Counter).@"enum".field_names, 0..) |name, index| {
-            std.debug.print(" {s}={d}", .{ name, self.counts[index] });
-        }
-        std.debug.print("\n", .{});
-    }
-};
-
-/// What `Stats` counts.
-const Counter = enum {
+/// Deterministic work counts for one procedure, or summed over several:
+/// what the proof cost and what it did, independent of elapsed time. Tests
+/// read them, and `ROC_RANGE_PROVE_STATS` prints them per procedure.
+pub const WorkStats = struct {
     /// Proof rounds, and the rounds among them that threaded Bool joins
     /// instead of walking.
-    rounds,
-    thread_rounds,
-    /// Times the proof started over after guarding or withdrawing a guard.
-    restarts,
+    rounds: usize = 0,
+    thread_rounds: usize = 0,
+    /// Times the proof started over after guarding a loop or withdrawing a
+    /// guard.
+    restarts: usize = 0,
+    /// Loop guards made, and the ones among them withdrawn.
+    guards: usize = 0,
+    guards_withdrawn: usize = 0,
+    /// Undecided checks examined for a hoisted test, and the fact-graph
+    /// walks made looking for one.
+    demand_queries: usize = 0,
+    demand_walks: usize = 0,
+    /// Loop-invariant candidates admitted as pending assumptions, and the
+    /// assumptions that verified and that died.
+    invariant_candidates: usize = 0,
+    invariants_verified: usize = 0,
+    invariants_died: usize = 0,
     /// Regions walked and statements modeled.
-    regions,
-    statements,
+    regions: usize = 0,
+    statements: usize = 0,
     /// Slack walks, and the roots they took off their worklists.
-    walks,
-    walk_roots,
+    walks: usize = 0,
+    walk_roots: usize = 0,
     /// Sum refreshes, the sums they stated, the roots and facts their
-    /// closures gathered, and the fact and sum relaxations they ran.
-    refreshes,
-    refresh_sums,
-    closure_roots,
-    closure_facts,
-    closure_relaxations,
-    /// The passes those closures ran, and the closures that stopped at the
-    /// pass cap with bounds still moving.
-    closure_passes,
-    closure_capped,
-    /// Undecided ordering comparisons examined for a hoisted length test.
-    demand_queries,
+    /// closures gathered, the passes they ran, and the fact and sum
+    /// relaxations in those passes.
+    refreshes: usize = 0,
+    refresh_sums: usize = 0,
+    closure_roots: usize = 0,
+    closure_facts: usize = 0,
+    closure_passes: usize = 0,
+    closure_relaxations: usize = 0,
+    /// Sum refreshes that stopped at the pass cap with bounds still moving.
+    capped_refreshes: usize = 0,
+
+    /// Add another procedure's counts to these.
+    pub fn add(self: *WorkStats, other: WorkStats) void {
+        inline for (@typeInfo(WorkStats).@"struct".field_names) |name| {
+            @field(self, name) += @field(other, name);
+        }
+    }
 };
+
+/// Print what proving procedure `proc_id` cost when `ROC_RANGE_PROVE_STATS`
+/// is set. `store` is the program's store, which holds the debug names the
+/// lowering recorded: the store a procedure is proved in is a rewrite shard
+/// that carries none. A procedure the compiler generated has no source name.
+pub fn reportWork(store: *const LirStore, proc_id: LIR.LirProcSpecId, work: WorkStats) void {
+    if (!dev_diagnostics.isSet(.range_prove_stats)) return;
+    std.debug.print("range-prove-stats: p{d} {s}", .{ @backingInt(proc_id), store.procDebugName(proc_id) orelse "<unnamed>" });
+    inline for (@typeInfo(WorkStats).@"struct".field_names) |name| {
+        std.debug.print(" {s}={d}", .{ name, @field(work, name) });
+    }
+    std.debug.print("\n", .{});
+}
 
 /// One pending statement of `scanJoinNesting`, with the join whose body
 /// lexically contains it.
@@ -1465,16 +1486,6 @@ const HoistDemand = struct {
     c: i128,
 };
 
-/// One procedure's proof rounds and what its loop guards cost.
-const GuardStats = struct {
-    rounds: u32 = 0,
-    guards: u32 = 0,
-    withdrawn: u32 = 0,
-    restarts: u32 = 0,
-    /// Fact-graph walks made to find a test for an undecided check.
-    demand_walks: u32 = 0,
-};
-
 /// A guard the proof rounds have yet to confirm: see "Hoisted length tests".
 const GuardTrial = struct {
     loop_id: JoinPointId,
@@ -1944,6 +1955,9 @@ const Pass = struct {
     current_region: ?CFStmtId,
     /// The statement that defines each `ref.local` alias `alias_of` lists.
     alias_defs: collections.DenseMap(LocalId, CFStmtId),
+    /// A statement that defines each local the procedure's statements
+    /// define: the one that does, for a single-assignment local.
+    def_stmts: collections.DenseMap(LocalId, CFStmtId),
     /// Locals some `init_uninitialized` statement defines: reading one is
     /// only valid where its initialization condition holds.
     uninit_locals: collections.DenseMap(LocalId, void),
@@ -1982,8 +1996,8 @@ const Pass = struct {
     guard_switches: collections.DenseMap(CFStmtId, void),
     /// Guards made at the last fixpoint, to be confirmed at the next.
     guard_trials: std.ArrayList(GuardTrial) = .empty,
-    /// What the procedure's guards cost, for `range_guard_stats`.
-    guard_stats: GuardStats = .{},
+    /// What the procedure being proved has cost so far.
+    work: WorkStats = .{},
     /// Innermost join whose body lexically contains each statement. A jump to
     /// a loop head from a region inside that loop's body is a back edge even
     /// when a nested join's region lies between; only jumps from outside the
@@ -2076,7 +2090,6 @@ const Pass = struct {
     /// Pending assumptions seeded so far this round.
     assumption_count: u8 = 0,
     rewrites: u32,
-    stats: Stats = .{},
     // Debug-only certification state; unused (and empty) in release builds.
     proof_records: std.ArrayList(ProofRecord),
     proof_facts: std.ArrayList(Fact),
@@ -2137,6 +2150,7 @@ const Pass = struct {
             .back_jumps = collections.DenseMap(JoinPointId, u32).init(allocator),
             .current_region = null,
             .alias_defs = collections.DenseMap(LocalId, CFStmtId).init(allocator),
+            .def_stmts = collections.DenseMap(LocalId, CFStmtId).init(allocator),
             .uninit_locals = collections.DenseMap(LocalId, void).init(allocator),
             .cycle_of = collections.DenseMap(CFStmtId, JoinPointId).init(allocator),
             .enclosing_loops = collections.DenseMap(JoinPointId, void).init(allocator),
@@ -2310,6 +2324,7 @@ const Pass = struct {
         self.join_assigned.deinit();
         self.back_jumps.deinit();
         self.alias_defs.deinit();
+        self.def_stmts.deinit();
         self.uninit_locals.deinit();
         self.cycle_of.deinit();
         self.enclosing_loops.deinit();
@@ -2397,6 +2412,7 @@ const Pass = struct {
         self.join_assigned.clearRetainingCapacity();
         self.back_jumps.clearRetainingCapacity();
         self.alias_defs.clearRetainingCapacity();
+        self.def_stmts.clearRetainingCapacity();
         self.uninit_locals.clearRetainingCapacity();
         self.cycle_of.clearRetainingCapacity();
         self.enclosing_loops.clearRetainingCapacity();
@@ -2591,8 +2607,8 @@ const Pass = struct {
     fn refreshSums(self: *Pass) ResourceError!void {
         self.refreshing_sums = true;
         defer self.refreshing_sums = false;
-        self.stats.add(.refreshes, 1);
-        self.stats.add(.refresh_sums, self.refresh_set.items.len);
+        self.work.refreshes += 1;
+        self.work.refresh_sums += self.refresh_set.items.len;
         try self.boundSumRoots();
         for (self.refresh_set.items, self.closure_sums.items) |index, in_closure| {
             const sum = &self.sums.items[index];
@@ -2712,8 +2728,8 @@ const Pass = struct {
                 }
             }
         }
-        self.stats.add(.closure_roots, self.query_queue.items.len);
-        self.stats.add(.closure_facts, self.closure_facts.items.len);
+        self.work.closure_roots += self.query_queue.items.len;
+        self.work.closure_facts += self.closure_facts.items.len;
         if (builtin.mode == .debug) {
             self.closure_check.clearRetainingCapacity();
             try self.closure_check.appendSlice(self.allocator, self.closure_bounds.items);
@@ -2732,7 +2748,7 @@ const Pass = struct {
                 if (b.hi_moved < fact.relaxed and a.lo_moved < fact.relaxed) continue;
                 step += 1;
                 fact.relaxed = step;
-                self.stats.add(.closure_relaxations, 1);
+                self.work.closure_relaxations += 1;
                 const hi_through = clampSlack(b.hi + fact.c);
                 if (hi_through < a.hi) {
                     a.hi = hi_through;
@@ -2756,12 +2772,12 @@ const Pass = struct {
                 if (!inputs_moved) continue;
                 step += 1;
                 sum.relaxed = step;
-                self.stats.add(.closure_relaxations, 1);
+                self.work.closure_relaxations += 1;
                 if (relaxSum(bounds, sum.*, step)) changed = true;
             }
         }
-        self.stats.add(.closure_passes, passes);
-        if (changed) self.stats.add(.closure_capped, 1);
+        self.work.closure_passes += passes;
+        if (changed) self.work.capped_refreshes += 1;
         if (builtin.mode == .debug) self.assertClosureBounds();
     }
 
@@ -2962,9 +2978,9 @@ const Pass = struct {
         try self.query_best.put(start, .{ .c = 0, .queued = true });
         try self.query_queue.append(self.allocator, start);
         self.reached_sum_end = self.isSumEnd(start);
-        self.stats.add(.walks, 1);
+        self.work.walks += 1;
         var next: usize = 0;
-        defer self.stats.add(.walk_roots, next);
+        defer self.work.walk_roots += next;
         while (next < self.query_queue.items.len) : (next += 1) {
             const node = self.query_queue.items[next];
             const acc = self.query_best.getPtr(node).?;
@@ -3481,7 +3497,10 @@ const Pass = struct {
                 .crash,
                 => {},
             }
-            if (BodyClone.definedTarget(stmt)) |target| try self.bumpAssign(target);
+            if (BodyClone.definedTarget(stmt)) |target| {
+                try self.bumpAssign(target);
+                try self.def_stmts.put(target, current);
+            }
             try BodyClone.forEachFlowSuccessor(self.store, stmt, self, edgeTo);
         }
         try self.collectSharedJoinBodies();
@@ -5161,13 +5180,19 @@ const Pass = struct {
     /// satisfies, as is a bound slack enough to hold for any pair of values;
     /// assuming either would cost a round for nothing.
     ///
-    /// So would a bound against a local the loop's cycle defines, unless
-    /// that local is a parameter of the loop. A back edge proves such a
-    /// bound against the value the pass it ends gave the local, and where
-    /// the next pass begins the local has not been given that pass's value
-    /// yet: the head has nothing to state the bound against, and no entry
-    /// edge has a value of the local to prove it for. A parameter of the
-    /// loop has its value for the pass where the pass begins.
+    /// So would a bound against a local that a statement in the loop's
+    /// body defines. A bound is against a literal or a single-assignment
+    /// local (`lenStable`), and such a local the body defines has no value
+    /// where a pass begins: the pass has not reached its definition, and
+    /// no entry edge has. A back edge proves bounds against these all the
+    /// same, because the local names a value of the pass that is ending: a
+    /// length read at the top of the pass, or the loop's own list read
+    /// through an alias on the arm that leaves the loop. Stated at the
+    /// head, the bound would be against a value the head made up, it could
+    /// not verify, and once the pass reached the definition the local would
+    /// name two values with the bound restated between them, which says a
+    /// value is below itself. A parameter of the loop is assigned by every
+    /// jump to it, so it is never the local a bound is against.
     fn admitLenCandidates(self: *Pass, join_id: JoinPointId, meet: *const EnvMeet, stored: *LoopBounds) void {
         const is_int = trackedIntMax(self.localLayout(meet.local)) != null;
         for (self.candidateBounds(meet)) |bound| {
@@ -5188,6 +5213,7 @@ const Pass = struct {
                     .hit = false,
                 };
                 stored.len_count += 1;
+                self.work.invariant_candidates += 1;
                 self.seeds_grew = true;
             }
         }
@@ -5205,10 +5231,22 @@ const Pass = struct {
         const candidate = self.lenStable(bound) orelse return null;
         switch (candidate.base) {
             .constant => if (candidate.c >= 0) return null,
-            .len_of, .value_of => |local| if (self.joinAssigns(join_id, local) and !self.isJoinParam(join_id, local)) return null,
+            .len_of, .value_of => |local| if (self.definedInBody(join_id, local)) return null,
         }
         if (candidate.c >= std.math.maxInt(i64)) return null;
         return .{ .base = candidate.base, .c = candidate.c };
+    }
+
+    /// Whether the statement that defines single-assignment `local` lies in
+    /// join `join_id`'s body, however deep in the joins that body declares.
+    fn definedInBody(self: *const Pass, join_id: JoinPointId, local: LocalId) bool {
+        const def = self.def_stmts.get(local) orelse return false;
+        var inside = self.enclosing_join.get(def);
+        while (inside) |id| {
+            if (id == join_id) return true;
+            inside = self.join_parent.get(id);
+        }
+        return false;
     }
 
     /// Whether `admitLenCandidates` would admit an invariant for a parameter
@@ -5260,6 +5298,7 @@ const Pass = struct {
                     item.status = .dead;
                     item.died_epoch = self.progress_epoch;
                     self.invariant_moves += 1;
+                    self.work.invariants_died += 1;
                 }
             }
         }
@@ -5309,6 +5348,7 @@ const Pass = struct {
                 if (item.status == .pending and item.hit) {
                     item.status = .verified;
                     self.invariant_moves += 1;
+                    self.work.invariants_verified += 1;
                 }
             }
         }
@@ -5846,6 +5886,7 @@ const Pass = struct {
     // Proc driver
 
     fn transformProc(self: *Pass, proc_id: LIR.LirProcSpecId) ResourceError!void {
+        self.work = .{};
         const proc = self.store.getProcSpec(proc_id);
         if (proc.body == .none or proc.hosted.get() != null) return;
 
@@ -5868,24 +5909,17 @@ const Pass = struct {
         // is revived once per epoch, which only those steps open.
         var persisted_size: usize = 0;
         var first = true;
-        self.guard_stats = .{};
-        defer if (base_mod.dev_diagnostics.isSet(.range_guard_stats)) {
-            const stats = self.guard_stats;
-            std.debug.print("range guards: proc={d} rounds={d} guards={d} withdrawn={d} restarts={d} demand_walks={d}\n", .{ @backingInt(proc_id), stats.rounds, stats.guards, stats.withdrawn, stats.restarts, stats.demand_walks });
-        };
-        defer self.stats.report(self.store, proc_id);
         while (true) {
-            self.guard_stats.rounds += 1;
+            self.work.rounds += 1;
             self.resetRound();
             try self.prescanProc(proc);
             if (first) try self.reserveMergeStorage();
             first = false;
-            self.stats.add(.rounds, 1);
             // Threading restructures control flow, so a round that threads
             // stops there and the next round re-derives the graph facts.
             self.seeds_grew = false;
             if (try self.threadBoolJoins(proc.body.get().?) != 0) {
-                self.stats.add(.thread_rounds, 1);
+                self.work.thread_rounds += 1;
             } else {
                 try self.walkRegions(proc.body.get().?);
                 try self.certifyRound(proc.body.get().?);
@@ -5899,8 +5933,7 @@ const Pass = struct {
                 const withdrew = try self.settleGuards();
                 const guarded = try self.hoistLengthTests(proc.body.get().?);
                 if (!withdrew and !guarded) break;
-                self.guard_stats.restarts += 1;
-                self.stats.add(.restarts, 1);
+                self.work.restarts += 1;
                 self.freePersisted();
                 self.loop_bounds.clearRetainingCapacity();
                 self.loop_facts.clearRetainingCapacity();
@@ -6232,7 +6265,7 @@ const Pass = struct {
 
     fn noteSumDemand(self: *Pass, join_id: JoinPointId, bounded_id: NodeId, other_id: NodeId, max: i128) ResourceError!bool {
         const bounded = self.nodes.items[bounded_id];
-        self.guard_stats.demand_walks += 1;
+        self.work.demand_walks += 1;
         try self.relaxFresh(bounded.root, .forward);
         // The ceiling comes from a value whose own range ends below the
         // type's highest value: a literal, a length, a masked or narrower
@@ -6255,7 +6288,7 @@ const Pass = struct {
         const other = self.nodes.items[other_id];
         var values: [hoist_term_cap]HoistValue = undefined;
         var values_len: usize = 0;
-        self.guard_stats.demand_walks += 1;
+        self.work.demand_walks += 1;
         try self.relaxFresh(other.root, .forward);
         {
             var it = self.query_best.iterator();
@@ -6318,7 +6351,7 @@ const Pass = struct {
         // that has measured none has none to compare against.
         if (!self.roundMayBeFixpoint() or self.len_terms.count() == 0) return;
         const join_id = self.hoistLoopOf(stmt) orelse return;
-        self.stats.add(.demand_queries, 1);
+        self.work.demand_queries += 1;
         // The claim that makes the comparison hold, then the one that makes
         // it fail, each as `x <= y + m`.
         const claims: [2]struct { x: NodeId, y: NodeId, m: i128 } = switch (op) {
@@ -6341,7 +6374,7 @@ const Pass = struct {
     fn noteClaimDemand(self: *Pass, join_id: JoinPointId, x_id: NodeId, y_id: NodeId, m: i128) ResourceError!bool {
         // Lengths at or below `y`: `root <= y.root + c` puts the length at
         // most `c - y.off_lo` above `y`.
-        self.guard_stats.demand_walks += 1;
+        self.work.demand_walks += 1;
         const y = self.nodes.items[y_id];
         var lengths: [hoist_term_cap]HoistLength = undefined;
         var lengths_len: usize = 0;
@@ -6370,7 +6403,7 @@ const Pass = struct {
         const x = self.nodes.items[x_id];
         var values: [hoist_term_cap]HoistValue = undefined;
         var values_len: usize = 0;
-        self.guard_stats.demand_walks += 1;
+        self.work.demand_walks += 1;
         try self.relaxFresh(x.root, .forward);
         {
             var it = self.query_best.iterator();
@@ -6698,7 +6731,7 @@ const Pass = struct {
                 .remainder = inner,
             } }, origin);
         }
-        self.guard_stats.guards += 1;
+        self.work.guards += 1;
         try self.hoisted_joins.put(loop_id, {});
         try self.hoisted_joins.put(copy_id, {});
         try self.guard_trials.append(self.allocator, .{
@@ -6756,7 +6789,7 @@ const Pass = struct {
             for (self.scratch.items) |stmt| self.store.getCFStmtPtr(stmt).jump.target = trial.loop_id;
             self.scratch.clearRetainingCapacity();
             self.store.getCFStmtPtr(trial.loop_stmt).join.remainder = trial.remainder;
-            self.guard_stats.withdrawn += 1;
+            self.work.guards_withdrawn += 1;
             withdrew = true;
         }
         self.guard_trials.clearRetainingCapacity();
@@ -6838,7 +6871,7 @@ const Pass = struct {
     }
 
     fn walkRegion(self: *Pass, head: CFStmtId) ResourceError!void {
-        self.stats.add(.regions, 1);
+        self.work.regions += 1;
         while (self.frames.pop()) |frame| {
             try self.rewindTo(frame.facts_len, frame.no_overflow_facts_len, frame.undo_len);
             if (frame.edge_fact) |fact| switch (fact) {
@@ -6859,7 +6892,7 @@ const Pass = struct {
                     break :walk;
                 }
                 if (self.visited.contains(current)) break :walk;
-                self.stats.add(.statements, 1);
+                self.work.statements += 1;
                 self.grantStatementNodes(self.store.getCFStmtImmediate(current).*);
 
                 switch (self.store.getCFStmtImmediate(current).*) {

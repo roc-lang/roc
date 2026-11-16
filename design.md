@@ -21871,17 +21871,32 @@ rounds to settle). Assumptions are never retried against the proof data they
 already failed under, so each epoch revives each assumption at most once.
 
 An invariant is stated where a pass through the loop begins, so the value it
-bounds the parameter against must exist there: a literal, a local the loop's
-cycle never defines, or a parameter of the loop. A back edge also proves
-bounds against locals that the pass it ends defined. A loop that reads its
-list's length at the top of a pass and then appends three items ends that
-pass with the length three above that local. Such a bound is never assumed.
+bounds the parameter against must exist there. A bound is against a literal
+or a single-assignment local, so that value is a literal or a local that no
+statement in the loop's body defines; a parameter of the loop is assigned by
+every jump to it and is never what a bound is against. A back edge also
+proves bounds against locals the body defines, because such a local names a
+value of the pass that is ending. A loop that reads its list's length at the
+top of a pass and then appends three items ends that pass with the length
+three above that local. A loop whose list is read through an alias on the arm
+that leaves the loop has that alias name the list's length for the pass, and
+an append puts the new length one above it. Such a bound is never assumed.
 Where the next pass begins the local does not hold that pass's value yet, and
 no entry edge has a value of it at all, so the assumption could not verify
 and would only spend a proof round. Within that round the local would also
 name two values, the unknown one the head read and the one its definition
 gives it, and the bound restated between them would say that a value is below
-itself.
+itself, which sends every sum refresh that meets it to its pass cap.
+
+An assumption that cannot verify costs rounds and never a wrong rewrite. A
+pending bound verifies only when the meet over every edge into the loop,
+entry edges included, holds it against the same root, and a root the head or
+the body made does not exist on an entry edge. Until it verifies, every proof
+that rests on it is deferred: an ordering query records the assumptions of
+the facts it relaxed through and a rewrite whose proof recorded any waits,
+and a value's own range, which rewrites that read ranges alone go by, takes
+only bounds that rest on no assumption. A round with a pending assumption
+persists nothing.
 
 Everything a round carries into later rounds (each merge's environment meet
 and ordering intersection, each loop's entry orderings, each loop parameter's
@@ -22125,7 +22140,7 @@ Looking for a test costs fact-graph walks, and only the fixpoint round's
 demands are used. The fixpoint is a round that rewrites nothing, defers
 nothing and seeds no assumption, so a check reached after the round has
 done any of those does not look. A comparison reached before the round has
-a length term for any list does not look either. `ROC_RANGE_GUARD_STATS` prints, per
+a length term for any list does not look either. `ROC_RANGE_PROVE_STATS` prints, per
 procedure, the proof rounds, the guards made and withdrawn, the proofs
 started over, and the walks spent looking.
 
@@ -28674,11 +28689,22 @@ and installation phases under the same diagnostic.
 The specialization, evaluation, runtime LIR, ARC, static-data and native test
 execution producers increment their own counters. This variable uses the same developer-only gate.
 
-`ROC_RANGE_PROVE_STATS` prints one line of deterministic work counters for
-each procedure the range prover walks: its proof rounds and restarts, the
-regions and statements it walked, its slack walks, and the sum refreshes with
-the size of their closures and the relaxations they ran. The counters measure
-how much work a procedure cost the prover and change nothing it proves.
+`ROC_RANGE_PROVE_STATS` prints one line of deterministic work counts for each
+procedure the range prover walks, named by its procedure id and its source
+name. The counts are the prover's `WorkStats`: proof rounds, the rounds that
+threaded Bool joins, and the proofs started over; loop guards made and
+withdrawn, the undecided checks examined for a hoisted test and the
+fact-graph walks spent looking for one; loop-invariant candidates admitted,
+verified and dead; regions and statements walked; slack walks and the roots
+they visited; and sum refreshes with the size of their closures, the passes
+and relaxations they ran, and how many stopped at the pass cap. Setting the
+variable also makes the lowering record procedure debug names, which it
+otherwise records only for the diagnostics that print them; a
+compiler-generated procedure has no source name and prints as `<unnamed>`.
+The counts measure what a procedure cost the prover and change nothing it
+proves. They are counted in every compiler, and the pipeline's `WorkMetrics`
+sums them over the lowered procedures for tests that pin how much work a
+shape costs.
 
 `ROC_PROFILE_ALLOCATIONS` attributes native test-root allocations on Linux x64.
 Each root owns its diagnostic table, aggregating allocation and reallocation
