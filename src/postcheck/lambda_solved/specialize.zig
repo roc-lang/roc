@@ -42,6 +42,10 @@ pub const Census = struct {
     /// most any group has.
     instances: usize = 0,
     max_instances: usize = 0,
+    /// Instances whose functions' procedure identities equal an earlier
+    /// instance's: they differ only in erased callables' members or in a
+    /// function's own callable set.
+    identity_equal_instances: usize = 0,
     /// Lifted functions this pass added, and their expressions, against
     /// the expressions of the program it was given.
     cloned_fns: usize = 0,
@@ -58,10 +62,10 @@ pub fn run(allocator: Allocator, program: *Ast.Program) Allocator.Error!Census {
     try pass.run();
     if (diagnostics.isSet(.lambda_solve_stats)) {
         const census = pass.census;
-        std.debug.print("lambda-specialize groups={d} generic_groups={d} instantiated_references={d} instances={d} max_instances={d} cloned_fns={d} cloned_exprs={d} exprs={d}\n", .{
-            census.groups,       census.generic_groups, census.instantiated_references,
-            census.instances,    census.max_instances,  census.cloned_fns,
-            census.cloned_exprs, census.exprs,
+        std.debug.print("lambda-specialize groups={d} generic_groups={d} instantiated_references={d} instances={d} max_instances={d} identity_equal_instances={d} cloned_fns={d} cloned_exprs={d} exprs={d}\n", .{
+            census.groups,     census.generic_groups, census.instantiated_references,
+            census.instances,  census.max_instances,  census.identity_equal_instances,
+            census.cloned_fns, census.cloned_exprs,   census.exprs,
         });
     }
     return pass.census;
@@ -91,6 +95,10 @@ const Pass = struct {
     assumed: std.AutoHashMapUnmanaged(u64, void) = .empty,
     assumed_insts: std.AutoHashMapUnmanaged(u64, void) = .empty,
     pending: std.ArrayList([2]Type.TypeVarId) = .empty,
+    /// Whether comparisons follow procedure identity (`proc_identity.zig`):
+    /// erased callables by their source function type only, and a
+    /// function's own callable set not at all.
+    relaxed: bool = false,
     /// Pairs of equal images to link once their group's instances are made.
     merges: std.ArrayList([2]Type.TypeVarId) = .empty,
 
@@ -218,6 +226,20 @@ const Pass = struct {
         }
         for (classes.items) |entry| self.inst_class.items[entry[0]] = entry[1];
         if (reps.items.len == 0) return;
+        if (diagnostics.isSet(.lambda_solve_stats) and reps.items.len > 1) {
+            self.relaxed = true;
+            defer self.relaxed = false;
+            for (reps.items[1..], 1..) |later, later_index| {
+                for (reps.items[0..later_index]) |earlier| {
+                    const merges_before = self.merges.items.len;
+                    defer self.merges.shrinkRetainingCapacity(merges_before);
+                    if (try self.instancesEqual(earlier, later)) {
+                        self.census.identity_equal_instances += 1;
+                        break;
+                    }
+                }
+            }
+        }
         self.census.instances += reps.items.len;
         self.census.max_instances = @max(self.census.max_instances, reps.items.len);
 
@@ -260,7 +282,9 @@ const Pass = struct {
         self.assumed.clearRetainingCapacity();
         self.assumed_insts.clearRetainingCapacity();
         self.pending.clearRetainingCapacity();
-        if (!try self.pushInstPair(rep, other)) return false;
+        if (self.relaxed) {
+            if (!try self.pushIdentityRoots(rep, other)) return false;
+        } else if (!try self.pushInstPair(rep, other)) return false;
         while (self.pending.pop()) |pair| {
             const a = self.types().rootCompressed(pair[0]);
             const b = self.types().rootCompressed(pair[1]);
@@ -292,6 +316,43 @@ const Pass = struct {
         const images_b = poly_.instImages(b);
         for (roots) |position| try self.pending.append(self.allocator, .{ images_a[position], images_b[position] });
         return true;
+    }
+
+    /// The parts of two instantiations' function types a procedure identity
+    /// renders: arguments, results and the function's own captures, not its
+    /// own callable set.
+    fn pushIdentityRoots(self: *Pass, a: Type.InstId, b: Type.InstId) Allocator.Error!bool {
+        const poly_ = self.poly();
+        const row = poly_.instantiations.items[@backingInt(a)];
+        const scheme = poly_.schemes.items[row.group];
+        const fns = self.program.binding_groups.group(row.group);
+        const roots = poly_.fn_roots.items[scheme.fn_roots_start..][0..fns.len];
+        const store = self.types();
+        for (fns, roots) |fn_id, position| {
+            const left = store.rootContent(poly_.instImages(a)[position]).func;
+            const right = store.rootContent(poly_.instImages(b)[position]).func;
+            if (!try self.pushSpanPairs(left.args, right.args)) return false;
+            try self.pending.append(self.allocator, .{ left.ret, right.ret });
+            const symbol = self.program.lifted.getFn(fn_id).symbol;
+            const left_captures = self.ownCaptures(left.callable, symbol) orelse return false;
+            const right_captures = self.ownCaptures(right.callable, symbol) orelse return false;
+            if (left_captures.count() != right_captures.count()) return false;
+            for (0..left_captures.count()) |index| {
+                try self.pending.append(self.allocator, .{ store.captureItem(left_captures, index).ty, store.captureItem(right_captures, index).ty });
+            }
+        }
+        return true;
+    }
+
+    fn ownCaptures(self: *Pass, callable: Type.TypeVarId, symbol: Common.Symbol) ?Type.Span {
+        const store = self.types();
+        const content = store.rootContent(callable);
+        const members = if (content == .lambda_set) content.lambda_set else if (content == .erased) content.erased.members else return null;
+        for (0..members.count()) |index| {
+            const member = store.memberItem(members, index);
+            if (member.lambda == symbol) return member.captures;
+        }
+        return null;
     }
 
     fn classOf(self: *Pass, inst: Type.InstId) u32 {
@@ -377,6 +438,7 @@ const Pass = struct {
             .erased => |erased| {
                 const other = right.erased;
                 if (!std.mem.eql(u8, &erased.source_fn_ty.bytes, &other.source_fn_ty.bytes)) return false;
+                if (self.relaxed) return true;
                 if ((erased.abi_fn == null) != (other.abi_fn == null)) return false;
                 if (erased.abi_fn) |abi_fn| try self.pending.append(self.allocator, .{ abi_fn, other.abi_fn.? });
                 return try self.membersMatch(erased.members, other.members);
