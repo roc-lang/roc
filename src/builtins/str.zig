@@ -20,6 +20,7 @@ const mem = std.mem;
 const unicode = std.unicode;
 const testing = std.testing;
 const rcNone = @import("utils.zig").rcNone;
+const utf8 = @import("utf8.zig");
 
 const InPlace = enum(u8) {
     InPlace,
@@ -2057,193 +2058,14 @@ fn fromValidUtf8List(list: RocList, update_mode: UpdateMode, roc_ops: *RocOps) R
     return RocStr.fromSubListUnsafe(list, 0, list.len(), update_mode, roc_ops);
 }
 
-/// The first ill-formed sequence in a byte slice: where it starts, and why it
-/// is ill-formed.
-pub const Utf8Error = struct {
-    index: usize,
-    problem: Utf8ByteProblem,
-};
+pub const Utf8ByteProblem = utf8.Utf8ByteProblem;
+pub const Utf8Error = utf8.Utf8Error;
 
-/// Returns null when `bytes` is well-formed UTF-8 (Unicode Table 3-7), and
-/// otherwise the start index and problem of its first ill-formed sequence.
-///
-/// The problem is decided in this order. A lead byte that is neither ASCII nor
-/// C0-F7 is `InvalidStartByte`. The lead byte announces the sequence length
-/// (C0-DF: 2, E0-EF: 3, F0-F7: 4); a sequence running past the end of the input
-/// is `UnexpectedEndOfSequence`, whatever its available bytes are. A byte
-/// outside 80-BF after the lead byte is `ExpectedContinuation`. Otherwise the
-/// lead and second byte decide `OverlongEncoding` (C0, C1, E0 below A0, F0 below
-/// 90), `EncodesSurrogateHalf` (ED from A0), or `CodepointTooLarge` (F4 from 90,
-/// F5-F7).
-///
-/// Valid input is checked in one pass without decoding: ASCII runs in 32- and
-/// 16-byte blocks, everything else through a shift-based DFA that costs one
-/// table load and one shift per byte. Only an error reruns the DFA, from the
-/// start of the sequence containing it, to find where that sequence begins.
+/// The first ill-formed UTF-8 sequence in `bytes`, or null for well-formed
+/// UTF-8 (see `utf8.validate`).
 pub fn validateUtf8(bytes: []const u8) ?Utf8Error {
-    const n = bytes.len;
-    var i: usize = 0;
-    var state: u64 = utf8_dfa_accept;
-    while (n - i >= 16) {
-        if (state & utf8_dfa_state_mask == utf8_dfa_accept) {
-            while (n - i >= 32 and isAsciiBlock(32, bytes[i..][0..32])) i += 32;
-            if (n - i < 16) break;
-            if (isAsciiBlock(16, bytes[i..][0..16])) {
-                i += 16;
-                continue;
-            }
-        }
-        const chunk_state = state;
-        inline for (0..16) |k| state = utf8DfaStep(state, bytes[i + k]);
-        if (state & utf8_dfa_state_mask == utf8_dfa_reject) return utf8ErrorFrom(bytes, i, chunk_state);
-        i += 16;
-    }
-    if (state & utf8_dfa_state_mask == utf8_dfa_accept and isAsciiTail(bytes, i)) return null;
-    const tail_state = state;
-    const tail_start = i;
-    while (i < n) : (i += 1) state = utf8DfaStep(state, bytes[i]);
-    if (state & utf8_dfa_state_mask != utf8_dfa_accept) return utf8ErrorFrom(bytes, tail_start, tail_state);
-    return null;
+    return utf8.validate(bytes);
 }
-
-/// Whether a block of `len` bytes is all ASCII, using generic vector operations
-/// so the builtin bitcode stays target-independent.
-inline fn isAsciiBlock(comptime len: comptime_int, block: *const [len]u8) bool {
-    const Vec = @Vector(16, u8);
-    var any: Vec = block[0..16].*;
-    inline for (1..len / 16) |k| any |= block[k * 16 ..][0..16].*;
-    return @as(u128, @bitCast(any)) & 0x80808080_80808080_80808080_80808080 == 0;
-}
-
-/// Whether `bytes[start..]`, fewer than 16 bytes, is all ASCII. Reads may
-/// overlap bytes before `start`, which are already known to be valid.
-inline fn isAsciiTail(bytes: []const u8, start: usize) bool {
-    const n = bytes.len;
-    const rem = n - start;
-    std.debug.assert(rem < 16);
-    if (rem == 0) return true;
-    if (n >= 16) return isAsciiBlock(16, bytes[n - 16 ..][0..16]);
-    if (n >= 8) {
-        var word = mem.readInt(u64, bytes[n - 8 ..][0..8], .little);
-        if (rem > 8) word |= mem.readInt(u64, bytes[start..][0..8], .little);
-        return word & 0x80808080_80808080 == 0;
-    }
-    if (n >= 4) {
-        var word = mem.readInt(u32, bytes[n - 4 ..][0..4], .little);
-        if (rem > 4) word |= mem.readInt(u32, bytes[start..][0..4], .little);
-        return word & 0x80808080 == 0;
-    }
-    for (bytes[start..]) |byte| {
-        if (byte >= 0x80) return false;
-    }
-    return true;
-}
-
-/// Finds the first ill-formed sequence, given that the DFA rejected or ended
-/// mid-sequence somewhere at or after `chunk_start`, and was in `chunk_state`
-/// there. Everything before `chunk_start` is well-formed, except a sequence
-/// that `chunk_state` says is still in progress.
-noinline fn utf8ErrorFrom(bytes: []const u8, chunk_start: usize, chunk_state: u64) Utf8Error {
-    var i = chunk_start;
-    if (chunk_state & utf8_dfa_state_mask != utf8_dfa_accept) {
-        // Back up over the in-progress sequence's continuation bytes to its lead byte.
-        while (isUtf8Continuation(bytes[i - 1])) i -= 1;
-        i -= 1;
-    }
-    var state: u64 = utf8_dfa_accept;
-    var sequence_start = i;
-    while (i < bytes.len) : (i += 1) {
-        if (state & utf8_dfa_state_mask == utf8_dfa_accept) sequence_start = i;
-        state = utf8DfaStep(state, bytes[i]);
-        if (state & utf8_dfa_state_mask == utf8_dfa_reject) break;
-    }
-    return .{ .index = sequence_start, .problem = utf8Problem(bytes, sequence_start) };
-}
-
-/// The problem of the ill-formed sequence starting at `start`, in the order
-/// `validateUtf8` documents.
-fn utf8Problem(bytes: []const u8, start: usize) Utf8ByteProblem {
-    const lead = bytes[start];
-    const len: usize = switch (lead) {
-        0xC0...0xDF => 2,
-        0xE0...0xEF => 3,
-        0xF0...0xF7 => 4,
-        else => return .InvalidStartByte,
-    };
-    if (bytes.len - start < len) return .UnexpectedEndOfSequence;
-    for (bytes[start + 1 .. start + len]) |byte| {
-        if (!isUtf8Continuation(byte)) return .ExpectedContinuation;
-    }
-    return switch (lead) {
-        0xC0, 0xC1, 0xE0, 0xF0 => .OverlongEncoding,
-        0xED => .EncodesSurrogateHalf,
-        0xF4...0xF7 => .CodepointTooLarge,
-        else => unreachable, // only lead bytes C0, C1, E0, ED and F0-F7 start complete all-continuation sequences that are ill-formed
-    };
-}
-
-// Shift-based UTF-8 DFA. State `s` is stored as the bit offset `s * 6`, and the
-// row for a byte packs, in bits `s * 6 .. s * 6 + 5`, the next state's offset.
-// One step is `row[byte] >> state`; only the low 6 bits of a state are
-// meaningful. States follow Unicode Table 3-7:
-//   0 accept, 1 reject (absorbing), 2 one continuation byte left,
-//   3 two continuation bytes left, 4 after E0 (needs A0-BF), 5 after ED
-//   (needs 80-9F), 6 after F0 (needs 90-BF), 7 after F1-F3 (needs 80-BF, then
-//   two more), 8 after F4 (needs 80-8F).
-const utf8_dfa_state_mask: u64 = 63;
-const utf8_dfa_accept: u64 = 0 * 6;
-const utf8_dfa_reject: u64 = 1 * 6;
-
-/// Packs the next state for each current state 0-8.
-fn utf8DfaRow(comptime next: [9]u64) u64 {
-    var row: u64 = 0;
-    for (next, 0..) |next_state, state| row |= (next_state * 6) << (state * 6);
-    return row;
-}
-
-const utf8_dfa_row_ascii = utf8DfaRow(.{ 0, 1, 1, 1, 1, 1, 1, 1, 1 });
-const utf8_dfa_row_cont_80_8f = utf8DfaRow(.{ 1, 1, 0, 2, 1, 2, 1, 3, 3 });
-const utf8_dfa_row_cont_90_9f = utf8DfaRow(.{ 1, 1, 0, 2, 1, 2, 3, 3, 1 });
-const utf8_dfa_row_cont_a0_bf = utf8DfaRow(.{ 1, 1, 0, 2, 2, 1, 3, 3, 1 });
-const utf8_dfa_row_invalid = utf8DfaRow(.{ 1, 1, 1, 1, 1, 1, 1, 1, 1 });
-const utf8_dfa_row_lead_2 = utf8DfaRow(.{ 2, 1, 1, 1, 1, 1, 1, 1, 1 });
-const utf8_dfa_row_lead_e0 = utf8DfaRow(.{ 4, 1, 1, 1, 1, 1, 1, 1, 1 });
-const utf8_dfa_row_lead_3 = utf8DfaRow(.{ 3, 1, 1, 1, 1, 1, 1, 1, 1 });
-const utf8_dfa_row_lead_ed = utf8DfaRow(.{ 5, 1, 1, 1, 1, 1, 1, 1, 1 });
-const utf8_dfa_row_lead_f0 = utf8DfaRow(.{ 6, 1, 1, 1, 1, 1, 1, 1, 1 });
-const utf8_dfa_row_lead_4 = utf8DfaRow(.{ 7, 1, 1, 1, 1, 1, 1, 1, 1 });
-const utf8_dfa_row_lead_f4 = utf8DfaRow(.{ 8, 1, 1, 1, 1, 1, 1, 1, 1 });
-
-const utf8_dfa_rows: [256]u64 =
-    @as([0x80]u64, @splat(utf8_dfa_row_ascii)) ++ // 00-7F
-    @as([0x10]u64, @splat(utf8_dfa_row_cont_80_8f)) ++ // 80-8F
-    @as([0x10]u64, @splat(utf8_dfa_row_cont_90_9f)) ++ // 90-9F
-    @as([0x20]u64, @splat(utf8_dfa_row_cont_a0_bf)) ++ // A0-BF
-    @as([0x02]u64, @splat(utf8_dfa_row_invalid)) ++ // C0-C1
-    @as([0x1E]u64, @splat(utf8_dfa_row_lead_2)) ++ // C2-DF
-    @as([0x01]u64, @splat(utf8_dfa_row_lead_e0)) ++ // E0
-    @as([0x0C]u64, @splat(utf8_dfa_row_lead_3)) ++ // E1-EC
-    @as([0x01]u64, @splat(utf8_dfa_row_lead_ed)) ++ // ED
-    @as([0x02]u64, @splat(utf8_dfa_row_lead_3)) ++ // EE-EF
-    @as([0x01]u64, @splat(utf8_dfa_row_lead_f0)) ++ // F0
-    @as([0x03]u64, @splat(utf8_dfa_row_lead_4)) ++ // F1-F3
-    @as([0x01]u64, @splat(utf8_dfa_row_lead_f4)) ++ // F4
-    @as([0x0B]u64, @splat(utf8_dfa_row_invalid)); // F5-FF
-
-inline fn utf8DfaStep(state: u64, byte: u8) u64 {
-    return utf8_dfa_rows[byte] >> @as(u6, @truncate(state));
-}
-
-/// Return types for validateUtf8Bytes
-/// Values must be in alphabetical order. That is, lowest values are the first alphabetically.
-pub const Utf8ByteProblem = enum(u8) {
-    CodepointTooLarge = 0,
-    EncodesSurrogateHalf = 1,
-    ExpectedContinuation = 2,
-    InvalidStartByte = 3,
-    OverlongEncoding = 4,
-    UnexpectedEndOfSequence = 5,
-};
 
 /// TODO
 pub fn validateUtf8Bytes(
@@ -4757,42 +4579,6 @@ test "fromUtf8: error index and problem match the byte-range specification" {
     }
 
     try testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
-}
-
-/// Unicode Table 3-7 as transitions between the states `utf8_dfa_rows` uses.
-fn table37NextState(state: u64, byte: u8) u64 {
-    return switch (state) {
-        1 => 1,
-        0 => switch (byte) {
-            0x00...0x7F => 0,
-            0xC2...0xDF => 2,
-            0xE0 => 4,
-            0xE1...0xEC, 0xEE...0xEF => 3,
-            0xED => 5,
-            0xF0 => 6,
-            0xF1...0xF3 => 7,
-            0xF4 => 8,
-            else => 1,
-        },
-        2 => if (byte >= 0x80 and byte <= 0xBF) 0 else 1,
-        3 => if (byte >= 0x80 and byte <= 0xBF) 2 else 1,
-        4 => if (byte >= 0xA0 and byte <= 0xBF) 2 else 1,
-        5 => if (byte >= 0x80 and byte <= 0x9F) 2 else 1,
-        6 => if (byte >= 0x90 and byte <= 0xBF) 3 else 1,
-        7 => if (byte >= 0x80 and byte <= 0xBF) 3 else 1,
-        8 => if (byte >= 0x80 and byte <= 0x8F) 3 else 1,
-        else => unreachable, // the DFA has states 0 through 8
-    };
-}
-
-test "validateUtf8: DFA rows encode Unicode Table 3-7 for every byte and state" {
-    for (0..256) |byte| {
-        for (0..9) |state| {
-            const next = (utf8_dfa_rows[byte] >> @intCast(state * 6)) & utf8_dfa_state_mask;
-            try testing.expectEqual(table37NextState(state, @intCast(byte)) * 6, next);
-            try testing.expectEqual(next, utf8DfaStep(state * 6, @intCast(byte)) & utf8_dfa_state_mask);
-        }
-    }
 }
 
 /// Writes `len` bytes of well-formed text to `out`: ASCII, or a cycle of 2-, 3-

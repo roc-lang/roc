@@ -75,6 +75,11 @@ pub const LinkedBuiltins = struct {
     /// name). The 64-bit builtin payload links the compression function built
     /// for them.
     sha256_rounds: builtins.sha256.Rounds,
+    /// The UTF-8 validation kernel the target's CPU features select
+    /// (`builtins.utf8.Kernel.forCpu` of the CPU that `cpu` and `features`
+    /// name). The 64-bit builtin payload links the validation function built
+    /// for it.
+    utf8_kernel: builtins.utf8.Kernel,
     /// Link the stack-checked builtins, for a wasm platform that reserves low
     /// memory (`builtins.stack_guard`).
     stack_checked: bool = false,
@@ -315,6 +320,9 @@ const llvm_embedded = if (llvm_available) @import("llvm_embedded") else struct {
     pub const sha256_portable_bc: []const u8 = "";
     pub const sha256_x86_sha_bc: []const u8 = "";
     pub const sha256_aarch64_sha2_bc: []const u8 = "";
+    pub const utf8_dfa_bc: []const u8 = "";
+    pub const utf8_x86_ssse3_bc: []const u8 = "";
+    pub const utf8_aarch64_neon_bc: []const u8 = "";
     pub const PrivateRuntime = struct { target: target.RocTarget, bitcode: []const u8 };
     pub const private_runtimes = [_]PrivateRuntime{};
 };
@@ -364,6 +372,21 @@ fn selectSha256RoundsBitcode(ptr_width: u16, rounds: builtins.sha256.Rounds) ?[]
             .portable => llvm_embedded.sha256_portable_bc,
             .x86_sha => llvm_embedded.sha256_x86_sha_bc,
             .aarch64_sha2 => llvm_embedded.sha256_aarch64_sha2_bc,
+        },
+        else => null,
+    };
+}
+
+/// The payload defining the 64-bit builtin bitcode's UTF-8 validation for
+/// `kernel`. The 32-bit payload carries its DFA inline: it serves wasm32
+/// together with targets without a 16-lane byte table lookup.
+fn selectUtf8KernelBitcode(ptr_width: u16, kernel: builtins.utf8.Kernel) ?[]const u8 {
+    return switch (ptr_width) {
+        64 => switch (kernel) {
+            .dfa => llvm_embedded.utf8_dfa_bc,
+            .x86_ssse3 => llvm_embedded.utf8_x86_ssse3_bc,
+            .aarch64_neon => llvm_embedded.utf8_aarch64_neon_bc,
+            .wasm_simd128 => unreachable, // no 64-bit target has the wasm instruction set
         },
         else => null,
     };
@@ -702,6 +725,22 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
                 // and merges with the rest of the builtins.
                 if (externs.LLVMLinkModules2(builtins_module, rounds_module) != 0) {
                     std.log.err("Failed to link SHA-256 rounds bitcode into builtin bitcode", .{});
+                    return false;
+                }
+            }
+            if (selectUtf8KernelBitcode(config.target.ptrBitWidth(), linked_builtins.utf8_kernel)) |kernel_bc| {
+                const kernel_buf = externs.LLVMCreateMemoryBufferWithMemoryRangeCopy(kernel_bc.ptr, kernel_bc.len, "roc-utf8-kernel-bc");
+                var kernel_module: ?*anyopaque = null;
+                if (externs.LLVMParseBitcode2(kernel_buf, &kernel_module) != 0) {
+                    std.log.err("Failed to parse UTF-8 kernel bitcode", .{});
+                    return false;
+                }
+                externs.LLVMSetTarget(kernel_module, target_triple_z.ptr);
+                externs.LLVMSetDataLayout(kernel_module, externs.LLVMGetDataLayoutStr(module));
+                // Linking destroys kernel_module; its definition then prunes
+                // and merges with the rest of the builtins.
+                if (externs.LLVMLinkModules2(builtins_module, kernel_module) != 0) {
+                    std.log.err("Failed to link UTF-8 kernel bitcode into builtin bitcode", .{});
                     return false;
                 }
             }

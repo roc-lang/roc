@@ -85,6 +85,7 @@ pub const std_options_debug_threaded_io: *std.Io.Threaded = &debug_threaded_io_i
 const build_options = @import("build_options");
 const shim_symbols = @import("builtins").shim_symbols;
 const Sha256Rounds = @import("builtins").sha256.Rounds;
+const Utf8Kernel = @import("builtins").utf8.Kernel;
 const base = @import("base");
 const collections = @import("collections");
 const dev_diagnostics = base.dev_diagnostics;
@@ -9750,6 +9751,30 @@ test "LLVM builds link the SHA-256 rounds each target's CPU features select" {
     }
 }
 
+test "LLVM builds link the UTF-8 validation kernel each target's CPU features select" {
+    const expected = [_]struct { RocTarget, Utf8Kernel }{
+        // x86-64-v3 includes SSSE3; the psABI v1 level stops at SSE2.
+        .{ .x64musl, .x86_ssse3 },
+        .{ .x64glibc, .x86_ssse3 },
+        .{ .x64mac, .x86_ssse3 },
+        .{ .x64win, .x86_ssse3 },
+        .{ .x64v1musl, .dfa },
+        .{ .x64v1win, .dfa },
+        // NEON is part of Armv8.0-A, so both aarch64 levels have it.
+        .{ .arm64musl, .aarch64_neon },
+        .{ .arm64mac, .aarch64_neon },
+        .{ .arm64win, .aarch64_neon },
+        .{ .arm64v1musl, .aarch64_neon },
+        .{ .arm32musl, .dfa },
+        .{ .wasm32, .wasm_simd128 },
+        .{ .wasm32v1, .dfa },
+    };
+    for (expected) |entry| {
+        const std_target = try std.zig.system.resolveTargetQuery(std.Options.debug_io, entry[0].llvmTargetQuery());
+        try std.testing.expectEqual(entry[1], Utf8Kernel.forCpu(std_target.cpu));
+    }
+}
+
 fn compileLlvmAppObject(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
@@ -9861,6 +9886,7 @@ fn compileLlvmAppObject(
             // through extern symbols, never through a RocOps parameter.
             .host_call_extern = true,
             .sha256_rounds = Sha256Rounds.forCpu(std_target.cpu),
+            .utf8_kernel = Utf8Kernel.forCpu(std_target.cpu),
             .stack_checked = stack_checks,
         },
         .pic = true,
