@@ -25737,10 +25737,12 @@ an outcome span, so `xs.set(i, v) ?? xs` in an app would retain `xs` for the
 failure path and `List.set` would copy it on every call. Every exported
 worker (`LIR.LirProcSpec.exported`: the template, integer list, lambda,
 dictionary-entry and default workers a module unit defines for other
-objects, of which the erased-ABI dictionary entries are pinned) whose
-signature nothing pins and whose solved capability is nonempty therefore
+objects, of which the erased-ABI dictionary entries are pinned) is an
+outcome publisher (`LIR.LirProcSpec.outcome_publisher`), and a publisher
+whose signature nothing pins and whose solved capability is nonempty
 publishes its outcome-restitution variant
-(`Solution.publishesOutcomeVariant`). ARC reserves that variant before any
+(`Solution.publishesOutcomeVariant`). ARC reserves an exported worker's
+variant before any
 planning, with exactly the worker's base signature and its complete
 capability as its demand, so the module always emits it, whether or not any
 call demands it; marks it exported, so its symbol is global and it is a root
@@ -25767,6 +25769,15 @@ other variant of an external procedure can be demanded. A Debug compiler
 asserts that the identity the demand names is among the imported records.
 The owned field-take variant and every optional variant stay within their
 callee's unit.
+
+A program `.boxy` lowers whole (the interpreter paths, tests, compile-time
+evaluation's own program, and a dev run lowered as one program) keeps the
+same boundary: it marks every worker of a kind a module unit exports as an
+outcome publisher, so a call from another module's unit may demand that
+worker's outcome variant exactly as it could of the module's object. Nothing
+in such a program is exported, so the variant is emitted only when a call
+demands it; a program and the per-module objects of the same sources select
+the same calling conventions.
 
 A complete outcome table whose restitution masks are all zero declares no
 additional ownership convention. The solver commits an empty capability for

@@ -1989,6 +1989,13 @@ pub const LirProcSpec = struct {
     /// A procedure this object defines for other objects of the link: its
     /// symbol has global binding and it is a root of reachability and ARC.
     exported: bool = false,
+    /// Set by `.boxy` lowering on a worker another module's object may call:
+    /// an exported worker of a module unit, or a program's worker of the
+    /// kinds a module unit exports. A call from any emission unit may demand
+    /// its outcome-restitution variant (design.md "Outcome-Conditioned
+    /// Argument Restitution", published outcome variants), and an exported
+    /// one's object always emits and exports that variant.
+    outcome_publisher: bool = false,
     /// Exact self-tail sites produced by LIR construction, consumed by TRMC/TCE.
     tail_calls: OptionalTailCalls = .none,
     /// Set by the tail-drive pass on an erased-callable procedure with an

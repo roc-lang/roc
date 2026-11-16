@@ -4546,6 +4546,16 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     }
 
     if (input.timing) |timing| step_started = timing.lap(step_started, .requests);
+    // A program's worker of a kind a module unit exports publishes its
+    // outcome variant as that unit's export does, so a call from another
+    // module may demand it here exactly as it may of the module's object
+    // (design.md "Outcome-Conditioned Argument Restitution").
+    if (program.moduleUnit() == null) {
+        for (program.workers.items) |worker| {
+            if (!Program.exportableKind(worker.key)) continue;
+            program.result.store.getProcSpecPtr(worker.proc).outcome_publisher = true;
+        }
+    }
     if (program.moduleUnit() != null and !input.compile_time) {
         for (program.workers.items) |worker| {
             if (worker.imported or !program.result.store.getProcSpec(worker.proc).exported) continue;
@@ -4654,7 +4664,9 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
     try program.drain();
     for (program.workers.items) |worker| {
         if (worker.imported or !Program.exportableKind(worker.key)) continue;
-        program.result.store.getProcSpecPtr(worker.proc).exported = true;
+        const spec = program.result.store.getProcSpecPtr(worker.proc);
+        spec.exported = true;
+        spec.outcome_publisher = true;
         try program.result.exported_procs.append(program.allocator, worker.proc);
     }
 }

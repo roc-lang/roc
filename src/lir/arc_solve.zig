@@ -568,16 +568,17 @@ pub const Solution = struct {
         return self.availableOutcomeSpanOf(callee);
     }
 
-    /// Whether `proc`'s object always emits its outcome-restitution variant
-    /// and publishes it, so that a call from any emission unit may demand it
-    /// (design.md "Outcome-Conditioned Argument Restitution"): an exported
-    /// worker this program emits whose solved capability is nonempty and
-    /// whose signature nothing pins, or an external procedure whose object
-    /// published one (`LIR.LirProcSpec.rc_outcomes`).
+    /// Whether a call from any emission unit may demand `proc`'s
+    /// outcome-restitution variant (design.md "Outcome-Conditioned Argument
+    /// Restitution", published outcome variants): a publishing worker
+    /// (`LIR.LirProcSpec.outcome_publisher`) this program emits whose solved
+    /// capability is nonempty and whose signature nothing pins, or an
+    /// external procedure whose object published one
+    /// (`LIR.LirProcSpec.rc_outcomes`).
     pub fn publishesOutcomeVariant(self: *const Solution, store: *const LirStore, proc: LIR.LirProcSpecId) bool {
         if (self.availableOutcomeSpanOf(proc).isEmpty()) return false;
         const spec = store.getProcSpec(proc);
-        return spec.external or (spec.exported and !self.isPinnedProc(proc));
+        return spec.external or (spec.outcome_publisher and !self.isPinnedProc(proc));
     }
 
     pub fn availableOutcomeSpanOf(self: *const Solution, proc: LIR.LirProcSpecId) arc_sig.OutcomeSpan {

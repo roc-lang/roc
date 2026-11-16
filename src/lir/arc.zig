@@ -823,9 +823,9 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     return .{ .deferred_erased_calls = deferred_erased_calls };
 }
 
-/// Queue the outcome-restitution variant of every procedure this program
-/// publishes one for (`Solution.publishesOutcomeVariant`), whether or not a
-/// call here demands it, export it, and record its outcome table on the
+/// Queue the outcome-restitution variant of every exported procedure that
+/// publishes one (`Solution.publishesOutcomeVariant`), whether or not a call
+/// here demands it, export it, and record its outcome table on the
 /// procedure for the export interface (design.md "Outcome-Conditioned
 /// Argument Restitution"). The variant's demand is exactly the base
 /// signature with the complete capability, which is what a call from
@@ -835,7 +835,8 @@ fn publishOutcomeVariants(store: *LirStore, solution: *const arc_solve.Solution,
     defer words.deinit(store.allocator);
     for (0..base_proc_count) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        if (store.getProcSpecImmediate(proc).external) continue;
+        const spec = store.getProcSpecImmediate(proc);
+        if (!spec.exported or spec.external) continue;
         if (!solution.publishesOutcomeVariant(store, proc)) continue;
         var demanded = solution.sigOf(proc);
         demanded.outcomes = solution.availableOutcomeSpanOf(proc);
@@ -15519,16 +15520,19 @@ test "RC emission units: a call demands an outcome-restitution variant within it
     // the outcome variant and hands the list over without a retain. A caller
     // in another module's unit, or any caller of an isolated callee, adapts to
     // the callee's base signature and retains the list across the call, so
-    // the mutation sees it shared, unless the callee is an exported worker:
-    // its object always emits and exports its outcome variant (design.md
-    // "Outcome-Conditioned Argument Restitution"), whether or not a call
-    // demands it, and a call from any unit may demand exactly that variant
-    // and no other, even with optional mode specialization on and a unique
-    // dying argument a same-unit call would seed.
+    // the mutation sees it shared, unless the callee publishes its outcome
+    // variant (design.md "Outcome-Conditioned Argument Restitution"): a call
+    // from any unit may demand exactly that variant and no other, even with
+    // optional mode specialization on and a unique dying argument a
+    // same-unit call would seed. An exported worker's object always emits
+    // and exports the variant, whether or not a call demands it; a program's
+    // publishing worker that is not exported gets it only on demand.
     const Case = struct {
         caller: LIR.EmissionUnit,
         callee: LIR.EmissionUnit,
         exported: bool = false,
+        /// A program's worker of a kind a module unit exports.
+        publisher: bool = false,
         reads_on_failure: bool = true,
         specialize: bool = false,
         variants: usize,
@@ -15543,6 +15547,8 @@ test "RC emission units: a call demands an outcome-restitution variant within it
         .{ .caller = .isolated, .callee = LIR.EmissionUnit.module(0), .exported = true, .variants = 1, .retains = false },
         .{ .caller = LIR.EmissionUnit.module(1), .callee = LIR.EmissionUnit.module(0), .exported = true, .specialize = true, .variants = 1, .retains = false },
         .{ .caller = LIR.EmissionUnit.module(1), .callee = LIR.EmissionUnit.module(0), .exported = true, .reads_on_failure = false, .variants = 1, .retains = false },
+        .{ .caller = LIR.EmissionUnit.module(1), .callee = LIR.EmissionUnit.module(0), .publisher = true, .variants = 1, .retains = false },
+        .{ .caller = LIR.EmissionUnit.module(1), .callee = LIR.EmissionUnit.module(0), .publisher = true, .reads_on_failure = false, .variants = 0, .retains = false },
     };
     for (cases) |case| {
         var f = try ArcTest.init(testing.allocator);
@@ -15557,6 +15563,7 @@ test "RC emission units: a call demands an outcome-restitution variant within it
         _ = try addFailureReadingCaller(&f, .{ .callee = callee, .result_layout = try_list, .input = input, .reads_on_failure = case.reads_on_failure, .unit = case.caller });
         f.store.getProcSpecPtr(callee).emission_unit = case.callee;
         f.store.getProcSpecPtr(callee).exported = case.exported;
+        f.store.getProcSpecPtr(callee).outcome_publisher = case.exported or case.publisher;
 
         const base_proc_count = f.store.procSpecCount();
         _ = try insert(&f.store, &f.layouts, .{ .specialize = case.specialize });
@@ -15715,6 +15722,7 @@ test "RC published outcome variant: a failure join reached after a retained subl
     const worker = try f.addProc(&.{bytes}, body, try_list);
     f.store.getProcSpecPtr(worker).emission_unit = LIR.EmissionUnit.module(0);
     f.store.getProcSpecPtr(worker).exported = true;
+    f.store.getProcSpecPtr(worker).outcome_publisher = true;
 
     const base_proc_count = f.store.procSpecCount();
     _ = try insert(&f.store, &f.layouts, .{ .specialize = false });
