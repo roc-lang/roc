@@ -654,14 +654,15 @@ pub fn cloneForBodyShard(self: *const Self, allocator: Allocator) Allocator.Erro
     result.runtime_contract = self.runtime_contract;
     result.body_prefix = self.captureBodyPrefix();
     result.next_synthetic_symbol = self.next_synthetic_symbol;
+    result.body_symbol_base = self.next_synthetic_symbol;
     return result;
 }
 
 /// Captures the suffix added since `prefix`.
 pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!BodyShard {
-    if (self.body_coordinator) |coordinator| {
+    if (self.body_coordinator != null) {
         if (!std.meta.eql(prefix, self.body_prefix)) return error.InvalidBodyPrefix;
-        if (self.next_synthetic_symbol != coordinator.next_synthetic_symbol or
+        if (self.next_synthetic_symbol != self.body_symbol_base or
             self.proc_specs.len() != 0 or
             self.proc_locs.len() != 0 or
             self.proc_debug_names.len() != 0 or
@@ -1037,6 +1038,11 @@ inline_scopes: GuardedList.List(InlineScope, "LirStore.inline_scopes"),
 body_coordinator: ?*const Self,
 /// Logical lengths occupied by `body_coordinator` in a body worker.
 body_prefix: BodyPrefix,
+/// A body worker's synthetic symbol counter when it was cloned: a worker
+/// allocates none, since symbol identities have no body-shard relocation
+/// domain, while its coordinator may allocate them before the worker's
+/// suffix is appended.
+body_symbol_base: u64 = 0,
 /// Private mutable prefix rows for an opt-in procedure rewrite.
 proc_rewrite: ?ProcRewrite = null,
 /// Source location per proc, parallel to `proc_specs`.
@@ -2589,6 +2595,19 @@ test "body shard rejects generated symbol identities" {
     // boundary; symbol identities have no body-shard relocation domain.
     worker.next_synthetic_symbol += 1;
     try std.testing.expectError(error.UnsupportedShardMetadata, worker.captureBodyShard(prefix));
+}
+
+test "body shard appends after its coordinator allocated a symbol" {
+    var coordinator = Self.init(std.testing.allocator);
+    defer coordinator.deinit();
+    const local = try coordinator.addLocal(.{ .layout_idx = .zst });
+    var worker = try coordinator.cloneForBodyShard(std.testing.allocator);
+    defer worker.deinit();
+    const prefix = worker.captureBodyPrefix();
+    const root = try worker.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+    _ = coordinator.freshSyntheticSymbol();
+    const appended = try coordinator.appendBodyShard(try worker.captureBodyShard(prefix), root, .empty(), null);
+    try std.testing.expect(coordinator.getCFStmtImmediate(appended.root.?).* == .ret);
 }
 
 test "body shard relocates nonzero local and body suffixes" {

@@ -894,13 +894,13 @@ pub const SyntaxChecker = struct {
             cwd,
             self.std_io,
             builtin_modules,
+            // A check has no runtime consumer.
+            .boxy,
         );
         errdefer env.deinit();
         env.compiler_version = build_options.compiler_compatibility_id;
         env.source_pin_version = @import("compiler_version").compiler_version;
         env.setFinalizeExecutableArtifacts(false);
-        // A check has no runtime consumer.
-        env.setSpecializationStrategy(.boxy);
 
         if (self.cache_config.enabled) {
             const cache_manager = try self.allocator.create(CacheManager);

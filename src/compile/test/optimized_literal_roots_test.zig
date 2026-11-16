@@ -90,6 +90,7 @@ test "an optimized runtime program reads a generic function's custom literal con
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(allocator, allocator, io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;

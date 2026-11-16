@@ -1149,10 +1149,13 @@ fn runTests(
     logDebug("Success Rate: {d:.0}%\n", .{stats.successRate()});
     logDebug("Duration: {}ms\n", .{stats.durationMs()});
 
+    // A failing run names each failed case and its message without
+    // `--verbose`, so a failure in CI or a build step can be diagnosed from
+    // its output alone.
     if (stats.failed > 0) {
-        logDebug("\n=== Failures ===\n", .{});
+        std.debug.print("\n=== Playground Failures ({d}/{d}) ===\n", .{ stats.failed, stats.total });
         for (failures.items) |failure| {
-            logDebug("- {s}: {s}\n", .{ failure.case_name, failure.message });
+            std.debug.print("- {s}: {s}\n", .{ failure.case_name, failure.message });
         }
     }
 

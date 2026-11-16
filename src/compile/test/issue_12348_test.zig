@@ -48,7 +48,7 @@ fn expectBuildErrors(files: []const SourceFile, expected: []const ExpectedError)
     const main_path = try tmp.dir.realPathFileAlloc(io, "main.roc", gpa);
     defer gpa.free(main_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
 
     build_env.build(main_path) catch {};

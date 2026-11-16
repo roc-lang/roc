@@ -418,9 +418,14 @@ pub const Constants = struct {
     /// 195: unary `!` canonicalizes to its own node and checks as a dispatch
     ///      of the operand's `not` method.
     /// 198: combines the 197 entry with the 195 entry above.
-    /// 199: unary `!` canonicalizes to a call to `Bool.not`, combined with the
-    ///      198 entry.
-    pub const CACHE_VERSION = 199;
+    /// 194: procedure templates record whether their scheme holds an
+    ///      uncommitted tag tail and list their signature's closed row nodes,
+    ///      and generalized local scopes record whether their scheme holds an
+    ///      uncommitted tag tail.
+    /// 199: combines the 198 entry with the 194 entry above.
+    /// 200: unary `!` canonicalizes to a call to `Bool.not`, combined with the
+    ///      199 entry above.
+    pub const CACHE_VERSION = 200;
 };
 
 /// Configuration for the Roc cache system.

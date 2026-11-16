@@ -149,13 +149,12 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         return error.BuildEnvInit;
     };
     defer gpa.free(cwd);
-    var build_env = BuildEnv.init(gpa, .single_threaded, 1, RocTarget.detectNative(), cwd, std_io) catch {
+    // `.lss` is the strategy the platform's ABI layouts are lowered under
+    // (`attachAbiLayouts`).
+    var build_env = BuildEnv.init(gpa, .single_threaded, 1, RocTarget.detectNative(), cwd, std_io, .lss) catch {
         return error.BuildEnvInit;
     };
     defer build_env.deinit();
-    // The strategy the platform's ABI layouts are lowered under
-    // (`attachAbiLayouts`).
-    build_env.setSpecializationStrategy(.lss);
     // Glue caches by default like every other pipeline; --no-cache opts out.
     if (!args.no_cache) build_env.enableDefaultCacheManager(false) catch {
         return error.BuildEnvInit;
@@ -408,11 +407,10 @@ fn compileGlueSpec(
 
     const build_env = gpa.create(BuildEnv) catch return error.OutOfMemory;
     errdefer gpa.destroy(build_env);
-    build_env.* = BuildEnv.init(gpa, .single_threaded, 1, RocTarget.detectNative(), glue_cwd, std_io) catch {
+    build_env.* = BuildEnv.init(gpa, .single_threaded, 1, RocTarget.detectNative(), glue_cwd, std_io, specialization_strategy) catch {
         return error.BuildEnvInit;
     };
     errdefer build_env.deinit();
-    build_env.setSpecializationStrategy(specialization_strategy);
     if (!no_cache) build_env.enableDefaultCacheManager(false) catch {
         return error.BuildEnvInit;
     };
@@ -5012,7 +5010,7 @@ test "issue 12760: boundary layout requirements survive memoization and callable
     defer gpa.free(cwd);
     const path = try tmp.dir.realPathFileAlloc(io, "main.roc", gpa);
     defer gpa.free(path);
-    var env = try BuildEnv.init(gpa, .single_threaded, 1, RocTarget.detectNative(), cwd, io);
+    var env = try BuildEnv.init(gpa, .single_threaded, 1, RocTarget.detectNative(), cwd, io, .lss);
     defer env.deinit();
     try env.build(path);
     var diagnostics = std.Io.Writer.Allocating.init(gpa);

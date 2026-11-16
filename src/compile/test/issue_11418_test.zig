@@ -90,6 +90,7 @@ test "issue 11418: shared LIR generation leaves runtime-only procedures to the r
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(allocator, allocator, io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;

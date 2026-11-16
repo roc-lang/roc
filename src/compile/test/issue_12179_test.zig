@@ -46,7 +46,7 @@ test "issue 12179: checking an app with a syntax error reports its own errors, n
     const other_path = try tmp.dir.realPathFileAlloc(io, "other.roc", gpa);
     defer gpa.free(other_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
 
     build_env.buildResolvingMain(other_path, null) catch {};
@@ -151,7 +151,7 @@ test "issue 12179: an app root with a syntax error is still checked past parsing
     const other_path = try tmp.dir.realPathFileAlloc(io, "other.roc", gpa);
     defer gpa.free(other_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
 
     build_env.buildResolvingMain(other_path, null) catch {};
@@ -181,7 +181,7 @@ test "issue 12179: a module is checked when its owning main.roc has a syntax err
     const child_path = try tmp.dir.realPathFileAlloc(io, "Child.roc", gpa);
     defer gpa.free(child_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
 
     build_env.buildResolvingMain(child_path, null) catch {};
@@ -233,7 +233,7 @@ test "issue 12179: checking reads each file discovery parses once" {
     for ([_]Mode{ .single_threaded, .multi_threaded }) |mode| {
         // An app is its own root.
         {
-            var build_env = try BuildEnv.init(gpa, mode, 2, roc_target.RocTarget.detectNative(), cwd, io);
+            var build_env = try BuildEnv.init(gpa, mode, 2, roc_target.RocTarget.detectNative(), cwd, io, .lss);
             defer build_env.deinit();
             var counts = [_]usize{0};
             var counter = ReadCounter{ .base = build_env.filesystem, .paths = &.{app_path}, .counts = &counts };
@@ -245,7 +245,7 @@ test "issue 12179: checking reads each file discovery parses once" {
 
         // A module is an entry below the main.roc that roots its build.
         {
-            var build_env = try BuildEnv.init(gpa, mode, 2, roc_target.RocTarget.detectNative(), cwd, io);
+            var build_env = try BuildEnv.init(gpa, mode, 2, roc_target.RocTarget.detectNative(), cwd, io, .lss);
             defer build_env.deinit();
             var counts = [_]usize{ 0, 0 };
             var counter = ReadCounter{ .base = build_env.filesystem, .paths = &.{ main_path, child_path }, .counts = &counts };

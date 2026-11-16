@@ -32,7 +32,7 @@ fn renderedErrors(gpa: std.mem.Allocator, files: []const SourceFile, entry: []co
     const module_path = try tmp_dir.dir.realPathFileAlloc(io, entry, gpa);
     defer gpa.free(module_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
     try build_env.build(module_path);
 

@@ -79,6 +79,7 @@ fn expectTypeHeaderResult(source: []const u8, expected_title: ?[]const u8) Issue
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
