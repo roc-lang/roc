@@ -130,7 +130,7 @@ const WrapperRole = enum { body, arm, operand };
 /// before backend instruction selection. `List.get` and the byte reads
 /// have this shape with a `Try` on each arm. Every position must qualify
 /// in its role, so positions are checked in any order on a work stack.
-fn isInlineableWrapperBody(allocator: Allocator, program: *const Ast.Program, root: Ast.ExprId) Allocator.Error!bool {
+pub fn isInlineableWrapperBody(allocator: Allocator, program: *const Ast.Program, root: Ast.ExprId) Allocator.Error!bool {
     const lifted = program;
     const Item = struct { role: WrapperRole, expr: Ast.ExprId };
     var stack: std.ArrayList(Item) = .empty;

@@ -213,10 +213,10 @@ test "copied method requirements - a nested call's template is not a second requ
 
     try test_env.assertNoErrors();
     try test_env.assertDefType("func",
-        \\c, d -> c
+        \\c, c -> c
         \\  where [
-        \\    c.plus : c, d -> c,
-        \\    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+        \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+        \\    c.plus : c, c -> c,
         \\  ]
     );
 }
@@ -439,7 +439,7 @@ test "copied method requirements - a nested helper's own parameter stays generic
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try test_env.assertDefType("a", "b, x -> x where [b.id : b, x -> x, x.plus : x, U64 -> x]");
+    try test_env.assertDefType("a", "b, U64 -> U64 where [b.id : b, U64 -> U64]");
 }
 
 test "copied method requirements - a nested helper's requirement on its method result is the enclosing definition's" {
@@ -452,7 +452,7 @@ test "copied method requirements - a nested helper's requirement on its method r
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try test_env.assertDefType("a", "b, x -> x where [b.id : b, x -> x, x.plus : x, U64 -> x]");
+    try test_env.assertDefType("a", "b, U64 -> U64 where [b.id : b, U64 -> U64]");
 }
 
 test "copied method requirements - a method conflict through helpers nested two deep is rejected" {

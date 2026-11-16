@@ -275,16 +275,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 376)
-				(e-runtime-error (tag "erroneous_value_expr"))
-				(e-tag (name "Ok")
-					(args
-						(e-list
-							(elems
-								(e-tag (name "Some")
-									(args
-										(e-num (value "42"))))
-								(e-tag (name "None")))))))))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(s-alias-decl
 		(ty-header (name "ComplexType")
 			(ty-args
@@ -303,7 +294,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 	(defs
 		(patt (type "Try(List(Error), Dict(Str, Error)) -> List(_c)"))
 		(patt (type "Error -> _ret"))
-		(patt (type "_arg -> List(_c)")))
+		(patt (type "_arg -> _ret")))
 	(type_decls
 		(alias (type "Error")
 			(ty-header (name "ComplexType")
@@ -313,5 +304,5 @@ main! = |_| processComplex(Ok([Some(42), None]))
 	(expressions
 		(expr (type "Try(List(Error), Dict(Str, Error)) -> List(_c)"))
 		(expr (type "Error -> _ret"))
-		(expr (type "_arg -> List(_c)"))))
+		(expr (type "_arg -> _ret"))))
 ~~~

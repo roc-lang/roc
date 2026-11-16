@@ -109,7 +109,7 @@ pub fn compileUnitImage(
     if (static_data.len != 0) {
         // A function pointer in static data names a function of this unit
         // or one another unit exports, which the unit imports.
-        for (static_data) |data_export| for (data_export.relocations) |relocation| {
+        if (std.debug.runtime_safety) for (static_data) |data_export| for (data_export.relocations) |relocation| {
             if (relocation.kind != .function_pointer) continue;
             const symbol = codegen.module.linking.findSymbolByName(relocation.target_symbol_name, codegen.module.imports.items, codegen.module.global_imports.items, codegen.module.table_imports.items) orelse
                 base.invariant("wasm unit invariant violated: static data names function {s}, which the unit neither defines nor imports", .{relocation.target_symbol_name});

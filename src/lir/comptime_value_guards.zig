@@ -20,14 +20,8 @@ const Guard = struct { locals: [3]LIR.LocalId, success: LIR.CFStmtId, crash: LIR
 /// itself, so every read of it is guarded.
 pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed: ?*const Program.FrozenStaticData) std.mem.Allocator.Error!void {
     std.debug.assert(program.comptime_value_guards.items.len == 0);
-    const has_value_slots = for (program.static_data_values.items) |slot| {
-        if (slot.compile_time_root) |root| {
-            if (root.role == .value) break true;
-        }
-    } else false;
-    if (!has_value_slots) return;
-    var completed_exports: ExportBySlot = if (completed) |frozen| try exportsBySlot(allocator, program, frozen) else .{};
-    defer completed_exports.deinit(allocator);
+    var guarded = (try guardedSlots(allocator, program, completed)) orelse return;
+    defer guarded.deinit(allocator);
     var uses: std.ArrayList(Use) = .empty;
     defer uses.deinit(allocator);
     var work: std.ArrayList(LIR.CFStmtId) = .empty;
@@ -59,11 +53,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
                 .static_data => |read| read.id,
                 .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bytes_literal, .proc_ref => continue,
             };
-            const root = program.static_data_values.items[@backingInt(slot)].compile_time_root orelse continue;
-            if (root.role != .value) continue;
-            if (completed) |frozen| {
-                if (!completedValueFailed(program, frozen, &completed_exports, root.role.value.failure_slot)) continue;
-            }
+            if (!guarded.isSet(@backingInt(slot))) continue;
             try uses.append(allocator, .{ .proc = proc_id, .stmt = stmt_id, .slot = slot });
         }
     }
@@ -166,6 +156,32 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         store.getProcSpecPtr(proc_id).frame_locals = span;
         if (store.procNeedsStackProbe(&program.layouts, store.getProcSpec(proc_id))) store.getProcSpecPtr(proc_id).stack_probe = .required;
     }
+}
+
+/// The static data slots whose reads `insert` guards: each compile-time
+/// value's slot, less those `completed` records as evaluated successfully.
+/// Null when the program reads no compile-time value. A guarded read can
+/// fail, so no pass before `insert` may delete it as a pure definition.
+pub fn guardedSlots(allocator: std.mem.Allocator, program: *const Program.Result, completed: ?*const Program.FrozenStaticData) std.mem.Allocator.Error!?std.DynamicBitSetUnmanaged {
+    const has_value_slots = for (program.static_data_values.items) |slot| {
+        if (slot.compile_time_root) |root| {
+            if (root.role == .value) break true;
+        }
+    } else false;
+    if (!has_value_slots) return null;
+    var completed_exports: ExportBySlot = if (completed) |frozen| try exportsBySlot(allocator, program, frozen) else .{};
+    defer completed_exports.deinit(allocator);
+    var guarded = try std.DynamicBitSetUnmanaged.initEmpty(allocator, program.static_data_values.items.len);
+    errdefer guarded.deinit(allocator);
+    for (program.static_data_values.items, 0..) |slot, index| {
+        const root = slot.compile_time_root orelse continue;
+        if (root.role != .value) continue;
+        if (completed) |frozen| {
+            if (!completedValueFailed(program, frozen, &completed_exports, root.role.value.failure_slot)) continue;
+        }
+        guarded.set(index);
+    }
+    return guarded;
 }
 
 /// A position in a frozen image's exports.

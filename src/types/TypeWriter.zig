@@ -73,6 +73,10 @@ count_pending: std.array_list.Managed(Var),
 /// static-dispatch constraints (see `countVarOccurrencesOutsideOwnConstraints`).
 count_skips_own_constraints: ?Var = null,
 occurrence_counts_skipped_constraints: ?Var = null,
+/// While a requirement a row variable holds is written, the record or tag
+/// union it is about, written as the row variable's name (design.md "Methods
+/// On Open Rows").
+row_value_display: ?struct { value: Var, row: Var } = null,
 /// Extension vars already reached by the row collection currently running.
 /// Row collection runs to completion without rendering anything, so one
 /// buffer serves every row node.
@@ -86,6 +90,10 @@ static_dispatch_constraints_tmp: std.array_list.Managed(StaticDispatchTmp),
 /// A receiver contributes its complete requirement list once per rendering,
 /// even when every method signature refers back to that receiver.
 collected_dispatchers: collections_mod.DenseMap(Var, void),
+/// The variables in this rendering that are the type of a literal whose
+/// conversion requirement no constraint records yet (`Flex.literal`). Each
+/// prints the requirement its constraint will state.
+literal_dispatchers: std.array_list.Managed(LiteralDispatcher),
 constraint_keys: std.HashMapUnmanaged(u64, void, ConstraintKeyContext, 80) = .empty,
 constraint_texts: std.StringHashMapUnmanaged(void) = .empty,
 buf_tmp: std.array_list.Managed(u8),
@@ -171,6 +179,12 @@ const StaticDispatchTmp = struct {
         }
         return type_ord == .lt;
     }
+};
+
+/// A deferred literal's type and which literals it is the type of.
+const LiteralDispatcher = struct {
+    var_: Var,
+    literal: types_mod.Flex.Literal,
 };
 
 /// A constraint paired with its dispatcher variable (the type that has the constraint)
@@ -325,6 +339,7 @@ pub fn initFromParts(
         .static_dispatch_constraints = try std.array_list.Managed(ConstraintWithDispatcher).initCapacity(gpa, 32),
         .static_dispatch_constraints_tmp = try std.array_list.Managed(StaticDispatchTmp).initCapacity(gpa, 32),
         .collected_dispatchers = .init(gpa),
+        .literal_dispatchers = std.array_list.Managed(LiteralDispatcher).init(gpa),
         .buf_tmp = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .name_tmp = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .scratch_record_fields = try std.array_list.Managed(types_mod.RecordField).initCapacity(gpa, 32),
@@ -354,6 +369,7 @@ pub fn deinit(self: *TypeWriter) void {
     self.static_dispatch_constraints.deinit();
     self.static_dispatch_constraints_tmp.deinit();
     self.collected_dispatchers.deinit();
+    self.literal_dispatchers.deinit();
     self.constraint_keys.deinit(self.gpa);
     self.constraint_texts.deinit(self.gpa);
     self.buf_tmp.deinit();
@@ -388,6 +404,7 @@ pub fn reset(self: *TypeWriter) void {
     self.static_dispatch_constraints.clearRetainingCapacity();
     self.static_dispatch_constraints_tmp.clearRetainingCapacity();
     self.collected_dispatchers.clearRetainingCapacity();
+    self.literal_dispatchers.clearRetainingCapacity();
     self.constraint_keys.clearRetainingCapacity();
     self.constraint_texts.clearRetainingCapacity();
     self.buf_tmp.clearRetainingCapacity();
@@ -447,7 +464,7 @@ pub fn write(self: *TypeWriter, var_: Var, format: Format) error{ OutOfMemory, W
     var aw = collections_mod.managedWriter(&self.buf);
     try self.writeVar(&aw.writer, var_, var_);
 
-    if (self.static_dispatch_constraints.items.len > 0) {
+    if (self.hasWhereClause()) {
         collections_mod.managedWriterFinish(&aw, &self.buf);
         aw = collections_mod.managedWriter(&self.buf);
         try self.writeWhereClause(&aw.writer, var_, self.buf.items.len, format);
@@ -469,7 +486,7 @@ pub fn writeIntoAtPolarity(self: *TypeWriter, into: *std.array_list.Managed(u8),
     collections_mod.managedWriterFinish(&aw, into);
     const into_end = into.items.len;
 
-    if (self.static_dispatch_constraints.items.len > 0) {
+    if (self.hasWhereClause()) {
         aw = collections_mod.managedWriter(into);
         try self.writeWhereClause(&aw.writer, var_, into_end - into_start, format);
         collections_mod.managedWriterFinish(&aw, into);
@@ -504,14 +521,14 @@ pub fn writeWithoutConstraints(self: *TypeWriter, var_: Var) error{ OutOfMemory,
 fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_len: usize, format: Format) error{ OutOfMemory, WriteFailed }!void {
     // Ensure we have enough temp storage to collect dispatch constraints
     try self.static_dispatch_constraints_tmp.ensureUnusedCapacity(
-        self.static_dispatch_constraints.items.len + 2,
+        self.static_dispatch_constraints.items.len + 2 * self.literal_dispatchers.items.len + 2,
     );
 
     // Pre-allocate buffer space for constraint strings BEFORE creating the
     // managedWriter, because ensureUnusedCapacity on buf_tmp can reallocate,
     // invalidating the writer's buffer pointer.
     try self.buf_tmp.ensureUnusedCapacity(
-        60 + (self.static_dispatch_constraints.items.len - 1) * 30,
+        60 + (self.static_dispatch_constraints.items.len + 2 * self.literal_dispatchers.items.len) * 30,
     );
 
     // Iterate over static dispatch constraints, generating their string representations
@@ -538,7 +555,11 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
             const item = self.static_dispatch_constraints.items[i];
 
             const start = tmp_aw.writer.end;
-            try self.writeVar(tmp_writer, item.dispatcher_var, root_var);
+            if (item.constraint.receiver == .open_row_value) {
+                try self.writeRowName(tmp_writer, item.dispatcher_var, root_var);
+            } else {
+                try self.writeVar(tmp_writer, item.dispatcher_var, root_var);
+            }
             const type_name_end = tmp_aw.writer.end;
 
             try tmp_writer.writeAll(".");
@@ -550,7 +571,13 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
             // an output, whatever position the constrained variable occupies.
             const saved_polarity = self.polarity;
             self.polarity = .pos;
+            const saved_display = self.row_value_display;
+            self.row_value_display = if (item.constraint.receiver == .open_row_value) if (self.openRowValueOf(item.constraint)) |value| .{
+                .value = value,
+                .row = self.types.resolveVar(item.dispatcher_var).var_,
+            } else null else null;
             try self.writeVar(tmp_writer, item.constraint.fn_var, root_var);
+            self.row_value_display = saved_display;
             self.polarity = saved_polarity;
 
             const constraint_len = tmp_aw.writer.end - start;
@@ -564,7 +591,42 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
                 .len = constraint_len,
             });
         }
+
+        // A literal's type whose conversion is not a constraint yet prints
+        // the requirement that constraint states. One that also has the
+        // constraint prints the same text, which shows once.
+        for (self.literal_dispatchers.items) |dispatcher| {
+            const requirements = [_]struct { present: bool, method: []const u8, before: []const u8, after: []const u8 }{
+                .{ .present = dispatcher.literal.hasNumeral(), .method = "from_numeral", .before = " : Numeral -> Try(", .after = ", [InvalidNumeral(Str)])" },
+                .{ .present = dispatcher.literal.hasQuote(), .method = "from_quote", .before = " : Str -> Try(", .after = ", [BadQuotedBytes(Str)])" },
+            };
+            for (requirements) |requirement| {
+                if (!requirement.present) continue;
+                const fn_name = self.idents.findByString(requirement.method) orelse continue;
+                const start = tmp_aw.writer.end;
+                try self.writeVar(tmp_writer, dispatcher.var_, root_var);
+                const type_name_end = tmp_aw.writer.end;
+
+                try tmp_writer.writeAll(".");
+                try tmp_writer.writeAll(requirement.method);
+                try tmp_writer.writeAll(requirement.before);
+                try self.writeVar(tmp_writer, dispatcher.var_, root_var);
+                try tmp_writer.writeAll(requirement.after);
+
+                const constraint_len = tmp_aw.writer.end - start;
+                total_constraint_len += constraint_len;
+
+                try self.static_dispatch_constraints_tmp.append(.{
+                    .fn_name = fn_name,
+                    .type_name_start = start,
+                    .type_name_end = type_name_end,
+                    .start = start,
+                    .len = constraint_len,
+                });
+            }
+        }
     }
+    if (self.static_dispatch_constraints_tmp.items.len == 0) return;
 
     // Sort constraints alphabetically by type name first, then by function name
     std.mem.sort(
@@ -707,6 +769,13 @@ fn requestVar(self: *TypeWriter, writer: *ByteWrite, var_: Var, context: TypeCon
         return true;
     }
 
+    if (self.row_value_display) |display| {
+        if (display.value == resolved.var_) {
+            try self.writeRowName(writer, display.row, root_var);
+            return true;
+        }
+    }
+
     if (self.hasSeenVar(resolved.var_)) {
         try writer.writeAll("<RecursiveType>");
         return true;
@@ -743,6 +812,7 @@ fn writeContentHead(
             }
 
             try self.collectDispatchConstraints(var_, resolved_var, constraints);
+            if (flex.literal != .none) try self.collectLiteralDispatcher(resolved_var, flex.literal);
             return false;
         },
         .rigid => |rigid| {
@@ -1092,7 +1162,9 @@ fn stepRecord(self: *TypeWriter, writer: *ByteWrite, frame: *RecordFrame, root_v
                         if (frame.fields_count > 0) try writer.writeAll(", ");
                         try writer.writeAll("..");
 
-                        if (flex.payload.name) |ident_idx| {
+                        if (self.holdsOpenRowValue(flex.var_)) {
+                            try self.writeRowName(writer, flex.var_, root_var);
+                        } else if (flex.payload.name) |ident_idx| {
                             const name = self.getIdent(ident_idx);
                             // Suppress internal names (e.g. #open_ext_0 from anonymous `..`)
                             if (name.len > 0 and name[0] != '#') {
@@ -1160,12 +1232,9 @@ fn stepTagUnion(self: *TypeWriter, writer: *ByteWrite, frame: *TagUnionFrame, ro
                         // still shown in input positions, and when the ext var is
                         // shared or constrained elsewhere in the type (where it
                         // carries real information).
-                        const display: enum { hidden, anonymous, source_name, generated_name } = blk: {
-                            // A tail constrained only by the `is_eq` and
-                            // `to_hash` an open row's derivation gives it is
-                            // satisfied by the closed row an output stands
-                            // for, so it is implicit openness too.
-                            const implicit_openness = self.polarity == .pos and self.constraintsAreRowDerivations(flex.payload.constraints);
+                        const display: enum { hidden, anonymous, source_name, generated_name, row_name } = blk: {
+                            if (self.holdsOpenRowValue(flex.var_)) break :blk .row_name;
+                            const implicit_openness = self.polarity == .pos and flex.payload.constraints.len() == 0;
                             if (flex.payload.name) |ident_idx| {
                                 const name = self.getIdent(ident_idx);
                                 if (name.len > 0 and name[0] != '#') {
@@ -1192,6 +1261,7 @@ fn stepTagUnion(self: *TypeWriter, writer: *ByteWrite, frame: *TagUnionFrame, ro
                             try writer.writeAll("..");
                             switch (display) {
                                 .hidden, .anonymous => {},
+                                .row_name => try self.writeRowName(writer, flex.var_, root_var),
                                 .source_name => try writer.writeAll(self.getIdent(flex.payload.name.?)),
                                 .generated_name => try self.writeFlexVarName(writer, flex.var_, .TagUnionExtension, root_var),
                             }
@@ -1314,7 +1384,13 @@ fn gatherRow(
         // for a cyclic row; a row that terminates on its own never revisits.
         if ((try self.ext_seen.getOrPut(resolved.var_)).found_existing) return .invalid;
         switch (resolved.desc.content) {
-            .flex => |flex| return .{ .flex = .{ .var_ = resolved.var_, .payload = flex } },
+            .flex => |flex| {
+                // An uncommitted record tail stands for no field a program
+                // can read, so it renders as the closed row it reads as
+                // (design.md "Uncommitted Record Tails").
+                if (kind == .record and resolved.desc.flags.uncommitted_record_tail) return .empty_record;
+                return .{ .flex = .{ .var_ = resolved.var_, .payload = flex } };
+            },
             .rigid => |rigid| return .{ .rigid = rigid },
             .alias => |alias| ext = self.types.getAliasBackingVar(alias),
             .structure => |flat_type| switch (kind) {
@@ -1388,6 +1464,21 @@ pub fn writeTagGet(self: *TypeWriter, tag: Tag, root_var: Var) error{ OutOfMemor
     return self.get();
 }
 
+/// Record a literal's type whose conversion requirement is not a constraint
+/// yet, once per rendering.
+fn collectLiteralDispatcher(self: *TypeWriter, root: Var, literal: types_mod.Flex.Literal) error{OutOfMemory}!void {
+    if (self.omit_literal_conversion_constraints or self.omitted_dispatcher == root) return;
+    for (self.literal_dispatchers.items) |existing| {
+        if (existing.var_ == root) return;
+    }
+    try self.literal_dispatchers.append(.{ .var_ = root, .literal = literal });
+}
+
+/// Whether this rendering has requirements to print after the type.
+fn hasWhereClause(self: *const TypeWriter) bool {
+    return self.static_dispatch_constraints.items.len > 0 or self.literal_dispatchers.items.len > 0;
+}
+
 /// Append a constraint with its dispatcher var to the list, if it doesn't already exist
 fn collectDispatchConstraints(self: *TypeWriter, dispatcher_var: Var, root: Var, constraints: []const types_mod.StaticDispatchConstraint) error{ OutOfMemory, WriteFailed }!void {
     if (constraints.len == 0 or self.omitted_dispatcher == root) return;
@@ -1429,7 +1520,7 @@ pub fn writeFlexVarName(self: *TypeWriter, writer: *ByteWrite, var_: Var, contex
         // Check if this variable appears multiple times
         // Note: counting can fail with corrupted data, so we treat it as appearing once
         const occurrences = try self.countVarOccurrences(resolved_var, root_var);
-        if (occurrences <= 1) {
+        if (occurrences <= 1 and !self.holdsOpenRowValue(resolved_var)) {
             // If it appears once, then generate and write the name
             try writer.writeAll("_");
             try self.generateContextualName(writer, context);
@@ -1536,6 +1627,14 @@ fn countRequest(self: *TypeWriter, current_var: Var) std.mem.Allocator.Error!boo
 
     const occurrences = try self.occurrence_counts.getOrPut(resolved.var_);
     occurrences.value_ptr.* = if (occurrences.found_existing) occurrences.value_ptr.* + 1 else 1;
+    // A deferred literal's type also occurs in the conversion requirement it
+    // prints with, so it is named like any variable that occurs twice.
+    switch (resolved.desc.content) {
+        .flex => |flex| if (flex.literal != .none and !occurrences.found_existing) {
+            occurrences.value_ptr.* += 1;
+        },
+        .rigid, .alias, .structure, .field_presence, .err => {},
+    }
 
     // Check if we've already seen this var on the path we are on
     // This avoids infinite recursion
@@ -1633,14 +1732,47 @@ fn collectCountChildrenInFlatType(self: *TypeWriter, flat_type: FlatType) std.me
     }
 }
 
-/// Whether every constraint in `range` is an `is_eq` or `to_hash`, the
-/// obligations deriving those methods over an open row gives its tail.
-fn constraintsAreRowDerivations(self: *const TypeWriter, range: types_mod.StaticDispatchConstraint.SafeList.Range) bool {
+/// Whether `var_` is a row variable holding a requirement for the record or
+/// tag union it ends (design.md "Methods On Open Rows").
+fn holdsOpenRowValue(self: *const TypeWriter, var_: Var) bool {
+    const resolved = self.types.resolveVar(var_);
+    const range = switch (resolved.desc.content) {
+        .flex => |flex| flex.constraints,
+        .rigid => |rigid| rigid.constraints,
+        .alias, .structure, .err, .field_presence => return false,
+    };
     for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
-        const name = self.idents.getText(constraint.fn_name);
-        if (!std.mem.eql(u8, name, "is_eq") and !std.mem.eql(u8, name, "to_hash")) return false;
+        if (constraint.receiver == .open_row_value) return true;
     }
-    return true;
+    return false;
+}
+
+/// The record or tag union a requirement a row variable holds is about: its
+/// method's first argument.
+fn openRowValueOf(self: *const TypeWriter, constraint: types_mod.StaticDispatchConstraint) ?Var {
+    const func = self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse return null;
+    const args = self.types.sliceVars(func.args);
+    if (args.len == 0) return null;
+    return self.types.resolveVar(args[0]).var_;
+}
+
+/// Write the name of a row variable that holds requirements: the name an
+/// annotation gave it, or one generated for it, never an anonymous `..`.
+fn writeRowName(self: *TypeWriter, writer: *ByteWrite, row: Var, root_var: Var) error{ OutOfMemory, WriteFailed }!void {
+    const resolved = self.types.resolveVar(row);
+    const source_name: ?Ident.Idx = switch (resolved.desc.content) {
+        .rigid => |rigid| rigid.name,
+        .flex => |flex| flex.name,
+        .alias, .structure, .err, .field_presence => null,
+    };
+    if (source_name) |ident_idx| {
+        const name = self.getIdent(ident_idx);
+        if (name.len > 0 and name[0] != '#') {
+            try writer.writeAll(name);
+            return;
+        }
+    }
+    try self.writeFlexVarName(writer, resolved.var_, .General, root_var);
 }
 
 /// Retrieves the text representation of an identifier by its index.
