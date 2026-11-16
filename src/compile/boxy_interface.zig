@@ -383,6 +383,9 @@ pub const Digests = struct {
         const templates = &artifact.checked_procedure_templates;
         const template = templates.templates.items()[@backingInt(ref.template)];
         hasher.update(std.mem.asBytes(&template.scheme_vars.len));
+        // An importer's worker for the template takes a hidden input per
+        // closed row node.
+        hasher.update(std.mem.asBytes(&template.closed_row_nodes.len));
         for (templates.evidence_params_pool.items()[template.evidence_params.start..][0..template.evidence_params.len]) |param| {
             hashBytes(hasher, artifact.canonical_names.methodNameText(param.method));
             hasher.update(std.mem.asBytes(&(param.slot.get() orelse @as(u32, std.math.maxInt(u32)))));

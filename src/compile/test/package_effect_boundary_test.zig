@@ -191,6 +191,7 @@ fn compileApp(gpa: std.mem.Allocator, files: []const File, entry_rel: []const u8
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, io),
+        .lss,
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -252,7 +253,7 @@ fn buildRootWithMain(
     const root_path = try tmp_dir.dir.realPathFileAlloc(io, root_rel, gpa);
     defer gpa.free(root_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
 
     if (main_rel) |main| {

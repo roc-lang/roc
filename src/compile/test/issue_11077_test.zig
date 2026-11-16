@@ -66,7 +66,7 @@ test "issue 11077: platform return mismatch describes the return value" {
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "app.roc", gpa);
     defer gpa.free(app_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
     try build_env.build(app_path);
 
@@ -168,7 +168,7 @@ fn expectPlatformDiagnostic(app_body: []const u8, required_type: []const u8, exp
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "app.roc", gpa);
     defer gpa.free(app_path);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
     try build_env.build(app_path);
 

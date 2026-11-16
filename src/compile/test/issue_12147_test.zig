@@ -74,7 +74,7 @@ test "issue 12147: a header declaring the same package shorthand twice is reject
     const root_main = try tmp_dir.dir.realPathFileAlloc(io, "root/main.roc", gpa);
     defer gpa.free(root_main);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
 
     // A rejected header may stop the build early; either way the rejection
@@ -138,7 +138,7 @@ test "issue 12147: a dependency's header problem is reported at its location" {
     const root_main = try tmp_dir.dir.realPathFileAlloc(io, "root/main.roc", gpa);
     defer gpa.free(root_main);
 
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
 
     try std.testing.expectError(error.InvalidDependency, build_env.build(root_main));
