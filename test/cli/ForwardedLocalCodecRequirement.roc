@@ -159,6 +159,15 @@ via_closure_generic = |x| {
     go(1.U8)
 }
 
+# The forwarding call sits in a generalized local function of its own
+# variable, which captures the requirement over that variable.
+via_generic_local : b -> (Str -> Try(Str, []))
+    where [b.status : b -> [Ok(Str), Err(Str)]]
+via_generic_local = |x| {
+    go = |y| with_custom(y)
+    go(x)
+}
+
 # The forwarding use names a procedure alias, top-level and local.
 fwd : a -> (Str -> Try(Str, [])) where [a.status : a -> [Ok(Str), Err(Str)]]
 fwd = with_custom
@@ -171,6 +180,21 @@ via_local_alias : b -> (Str -> Try(Str, []))
     where [b.status : b -> [Ok(Str), Err(Str)]]
 via_local_alias = |x| {
     local_fwd : c -> (Str -> Try(Str, [])) where [c.status : c -> [Ok(Str), Err(Str)]]
+    local_fwd = with_custom
+    local_fwd(x)
+}
+
+# The same aliases unannotated: each has its scheme and its captured
+# requirement from the procedure it names.
+fwd_plain = with_custom
+
+via_plain_alias : b -> (Str -> Try(Str, []))
+    where [b.status : b -> [Ok(Str), Err(Str)]]
+via_plain_alias = |x| fwd_plain(x)
+
+via_plain_local_alias : b -> (Str -> Try(Str, []))
+    where [b.status : b -> [Ok(Str), Err(Str)]]
+via_plain_local_alias = |x| {
     local_fwd = with_custom
     local_fwd(x)
 }
@@ -216,3 +240,12 @@ expect via_local_alias(Job.Failed)("") == Ok("Err(broken)")
 expect via_method(Job.Pending)("") == Ok("Ok(cv)")
 expect via_method_alias(Job.Failed)("") == Ok("Err(broken)")
 expect via_method_alias_dict(Job.Pending)("") == Ok("Ok(cv)")
+expect via_generic_local(Job.Pending)("") == Ok("Ok(cv)")
+expect via_plain_alias(Job.Failed)("") == Ok("Err(broken)")
+expect via_plain_local_alias(Job.Pending)("") == Ok("Ok(cv)")
+expect fwd_plain(Job.Pending)("") == Ok("Ok(cv)")
+expect fwd(Job.Failed)("") == Ok("Err(broken)")
+expect {
+    go = |y| with_custom(y)
+    go(Job.Failed)("") == Ok("Err(broken)")
+}

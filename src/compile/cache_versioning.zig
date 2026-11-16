@@ -72,10 +72,11 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// those roots resolved against no evidence chain, and top-level constants'
 /// right-hand sides resolved against their wrapper's own requirements, and
 /// evidence parameters recording the edge that hands a captured codec
-/// requirement on, an alias-bound dispatch edge's among them. It rejects
-/// every earlier format, including the independent version 19 through 47
-/// formats. Platform-pairing entries share it.
-const checked_envelope_version: u32 = 48;
+/// requirement on, an alias-bound dispatch edge's among them, and private
+/// codec instances whose copies of a template's variables the ambiguity rule
+/// does not judge. It rejects every earlier format, including the independent
+/// version 19 through 48 formats. Platform-pairing entries share it.
+const checked_envelope_version: u32 = 49;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment.
