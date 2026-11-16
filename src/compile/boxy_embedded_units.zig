@@ -27,7 +27,9 @@
 //!     and its object input (`boxy_interface.Digests`), [32]u8 each;
 //!     unit count (u32), then for each unit
 //!         object input ([32]u8), flags (u8: inline expects, run image,
-//!         expect sites, wasm stack checks), target name and opt name (each
+//!         expect sites, wasm stack checks, and whether the entry is the
+//!         one filed under the unit's pieces key
+//!         (`boxy_object_cache.piecesKey`)), target name and opt name (each
 //!         a u8 length and its bytes), entry offset and length (u64 each);
 //!     then each unit's entry (`boxy_object_cache.encode`) at an offset that
 //!     places it as a cache file places its entry, so an image in it starts
@@ -40,7 +42,7 @@ const object_cache = @import("boxy_object_cache.zig");
 const Allocator = std.mem.Allocator;
 
 /// The table format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 3;
+pub const format_version: u32 = 4;
 
 const magic = "RBXE";
 
@@ -73,7 +75,7 @@ pub const Units = struct {
             const opt = reader.take(reader.take(1)[0]);
             const offset: usize = @intCast(reader.word64());
             const len: usize = @intCast(reader.word64());
-            const unit_key = object_cache.key(.{
+            const input_key = object_cache.key(.{
                 .object_input = object_input,
                 .target = target,
                 .opt = opt,
@@ -82,6 +84,7 @@ pub const Units = struct {
                 .expect_sites = flags & flag_expect_sites != 0,
                 .wasm_stack_checks = flags & flag_wasm_stack_checks != 0,
             });
+            const unit_key = if (flags & flag_pieces != 0) object_cache.piecesKey(input_key) else input_key;
             if (std.mem.eql(u8, &unit_key.bytes, &key.bytes)) return self.table[offset..][0..len];
         }
         return null;
@@ -133,11 +136,15 @@ const flag_inline_expects: u8 = 1;
 const flag_run_image: u8 = 2;
 const flag_expect_sites: u8 = 4;
 const flag_wasm_stack_checks: u8 = 8;
+const flag_pieces: u8 = 16;
 
 /// One unit the compiler's build embeds: its key input and its encoded
 /// cache entry. An embedded unit binds no hosted functions.
 pub const Unit = struct {
     input: object_cache.KeyInput,
+    /// Whether `entry` is the one filed under the pieces key of the unit
+    /// `input` keys (`boxy_object_cache.piecesKey`), which holds its pieces.
+    pieces: bool = false,
     entry: []const u8,
 };
 
@@ -169,6 +176,7 @@ pub fn encode(allocator: Allocator, compiler_artifact_hash: [32]u8, modules: []c
         if (unit.input.run_image) flags |= flag_run_image;
         if (unit.input.expect_sites) flags |= flag_expect_sites;
         if (unit.input.wasm_stack_checks) flags |= flag_wasm_stack_checks;
+        if (unit.pieces) flags |= flag_pieces;
         try bytes.append(allocator, flags);
         for ([_][]const u8{ unit.input.target, unit.input.opt }) |name| {
             try bytes.append(allocator, @intCast(name.len));
@@ -230,6 +238,7 @@ test "an embedded entry is found by its key under this compiler, and placed as a
     const encoded = try encode(gpa, build_options.compiler_artifact_hash, &.{module}, &.{
         .{ .input = input, .entry = first_entry },
         .{ .input = other, .entry = second_entry },
+        .{ .input = input, .pieces = true, .entry = "pieces entry" },
     });
     defer gpa.free(encoded);
     const table = try gpa.alignedAlloc(u8, .fromByteUnits(alignment), encoded.len);
@@ -240,6 +249,8 @@ test "an embedded entry is found by its key under this compiler, and placed as a
     try std.testing.expectEqualStrings(first_entry, found);
     try std.testing.expectEqual(entry_file_offset, (@intFromPtr(found.ptr) - @intFromPtr(table.ptr)) % alignment);
     try std.testing.expectEqualStrings(second_entry, units.find(object_cache.key(other)).?);
+    try std.testing.expectEqualStrings("pieces entry", units.find(object_cache.piecesKey(object_cache.key(input))).?);
+    try std.testing.expectEqual(null, units.find(object_cache.piecesKey(object_cache.key(other))));
     var miss = input;
     miss.expect_sites = true;
     try std.testing.expectEqual(null, units.find(object_cache.key(miss)));

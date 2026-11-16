@@ -508,14 +508,14 @@ comptime {
     // bottom of this file, then update the expected field count below. A
     // same-build omission is otherwise silent, since `FORMAT_VERSION` only
     // guards cross-version mismatches. `tail_call_builder`, `proc_rewrite`,
-    // `stmt_source_rows`, `rc_effect_rows` and `facts` are transient worker state, not
+    // `body_symbol_base`, `stmt_source_rows`, `rc_effect_rows` and `facts` are transient worker state, not
     // serialized, and default to null or empty in views. The layout store's `digest_cache` is a memo
     // each view starts empty; its interning caches, `recursive_layout_keys`,
     // `interned_recursive_graphs`, `recursive_commit_layouts` and
     // `recursive_digests` serve only commits,
     // which a view never makes; and its `commit_scratch` and
     // `scratch_field_offsets` are scratch that views start empty.
-    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 38);
+    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 39);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 21);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 

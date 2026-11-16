@@ -12302,7 +12302,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         null;
     defer if (boxy_library) |library| library.deinit(ctx.gpa);
     const boxy_cache_manager: ?*CacheManager = if (args.no_cache) null else build_env.cache_manager;
-    const boxy_root_key: ?compile.boxy_object_cache.Key = if (boxy_library) |library| try boxyObjectKey(ctx.gpa, &boxy_digests, root_artifact, boxyUnitPlatform(root_artifact, library.platform), BoxyUnitPolicy.ofBuild(args), target, library.paired_platforms, false) else null;
+    // A link that composes pieces files the root unit's under its pieces
+    // key; a fast dev link reads only its image.
+    const boxy_root_key: ?compile.boxy_object_cache.Key = if (boxy_library) |library| key: {
+        const image_key = try boxyObjectKey(ctx.gpa, &boxy_digests, root_artifact, boxyUnitPlatform(root_artifact, library.platform), BoxyUnitPolicy.ofBuild(args), target, library.paired_platforms, false);
+        break :key if (fast_link == null and compile.boxy_unit.producesImage(target)) compile.boxy_object_cache.piecesKey(image_key) else image_key;
+    } else null;
     if (dev_diagnostics.isSet(.trace_boxy_work)) if (boxy_library) |library| std.debug.print("boxy-work: library units {d}, root key {s}\n", .{ library.pieces.len, &std.fmt.bytesToHex(boxy_root_key.?.bytes[0..8], .lower) });
     // The root program's object is cached under its own key too: a build
     // whose every module is cached lowers nothing.
@@ -12410,15 +12415,13 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             if (!args.no_cache) {
                 const records = try compile.boxy_unit.exportRecords(ctx.gpa, &lowered, &boxy_interfaces.?);
                 defer ctx.gpa.free(records);
-                const encoded = try backend.dev.UnitPieces.encode(ctx.gpa, &root_pieces);
-                defer ctx.gpa.free(encoded);
                 try compile.boxy_unit.store(ctx.gpa, boxy_cache_manager, boxy_root_key.?, .{
                     .exports = records,
                     .exports_digest = try compile.boxy_object_cache.exportRecordsDigest(ctx.gpa, records),
                     .hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
                     .link_root_symbols = try devObjectLinkRootSymbols(ctx.arena, static_data_exports),
                     .app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
-                    .pieces = encoded,
+                    .pieces = &.{},
                     .image = root_image.?,
                 });
                 build_env.recordBoxyObjects(0, 1);
@@ -19128,9 +19131,10 @@ fn recordChunkedBreakdown(reporter: *progress.Reporter, name: []const u8, contin
     }
 }
 
-/// Detailed LIR pass timing: each procedure-local phase's elapsed time,
-/// preparation, summed worker time, idle worker capacity, and commit, then
-/// the whole-program steps before ARC and after it.
+/// Detailed LIR pass timing: each segment's elapsed time, preparation, idle
+/// worker capacity and commit under its first phase, each phase's summed
+/// worker time and procedure counts, then the whole-program steps before ARC
+/// and after it.
 fn recordLirPassDetail(reporter: *progress.Reporter, snapshot: lir.CheckedPipeline.TimingSnapshot, comptime prefix: []const u8) void {
     const Pipeline = lir.CheckedPipeline;
     const phases = @typeInfo(Pipeline.LirPassPhase).@"enum".field_names;
@@ -19141,16 +19145,19 @@ fn recordLirPassDetail(reporter: *progress.Reporter, snapshot: lir.CheckedPipeli
     inline for (phases) |name| {
         const phase = @field(Pipeline.LirPassPhase, name);
         const wall = snapshot.procPass(.wall, phase);
+        const worker = snapshot.procPass(.worker, phase);
         if (wall != 0) {
-            const worker = snapshot.procPass(.worker, phase);
-            rows[len..][0..5].* = .{
+            rows[len..][0..4].* = .{
                 .{ .name = name, .ns = wall },
                 .{ .name = name ++ ": prepare", .ns = snapshot.procPass(.prepare, phase) },
-                .{ .name = name ++ ": workers", .ns = worker },
-                .{ .name = name ++ ": idle workers", .ns = snapshot.procPass(.capacity, phase) -| worker },
+                .{ .name = name ++ ": idle workers", .ns = snapshot.procPass(.capacity, phase) -| snapshot.procPass(.segment_worker, phase) },
                 .{ .name = name ++ ": commit", .ns = snapshot.procPass(.commit, phase) },
             };
-            len += 5;
+            len += 4;
+        }
+        if (wall != 0 or worker != 0) {
+            rows[len] = .{ .name = name ++ ": workers", .ns = worker };
+            len += 1;
             counters[counter_len..][0..2].* = .{
                 .{ .name = name ++ " procedures visited", .count = snapshot.procPass(.visited, phase) },
                 .{ .name = name ++ " procedures changed", .count = snapshot.procPass(.changed, phase) },
@@ -19202,6 +19209,8 @@ fn arcStepLabel(step: lir.CheckedPipeline.ArcTiming.Step) []const u8 {
         .emission_workers => "Emission Workers",
         .shard_append => "Shard Append",
         .certify => "Certification",
+        .procedure_tasks => "Procedure Tasks",
+        .procedure_task_workers => "Procedure Task Workers",
         .parallel_capacity => "Idle Workers",
     };
 }
@@ -19213,7 +19222,8 @@ fn recordArcDetail(reporter: *progress.Reporter, snapshot: lir.CheckedPipeline.T
     var rows: [ArcTiming.step_count]progress.SubTiming = undefined;
     const workers = snapshot.arc_steps_ns[@backingInt(ArcTiming.Step.source_prep_workers)] +|
         snapshot.arc_steps_ns[@backingInt(ArcTiming.Step.planning_workers)] +|
-        snapshot.arc_steps_ns[@backingInt(ArcTiming.Step.emission_workers)];
+        snapshot.arc_steps_ns[@backingInt(ArcTiming.Step.emission_workers)] +|
+        snapshot.arc_steps_ns[@backingInt(ArcTiming.Step.procedure_task_workers)];
     inline for (@typeInfo(ArcTiming.Step).@"enum".field_names, 0..) |name, index| {
         const step = @field(ArcTiming.Step, name);
         const ns = snapshot.arc_steps_ns[index];
@@ -19228,7 +19238,7 @@ fn codegenStepLabel(step: lir.CheckedPipeline.CodegenStep) []const u8 {
     return switch (step) {
         .backend_setup => "Backend Setup",
         .procedure_setup => "Procedure Setup",
-        .procedure_waves => "Procedure Waves",
+        .procedure_runs => "Procedure Runs",
         .procedure_worker_setup => "Worker Setup (summed)",
         .procedure_emit => "Stack Plan + Emission (summed)",
         .procedure_extract => "Fragment Extraction (summed)",
@@ -19244,7 +19254,8 @@ fn codegenStepLabel(step: lir.CheckedPipeline.CodegenStep) []const u8 {
         .composition => "Image Composition",
         .dwarf => "DWARF Generation",
         .object_encoding => "Object Encoding",
-        .unit_image => "Object to Unit Image",
+        .unit_image => "Unit Image Build",
+        .pieces_encoding => "Pieces Encoding",
     };
 }
 

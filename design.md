@@ -1392,12 +1392,19 @@ eligible expression, failure to evaluate, store, restore, or emit it correctly
 is a compiler bug with a regression test, not a reason to demote the expression
 from compile-time evaluation.
 
-Selection decides which expressions are roots, never how a root is completed.
-Once the module's dispatch plans and literal conversion roots are published,
-checking records for each selected root which producer completes it: the
-checked-value writer for a root in value form, an evaluator for every other
-("Value-Form Roots"). That record changes neither which expressions are roots
-nor any type.
+Selection decides which expressions are roots, in two steps. The checker
+traversal above selects candidates: every maximal eligible expression and
+every binding a candidate or runtime code reads. Publication then makes each
+candidate a root except a data constant in value form ("Value-Form Roots")
+that binds no top-level name and whose binding no kept candidate reads
+(`SelectedHoistedRoot.read_by_root`, which pruning records as it keeps the
+reading candidate): such an expression computes nothing, so its body keeps it
+("Value-Form Expressions Stay In Their Bodies"). This is the selection rule,
+not a demotion: value form is a fact of the checked expression, decided
+before any evaluation and never after one fails. Once the module's dispatch
+plans are published, publication records for each root it makes which
+producer completes it: the checked-value writer for a root in value form, an
+evaluator for every other ("Value-Form Roots"). That record changes no type.
 
 ### Every Rejection Is Explicit Recovery
 
@@ -2194,13 +2201,18 @@ the pairing. The unpaired platform's templates remain unchanged.
 #### Value-Form Roots
 
 A constant root whose checked expression already is its value computes
-nothing: `end_of_block = 256`, or the `Err(NotFound)` and `Ok({ x: 0, y: 0 })`
-a function body returns. **A root whose checked expression is in value form
-is completed by the checked-value writer; every other root is completed by an
-evaluator.** Each root has exactly one producer, which checking records on
-the root (`CompileTimeRoot.completion`), and finalization consumes that
-record as it is: it never re-inspects the expression, and never tries one
-producer and then the other.
+nothing: `end_of_block = 256`. **A root whose checked expression is in value
+form is completed by the checked-value writer; every other root is completed
+by an evaluator.** Each root has exactly one producer, which publication
+records on the root as it makes it (`CompileTimeRoot.completion`), and
+finalization consumes that record as it is: it never re-inspects the
+expression, and never tries one producer and then the other.
+
+The roots in value form are top-level constants, a selected binding that
+binds a top-level name, and a selected local binding a kept root reads by
+reference. Any other selected expression in value form, such as the
+`Err(NotFound)` or `Ok({ x: 0, y: 0 })` a function body returns, is no root
+at all: its body keeps it ("Value-Form Expressions Stay In Their Bodies").
 
 An expression is in value form when it is one of these, judged over checked
 CIR kinds (as the checked body reader presents them) and checked types:
@@ -2221,14 +2233,21 @@ CIR kinds (as the checked body reader presents them) and checked types:
   required, and whose every field value is in value form;
 - a nominal construction whose backing expression is in value form, unless
   its type is a builtin nominal other than `Bool` and `Try`;
+- a block with no statements whose final expression is in value form: its
+  value is that expression's, so `if n == 0 { [] } else { ["a", "b"] }`
+  has two value-form branches (`valueFormValueExpr` names the expression a
+  writer reads the value from);
 
 and no part other than the root itself is read at a row other than its own
 (`CheckedBodies.rowCoercion`). The root's own coercion belongs to the site
 reading the root, which converts the stored value as it converts any other.
 Only `constant` and `hoisted_constant` roots whose body is their expression
-qualify. Checking marks them after it has published the module's dispatch
-plans and literal conversion roots (`publishValueFormRoots`); marking reads
-the checked types and changes none.
+qualify. Publication decides value form once, where it creates the module's
+roots (`CompileTimeRootTable.fromModule`), after it has published the
+module's dispatch plans: a numeral with a `from_numeral` plan is not in value
+form, and a literal with a conversion root always has such a plan, so the
+conversion roots published later decide nothing. Deciding reads the checked
+types and changes none.
 
 Everything else stays with the evaluator, deliberately:
 
@@ -2242,7 +2261,8 @@ Everything else stays with the evaluator, deliberately:
 - String interpolation, a record update, a record whose type stores a field
   by its presence or fills it from a default, a call, a dispatch, an
   operator (unary minus included), a lookup of any definition, a field or
-  tuple access, a block, a branch, `dbg`, `expect`, and `crash`.
+  tuple access, a block with a statement, a branch, `dbg`, `expect`, and
+  `crash`.
 - A reference to another root's completed value. Its value is complete when
   the root runs, but writing it would copy or share another root's nodes,
   which this rule leaves to a later step.
@@ -2284,6 +2304,59 @@ wrapper of a completed root, but a module's object defines each completed
 root's wrapper for the other objects of a link, and runtime reads restore
 the stored value through the const template, exactly as for an evaluated
 root.
+
+#### Value-Form Expressions Stay In Their Bodies
+
+A selected data constant in value form that binds no top-level name and
+whose binding no kept root reads is not made a root (see "Root Selection
+During Checking"). Making it one would cost a root request, an entry
+wrapper template and its compiled wrapper in the module's object, a const
+template, a hoisted-constant entry, a stored value and the checked-value
+writer's work, all to recover what the expression already says. Publication
+lists these expressions instead, ascending
+(`CompileTimeRootTable.inline_literals`), and their bodies keep them. A
+binding whose right-hand side is listed is an ordinary local binding: its
+declaration stays in the body and its uses read the local.
+
+The rule applies at every position. A value-form part of a larger selected
+expression that is not in value form, such as `[1, 2]` in
+`List.concat([1, 2], [3])`, is covered by that expression's root and is
+evaluated with it, as before. A value-form part of an expression that is no
+root, such as `[1, 2]` in `List.concat([1, 2], xs)` with `xs` read at
+runtime, was a candidate of its own and is listed. Either way nothing about
+a value-form expression is computed at runtime that a root would have
+stored: the covering root still evaluates its whole expression, and a listed
+expression is data.
+
+A listed expression is read exactly as the stored constant its root would
+have held, so runtime code is unchanged: lowering reads an aggregate from
+immutable static data, and builds an immediate in place, which allocates
+nothing: a scalar (under `.lss` a string only when it is small, under `.boxy`
+any string, whose literal backing is image data too), a discriminant-only tag,
+or under `.boxy` a zero-sized value. The static data comes from a closed static
+initializer that builds the expression's value from its literals, which
+static data materialization evaluates at compile time into frozen image
+data with the static reference count; no runtime constructor runs, a read
+allocates nothing, and reference counting on the value does nothing, as for
+any other image data.
+
+- `.boxy` lowering reads a listed expression whose committed layout is not
+  an immediate from the slot of its initializer worker
+  (`WorkerKey.inline_literal`, `Program.inlineLiteralSlot`), one per
+  expression per program; the initializer lowers the expression's own value
+  (`Builder.inlineLiteralRead`).
+- Monotype builds a listed number, string, tag with no payload, or empty
+  record in place, through any nominal wrapping or block with no statements,
+  exactly as it restores a stored constant of that shape, so branch folding
+  and range proofs see the literal (`inlineLiteralUsesStaticData`). It lowers
+  every other listed expression as a static data candidate whose initializer
+  is the expression's own value (`InlineLiteralTask`), requested by module
+  and expression (`StaticDataValue.inline_literal`); LIR lowering then treats
+  it exactly as a stored constant's candidate.
+
+A listed expression in a function called from many places is one static
+datum per program, read at every call. Equal listed expressions in one
+program each have their own initializer and datum.
 
 A shared post-check program represents a selected root read as an explicit
 `comptime_value` expression. Its identity is the checked module id, compile-time
@@ -5048,6 +5121,15 @@ already delivered: its reports and imports, which come from the same source
 bytes as the record, are not taken a second time (debug builds check that they
 match).
 
+The coordinator's loop waits only while a frontend task is out, and then for
+a worker's result: every event it reacts to arrives through the result
+channel (a task's result, a wake for a finished task of the module-object
+scheduler's session, or a wake from a worker that ran out of memory), and the
+channel's wait ends the moment one is sent. A cancel request is a flag its
+embedder sets without waking anyone, so a cancellable compilation waits at
+most 10 ms at a time to read it. With no frontend task out, the loop does
+not wait: nothing it waits for can arrive.
+
 ## Cache Boundary
 
 Every cache entry is keyed by the content hash of its inputs: the module's
@@ -7226,9 +7308,10 @@ recursive checking work that already determines types, resolved references, and
 effect data. Checking may return temporary hoistability data from `checkExpr`
 and keep temporary binding data in the active lexical scope, but it must not add
 permanent hoistability summaries to every checked expression. The checked module
-stores only selected hoisted roots plus sparse lookup indexes needed by later
-lowering, such as checked-expression id to hoisted-root id and selected
-local-binding id to hoisted-root id.
+stores only selected hoisted roots, the selected value-form expressions that
+are no roots ("Value-Form Expressions Stay In Their Bodies"), and sparse lookup
+indexes needed by later lowering, such as checked-expression id to hoisted-root
+id and selected local-binding id to hoisted-root id.
 
 The hoistability decision must use explicit checked data, not source-name scans
 or canonicalization guesses. Allowed dependencies include literals, already
@@ -11633,7 +11716,8 @@ emitted.
 #### Constant Storage
 
 Compile-time finalization is separate from iterator representation and
-SpecConstr. Eligible constant list values become explicit
+SpecConstr. Eligible constant list values, and the value-form expressions bodies keep
+("Value-Form Expressions Stay In Their Bodies"), become explicit
 `static_data_candidate` nodes, and direct LIR lowering emits their bytes into
 the data segment. This is why a constant list consumed through `.iter()` can
 have zero runtime list allocation in a size cart even though the eval allocation
@@ -17807,7 +17891,9 @@ body ("Literal Arguments"), or the body converts it through its dictionary.
 An expression compile-time evaluation hoisted and stored is read from its
 stored value wherever it occurs, as `.lss` reads it, except in the entry
 wrapper that computes it, when its evaluation failed (it runs in place), and
-for a guarded binding's right-hand side.
+for a guarded binding's right-hand side. A value-form expression its body
+keeps is read from the static data its initializer freezes, unless its value
+is an immediate ("Value-Form Expressions Stay In Their Bodies").
 
 A value whose type is closed inside a generic body is an ordinary local with
 an ordinary layout, lowered with the same statements `.lss` emits. The
@@ -18371,8 +18457,9 @@ on, and it is the reason modules can be lowered independently and in
 parallel.
 
 Unit lowering finishes the closure of those module-definition workers and
-records their export inventory in `seedUnitWorkers`, before lowering command
-roots. Test and REPL roots, platform entrypoint wrappers, and requested static
+records their export inventory in `seedUnitWorkers`, with which of them are
+importer-visible and where each template's worker lies in its module
+(`recordExports`, Caching Under `.boxy`), before lowering command roots. Test and REPL roots, platform entrypoint wrappers, and requested static
 initializers keep their own explicit entrypoint/data references. Workers created
 only for those roots are local to the unit; being a lambda or method-entry worker
 does not make a test helper part of the module's external interface. A root can
@@ -18429,15 +18516,34 @@ and Per-Module Output is the invariant that makes it possible:
 
 - The KEY of a module's lowered output is what that output is a function of,
   extended with the compiler version, the opt level, and the target
-  (`compile.boxy_interface`, `Digests.objectInput`): the content hashes of the
-  checked modules it was built from (the module's own checked entry key, which
-  covers its imports' keys) and its evaluation output, together with its name
-  in the link. It is never a hash of a derived table: evidence, worker
-  signatures, ownership signatures and layouts are functions of those checked
-  modules, so their keys already cover them. A key names one file.
-- An edit to a module changes its checked entry key and therefore the key of
-  every module whose checked entry covers it, so the edited module and its
-  importers rebuild. A unit's task computes its key on its lane, once its
+  (`compile.boxy_interface`, `Digests.objectInput`): the module's own source,
+  checking policy and evaluation output, its name in the link, and, for each
+  module it imports, that module's interface and export digests, never its
+  implementation. A module's interface digest covers what its checked module
+  tells an importer's lowering (its checking interface, the names and hidden
+  inputs of the workers its exposed definitions, bindings and constants
+  name, its registered methods (each by its owner's name and position among
+  declarations of that name, its method name and its target, in an order no
+  checked id decides), its defaults' count, the names of its nominal
+  declarations with the number of declarations of each, which is all their
+  runtime names depend on, and the stored values an importer restores: its
+  exposed constants' and its callable bindings'. A private constant is read
+  only by its own module's code, whose object holds its value, so it is no
+  part of the interface; a Debug compiler fails when a lowering reads a
+  constant another module does not expose (`Program.assertConstReadable`)); its export digest covers the
+  importer-visible export records its object solved (FILE, below). Each folds
+  in the same digest of the module's own imports, because lowering reads
+  through an import to the modules behind it: a needs list an importer fills
+  a table from names the workers of the module's imports, and the module's
+  types name theirs. A key names one file.
+- An edit to a module changes that module's key. It changes an importer's
+  key only when it changes something the importer's key covers: an exposed
+  name, signature, or stored value, or an importer-visible export record. An
+  edit to a private function's body, a new private definition, or a new
+  expression inside an exposed function's body that leaves its ownership
+  signature and needs alone rebuilds the edited module only, because no
+  worker's name is a position in its module (NAMES, below). A unit's task
+  computes its key on its lane, once its
   imports' units are done: the module's own part of its digests (its stored
   values and public surface, the bulk of the hashing) is hashed there, or
   earlier by a lane no unit was ready for, and the imports' parts come from
@@ -18461,13 +18567,26 @@ and Per-Module Output is the invariant that makes it possible:
   entries already filed stay valid under their own keys. The name is an input
   of the module's key and of its importers', so a key always names the object
   its link needs. A whole program links nothing and names modules by content
-  identity. A worker's name is the template's position in its table, which the
-  interface covers for every template an importer can name; a default's is its
-  position among its module's defaults, and a nominal type's is its position
-  among the declarations sharing its name. A lambda's worker is named by its
-  expression, which only a function value stored in a constant reaches across
-  modules; a stored function value's recipe names its modules by checked key,
-  and its digest names them by link name.
+  identity. Within its module, a worker is named by what an edit elsewhere in
+  the module leaves alone (`Program.workerIdentity`,
+  `ImportedModuleView.templateName`): a definition's template by the
+  definition's name, and a top-level constant's or callable binding's entry
+  wrapper by the constant's name; a lambda by its outer worker, the template
+  or default owning its nested procedure site, and the site's place among
+  that owner's sites; a default by its place among its module's defaults; a
+  dictionary entry by its target. A template with no name of its own (a
+  promoted local procedure, a hoisted constant's or literal's entry wrapper)
+  is named by its position in its module's table. Exposed names are unique
+  within a module except where a module declares one name twice, which
+  canonicalization reports as a warning and resolves by keeping one
+  definition per name (`top_level_value_defs`, which is the very span of
+  `global_value_defs` when all names are distinct); each definition that
+  selection leaves out is named by its name and one more than the number of
+  module-global definitions of that name before it, and a module with no
+  duplicate does no work for this beyond comparing those two spans. A nominal
+  type's name is its position among the declarations sharing its name. A
+  stored function value's recipe names its modules by checked key, and its
+  digest names them by link name.
 - The root program's key adds the key of its platform/app pairing, which covers
   both modules' checked entries and the pairing's evaluation output: the root
   unit lowers the platform's implementations at the app's types, read through
@@ -18481,15 +18600,35 @@ and Per-Module Output is the invariant that makes it possible:
   outcome table of the outcome-restitution variant it publishes, which is an
   exported procedure with a record of its own; Per-Module Output makes all
   of it a function of the module and its imports), with
-  the digest of those records (`exportRecordsDigest`). An importer's key
-  folds in the module's export digest, which combines that records digest
-  with its imports' export digests (`Digests.recordExportsDigest`), so a
-  restored object's records are not hashed again. This is a checked
-  interface digest, never a payload-integrity hash. The v2 export digest
-  composition changes hash bytes; object format 19 also incorporates stored
-  field-default identities alongside integer worker bindings and invalidates
-  the older entries. Its inputs remain the module's own export records and its imports,
-  never its importers or other modules in the program. There
+  the digest of the importer-visible ones (`exportRecordsDigest`). A record
+  is importer-visible when another unit can read it
+  (`lower.recordExports`): it reads a worker's ownership signature and
+  published outcome table when it calls the worker and its needs when it
+  fills the worker's table, and it
+  names a worker of the module only through the module's checked interface
+  or its records. The visible records are those of the templates the
+  checked module names to importers (exposed definitions, exposed bindings'
+  templates and the templates exposed procedure aliases forward to,
+  registered methods, exposed constants' entry procedures, and the entry
+  wrappers of callable bindings, each with its integer list workers), every
+  default, every lambda and dictionary entry that takes a type table (a function value an importer's compile-time evaluation stored
+  can be any of them, and restoring it fills its table), every worker a
+  visible worker's needs list names, and the outcome-restitution variant a
+  visible worker publishes, whose identity a call of the worker demands
+  (`finishLoweredOutput` gives a variant its worker's visibility). A debug
+  compiler fails when a unit reads a record that is not visible
+  (`bindImportedInterface`, `fillTable`). A decoder resolving a worker a link's encoding names reads
+  only the record's template position, which locates the worker and is no
+  part of the digest. An importer's key folds in the module's export
+  digest, which combines that records digest with its imports' export
+  digests (`Digests.recordExportsDigest`), so a restored object's records
+  are not hashed again. This is a checked interface digest, never a
+  payload-integrity hash. The v3 export digest composition covers only
+  visible records and includes their outcome tables. Object format 24
+  carries each record's outcome table, template position and visibility
+  and invalidates the older entries. Its inputs
+  remain the module's own export records and its imports, never its
+  importers or other modules in the program. There
   is no index, no manifest, no second cache the file refers to, and nothing
   in it comes from any other cache. `ROC_VERIFY_BOXY_OBJECT_REUSE` rebuilds
   every restored or embedded object (Embedded Units) and compares the bytes,
@@ -18523,7 +18662,7 @@ compiler (`compile.boxy_embedded_units`), so a compiler that embeds it never
 lowers or compiles it for that key, with a cold cache, a warm one, or
 `--no-cache`.
 
-Exactly one entry is embedded: the Builtin's ordinary unit for the target
+One unit is embedded: the Builtin's ordinary unit for the target
 the compiler runs on at its default CPU level
 (`RocTarget.fromStdTarget` of the compiler's own target), at dev opt with
 inline expects compiled in, with no run image, no expect sites and no wasm
@@ -18531,8 +18670,13 @@ stack checks, under the Builtin's stable link name. That is the unit
 compile-time evaluation links against (`lowering_policy.compileTimeObjectLowering`)
 and the unit a native dev `roc build` or `roc run`, and a `roc test` whose
 Builtin unit needs no expect sites (the Builtin has no expects), links,
-since all of them key it identically. A compiler target without a dev
-backend embeds nothing.
+since all of them key it identically. On a target with native unit images
+it is embedded as two entries from one build: the entry holding its image,
+under its key, and the entry holding its pieces and image, under its pieces
+key (`boxy_object_cache.piecesKey`), which a link that composes pieces
+(an `Archive` output) restores (Unit Pieces And Whole-Program Dead Code).
+The table records the pieces entry with the same key input and a flag. A
+compiler target without a dev backend embeds nothing.
 
 Selection is by key, never by a description of the unit. The table records
 each entry's `KeyInput` (the Builtin's `objectInput`, the target and opt
@@ -18578,7 +18722,8 @@ pair (another Builtin, or the Builtin named by content) hashes as usual.
 `zig build run-test-builtin-unit` builds the unit through `restoreOrBuild`
 into an empty cache, with the tool compiled as the compiler is (its target,
 its optimize mode), and requires the filed entry to be byte-identical to
-the Debug tool's table entry, the table to serve its key, and the embedded
+the Debug tool's table entry, the table to serve its key, and likewise for
+the entry it files under its pieces key, and the embedded
 digests to be the ones hashing the Builtin gives. MiniCI runs it in
 ReleaseSafe, so it compares a Debug build's unit with an optimized build's;
 a compiler for a target the build machine cannot run is not verified.
@@ -18604,8 +18749,15 @@ optimization level. This is the native half of the Roc-only composition
 phase the Sealed Roc Object Boundary requires (compiler-owned code "merged,
 resolved, dead-stripped from the `provides` roots, and localized").
 
-- A UNIT'S CACHE ENTRY holds its code in PIECES, one per function, never a
-  finished object. A piece is one procedure's, refcount helper's, entry
+- A UNIT'S CACHE ENTRY for a link that composes pieces holds its code in
+  PIECES, one per function, never a finished object. Only such a link
+  reads pieces (an `archive` output, an `arm32` target, or a host without
+  unit images), so on a target with native unit images a unit's pieces are
+  encoded and filed only by a build whose link composes them, in an entry of
+  their own under the unit's pieces key (`boxy_object_cache.piecesKey`),
+  and every other command files an entry holding the unit image and no
+  pieces under the unit's key. A target without native unit images files
+  pieces under the unit's key, since they are all of its code. A piece is one procedure's, refcount helper's, entry
   wrapper's or static-data initializer's machine code with its frame and
   unwind data, its source lines and failure sites, and its outgoing
   references: to other pieces by stable identity (a procedure by its
@@ -18697,8 +18849,9 @@ unit's link name (`Program.programLocalIdentity`). A link that places whole
 unit images (the fast dev link, the wasm link, and `roc test`'s loaded
 images) keeps every unit's copy of such a worker its own calls reach, and
 binds a symbol two images define to one of them.
-`ROC_VERIFY_BOXY_OBJECT_REUSE` compares a restored unit's encoded pieces
-with a rebuilt unit's exactly as it compared objects.
+`ROC_VERIFY_BOXY_OBJECT_REUSE` compares a restored unit's encoded pieces,
+when its entry holds them, with a rebuilt unit's exactly as it compared
+objects.
 
 ### Compile-Time Evaluation Strategy
 
@@ -18796,10 +18949,19 @@ entry wrapper restores the stored value, which the other objects of a link read
 through it, so an object lowered while a root was still pending would compute
 the root's body at every read instead. The coordinator's unit scheduler
 (`compile.coordinator.BoxyObjects`) therefore builds each module's object as
-soon as the module can have one, and no sooner: a module restored from the
-checked cache with its roots complete, or one with no roots, the moment it is
-type-checked, while checking continues; every other module the moment the
-evaluator completes its roots. Each unit lowers once its imports' units are
+soon as the module can have one and the compilation needs it, and no sooner: a
+module restored from the checked cache with its roots complete, or one with no
+roots, the moment it is type-checked, while checking continues; every other
+module the moment the evaluator completes its roots. A module's checked data
+says whether its evaluation will run a program against its imports' objects
+(`CompileTimeFinalization.evaluationLinksImportObjects`: a root still to
+evaluate under `.boxy` that the checked-value writer does not complete, and no
+platform requirements), so every compilation, `roc check` included, asks for
+the objects of such a module's import closure the moment the module is
+type-checked, and the units of those that can have an object build while
+checking continues. The evaluation asks for them again, for every such module,
+before it completes the value-form roots and builds the root graph, which
+matters after the scheduler starts over under the link's names. Each unit lowers once its imports' units are
 done, since its calls compile against their export interfaces, and the units
 run on the post-check executor alongside checking, the other units, and the
 evaluations of other modules. The evaluations run the same way: a module's
@@ -18834,11 +18996,13 @@ completes it (`BoxyObjectLowering.Materializer`), so the link reads them back
 without writing them again. While checking continues, a compilation that links
 its program builds only modules reachable through import edges from the root
 package's root and the platform root, which every module the root will see is,
-and leaves one worker to checking; after it, exactly the modules the root sees.
+beside the import closures evaluations need; every compilation leaves one
+worker to checking while it continues. After checking, a compilation that links
+its program builds exactly the modules the root sees.
 Every unit and program build is given the post-check executor, whichever thread
 runs it: a session may be opened on any thread, a running task included, and a
 thread waiting in a session runs that session's queued tasks itself, so the
-parallel waves of a unit's ARC and native code generation spread over the pool
+ordered runs of a unit's ARC and native code generation spread over the pool
 from a worker as they do from the coordinating thread, and the evaluating
 thread, waiting for the next unit or program, builds queued ones itself. A
 compilation that does not link its program (`roc check`) builds the modules
@@ -18884,6 +19048,91 @@ programs "Stored Function Values" describes rather than the module's program.
 A literal argument root ("Literal Arguments") is the module's program's
 whatever its value: one whose value holds a function is evaluated for its
 outcome and discarded.
+
+#### Evaluation During Checking
+
+A compilation that links module objects (a cache, `.boxy`, a host that runs
+native code) starts compile-time evaluation while checking continues
+(`CompileTimeFinalization.EarlyEvaluation`, which the coordinator drives).
+Once every module of the build is known (every module parsed, so every import
+registered, and every import of another package naming its module), the
+coordinator reads each module's checked result as the module is checked and
+hands the evaluation each freshly checked module whose evaluation is exactly
+the one the program evaluation would run:
+
+- it is not the root module of the root package or of the platform;
+- neither it nor a module its lowering sees has platform requirements;
+- no other module of the build shares its name or the name of a module its
+  lowering sees, and none of those is named like the Builtin module: modules
+  sharing a name can be one checked identity under two packages, whose roots
+  the first artifact evaluates for both, or be named in the link by their
+  content identities, which only the finished link shows
+  (`BoxyObjects.settleNames`);
+- when the build pairs an app with its platform and it, or a module its
+  lowering sees, is in the platform root's import closure, no platform-only
+  evaluation can run: the checked platform root is finalized or has no
+  compile-time requests of its own, so every module of that closure is
+  evaluated with the program's.
+
+A module is handed over the moment the last module its lowering sees
+completes: the coordinator counts, for each eligible module, the seen modules
+not complete yet (`EarlyCandidate`), and a module completing (restored
+complete from the checked cache, checked with nothing to evaluate, or
+completed during checking) releases the modules waiting for it. A module in
+or seeing the platform root's closure also waits for the platform root to be
+checked, and is never handed over when a platform-only evaluation can run:
+that evaluation completes and commits the closure's modules before the
+program's, with report destinations of its own and a different module
+receiving the Builtin module's reports, and whether it runs depends on whether
+the app root checks, which is known only when checking ends. A module
+restored from the checked cache is never handed over; a cached module with
+roots left to evaluate is reopened by the program evaluation.
+
+Taking a module completes its value-form roots under one value schema that
+every module taken extends with the modules its lowering sees (a root's
+schema reads only the modules its type names), and prepares the root graph,
+classification and module evaluation `evaluateRootsBoxy` prepares for it,
+over the module and the modules its lowering sees that this compilation
+commits, whose problem stores its programs can report to. A module whose only
+roots are value-form is complete at once, so its object can build. Every other
+module's program is lowered and compiled as a task of the scheduler's session
+once its imports' objects are known, and then run as another task
+(`EarlyEvaluation.RunTask`): its roots run as executor tasks on the workers,
+alongside checking, unit builds and the programs of other modules, several of
+which can run at once. A run writes its own module's store, which nothing
+reads or writes until the module completes, and stores its roots' results
+holding one lock (`Options.store_lock`), since storing also writes the report
+stores and observations of modules other programs reach. The coordinating
+thread does only what decides the next step: it takes modules, starts their
+programs once the objects are known, and when a run completes moves the
+module to its next stage and, once every root is complete, tells the object
+scheduler the module completed and releases the modules waiting for it. The
+frontend loop learns of each completion as it learns of a frontend result: a
+worker finishing a task of the scheduler's session posts a wake through the
+result channel the loop waits on (`Coordinator.wakeFrontendLoop`).
+Importers' checking reads a module's checked interface and never its
+evaluation columns, so a module's importers are checked while its roots are
+evaluated. A coordinator without workers runs no task while checking
+continues, so there the evaluation during checking only completes value-form
+roots and prepares the rest.
+
+When checking completes, every module whose program has started runs to
+completion before any other evaluation uses the scheduler's session; a module
+whose program has not started is left to the program evaluation, which finds
+its value-form roots complete and evaluates the rest exactly as it would have.
+The program evaluation replays and persists the observations made during
+checking with its own (`Options.early_evaluation`), takes over the report
+destinations the evaluation during checking used for modules no evaluation of
+this compilation completes (cached modules and the Builtin module), so its
+reports are those one evaluation makes, and links its programs against the
+images the evaluation during checking loaded, unless the scheduler started
+over under the link's names, which unloads them. Modules are committed, and
+their checked entries queued for writing, after the program evaluation: the
+evaluation of a module importing another can still report to the imported
+module's problem store (an exhaustiveness failure in its code reached through
+its object), so a module's reports are final only once every importer's roots
+are complete, and an entry is written only with its final reports ("Cache
+Boundary").
 
 #### Compile-Time Evaluation Under `.lss`
 
@@ -19049,8 +19298,18 @@ recipe then holds its own table of types rather than ids of stored types. A
 generated codec worker's signature is generic, so a recipe type can name
 variables, which no stored type does, and a table keeps a block-local nominal's
 context arguments, which a stored type leaves to its reader's scope. Workers are
-named as their keys name them: templates and lambdas by checked id, codec
-pieces by their family's derivation, a compile-time slot by its root.
+named as their identities name them (Caching Under `.boxy`): a template by its
+worker's identity and an index into a table of template positions that follows
+the module table, a lambda by its owner and its place among the owner's nested
+procedure sites, a default by its place among its module's defaults, codec
+pieces by their family's derivation, a compile-time slot by its root. The
+positions table locates each template in the modules the recipe was stored
+with; it is no part of what the recipe names (`ConstStore.recipeBody`), so a
+stored function value's digest changes only when the value does, not when an
+edit elsewhere in a module moves its templates. A needs list and a function
+unit's metadata, which are read against modules built apart from them, name a
+template by its worker's identity alone, which the reader resolves through the
+worker's export record.
 
 Function types share one descriptor, so a descriptor cannot be read back into
 a type by its structure. A function value's table names its inputs instead:
@@ -19129,6 +19388,49 @@ size, or runtime performance are allowed.
 
 
 ## Shared Post-Check Model
+
+### Ordered Runs
+
+Native dev code generation, ARC and the procedure-local LIR passes run their
+per-procedure work as ordered runs on the post-check executor
+(`post_check_task_executor.runOrdered`). A run's owner splits its items into
+chunks of consecutive items by a scheduling weight, a procedure's frame size:
+each chunk carries at least a minimum weight, and a run has about sixteen
+chunks per worker, so many short procedures share one claim and a heavy
+procedure late in the run leaves the other lanes little to wait for. The
+owner submits drain tasks, at most one per worker. A drain task claims chunks
+from one shared counter, never more than a window of four chunks per worker
+past the oldest uncommitted chunk, and runs every item of each chunk it
+claims, so a lane goes from one chunk to the next without returning to the
+executor and the results waiting for their commit are bounded by the window.
+
+The owner commits items in index order, each as soon as it and every item
+before it have run, while lanes keep running later chunks. It waits only by
+receiving a completion of its session: the lane that finishes the chunk the
+owner is waiting for ends its drain task, and that completion wakes the owner,
+so no thread polls or sleeps. A drain task the owner runs itself while it waits
+ends after one chunk, so the owner gets back to committing. Commit order is
+item order for every worker count, chunking and completion order, and the
+weights decide only which lane runs an item and when, so a run's output depends
+only on its items. The first error, from an item or a commit, stops every
+further claim; items already claimed finish, nothing further commits, and the
+owner returns the error once it has received every task. Without an executor,
+the items run and commit in order on one sequential lane through the same
+callbacks.
+
+Each lane lends every item it runs one scratch arena, registered in the lane's
+state and reset after each item to a single retained chunk of at most
+`lane_scratch_retain_limit` (4 MiB), so a lane's steady-state items allocate
+nothing from the backing allocator and idle scratch is bounded per lane.
+
+A commit runs while lanes run later items, so it may change nothing an item
+reads. Native code generation commits in the run: lanes read only the frozen
+program and their own generators, and the owner appends each fragment to the
+destination. ARC and the LIR passes commit after their runs, since their
+commits append to the store every item reads: ARC appends a wave's shards in
+owner order after the wave ("ARC Borrow Inference"), and a segment of LIR pass
+phases commits in procedure order after its run ("Procedure-Local LIR
+Rewrites").
 
 ### Value Rules
 
@@ -23958,11 +24260,27 @@ proving decides a switch or a checked-arithmetic operation, and equally a
 comparison of unsigned integers with no branch beside it and the count of a
 SIMD concat-shift, so each of those four shapes admits a body to it. Debug
 builds also run every phase on the procedures its shapes excluded and fail if
-one of them would be rewritten.
+one of them would be rewritten; within a segment, each phase the shapes
+exclude is checked on every procedure no earlier phase of the segment changed.
 
-The same patch boundary applies with one worker. Every phase finishes its
-callbacks before committing in procedure order, so neither input visibility
-nor output identity depends on worker count or completion order. Each commit
+Phases run in segments. Consecutive phases that read no other procedure's
+body, allocate no fresh join identities, and prepare no layouts from an earlier
+phase's output (branch expectation, TRMC, join scalarization and join-parameter
+pruning, `ProcPasses.fusible`) form one segment; every other phase, and every
+whole-program step such as single-use inlining, is a segment boundary. A
+segment clones each procedure once, runs each of its phases the procedure's
+shapes admit on that one shard, checking admission against the shapes the
+shard has gained, and commits once: each phase therefore reads exactly what
+the commit of the phase before it would have left, and the output is the
+output of running the phases one at a time. Loop append promotion reads the
+bodies of the procedures a loop calls, so it starts a segment of its own after
+every procedure's earlier phases committed.
+
+The same patch boundary applies with one worker. A segment with workers is
+one ordered run ("Ordered Runs") whose items rewrite and whose own commit does
+nothing; every segment finishes its callbacks before committing in procedure
+order, so neither input visibility nor output identity depends on worker count
+or completion order. Each commit
 relocates appended references in both patched rows and procedure metadata.
 Fusion workers keep a procedure's full fixed point in one task. The coordinator
 inventories the old join-ID domain once; each task allocates fresh identities
@@ -25783,6 +26101,27 @@ cannot change variant symbols or emitted LIR. Submission or callback failure
 drains accepted work before freeing its owners; insertion failure discards the
 entire result rather than replaying work against a partially emitted store.
 
+Without uniqueness proofs, as in dev builds and compile-time evaluation, and
+when every statement belongs to exactly one procedure's statement list,
+nothing a procedure's planning or emission reads depends on another
+procedure's source preparation: a complete projection read is decided by the
+one source procedure whose statement list holds it, and an emission consults
+only its own source's decisions. (Procedures may share an ownership-neutral
+body; a statement two of them share takes the decision of the last source to
+decide it, so such a program uses the phased schedule below.) Procedure facts are recorded before
+the first wave, and each wave of owners is one ordered run ("Ordered Runs")
+whose task prepares a base owner's source, plans the owner, and emits it when
+its plan requests no variant. A variant reads its base procedure's prepared
+source, so a wave holds base owners or variants, never both, and every base
+wave precedes every variant wave. The wave then reserves its variants in owner
+order, emits the owners whose plans requested any in a second run, and
+appends every shard in owner order. A shard emitted before the wave's
+reservations names the shorter procedure prefix it was cloned from; appending
+relocates it exactly like one emitted after them. Proving uniqueness settles
+against every source's prepared projections, so that schedule prepares every
+source before any wave and plans, reserves and emits each wave in three
+executor round trips.
+
 A build without optional mode specialization suppresses general cost-only
 demand vectors, but it does not force every call to the solved base `RcSig`.
 Two exact ownership schedules remain mandatory in every ARC run: an owned
@@ -25863,7 +26202,9 @@ of reachability; and records the capability on the worker
 (`LIR.LirProcSpec.rc_outcomes`, one discriminant word and one mask word per
 row). The unit's export record for the worker carries that table, and the
 variant has an export record of its own under the identity its demand names
-(`LIR.ProcIdentity.ownershipVariant`). Since the capability is a function of
+(`LIR.ProcIdentity.ownershipVariant`), which is importer-visible exactly when
+the worker's is ("Caching Under `.boxy`"): an importer demands the variant
+only through a call of the worker, and it calls only a visible worker. Since the capability is a function of
 the worker's own body, the module's output still depends only on its own
 bodies and its imports, never on whether an importer calls the variant
 (Per-Module Output).
@@ -25879,7 +26220,8 @@ Variant reservation turns that demand into a body-less linked procedure
 under the identity the demand names, which is the identity the defining
 object exported, so the link resolves the call to the published variant. No
 other variant of an external procedure can be demanded. A Debug compiler
-asserts that the identity the demand names is among the imported records.
+asserts that the identity the demand names is among the imported records
+and that its record is visible.
 The owned field-take variant and every optional variant stay within their
 callee's unit.
 
@@ -30636,8 +30978,9 @@ A `.boxy` dev `roc run` of an app without a platform header builds it
 against the synthetic default platform with a fast dev link and runs the
 binary, reusing every object `roc check` filed (Caching Under `.boxy`).
 
-**Unit images.** A `.boxy` unit's cache entry (`boxy_object_cache`) carries,
-beside its pieces, a unit image (`backend.dev.UnitImage`): the unit's text
+**Unit images.** A `.boxy` unit's cache entry (`boxy_object_cache`) carries
+a unit image (`backend.dev.UnitImage`), beside its pieces only in the entry
+of a link that composes them (Unit Pieces And Whole-Program Dead Code): the unit's text
 followed by its read-only data in one block, its writable data and zero-fill
 size, its symbols, its patch sites, its DWARF fragments and its content
 digest. Every reference the unit's own placement decides is resolved when the
@@ -30649,9 +30992,21 @@ the image's regions. A site's kind is the field's encoding, x86_64's
 is placed page aligned, so an arm64 page-relative reference inside the block
 resolves at build time like an x86_64 displacement. The image is built from
 the unit's relocatable object in the target's format, ELF, Mach-O or COFF
-for either instruction set, and names its symbols by their C
+for either instruction set, read into one format-neutral form
+(`UnitImage.Object`: classified sections, symbols in symbol-table order,
+relocations with their addends), and names its symbols by their C
 names (a Mach-O name without its underscore), so images, hosted symbols and
-provides read the same on every target. A load through the global offset
+provides read the same on every target. A unit's own image never goes
+through encoded object bytes: each dev object writer gives the object it
+would encode in that form directly (`ObjectWriter.indexedImageObject`),
+exactly what reading its encoded bytes back gives, and the composition
+builds the image from it (`ObjectFileCompiler.buildUnitImage`).
+`ROC_DEV_UNIT_IMAGE_ROUNDTRIP` also encodes every unit's object, reads the
+image back from the bytes and requires the two images to be identical. The
+image builder resolves each symbol once, at its first reference, rather
+than looking its name up at every relocation. Encoded object bytes are
+read only for the compiler's support objects, which Roc's build graph
+converts. A load through the global offset
 table reads a slot the image keeps in its writable data, one per referenced
 symbol. The image is a pure function of the unit (Per-Module Output), so two
 builds of a unit write identical images. The block divides into atoms, one
@@ -31439,25 +31794,30 @@ its imports' objects and the wait for a worker. The steps are summed over
 units, and the ten slowest units by their own work, with the Builtin
 module's unit always, are printed one per row.
 
-The LIR passes report each procedure-local phase's elapsed time,
-preparation, summed worker time, idle worker capacity and ordered commit,
-with procedures visited and changed, and each whole-program step before ARC
-and after it. Summed worker time comes from one slot per task
-(`post_check_task_executor.TimedTasks`) or per lane, folded by the
-coordinator after the barrier, so no two lanes write one counter. Idle
-capacity is each parallel section's elapsed time times the executor's
-worker count, less the summed worker time.
+The LIR passes report each segment's elapsed time, preparation, idle worker
+capacity and ordered commit under its first phase, each phase's summed worker
+time with the procedures it visited and the procedures it was the first of
+its segment to change, and each whole-program step before ARC and after it.
+Summed worker time comes from one slot per task
+(`post_check_task_executor.TimedTasks`) or per lane
+(`post_check_task_executor.OrderedTiming`), folded by the owner after the
+last completion, so no two lanes write one counter. Idle capacity is each
+parallel section's elapsed time times the executor's worker count, less the
+summed worker time.
 
 ARC reports its serial steps, each parallel step's elapsed time and summed
-worker time, and idle worker capacity.
+worker time, among them the tasks that each prepare, plan and emit one
+procedure, and idle worker capacity.
 
 A module unit's native code generation reports backend setup, procedure
-setup, waves, worker setup, stack planning with emission, fragment
+setup, the ordered runs, worker setup, stack planning with emission, fragment
 extraction, idle workers, fragment commit, symbolic reference resolution,
 entrypoints, the steps lifting code into pieces, image composition, DWARF,
-object encoding and the unit image, with the bytes of code, objects,
+the unit image built from the composition's object contents, and the
+encoding of pieces for an entry that holds them, with the bytes of code,
 images, pieces and cache entries, and code bytes and statements by LIR
-statement kind. A statement's bytes run from its start to the next
+statement kind. A cache entry is written to its file in two parts, its
+records and its image, so filing it copies the image only into the file. A statement's bytes run from its start to the next
 statement's start.
 
 Lambda-set solving reports its analysis solve, which finds the row-joined

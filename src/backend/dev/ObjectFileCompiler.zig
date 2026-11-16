@@ -68,10 +68,14 @@ pub const CompilationResult = struct {
     excerpts: ?CodeExcerpt.Set = null,
     /// The object's encoded `CodeLocations`, when the compile captured them.
     code_locations: []const u8 = &.{},
+    /// The unit image a composition built in place of an object
+    /// (`ComposeOptions.unit_image`), owned by the caller once taken.
+    image: []align(UnitImage.alignment.toByteUnits()) u8 = &.{},
 
     pub fn deinit(self: *CompilationResult) void {
         self.allocator.free(self.object_bytes);
         self.allocator.free(self.code_locations);
+        self.allocator.free(self.image);
         if (self.excerpts) |*set| set.deinit();
     }
 };
@@ -91,16 +95,20 @@ pub const ComposeOptions = struct {
     /// into its own process looks procedures up by name.
     global_procs: bool = false,
     capture_code_locations: bool = false,
-    /// Receives every code reference the assembly patched in place rather
-    /// than emitting a relocation for: an excerpt's references to other
-    /// excerpts of the object. A unit image needs them to know what each
-    /// piece of code reaches.
-    patched_refs: ?*PatchedRefs = null,
+    /// Build the composition's unit image (`UnitImage`) in place of its
+    /// relocatable object: the image `UnitImage.build` would read from the
+    /// object, built from the object's contents with no object encoded.
+    unit_image: bool = false,
+    /// With `unit_image`, also encode the object, read the image back from
+    /// it with `UnitImage.build`, and require the two images to be
+    /// identical. `ROC_DEV_UNIT_IMAGE_ROUNDTRIP` turns this on for every
+    /// unit image a diagnostics-enabled compiler builds.
+    check_unit_image: bool = false,
 };
 
 /// The code references a composition patched in place, as offsets in its
 /// text section.
-pub const PatchedRefs = struct {
+const PatchedRefs = struct {
     edges: std.ArrayList(UnitImage.CodeEdge) = .empty,
     /// Where each datum starts in the object's read-only data
     /// (`UnitImage.SymbolAtoms.data_starts`).
@@ -178,7 +186,7 @@ pub const ObjectFileCompiler = struct {
         /// Detailed steps, recorded only when `Timing.detail` is set.
         /// Native procedure emission (`NativeProcCompiler.Timing`).
         native_setup_ns: u64 = 0,
-        native_waves_ns: u64 = 0,
+        native_runs_ns: u64 = 0,
         native_idle_ns: u64 = 0,
         native_worker_setup_ns: u64 = 0,
         native_emit_ns: u64 = 0,
@@ -194,7 +202,7 @@ pub const ObjectFileCompiler = struct {
         piece_extraction_ns: u64 = 0,
         content_naming_ns: u64 = 0,
         piece_data_ns: u64 = 0,
-        /// Reading a unit's composed object back into its unit image.
+        /// Building a unit's image from its composition's object contents.
         unit_image_ns: u64 = 0,
         /// Bytes of the composed objects and unit images built.
         object_bytes: u64 = 0,
@@ -240,7 +248,7 @@ pub const ObjectFileCompiler = struct {
             const measured = native orelse return;
             const value = &active.snapshot_value;
             value.native_setup_ns +|= measured.setup_ns;
-            value.native_waves_ns +|= measured.waves_ns;
+            value.native_runs_ns +|= measured.runs_ns;
             value.native_idle_ns +|= measured.capacity_ns -| (measured.worker_setup_ns +| measured.emit_ns +| measured.extract_ns);
             value.native_worker_setup_ns +|= measured.worker_setup_ns;
             value.native_emit_ns +|= measured.emit_ns;
@@ -407,43 +415,22 @@ pub const ObjectFileCompiler = struct {
     ) CompilationError![]align(UnitImage.alignment.toByteUnits()) u8 {
         std.debug.assert(target.toCpuArch() == .x86_64 or target.toCpuArch() == .aarch64);
         std.debug.assert(@import("mod.zig").imageOs(target.toOsTag()));
-        var patched: PatchedRefs = .{};
-        defer patched.deinit(self.allocator);
         var composed = try self.composeObject(&.{pieces}, target, .{
             .roots = switch (roots) {
                 .every_procedure => null,
                 .entrypoints => &.{},
             },
             .global_procs = true,
-            .patched_refs = &patched,
             .capture_code_locations = code_locations != null,
+            .unit_image = true,
         });
         defer composed.deinit();
-        const image_started = Timing.startDetail(self.timing);
-        defer if (self.timing) |timing| if (timing.detail) {
-            _ = Timing.lapDetail(timing, image_started, "unit_image_ns");
-            timing.snapshot_value.object_bytes +|= composed.object_bytes.len;
-        };
-        const image = UnitImage.build(self.allocator, &.{composed.object_bytes}, .{
-            .keep_debug = true,
-            // Code reached only through references the image cannot see
-            // keeps the whole image together.
-            .atoms = if (patched.incomplete) .whole else .{ .symbols = .{ .edges = patched.edges.items, .data_starts = patched.data_starts.items } },
-        }) catch |err| switch (err) {
-            error.OutOfMemory => return CompilationError.OutOfMemory,
-            error.InvalidObject,
-            error.UnsupportedSection,
-            error.UnsupportedSymbol,
-            error.UnsupportedRelocation,
-            error.DuplicateDefinition,
-            error.RelocationOutOfRange,
-            error.ImageTooLarge,
-            => invariant("the dev backend's object for a unit is not convertible into a unit image: {s}", .{@errorName(err)}),
-        };
         if (code_locations) |out| {
             out.* = composed.code_locations;
             composed.code_locations = &.{};
         }
+        const image = composed.image;
+        composed.image = &.{};
         if (self.timing) |timing| if (timing.detail) {
             timing.snapshot_value.image_bytes +|= image.len;
         };
@@ -1033,24 +1020,8 @@ fn encodeObject(
     dwarf_procs: []const Dwarf.ProcEntry,
     timing: ?*ObjectFileCompiler.Timing,
 ) CompilationError![]const u8 {
-    const dwarf_started_ns = if (timing) |timings| timings.start() else 0;
-    const source_file_names = allocator.alloc([]const u8, lir_store.sourceFileCount()) catch {
-        return CompilationError.OutOfMemory;
-    };
-    defer allocator.free(source_file_names);
-    for (source_file_names, 0..) |*name, i| {
-        name.* = lir_store.sourceFileName(@intCast(i));
-    }
-    var dwarf_sections = Dwarf.build(
-        allocator,
-        "roc dev",
-        source_file_names,
-        codegen.getLineEntries(),
-        dwarf_procs,
-        code.len,
-    ) catch return CompilationError.OutOfMemory;
+    var dwarf_sections = try buildDwarf(allocator, lir_store, codegen, code, dwarf_procs, timing);
     defer dwarf_sections.deinit(allocator);
-    if (timing) |timings| timings.finish(dwarf_started_ns, .dwarf);
 
     const object_encoding_started_ns = if (timing) |timings| timings.start() else 0;
     var output = std.ArrayList(u8).empty;
@@ -1082,6 +1053,95 @@ fn encodeObject(
     const object_bytes = output.toOwnedSlice(allocator) catch return CompilationError.OutOfMemory;
     if (timing) |timings| timings.finish(object_encoding_started_ns, .object_encoding);
     return object_bytes;
+}
+
+/// The debug sections of a finished code generator's code.
+fn buildDwarf(
+    allocator: Allocator,
+    lir_store: *const LirStore,
+    codegen: anytype,
+    code: []const u8,
+    dwarf_procs: []const Dwarf.ProcEntry,
+    timing: ?*ObjectFileCompiler.Timing,
+) CompilationError!Dwarf.Sections {
+    const dwarf_started_ns = if (timing) |timings| timings.start() else 0;
+    const source_file_names = allocator.alloc([]const u8, lir_store.sourceFileCount()) catch {
+        return CompilationError.OutOfMemory;
+    };
+    defer allocator.free(source_file_names);
+    for (source_file_names, 0..) |*name, i| {
+        name.* = lir_store.sourceFileName(@intCast(i));
+    }
+    const dwarf_sections = Dwarf.build(
+        allocator,
+        "roc dev",
+        source_file_names,
+        codegen.getLineEntries(),
+        dwarf_procs,
+        code.len,
+    ) catch return CompilationError.OutOfMemory;
+    if (timing) |timings| timings.finish(dwarf_started_ns, .dwarf);
+    return dwarf_sections;
+}
+
+/// The unit image of a finished composition: its object's contents in the
+/// form `UnitImage` reads an object into (`ObjectWriter.indexedImageObject`),
+/// built with the code references its assembly patched in place.
+fn buildCompositionImage(
+    allocator: Allocator,
+    lir_store: *const LirStore,
+    target: RocTarget,
+    codegen: anytype,
+    code: []const u8,
+    rodata: []const u8,
+    zero_fill_size: u64,
+    symbols: []const ObjectWriter.Symbol,
+    relocations: []const IndexedRelocation,
+    rodata_relocations: []const ObjectWriter.IndexedDataRelocation,
+    dwarf_procs: []const Dwarf.ProcEntry,
+    patched: *const PatchedRefs,
+    timing: ?*ObjectFileCompiler.Timing,
+) CompilationError![]align(UnitImage.alignment.toByteUnits()) u8 {
+    var dwarf_sections = try buildDwarf(allocator, lir_store, codegen, code, dwarf_procs, timing);
+    defer dwarf_sections.deinit(allocator);
+    const image_started = ObjectFileCompiler.Timing.startDetail(timing);
+    defer _ = ObjectFileCompiler.Timing.lapDetail(timing, image_started, "unit_image_ns");
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const object = ObjectWriter.indexedImageObject(arena_state.allocator(), target, code, rodata, zero_fill_size, symbols, relocations, rodata_relocations, codegen.getUnwindFunctions(), .{
+        .line = dwarf_sections.debug_line,
+        .abbrev = dwarf_sections.debug_abbrev,
+        .info = dwarf_sections.debug_info,
+        .line_relocs = dwarf_sections.line_relocs,
+        .info_relocs = dwarf_sections.info_relocs,
+    }, true) catch |err| switch (err) {
+        error.OutOfMemory => return CompilationError.OutOfMemory,
+        error.UnsupportedTarget => return CompilationError.UnsupportedTarget,
+        error.InvalidObject,
+        error.UnsupportedSection,
+        error.UnsupportedSymbol,
+        error.UnsupportedRelocation,
+        error.DuplicateDefinition,
+        error.RelocationOutOfRange,
+        error.ImageTooLarge,
+        => invariant("the dev backend's object for a unit is not convertible into a unit image: {s}", .{@errorName(err)}),
+    };
+    return UnitImage.buildObjects(allocator, &.{object}, .{
+        .keep_debug = true,
+        // Code reached only through references the image cannot see keeps
+        // the whole image together.
+        .atoms = if (patched.incomplete) .whole else .{ .symbols = .{ .edges = patched.edges.items, .data_starts = patched.data_starts.items } },
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return CompilationError.OutOfMemory,
+        error.InvalidObject,
+        error.UnsupportedSection,
+        error.UnsupportedSymbol,
+        error.UnsupportedRelocation,
+        error.DuplicateDefinition,
+        error.RelocationOutOfRange,
+        error.ImageTooLarge,
+        => invariant("the dev backend's object for a unit is not convertible into a unit image: {s}", .{@errorName(err)}),
+    };
 }
 
 const SymbolDefinition = struct {
@@ -1574,7 +1634,13 @@ fn composeWithCodeGen(
     defer helper_keys.deinit();
     const starts = CodeExcerpt.assembleArranged(CodeGen, allocator, &final, &canonical.set, &procs_by_identity, &helper_keys) catch return CompilationError.OutOfMemory;
     defer allocator.free(starts);
-    if (options.patched_refs) |patched| {
+    // A unit image needs every code reference the assembly patched in place
+    // rather than emitting a relocation for (an excerpt's references to
+    // other excerpts of the object) to know what each piece of code reaches.
+    var patched_refs: PatchedRefs = .{};
+    defer patched_refs.deinit(allocator);
+    if (options.unit_image) {
+        const patched = &patched_refs;
         for (canonical.set.excerpts, starts) |excerpt, start| {
             if (excerpt.symbolic_refs.len != 0) patched.incomplete = true;
             for (excerpt.refs) |ref| {
@@ -1634,7 +1700,7 @@ fn composeWithCodeGen(
                 .relocations = relocations,
             };
         }
-        try appendStaticDataExports(allocator, &final.codegen.symbols, data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols, if (options.patched_refs) |patched| &patched.data_starts else null);
+        try appendStaticDataExports(allocator, &final.codegen.symbols, data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols, if (options.unit_image) &patched_refs.data_starts else null);
     }
     for (canonical.set.excerpts, starts) |excerpt, start| switch (excerpt.kind) {
         .proc => |identity| {
@@ -1724,6 +1790,36 @@ fn composeWithCodeGen(
     var resolved = try resolveObjectSymbols(allocator, &final.codegen.symbols, symbols.items, relocations);
     defer resolved.deinit(allocator);
     if (timing) |timings| timings.finish(symbol_relocations_started_ns, .symbol_relocations);
+    if (options.unit_image) {
+        const image = try buildCompositionImage(allocator, &store, target, &final, code, rodata.items, zero_fill_size, resolved.symbols, relocations, rodata_relocations.items, dwarf_procs.items, &patched_refs, timing);
+        errdefer allocator.free(image);
+        if (options.check_unit_image or dev_diagnostics.isSet(.dev_unit_image_roundtrip)) {
+            const object_bytes = try encodeObject(allocator, &store, target, &final, code, rodata.items, zero_fill_size, resolved.symbols, relocations, rodata_relocations.items, dwarf_procs.items, null);
+            defer allocator.free(object_bytes);
+            const read_back = UnitImage.build(allocator, &.{object_bytes}, .{
+                .keep_debug = true,
+                .atoms = if (patched_refs.incomplete) .whole else .{ .symbols = .{ .edges = patched_refs.edges.items, .data_starts = patched_refs.data_starts.items } },
+            }) catch |err| switch (err) {
+                error.OutOfMemory => return CompilationError.OutOfMemory,
+                error.InvalidObject,
+                error.UnsupportedSection,
+                error.UnsupportedSymbol,
+                error.UnsupportedRelocation,
+                error.DuplicateDefinition,
+                error.RelocationOutOfRange,
+                error.ImageTooLarge,
+                => invariant("the dev backend's object for a unit is not convertible into a unit image: {s}", .{@errorName(err)}),
+            };
+            defer allocator.free(read_back);
+            if (!std.mem.eql(u8, image, read_back)) invariant("a unit image built from its object's contents differs from the image read back from the encoded object ({d} and {d} bytes)", .{ image.len, read_back.len });
+        }
+        return CompilationResult{
+            .object_bytes = &.{},
+            .allocator = allocator,
+            .image = image,
+            .code_locations = if (options.capture_code_locations) try encodeCodeLocations(allocator, &store, &final) else &.{},
+        };
+    }
     const object_bytes = try encodeObject(allocator, &store, target, &final, code, rodata.items, zero_fill_size, resolved.symbols, relocations, rodata_relocations.items, dwarf_procs.items, timing);
     errdefer allocator.free(object_bytes);
     return CompilationResult{
