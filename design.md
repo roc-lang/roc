@@ -17942,8 +17942,10 @@ strategy).
   solution's `root_subst`: the app's check instantiated the binding for the
   platform, so the app module owns the roots of that instantiation and the
   platform's call of `main!` whose error type mentions `Sql(a)` validates
-  its literals there; when the binding is a value such as `main! = run!`,
-  the edge instantiates the binding's entry wrapper, and
+  its literals there, so `roc check` and `roc build` report such a
+  literal's rejection under either strategy
+  (`test/fx-open/rejected_quote_in_main_result.roc`); when the binding is
+  a value such as `main! = run!`, the edge instantiates the binding's entry wrapper, and
   `PlatformRequirementEdge.invokes` says which), a
   generalized local function's use or construction), recording the type after the edge's
   substitution, the edge, and the callee's literal requirement index. Literal requirements are
