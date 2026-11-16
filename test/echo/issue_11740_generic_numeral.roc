@@ -21,7 +21,7 @@ main! = |_| {
     echo!(result.to_i64().to_str())
 
     also : I64
-    also = add_one(3)
+    also = add_one(3.I64)
     echo!(also.to_str())
 
     Ok({})

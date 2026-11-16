@@ -6,7 +6,6 @@
 //! gives them explicit package identities independent of that directory.
 
 const std = @import("std");
-const Sha256 = @import("base").Sha256;
 const CoreCtx = @import("ctx").CoreCtx;
 const cache_config = @import("cache_config.zig");
 const compiler_platform_sources = @import("compiler_platform_sources");
@@ -25,7 +24,6 @@ pub const MaterializeError = Allocator.Error || CoreCtx.MakePathError || CoreCtx
 pub const MaterializedPlatform = struct {
     root_file: []const u8,
     root_dir: []const u8,
-    root_source_hash: [32]u8,
     content_bytes: u64,
 };
 
@@ -128,7 +126,6 @@ pub fn materialize(
     try fs.makePath(root_dir);
 
     var content_bytes: u64 = 0;
-    var root_source_hash: [32]u8 = undefined;
     for (files(platform)) |file| {
         const dest = try std.fs.path.join(allocator, &.{ root_dir, file.path });
         defer allocator.free(dest);
@@ -136,11 +133,6 @@ pub fn materialize(
             try publishFile(allocator, fs, dest, file.bytes);
         }
         content_bytes += file.bytes.len;
-        if (std.mem.eql(u8, file.path, "main.roc")) {
-            var sha = Sha256.init(.{});
-            sha.update(file.bytes);
-            root_source_hash = sha.finalResult();
-        }
     }
 
     const root_file = try std.fs.path.join(allocator, &.{ root_dir, "main.roc" });
@@ -149,7 +141,6 @@ pub fn materialize(
     return .{
         .root_file = root_file,
         .root_dir = root_dir,
-        .root_source_hash = root_source_hash,
         .content_bytes = content_bytes,
     };
 }

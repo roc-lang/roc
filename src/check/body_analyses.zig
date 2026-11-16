@@ -53,11 +53,14 @@ pub const NodeFlags = packed struct(u8) {
     recursive_decl: bool = false,
     /// A binder bound by a recursive value declaration.
     recursive_binder: bool = false,
-    /// The binder of a generalized callable lookup binding.
+    /// The binder of a local scheme alias (`bindsLocalSchemeAlias`).
     scheme_alias_binder: bool = false,
     /// A defaulted-field default expression.
     default: bool = false,
-    _: u1 = 0,
+    /// A destructuring scheme alias declaration
+    /// (`bindsDestructuredSchemeAlias`): set on its statement and on each
+    /// binder its pattern binds.
+    destructured_alias: bool = false,
 };
 
 /// What owns a top-level unit's nodes.
@@ -86,6 +89,8 @@ pub const UnitId = enum(u32) { _ };
 
 const TopLevelDef = struct { pattern: u32, def: CIR.Def.Idx };
 
+const DestructuredAlias = struct { binder: u32, statement: StatementId };
+
 /// The CIR-only index of a checked module's bodies.
 pub const ModuleIndex = struct {
     has_expects: bool = false,
@@ -105,6 +110,9 @@ pub const ModuleIndex = struct {
     top_level_defs: []TopLevelDef = &.{},
     /// Defaulted-field default expressions, ascending.
     defaults: []u32 = &.{},
+    /// The binders of destructuring scheme alias declarations with their
+    /// declarations, by binder node, ascending.
+    destructured_aliases: []DestructuredAlias = &.{},
 
     /// The index of `env`'s bodies. `promoted_patterns` are the binding
     /// patterns of the module's promoted local procedures.
@@ -126,6 +134,7 @@ pub const ModuleIndex = struct {
         allocator.free(self.unit_nodes);
         allocator.free(self.top_level_defs);
         allocator.free(self.defaults);
+        allocator.free(self.destructured_aliases);
         self.* = .{};
     }
 
@@ -208,6 +217,26 @@ pub const ModuleIndex = struct {
         return self.flags(@backingInt(pattern)).scheme_alias_binder;
     }
 
+    /// Whether declaration `statement` is a destructuring scheme alias
+    /// (`bindsDestructuredSchemeAlias`).
+    pub fn isDestructuredAliasDecl(self: *const ModuleIndex, statement: StatementId) bool {
+        return self.flags(@backingInt(statement)).destructured_alias;
+    }
+
+    /// The destructuring scheme alias declaration that binds `pattern`, if
+    /// one does (`bindsDestructuredSchemeAlias`).
+    pub fn destructuredAliasDecl(self: *const ModuleIndex, pattern: PatternId) ?StatementId {
+        const raw = @backingInt(pattern);
+        if (!self.flags(raw).destructured_alias) return null;
+        const index = std.sort.binarySearch(DestructuredAlias, self.destructured_aliases, raw, orderDestructuredAlias) orelse
+            invariant("a destructured alias binder has no declaration in the module index");
+        return self.destructured_aliases[index].statement;
+    }
+
+    fn orderDestructuredAlias(key: u32, item: DestructuredAlias) std.math.Order {
+        return std.math.order(key, item.binder);
+    }
+
     pub fn isDefault(self: *const ModuleIndex, expr: ExprId) bool {
         return self.flags(@backingInt(expr)).default;
     }
@@ -235,6 +264,7 @@ pub const ModuleIndex = struct {
         work: std.ArrayList(Pending) = .empty,
         top_level_defs: std.ArrayList(TopLevelDef) = .empty,
         defaults: std.ArrayList(u32) = .empty,
+        destructured_aliases: std.ArrayList(DestructuredAlias) = .empty,
 
         fn init(allocator: Allocator, env: *const ModuleEnv) Allocator.Error!Builder {
             const node_count = env.store.nodes.len();
@@ -270,6 +300,7 @@ pub const ModuleIndex = struct {
             self.unit_nodes.deinit(self.allocator);
             self.top_level_defs.deinit(self.allocator);
             self.defaults.deinit(self.allocator);
+            self.destructured_aliases.deinit(self.allocator);
         }
 
         fn finish(self: *Builder) Allocator.Error!ModuleIndex {
@@ -280,6 +311,11 @@ pub const ModuleIndex = struct {
             }.lessThan);
             std.mem.sort(u32, self.defaults.items, {}, std.sort.asc(u32));
             dedupeSorted(&self.defaults);
+            std.mem.sort(DestructuredAlias, self.destructured_aliases.items, {}, struct {
+                fn lessThan(_: void, a: DestructuredAlias, b: DestructuredAlias) bool {
+                    return a.binder < b.binder;
+                }
+            }.lessThan);
             const allocator = self.allocator;
             const units = try self.units.toOwnedSlice(allocator);
             errdefer allocator.free(units);
@@ -288,6 +324,8 @@ pub const ModuleIndex = struct {
             const top_level_defs = try self.top_level_defs.toOwnedSlice(allocator);
             errdefer allocator.free(top_level_defs);
             const defaults = try self.defaults.toOwnedSlice(allocator);
+            errdefer allocator.free(defaults);
+            const destructured_aliases = try self.destructured_aliases.toOwnedSlice(allocator);
             return .{
                 .has_expects = self.has_expects,
                 .node_kinds = self.node_kinds,
@@ -298,6 +336,7 @@ pub const ModuleIndex = struct {
                 .unit_nodes = unit_nodes,
                 .top_level_defs = top_level_defs,
                 .defaults = defaults,
+                .destructured_aliases = destructured_aliases,
             };
         }
 
@@ -645,7 +684,7 @@ pub const ModuleIndex = struct {
         }
 
         /// Rejected method declarations, recursive value declarations and
-        /// their binders, and generalized callable lookup bindings.
+        /// their binders, and scheme alias declarations.
         fn indexDeclarations(self: *Builder) Allocator.Error!void {
             const env = self.env;
             const store = &env.store;
@@ -679,12 +718,23 @@ pub const ModuleIndex = struct {
                 if (data != .s_decl) continue;
                 const decl = data.s_decl;
                 if (self.node_flags[@backingInt(decl.pattern)].promoted_pattern) continue;
-                if (bindsProcedureAlias(env, decl.pattern, decl.expr)) {
+                if (bindsLocalSchemeAlias(env, decl.pattern, decl.expr)) {
                     self.node_flags[@backingInt(decl.pattern)].scheme_alias_binder = true;
                 }
-                if (recursively_referenced.count() == 0) continue;
+                // Only a destructuring scheme alias and a recursive value
+                // need the declaration's binders.
+                const destructured_alias = bindsDestructuredSchemeAlias(env, decl.pattern, decl.expr);
+                if (!destructured_alias and recursively_referenced.count() == 0) continue;
                 binders.clearRetainingCapacity();
                 try can.DependencyGraph.appendPatternBinders(env, decl.pattern, &binders, &scratch, self.allocator);
+                if (destructured_alias) {
+                    self.node_flags[@backingInt(statement)].destructured_alias = true;
+                    for (binders.items) |binder| {
+                        self.node_flags[@backingInt(binder)].destructured_alias = true;
+                        try self.destructured_aliases.append(self.allocator, .{ .binder = @backingInt(binder), .statement = statement });
+                    }
+                }
+                if (recursively_referenced.count() == 0) continue;
                 const recursive = for (binders.items) |binder| {
                     if (recursively_referenced.contains(@backingInt(binder))) break true;
                 } else false;
@@ -699,12 +749,40 @@ pub const ModuleIndex = struct {
 /// Whether `pattern = expr` binds an exact procedure alias, local or top
 /// level (design.md "Procedure Aliases").
 pub fn bindsProcedureAlias(env: *const ModuleEnv, pattern: PatternId, expr: ExprId) bool {
+    return bindsLocalSchemeAlias(env, pattern, expr) and
+        env.types.varResolvesToFunction(ModuleEnv.varFrom(pattern));
+}
+
+/// Whether the local declaration `pattern = expr` binds a scheme alias: a
+/// name for a looked-up value, generalized, so each use of the name
+/// instantiates the value's scheme anew. The value is a procedure
+/// (`bindsProcedureAlias`) or a constant whose type keeps a variable. Either
+/// way a use lowers the lookup at the use's own instantiation; the
+/// declaration computes nothing.
+pub fn bindsLocalSchemeAlias(env: *const ModuleEnv, pattern: PatternId, expr: ExprId) bool {
     const rhs = env.store.getExpr(expr);
     const is_lookup = rhs == .e_lookup_local or rhs == .e_lookup_external or
         rhs == .e_lookup_required or rhs == .e_lookup_associated_resolved;
     return is_lookup and env.store.getPattern(pattern) == .assign and
-        env.nodeIsBindingScheme(ModuleEnv.nodeIdxFrom(pattern)) and
-        env.types.varResolvesToFunction(ModuleEnv.varFrom(pattern));
+        env.nodeIsBindingScheme(ModuleEnv.nodeIdxFrom(pattern));
+}
+
+/// Whether the local declaration `pattern = expr` is a destructuring scheme
+/// alias: it takes a looked-up value apart, and its pattern is generalized,
+/// so each use of a name it binds instantiates the value's scheme anew
+/// (`(shout, _) = Hooks.pair`). A use of any of its binders lowers the lookup
+/// and the destructuring at the use's own instantiation; the declaration
+/// computes nothing.
+pub fn bindsDestructuredSchemeAlias(env: *const ModuleEnv, pattern: PatternId, expr: ExprId) bool {
+    return destructuresLookup(env, pattern, expr) and env.nodeIsBindingScheme(ModuleEnv.nodeIdxFrom(pattern));
+}
+
+/// Whether `pattern = expr` takes a looked-up value apart.
+fn destructuresLookup(env: *const ModuleEnv, pattern: PatternId, expr: ExprId) bool {
+    const rhs = env.store.getExpr(expr);
+    const is_lookup = rhs == .e_lookup_local or rhs == .e_lookup_external or
+        rhs == .e_lookup_required or rhs == .e_lookup_associated_resolved;
+    return is_lookup and env.store.getPattern(pattern) != .assign;
 }
 
 fn dedupeSorted(list: *std.ArrayList(u32)) void {
@@ -2714,7 +2792,7 @@ const index_test_source =
 
 fn expectSameIndex(expected: *const ModuleIndex, actual: *const ModuleIndex) error{TestExpectedEqual}!void {
     try std.testing.expectEqual(expected.has_expects, actual.has_expects);
-    inline for (.{ "node_kinds", "node_flags", "units", "unit_nodes", "top_level_defs", "defaults" }) |field| {
+    inline for (.{ "node_kinds", "node_flags", "units", "unit_nodes", "top_level_defs", "defaults", "destructured_aliases" }) |field| {
         try std.testing.expectEqualDeep(@field(expected, field), @field(actual, field));
     }
     // Ownership and position are defined only for reached nodes.

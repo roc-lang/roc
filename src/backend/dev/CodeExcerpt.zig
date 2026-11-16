@@ -334,7 +334,9 @@ pub fn compileRcHelperFragmentPrepared(
     return captureFragmentPrepared(CG, allocator, codegen, proc_specs, layout_store, prepared);
 }
 
-fn captureFragmentPrepared(
+/// Lift the fragment `codegen` just emitted out against the coordinator's
+/// shared immutable data catalog.
+pub fn captureFragmentPrepared(
     comptime CG: type,
     allocator: Allocator,
     codegen: *CG,

@@ -33,7 +33,7 @@ expect bytes_from(10, 4).contains(12)
 expect !(bytes_from(10, 4).contains(42))
 expect bytes_from(1, 4).map(|b| b * 2) == [2, 4, 6, 8]
 expect bytes_from(1, 5).keep_if(|b| b > 2) == [3, 4, 5]
-expect bytes_from(1, 4).fold(0, |sum, b| sum + b) == 10
+expect bytes_from(1, 4).fold(0.U8, |sum, b| sum + b) == 10
 expect bytes_from(1, 5).split_on(3) == [[1, 2], [4, 5]]
 expect second(bytes_from(5, 3)) == Ok(6)
 expect second(["a", "b"]) == Ok("b")

@@ -44,7 +44,7 @@ pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.
 const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.CheckedReports.Serialized, 1);
 
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 41 stores reproducible checking
+/// reflected in layout fingerprints. Version 45 stores reproducible checking
 /// and evaluation reports beside paired callable forwarding and request
 /// completion and cached literal argument roots for both strategies,
 /// body-local type context arguments, generated-codec recurrences,
@@ -55,14 +55,18 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// name, stored function recipes naming modules the storing module imports,
 /// type stores listing their widening field names once, anonymous structure
 /// that every use shares when nothing visible can lift or widen it, record and
-/// tag tails a use closes or lifts in place of that sharing, checked artifacts'
-/// type, scheme, blob and proc-base interning tables, type tags that record
-/// whether only `match` branch patterns put them in their row, literal
-/// argument roots whose source is their edge owner and which hold no
-/// expression, and validate-only interpolation conversion roots and literal
-/// argument roots completed as `discarded`. It rejects every earlier format.
-/// Platform-pairing entries share it.
-const checked_envelope_version: u32 = 41;
+/// tag tails a use closes or lifts in place of that sharing, literal conversion
+/// roots published for deferred literals, checked artifacts' type, scheme, blob
+/// and proc-base interning tables, type tags that record whether only `match`
+/// branch patterns put them in their row, literal argument roots whose source
+/// is their edge owner and which hold no expression, stored function recipes
+/// whose lambda tables refer to their creators' tables, compile-time roots
+/// indexed by pattern, each checking problem carrying the source regions
+/// its report highlights in place of a region per type variable, and
+/// validate-only interpolation conversion roots and literal argument roots
+/// completed as `discarded`. It rejects every earlier format, including the
+/// independent version 19 through 44 formats. Platform-pairing entries share it.
+const checked_envelope_version: u32 = 45;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment.
@@ -161,8 +165,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xAE, 0x08, 0x38, 0x87, 0x97, 0x76, 0x23, 0xDE, 0x3A, 0xD1, 0x52, 0x69, 0x87, 0x26, 0x72, 0x7C,
-        0x49, 0xCA, 0xA4, 0x31, 0xEB, 0x97, 0xD7, 0xA9, 0x63, 0x08, 0xA0, 0xE3, 0xE4, 0x59, 0xEB, 0x6E,
+        0xBA, 0x6D, 0xE1, 0x89, 0xDB, 0x1F, 0x6C, 0xC2, 0xAC, 0xF9, 0x63, 0xFF, 0x42, 0xBF, 0xBA, 0x5F,
+        0xAC, 0xDA, 0x58, 0x88, 0x84, 0xEF, 0xE8, 0xC7, 0x73, 0xF1, 0x69, 0xFF, 0x80, 0x42, 0x34, 0x21,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

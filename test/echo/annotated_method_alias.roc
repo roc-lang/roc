@@ -1,10 +1,10 @@
 # A method defined as another method of the same type, with its own annotation
 # carrying a `where` clause, called by its own name.
 Annotated(a) := { v : a }.{
-	scaled : Annotated(a) -> a where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]
+	scaled : Annotated(a) -> a where [a.times : a, a -> a, a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 	scaled = |s| s.v * 2
 
-	twice : Annotated(a) -> a where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]
+	twice : Annotated(a) -> a where [a.times : a, a -> a, a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 	twice = scaled
 }
 
