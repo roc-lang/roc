@@ -267,7 +267,8 @@ fn walkTree(allocator: Allocator, io: std.Io, dir_path: []const u8, zig_files: *
     while (try it.next(io)) |entry| {
         if (entry.kind == .sym_link) continue;
 
-        const next_path = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
+        // Always `/`, which Windows also accepts, so lints compare paths the same way on every host.
+        const next_path = try std.mem.join(allocator, "/", &.{ dir_path, entry.name });
 
         if (entry.kind == .directory) {
             // Skip .zig-cache directories
