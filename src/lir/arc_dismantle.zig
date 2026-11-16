@@ -720,7 +720,11 @@ const Analysis = struct {
         if (!self.rc_local[local_index]) return false;
         const fields = ProductFields.of(self.store, self.layouts, local) orelse return false;
         if (self.solution.isBorrowed(local) and !self.is_param[local_index] and self.projected_root[local_index] == .none and self.view_root.items[local_index] == .none) return false;
-        if (self.solution.isJoinParam(local) and !self.explicit_init_join[local_index]) return false;
+        // A procedure parameter that a self-tail loop's join also declares,
+        // and that no statement writes, is bound once, by the call: every
+        // iteration reads the one value the call passed, and the field flow
+        // follows the loop's back edge like any other path.
+        if (self.solution.isJoinParam(local) and !self.explicit_init_join[local_index] and !self.is_param[local_index]) return false;
         if (self.solution.maybeUninitializedCondition(local) != null) return false;
 
         for (0..fields.len()) |i| {
