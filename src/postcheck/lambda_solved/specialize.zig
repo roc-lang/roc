@@ -1388,9 +1388,9 @@ const Pass = struct {
             const ty: Type.TypeVarId = @fromBackingInt(@intCast(index));
             const content = store.get(ty);
             if (content == .lambda_set) {
-                if (try self.canonical(content.lambda_set, &sorted)) |span| try store.set(ty, .{ .lambda_set = span });
+                if (try self.strictlyAscendingByLambda(content.lambda_set, &sorted)) |span| try store.set(ty, .{ .lambda_set = span });
             } else if (content == .erased) {
-                if (try self.canonical(content.erased.members, &sorted)) |span| {
+                if (try self.strictlyAscendingByLambda(content.erased.members, &sorted)) |span| {
                     var copied = content.erased;
                     copied.members = span;
                     try store.set(ty, .{ .erased = copied });
@@ -1399,7 +1399,7 @@ const Pass = struct {
         }
     }
 
-    fn canonical(self: *Pass, members: Type.Span, sorted: *std.ArrayList(Type.FnMember)) Allocator.Error!?Type.Span {
+    fn strictlyAscendingByLambda(self: *Pass, members: Type.Span, sorted: *std.ArrayList(Type.FnMember)) Allocator.Error!?Type.Span {
         if (members.count() < 2) return null;
         const store = self.types();
         const ascending = for (1..members.count()) |index| {
