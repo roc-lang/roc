@@ -5857,10 +5857,34 @@ const FieldNamesIterMode = enum {
 };
 
 const StaticDataUse = struct {
-    module: checked.ModuleId,
-    node: checked.ConstNodeId,
-    checked_type: checked.CheckedTypeId,
+    source: StaticDataSource,
     ty: Type.TypeId,
+};
+
+/// What a static datum holds, apart from its type: a stored constant node,
+/// or a value-form expression its body keeps.
+const StaticDataSource = union(enum) {
+    stored: struct {
+        module: checked.ModuleId,
+        node: checked.ConstNodeId,
+        checked_type: checked.CheckedTypeId,
+    },
+    inline_literal: Ast.InlineLiteralStaticData,
+
+    fn eql(a: StaticDataSource, b: StaticDataSource) bool {
+        return switch (a) {
+            .stored => |left| switch (b) {
+                .stored => |right| moduleBytesEqual(left.module.bytes, right.module.bytes) and
+                    left.node == right.node and
+                    left.checked_type == right.checked_type,
+                .inline_literal => false,
+            },
+            .inline_literal => |left| switch (b) {
+                .stored => false,
+                .inline_literal => |right| moduleBytesEqual(left.module.bytes, right.module.bytes) and left.expr == right.expr,
+            },
+        };
+    }
 };
 
 /// A restored string lowers as its own bytes and capacity (see
@@ -5879,6 +5903,40 @@ fn constStaticDataStorage(view: ModuleView, node: checked.ConstNodeId) Common.St
         .nominal => |nominal| current = nominal.backing,
         .pending => Common.invariant("pending const reached static storage metadata production"),
         .zst, .scalar, .fn_value, .list, .box, .tuple, .record, .tag, .crash, .checked_error => return .aggregate,
+    };
+}
+
+/// Whether the value of a value-form expression its body keeps is read
+/// from a static data candidate, by the rule a restored constant follows
+/// (`constValueMayUseStaticDataCandidate`): a number, a string, a tag with
+/// no payload, or an empty record, through any nominal wrapping or block
+/// with no statements, is built in place as the literal it is, so branch
+/// folding and range proofs see it; every other value is a candidate.
+fn inlineLiteralUsesStaticData(view: ModuleView, expr: CIR.Expr.Idx) bool {
+    var current = expr;
+    while (true) switch (view.bodies.exprData(current)) {
+        .nominal => |nominal| current = nominal.backing_expr,
+        .block => |block| current = block.final_expr,
+        .numeral, .str, .str_segment, .zero_argument_tag, .empty_record => return false,
+        .list, .empty_list, .tuple, .record, .tag => return true,
+        .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .match_, .if_, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("a value-form expression a body keeps is not a literal or construction"),
+    };
+}
+
+/// The storage a value-form expression its body keeps needs: a string's
+/// backing for a string literal, possibly inside nominal wrappers, and an
+/// aggregate otherwise.
+fn inlineLiteralStorage(view: ModuleView, expr: CIR.Expr.Idx) Common.StaticDataStorage {
+    var current = expr;
+    while (true) switch (view.bodies.exprData(current)) {
+        .nominal => |nominal| current = nominal.backing_expr,
+        .block => |block| current = block.final_expr,
+        .str => |segments| {
+            var len: u64 = 0;
+            for (segments) |segment| len += view.bodies.text(view.bodies.exprData(segment).str_segment).len;
+            return .{ .string_backing = len };
+        },
+        .numeral, .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return .aggregate,
     };
 }
 
@@ -12861,27 +12919,27 @@ const Builder = struct {
 
     fn commitStaticDataValue(
         self: *Builder,
-        const_locator: checked.ConstLocator,
-        node: ?checked.ConstNodeId,
-        checked_type: checked.CheckedTypeId,
+        value: Ast.StaticDataValue,
         ty: Type.TypeId,
     ) Allocator.Error!Common.StaticDataId {
-        const const_node = self.constNode(const_locator, node);
         const use = StaticDataUse{
-            .module = const_node.module.key,
-            .node = const_node.id,
-            .checked_type = checked_type,
+            .source = switch (value) {
+                .stored => |request| blk: {
+                    const const_node = self.constNode(request.const_locator, request.node);
+                    break :blk .{ .stored = .{
+                        .module = const_node.module.key,
+                        .node = const_node.id,
+                        .checked_type = request.checked_type,
+                    } };
+                },
+                .inline_literal => |literal| .{ .inline_literal = literal },
+            },
             .ty = ty,
         };
         if (self.static_data_ids.get(use)) |existing| return existing;
 
         for (self.static_data_uses.items, 0..) |existing, index| {
-            if (!moduleBytesEqual(existing.module.bytes, use.module.bytes) or
-                existing.node != use.node or
-                existing.checked_type != use.checked_type)
-            {
-                continue;
-            }
+            if (!existing.source.eql(use.source)) continue;
             if (!try self.program.types.typeEql(&self.program.names, existing.ty, use.ty)) continue;
 
             const id: Common.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
@@ -12892,11 +12950,7 @@ const Builder = struct {
         try self.program.ensureStaticDataValueCapacity(1);
         try self.static_data_uses.ensureUnusedCapacity(self.allocator, 1);
         try self.static_data_ids.ensureUnusedCapacity(1);
-        const id = self.program.addStaticDataValueAssumeCapacity(.{
-            .const_locator = const_locator,
-            .node = node,
-            .checked_type = checked_type,
-        });
+        const id = self.program.addStaticDataValueAssumeCapacity(value);
         if (@backingInt(id) != self.static_data_uses.items.len) {
             Common.invariant("Monotype static-data use index diverged from program id");
         }
@@ -15398,12 +15452,7 @@ const Builder = struct {
         // function body, preserving the prior eager assignment of durable ids.
         for (body_draft.static_data_requests.items, static_data_ids) |request, *id| {
             const coordinator_ty = try request.ty.sealCommitted(committed_types);
-            id.* = try self.commitStaticDataValue(
-                request.const_locator,
-                request.node.get(),
-                request.checked_type,
-                coordinator_ty,
-            );
+            id.* = try self.commitStaticDataValue(request.value, coordinator_ty);
         }
         const fn_slots = try self.allocator.alloc(?Ast.FnSlot, body_draft.fns.items.len);
         errdefer self.allocator.free(fn_slots);
@@ -19174,25 +19223,25 @@ const StaticDataPartRoot = struct {
 /// Draft-local static-data identity. Graph types remain qualified by the body
 /// that owns them until ordered commit seals the request into program storage.
 const DraftStaticDataRequestAddress = struct {
-    module: checked.ModuleId,
-    node: checked.ConstNodeId,
-    checked_type: checked.CheckedTypeId,
-    checked_type_module: checked.ModuleId,
+    source: union(enum) {
+        stored: struct {
+            module: checked.ModuleId,
+            node: checked.ConstNodeId,
+            checked_type: checked.CheckedTypeId,
+            checked_type_module: checked.ModuleId,
+        },
+        inline_literal: Ast.InlineLiteralStaticData,
+    },
     ty: DraftTypeCell,
 };
 
 const DraftStaticDataRequest = struct {
-    const_locator: checked.ConstLocator,
-    node: collections.OptionalId(checked.ConstNodeId),
-    module: checked.ModuleId,
-    const_node: checked.ConstNodeId,
-    checked_type: checked.CheckedTypeId,
-    checked_type_module: checked.ModuleId,
+    value: Ast.StaticDataValue,
     ty: DraftTypeCell,
 };
 
 comptime {
-    std.debug.assert(@sizeOf(DraftStaticDataRequest) == 136);
+    std.debug.assert(@sizeOf(DraftStaticDataRequest) <= 136);
 }
 
 /// A generated-codec contract instantiated in one graph, with the boundary
@@ -22761,6 +22810,10 @@ const BodyContext = struct {
     /// value is discarded, so the root has nothing to restore there; the
     /// statement lowers its original expression, keeping its failure in place.
     in_place_statement_expr: ?ExprSite = null,
+    /// A value-form expression its body keeps whose own value is being
+    /// lowered as its static data candidate's initializer
+    /// (`InlineLiteralTask`). The step that lowers the value consumes it.
+    inline_literal_inner: ?ExprSite = null,
     /// Generated local for the top-level constant root currently being
     /// restored. Recursive references to that exact checked const identity
     /// consume this local so the restored value becomes an explicit recursive
@@ -23025,13 +23078,27 @@ const BodyContext = struct {
         ty: DraftTypeCell,
     ) Allocator.Error!DraftStaticDataId {
         const const_node = self.builder.constNode(const_locator, node);
-        const address: DraftStaticDataRequestAddress = .{
-            .checked_type_module = checked_type_module,
-            .module = const_node.module.key,
-            .node = const_node.id,
-            .checked_type = checked_type,
+        return try self.draftStaticDataRequestAt(.{
+            .source = .{ .stored = .{
+                .checked_type_module = checked_type_module,
+                .module = const_node.module.key,
+                .node = const_node.id,
+                .checked_type = checked_type,
+            } },
             .ty = ty,
-        };
+        }, .{ .stored = .{
+            .const_locator = const_locator,
+            .node = node,
+            .checked_type = checked_type,
+        } });
+    }
+
+    /// The draft static data request at `address`, requesting `value`.
+    fn draftStaticDataRequestAt(
+        self: *BodyContext,
+        address: DraftStaticDataRequestAddress,
+        value: Ast.StaticDataValue,
+    ) Allocator.Error!DraftStaticDataId {
         if (self.draft.static_data_request_ids.get(address)) |existing| return existing;
 
         try self.draft.static_data_requests.ensureUnusedCapacity(self.allocator, 1);
@@ -23040,15 +23107,7 @@ const BodyContext = struct {
         errdefer _ = self.draft.static_data_request_ids.remove(address);
         const id: DraftStaticDataId =
             @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.static_data_requests.items.len))));
-        self.draft.static_data_requests.appendAssumeCapacity(.{
-            .checked_type_module = checked_type_module,
-            .const_locator = const_locator,
-            .node = .of(node),
-            .module = const_node.module.key,
-            .const_node = const_node.id,
-            .checked_type = checked_type,
-            .ty = ty,
-        });
+        self.draft.static_data_requests.appendAssumeCapacity(.{ .value = value, .ty = address.ty });
         entry.value_ptr.* = id;
         return id;
     }
@@ -34258,6 +34317,8 @@ const BodyContext = struct {
         /// An interpolation: its compile-time conversion, then its assembler
         /// called with the parts' values.
         interpolation: InterpolationLowerTask,
+        /// A value-form expression its body keeps, read as static data.
+        inline_literal: InlineLiteralTask,
     };
 
     const InterpolationLowerTask = struct {
@@ -37207,6 +37268,7 @@ const BodyContext = struct {
             .cell_inner,
             .type_inner,
             .expr,
+            .inline_literal,
             .closed_low_level,
             .closed_procedure,
             .closed_operands_at_node,
@@ -37268,7 +37330,64 @@ const BodyContext = struct {
             .destructured_alias => |*task| return self.stepDestructuredAlias(task, input),
             .callsite_intrinsic => |*task| return self.stepCallsiteIntrinsic(task, input),
             .interpolation => |*task| return self.stepInterpolationLower(task, input),
+            .inline_literal => |*task| return self.stepInlineLiteral(frame, task, input),
         }
+    }
+
+    /// A value-form expression its body keeps
+    /// (`CompileTimeRootTable.inline_literals`), and the step that lowers
+    /// its own value.
+    const InlineLiteralTask = struct {
+        expr: ExprSite,
+        inner: union(enum) {
+            cell: struct { cell: DraftTypeCell, expected_node: NodeId },
+            ty: Type.TypeId,
+            own,
+        },
+    };
+
+    /// Whether `expr_id` is a value-form expression its body keeps that is
+    /// read as a static data candidate here, rather than built in place: its
+    /// value has a part a restored constant reads from static data
+    /// (`inlineLiteralUsesStaticData`), and it is not the value its own
+    /// candidate's initializer is lowering.
+    fn inlineLiteralSite(self: *BodyContext, expr_id: ExprSite) bool {
+        const node = exprSourceNode(self.view, expr_id) orelse return false;
+        if (!self.view.compile_time_roots.isInlineLiteral(node)) return false;
+        if (!inlineLiteralUsesStaticData(self.view, node)) return false;
+        if (self.inline_literal_inner) |inner| if (inner == expr_id) return false;
+        return true;
+    }
+
+    /// The static data candidate of a value-form expression its body keeps
+    /// (design.md "Value-Form Expressions Stay In Their Bodies"): the
+    /// expression's own value, lowered as usual, is the candidate's
+    /// initializer. LIR lowering reads an aggregate from the static data the
+    /// initializer freezes, and builds an immediate in place, exactly as it
+    /// treats a stored constant's candidate.
+    fn stepInlineLiteral(self: *BodyContext, frame: *LowerFrame, task: *InlineLiteralTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        if (frame.cursor == 0) {
+            frame.cursor = 1;
+            self.inline_literal_inner = task.expr;
+            return switch (task.inner) {
+                .cell => |cell| requestLowerTask(self, .{ .cell_inner = .{ .expr = task.expr, .cell = cell.cell, .expected_node = cell.expected_node } }),
+                .ty => |ty| requestLowerTask(self, .{ .type_inner = .{ .expr = task.expr, .ty = ty } }),
+                .own => requestLowerTask(self, .{ .expr_inner = .{ .expr = task.expr } }),
+            };
+        }
+        self.inline_literal_inner = null;
+        const lowered = input.?.exprValue();
+        const node = exprSourceNode(self.view, task.expr).?;
+        const cell = self.exprTypeCell(lowered);
+        const id = try self.draftStaticDataRequestAt(.{
+            .source = .{ .inline_literal = .{ .module = self.view.key, .expr = node } },
+            .ty = cell,
+        }, .{ .inline_literal = .{ .module = self.view.key, .expr = node } });
+        return loweredExprStep(try self.addExprWithTypeCell(cell, .{ .static_data_candidate = .{
+            .static_data = id,
+            .storage = inlineLiteralStorage(self.view, node),
+            .value = .{ .runtime = lowered },
+        } }));
     }
 
     /// An interpolation's conversion receives its literal segments and returns
@@ -37597,6 +37716,10 @@ const BodyContext = struct {
         if (try self.restoredHoistedExprAtNode(checked_expr, expected_node)) |restored| {
             return loweredExprStep(restored);
         }
+        if (self.inlineLiteralSite(checked_expr)) {
+            frame.cursor = 7;
+            return requestLowerTask(self, .{ .inline_literal = .{ .expr = checked_expr, .inner = .{ .cell = .{ .cell = cell, .expected_node = expected_node } } } });
+        }
         frame.cursor = 5;
         switch (expr.data) {
             .lookup_local => |lookup| return try self.lookupExprAtNodeStep(checked_expr, lookup.resolved, expected_node),
@@ -37768,6 +37891,10 @@ const BodyContext = struct {
             .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         if (try self.restoredHoistedExprAtType(checked_expr, ty)) |restored| return loweredExprStep(restored);
+        if (self.inlineLiteralSite(checked_expr)) {
+            frame.cursor = 3;
+            return requestLowerTask(self, .{ .inline_literal = .{ .expr = checked_expr, .inner = .{ .ty = ty } } });
+        }
         switch (expr.data) {
             .runtime_error => |runtime_error| {
                 frame.cursor = 3;
@@ -37886,6 +38013,10 @@ const BodyContext = struct {
         if (exprSourceNode(self.view, expr_id) != null and self.view.hoisted_constants.lookupByExpr(expr_id.node()) != null) {
             const expr_node = try self.lowerExprTypeNode(expr_id);
             if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return self.exprInnerDone(task, restored);
+        }
+        if (self.inlineLiteralSite(expr_id)) {
+            frame.cursor = 1;
+            return requestLowerTask(self, .{ .inline_literal = .{ .expr = expr_id, .inner = .own } });
         }
         switch (expr.data) {
             // A literal conversion is the leaf that resolves its checked
@@ -45520,16 +45651,12 @@ const BodyContext = struct {
             precomputed_plan,
         );
         const value_local = try self.addLocal(self.builder.symbols.fresh(), value_ty);
-        const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const inserted = try self.lowerDictInsert(
-            dict_ty,
-            key_ty,
-            value_ty,
-            try self.localExpr(dict_local, dict_ty),
-            try self.localExpr(key_local, key_ty),
-            try self.localExpr(value_local, value_ty),
-        );
+        const value_rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        // The dict and state the entry leaves behind, once a key the dict
+        // already holds has been settled.
+        const settled_join = try self.reserveGeneratedJoinPoint(ret_ty);
         const inserted_local = try self.addLocal(self.builder.symbols.fresh(), dict_ty);
+        const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
 
         const entry_end = switch (entry_end_mode) {
             .uncounted => blk: {
@@ -45595,10 +45722,166 @@ const BodyContext = struct {
             } } }),
         };
 
-        const with_inserted = try self.wrapLet(inserted_local, dict_ty, inserted, entry_end, ret_ty);
-        const value_body = try self.sequenceTryRecord(value_parse, value_parse_ret_ty, value_local, value_name, rest_local, rest_name, with_inserted, ret_ty);
+        const insert_body = try self.lowerParseDictInsertEntry(
+            dict_ty,
+            key_ty,
+            value_ty,
+            encoding_expr,
+            encoding_ty,
+            state_ty,
+            dict_local,
+            key_local,
+            value_local,
+            value_rest_local,
+            settled_join,
+            ret_ty,
+        );
+        try self.completeGeneratedJoinPoint(
+            settled_join,
+            &.{
+                .{ .local = inserted_local, .ty = dict_ty },
+                .{ .local = rest_local, .ty = state_ty },
+            },
+            &.{},
+            entry_end,
+            insert_body,
+        );
+        const value_body = try self.sequenceTryRecord(value_parse, value_parse_ret_ty, value_local, value_name, value_rest_local, rest_name, settled_join, ret_ty);
         const separator_body = try self.sequenceTry(separator_try, separator_try_ty, value_state_local, value_body, ret_ty);
         return try self.sequenceTryRecord(key_parse, key_parse_ret_ty, key_local, value_name, after_key_local, rest_name, separator_body, ret_ty);
+    }
+
+    /// Add a parsed entry to the dict with `Dict.insert_fresh`, then jump to
+    /// `settled_join` with the resulting dict and the state to continue from.
+    /// A key the dict already holds goes to the format's
+    /// `parse_dict_duplicate_key`, called with the state after the entry's
+    /// value: `KeepFirst` leaves the dict as it is, and `KeepLast` replaces
+    /// the held value through `Dict.insert`.
+    fn lowerParseDictInsertEntry(
+        self: *BodyContext,
+        dict_ty: Type.TypeId,
+        key_ty: Type.TypeId,
+        value_ty: Type.TypeId,
+        encoding_expr: DraftExprId,
+        encoding_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+        dict_local: DraftLocalId,
+        key_local: DraftLocalId,
+        value_local: DraftLocalId,
+        value_rest_local: DraftLocalId,
+        settled_join: DraftExprId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        const ret_info = self.tryInfo(ret_ty);
+        const outcome = try self.lowerDictInsertFresh(
+            dict_ty,
+            key_ty,
+            value_ty,
+            try self.localExpr(dict_local, dict_ty),
+            try self.localExpr(key_local, key_ty),
+            try self.localExpr(value_local, value_ty),
+        );
+
+        const fresh_dict_local = try self.addLocal(self.builder.symbols.fresh(), dict_ty);
+        const inserted_pat = try self.addPat(.{ .ty = outcome.ty, .data = .{ .tag = .{
+            .name = outcome.inserted_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{try self.bindPat(fresh_dict_local, dict_ty)}),
+        } } });
+        const inserted_body = try self.jumpToGeneratedJoin(
+            settled_join,
+            &.{
+                try self.localExpr(fresh_dict_local, dict_ty),
+                try self.localExpr(value_rest_local, state_ty),
+            },
+            &.{},
+            &.{},
+            ret_ty,
+        );
+
+        const held_dict_local = try self.addLocal(self.builder.symbols.fresh(), dict_ty);
+        const refused_key_local = try self.addLocal(self.builder.symbols.fresh(), key_ty);
+        const refused_value_local = try self.addLocal(self.builder.symbols.fresh(), value_ty);
+        const occupied_fields = [_]DraftRecordDestruct{
+            .{ .name = try self.nameStoreMut().internRecordFieldLabel("dict"), .pattern = try self.bindPat(held_dict_local, dict_ty) },
+            .{ .name = try self.nameStoreMut().internRecordFieldLabel("key"), .pattern = try self.bindPat(refused_key_local, key_ty) },
+            .{ .name = try self.nameStoreMut().internRecordFieldLabel("value"), .pattern = try self.bindPat(refused_value_local, value_ty) },
+        };
+        const occupied_record_pat = try self.addPat(.{ .ty = outcome.occupied_ty, .data = .{ .record = try self.addRecordDestructSpan(&occupied_fields) } });
+        const occupied_pat = try self.addPat(.{ .ty = outcome.ty, .data = .{ .tag = .{
+            .name = outcome.occupied_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{occupied_record_pat}),
+        } } });
+
+        const decision_ty = try self.parseArrayEventType(state_ty, "KeepFirst", "KeepLast");
+        const decision_try_ty = try self.tryTypeLike(ret_ty, decision_ty, ret_info.err_ty);
+        const decision_try = try self.lowerParseFormatMethod(
+            "parse_dict_duplicate_key",
+            &.{ encoding_expr, try self.localExpr(value_rest_local, state_ty) },
+            &.{ encoding_ty, state_ty },
+            dict_ty,
+            decision_try_ty,
+        );
+        const decision_local = try self.addLocal(self.builder.symbols.fresh(), decision_ty);
+
+        const keep_first_tag = self.monoTagByText(decision_ty, "KeepFirst");
+        const keep_first_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const keep_first_pat = try self.addPat(.{ .ty = decision_ty, .data = .{ .tag = .{
+            .name = keep_first_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{try self.bindPat(keep_first_state_local, state_ty)}),
+        } } });
+        const keep_first_body = try self.jumpToGeneratedJoin(
+            settled_join,
+            &.{
+                try self.localExpr(held_dict_local, dict_ty),
+                try self.localExpr(keep_first_state_local, state_ty),
+            },
+            &.{},
+            &.{},
+            ret_ty,
+        );
+
+        const keep_last_tag = self.monoTagByText(decision_ty, "KeepLast");
+        const keep_last_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const keep_last_pat = try self.addPat(.{ .ty = decision_ty, .data = .{ .tag = .{
+            .name = keep_last_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{try self.bindPat(keep_last_state_local, state_ty)}),
+        } } });
+        const keep_last_body = try self.jumpToGeneratedJoin(
+            settled_join,
+            &.{
+                try self.lowerDictInsert(
+                    dict_ty,
+                    key_ty,
+                    value_ty,
+                    try self.localExpr(held_dict_local, dict_ty),
+                    try self.localExpr(refused_key_local, key_ty),
+                    try self.localExpr(refused_value_local, value_ty),
+                ),
+                try self.localExpr(keep_last_state_local, state_ty),
+            },
+            &.{},
+            &.{},
+            ret_ty,
+        );
+
+        const decision_branches = [_]DraftBranch{
+            .{ .pat = keep_first_pat, .body = keep_first_body },
+            .{ .pat = keep_last_pat, .body = keep_last_body },
+        };
+        const decision_match = try self.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
+            .scrutinee = try self.localExpr(decision_local, decision_ty),
+            .branches = try self.addBranchSpan(&decision_branches),
+        } } });
+        const occupied_body = try self.sequenceTry(decision_try, decision_try_ty, decision_local, decision_match, ret_ty);
+
+        const outcome_branches = [_]DraftBranch{
+            .{ .pat = inserted_pat, .body = inserted_body },
+            .{ .pat = occupied_pat, .body = occupied_body },
+        };
+        return try self.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
+            .scrutinee = outcome.expr,
+            .branches = try self.addBranchSpan(&outcome_branches),
+        } } });
     }
 
     fn lowerParseDictKey(
@@ -54547,6 +54830,59 @@ const BodyContext = struct {
         });
     }
 
+    /// A call of `Dict.insert_fresh`, with its outcome row: `Inserted` holds
+    /// the dict with the entry added, and `Occupied` holds a record of the
+    /// unchanged dict and the key and value that were not inserted.
+    fn lowerDictInsertFresh(
+        self: *BodyContext,
+        dict_ty: Type.TypeId,
+        key_ty: Type.TypeId,
+        value_ty: Type.TypeId,
+        dict_expr: DraftExprId,
+        key_expr: DraftExprId,
+        value_expr: DraftExprId,
+    ) Allocator.Error!struct {
+        expr: DraftExprId,
+        ty: Type.TypeId,
+        inserted_tag: Type.Tag,
+        occupied_tag: Type.Tag,
+        occupied_ty: Type.TypeId,
+    } {
+        const prepared = try self.frozenFormatCodecCallForShape(.parser, "insert_fresh", dict_ty);
+        const lookup = prepared.lookup;
+        const callable_mono_ty = prepared.callable_ty;
+        const insert_fn = functionShape(self.typeStore(), callable_mono_ty, "Dict.insert_fresh target method was not a function");
+        const arg_tys = self.typeStore().span(insert_fn.args);
+        if (arg_tys.len != 3) Common.invariant("Dict.insert_fresh target method had an unexpected arity");
+        self.assertSameType(GuardedList.at(arg_tys, 0), dict_ty, "Dict.insert_fresh dict argument type differed from Dict type");
+        self.assertSameType(GuardedList.at(arg_tys, 1), key_ty, "Dict.insert_fresh key argument type differed from key type");
+        self.assertSameType(GuardedList.at(arg_tys, 2), value_ty, "Dict.insert_fresh value argument type differed from value type");
+
+        const outcome_ty = insert_fn.ret;
+        const inserted_tag = self.monoTagByText(outcome_ty, "Inserted");
+        const occupied_tag = self.monoTagByText(outcome_ty, "Occupied");
+        const occupied_ty = self.singleTagPayloadType(occupied_tag, "Dict.insert_fresh Occupied outcome");
+        self.assertSameType(self.singleTagPayloadType(inserted_tag, "Dict.insert_fresh Inserted outcome"), dict_ty, "Dict.insert_fresh Inserted payload type differed from Dict type");
+        self.assertSameType(self.recordFieldType(occupied_ty, try self.nameStoreMut().internRecordFieldLabel("dict")), dict_ty, "Dict.insert_fresh Occupied dict type differed from Dict type");
+        self.assertSameType(self.recordFieldType(occupied_ty, try self.nameStoreMut().internRecordFieldLabel("key")), key_ty, "Dict.insert_fresh Occupied key type differed from key type");
+        self.assertSameType(self.recordFieldType(occupied_ty, try self.nameStoreMut().internRecordFieldLabel("value")), value_ty, "Dict.insert_fresh Occupied value type differed from value type");
+
+        return .{
+            .expr = try self.addExpr(.{
+                .ty = outcome_ty,
+                .data = .{ .call_proc = .{
+                    .callee = try self.draftProcCalleeForSlot(prepared.callee),
+                    .args = try self.addExprSpan(&[_]DraftExprId{ dict_expr, key_expr, value_expr }),
+                    .captures = try self.methodTargetCaptureSpan(lookup),
+                } },
+            }),
+            .ty = outcome_ty,
+            .inserted_tag = inserted_tag,
+            .occupied_tag = occupied_tag,
+            .occupied_ty = occupied_ty,
+        };
+    }
+
     fn lowerDictToList(
         self: *BodyContext,
         dict_ty: Type.TypeId,
@@ -62794,6 +63130,31 @@ const BodyContext = struct {
         } });
     }
 
+    /// The `Dict.insert_fresh` outcome row at the checked-evidence boundary.
+    /// `freshDictInsertFreshOutcomeVar` in check/Check.zig builds the same row
+    /// and must agree with this one.
+    fn graphDictInsertFreshOutcome(
+        self: *BodyContext,
+        dict_node: NodeId,
+        key_node: NodeId,
+        value_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const occupied_payload = try self.graphClosedRecord(&.{
+            .{ .name = try self.nameStoreMut().internRecordFieldLabel("dict"), .ty = dict_node, .default = .none },
+            .{ .name = try self.nameStoreMut().internRecordFieldLabel("key"), .ty = key_node, .default = .none },
+            .{ .name = try self.nameStoreMut().internRecordFieldLabel("value"), .ty = value_node, .default = .none },
+        });
+        const inserted_name = try self.nameStoreMut().internTagLabel("Inserted");
+        const occupied_name = try self.nameStoreMut().internTagLabel("Occupied");
+        return try self.graph.newNode(.{ .tag_union = .{
+            .tags = try self.graph.arena().dupe(InstTag, &.{
+                .{ .name = inserted_name, .checked_name = inserted_name, .payloads = try self.graph.arena().dupe(NodeId, &.{dict_node}) },
+                .{ .name = occupied_name, .checked_name = occupied_name, .payloads = try self.graph.arena().dupe(NodeId, &.{occupied_payload}) },
+            }),
+            .ext = try self.graph.newNode(.empty_tag_union),
+        } });
+    }
+
     fn graphTryLike(
         self: *BodyContext,
         template_try: NodeId,
@@ -63292,6 +63653,14 @@ const BodyContext = struct {
             "parse_dict_after_entry",
             false,
         ) or added;
+        added = try self.prepareParseFormatControlCodecCall(
+            boundary_expr,
+            shape_node,
+            contract_subject_node,
+            boundary_callable_node,
+            "parse_dict_duplicate_key",
+            false,
+        ) or added;
         return added;
     }
 
@@ -63562,6 +63931,15 @@ const BodyContext = struct {
                     "insert",
                     &.{ dict_node, key_node, value_node },
                     dict_node,
+                ) or added;
+                added = try self.prepareOwnedCodecMethodCall(
+                    boundary_expr,
+                    kind,
+                    dict_node,
+                    dict_node,
+                    "insert_fresh",
+                    &.{ dict_node, key_node, value_node },
+                    try self.graphDictInsertFreshOutcome(dict_node, key_node, value_node),
                 ) or added;
                 break :blk added;
             },

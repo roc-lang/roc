@@ -179,6 +179,45 @@ test "generated associated method markers are not value bindings" {
     try std.testing.expectEqual(@as(usize, 0), countDefsWithExprTag(&env, env.value_binding_defs, .e_derived_method));
 }
 
+test "issue 13077 nested derived declarations have distinct owners" {
+    // https://github.com/roc-lang/roc/issues/13077
+    // Deriving the same methods for distinct nominal types must not warn.
+    const source =
+        \\Outer := { node : Outer.Inner }.{
+        \\    is_eq : _
+        \\    to_hash : _
+        \\    Inner := [Leaf(Str)].{
+        \\        is_eq : _
+        \\        to_hash : _
+        \\    }
+        \\}
+    ;
+
+    const allocator = std.testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    try std.testing.expect(!ast.hasErrors());
+
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+    var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
+    defer can.deinit();
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    for (diagnostics) |diagnostic| {
+        std.debug.print("unexpected diagnostic: {s}\n", .{@tagName(diagnostic)});
+    }
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.len);
+}
+
 test "unfiltered value-definition spans reuse global definition storage" {
     const source =
         \\one = || {}

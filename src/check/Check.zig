@@ -16280,6 +16280,9 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
 
     var keep_oracle = try HoistedRootKeepOracle.init(self.gpa, self.selected_hoisted_roots.items, keep_roots);
     defer keep_oracle.deinit(self.gpa);
+    var reads: std.ArrayListUnmanaged(u32) = .empty;
+    defer reads.deinit(self.gpa);
+    keep_oracle.reads = &reads;
 
     const reaches_rejected = try self.hoistedRootsReachingRejectedCode();
     defer self.gpa.free(reaches_rejected);
@@ -16293,6 +16296,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     var kept_validation_count: u32 = 0;
     for (self.selected_hoisted_roots.items, 0..) |*root, i| {
         keep_oracle.current_root_index = i;
+        reads.clearRetainingCapacity();
         const intrinsic = !self.selectedHoistedRootNamesRetiredBinder(root.*) and
             (root.body == .pattern_error or root.body == .valueless_binding or !self.hoistExprInvalidated(root.expr)) and
             !reaches_rejected[i] and
@@ -16309,6 +16313,9 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         if (!deps) continue;
 
         keep_roots[i] = true;
+        // An earlier root whose binding this kept root reads stays a root:
+        // the evaluation reads it by reference.
+        for (reads.items) |read| self.selected_hoisted_roots.items[read].read_by_root = true;
         kept_count += 1;
         switch (root.body) {
             .expr => kept_expr_count += 1,
@@ -16838,6 +16845,9 @@ const HoistedRootKeepOracle = struct {
     expr_roots: collections.DenseMapUnmanaged(CIR.Expr.Idx, u32) = .empty,
     keep_roots: []const bool,
     current_root_index: usize = 0,
+    /// When set, the selected roots whose bindings the current root reads
+    /// and finds kept, by index, in the order it reads them.
+    reads: ?*std.ArrayListUnmanaged(u32) = null,
 
     fn init(
         allocator: Allocator,
@@ -16949,11 +16959,13 @@ fn hoistedRootBindingIsKept(
     pattern: CIR.Pattern.Idx,
     context: *const HoistedDependencyContext,
     keep_oracle: *const HoistedRootKeepOracle,
-) bool {
-    return self.patternIsTopLevel(pattern) or
+) Allocator.Error!bool {
+    if (self.patternIsTopLevel(pattern) or
         self.promoted_local_procedure_patterns.contains(pattern) or
-        context.contains(pattern) or
-        (keep_oracle.selectedPatternIsKept(pattern) orelse false);
+        context.contains(pattern)) return true;
+    const kept = keep_oracle.selectedPatternIsKept(pattern) orelse return false;
+    if (kept) if (keep_oracle.reads) |reads| try reads.append(self.gpa, keep_oracle.pattern_roots.get(pattern).?);
+    return kept;
 }
 
 /// One expression's own check; the subexpressions it depends on go on
@@ -16975,7 +16987,7 @@ fn hoistedRootExprStep(
 
     const gpa = self.gpa;
     return switch (self.cir.store.getExpr(expr)) {
-        .e_lookup_local => |lookup| self.hoistedRootBindingIsKept(lookup.pattern_idx, context, keep_oracle),
+        .e_lookup_local => |lookup| try self.hoistedRootBindingIsKept(lookup.pattern_idx, context, keep_oracle),
         .e_lookup_external,
         .e_lookup_associated_local,
         .e_lookup_associated,
@@ -45346,6 +45358,19 @@ const DispatchDedupScratch = struct {
     }
 };
 
+/// Journal that deduplication dropped the requirement whose callable is
+/// `dropped_fn_var` in favor of the one whose callable is `retained_fn_var`.
+/// A dispatch written against the dropped callable is keyed by that exact
+/// var, so it reaches the retained relation's selected target only through
+/// this fold (`publishDispatchRelationMerges`).
+fn recordDeduplicatedDispatchRelation(self: *Self, dropped_fn_var: Var, retained_fn_var: Var) Allocator.Error!void {
+    if (dropped_fn_var == retained_fn_var) return;
+    try self.types.static_dispatch_relation_merges.append(self.types.gpa, .{
+        .dropped_fn_var = dropped_fn_var,
+        .retained_fn_var = retained_fn_var,
+    });
+}
+
 fn deduplicateGeneralizedDispatchRequirements(
     self: *Self,
     scheme_var: Var,
@@ -45460,8 +45485,11 @@ fn deduplicateGeneralizedDispatchRequirements(
                 if (constraint.origin == .where_clause) {
                     const body_required = constraint.origin.where_clause.body_required or
                         (retained.origin == .where_clause and retained.origin.where_clause.body_required);
+                    try self.recordDeduplicatedDispatchRelation(retained.fn_var, constraint.fn_var);
                     retained.* = constraint;
                     retained.origin.where_clause.body_required = body_required;
+                } else {
+                    try self.recordDeduplicatedDispatchRelation(constraint.fn_var, retained.fn_var);
                 }
                 duplicate = true;
                 break;
@@ -45511,6 +45539,7 @@ fn deduplicateGeneralizedDispatchRequirements(
                 try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.fn_var, requirement.constraint.fn_var, env);
             self.canonical_key_writer.invalidateAnchoredKeys();
             if (same_callable) {
+                try self.recordDeduplicatedDispatchRelation(requirement.constraint.fn_var, entry.value_ptr.fn_var);
                 const retained = &self.type_schemes.items[scheme_idx].dispatch_requirements.items[entry.value_ptr.write_index];
                 retained.deferred_generated_codec = retained.deferred_generated_codec or requirement.deferred_generated_codec;
                 retained.pristine_codec_is_scheme_only = retained.pristine_codec_is_scheme_only or requirement.pristine_codec_is_scheme_only;
@@ -62308,7 +62337,8 @@ fn validateEncodeFormatMethod(
 /// The dict protocol, mirroring the list one: `parse_dict_start` may declare
 /// the entry count, `parse_dict_next` reports whether an entry follows,
 /// `parse_dict_after_key` consumes whatever sits between a key and its value,
-/// and `parse_dict_after_entry` reports whether more entries follow.
+/// `parse_dict_after_entry` reports whether more entries follow, and
+/// `parse_dict_duplicate_key` settles an entry whose key the dict already holds.
 fn validateEncodeDictProtocolMethod(
     self: *Self,
     subject_var: Var,
@@ -62355,12 +62385,14 @@ fn beginParseDictProtocolMethod(
         .parse_dict_next => try self.freshParseArrayEventTryVar(state_var, err_var, "Entry", "Done", env, region),
         .parse_dict_after_key, .parse_key_start => try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region),
         .parse_dict_after_entry => try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region),
+        .parse_dict_duplicate_key => try self.freshParseArrayEventTryVar(state_var, err_var, "KeepFirst", "KeepLast", env, region),
     };
     const method_name = switch (protocol_method) {
         inline .parse_dict_start,
         .parse_dict_next,
         .parse_dict_after_key,
         .parse_dict_after_entry,
+        .parse_dict_duplicate_key,
         .parse_key_start,
         => |known| try self.protocolMethodName(@tagName(known)),
     };
@@ -63141,6 +63173,7 @@ const DictParseMethod = enum {
     parse_dict_next,
     parse_dict_after_key,
     parse_dict_after_entry,
+    parse_dict_duplicate_key,
     parse_key_start,
 };
 
@@ -63796,6 +63829,7 @@ fn stepDerivedParseNominal(
             .{ .dict_protocol = .{ .subject_var = nominal_var, .method = .parse_dict_next } },
             .{ .dict_protocol = .{ .subject_var = nominal_var, .method = .parse_dict_after_key } },
             .{ .dict_protocol = .{ .subject_var = nominal_var, .method = .parse_dict_after_entry } },
+            .{ .dict_protocol = .{ .subject_var = nominal_var, .method = .parse_dict_duplicate_key } },
         });
     }
     if (self.nominalIsBuiltinDecl(nominal, .try_type)) {
@@ -64109,7 +64143,7 @@ fn validateDictConstructionMethods(
         env,
         region,
     ))) |result| return result;
-    return try self.validateGeneratedNominalMethodCall(
+    if (derivedCodecFailed(try self.validateGeneratedNominalMethodCall(
         dict_var,
         dict_nominal,
         "insert",
@@ -64118,7 +64152,46 @@ fn validateDictConstructionMethods(
         constraint,
         env,
         region,
+    ))) |result| return result;
+    return try self.validateGeneratedNominalMethodCall(
+        dict_var,
+        dict_nominal,
+        "insert_fresh",
+        &.{ dict_var, key_var, value_var },
+        try self.freshDictInsertFreshOutcomeVar(dict_var, key_var, value_var, env, region),
+        constraint,
+        env,
+        region,
     );
+}
+
+/// What `Dict.insert_fresh` returns: the dict with the entry added, or, for a
+/// key the dict already holds, the unchanged dict with the key and value handed
+/// back. `graphDictInsertFreshOutcome` in postcheck/monotype/lower.zig builds
+/// the same row.
+fn freshDictInsertFreshOutcomeVar(
+    self: *Self,
+    dict_var: Var,
+    key_var: Var,
+    value_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const dict_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("dict"));
+    const key_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("key"));
+    const value_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("value"));
+    const occupied_record = try self.freshClosedRecordVar(&.{
+        .{ .name = dict_name, .presence = .required(dict_var) },
+        .{ .name = key_name, .presence = .required(key_var) },
+        .{ .name = value_name, .presence = .required(value_var) },
+    }, env, region);
+
+    const inserted_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Inserted"));
+    const occupied_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Occupied"));
+    return try self.freshClosedTagUnionVar(&.{
+        try self.types.mkTag(inserted_ident, &.{dict_var}),
+        try self.types.mkTag(occupied_ident, &.{occupied_record}),
+    }, env, region);
 }
 
 fn validateGeneratedNominalMethodCall(
