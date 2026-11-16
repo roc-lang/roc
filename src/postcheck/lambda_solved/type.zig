@@ -69,11 +69,45 @@ comptime {
     std.debug.assert(@sizeOf(Capture) == 64);
 }
 
-/// Function member of a lambda set.
+/// Identifier for one instantiation of a binding group: a row of
+/// `Ast.Polymorphism.instantiations`.
+pub const InstId = enum(u32) {
+    /// What every member names once Lambda Specialize has given each
+    /// instantiation its own lifted functions: the member's lambda symbol
+    /// alone then identifies its function.
+    specialized = std.math.maxInt(u32),
+    _,
+};
+
+/// Function member of a lambda set: a lambda at one instantiation of its
+/// binding group. Lambda solving gives every member it creates its group's
+/// identity instantiation, and instantiating a generalized group gives each
+/// copied member the reference's instantiation. Lambda Specialize rewrites
+/// each member to the lifted function specialized for its instantiation and
+/// to `InstId.specialized`, so consumers of a specialized program key members
+/// by `lambda` alone.
 pub const FnMember = struct {
     lambda: Common.Symbol,
     captures: Span,
+    inst: InstId = .specialized,
 };
+
+/// The owner of a type variable class: the binding group whose solving
+/// created it, numbered from `first_group_owner`, or one of the two
+/// sentinels. A class takes the oldest owner of the variables it joined.
+pub const Owner = u32;
+
+/// Owner of variables created outside every binding group's solve, once
+/// solving has finished: older than every group.
+pub const global_owner: Owner = 0;
+
+/// Owner number of the first binding group.
+pub const first_group_owner: Owner = 1;
+
+/// Owner of variables created before any group is solved (registered
+/// function types and local types): no group has related them yet, so they
+/// belong to the first group whose solving relates them.
+pub const unowned: Owner = std.math.maxInt(u32);
 
 /// One entry of a nominal record's declared fields; consumed by layout and
 /// descriptor planning (the backing row stays lexicographic).
@@ -86,7 +120,6 @@ pub const DeclaredField = union(enum) {
 pub const Content = union(enum) {
     link: TypeVarId,
     unbound,
-    forall,
     primitive: MonoType.Primitive,
     named: struct {
         named_type: MonoType.NamedType,
@@ -132,9 +165,11 @@ pub const Content = union(enum) {
     /// clones that can reach `unify` must own their vars.
     mono: struct {
         id: MonoType.TypeId,
-        /// Clone context tying recursive back-references within one lazily
-        /// materialized tree to their existing vars, exactly as an eager
-        /// clone's memo map did. `no_leaf_context` until first expansion.
+        /// Clone context tying the occurrences of one Monotype within one
+        /// instance of a Monotype cycle (or one whole producer-authored
+        /// signature graph) to one var, so a recursive back-reference reaches
+        /// the node it recurs into. `no_leaf_context` for a leaf that begins
+        /// a tree of its own.
         ctx: u32 = no_leaf_context,
     },
 };
@@ -167,7 +202,6 @@ pub const ErasedContent = std.meta.fieldInfo(Content, .erased).type;
 pub const StoredNode = union(enum(u8)) {
     link: TypeVarId,
     unbound,
-    forall,
     primitive: MonoType.Primitive,
     named: u32,
     record: Span,
@@ -188,7 +222,6 @@ fn contentOf(node: StoredNode, named_payloads: []const NamedContent, erased_payl
     return switch (node) {
         .link => |target| .{ .link = target },
         .unbound => .unbound,
-        .forall => .forall,
         .primitive => |primitive| .{ .primitive = primitive },
         .named => |index| .{ .named = named_payloads[index] },
         .record => |span_| .{ .record = span_ },
@@ -241,6 +274,14 @@ pub const Store = struct {
     captures: std.ArrayList(Capture),
     fn_members: std.ArrayList(FnMember),
     declared_fields: std.ArrayList(DeclaredField),
+    /// The owner of each variable's class, read at its root.
+    owners: std.ArrayList(Owner) = .empty,
+    /// The owner every new variable gets.
+    current_owner: Owner = unowned,
+    /// While a binding group is solved: its owner, and the class roots older
+    /// than it that a link joined to a class it owns (`escapes`).
+    escape_watch: ?Owner = null,
+    escapes: std.ArrayList(TypeVarId) = .empty,
     /// Advances on every write that can change a variable's meaning, so a
     /// result derived from the store can tell whether it is still current.
     mutation_epoch: u64 = 0,
@@ -264,6 +305,8 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Store) void {
+        self.escapes.deinit(self.allocator);
+        self.owners.deinit(self.allocator);
         self.declared_fields.deinit(self.allocator);
         self.fn_members.deinit(self.allocator);
         self.captures.deinit(self.allocator);
@@ -284,7 +327,6 @@ pub const Store = struct {
         return switch (content) {
             .link => |target| .{ .link = target },
             .unbound => .unbound,
-            .forall => .forall,
             .primitive => |primitive| .{ .primitive = primitive },
             .named => |named| blk: {
                 if (previous) |node| if (node == .named) {
@@ -328,29 +370,50 @@ pub const Store = struct {
         try self.vars.ensureUnusedCapacity(self.allocator, 1);
         try self.analysis_changes.ensureUnusedCapacity(self.allocator, 1);
         try self.owned_named_backings.ensureUnusedCapacity(self.allocator, 1);
+        try self.owners.ensureUnusedCapacity(self.allocator, 1);
         self.vars.appendAssumeCapacity(try self.storeNode(content, null));
         self.owned_named_backings.appendAssumeCapacity(false);
+        self.owners.appendAssumeCapacity(self.current_owner);
         self.analysis_changes.appendAssumeCapacity();
         return id;
     }
 
     pub fn set(self: *Store, id: TypeVarId, content: Content) std.mem.Allocator.Error!void {
-        if (content == .link) return self.setLink(id, content.link);
+        if (content == .link) return try self.setLink(id, content.link);
         const node = try self.storeNode(content, self.vars.items[@backingInt(id)]);
         self.mutation_epoch +%= 1;
         self.analysis_changes.mark(id);
         self.vars.items[@backingInt(id)] = node;
     }
 
-    /// Link `id` to `target`, carrying an owned named backing to its root.
-    pub fn setLink(self: *Store, id: TypeVarId, target: TypeVarId) void {
+    /// Link `id` to `target`, carrying an owned named backing and the older
+    /// owner to its root.
+    pub fn setLink(self: *Store, id: TypeVarId, target: TypeVarId) std.mem.Allocator.Error!void {
         self.mutation_epoch +%= 1;
         self.analysis_changes.mark(id);
+        const target_root = self.root(target);
         if (self.owned_named_backings.items[@backingInt(id)]) {
-            const target_root = self.root(target);
             self.owned_named_backings.items[@backingInt(target_root)] = true;
         }
+        const id_owner = self.owners.items[@backingInt(self.root(id))];
+        const target_owner = self.owners.items[@backingInt(target_root)];
+        if (id_owner != target_owner) {
+            const older = @min(id_owner, target_owner);
+            if (self.escape_watch) |watched| {
+                // A class the watched group owns joined an older one: the
+                // older class is part of that group's environment now.
+                if (older < watched and @max(id_owner, target_owner) >= watched) {
+                    try self.escapes.append(self.allocator, target_root);
+                }
+            }
+            self.owners.items[@backingInt(target_root)] = older;
+        }
         self.vars.items[@backingInt(id)] = .{ .link = target };
+    }
+
+    /// The owner of `id`'s class.
+    pub fn ownerOf(self: *const Store, id: TypeVarId) Owner {
+        return self.owners.items[@backingInt(self.root(id))];
     }
 
     /// Visit exactly the identities changed since a proof observer last ran.
@@ -377,7 +440,7 @@ pub const Store = struct {
         while (true) {
             switch (self.vars.items[@backingInt(current)]) {
                 .link => |target| current = target,
-                .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .hole, .mono => return current,
+                .unbound, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .hole, .mono => return current,
             }
         }
     }
@@ -394,7 +457,7 @@ pub const Store = struct {
         while (current != root_id) {
             const next = switch (self.vars.items[@backingInt(current)]) {
                 .link => |target| target,
-                .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .hole, .mono => break,
+                .unbound, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .hole, .mono => break,
             };
             // Existing links already transferred backing ownership. Compression
             // only shortens that exact path, without changing any dependency.
@@ -532,7 +595,7 @@ pub const Store = struct {
             while (true) {
                 switch (self.vars[@backingInt(current)]) {
                     .link => |target| current = target,
-                    .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .hole, .mono => return current,
+                    .unbound, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .hole, .mono => return current,
                 }
             }
         }

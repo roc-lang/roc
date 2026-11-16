@@ -14,6 +14,7 @@ const FunctionRelocationKind = @import("../Relocation.zig").FunctionRelocationKi
 const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
 const object = @import("mod.zig");
 const DebugReloc = object.DebugReloc;
+const UnitImage = @import("../UnitImage.zig");
 
 /// ELF file header constants
 const ELF = struct {
@@ -645,6 +646,94 @@ pub const ElfWriter = struct {
         // its file offset only has to be inside the file.
         appendShdr(output, .{ .sh_name = shname_bss, .sh_type = ELF.SHT_NOBITS, .sh_flags = ELF.SHF_ALLOC | ELF.SHF_WRITE, .sh_offset = shdr_offset, .sh_size = self.zero_fill_size, .sh_addralign = 16 });
         std.debug.assert(output.items.len == object_size);
+    }
+
+    /// The object `write` encodes, in the form a unit image is built from:
+    /// exactly what `UnitImage` reads back from the encoded bytes
+    /// (`UnitImage.Object`), with `keep_debug` deciding whether the debug
+    /// sections are kept as `UnitImage.BuildOptions` does. Section contents
+    /// stay borrowed from the writer.
+    pub fn imageObject(self: *const Self, arena: Allocator, keep_debug: bool) (Allocator.Error || UnitImage.BuildError)!UnitImage.Object {
+        const pointer_bearing = self.rodata_relocs.items.len != 0;
+        const debug_class = struct {
+            fn of(keep: bool, class: UnitImage.SectionClass) UnitImage.SectionClass {
+                return if (keep) class else .skip;
+            }
+        }.of;
+        const skipped: UnitImage.Section = .{ .class = .skip, .bytes = &.{}, .size = 0, .addralign = 1 };
+        const sections = try arena.alloc(UnitImage.Section, 14);
+        sections[0] = skipped;
+        sections[1] = .{ .class = .text, .bytes = self.text, .size = self.text.len, .addralign = 16 };
+        sections[2] = .{ .class = if (pointer_bearing) .data else .rodata, .bytes = self.rodata, .size = self.rodata.len, .addralign = 16 };
+        for (sections[3..8]) |*section| section.* = skipped;
+        sections[8] = .{ .class = debug_class(keep_debug, .debug_line), .bytes = self.debug.line, .size = self.debug.line.len, .addralign = 1 };
+        sections[9] = .{ .class = debug_class(keep_debug, .debug_abbrev), .bytes = self.debug.abbrev, .size = self.debug.abbrev.len, .addralign = 1 };
+        sections[10] = .{ .class = debug_class(keep_debug, .debug_info), .bytes = self.debug.info, .size = self.debug.info.len, .addralign = 1 };
+        sections[11] = skipped;
+        sections[12] = skipped;
+        sections[13] = .{ .class = .bss, .bytes = &.{}, .size = self.zero_fill_size, .addralign = 16 };
+
+        // The null symbol, the section symbols DWARF relocations name, then
+        // the writer's symbols in order.
+        const writer_symbol_offset: u32 = 4;
+        const symbols = try arena.alloc(UnitImage.ObjectSymbol, self.symbols.items.len + writer_symbol_offset);
+        symbols[0] = .{ .name = "", .value = 0, .size = 0, .section = null, .bind = .local, .kind = .notype, .hidden = false, .skip = true };
+        for (symbols[1..writer_symbol_offset], [_]u32{ 1, 8, 9 }) |*symbol, section| {
+            symbol.* = .{ .name = "", .value = 0, .size = 0, .section = section, .bind = .local, .kind = .section, .hidden = false, .skip = false };
+        }
+        for (self.symbols.items, symbols[writer_symbol_offset..]) |sym, *symbol| symbol.* = .{
+            .name = sym.name,
+            .value = sym.offset,
+            .size = sym.size,
+            .section = switch (sym.section) {
+                .text => 1,
+                .rodata => 2,
+                .bss => 13,
+                .data, .undef => null,
+            },
+            .bind = if (sym.is_global) .global else .local,
+            .kind = if (sym.is_function) .func else if (sym.section == .rodata or sym.section == .bss) .object else .notype,
+            .hidden = sym.is_hidden,
+            .skip = false,
+        };
+
+        const relocs = try arena.alloc(UnitImage.Reloc, self.text_relocs.items.len + self.rodata_relocs.items.len + self.debug.line_relocs.len + self.debug.info_relocs.len);
+        var at: usize = 0;
+        for ([_]struct { []const TextReloc, u32 }{ .{ self.text_relocs.items, 1 }, .{ self.rodata_relocs.items, 2 } }) |group| {
+            for (group[0]) |rel| {
+                relocs[at] = .{
+                    .section = group[1],
+                    .offset = rel.offset,
+                    .kind = switch (self.arch) {
+                        .x86_64 => try UnitImage.classifyX86_64Reloc(rel.reloc_type),
+                        .aarch64 => try UnitImage.classifyAarch64Reloc(rel.reloc_type),
+                    },
+                    .symbol = rel.symbol_idx + writer_symbol_offset,
+                    .addend = rel.addend,
+                };
+                at += 1;
+            }
+        }
+        for ([_]struct { []const DebugReloc, u32 }{ .{ self.debug.line_relocs, 8 }, .{ self.debug.info_relocs, 10 } }) |group| {
+            for (group[0]) |rel| {
+                relocs[at] = .{
+                    .section = group[1],
+                    .offset = rel.section_offset,
+                    .kind = switch (rel.width) {
+                        .four => .abs32,
+                        .eight => .abs64,
+                    },
+                    .symbol = switch (rel.target) {
+                        .text => 1,
+                        .debug_line => 2,
+                        .debug_abbrev => 3,
+                    },
+                    .addend = @intCast(rel.addend),
+                };
+                at += 1;
+            }
+        }
+        return .{ .sections = sections, .symbols = symbols, .relocs = relocs, .text_section = 1, .static_data_section = 2, .x86_64 = self.arch == .x86_64 };
     }
 
     fn appendShdr(output: *std.ArrayList(u8), shdr: Elf64_Shdr) void {

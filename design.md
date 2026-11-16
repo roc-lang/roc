@@ -1392,12 +1392,19 @@ eligible expression, failure to evaluate, store, restore, or emit it correctly
 is a compiler bug with a regression test, not a reason to demote the expression
 from compile-time evaluation.
 
-Selection decides which expressions are roots, never how a root is completed.
-Once the module's dispatch plans and literal conversion roots are published,
-checking records for each selected root which producer completes it: the
-checked-value writer for a root in value form, an evaluator for every other
-("Value-Form Roots"). That record changes neither which expressions are roots
-nor any type.
+Selection decides which expressions are roots, in two steps. The checker
+traversal above selects candidates: every maximal eligible expression and
+every binding a candidate or runtime code reads. Publication then makes each
+candidate a root except a data constant in value form ("Value-Form Roots")
+that binds no top-level name and whose binding no kept candidate reads
+(`SelectedHoistedRoot.read_by_root`, which pruning records as it keeps the
+reading candidate): such an expression computes nothing, so its body keeps it
+("Value-Form Expressions Stay In Their Bodies"). This is the selection rule,
+not a demotion: value form is a fact of the checked expression, decided
+before any evaluation and never after one fails. Once the module's dispatch
+plans are published, publication records for each root it makes which
+producer completes it: the checked-value writer for a root in value form, an
+evaluator for every other ("Value-Form Roots"). That record changes no type.
 
 ### Every Rejection Is Explicit Recovery
 
@@ -2194,13 +2201,18 @@ the pairing. The unpaired platform's templates remain unchanged.
 #### Value-Form Roots
 
 A constant root whose checked expression already is its value computes
-nothing: `end_of_block = 256`, or the `Err(NotFound)` and `Ok({ x: 0, y: 0 })`
-a function body returns. **A root whose checked expression is in value form
-is completed by the checked-value writer; every other root is completed by an
-evaluator.** Each root has exactly one producer, which checking records on
-the root (`CompileTimeRoot.completion`), and finalization consumes that
-record as it is: it never re-inspects the expression, and never tries one
-producer and then the other.
+nothing: `end_of_block = 256`. **A root whose checked expression is in value
+form is completed by the checked-value writer; every other root is completed
+by an evaluator.** Each root has exactly one producer, which publication
+records on the root as it makes it (`CompileTimeRoot.completion`), and
+finalization consumes that record as it is: it never re-inspects the
+expression, and never tries one producer and then the other.
+
+The roots in value form are top-level constants, a selected binding that
+binds a top-level name, and a selected local binding a kept root reads by
+reference. Any other selected expression in value form, such as the
+`Err(NotFound)` or `Ok({ x: 0, y: 0 })` a function body returns, is no root
+at all: its body keeps it ("Value-Form Expressions Stay In Their Bodies").
 
 An expression is in value form when it is one of these, judged over checked
 CIR kinds (as the checked body reader presents them) and checked types:
@@ -2221,14 +2233,21 @@ CIR kinds (as the checked body reader presents them) and checked types:
   required, and whose every field value is in value form;
 - a nominal construction whose backing expression is in value form, unless
   its type is a builtin nominal other than `Bool` and `Try`;
+- a block with no statements whose final expression is in value form: its
+  value is that expression's, so `if n == 0 { [] } else { ["a", "b"] }`
+  has two value-form branches (`valueFormValueExpr` names the expression a
+  writer reads the value from);
 
 and no part other than the root itself is read at a row other than its own
 (`CheckedBodies.rowCoercion`). The root's own coercion belongs to the site
 reading the root, which converts the stored value as it converts any other.
 Only `constant` and `hoisted_constant` roots whose body is their expression
-qualify. Checking marks them after it has published the module's dispatch
-plans and literal conversion roots (`publishValueFormRoots`); marking reads
-the checked types and changes none.
+qualify. Publication decides value form once, where it creates the module's
+roots (`CompileTimeRootTable.fromModule`), after it has published the
+module's dispatch plans: a numeral with a `from_numeral` plan is not in value
+form, and a literal with a conversion root always has such a plan, so the
+conversion roots published later decide nothing. Deciding reads the checked
+types and changes none.
 
 Everything else stays with the evaluator, deliberately:
 
@@ -2242,7 +2261,8 @@ Everything else stays with the evaluator, deliberately:
 - String interpolation, a record update, a record whose type stores a field
   by its presence or fills it from a default, a call, a dispatch, an
   operator (unary minus included), a lookup of any definition, a field or
-  tuple access, a block, a branch, `dbg`, `expect`, and `crash`.
+  tuple access, a block with a statement, a branch, `dbg`, `expect`, and
+  `crash`.
 - A reference to another root's completed value. Its value is complete when
   the root runs, but writing it would copy or share another root's nodes,
   which this rule leaves to a later step.
@@ -2284,6 +2304,59 @@ wrapper of a completed root, but a module's object defines each completed
 root's wrapper for the other objects of a link, and runtime reads restore
 the stored value through the const template, exactly as for an evaluated
 root.
+
+#### Value-Form Expressions Stay In Their Bodies
+
+A selected data constant in value form that binds no top-level name and
+whose binding no kept root reads is not made a root (see "Root Selection
+During Checking"). Making it one would cost a root request, an entry
+wrapper template and its compiled wrapper in the module's object, a const
+template, a hoisted-constant entry, a stored value and the checked-value
+writer's work, all to recover what the expression already says. Publication
+lists these expressions instead, ascending
+(`CompileTimeRootTable.inline_literals`), and their bodies keep them. A
+binding whose right-hand side is listed is an ordinary local binding: its
+declaration stays in the body and its uses read the local.
+
+The rule applies at every position. A value-form part of a larger selected
+expression that is not in value form, such as `[1, 2]` in
+`List.concat([1, 2], [3])`, is covered by that expression's root and is
+evaluated with it, as before. A value-form part of an expression that is no
+root, such as `[1, 2]` in `List.concat([1, 2], xs)` with `xs` read at
+runtime, was a candidate of its own and is listed. Either way nothing about
+a value-form expression is computed at runtime that a root would have
+stored: the covering root still evaluates its whole expression, and a listed
+expression is data.
+
+A listed expression is read exactly as the stored constant its root would
+have held, so runtime code is unchanged: lowering reads an aggregate from
+immutable static data, and builds an immediate in place, which allocates
+nothing: a scalar (under `.lss` a string only when it is small, under `.boxy`
+any string, whose literal backing is image data too), a discriminant-only tag,
+or under `.boxy` a zero-sized value. The static data comes from a closed static
+initializer that builds the expression's value from its literals, which
+static data materialization evaluates at compile time into frozen image
+data with the static reference count; no runtime constructor runs, a read
+allocates nothing, and reference counting on the value does nothing, as for
+any other image data.
+
+- `.boxy` lowering reads a listed expression whose committed layout is not
+  an immediate from the slot of its initializer worker
+  (`WorkerKey.inline_literal`, `Program.inlineLiteralSlot`), one per
+  expression per program; the initializer lowers the expression's own value
+  (`Builder.inlineLiteralRead`).
+- Monotype builds a listed number, string, tag with no payload, or empty
+  record in place, through any nominal wrapping or block with no statements,
+  exactly as it restores a stored constant of that shape, so branch folding
+  and range proofs see the literal (`inlineLiteralUsesStaticData`). It lowers
+  every other listed expression as a static data candidate whose initializer
+  is the expression's own value (`InlineLiteralTask`), requested by module
+  and expression (`StaticDataValue.inline_literal`); LIR lowering then treats
+  it exactly as a stored constant's candidate.
+
+A listed expression in a function called from many places is one static
+datum per program, read at every call. Equal listed expressions in one
+program each have their own initializer and datum.
 
 A shared post-check program represents a selected root read as an explicit
 `comptime_value` expression. Its identity is the checked module id, compile-time
@@ -7229,9 +7302,10 @@ recursive checking work that already determines types, resolved references, and
 effect data. Checking may return temporary hoistability data from `checkExpr`
 and keep temporary binding data in the active lexical scope, but it must not add
 permanent hoistability summaries to every checked expression. The checked module
-stores only selected hoisted roots plus sparse lookup indexes needed by later
-lowering, such as checked-expression id to hoisted-root id and selected
-local-binding id to hoisted-root id.
+stores only selected hoisted roots, the selected value-form expressions that
+are no roots ("Value-Form Expressions Stay In Their Bodies"), and sparse lookup
+indexes needed by later lowering, such as checked-expression id to hoisted-root
+id and selected local-binding id to hoisted-root id.
 
 The hoistability decision must use explicit checked data, not source-name scans
 or canonicalization guesses. Allowed dependencies include literals, already
@@ -11688,7 +11762,8 @@ emitted.
 #### Constant Storage
 
 Compile-time finalization is separate from iterator representation and
-SpecConstr. Eligible constant list values become explicit
+SpecConstr. Eligible constant list values, and the value-form expressions bodies keep
+("Value-Form Expressions Stay In Their Bodies"), become explicit
 `static_data_candidate` nodes, and direct LIR lowering emits their bytes into
 the data segment. This is why a constant list consumed through `.iter()` can
 have zero runtime list allocation in a size cart even though the eval allocation
@@ -12913,18 +12988,32 @@ value's own row (Value Rows: Uses Share One Row) the relation only ties the
 read to the root's slot.
 
 A join follows a value, so Lambda Solved must hold one node per OCCURRENCE of
-a row-bearing type that a join can change, not one per type. Its lazy
-Monotype leaves share clones to save work: within one expanded type every
-occurrence of one sub-type is one node, and a callable-free type that no join
-can change is one node wherever it occurs. Both ties are kept only for types
-that cannot change under unification (`Solver.isCloneInvariant`: no callable
-slot, and no tag row a join can change) and, within a clone context, for rows
-that lie on a cycle, whose back-references the tie exists for. A callable-free
-type holding a row a join can change and reaching no cycle is POSITIONAL
-(`Solver.LeafSharing`): each occurrence is its own leaf, in no context.
-Otherwise two unrelated unions that both receive a value of one narrower type
-would be joined through it by type identity rather than by flow, and one tag
-label standing in both with two payload types would then be unified.
+a type that a join can change, not one per type; the same holds for callable
+slots, which join where function values flow. Its lazy Monotype leaves tie
+two occurrences of one Monotype to one node only where something requires
+it. A type that cannot change under unification (`Solver.isCloneInvariant`:
+no callable slot, and no tag row a join can change) is one node wherever it
+occurs. A clone context instantiates one Monotype cycle: within it, each type
+on the cycle is one node, so a recursive type's back-reference reaches the
+node it recurs into (`rest : Iter(item)` is its enclosing iterator), and the
+next unrolling of the cycle is never a separate copy. A named type's argument
+scope binds each backing position of an argument's Monotype, up to nested
+named types, to that argument. An exact producer-authored signature graph
+(`Lifted.Fn.signature`) expands in one whole-root context in which every
+occurrence of a Monotype is one node, since its producer means them to be
+one value. Monotype lowers nested lambdas with exact signature graphs too, so
+a closure typed `Iter(I64) -> Iter(I64)` has one node for its argument and
+its result. Every other occurrence is its own leaf: a callable-free type
+holding a row a join can change and reaching no cycle is POSITIONAL
+(`Solver.LeafSharing`), and a callable-bearing or cyclic occurrence that is
+not on a cycle with its parent begins a tree of its own, in no context until
+it reaches a cycle. So both fields of `{ a : Iter(I64), b : Iter(I64) }`, or
+the argument and result of a callback typed `Iter(I64) -> Iter(I64)`, have
+independent callable slots. Otherwise two unrelated unions that both receive
+a value of one narrower type would be joined through it by type identity
+rather than by flow, and one tag label standing in both with two payload
+types would then be unified; likewise two function values would share a
+lambda set merely because their types are equal.
 
 Which rows a join can change is found by solving (`solveProgram`). A row
 changes only where unification relates two types instantiated from DIFFERENT
@@ -12932,7 +13021,11 @@ Monotypes; relating two instances of one Monotype unites rows that are
 already equal. The sharing solve relates every body with one clone per
 callable-free Monotype, and records both Monotypes of every such pair.
 Sharing a clone only adds relations, so the sharing solve relates every pair
-that a solve sharing fewer clones does. When it records no row-bearing
+that a solve sharing fewer clones does. Both solves generalize binding groups
+the same way (see "Lambda Set Generalization"), and an instantiation's copies
+carry the Monotypes of the nodes they copy, so the pairs a polymorphic solve
+relates are pairs of the same Monotypes; the sharing solve finishes and
+generalizes every group, since its solution may be the program's. When it records no row-bearing
 Monotype, no row was joined, every clone it shared is one no join can change,
 and its solution is the program's: a program without row joins solves its
 bodies once. Otherwise the recorded row-bearing Monotypes, every Monotype
@@ -17871,7 +17964,9 @@ body ("Literal Arguments"), or the body converts it through its dictionary.
 An expression compile-time evaluation hoisted and stored is read from its
 stored value wherever it occurs, as `.lss` reads it, except in the entry
 wrapper that computes it, when its evaluation failed (it runs in place), and
-for a guarded binding's right-hand side.
+for a guarded binding's right-hand side. A value-form expression its body
+keeps is read from the static data its initializer freezes, unless its value
+is an immediate ("Value-Form Expressions Stay In Their Bodies").
 
 A value whose type is closed inside a generic body is an ordinary local with
 an ordinary layout, lowered with the same statements `.lss` emits. The
@@ -18435,8 +18530,9 @@ on, and it is the reason modules can be lowered independently and in
 parallel.
 
 Unit lowering finishes the closure of those module-definition workers and
-records their export inventory in `seedUnitWorkers`, before lowering command
-roots. Test and REPL roots, platform entrypoint wrappers, and requested static
+records their export inventory in `seedUnitWorkers`, with which of them are
+importer-visible and where each template's worker lies in its module
+(`recordExports`, Caching Under `.boxy`), before lowering command roots. Test and REPL roots, platform entrypoint wrappers, and requested static
 initializers keep their own explicit entrypoint/data references. Workers created
 only for those roots are local to the unit; being a lambda or method-entry worker
 does not make a test helper part of the module's external interface. A root can
@@ -18493,15 +18589,34 @@ and Per-Module Output is the invariant that makes it possible:
 
 - The KEY of a module's lowered output is what that output is a function of,
   extended with the compiler version, the opt level, and the target
-  (`compile.boxy_interface`, `Digests.objectInput`): the content hashes of the
-  checked modules it was built from (the module's own checked entry key, which
-  covers its imports' keys) and its evaluation output, together with its name
-  in the link. It is never a hash of a derived table: evidence, worker
-  signatures, ownership signatures and layouts are functions of those checked
-  modules, so their keys already cover them. A key names one file.
-- An edit to a module changes its checked entry key and therefore the key of
-  every module whose checked entry covers it, so the edited module and its
-  importers rebuild. A unit's task computes its key on its lane, once its
+  (`compile.boxy_interface`, `Digests.objectInput`): the module's own source,
+  checking policy and evaluation output, its name in the link, and, for each
+  module it imports, that module's interface and export digests, never its
+  implementation. A module's interface digest covers what its checked module
+  tells an importer's lowering (its checking interface, the names and hidden
+  inputs of the workers its exposed definitions, bindings and constants
+  name, its registered methods (each by its owner's name and position among
+  declarations of that name, its method name and its target, in an order no
+  checked id decides), its defaults' count, the names of its nominal
+  declarations with the number of declarations of each, which is all their
+  runtime names depend on, and the stored values an importer restores: its
+  exposed constants' and its callable bindings'. A private constant is read
+  only by its own module's code, whose object holds its value, so it is no
+  part of the interface; a Debug compiler fails when a lowering reads a
+  constant another module does not expose (`Program.assertConstReadable`)); its export digest covers the
+  importer-visible export records its object solved (FILE, below). Each folds
+  in the same digest of the module's own imports, because lowering reads
+  through an import to the modules behind it: a needs list an importer fills
+  a table from names the workers of the module's imports, and the module's
+  types name theirs. A key names one file.
+- An edit to a module changes that module's key. It changes an importer's
+  key only when it changes something the importer's key covers: an exposed
+  name, signature, or stored value, or an importer-visible export record. An
+  edit to a private function's body, a new private definition, or a new
+  expression inside an exposed function's body that leaves its ownership
+  signature and needs alone rebuilds the edited module only, because no
+  worker's name is a position in its module (NAMES, below). A unit's task
+  computes its key on its lane, once its
   imports' units are done: the module's own part of its digests (its stored
   values and public surface, the bulk of the hashing) is hashed there, or
   earlier by a lane no unit was ready for, and the imports' parts come from
@@ -18525,13 +18640,26 @@ and Per-Module Output is the invariant that makes it possible:
   entries already filed stay valid under their own keys. The name is an input
   of the module's key and of its importers', so a key always names the object
   its link needs. A whole program links nothing and names modules by content
-  identity. A worker's name is the template's position in its table, which the
-  interface covers for every template an importer can name; a default's is its
-  position among its module's defaults, and a nominal type's is its position
-  among the declarations sharing its name. A lambda's worker is named by its
-  expression, which only a function value stored in a constant reaches across
-  modules; a stored function value's recipe names its modules by checked key,
-  and its digest names them by link name.
+  identity. Within its module, a worker is named by what an edit elsewhere in
+  the module leaves alone (`Program.workerIdentity`,
+  `ImportedModuleView.templateName`): a definition's template by the
+  definition's name, and a top-level constant's or callable binding's entry
+  wrapper by the constant's name; a lambda by its outer worker, the template
+  or default owning its nested procedure site, and the site's place among
+  that owner's sites; a default by its place among its module's defaults; a
+  dictionary entry by its target. A template with no name of its own (a
+  promoted local procedure, a hoisted constant's or literal's entry wrapper)
+  is named by its position in its module's table. Exposed names are unique
+  within a module except where a module declares one name twice, which
+  canonicalization reports as a warning and resolves by keeping one
+  definition per name (`top_level_value_defs`, which is the very span of
+  `global_value_defs` when all names are distinct); each definition that
+  selection leaves out is named by its name and one more than the number of
+  module-global definitions of that name before it, and a module with no
+  duplicate does no work for this beyond comparing those two spans. A nominal
+  type's name is its position among the declarations sharing its name. A
+  stored function value's recipe names its modules by checked key, and its
+  digest names them by link name.
 - The root program's key adds the key of its platform/app pairing, which covers
   both modules' checked entries and the pairing's evaluation output: the root
   unit lowers the platform's implementations at the app's types, read through
@@ -18543,15 +18671,30 @@ and Per-Module Output is the invariant that makes it possible:
   words of ARC interface a downstream module compiles against (each exported
   procedure's solved ownership signature and uniqueness data, which
   Per-Module Output makes a function of the module and its imports), with
-  the digest of those records (`exportRecordsDigest`). An importer's key
-  folds in the module's export digest, which combines that records digest
-  with its imports' export digests (`Digests.recordExportsDigest`), so a
-  restored object's records are not hashed again. This is a checked
-  interface digest, never a payload-integrity hash. The v2 export digest
-  composition changes hash bytes; object format 19 also incorporates stored
-  field-default identities alongside integer worker bindings and invalidates
-  the older entries. Its inputs remain the module's own export records and its imports,
-  never its importers or other modules in the program. There
+  the digest of the importer-visible ones (`exportRecordsDigest`). A record
+  is importer-visible when another unit can read it
+  (`lower.recordExports`): it reads a worker's ownership signature when it
+  calls the worker and its needs when it fills the worker's table, and it
+  names a worker of the module only through the module's checked interface
+  or its records. The visible records are those of the templates the
+  checked module names to importers (exposed definitions, exposed bindings'
+  templates and the templates exposed procedure aliases forward to,
+  registered methods, exposed constants' entry procedures, and the entry
+  wrappers of callable bindings, each with its integer list workers), every
+  default, every lambda and dictionary entry that takes a type table (a function value an importer's compile-time evaluation stored
+  can be any of them, and restoring it fills its table), and every worker a
+  visible worker's needs list names. A debug compiler fails when a unit
+  reads a record that is not visible (`bindImportedInterface`,
+  `fillTable`). A decoder resolving a worker a link's encoding names reads
+  only the record's template position, which locates the worker and is no
+  part of the digest. An importer's key folds in the module's export
+  digest, which combines that records digest with its imports' export
+  digests (`Digests.recordExportsDigest`), so a restored object's records
+  are not hashed again. This is a checked interface digest, never a
+  payload-integrity hash. Object format 21 adds each record's template
+  position and visibility and invalidates the older entries. Its inputs
+  remain the module's own export records and its imports, never its
+  importers or other modules in the program. There
   is no index, no manifest, no second cache the file refers to, and nothing
   in it comes from any other cache. `ROC_VERIFY_BOXY_OBJECT_REUSE` rebuilds
   every restored or embedded object (Embedded Units) and compares the bytes,
@@ -18585,7 +18728,7 @@ compiler (`compile.boxy_embedded_units`), so a compiler that embeds it never
 lowers or compiles it for that key, with a cold cache, a warm one, or
 `--no-cache`.
 
-Exactly one entry is embedded: the Builtin's ordinary unit for the target
+One unit is embedded: the Builtin's ordinary unit for the target
 the compiler runs on at its default CPU level
 (`RocTarget.fromStdTarget` of the compiler's own target), at dev opt with
 inline expects compiled in, with no run image, no expect sites and no wasm
@@ -18593,8 +18736,13 @@ stack checks, under the Builtin's stable link name. That is the unit
 compile-time evaluation links against (`lowering_policy.compileTimeObjectLowering`)
 and the unit a native dev `roc build` or `roc run`, and a `roc test` whose
 Builtin unit needs no expect sites (the Builtin has no expects), links,
-since all of them key it identically. A compiler target without a dev
-backend embeds nothing.
+since all of them key it identically. On a target with native unit images
+it is embedded as two entries from one build: the entry holding its image,
+under its key, and the entry holding its pieces and image, under its pieces
+key (`boxy_object_cache.piecesKey`), which a link that composes pieces
+(an `Archive` output) restores (Unit Pieces And Whole-Program Dead Code).
+The table records the pieces entry with the same key input and a flag. A
+compiler target without a dev backend embeds nothing.
 
 Selection is by key, never by a description of the unit. The table records
 each entry's `KeyInput` (the Builtin's `objectInput`, the target and opt
@@ -18643,7 +18791,8 @@ pair (another Builtin, or the Builtin named by content) hashes as usual.
 `zig build run-test-builtin-unit` builds the unit through `restoreOrBuild`
 into an empty cache, with the tool compiled as the compiler is (its target,
 its optimize mode), and requires the filed entry to be byte-identical to
-the Debug tool's table entry, the table to serve its key, and the embedded
+the Debug tool's table entry, the table to serve its key, and likewise for
+the entry it files under its pieces key, and the embedded
 digests to be the ones hashing the Builtin gives. MiniCI runs it in
 ReleaseSafe, so it compares a Debug build's unit with an optimized build's;
 a compiler for a target the build machine cannot run is not verified.
@@ -18669,8 +18818,15 @@ optimization level. This is the native half of the Roc-only composition
 phase the Sealed Roc Object Boundary requires (compiler-owned code "merged,
 resolved, dead-stripped from the `provides` roots, and localized").
 
-- A UNIT'S CACHE ENTRY holds its code in PIECES, one per function, never a
-  finished object. A piece is one procedure's, refcount helper's, entry
+- A UNIT'S CACHE ENTRY for a link that composes pieces holds its code in
+  PIECES, one per function, never a finished object. Only such a link
+  reads pieces (an `archive` output, an `arm32` target, or a host without
+  unit images), so on a target with native unit images a unit's pieces are
+  encoded and filed only by a build whose link composes them, in an entry of
+  their own under the unit's pieces key (`boxy_object_cache.piecesKey`),
+  and every other command files an entry holding the unit image and no
+  pieces under the unit's key. A target without native unit images files
+  pieces under the unit's key, since they are all of its code. A piece is one procedure's, refcount helper's, entry
   wrapper's or static-data initializer's machine code with its frame and
   unwind data, its source lines and failure sites, and its outgoing
   references: to other pieces by stable identity (a procedure by its
@@ -18762,8 +18918,9 @@ unit's link name (`Program.programLocalIdentity`). A link that places whole
 unit images (the fast dev link, the wasm link, and `roc test`'s loaded
 images) keeps every unit's copy of such a worker its own calls reach, and
 binds a symbol two images define to one of them.
-`ROC_VERIFY_BOXY_OBJECT_REUSE` compares a restored unit's encoded pieces
-with a rebuilt unit's exactly as it compared objects.
+`ROC_VERIFY_BOXY_OBJECT_REUSE` compares a restored unit's encoded pieces,
+when its entry holds them, with a rebuilt unit's exactly as it compared
+objects.
 
 ### Compile-Time Evaluation Strategy
 
@@ -19210,8 +19367,20 @@ recipe then holds its own table of types rather than ids of stored types. A
 generated codec worker's signature is generic, so a recipe type can name
 variables, which no stored type does, and a table keeps a block-local nominal's
 context arguments, which a stored type leaves to its reader's scope. Workers are
-named as their keys name them: templates and lambdas by checked id, codec
-pieces by their family's derivation, a compile-time slot by its root.
+named as their identities name them (Caching Under `.boxy`), but for their
+modules: a template by its name within its module, which no module's link name
+enters, since the lowering that stores a recipe and the one that restores it can
+name modules differently, and an index into a table of template positions that
+follows the module table, a lambda by its owner and its place among the owner's nested
+procedure sites, a default by its place among its module's defaults, codec
+pieces by their family's derivation, a compile-time slot by its root. The
+positions table locates each template in the modules the recipe was stored
+with; it is no part of what the recipe names (`ConstStore.recipeBody`), so a
+stored function value's digest changes only when the value does, not when an
+edit elsewhere in a module moves its templates. A needs list and a function
+unit's metadata, which are read against modules built apart from them, name a
+template by its worker's identity alone, which the reader resolves through the
+worker's export record.
 
 Function types share one descriptor, so a descriptor cannot be read back into
 a type by its structure. A function value's table names its inputs instead:
@@ -23055,7 +23224,6 @@ not a side representation store.
 const LambdaType = union(enum) {
     link: TypeVarId,
     unbound,
-    forall,
     content: LambdaContent,
 };
 
@@ -23085,6 +23253,7 @@ const LambdaSet = struct {
 const LambdaSetMember = struct {
     lambda: Symbol,
     captures: Span(Capture),
+    inst: InstId,
 };
 
 const Capture = struct {
@@ -23115,7 +23284,14 @@ Monotype records whether a function signature's argument and result positions
 are independent roots or one exact producer-authored graph. The generated
 `Iter.fromStep` boundary uses the exact-graph relation because its result
 iterator intentionally retains the step function argument's runtime callable
-representation; ordinary function signatures use independent roots. Monotype
+representation. Monotype also lowers every nested lambda with the exact-graph
+relation: the lambda's type is the enclosing body's own graph node for it, not
+a type completed independently from the lambda's lowered result. That identity
+is not value flow the body could express instead: lowering nested lambdas at
+independent roots makes `test/echo/issue_12717_self_capturing_opaque.roc`
+(closures capturing their own opaque record) reach LIR with two different
+layouts for one closure capture. Other function signatures use independent
+roots. Monotype
 Lifted retains an exact graph only while that ABI is unchanged. Lambda Solved
 then imports it from a single signature root, preserving recursive edges and
 intentional sharing between an argument and a nested result slot, and relates
@@ -23163,25 +23339,67 @@ unevaluated, so LIR carries the operation's two runtime operands. Adding the
 item's type to the buffer's instead would give every in-place operation a
 second type parameter for what this operand states directly.
 
-Solving is monomorphic. Every lifted function's type is registered before any
-body is solved, and all of a function's call sites unify with those same type
-nodes; there is no generalization, per-use instantiation, or recursive-group
-ordering, and definitions are output in `FnId` order because consumers
-reach functions only through explicit references. Monotype specialization
-shares one `FnId` among every call site that reaches a callable at the same
-closed type, so those sites' lambda sets become their union. The union is
-sound: a finite callable value carries the tag of the member it was built
-from, and a call dispatches on that tag. Lambda sets key members by lambda
-symbol, so every lifted function must have its own symbol.
+Every lifted function's type is registered before any body is solved.
+Definitions are output in `FnId` order because consumers reach functions only
+through explicit references.
 
-A lambda-set member is born only when a lifted function's type is registered,
-with that function's one capture span. Every member naming a lambda therefore
-carries the same span, and merging two sets never relates capture lists; a
-lambda that reaches a merge with two different spans is a compiler invariant
-violation. Merges append new members in encounter order so a growing set can
-extend in place at the end of the member pool. When solving ends, every
-lambda set and erased callable is rewritten with its members in ascending
-lambda-symbol order, so every consumer that numbers callable variants by
+Bodies are solved one binding group at a time. A binding group is a strongly
+connected component of the lifted-function reference graph, whose edges are
+the functions a body names (`fn_ref` and direct `call_proc`), plus one edge
+back from a capturing function to every function that names it with capture
+operands. The operands read locals of the naming function's scope, so the
+back edge puts a closure in one group with every function whose locals it
+captures, and no group's types depend on locals another group binds. The
+groups are listed callee-first, and a group's functions in ascending `FnId`
+order (`Lifted.Program.bindingGroups`). The groups are a pure function of the
+final lifted program's explicit references, which SpecConstr may still
+rewrite after lifting, so Lambda Solved computes them as its first step from
+the program it consumes and records them on its output program
+(`Ast.Program.binding_groups`) for every later consumer. The same walk
+records which groups share an expression with another group's body
+(SpecConstr reuses unchanged expressions of a body it copies): such an
+expression has one type for both bodies.
+
+Solving is order-independent within that discipline: the solved classes do
+not depend on the order a group's bodies are visited in (`Solve.BodyOrder`;
+tests solve and specialize programs with each group's bodies in both orders
+and compare their classes), and the order in which merges meet lambda-set
+members does not reach any consumer, since the final member order is
+canonical (below). `BodyOrder.fn_ids` solves in `FnId` order without
+generalization, a monomorphic solve. Every shortcut that relates types
+without unifying their structure must keep this: two unexpanded leaves of one
+Monotype are linked directly only when they lie in one clone context and
+inherit one argument scope (`Solver.leavesExpandAlike`), because a leaf's
+expansion ties its parts to its context's and scope's nodes, and linking
+leaves that differ there would drop the relation their expansions'
+unification makes between those nodes. Whether that relation was made would
+then depend on whether the two leaves met before or after one of them
+expanded.
+
+Monotype specialization shares one `FnId` among every call site that reaches
+a callable at the same closed type. Within one solve, references to a
+function of a monomorphic group, and references inside the group being
+solved, unify with the function's one registered type, so those sites' lambda
+sets become their union. The union is sound: a finite callable value carries
+the tag of the member it was built from, and a call dispatches on that tag.
+References to a generalized group are instantiated instead (below).
+
+A lambda-set member is a lambda at one instantiation of its binding group
+(`FnMember.inst`). A member is born only when a lifted function's type is
+registered, naming its group's identity instantiation and that function's one
+capture span; instantiating a group copies its members with the reference's
+instantiation and one copy of each capture span per instantiation. Lambda
+sets key members by lambda and instantiation, so every member naming one
+lambda at one instantiation carries one capture span, and merging two sets
+never relates capture lists; a member that reaches a merge with two different
+spans is a compiler invariant violation. Merges append new members in
+encounter order so a growing set can extend in place at the end of the
+member pool. When solving ends, every lambda set and erased callable is
+rewritten with its members in ascending lambda-and-instantiation order. Lambda
+Specialize then gives every member the lifted function of its instance and
+`InstId.specialized`, and orders every set by lambda symbol with one member
+per lambda, so every consumer keys members by symbol, every lifted function
+has its own symbol, and every consumer that numbers callable variants by
 position sees one order for a given member set.
 
 Explicit return boundaries preserve the source value's tag rows and the
@@ -23237,13 +23455,19 @@ proven-uninhabited structural type joins a nominal or opaque type whose
 inspectable public backing it stands for.
 
 Monotype Lifted types enter the solved store as lazy leaves that materialize one
-level when unification or a shape read touches them. A leaf that has never
-expanded stands for a fresh clone of its Monotype whose callable slots nothing
-else references when its expansion would be unobservable: the leaf has no clone
-context yet, or it is the only unexpanded leaf of a clone context whose every
-expansion registered at most one callable-bearing child, so every other entry
-of that context lies on its ancestor chain and no other expansion can reach the
-context again. Unifying such a leaf with a class already instantiated from the
+level when unification or a shape read touches them. Which occurrences of one
+Monotype share a node is described in "Row Joins": a clone context holds one
+instance of a Monotype cycle (or one whole signature graph), and an
+occurrence off its parent's cycle begins a tree of its own. A leaf that has
+never expanded stands for a fresh clone of its Monotype whose callable slots
+nothing else references when its expansion would be unobservable: the leaf
+has no clone context yet and reads no binding of an argument scope it
+inherited, or it is the only unexpanded leaf of a whole-root clone context
+whose every expansion registered at most one callable-bearing child, so every
+other entry of that context lies on its ancestor chain and no other expansion
+can reach the context again. Without a binding, a fresh clone's only ties are
+the ones its own Monotype imposes on every instance of it, which any class
+instantiated from that Monotype already has. Unifying such a leaf with a class already instantiated from the
 same Monotype only joins the clone's fresh callable slots to the class's, so the
 leaf joins the class without materializing. A Monotype that reaches a cycle, or
 that is uninhabited, keeps the ordinary relation. Leaves that survive solving
@@ -23404,6 +23628,107 @@ byte sizes cannot replace them. The cast between input and output buffers does
 not equate their different item types. Layout eligibility is computed only
 from the resulting solved representations.
 
+### Lambda Set Generalization
+
+Lambda Solved follows "Better Defunctionalization through Lambda Set
+Specialization" (Brandon et al., PLDI 2023): a finished binding group is
+generalized over the callable slots its function types own, every reference
+to it from a later group copies those slots, and Lambda Specialize gives each
+distinct copy its own functions. The unit of generalization is the binding
+group, as the paper's unit is the strongly connected definition; recursive
+references inside a group use the group's own types, so no group is
+polymorphically recursive.
+
+Ownership is explicit. Every type variable class has an owner
+(`Type.Store.owners`): the binding group whose solving created it, numbered
+from `first_group_owner`. Variables created before any group is solved
+(registered function types and local types) are `unowned` until a group's
+solving relates them; a lazy leaf's parts belong to the leaf's owner,
+whichever group expands it; variables created after solving belong to
+`global_owner`. A link gives the joined class the older owner. While a group
+is solved, every link that joins a class it owns to an older class is
+recorded (`Store.escapes`): the older class is the group's environment, in
+the paper's terms a type free in the context, and nothing it reaches can be
+quantified.
+
+When a group finishes, after its own boundaries are erased, its scheme is
+computed. The group stays monomorphic (an empty scheme) when it holds a
+monomorphic root (a root, a literal root, a layout request's function, or a
+hosted function), when it shares an expression with another group's body,
+when one of its function types belongs to an older class, or when its
+environment reaches one of its own lambdas. Otherwise the scheme is every
+node of its function types (arguments, callable slots, results, and through
+the slots every member's captures and the images of the instantiations
+members name) that the group owns, that its environment does not reach, and
+that reaches a callable slot. Every callable-bearing lazy leaf the walk meets
+is expanded first, so a scheme holds no leaf: a copy reproduces the ties a
+leaf's expansion would make, and finalization never gives an untouched
+scheme leaf a clone other leaves share. Nodes outside the scheme stay shared:
+callable-free nodes, including tag rows that reach no callable slot (rows
+join where values flow; a shared row joins every instance's flows, so every
+instance and every copy reads one representation of it), and older classes.
+Scheme nodes are never related again once the group finishes: later groups
+only meet their copies, which is what lets one scheme serve every reference. A scheme is an explicit list of nodes (`Ast.Scheme`); the type store has
+no quantifier node.
+
+A reference to a function of a generalized group from a later group
+(`fn_ref` or direct `call_proc`) instantiates the group once per referencing
+expression (`Ast.Polymorphism.expr_insts`): every scheme node gets a fresh
+image whose content is the node's with scheme nodes replaced by their images,
+members of the group's own lambdas name the new instantiation, and members
+naming another instantiation whose images the scheme reaches name a copy of
+it. The reference unifies with the image of the function's type, and its
+capture operands with the images of the function's capture types. The
+instantiation is recorded as a row of images (`Ast.Instantiation`), the
+paper's delayed substitution: nothing is substituted into bodies until
+Lambda Specialize.
+
+### Lambda Specialize
+
+Lambda Specialize (`lambda_solved/specialize.zig`) runs after Lambda Solving
+and before Solved Inline. It consumes the polymorphic program and outputs an
+ordinary monomorphic Lambda Solved program: every reference and every member
+names one lifted function, and every function has one solved type per
+expression, local and pattern. A program without a generalized group costs
+one pass over the member pool.
+
+Generalized groups are visited callers first, so every instantiation of a
+group exists when the group is visited: each was made at a reference in an
+already specialized body, or copied there with a member that names it.
+Instantiations are compared as infinite types: from the images of the
+group's function types, pairs of types are assumed equal while their parts
+are compared, so cycles close; members compare by lambda and by their
+instantiations, which compare the same way unless their group is already
+specialized, when they compare by instance. Any difference fails the whole
+comparison, so equality is exact: the assumed pairs are a bisimulation. Equal
+instantiations are one instance, and their images are linked into one class
+pair by pair. The first instance keeps the group's own functions: each scheme
+node is linked to that instance's image, which instantiation built as a copy
+of it and unification then only extended. Every further instance copies the
+group's bodies with fresh locals (each a copy of its source's identity, so
+capture operands still match their slots), join points, function ids and
+symbols. The copy's types substitute the instance's images for scheme nodes
+and copy every body type the group owns that reaches a scheme node, a
+callable naming one of the group's own lambdas, or an instantiation whose
+images are such types; every other type stays shared. Instantiations named
+by the copied bodies and types are copied too, for the groups visited later.
+A generalized group no reference instantiated keeps its own types.
+
+Once every group is visited, every reference is pointed at the function of
+its instance, and every member at that function's symbol, with captures
+naming the instance's locals. Copies of a function keep its source, so
+procedure identities (`proc_identity.zig`) still name them by content.
+SpecConstr's procedure-use inventory counts uses per function, so when
+specialization copies a function the pipeline counts the specialized
+program's uses afresh (`SpecConstr.collectProcedureUsage`).
+
+The developer-only `ROC_LAMBDA_SOLVE_STATS` diagnostic reports, per solve,
+generalized groups, scheme nodes, instantiations and the nodes they copied,
+and the groups kept monomorphic for each reason; per specialization, groups,
+generalized groups, instantiated references, distinct instances (sum and
+maximum), and the functions and expressions copied against the program's
+expressions.
+
 ### Erased Callable Requirements
 
 In `.lss`, `erased` callable requirements are explicit data entering Lambda
@@ -23435,6 +23760,21 @@ so its identity must agree in every program, including one in which nothing
 reaches the box. After
 solving, debug builds walk every one of those boundaries again and assert that
 each function value reached has an erased callable slot.
+
+The boundaries a binding group's own types carry are applied when the group
+finishes, before any later group is solved: the signatures of its hosted
+functions, and every `Box` and forced-dynamic iterator among the types
+created since the previous group finished. Platform and hosted roots, layout
+requests and runtime schema requests are requests about the whole program
+rather than properties of any binding group, so they are applied once every
+group is solved, and closing unfilled callable slots needs every group's
+flow. In a monomorphic solve a later group can still bring new callables
+under a boundary already applied: a row join adds tags to a row the boundary
+reaches, and a merge adds members to an erased callable. So once every group
+is solved, every boundary is walked again and each erased callable's
+`source_fn_ty` digest is recomputed from its function type at the solved
+rows. Erasure only grows, so the result is exactly what a single walk after
+solving produces.
 
 Monotype lowering carries boundary requirements as typed annotations into
 Lambda Solved IR. Lambda solving also consumes the explicit iterator
@@ -31279,8 +31619,9 @@ A `.boxy` dev `roc run` of an app without a platform header builds it
 against the synthetic default platform with a fast dev link and runs the
 binary, reusing every object `roc check` filed (Caching Under `.boxy`).
 
-**Unit images.** A `.boxy` unit's cache entry (`boxy_object_cache`) carries,
-beside its pieces, a unit image (`backend.dev.UnitImage`): the unit's text
+**Unit images.** A `.boxy` unit's cache entry (`boxy_object_cache`) carries
+a unit image (`backend.dev.UnitImage`), beside its pieces only in the entry
+of a link that composes them (Unit Pieces And Whole-Program Dead Code): the unit's text
 followed by its read-only data in one block, its writable data and zero-fill
 size, its symbols, its patch sites, its DWARF fragments and its content
 digest. Every reference the unit's own placement decides is resolved when the
@@ -31292,9 +31633,21 @@ the image's regions. A site's kind is the field's encoding, x86_64's
 is placed page aligned, so an arm64 page-relative reference inside the block
 resolves at build time like an x86_64 displacement. The image is built from
 the unit's relocatable object in the target's format, ELF, Mach-O or COFF
-for either instruction set, and names its symbols by their C
+for either instruction set, read into one format-neutral form
+(`UnitImage.Object`: classified sections, symbols in symbol-table order,
+relocations with their addends), and names its symbols by their C
 names (a Mach-O name without its underscore), so images, hosted symbols and
-provides read the same on every target. A load through the global offset
+provides read the same on every target. A unit's own image never goes
+through encoded object bytes: each dev object writer gives the object it
+would encode in that form directly (`ObjectWriter.indexedImageObject`),
+exactly what reading its encoded bytes back gives, and the composition
+builds the image from it (`ObjectFileCompiler.buildUnitImage`).
+`ROC_DEV_UNIT_IMAGE_ROUNDTRIP` also encodes every unit's object, reads the
+image back from the bytes and requires the two images to be identical. The
+image builder resolves each symbol once, at its first reference, rather
+than looking its name up at every relocation. Encoded object bytes are
+read only for the compiler's support objects, which Roc's build graph
+converts. A load through the global offset
 table reads a slot the image keeps in its writable data, one per referenced
 symbol. The image is a pure function of the unit (Per-Module Output), so two
 builds of a unit write identical images. The block divides into atoms, one
@@ -32101,9 +32454,11 @@ A module unit's native code generation reports backend setup, procedure
 setup, the ordered runs, worker setup, stack planning with emission, fragment
 extraction, idle workers, fragment commit, symbolic reference resolution,
 entrypoints, the steps lifting code into pieces, image composition, DWARF,
-object encoding and the unit image, with the bytes of code, objects,
+the unit image built from the composition's object contents, and the
+encoding of pieces for an entry that holds them, with the bytes of code,
 images, pieces and cache entries, and code bytes and statements by LIR
-statement kind. A statement's bytes run from its start to the next
+statement kind. A cache entry is written to its file in two parts, its
+records and its image, so filing it copies the image only into the file. A statement's bytes run from its start to the next
 statement's start.
 
 Lambda-set solving reports its analysis solve, which finds the row-joined

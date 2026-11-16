@@ -229,13 +229,18 @@ pub const Modules = struct {
     }
 
     /// Rebase a checked default from its name store into this program's modules.
-    pub fn fieldDefault(self: *const Modules, module: ModuleIndex, default: checked.CheckedFieldDefault) FieldDefault {
+    pub fn fieldDefault(self: *const Modules, module: ModuleIndex, default: checked.CheckedFieldDefault) Allocator.Error!FieldDefault {
         const origin = default.origin() orelse invariant("a field default has no declaring module");
         const identity = self.get(module).nameStore().moduleIdentityBytes(origin).*;
-        return .{
-            .module = self.by_identity.get(identity) orelse invariant("a field default's declaring module is not in this lowering"),
-            .expr_node = default.expr_node,
-        };
+        const declaring = self.by_identity.get(identity) orelse invariant("a field default's declaring module is not in this lowering");
+        const bodies = self.get(declaring).bodies();
+        try bodies.demandIndex();
+        const ordinal = std.sort.binarySearch(u32, bodies.defaultExprs(), default.expr_node, struct {
+            fn order(target: u32, item: u32) std.math.Order {
+                return std.math.order(target, item);
+            }
+        }.order) orelse invariant("a field default's expression is no default of its module");
+        return .{ .module = declaring, .ordinal = @intCast(ordinal) };
     }
 
     /// The name module `index`'s workers and nominal types are digested
@@ -330,12 +335,15 @@ pub const FieldKind = enum(u8) {
     variable_slot,
 };
 
-/// A `??` default's immutable identity, rebased into this program's modules.
-/// Defaults affect codec semantics, not the field's inline representation.
-pub const FieldDefault = struct { module: ModuleIndex, expr_node: u32 };
+/// A `??` default's immutable identity, rebased into this program's modules:
+/// its declaring module and its place among that module's defaults, which
+/// an edit elsewhere in the module leaves alone (design.md "Caching Under
+/// `.boxy`"). Defaults affect codec semantics, not the field's inline
+/// representation.
+pub const FieldDefault = struct { module: ModuleIndex, ordinal: u32 };
 
 /// An optional `FieldDefault` at its own size.
-pub const OptionalFieldDefault = collections.OptionalStruct(FieldDefault, "expr_node");
+pub const OptionalFieldDefault = collections.OptionalStruct(FieldDefault, "ordinal");
 
 /// One field of a record type: its name, type, and storage kind.
 pub const Field = struct {
@@ -913,7 +921,7 @@ pub const Store = struct {
                     try self.scratch_key.append(self.allocator, @intFromBool(field.default.get() != null));
                     if (field.default.get()) |default| {
                         try self.keyU32(@backingInt(default.module));
-                        try self.keyU32(default.expr_node);
+                        try self.keyU32(default.ordinal);
                     }
                     closed = closed and self.isClosed(field.ty) and field.kind != .variable_slot;
                 }
@@ -1579,7 +1587,7 @@ pub const Converter = struct {
                     for (0..current_fields.len()) |field_index| {
                         const field = current_fields.get(field_index);
                         const field_name = try self.store.internName(name_store.recordFieldLabelText(field.name));
-                        try fields.append(allocator, self.convertedField(module, field_name, children[child_index], field.kind, env));
+                        try fields.append(allocator, try self.convertedField(module, field_name, children[child_index], field.kind, env));
                         child_index += 1;
                     }
                     current_fields = .empty;
@@ -1753,10 +1761,10 @@ pub const Converter = struct {
     /// A record field of value type `ty`: an undetermined kind takes the
     /// binding its scheme gives it, and a kind no scope binds commits to
     /// `required`, as it does for every other strategy.
-    fn convertedField(self: Converter, module: ModuleIndex, name: NameId, ty: TypeId, kind: checked.CheckedFieldKind, env: Env) Field {
+    fn convertedField(self: Converter, module: ModuleIndex, name: NameId, ty: TypeId, kind: checked.CheckedFieldKind, env: Env) Allocator.Error!Field {
         return switch (kind.tag) {
             .required => .{ .name = name, .ty = ty, .kind = .inline_slot },
-            .defaulted => .{ .name = name, .ty = ty, .kind = .inline_slot, .default = .some(self.modules.fieldDefault(module, kind.default)) },
+            .defaulted => .{ .name = name, .ty = ty, .kind = .inline_slot, .default = .some(try self.modules.fieldDefault(module, kind.default)) },
             .optional => .{ .name = name, .ty = ty, .kind = .presence_slot },
             .undetermined => {
                 if (!self.seal_undetermined_kinds) {
@@ -2077,13 +2085,13 @@ test "record interning preserves immutable field default identities" {
     const u8_ty = try store.primitive(.u8);
     var fields = [_]Field{.{ .name = count, .ty = u8_ty, .kind = .inline_slot }};
     const required = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
-    const first_default: FieldDefault = .{ .module = first_module, .expr_node = 10 };
+    const first_default: FieldDefault = .{ .module = first_module, .ordinal = 10 };
     fields[0].default = .some(first_default);
     const first = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
     try std.testing.expectEqual(first, try store.intern(.{ .record = .{ .fields = &fields, .ext = null } }));
-    fields[0].default = .some(.{ .module = first_module, .expr_node = 20 });
+    fields[0].default = .some(.{ .module = first_module, .ordinal = 20 });
     const other_expr = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
-    fields[0].default = .some(.{ .module = second_module, .expr_node = 10 });
+    fields[0].default = .some(.{ .module = second_module, .ordinal = 10 });
     const other_module = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
     try std.testing.expect(required != first);
     try std.testing.expect(first != other_expr);
