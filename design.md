@@ -10215,18 +10215,26 @@ return. The query has no candidate or path-length limit and never walks unrelate
 control flow. Both Solved and Boxy lowering use this same construction contract.
 
 A proven call to the procedure being built is a self-tail site, recorded as
-described below, except in a `.boxy` procedure with a dynamic frame region:
-there the next call's dynamic arguments live in the region, which a loop
-iteration would allocate again while they are still read, so the call is
+described below, except in the `.boxy` cases that follow, where the call is
 lowered like a tail call to any other procedure and replaces the frame
 (see "Frame-Replacing Calls"), whose dynamic arguments each backend moves out
-of the dying frame. A `.boxy` self call is also lowered that way when it does
+of the dying frame. A `.boxy` self call is lowered that way when it does
 not pass the procedure's own descriptors, dictionaries, and literal arguments
 along unchanged: a polymorphic recursive call at other types needs the
 descriptors its body composes at entry composed again, which a loop jump never
-does. So is one that does not pass each dynamic parameter along unchanged: a
+does. The call passes them unchanged when its callee's type table is the
+procedure's own table at its own inputs, in order, which lowering recognizes
+on the table's recipe and passes as the table the procedure holds. So is one
+that does not pass each dynamic parameter along unchanged: a
 dynamic parameter is the address of storage its caller owns, which a loop jump
 cannot rebind, while a frame-replacing call moves its dynamic arguments. A
+self call that passes every dynamic parameter along unchanged reads no
+argument from the procedure's dynamic frame region, so it loops even when
+the procedure has one: the region is allocated once, in the entry chain, and
+each frame local's slot is written again only by its own definition. Only a
+`.boxy` procedure whose parameters lowering does not record (a generated
+worker other than a template's) replaces its frame on every self call when
+it has a region, since nothing tells it its arguments are not in it. A
 `.boxy` self-tail loop begins after the entry chain that composes those
 descriptors (`TailCalls.entry`), so every iteration shares them and each
 dynamic parameter's descriptor is defined before the loop binds it. A proven call to any other procedure has its continuation
@@ -11048,7 +11056,7 @@ the moved prefix links to it. These two passes visit only
 stamped procedures, so ordinary dev code pays neither their analysis cost nor
 their structural changes.
 
-A third rewrite, tag-case fusion, runs under lambda-set specialization in every
+A third rewrite, tag-case fusion, runs under both lowering strategies, in every
 inline mode, at every optimization level, and in every procedure: literal tag
 edges bypass a join whose body immediately matches that tag, so the union is
 never materialized. It bounds list copying rather than shaving constant
@@ -11133,8 +11141,15 @@ consumes it, and a list in it is copied each iteration. The rewrite is exact:
   their own current value are unchanged. A pure alias, field read, or
   descriptor-free struct build only carries a differing value into its
   target, field by field for a struct, so an exit that packs the loop state
-  into a tuple and reads back the unchanged field observes nothing; every
-  other statement observes what it reads.
+  into a tuple and reads back the unchanged field observes nothing. A write
+  of a join parameter likewise only carries a differing value into the
+  parameter, whose readers in that join's body observe it, so an exit that
+  carries every loop variable into a join after the loop and reads only the
+  unchanged ones there (as `.boxy` lowering builds a loop's exit) observes
+  nothing. A join parameter is written on every edge into its join, so the
+  walk repeats until no write marks another parameter differing, and reads
+  are checked against that complete set; every other statement observes
+  what it reads.
 
 The rewritten edge keeps its statements except the parameter writes and the
 definitions no remaining statement reads, then jumps to the exit. Any other
@@ -22986,9 +23001,15 @@ plain source `for` loop binds nothing from it and simply continues with `rest`.
 the step field the owner's `IteratorRepresentationTopology` names from the
 iterator it owns and makes an owned erased call of it (Destination-Passing
 Results and Allocation Reuse). The loop dismantles the dying iterator into
-that call, so the thunk receives its own allocation unique and repacks it
-with the next step's captures; an iterator over a list is then advanced
-without an allocation. The call is made where the loop matches its result, so
+that call, so the thunk receives its own allocation unique, and it repacks
+that allocation with the next step's captures when its own body packs the
+next step's closure at its own capture layout (Function Values). A thunk
+that builds its successor through a call of another procedure cannot hand
+it the allocation: `List.iter`'s and `List.iter_rev`'s thunks call their
+local `make`, whose closure the thunk packs again before the call, and
+`Iter.custom`'s calls `Iter.custom`, so stepping such an iterator value
+allocates on every step. A `for` loop over a list never steps one: it runs
+the list as a chain source (below). The call is made where the loop matches its result, so
 no pending call is left for the loop to drive. Every other `next`, including
 `Stream.next!`, is dispatched to as the plan resolves it.
 
@@ -25199,13 +25220,18 @@ generates constraints per statement:
   arguments it may borrow from; an owned return is a fresh owned resource.
 - `assign_call_erased`: the erased-callable ABI is a pinned all-owned
   `RcSig` for refcounted args and the result. Inference does not flow modes
-  through erased callable values. The closure is borrowed by the call unless
-  its unit dies there: then emission moves that unit into the callee through
-  the ABI's reuse channel (`reuse_closure`), and the callee reads its
-  captures out of the transferred allocation (see `erased_capture_load`
-  below). A call whose result holds exactly one erased-callable slot
-  (`result_reuse`) is solved as demanding the closure's unit, because the
-  callee can repack a transferred allocation as its result.
+  through erased callable values. The call demands its closure's unit (the
+  allocation `erasedCallOwner` names), so a closure parameter the procedure
+  calls is owned, and its caller hands over a closure that dies at the call
+  rather than lending it: a closure called through a function parameter
+  then reaches its body with its captures unshared, and a captured list the
+  body updates is updated in place. The call itself still borrows the
+  closure unless its unit dies there: then emission moves that unit into the
+  callee through the ABI's reuse channel (`reuse_closure`), and the callee
+  reads its captures out of the transferred allocation (see
+  `erased_capture_load` below). A call whose result holds exactly one
+  erased-callable slot (`result_reuse`) also consumes the unit there, because
+  the callee can repack a transferred allocation as its result.
 - dictionary calls are erased calls and follow the erased-call rule above.
   A type table argument and the descriptors and dictionaries read from it are
   pointer-sized opaque values that own nothing. Method selection is already encoded in the dictionary;
@@ -26489,7 +26515,12 @@ A container qualifies for dismantling when all of the following hold:
 
 - its committed layout or explicit descriptor-backed product shape contains at least one refcounted field
 - its binding is owned and bound exactly once, or is a join parameter whose
-  definitions are explicit `initialize_join_param` writes. Lowering gives
+  definitions are explicit `initialize_join_param` writes. A procedure
+  parameter that a self-tail loop's join also declares and that no
+  statement writes (the loop's self call passed it along unchanged, so TCE
+  omitted the identity write) is bound exactly once, by the call; the field
+  flow follows the back edge, so a take on a path that loops again is a
+  take of a field that may already be gone. Lowering gives
   every `if`/`match` value join whose result is a struct holding refcounted
   fields this form: each branch computes its value into a branch-local and
   writes the join parameter with `initialize_join_param`, so a record chosen
@@ -27057,9 +27088,12 @@ again. Sites are solved for struct containers, held views and projected
 containers alike. A tag union's payload view has none. A container nothing
 takes from commits a plan for its sites alone only when it holds its unit in
 every emission: a borrowed parameter would otherwise earn an owned variant
-whose one difference is where a retained unit is released. Aggregate and
-low-level operands reach this rule through the owned binding lowering gives
-them; a borrowed operand retained directly at such a position keeps its whole
+whose one difference is where a retained unit is released. A fresh struct
+that stores the container whole is a site too, at the field holding it: the
+aggregate owns what it stores, so the field is an owned position, whether
+lowering stores the container itself or an owned binding of it. Low-level
+operands reach this rule through the owned binding lowering gives them; a
+borrowed operand retained directly at a low-level position keeps its whole
 retain.
 
 Emission applies a site only where it actually retains: the container is in
@@ -27068,7 +27102,8 @@ outcome receipt covers the position, and no other operand of the statement
 lends the same value, since the callee could release its unit of a field while
 that operand still reads it. Emission then pays the ordinary whole retain,
 releases the masked fields from the container's own unit before the receiver
-runs, and continues with the remaining fields as the container's residual.
+runs (after a struct site's store and its retain, since the struct runs no
+code), and continues with the remaining fields as the container's residual.
 The RC statements are the ones the container's death would have emitted for
 those fields; only their position changes, from after the receiver to before
 it. The certifier needs no rule for it: a retained aggregate that dismantles
@@ -28063,9 +28098,10 @@ closure's unit exactly when that unit dies at the call (the callee consumes
 it: the dying closure's captures reach the body unshared, and a single-slot
 result can repack the allocation), and otherwise borrows the closure and
 passes null, with no refcount statement. Lowering records the call's
-ownership source on every erased call and marks a call whose result holds
-exactly one erased-callable slot (`result_reuse`), which ARC solves as
-demanding the closure's unit. A deferred `.lss` call keeps a retained
+ownership source on every erased call, which ARC solves as demanding the
+closure's unit, so a closure parameter is owned and can die at its call,
+and marks a call whose result holds exactly one erased-callable slot
+(`result_reuse`), which consumes the unit there. A deferred `.lss` call keeps a retained
 closure reference for whoever drives it and never transfers; a deferred
 `.boxy` call transfers when the closure dies there.
 

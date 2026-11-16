@@ -3350,7 +3350,22 @@ const Inserter = struct {
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     try step.transfer_positions.append(u32, self.solve_allocator, &self.arc_plans.positions, self.transfer_position_scratch.items);
                     const singles = [_]LIR.LocalId{assign.target};
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.fields, assign.next);
+                    self.death_scratch.clearRetainingCapacity();
+                    // A container stored whole while it is read again
+                    // afterwards is retained after the store; the fields
+                    // nothing reads afterwards are then released from it, so
+                    // the aggregate holds their only unit.
+                    const fields = self.store.getLocalSpan(assign.fields);
+                    for (0..GuardedList.borrowLen(fields)) |position| {
+                        if (position > std.math.maxInt(u8)) break;
+                        if (std.mem.findScalar(u32, self.transfer_position_scratch.items, @intCast(position)) != null) continue;
+                        const local = GuardedList.at(fields, position);
+                        if (try self.wholeMoveResidual(&segment.owned, segment.cursor, position, fields, local)) |release| {
+                            try self.death_scratch.append(self.lane_allocator, release);
+                        }
+                    }
+                    try self.postStmtDeaths(&segment.owned, &singles, assign.fields, assign.next, self.death_scratch);
+                    try self.copyDeathScratchToStep(step);
                 },
                 .assign_tag => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
