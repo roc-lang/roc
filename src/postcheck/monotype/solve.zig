@@ -5703,6 +5703,66 @@ pub const InstGraph = struct {
         return copied;
     }
 
+    /// What a codec query looks for in a type.
+    pub const CodecQuery = enum {
+        /// A codec representation's checked-public named type: a position
+        /// whose value is a generated representation that only its producer
+        /// has related to it.
+        public_codec_interface,
+        /// Generated-private evidence other than a codec representation: an
+        /// iterator representation, which representation selection may
+        /// still join or force dynamic.
+        iterator_evidence,
+    };
+
+    /// Whether `root` reaches a node `query` describes, at any structural
+    /// depth, through arguments and backings alike.
+    pub fn containsCodecQuery(self: *InstGraph, root: NodeId, query: CodecQuery) Allocator.Error!bool {
+        var pending = std.ArrayList(NodeId).empty;
+        defer pending.deinit(self.allocator);
+        var seen = self.node_set_pool.acquire();
+        defer self.node_set_pool.release(&seen);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |raw_node| {
+            const node = self.find(raw_node);
+            if ((try seen.getOrPut(node)).found_existing) continue;
+            switch (try self.rootContent(node)) {
+                .redirect, .leaf => unreachable, // rootContent of a find root expands a leaf
+                .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
+                .list, .box => |child| try pending.append(self.allocator, child),
+                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .func => |function| {
+                    try pending.appendSlice(self.allocator, function.args);
+                    try pending.append(self.allocator, function.ret);
+                },
+                .tag_union => |row| {
+                    for (row.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
+                    try pending.append(self.allocator, row.ext);
+                },
+                .record => |row| {
+                    for (row.fields) |field| {
+                        try pending.append(self.allocator, field.ty);
+                        if (field.value_ty.get()) |value_ty| try pending.append(self.allocator, value_ty);
+                    }
+                    try pending.append(self.allocator, row.ext);
+                },
+                .named => |named| {
+                    if (named.backing.get()) |backing| {
+                        const codec = isCodecRepresentation(named);
+                        const private = backing.authority == .generated_private;
+                        if (switch (query) {
+                            .public_codec_interface => codec and !private,
+                            .iterator_evidence => private and !codec,
+                        }) return true;
+                        try pending.append(self.allocator, backing.node);
+                    }
+                    try pending.appendSlice(self.allocator, named.args);
+                },
+            }
+        }
+        return false;
+    }
+
     pub fn containsGeneratedPrivate(self: *InstGraph, root: NodeId) Allocator.Error!bool {
         if (self.generated_private_nodes == 0) {
             self.countDiagnostic("generated_private_guard_returns");
@@ -5974,7 +6034,7 @@ pub const InstGraph = struct {
 
     /// Whether selecting `private_node` as the representation of
     /// `public_node` goes from public to private. Selection joins class
-    /// roots, so the direction is a fact of the roots: the private side's
+    /// roots, so the roots alone determine the direction: the private side's
     /// root is generated-private evidence and the public side's is not. A
     /// public root may still hold generated-private types among its
     /// arguments, as `Iter(() -> Iter(U8))` holds the produced iterator its
@@ -6038,10 +6098,13 @@ pub const InstGraph = struct {
                         if (try self.resolvePublicVariableToImportedGeneratedIterator(public_node, public_var, private_node, private_named)) {
                             return;
                         }
-                        if (private_named.generated_iterator == null and private_named.def.iterator_representation == .none) {
+                        if (isCodecRepresentation(private_named)) {
                             try self.resolvePublicVariableToGeneratedRepresentation(public_node, public_var, private_node);
                             return;
                         }
+                    } else if (public_content == .named and isCodecRepresentation(private_named)) {
+                        try self.resolvePublicNamedToCodecRepresentation(public_node, public_content.named, private_node, private_named, pair.row_width, pending);
+                        return;
                     }
                     try self.relateGeneratedOpaquePair(public_content, private_named, pair.row_width, pending);
                     return;
@@ -6446,6 +6509,43 @@ pub const InstGraph = struct {
         }
         if (public_var.numeric_default_phase != null or public_var.row_default != null) {
             Common.invariant("generated-private representation relation received a defaultable public variable");
+        }
+        try self.union_(private_node, public_node);
+    }
+
+    /// A codec representation's checked-public named type (such as the
+    /// `FieldNames(shape)` a codec contract gives the quantified variable of
+    /// an unannotated codec method parameter, or that parameter's
+    /// annotation) states no runtime structure of its own: its declared
+    /// backing is never a value's layout, because every value of the type is
+    /// the generated representation. Related to that representation, the
+    /// public type therefore denotes it at the same arguments, exactly as a
+    /// public variable does (`resolvePublicVariableToGeneratedRepresentation`
+    /// explains why the join never collapses two different representations).
+    fn resolvePublicNamedToCodecRepresentation(
+        self: *InstGraph,
+        public_node: NodeId,
+        public_named: *const InstNamed,
+        private_node: NodeId,
+        private_named: *const InstNamed,
+        row_width: RowWidthRelation,
+        pending: *std.ArrayList(NodePair),
+    ) Allocator.Error!void {
+        if (public_named.kind != .@"opaque" or private_named.kind != .@"opaque" or
+            !std.meta.eql(public_named.def, private_named.def))
+        {
+            Common.invariant("codec representation relation received different opaque definitions");
+        }
+        const public_backing = public_named.backing.get() orelse
+            Common.invariant("codec representation relation received a public type without backing");
+        if (public_backing.authority != .checked_public) {
+            Common.invariant("codec representation relation received a public type with private backing");
+        }
+        if (public_named.args.len != private_named.args.len) {
+            Common.invariant("codec representation relation received different type-argument arities");
+        }
+        for (public_named.args, private_named.args) |public_arg, private_arg| {
+            try self.relateOpaqueChild(public_arg, private_arg, row_width, pending);
         }
         try self.union_(private_node, public_node);
     }
@@ -7231,6 +7331,7 @@ pub const InstGraph = struct {
         }
         try self.migrateGeneratedIteratorRoot(loser, winner);
         self.removeGeneratedIterator(loser);
+        try self.forgetPublicCodecViews(winner, loser);
         const winner_tail = self.class_member_tail.items[@backingInt(winner)];
         const loser_head = self.class_member_head.items[@backingInt(loser)];
         self.class_member_next.items[@backingInt(winner_tail)] = .of(loser_head);
@@ -7251,6 +7352,8 @@ pub const InstGraph = struct {
             self.contentIsNamed(winner_content) != self.contentIsNamed(loser_content);
         const joins_iterator_representations = winner_content == .named and loser_content == .named and
             self.iteratorRelation(winner_content.named, loser_content.named) != .ordinary;
+        const joins_public_with_representation = winner_content != .unresolved and loser_content != .unresolved and
+            self.contentIsGeneratedPrivateRoot(winner_content) != self.contentIsGeneratedPrivateRoot(loser_content);
         self.nodes.items[@backingInt(loser)] = .{ .redirect = winner };
         self.parents.items[@backingInt(loser)] = winner;
         self.versions.items[@backingInt(winner)] +%= 1;
@@ -7261,9 +7364,11 @@ pub const InstGraph = struct {
         // An active snapshot exists only for a resolved class and reaches
         // only resolved classes. A variable never wins a join, and two
         // resolved classes ordinarily unify equal content. Nominal/structural
-        // joins and explicit iterator representation joins can instead select
-        // different content, invalidating snapshots through either class.
-        if (joins_nominal_with_structural or joins_iterator_representations) {
+        // joins, explicit iterator representation joins, and a public named
+        // type joining the generated representation it denotes (a codec
+        // representation's) can instead select different content,
+        // invalidating snapshots through either class.
+        if (joins_nominal_with_structural or joins_iterator_representations or joins_public_with_representation) {
             self.invalidateActiveSnapshots(winner);
         } else {
             // The joined class keeps its current view under its new root.
@@ -7276,6 +7381,30 @@ pub const InstGraph = struct {
             }
         }
         try self.drainNominalBackingCollisions();
+    }
+
+    /// A public named type joining the codec representation it denotes
+    /// stops being the finished Monotype it was imported as: the class's type
+    /// is the representation. Its nodes therefore give up their imported
+    /// views and their class its finished witness before the two classes
+    /// become one, so every later view of them reads the joined class.
+    fn forgetPublicCodecViews(self: *InstGraph, winner: NodeId, loser: NodeId) Allocator.Error!void {
+        const winner_content = self.nodes.items[@backingInt(winner)];
+        const loser_content = self.nodes.items[@backingInt(loser)];
+        if (winner_content == .unresolved or loser_content == .unresolved) return;
+        const winner_private = self.contentIsGeneratedPrivateRoot(winner_content);
+        if (winner_private == self.contentIsGeneratedPrivateRoot(loser_content)) return;
+        const private_content = if (winner_private) winner_content else loser_content;
+        const private_owner = switch (private_content) {
+            .named => |named| named.builtin_owner.get(),
+            .leaf => |leaf| self.types.get(leaf.ty).named.builtin_owner.get(),
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => unreachable, // contentIsGeneratedPrivateRoot holds only for a named type or a leaf of one
+        };
+        if (!isCodecOwner(private_owner)) return;
+        const public_root = if (winner_private) loser else winner;
+        var members = self.classMemberIterator(public_root);
+        while (members.next()) |member| _ = self.imported_monos.remove(member);
+        self.class_finished_monos.items[@backingInt(public_root)] = .none;
     }
 
     /// Whether class content is a named type, including an unread leaf of one.
@@ -7664,7 +7793,8 @@ pub const InstGraph = struct {
             !allow_private_selection and
             !contentIsFieldSlot(left_content) and
             !contentIsFieldSlot(right_content) and
-            !self.isIteratorRepresentationTierRelation(left_content, right_content))
+            !self.isIteratorRepresentationTierRelation(left_content, right_content) and
+            !self.isCodecRepresentationRelation(left_content, right_content))
         {
             Common.invariant("generated-private representation reached ordinary public/private graph unification");
         }
@@ -8012,6 +8142,38 @@ pub const InstGraph = struct {
                 }
             },
         }
+    }
+
+    /// Whether a generated-private codec representation meets a public type
+    /// that denotes it: a variable, or the representation's own named type.
+    /// A codec representation is the only runtime representation of its
+    /// named type at its arguments, so ordinary unification joins them and
+    /// the representation becomes the class's content. Either side may be an
+    /// unread leaf.
+    fn isCodecRepresentationRelation(self: *InstGraph, left: InstNode, right: InstNode) bool {
+        const private_content, const public_content = if (self.contentIsGeneratedPrivateRoot(left))
+            .{ left, right }
+        else
+            .{ right, left };
+        const private_def, const private_owner = switch (private_content) {
+            .named => |named| .{ named.def, named.builtin_owner.get() },
+            .leaf => |leaf| leaf: {
+                const named = self.types.get(leaf.ty).named;
+                break :leaf .{ named.def, named.builtin_owner.get() };
+            },
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return false,
+        };
+        if (!isCodecOwner(private_owner)) return false;
+        const public_def = switch (public_content) {
+            .unresolved => return true,
+            .named => |named| named.def,
+            .leaf => |leaf| switch (self.types.get(leaf.ty)) {
+                .named => |named| named.def,
+                .primitive, .zst, .hole, .erased, .func, .record, .tuple, .tag_union, .list, .box => return false,
+            },
+            .redirect, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return false,
+        };
+        return std.meta.eql(public_def, private_def);
     }
 
     fn isIteratorRepresentationTierRelation(self: *InstGraph, left: InstNode, right: InstNode) bool {
@@ -9290,6 +9452,20 @@ pub const InstGraph = struct {
     fn appendTypeSpan(self: *InstGraph, out: *std.ArrayList(Type.TypeId), span: Type.Span) Allocator.Error!void {
         const children = self.types.span(span);
         for (0..children.len) |index| try out.append(self.allocator, GuardedList.at(children, index));
+    }
+
+    /// Whether a named type with generated-private backing is a codec
+    /// representation: the `FieldNames`, `FieldName` or `ParseTagUnionSpec`
+    /// value a derived parser builds for a format's methods.
+    fn isCodecRepresentation(named: *const InstNamed) bool {
+        return isCodecOwner(named.builtin_owner.get());
+    }
+
+    fn isCodecOwner(owner: ?static_dispatch.BuiltinOwner) bool {
+        return switch (owner orelse return false) {
+            .fields, .field, .parse_tag_union_spec => true,
+            .list, .box, .dict, .set, .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher, .iter, .stream => false,
+        };
     }
 
     fn isGeneratedPrivateRootContent(node_content: InstNode) bool {
@@ -13141,6 +13317,79 @@ test "opaque interface relation preserves distinct public and generated-private 
     defer graph.destroy();
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAD))));
+    const type_name = try name_store.internTypeName("OpaqueEvidence");
+    const named_type: Type.NamedType = .{ .module = .{} };
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+    const public_args = try graph.arena().alloc(NodeId, 1);
+    public_args[0] = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const private_args = try graph.arena().alloc(NodeId, 1);
+    private_args[0] = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const public_backing = try graph.newNode(.empty_record);
+    const private_backing = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().alloc(InstField, 0),
+        .ext = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),
+    } });
+    const public = try graph.newNode(try graph.namedContent(.{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = .none,
+        .args = public_args,
+        .backing = .some(.{ .node = public_backing, .use = .runtime_layout_only }),
+    }));
+    const private = try graph.newNode(try graph.namedContent(.{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = .none,
+        .args = private_args,
+        .backing = .some(.{
+            .node = private_backing,
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        }),
+    }));
+
+    try graph.relateOpaqueInterface(public, private);
+
+    const public_content = (try graph.content(public));
+    if (public_content != .named) return error.TestUnexpectedResult;
+    const retained_public = public_content.named;
+    const private_content = (try graph.content(private));
+    if (private_content != .named) return error.TestUnexpectedResult;
+    const retained_private = private_content.named;
+    try std.testing.expect(!graph.sameClass(public, private));
+    try std.testing.expectEqual(Type.BackingAuthority.checked_public, retained_public.backing.get().?.authority);
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, retained_private.backing.get().?.authority);
+    try std.testing.expect(!graph.sameClass(public_backing, private_backing));
+    try std.testing.expect(graph.sameClass(public_args[0], private_args[0]));
+    try std.testing.expectEqual(@as(usize, 0), (try graph.recordConstructionNodes(public)).fields.len);
+
+    const field_name = try name_store.internRecordFieldLabel("value");
+    const fields = try graph.arena().alloc(InstField, 1);
+    fields[0] = .{ .name = field_name, .ty = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) }), .default = .none };
+    const structural_record = try graph.newNode(.{ .record = .{
+        .fields = fields,
+        .ext = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),
+    } });
+    const projected = try graph.recordNodes(structural_record);
+    try std.testing.expectEqual(@as(usize, 1), projected.fields.len);
+    try std.testing.expectEqual(field_name, projected.fields[0].name);
+}
+
+test "opaque interface relation gives a codec representation's public type the representation" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAE))));
     const type_name = try name_store.internTypeName("FieldNames");
     const named_type: Type.NamedType = .{ .module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
@@ -13176,29 +13425,122 @@ test "opaque interface relation preserves distinct public and generated-private 
 
     try graph.relateOpaqueInterface(public, private);
 
-    const public_content = (try graph.content(public));
-    if (public_content != .named) return error.TestUnexpectedResult;
-    const retained_public = public_content.named;
-    const private_content = (try graph.content(private));
-    if (private_content != .named) return error.TestUnexpectedResult;
-    const retained_private = private_content.named;
-    try std.testing.expect(!graph.sameClass(public, private));
-    try std.testing.expectEqual(Type.BackingAuthority.checked_public, retained_public.backing.get().?.authority);
-    try std.testing.expectEqual(Type.BackingAuthority.generated_private, retained_private.backing.get().?.authority);
+    try std.testing.expect(graph.sameClass(public, private));
+    const joined = (try graph.content(public));
+    if (joined != .named) return error.TestUnexpectedResult;
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, joined.named.backing.get().?.authority);
+    try std.testing.expect(graph.sameClass(joined.named.backing.get().?.node, private_backing));
     try std.testing.expect(!graph.sameClass(public_backing, private_backing));
     try std.testing.expect(graph.sameClass(public_args[0], private_args[0]));
-    try std.testing.expectEqual(@as(usize, 0), (try graph.recordConstructionNodes(public)).fields.len);
+}
 
-    const field_name = try name_store.internRecordFieldLabel("value");
-    const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = field_name, .ty = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) }), .default = .none };
-    const structural_record = try graph.newNode(.{ .record = .{
-        .fields = fields,
+test "a finished public named type joined into its codec representation reads as the representation" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xB0))));
+    const type_name = try name_store.internTypeName("FieldNames");
+    const public_backing = try type_store.add(.{ .record = Type.Span.empty() });
+    const private_backing = try type_store.add(.{ .tuple = Type.Span.empty() });
+    const public_ty = try type_store.add(.{ .named = .{
+        .named_type = .{ .module = .{} },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .@"opaque",
+        .builtin_owner = .some(.fields),
+        .args = Type.Span.empty(),
+        .backing = .some(.{ .ty = public_backing, .use = .runtime_layout_only }),
+    } });
+    const private_ty = try type_store.add(.{ .named = .{
+        .named_type = .{ .module = .{} },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .@"opaque",
+        .builtin_owner = .some(.fields),
+        .args = Type.Span.empty(),
+        .backing = .some(.{ .ty = private_backing, .use = .runtime_layout_only, .authority = .generated_private }),
+    } });
+
+    const public = try graph.importMonoIndependent(public_ty);
+    const private = try graph.importMonoIndependent(private_ty);
+    // A list of the public type holds an active snapshot that reaches it,
+    // and the public node reads as the type it was imported as.
+    const list = try graph.newNode(.{ .list = public });
+    const list_before = try graph.activeTypeViewForNode(list);
+    try std.testing.expect(try type_store.typeEql(&name_store, public_ty, type_store.get(list_before).list));
+    try std.testing.expectEqual(public_ty, try graph.activeTypeViewForNode(public));
+
+    try graph.relateOpaqueInterface(public, private);
+    try std.testing.expect(graph.sameClass(public, private));
+
+    // Neither view outlives the join.
+    const view = try graph.activeTypeViewForNode(public);
+    try std.testing.expect(try type_store.typeEql(&name_store, private_ty, view));
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, type_store.get(view).named.backing.get().?.authority);
+    const list_after = try graph.activeTypeViewForNode(list);
+    try std.testing.expect(try type_store.typeEql(&name_store, private_ty, type_store.get(list_after).list));
+}
+
+test "ordinary unification gives a codec representation's public type the representation" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAF))));
+    const type_name = try name_store.internTypeName("FieldNames");
+    const named_type: Type.NamedType = .{ .module = .{} };
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+    const public_args = try graph.arena().alloc(NodeId, 1);
+    public_args[0] = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const private_args = try graph.arena().alloc(NodeId, 1);
+    private_args[0] = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const public_backing = try graph.newNode(.empty_record);
+    const private_backing = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().alloc(InstField, 0),
         .ext = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),
     } });
-    const projected = try graph.recordNodes(structural_record);
-    try std.testing.expectEqual(@as(usize, 1), projected.fields.len);
-    try std.testing.expectEqual(field_name, projected.fields[0].name);
+    const public = try graph.newNode(try graph.namedContent(.{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = .some(.fields),
+        .args = public_args,
+        .backing = .some(.{ .node = public_backing, .use = .runtime_layout_only }),
+    }));
+    const private = try graph.newNode(try graph.namedContent(.{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = .some(.fields),
+        .args = private_args,
+        .backing = .some(.{
+            .node = private_backing,
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        }),
+    }));
+
+    try graph.unify(public, private);
+
+    try std.testing.expect(graph.sameClass(public, private));
+    const joined = (try graph.content(public));
+    if (joined != .named) return error.TestUnexpectedResult;
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, joined.named.backing.get().?.authority);
+    try std.testing.expect(!graph.sameClass(public_backing, private_backing));
+    try std.testing.expect(graph.sameClass(public_args[0], private_args[0]));
 }
 
 test "construction selection preserves private evidence while absorbing optional width" {
@@ -14182,7 +14524,7 @@ test "opaque interface relation preserves nested generated-private backing" {
         .named_type = inner_named_type,
         .def = inner_def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .some(.{ .node = public_inner_backing, .use = .runtime_layout_only }),
     }));
@@ -14190,7 +14532,7 @@ test "opaque interface relation preserves nested generated-private backing" {
         .named_type = inner_named_type,
         .def = inner_def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .some(.{
             .node = private_inner_backing,
@@ -14204,7 +14546,7 @@ test "opaque interface relation preserves nested generated-private backing" {
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().dupe(NodeId, &.{public_arg}),
         .backing = .some(.{ .node = public_backing, .use = .runtime_layout_only }),
     }));
@@ -14212,7 +14554,7 @@ test "opaque interface relation preserves nested generated-private backing" {
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().dupe(NodeId, &.{private_arg}),
         .backing = .some(.{
             .node = private_backing,

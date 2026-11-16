@@ -55,7 +55,7 @@ test "issue 11736: mistyped requirement containing a tag alias reports a mismatc
     defer gpa.free(cwd);
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "app.roc", gpa);
     defer gpa.free(app_path);
-    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
     defer build_env.deinit();
     try build_env.build(app_path);
 
@@ -147,7 +147,7 @@ fn expectBlockRequirement(value: []const u8, expected_mismatches: usize, compile
     const cache_path = try tmp_dir.dir.realPathFileAlloc(io, "cache", gpa);
     defer gpa.free(cache_path);
     for (0..2) |iteration| {
-        var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+        var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
         defer build_env.deinit();
         const manager = try gpa.create(@import("../cache_manager.zig").CacheManager);
         manager.* = @import("../cache_manager.zig").CacheManager.init(gpa, .{

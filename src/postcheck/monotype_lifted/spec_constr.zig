@@ -10555,6 +10555,14 @@ const Cloner = struct {
         out_owned: bool = false,
         chain: *BindingChain = undefined,
         expr_span: Ast.Span(Ast.ExprId) = undefined,
+        /// The index of the last argument whose clone produced strict
+        /// bindings. Those bindings are placed ahead of the call, so every
+        /// earlier argument's own work is named in the chain at its position
+        /// first; left in the argument list it would run after them.
+        strict_before: usize = 0,
+        /// The work budget every argument named for `strict_before` starts
+        /// from; allocated by the first one.
+        pin_budget: ?*u32 = null,
     };
 
     /// Cursor states of a direct call clone.
@@ -10567,6 +10575,8 @@ const Cloner = struct {
         const specialized_captures = 5;
         const residual_arg = 6;
         const residual_captures = 7;
+        const specialized_pinned = 8;
+        const residual_pinned = 9;
     };
 
     fn stepCallProc(self: *Cloner, frame: *CloneFrame, task: *CallProcTask, input: ?CloneResult) Common.LowerError!CloneStep {
@@ -10635,7 +10645,17 @@ const Cloner = struct {
                 } } });
                 return retExpr(try self.wrapBindings(task.chain.*, residual));
             },
-            CallProcCursor.residual_captures + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to a CallProcCursor constant
+            CallProcCursor.specialized_pinned => {
+                task.values[frame.index] = input.?.get(.value);
+                frame.cursor = CallProcCursor.specialized_arg;
+                return .{ .call = .{ .append_exprs_from_value = .{ .shape = task.spec_pattern.?.args[frame.index], .value = task.values[frame.index], .out = task.out } } };
+            },
+            CallProcCursor.residual_pinned => {
+                task.values[frame.index] = input.?.get(.value);
+                frame.cursor = CallProcCursor.residual_arg;
+                return .{ .call = .{ .materialize = .{ .value = task.values[frame.index] } } };
+            },
+            CallProcCursor.residual_pinned + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to a CallProcCursor constant
         }
         const raw = @backingInt(Ast.localDirectCallee(call).?);
         if (frame.index < task.args.len) {
@@ -10652,6 +10672,9 @@ const Cloner = struct {
         // also required for correctness when producing values with binding
         // chains: those chains must be placed exactly once before the call.
         task.chain = try self.newChain();
+        for (task.analyzed, 0..) |analyzed, index| {
+            if (!analyzed.bindings.isEmpty()) task.strict_before = index;
+        }
         task.out = try arena.create(std.ArrayList(Ast.ExprId));
         task.out.* = self.spare_lists.exprs.take();
         task.out_owned = true;
@@ -10675,6 +10698,10 @@ const Cloner = struct {
         const pattern = task.spec_pattern.?;
         if (frame.index < pattern.args.len) {
             task.chain.appendChain(task.analyzed[frame.index].bindings);
+            if (frame.index < task.strict_before) {
+                frame.cursor = CallProcCursor.specialized_pinned;
+                return .{ .call = try self.pinCallArgTask(task, frame.index) };
+            }
             frame.cursor = CallProcCursor.specialized_arg;
             return .{ .call = .{ .append_exprs_from_value = .{ .shape = pattern.args[frame.index], .value = task.values[frame.index], .out = task.out } } };
         }
@@ -10685,9 +10712,24 @@ const Cloner = struct {
         return .{ .call = .{ .capture_span = .{ .span = task.call.captures } } };
     }
 
+    /// Name the work of the argument at `index` in the call's chain.
+    fn pinCallArgTask(self: *Cloner, task: *CallProcTask, index: usize) Allocator.Error!CloneTask {
+        const budget = task.pin_budget orelse blk: {
+            const created = try self.arena.allocator().create(u32);
+            task.pin_budget = created;
+            break :blk created;
+        };
+        budget.* = make_reusable_work_budget;
+        return .{ .make_reusable = .{ .value = task.values[index], .budget = budget, .bindings = task.chain } };
+    }
+
     fn nextResidualCallArg(self: *Cloner, frame: *CloneFrame, task: *CallProcTask) Common.LowerError!CloneStep {
         if (frame.index < task.values.len) {
             task.chain.appendChain(task.analyzed[frame.index].bindings);
+            if (frame.index < task.strict_before) {
+                frame.cursor = CallProcCursor.residual_pinned;
+                return .{ .call = try self.pinCallArgTask(task, frame.index) };
+            }
             frame.cursor = CallProcCursor.residual_arg;
             return .{ .call = .{ .materialize = .{ .value = task.values[frame.index] } } };
         }
@@ -14069,6 +14111,7 @@ const Cloner = struct {
     const LoopAttemptMark = struct {
         analysis: Pass.AnalysisMark,
         callable_workers: usize,
+        prefix_fns: usize,
         rebased_inline_scope_changes: usize,
         recorded_value_keys: usize,
         clone_templates: usize,
@@ -14099,6 +14142,7 @@ const Cloner = struct {
         return .{
             .analysis = self.pass.markAnalysis(),
             .callable_workers = self.pass.callable_workers.count(),
+            .prefix_fns = self.pass.prefix_fns.count(),
             .rebased_inline_scope_changes = self.rebased_inline_scope_changes.items.len,
             .recorded_value_keys = self.recorded_value_keys.items.len,
             .clone_templates = self.clone_templates.items.len,
@@ -14140,7 +14184,12 @@ const Cloner = struct {
             if (!removed) Common.invariant("recorded value change had no map entry");
         }
 
-        if (self.pass.callable_workers.count() == mark.callable_workers) {
+        // A callable worker or a prefix split the attempt committed is
+        // program state every later clone reads, so the suffix holding it
+        // stays, unreferenced by the next attempt.
+        if (self.pass.callable_workers.count() == mark.callable_workers and
+            self.pass.prefix_fns.count() == mark.prefix_fns)
+        {
             self.rewindProgramSuffix(mark);
         }
 

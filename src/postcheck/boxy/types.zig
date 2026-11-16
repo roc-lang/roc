@@ -669,7 +669,7 @@ pub const Store = struct {
 
     /// A memoized conversion, and whether the type reaches a record or tag
     /// union whose row ends in an uncommitted tail, which a scope can name as
-    /// a closed row node (`Converter.endsInUncommittedTail`). Such a type
+    /// a closed row node (`Converter.pushFrame`). Such a type
     /// converts the same only in scopes that name no record or tag union.
     const ClosedMemo = struct { ty: TypeId, reaches_row_node: bool };
 
@@ -1334,6 +1334,10 @@ pub const Converter = struct {
         /// Children still to convert, in `pending`.
         pending_start: usize,
         pending_next: usize,
+        /// Whether `ty` is a record or tag union whose row ends in an
+        /// uncommitted tail (`ClosedMemo`), read where `pushFrame` finds the
+        /// row's end.
+        ends_in_uncommitted_tail: bool,
     };
 
     /// Convert `ty`, read in `module`, binding the variables `env` names.
@@ -1383,8 +1387,7 @@ pub const Converter = struct {
             const frame = frames.pop().?;
             const children = results.items[frame.results_start..];
             const built = try self.finish(frame.module, frame.ty, frame.payload, children, env);
-            const built_reaches = std.mem.findScalar(bool, reaches.items[frame.results_start..], true) != null or
-                self.payloadEndsInUncommittedTail(frame.module, frame.payload);
+            const built_reaches = frame.ends_in_uncommitted_tail or std.mem.findScalar(bool, reaches.items[frame.results_start..], true) != null;
             results.shrinkRetainingCapacity(frame.results_start);
             reaches.shrinkRetainingCapacity(frame.results_start);
             pending.shrinkRetainingCapacity(frame.pending_start);
@@ -1441,32 +1444,6 @@ pub const Converter = struct {
         return names_none;
     }
 
-    /// Whether checked type `ty` of `module` is a record or tag union whose
-    /// row ends in an uncommitted tail: a record's in an uncommitted record
-    /// tail variable, a tag union's in an uncommitted tag tail. Only such a
-    /// type is a closed row node of a scope (`Program.appendClosedRowNodes`).
-    fn endsInUncommittedTail(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId) bool {
-        return self.payloadEndsInUncommittedTail(module, self.modules.get(module).types().payload(ty));
-    }
-
-    /// `endsInUncommittedTail` of the type whose checked payload is `payload`.
-    fn payloadEndsInUncommittedTail(self: Converter, module: ModuleIndex, payload: checked.CheckedTypePayload) bool {
-        const types = self.modules.get(module).types();
-        var current = switch (payload) {
-            .record => |record| record.ext,
-            .tag_union => |tag_union| tag_union.ext,
-            .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .empty_tag_union, .field_kind => return false,
-        };
-        while (true) switch (types.payload(current)) {
-            .alias => |alias| current = alias.backing,
-            .record => |record| current = record.ext,
-            .tag_union => |tag_union| current = tag_union.ext,
-            .flex => |flex| return flex.row_tail == .uncommitted_record,
-            .empty_tag_union => return types.uncommittedTagTail(current),
-            .pending, .err, .rigid, .tuple, .nominal, .function, .empty_record, .field_kind => return false,
-        };
-    }
-
     /// The position of the closed row node `env` binds at `index`, if it
     /// binds one: a scheme position holding the checked record or tag union
     /// whose row ends in a quantified uncommitted tail
@@ -1509,7 +1486,12 @@ pub const Converter = struct {
         if (env.lookupIndex(module, ty)) |index| {
             // A closed row node of the scope converts as its own structure.
             if (self.tailNodeAt(env, index) == null) {
-                reaches.* = self.endsInUncommittedTail(module, ty);
+                // A closed row node an instantiation binds to the use's
+                // whole value: the scope names the record or tag union.
+                reaches.* = switch (self.modules.get(env.module).types().payload(env.vars[index])) {
+                    .record, .tag_union => true,
+                    .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .empty_tag_union, .field_kind => false,
+                };
                 return .{ .done = env.bound[index] };
             }
         }
@@ -1629,6 +1611,7 @@ pub const Converter = struct {
         const pending_start = pending.items.len;
         const view = self.modules.get(module);
         const types = view.types();
+        var ends_in_uncommitted_tail = false;
         switch (composite.payload) {
             .alias => |alias| try pending.append(allocator, .{ .module = module, .ty = alias.backing }),
             .record => |record| {
@@ -1652,7 +1635,11 @@ pub const Converter = struct {
                 // The row's remainder, when it is not the empty record.
                 switch (types.payload(current)) {
                     .empty_record => {},
-                    .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .tag_union, .empty_tag_union => try pending.append(allocator, .{ .module = module, .ty = current }),
+                    .flex => |flex| {
+                        ends_in_uncommitted_tail = flex.row_tail == .uncommitted_record;
+                        try pending.append(allocator, .{ .module = module, .ty = current });
+                    },
+                    .pending, .field_kind, .err, .rigid, .alias, .record, .tuple, .nominal, .function, .tag_union, .empty_tag_union => try pending.append(allocator, .{ .module = module, .ty = current }),
                 }
             },
             .tuple => |items| for (items) |item| try pending.append(allocator, .{ .module = module, .ty = item }),
@@ -1675,7 +1662,7 @@ pub const Converter = struct {
                     }
                 }
                 switch (types.payload(current)) {
-                    .empty_tag_union => {},
+                    .empty_tag_union => ends_in_uncommitted_tail = types.uncommittedTagTail(current),
                     .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union => try pending.append(allocator, .{ .module = module, .ty = current }),
                 }
             },
@@ -1694,6 +1681,7 @@ pub const Converter = struct {
             .results_start = results_start,
             .pending_start = pending_start,
             .pending_next = pending_start,
+            .ends_in_uncommitted_tail = ends_in_uncommitted_tail,
         });
     }
 

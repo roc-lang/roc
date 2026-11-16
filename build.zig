@@ -2116,6 +2116,8 @@ pub fn build(b: *std.Build) void {
     const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo/echo.wasm");
     const echo_wasm_archive_step = b.step("build-echo-wasm-archive", "Build echo.wasm and zstd-compress it under zig-out/lib/echo");
     const build_test_echo_wasm_runner_step = b.step("build-test-echo-wasm-runner", "Build the echo.wasm integration test runner");
+    const build_test_echo_native_runner_step = b.step("build-test-echo-native-runner", "Build the native echo platform driver that run-test-echo-native runs");
+    const run_test_echo_native_step = b.step("run-test-echo-native", "Run echo programs through the native echo platform driver");
     const check_echo_wasm_size_step = b.step("run-check-echo-wasm-size", "Check echo.wasm against the website's asset size limit");
     const build_glue_release_step = b.step("build-glue-release", "Build release-ready glue specs");
 
@@ -2821,10 +2823,11 @@ pub fn build(b: *std.Build) void {
 
     const main_exe_result = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, dependency_source, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy, test_filters, true, valgrind_support) orelse return;
     const roc_exe = main_exe_result.exe;
+    const roc_embeds_builtin_unit = embed_builtin_unit orelse (optimize != .debug);
     {
         // The table `roc` carries must hold exactly what `roc` files for the
         // same key (src/build/builtin_unit.zig, `--verify`).
-        const units = linkEmbeddedBuiltinUnits(b, roc_modules, write_compiled_builtins, roc_exe, flag_enable_tracy, embed_builtin_unit orelse (optimize != .debug));
+        const units = linkEmbeddedBuiltinUnits(b, roc_modules, write_compiled_builtins, roc_exe, flag_enable_tracy, roc_embeds_builtin_unit);
         const step = b.step("run-test-builtin-unit", "Check that the Builtin unit roc embeds is byte-identical to the one roc builds");
         if (units.verifier) |verifier| {
             const verify = b.addRunArtifact(verifier);
@@ -3123,6 +3126,9 @@ pub fn build(b: *std.Build) void {
 
     const cli_test_options = b.addOptions();
     cli_test_options.addOption(bool, "binaryen", dependency_source.isBundled());
+    // Whether the `roc` the CLI tests run serves the Builtin's unit from its
+    // embedded table (design.md "Embedded Units") instead of building it.
+    cli_test_options.addOption(bool, "roc_embeds_builtin_unit", roc_embeds_builtin_unit);
 
     // CLI integration tests: one harness-backed runner covers platforms,
     // subcommands, echo, and glue. Focus locally with:
@@ -3770,6 +3776,41 @@ pub fn build(b: *std.Build) void {
         run_echo_cmd.addPassthruArgs();
         run_echo_cmd.step.dependOn(&echo_native_install.step);
         run_echo_step.dependOn(&run_echo_cmd.step);
+
+        // test-echo-native: runs echo programs through the native driver,
+        // which reads the synthetic app and the embedded platform from its
+        // virtual tree while every other path reaches the host filesystem.
+        build_test_echo_native_runner_step.dependOn(&echo_native_exe.step);
+        const EchoNativeCase = struct {
+            app: []const u8,
+            with_files: []const [2][]const u8 = &.{},
+            stdout: []const u8,
+        };
+        const echo_native_cases = [_]EchoNativeCase{
+            .{ .app = "test/echo/alias_of_function_field.roc", .stdout = "ok" },
+            .{
+                .app = "test/echo/issue_12189_imported_generic_tuple_nominal.roc",
+                .with_files = &.{.{ "Issue12189Mod", "test/echo/Issue12189Mod.roc" }},
+                .stdout = "15\n",
+            },
+            .{
+                .app = "test/echo/imported_generic_nominal_reads.roc",
+                .with_files = &.{.{ "ImportedGenericNominals", "test/echo/ImportedGenericNominals.roc" }},
+                .stdout = "field: 2\ndestructured: 1\nannotated: 3\nconcrete export: 3\nnested path: 6\ntag payload: 7\nlocal nested path: 9\n",
+            },
+        };
+        for (echo_native_cases) |case| {
+            const run_case = b.addRunArtifact(echo_native_exe);
+            run_case.setName(b.fmt("echo_native {s}", .{case.app}));
+            run_case.addFileArg(b.path(case.app));
+            for (case.with_files) |with_file| {
+                run_case.addArg("--with-file");
+                run_case.addPrefixedFileArg(b.fmt("{s}=", .{with_file[0]}), b.path(with_file[1]));
+            }
+            run_case.expectStdOutEqual(case.stdout);
+            run_case.expectExitCode(0);
+            run_test_echo_native_step.dependOn(&run_case.step);
+        }
 
         // test-echo-wasm: bytebox-driven integration test that loads the
         // declared echo.wasm artifact, supplies in-process js_echo + js_stderr,
@@ -5053,6 +5094,7 @@ pub fn build(b: *std.Build) void {
     // MiniCI, so their native runners are built here with the modules.
     build_ci_step.dependOn(build_test_repl_wasm_runner_step);
     build_ci_step.dependOn(build_test_echo_wasm_runner_step);
+    build_ci_step.dependOn(build_test_echo_native_runner_step);
     build_ci_step.dependOn(build_test_playground_runner_step);
     build_ci_step.dependOn(build_test_cli_runners_step);
     build_ci_step.dependOn(build_test_hosts_step);

@@ -19,10 +19,13 @@
 //! names, generic where the worker's own types are, then the worker, then
 //! the capture graph and its table-input and capture-descriptor roots. Every
 //! module reference is an index into the first table. A worker is named as
-//! its identity names it (`Program.workerIdentity`): a template by its
-//! worker's identity and an index into the positions table, a lambda by its
-//! owner and its place among the owner's nested procedure sites, a default by
-//! its place among its module's defaults.
+//! its identity names it (`Program.workerIdentity`), but for its module: a
+//! template by its name within its module (`Program.templateNameWithin`) and
+//! an index into the positions table, a lambda by its owner and its place
+//! among the owner's nested procedure sites, a default by its place among its
+//! module's defaults. Nothing after the module table names a module itself,
+//! as the lowering that stores a recipe and the one that reads it can name
+//! modules differently.
 
 const std = @import("std");
 const collections = @import("collections");
@@ -1192,19 +1195,26 @@ const Encoder = struct {
         try self.word(try self.moduleEntry(index));
     }
 
-    /// A template of module `module_index`, by its worker's identity, which
-    /// an edit elsewhere in the module leaves alone. A link's encoding (a
-    /// needs list, function metadata) is read against modules built apart
-    /// from it, so a reader resolves the identity through the worker's
-    /// export record (`ExportInterface.template`). A stored constant's
-    /// recipe is read against the modules it was stored with, so it also
-    /// lists the template's position, once per template, in a table after
-    /// its module table that the recipe's digest leaves out
-    /// (`ConstStore.recipeBody`).
-    fn templateRef(self: *Encoder, module_index: types.ModuleIndex, template: checked_names.CheckedProcedureTemplateId, identity: [32]u8) Allocator.Error!void {
+    /// Module `module_index`'s template worker for `template` at `binding`,
+    /// by what an edit elsewhere in the module leaves alone. A link's
+    /// encoding (a needs list, function metadata) is read against modules
+    /// built apart from it, so it names the worker by its identity, which a
+    /// reader resolves through the worker's export record
+    /// (`ExportInterface.template`); `identity` is that identity when the
+    /// caller already has it. A stored constant's recipe is read by
+    /// lowerings that name modules differently, so it names the template
+    /// within its module (`Program.templateNameWithin`), and since it is
+    /// read against the modules it was stored with, it also lists the
+    /// template's position, once per template, in a table after its module
+    /// table that the recipe's digest leaves out (`ConstStore.recipeBody`).
+    fn templateRef(self: *Encoder, module_index: types.ModuleIndex, template: checked_names.CheckedProcedureTemplateId, binding: lower.TemplateBinding, identity: ?[32]u8) Allocator.Error!void {
         try self.module(module_index);
-        try self.bytes.appendSlice(self.allocator, &identity);
-        if (self.link_names) return;
+        if (self.link_names) {
+            const bytes = identity orelse self.program.templateIdentity(module_index, template, binding).bytes;
+            try self.bytes.appendSlice(self.allocator, &bytes);
+            return;
+        }
+        try self.bytes.appendSlice(self.allocator, &self.program.templateNameWithin(module_index, template, binding));
         const slot = try self.template_slots.getOrPut(self.allocator, .{ .module = module_index, .template = template });
         if (!slot.found_existing) {
             slot.value_ptr.* = @intCast(self.template_positions.items.len);
@@ -1219,7 +1229,7 @@ const Encoder = struct {
         switch (owner) {
             .template => |template| {
                 try self.bytes.append(self.allocator, 0);
-                try self.templateRef(template.module, template.template, self.program.templateIdentity(template.module, template.template, .generic).bytes);
+                try self.templateRef(template.module, template.template, .generic, null);
             },
             .default => |default| {
                 try self.bytes.append(self.allocator, 1);
@@ -1381,8 +1391,7 @@ const Encoder = struct {
         switch (kind) {
             .template => {
                 const module_index = input.module();
-                const ref = input.template(module_index, .generic);
-                try self.templateRef(module_index, ref.id, ref.identity);
+                try self.templateRef(module_index, input.template(module_index, .generic), .generic, null);
             },
             .default => {
                 try self.module(input.module());
@@ -1391,7 +1400,7 @@ const Encoder = struct {
             .template_list_int => {
                 const module_index = input.module();
                 const ref = input.listIntTemplate(module_index);
-                try self.templateRef(module_index, ref.id, ref.identity);
+                try self.templateRef(module_index, ref.id, .{ .list_int = ref.item }, null);
                 try self.bytes.append(self.allocator, @backingInt(ref.item));
             },
             .lambda => {
@@ -1470,8 +1479,7 @@ const Encoder = struct {
                 });
                 // A finished program's procedures are compacted, so there
                 // the identity comes from the key, not the worker's procedure.
-                const identity = if (self.proc_identities) record.identityBytes(program) else program.templateIdentity(key.module, key.template, key.binding).bytes;
-                try self.templateRef(key.module, key.template, identity);
+                try self.templateRef(key.module, key.template, key.binding, if (self.proc_identities) record.identityBytes(program) else null);
                 switch (key.binding) {
                     .generic => {},
                     .list_int => |item| try self.bytes.append(self.allocator, @backingInt(item)),
@@ -1715,45 +1723,43 @@ const Decoder = struct {
         return try self.program.store.internName(self.take(len));
     }
 
-    const TemplateRef = struct { id: checked_names.CheckedProcedureTemplateId, identity: [32]u8 };
-
-    /// The template of module `module_index` an encoding names by its
-    /// worker's identity at `binding` (`Encoder.templateRef`): in a link's
-    /// encoding, at the position its export record gives it in the module's
-    /// current checked module; in a recipe, at the position the recipe
-    /// lists.
-    fn template(self: *Decoder, module_index: types.ModuleIndex, binding: lower.TemplateBinding) TemplateRef {
-        const identity = self.take(32)[0..32].*;
-        const template_id: checked_names.CheckedProcedureTemplateId = if (self.link_names) blk: {
+    /// The template of module `module_index` an encoding names at `binding`
+    /// (`Encoder.templateRef`): in a link's encoding, by its worker's
+    /// identity, at the position its export record gives it in the module's
+    /// current checked module; in a recipe, by its name within the module,
+    /// at the position the recipe lists.
+    fn template(self: *Decoder, module_index: types.ModuleIndex, binding: lower.TemplateBinding) checked_names.CheckedProcedureTemplateId {
+        const named = self.take(32)[0..32].*;
+        if (self.link_names) {
             const unit = self.program.moduleUnit() orelse invariant("a link's encoding of a worker was read outside a module unit");
-            const interface = unit.imports.get(.{ .bytes = identity }) orelse
+            const interface = unit.imports.get(.{ .bytes = named }) orelse
                 invariant("a link's encoding names a template worker its module's object exports no record of");
             if (interface.template == LirProgram.BoxyExport.no_template) invariant("a link's encoding names a template worker whose record locates no template");
-            break :blk @fromBackingInt(interface.template);
-        } else blk: {
-            const slot = self.word();
-            if (slot >= self.templates.len / 4) invariant("a recipe names a template its table does not list");
-            break :blk @fromBackingInt(std.mem.readInt(u32, self.templates[slot * 4 ..][0..4], .little));
-        };
-        if (std.debug.runtime_safety) {
-            const named = self.program.templateIdentity(module_index, template_id, binding);
-            if (!std.mem.eql(u8, &named.bytes, &identity)) invariant("an encoding's template resolved to a template of another identity");
+            const template_id: checked_names.CheckedProcedureTemplateId = @fromBackingInt(interface.template);
+            if (std.debug.runtime_safety and !std.mem.eql(u8, &self.program.templateIdentity(module_index, template_id, binding).bytes, &named))
+                invariant("a link's encoding of a template resolved to a template of another identity");
+            return template_id;
         }
-        return .{ .id = template_id, .identity = identity };
+        const slot = self.word();
+        if (slot >= self.templates.len / 4) invariant("a recipe names a template its table does not list");
+        const template_id: checked_names.CheckedProcedureTemplateId = @fromBackingInt(std.mem.readInt(u32, self.templates[slot * 4 ..][0..4], .little));
+        if (std.debug.runtime_safety and !std.mem.eql(u8, &self.program.templateNameWithin(module_index, template_id, binding), &named))
+            invariant("a recipe's template resolved to a template of another name");
+        return template_id;
     }
 
     /// An integer list worker's template and item type.
-    fn listIntTemplate(self: *Decoder, module_index: types.ModuleIndex) struct { id: checked_names.CheckedProcedureTemplateId, identity: [32]u8, item: lower.ListIntItem } {
-        // The item follows the template's reference, whose identity is of
-        // the item's worker.
+    fn listIntTemplate(self: *Decoder, module_index: types.ModuleIndex) struct { id: checked_names.CheckedProcedureTemplateId, item: lower.ListIntItem } {
+        // The item follows the template's reference, whose name is of the
+        // item's worker.
         const at = self.at;
         self.at += 32;
         if (!self.link_names) self.at += 4;
         const item: lower.ListIntItem = @fromBackingInt(self.byte());
         self.at = at;
-        const ref = self.template(module_index, .{ .list_int = item });
+        const id = self.template(module_index, .{ .list_int = item });
         _ = self.byte();
-        return .{ .id = ref.id, .identity = ref.identity, .item = item };
+        return .{ .id = id, .item = item };
     }
 
     /// What owns a lambda's site (`Encoder.siteOwner`).
@@ -1761,7 +1767,7 @@ const Decoder = struct {
         return switch (self.byte()) {
             0 => blk: {
                 const module_index = self.module();
-                break :blk .{ .template = .{ .module = module_index, .template = self.template(module_index, .generic).id } };
+                break :blk .{ .template = .{ .module = module_index, .template = self.template(module_index, .generic) } };
             },
             1 => blk: {
                 const module_index = self.module();
@@ -1787,7 +1793,7 @@ const Decoder = struct {
         switch (tag) {
             .template => {
                 const module_index = self.module();
-                const template_id = self.template(module_index, .generic).id;
+                const template_id = self.template(module_index, .generic);
                 return switch (role) {
                     .value => try program.templateWorker(module_index, template_id),
                     .scope => try program.templateScopeWorker(module_index, template_id),

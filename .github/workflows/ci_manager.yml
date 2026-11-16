@@ -366,7 +366,7 @@ jobs:
       - name: Build MiniCI binaries
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build build-ci
+          command: zig build build-ci -Dembed-builtin-unit=true
           retry_count: 3
 
       # zstd on all cores, instead of upload-artifact's single-threaded zip

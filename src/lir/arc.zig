@@ -5794,9 +5794,21 @@ const Inserter = struct {
             if ((check_mask & bit) == 0) continue;
             if (local == target) continue;
             if (!self.localContainsRefcounted(local)) continue;
-            if (!self.isLocalUniqueHere(local)) continue;
+            // A check that only reads its argument may read it through a
+            // view, whose uniqueness is that of the value it views.
+            const unique_here = if ((rc_effect.consume_args & bit) == 0)
+                self.solution.isUniqueThroughViewsUnder(local, self.current_sig.unique_params)
+            else
+                self.isLocalUniqueHere(local);
+            if (!unique_here) continue;
             if ((rc_effect.consume_args & bit) != 0 and (preserve_consumed_args & bit) != 0) continue;
-            if (!owned.contains(local)) continue;
+            // A borrowed pure same-value alias reads the allocation its
+            // source's unit holds, so the claim rests on that unit being
+            // owned whole here.
+            const unit = self.solution.unitLocalOf(local);
+            if (!owned.contains(unit)) continue;
+            const full_residual = owned.fullResidualMask(unit);
+            if (full_residual != 0 and owned.residualMask(unit) != full_residual) continue;
             // The preserve scan proved the argument's borrow group dead
             // after this statement; a group member appearing as another
             // operand of this same statement is still live at the op.
@@ -5814,10 +5826,11 @@ const Inserter = struct {
     /// was born unique and the solver records the alias as the same value.
     fn valueHasAnotherOwnedUnit(self: *const Inserter, local: LIR.LocalId, owned: *const OwnedSet) bool {
         const root = self.solution.aliasRootOf(local);
+        const unit = self.solution.unitLocalOf(local);
         var units = owned.iterator(.{});
         while (units.next()) |bit_index| {
             const other = owned.domain.resource_locals[bit_index];
-            if (other == local) continue;
+            if (other == unit) continue;
             if (self.solution.aliasRootOf(other) == root) return true;
         }
         return false;
@@ -14518,6 +14531,40 @@ test "uniqueness: the owned flag of a fresh list is check-free" {
     try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
 }
 
+test "uniqueness: the owned flag read through a borrowed alias of a fresh list is check-free" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const view = try f.local(try f.layouts.insertList(try f.layouts.ensureZstLayout()));
+    const flag = try f.local(.u64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    // list = []; view = list; flag = list_owned_unique(view); appended = checked_op(list).
+    // The measurement reads the list through an alias that only borrows it
+    // and is typed without its items, which is the shape a Builtin wrapper's
+    // inlined parameter leaves behind for an op that never reads the items.
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const measure = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = flag,
+        .op = .list_owned_unique,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_owned_unique.rcEffect()),
+        .args = try f.span(&.{view}),
+        .next = append,
+    } }, .test_fixture);
+    const view_assign = try f.assignRefLocal(view, list, measure);
+    const elem_assign = try f.assignI64(elem, 5, view_assign);
+    const body = try f.assignList(list, &.{}, elem_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(flag));
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
 test "uniqueness: a record handed through a result join keeps its field births" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -15639,6 +15686,86 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
     }
     try testing.expect(remaining > 0);
     try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
+}
+
+test "RC emission units: a call demands an outcome-restitution variant only within its callee's unit" {
+    // A checked mutation whose failure outcome leaves its list argument
+    // untouched, called by a caller that reads the list again on failure, with
+    // the two procedures placed in emission units (design.md "Mode
+    // Specialization", emission units) and no optional mode specialization,
+    // as a dev build lowers them. A caller in the callee's unit demands the
+    // outcome variant and hands the list over without a retain; a caller in
+    // another module's unit, or any caller of an isolated callee, as a `.boxy`
+    // app's call of a Builtin `List` worker is, adapts to the callee's base
+    // signature and retains the list across the call, so the mutation sees it
+    // shared.
+    const Case = struct { caller: LIR.EmissionUnit, callee: LIR.EmissionUnit, outcome_variant: bool };
+    const cases = [_]Case{
+        .{ .caller = LIR.EmissionUnit.module(0), .callee = LIR.EmissionUnit.module(0), .outcome_variant = true },
+        .{ .caller = LIR.EmissionUnit.module(1), .callee = LIR.EmissionUnit.module(0), .outcome_variant = false },
+        .{ .caller = LIR.EmissionUnit.module(0), .callee = .isolated, .outcome_variant = false },
+        .{ .caller = .program, .callee = .program, .outcome_variant = true },
+    };
+    for (cases) |case| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+
+        const try_list = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+            try f.layouts.ensureZstLayout(),
+            f.list_i64,
+        });
+        const param = try f.local(f.list_i64);
+        const choose_success = try f.local(.i64);
+        const changed = try f.local(f.list_i64);
+        const callee_result = try f.local(try_list);
+        const success_ret = try f.ret(callee_result);
+        const success_tag = try f.assignTag(callee_result, 1, changed, success_ret);
+        const mutate = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = changed,
+            .op = .list_reverse,
+            .rc_effect = try f.store.addRcEffect(LIR.LowLevel.RcEffect.runtimeUniqueness(1)),
+            .args = try f.span(&.{param}),
+            .next = success_tag,
+        } }, .test_fixture);
+        const failure_ret = try f.ret(callee_result);
+        const failure_tag = try f.assignTag(callee_result, 0, null, failure_ret);
+        const callee_body = try f.switchStmt(choose_success, mutate, failure_tag, null);
+        const callee = try f.addProc(&.{ param, choose_success }, callee_body, try_list);
+
+        const item = try f.local(.i64);
+        const input = try f.local(f.list_i64);
+        const caller_choose = try f.local(.i64);
+        const call_result = try f.local(try_list);
+        const discriminant = try f.local(.u8);
+        const success_value = try f.local(.i64);
+        const failure_value = try f.local(.i64);
+        const caller_success_ret = try f.ret(success_value);
+        const success_body = try f.assignI64(success_value, 1, caller_success_ret);
+        const caller_failure_ret = try f.ret(failure_value);
+        const failure_done = try f.assignI64(failure_value, 0, caller_failure_ret);
+        const failure_body = try f.expectStmt(input, failure_done);
+        const refine = try f.switchStmt(discriminant, success_body, failure_body, null);
+        const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
+        const call = try f.store.addCFStmt(.{ .assign_call = .{
+            .target = call_result,
+            .proc = callee,
+            .args = try f.span(&.{ input, caller_choose }),
+            .next = read_discriminant,
+        } }, .test_fixture);
+        const choose = try f.assignI64(caller_choose, 1, call);
+        const make_input = try f.assignList(input, &.{item}, choose);
+        const caller_body = try f.assignI64(item, 7, make_input);
+        const caller = try f.addProc(&.{}, caller_body, .i64);
+        f.store.getProcSpecPtr(callee).emission_unit = case.callee;
+        f.store.getProcSpecPtr(caller).emission_unit = case.caller;
+
+        const base_proc_count = f.store.procSpecCount();
+        _ = try insert(&f.store, &f.layouts, .{ .specialize = false });
+
+        const variants: usize = if (case.outcome_variant) 1 else 0;
+        try testing.expectEqual(base_proc_count + variants, f.store.procSpecCount());
+        try testing.expectEqual(@as(usize, if (case.outcome_variant) 0 else 1), f.countRc(input, .incref));
+    }
 }
 
 /// A callee that hands its `List(Str)` argument back in variant

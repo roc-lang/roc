@@ -421,7 +421,13 @@ pub const Constants = struct {
     /// 199: combines the 198 entry above with selected hoisted roots
     ///      recording whether a kept root reads their binding, and checked
     ///      artifacts listing the value-form expressions their bodies keep.
-    pub const CACHE_VERSION = 199;
+    /// 194: procedure templates record whether their scheme holds an
+    ///      uncommitted tag tail and list their signature's closed row nodes,
+    ///      and generalized local scopes record whether their scheme holds an
+    ///      uncommitted tag tail.
+    /// 199: combines the 198 entry with the 194 entry above.
+    /// 200: combines the two independent 199 entries.
+    pub const CACHE_VERSION = 200;
 };
 
 /// Configuration for the Roc cache system.

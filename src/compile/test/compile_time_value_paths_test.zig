@@ -113,6 +113,7 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(gpa, gpa, io),
+        .lss,
     );
     errdefer coord.deinit();
     coord.enable_hosted_transform = true;
