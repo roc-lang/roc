@@ -32310,7 +32310,7 @@ const BodyContext = struct {
                     nested_evidence.chain,
                     nested_evidence.owned_scope,
                     false,
-                    .exact_graph,
+                    .independent_roots,
                     .inherit,
                 )) {
                     .hit => |target| return self.finishNestedFnValue(task, target),
@@ -50888,7 +50888,7 @@ const BodyContext = struct {
                     fn_ctx.evidence,
                     null,
                     false,
-                    .exact_graph,
+                    .independent_roots,
                     .inherit,
                 );
             },
@@ -50992,7 +50992,7 @@ const BodyContext = struct {
                     fn_ctx.evidence,
                     null,
                     false,
-                    .exact_graph,
+                    .independent_roots,
                     .inherit,
                 );
             },
@@ -53432,7 +53432,7 @@ const BodyContext = struct {
             nested_evidence.chain,
             nested_evidence.owned_scope,
             false,
-            .exact_graph,
+            .independent_roots,
             .inherit,
         );
     }

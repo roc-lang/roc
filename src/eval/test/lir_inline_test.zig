@@ -15482,32 +15482,24 @@ const user_iter_callback_main =
 
 // (c) A callback typed `MyIter(I64) -> MyIter(I64)` that maps its argument.
 // The callback's argument and result are two occurrences of one Monotype in
-// one function type. Its target is `user_iter_fused` for every case at both
-// modes: the result's step set is not the argument's, so nothing contains
-// itself and nothing is boxed. With direct adapters at `.none`, the one
-// tie between the two occurrences is the callback lambda's signature:
-// Monotype lifts a nested lambda with an exact signature graph
-// (`SignatureRelation.exact_graph`), and Lambda Solved expands that graph in
-// one whole-root context, where its argument and result are one var. The map
-// step that captures the argument then lands in the argument's own step set
-// (with the list step), which contains itself and is boxed. After `.wrappers` cloning
-// nothing is boxed, but one solved set of two members still contains
-// itself.
+// one function type, typed at independent roots, so the result's step set is
+// not the argument's: nothing contains itself and nothing is boxed. After
+// `.wrappers` call-pattern cloning one solved set holds two members.
 test "MyIter lambda sets: callback from iterator to iterator" {
     try expectUserIterCases(&.{
         .{
             .name = "next-based",
             .source = my_iter_with_next ++ user_iter_callback_main,
             .dbg = "36",
-            .none = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 1, .box_box_count = 3 },
-            .wrappers = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 1, .box_box_count = 0 },
+            .none = user_iter_fused,
+            .wrappers = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
         },
         .{
             .name = "direct",
             .source = my_iter_direct ++ user_iter_callback_main,
             .dbg = "36",
-            .none = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 1, .box_box_count = 3 },
-            .wrappers = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 1, .box_box_count = 0 },
+            .none = user_iter_fused,
+            .wrappers = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
         },
     });
 }

@@ -23004,14 +23004,10 @@ Monotype records whether a function signature's argument and result positions
 are independent roots or one exact producer-authored graph. The generated
 `Iter.fromStep` boundary uses the exact-graph relation because its result
 iterator intentionally retains the step function argument's runtime callable
-representation. Monotype also lowers every nested lambda with the exact-graph
-relation: the lambda's type is the enclosing body's own graph node for it, not
-a type completed independently from the lambda's lowered result. That identity
-is not value flow the body could express instead: lowering nested lambdas at
-independent roots makes `test/echo/issue_12717_self_capturing_opaque.roc`
-(closures capturing their own opaque record) reach LIR with two different
-layouts for one closure capture. Other function signatures use independent
-roots. Monotype
+representation. Every other function signature, nested lambdas included, uses
+independent roots: a nested lambda's argument and result are as independent
+as any other function's, so two occurrences of one Monotype in its signature
+get their own callable slots. Monotype
 Lifted retains an exact graph only while that ABI is unchanged. Lambda Solved
 then imports it from a single signature root, preserving recursive edges and
 intentional sharing between an argument and a nested result slot, and relates
