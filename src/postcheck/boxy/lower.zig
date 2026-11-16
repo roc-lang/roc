@@ -382,6 +382,10 @@ pub const WorkerKey = union(enum) {
     /// The initializer of static data request `index`: it builds the
     /// requested constant at its type, for static data materialization.
     static_data: u32,
+    /// The initializer of the static data a value-form expression of
+    /// `module` that its body keeps reads (`CompileTimeRootTable.inline_literals`):
+    /// it builds the expression's value, for static data materialization.
+    inline_literal: struct { module: ModuleIndex, expr: ExprId },
     /// The method of a dictionary whose checked evidence resolves its slot
     /// to a crash: a dispatch checking rejected, or one no value can reach
     /// (design.md "Static Dispatch In Monotype"). Calling it crashes.
@@ -924,6 +928,9 @@ pub const Program = struct {
     /// evaluates later from (`rootValueSlot`), by root.
     root_value_slots: std.AutoHashMapUnmanaged(RootSlotKey, LIR.StaticDataId) = .empty,
     stored_value_slots: std.AutoHashMapUnmanaged(StoredValueKey, LIR.StaticDataId) = .empty,
+    /// The static data slot each value-form expression a body keeps reads
+    /// (`inlineLiteralSlot`), by the expression's initializer worker.
+    inline_literal_slots: collections.DenseMapUnmanaged(WorkerId, LIR.StaticDataId) = .empty,
     /// The compile-time roots this program evaluates (`Input.roots`), by
     /// module and root (`evaluatesRoot`), each with its request's checked
     /// type (`rootValueType`).
@@ -1138,7 +1145,7 @@ pub const Program = struct {
                 hasher.update(&self.worker(target).identityBytes(self));
             },
             .default => |default| return self.defaultIdentity(default.module, self.defaultOrdinal(default.module, default.expr)),
-            .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker no module's object exports has no content identity"),
+            .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker no module's object exports has no content identity"),
         }
         return .{ .bytes = hasher.finalResult() };
     }
@@ -1265,7 +1272,7 @@ pub const Program = struct {
     pub fn exportableKind(key: WorkerKey) bool {
         return switch (key) {
             .template, .lambda, .method_entry, .default => true,
-            .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => false,
+            .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => false,
         };
     }
 
@@ -1302,7 +1309,7 @@ pub const Program = struct {
             .codec => "boxy.codec",
             .convert => "boxy.convert",
             .callable_eval_entry => "boxy.callable_eval_entry",
-            .template, .lambda, .default, .method_entry, .root, .static_data, .root_slot => invariant("a worker a module's object defines has no generated identity"),
+            .template, .lambda, .default, .method_entry, .root, .static_data, .inline_literal, .root_slot => invariant("a worker a module's object defines has no generated identity"),
         };
         if (self.moduleUnit() == null) return LIR.ProcIdentity.programLocal(role, raw);
         var hasher = base.TypeDigestHasher.init();
@@ -1343,7 +1350,7 @@ pub const Program = struct {
                 hasher.update(&self.modules.linkName(binding.module));
                 hashWord(&hasher, @backingInt(binding.template));
             },
-            .template, .lambda, .default, .method_entry, .root, .static_data, .root_slot => unreachable, // rejected above
+            .template, .lambda, .default, .method_entry, .root, .static_data, .inline_literal, .root_slot => unreachable, // rejected above
         }
         try self.hashTypes(&hasher, signature);
         return .{ .bytes = hasher.finalResult() };
@@ -1586,6 +1593,7 @@ pub const Program = struct {
         self.platform_identities.deinit(self.allocator);
         self.root_value_slots.deinit(self.allocator);
         self.stored_value_slots.deinit(self.allocator);
+        self.inline_literal_slots.deinit(self.allocator);
         self.requested_roots.deinit(self.allocator);
         self.const_schema.deinit(self.allocator);
         self.wrapper_by_root.deinit(self.allocator);
@@ -1881,7 +1889,7 @@ pub const Program = struct {
         const target = self.worker(id).*;
         const key = switch (target.key) {
             .template => |key| key,
-            .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => return null,
+            .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => return null,
         };
         const template_key: TemplateKey = .{ .module = key.module, .template = key.template };
         if (self.list_item_slots.get(template_key)) |known| return known;
@@ -1946,7 +1954,7 @@ pub const Program = struct {
         const target = self.worker(callee).*;
         const key = switch (target.key) {
             .template => |key| key,
-            .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => return callee,
+            .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => return callee,
         };
         switch (key.binding) {
             .generic => {},
@@ -3085,7 +3093,7 @@ pub const Program = struct {
         if (requirements.len == 0) return .{ .bound = bound, .requirements = requirements };
         const key = switch (target_worker.key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.module(key.module).view.checked_procedure_templates;
         const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool.items(), templates.templates.items()[@backingInt(key.template)].evidence_params);
@@ -3245,7 +3253,7 @@ pub const Program = struct {
         if (target_worker.dictionary_params.len == 0) return;
         const key = switch (target_worker.key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.module(key.module).view.checked_procedure_templates;
         const all_params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool.items(), templates.templates.items()[@backingInt(key.template)].evidence_params);
@@ -3588,6 +3596,45 @@ pub const Program = struct {
         return id;
     }
 
+    /// The static data slot holding the value of `expr`, a value-form
+    /// expression of `module_index` that its body keeps
+    /// (`CompileTimeRootTable.inline_literals`). Its initializer
+    /// (`WorkerKey.inline_literal`) builds the expression once, and static
+    /// data materialization freezes what it builds, so a read allocates
+    /// nothing and the value's reference count is the static one.
+    pub fn inlineLiteralSlot(self: *Program, module_index: ModuleIndex, expr: ExprId, ty: TypeId) Allocator.Error!LIR.StaticDataId {
+        const key: WorkerKey = .{ .inline_literal = .{ .module = module_index, .expr = expr } };
+        if (self.worker_ids.get(key)) |existing| return self.inline_literal_slots.get(existing).?;
+        if (!self.store.isClosed(ty)) invariant("a value-form expression a body keeps has an open type");
+        const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
+        const proc = try self.result.store.addProcSpec(.{
+            .name = self.result.store.freshSyntheticSymbol(),
+            .identity = self.programLocalIdentity("boxy.inline_literal", @backingInt(id)),
+            .emission_unit = .isolated,
+            .args = .empty(),
+            .ret_layout = .zst,
+            .is_static_initializer = true,
+        }, base.SourceLoc.none);
+        try self.workers.append(self.allocator, .{
+            .key = key,
+            .proc = proc,
+            .module = module_index,
+            .scheme_vars = &.{},
+            .dictionary_params = &.{},
+            .params = &.{},
+            .ret = ty,
+        });
+        try self.worker_ids.put(self.allocator, key, id);
+        try self.worklist.append(self.allocator, id);
+        const slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.result.static_data_values.items.len));
+        try self.result.static_data_values.append(self.allocator, .{
+            .initializer = .some(proc),
+            .layout_idx = try self.layouts.layoutOf(ty),
+        });
+        try self.inline_literal_slots.put(self.allocator, id, slot);
+        return slot;
+    }
+
     /// The wrapper of root request `index` (see `WorkerKey.root`).
     pub fn rootWorker(self: *Program, index: u32, request: checked.RootRequest, module_index: ModuleIndex) Allocator.Error!WorkerId {
         const key: WorkerKey = .{ .root = index };
@@ -3632,7 +3679,7 @@ pub const Program = struct {
             const scoped = self.worker(current).*;
             const outer: ?WorkerId = switch (scoped.key) {
                 .lambda => |lambda| lambda.outer,
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => null,
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => null,
             };
             const own = if (outer) |o| scoped.literal_scopes.len != self.worker(o).literal_scopes.len else scoped.literal_scopes.len != 0;
             if (own) try owners.append(allocator, current);
@@ -3798,7 +3845,7 @@ pub const Program = struct {
             // Only a compile-time program reads a root's slot.
             .root_slot => self.programLocalIdentity(role, @backingInt(id)),
             .adapter, .structural, .structural_map, .crash_dictionary, .literal_thunk, .codec, .convert, .callable_eval_entry => try self.generatedWorkerIdentity(key, module_index, @backingInt(id), &.{}),
-            .template, .lambda, .default, .method_entry, .root, .static_data => invariant("a worker a module's object defines is no generated erased worker"),
+            .template, .lambda, .default, .method_entry, .root, .static_data, .inline_literal => invariant("a worker a module's object defines is no generated erased worker"),
         };
         return try self.addErasedWorkerWithIdentity(key, module_index, scheme_vars, params, ret, identity, .isolated);
     }
@@ -4290,7 +4337,7 @@ pub const Program = struct {
                         continue;
                     }
                 },
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => {},
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => {},
             }
             const arena = self.arena.allocator();
             const bound = try arena.alloc(TypeId, target.scheme_vars.len);
@@ -4337,7 +4384,7 @@ pub const Program = struct {
             .adapter, .codec, .default => Tables.InputLayout.flat(.{ .descs = @intCast(target.scheme_vars.len) }),
             .method_entry => |entry_target| self.inputLayout(entry_target),
             .structural, .structural_map => Tables.InputLayout.flat(.{ .descs = target.structural_descs }),
-            .literal_thunk, .root_slot, .root, .static_data, .crash_dictionary, .convert, .callable_eval_entry => .{},
+            .literal_thunk, .root_slot, .root, .static_data, .inline_literal, .crash_dictionary, .convert, .callable_eval_entry => .{},
         };
     }
 
@@ -4463,6 +4510,7 @@ fn perfNameOf(program: *Program, a: Allocator, names: []?[]const u8, id: WorkerI
         },
         .root => |index| .{ .text = "root", .number = index },
         .static_data => |index| .{ .text = "static_data", .number = index },
+        .inline_literal => |key| .{ .module = module_name, .text = "inline_literal", .number = @backingInt(key.expr) },
         .root_slot => |key| .{ .module = module_name, .text = "root_slot", .number = @backingInt(key.root) },
     };
     const name = try perfNameLabel(a, label);
@@ -4791,7 +4839,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                         .list_int => |item| try std.fmt.allocPrint(program.arena.allocator(), "{s}{s}", .{ names.exportNameText(export_name), item.nameSuffix() }),
                     };
                 },
-                inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => |_, kind| "boxy." ++ @tagName(kind),
+                inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => |_, kind| "boxy." ++ @tagName(kind),
             };
             try program.result.store.setProcDebugName(worker.proc, name);
         }

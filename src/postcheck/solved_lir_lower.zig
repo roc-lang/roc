@@ -5656,7 +5656,10 @@ const Lowerer = struct {
             .stored => {
                 // Frozen straight from the stored node its request names: no
                 // initializer builds it.
-                const stored_request = self.solved.lifted.static_data_values.get(@backingInt(candidate.static_data));
+                const stored_request = switch (self.solved.lifted.static_data_values.get(@backingInt(candidate.static_data))) {
+                    .stored => |stored| stored,
+                    .inline_literal => Common.invariant("a stored list's static data request named a value-form expression"),
+                };
                 const result_id: LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(self.result.static_data_values.items.len))));
                 try self.result.static_data_values.append(self.allocator, .{
                     .initializer = .none,

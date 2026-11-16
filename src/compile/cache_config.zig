@@ -418,7 +418,10 @@ pub const Constants = struct {
     /// 195: unary `!` canonicalizes to its own node and checks as a dispatch
     ///      of the operand's `not` method.
     /// 198: combines the 197 entry with the 195 entry above.
-    pub const CACHE_VERSION = 198;
+    /// 199: combines the 198 entry above with selected hoisted roots
+    ///      recording whether a kept root reads their binding, and checked
+    ///      artifacts listing the value-form expressions their bodies keep.
+    pub const CACHE_VERSION = 199;
 };
 
 /// Configuration for the Roc cache system.

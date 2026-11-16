@@ -1479,7 +1479,7 @@ pub const Builder = struct {
         while (current != scope) : (levels += 1) {
             switch (self.program.worker(current).key) {
                 .lambda => |key| current = key.outer,
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a scope's table is read outside its chain of lambdas"),
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a scope's table is read outside its chain of lambdas"),
             }
         }
         if (self.table_local == null) invariant("a worker without a type table read a scope's table");
@@ -1896,6 +1896,7 @@ pub const Builder = struct {
             .structural_map => |map| return try self.lowerStructuralMap(map),
             .root => return try self.lowerRootWrapper(),
             .static_data => return try self.lowerStaticDataInitializer(),
+            .inline_literal => |key| return try self.lowerInlineLiteralInitializer(key.expr),
             .default => |key| return try self.lowerDefaultBody(key.expr),
             .codec => |piece| return try Codec.lowerPiece(self, piece),
             .crash_dictionary => |kind| return try self.lowerCrashDictionary(kind),
@@ -2854,6 +2855,21 @@ pub const Builder = struct {
         try self.finishProc(entry, body_start, if (has_table) &table_arg else &.{}, ret_layout);
     }
 
+    /// A value-form expression's initializer body (`WorkerKey.inline_literal`):
+    /// the expression's own value, built from its literals.
+    pub fn lowerInlineLiteralInitializer(self: *Builder, expr: ExprId) Allocator.Error!void {
+        const worker = self.currentWorker().*;
+        self.entry_hole = try self.newHole();
+        const entry = self.entry_hole;
+        const ret_layout = try self.program.layouts.layoutOf(worker.ret);
+        const body_start = try self.newHole();
+        self.hole = body_start;
+        try self.tasks.append(self.allocator, .ret);
+        try self.tasks.append(self.allocator, .{ .own_expr = expr });
+        try self.run();
+        try self.finishProc(entry, body_start, &.{}, ret_layout);
+    }
+
     /// The value of the `??` default `default` for a field of type
     /// `field_ty`: its declaring module's default expression, evaluated now
     /// at the instantiation the field's type gives its variables.
@@ -3582,6 +3598,30 @@ pub const Builder = struct {
         };
     }
 
+    /// The static data slot a value-form expression its body keeps is read
+    /// from (design.md "Value-Form Expressions Stay In Their Bodies"), or
+    /// null where the expression is built in place: every other expression,
+    /// the expression's own initializer, and an expression whose value is an
+    /// immediate (a scalar, a discriminant-only tag, or a zero-sized value),
+    /// which a construction holds with nothing to allocate.
+    fn inlineLiteralRead(self: *Builder, expr_id: ExprId) Allocator.Error!?LIR.StaticDataId {
+        if (!self.view.view.compile_time_roots.isInlineLiteral(expr_id)) return null;
+        switch (self.currentWorker().key) {
+            .inline_literal => |key| if (key.expr == expr_id and key.module == self.module) return null,
+            .template, .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => {},
+        }
+        const ty = try self.exprType(expr_id);
+        const layouts = &self.program.result.layouts;
+        const value_layout = layouts.getLayout(try self.program.layouts.layoutOf(ty));
+        const immediate = switch (value_layout.tag) {
+            .scalar, .zst => true,
+            .tag_union => layouts.getTagUnionInfo(value_layout).discriminant_offset == 0,
+            .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr, .hole, .dynamic => false,
+        };
+        if (immediate) return null;
+        return try self.program.inlineLiteralSlot(self.module, expr_id, ty);
+    }
+
     /// The compile-time root of a hoisted constant of this module, or null
     /// for a constant of another module or one no root computes.
     fn hoistedRootOfConstRef(self: *Builder, const_ref: checked.ConstRef) ?checked.ComptimeRootId {
@@ -3686,6 +3726,7 @@ pub const Builder = struct {
             .stored => |stored| return try self.pushStoredRestore(.{ .module = self.module }, stored, try self.exprType(expr_id), if (self.view.view.hoisted_constants.lookupByExpr(expr_id)) |hoisted| hoisted.root else null),
             .pending => |root| return try self.pendingValueRead(self.module, root, try self.exprType(expr_id)),
         };
+        if (try self.inlineLiteralRead(expr_id)) |slot| return try self.pushValue(try self.staticRead(slot));
         const raw = @backingInt(expr_id);
         switch (expr.data) {
             .numeral => try self.lowerNumeral(.{ .expr = expr_id }, self.bodies().numeralLiteral(raw), self.bodies().numeralPlan(raw), self.bodies().literalConversionRoot(raw)),
@@ -4423,7 +4464,7 @@ pub const Builder = struct {
                 const export_name = view.nameStore().procBase(template.proc_base).export_name.get() orelse break :blk "a template";
                 break :blk view.nameStore().exportNameText(export_name);
             },
-            inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => |_, kind| @tagName(kind),
+            inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => |_, kind| @tagName(kind),
         };
     }
 
@@ -5583,7 +5624,7 @@ pub const Builder = struct {
         while (chain != owner) {
             switch (self.program.worker(chain).key) {
                 .lambda => |key| chain = key.outer,
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => return self.declarationOf(owner),
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => return self.declarationOf(owner),
             }
         }
         return null;
@@ -5650,7 +5691,7 @@ pub const Builder = struct {
                         break try self.declaredLambdaWorker(scope_worker, lambda_expr, closure_expr.ty, captures)
                     else
                         invariant("a local procedure's function value is built outside its declaring body with no declaration context"),
-                    .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a local procedure's function value is built outside its declaring body with no declaration context"),
+                    .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a local procedure's function value is built outside its declaring body with no declaration context"),
                 }
             };
             const declaring = self.program.worker(scope_worker).*;
@@ -6696,7 +6737,7 @@ pub const Builder = struct {
     pub fn templateEvidenceParams(self: *Builder, worker_id: WorkerId) []const static_dispatch.EvidenceParamRecord {
         const key = switch (self.program.worker(worker_id).key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("evidence parameters of a worker that is not a procedure template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("evidence parameters of a worker that is not a procedure template's"),
         };
         const view = self.program.module(key.module).view;
         const template = view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
@@ -7525,7 +7566,7 @@ pub const Builder = struct {
         const target = self.program.worker(callee).*;
         const key = switch (target.key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.program.module(key.module).view.checked_procedure_templates;
         return .{

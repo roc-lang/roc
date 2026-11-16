@@ -1392,12 +1392,19 @@ eligible expression, failure to evaluate, store, restore, or emit it correctly
 is a compiler bug with a regression test, not a reason to demote the expression
 from compile-time evaluation.
 
-Selection decides which expressions are roots, never how a root is completed.
-Once the module's dispatch plans and literal conversion roots are published,
-checking records for each selected root which producer completes it: the
-checked-value writer for a root in value form, an evaluator for every other
-("Value-Form Roots"). That record changes neither which expressions are roots
-nor any type.
+Selection decides which expressions are roots, in two steps. The checker
+traversal above selects candidates: every maximal eligible expression and
+every binding a candidate or runtime code reads. Publication then makes each
+candidate a root except a data constant in value form ("Value-Form Roots")
+that binds no top-level name and whose binding no kept candidate reads
+(`SelectedHoistedRoot.read_by_root`, which pruning records as it keeps the
+reading candidate): such an expression computes nothing, so its body keeps it
+("Value-Form Expressions Stay In Their Bodies"). This is the selection rule,
+not a demotion: value form is a fact of the checked expression, decided
+before any evaluation and never after one fails. Once the module's dispatch
+plans are published, publication records for each root it makes which
+producer completes it: the checked-value writer for a root in value form, an
+evaluator for every other ("Value-Form Roots"). That record changes no type.
 
 ### Every Rejection Is Explicit Recovery
 
@@ -2194,13 +2201,18 @@ the pairing. The unpaired platform's templates remain unchanged.
 #### Value-Form Roots
 
 A constant root whose checked expression already is its value computes
-nothing: `end_of_block = 256`, or the `Err(NotFound)` and `Ok({ x: 0, y: 0 })`
-a function body returns. **A root whose checked expression is in value form
-is completed by the checked-value writer; every other root is completed by an
-evaluator.** Each root has exactly one producer, which checking records on
-the root (`CompileTimeRoot.completion`), and finalization consumes that
-record as it is: it never re-inspects the expression, and never tries one
-producer and then the other.
+nothing: `end_of_block = 256`. **A root whose checked expression is in value
+form is completed by the checked-value writer; every other root is completed
+by an evaluator.** Each root has exactly one producer, which publication
+records on the root as it makes it (`CompileTimeRoot.completion`), and
+finalization consumes that record as it is: it never re-inspects the
+expression, and never tries one producer and then the other.
+
+The roots in value form are top-level constants, a selected binding that
+binds a top-level name, and a selected local binding a kept root reads by
+reference. Any other selected expression in value form, such as the
+`Err(NotFound)` or `Ok({ x: 0, y: 0 })` a function body returns, is no root
+at all: its body keeps it ("Value-Form Expressions Stay In Their Bodies").
 
 An expression is in value form when it is one of these, judged over checked
 CIR kinds (as the checked body reader presents them) and checked types:
@@ -2226,9 +2238,12 @@ and no part other than the root itself is read at a row other than its own
 (`CheckedBodies.rowCoercion`). The root's own coercion belongs to the site
 reading the root, which converts the stored value as it converts any other.
 Only `constant` and `hoisted_constant` roots whose body is their expression
-qualify. Checking marks them after it has published the module's dispatch
-plans and literal conversion roots (`publishValueFormRoots`); marking reads
-the checked types and changes none.
+qualify. Publication decides value form once, where it creates the module's
+roots (`CompileTimeRootTable.fromModule`), after it has published the
+module's dispatch plans: a numeral with a `from_numeral` plan is not in value
+form, and a literal with a conversion root always has such a plan, so the
+conversion roots published later decide nothing. Deciding reads the checked
+types and changes none.
 
 Everything else stays with the evaluator, deliberately:
 
@@ -2284,6 +2299,55 @@ wrapper of a completed root, but a module's object defines each completed
 root's wrapper for the other objects of a link, and runtime reads restore
 the stored value through the const template, exactly as for an evaluated
 root.
+
+#### Value-Form Expressions Stay In Their Bodies
+
+A selected data constant in value form that binds no top-level name and
+whose binding no kept root reads is not made a root (see "Root Selection
+During Checking"). Making it one would cost a root request, an entry
+wrapper template and its compiled wrapper in the module's object, a const
+template, a hoisted-constant entry, a stored value and the checked-value
+writer's work, all to recover what the expression already says. Publication
+lists these expressions instead, ascending
+(`CompileTimeRootTable.inline_literals`), and their bodies keep them. A
+binding whose right-hand side is listed is an ordinary local binding: its
+declaration stays in the body and its uses read the local.
+
+The rule applies at every position. A value-form part of a larger selected
+expression that is not in value form, such as `[1, 2]` in
+`List.concat([1, 2], [3])`, is covered by that expression's root and is
+evaluated with it, as before. A value-form part of an expression that is no
+root, such as `[1, 2]` in `List.concat([1, 2], xs)` with `xs` read at
+runtime, was a candidate of its own and is listed. Either way nothing about
+a value-form expression is computed at runtime that a root would have
+stored: the covering root still evaluates its whole expression, and a listed
+expression is data.
+
+A listed expression is read exactly as the stored constant its root would
+have held, so runtime code is unchanged: lowering reads an aggregate from
+immutable static data, and builds an immediate in place, which allocates
+nothing: a scalar (under `.lss` a string only when it is small, under `.boxy`
+any string, whose literal backing is image data too), a discriminant-only tag,
+or under `.boxy` a zero-sized value. The static data comes from a closed static
+initializer that builds the expression's value from its literals, which
+static data materialization evaluates at compile time into frozen image
+data with the static reference count; no runtime constructor runs, a read
+allocates nothing, and reference counting on the value does nothing, as for
+any other image data.
+
+- `.boxy` lowering reads a listed expression whose committed layout is not
+  an immediate from the slot of its initializer worker
+  (`WorkerKey.inline_literal`, `Program.inlineLiteralSlot`), one per
+  expression per program; the initializer lowers the expression's own value
+  (`Builder.inlineLiteralRead`).
+- Monotype lowers a listed expression as a static data candidate whose
+  initializer is the expression's own value (`InlineLiteralTask`), requested
+  by module and expression (`StaticDataValue.inline_literal`); LIR lowering
+  then treats it exactly as a stored constant's candidate.
+
+A listed expression in a function called from many places is one static
+datum per program, read at every call. Equal listed expressions in one
+program each have their own initializer and datum.
 
 A shared post-check program represents a selected root read as an explicit
 `comptime_value` expression. Its identity is the checked module id, compile-time
@@ -7204,9 +7268,10 @@ recursive checking work that already determines types, resolved references, and
 effect data. Checking may return temporary hoistability data from `checkExpr`
 and keep temporary binding data in the active lexical scope, but it must not add
 permanent hoistability summaries to every checked expression. The checked module
-stores only selected hoisted roots plus sparse lookup indexes needed by later
-lowering, such as checked-expression id to hoisted-root id and selected
-local-binding id to hoisted-root id.
+stores only selected hoisted roots, the selected value-form expressions that
+are no roots ("Value-Form Expressions Stay In Their Bodies"), and sparse lookup
+indexes needed by later lowering, such as checked-expression id to hoisted-root
+id and selected local-binding id to hoisted-root id.
 
 The hoistability decision must use explicit checked data, not source-name scans
 or canonicalization guesses. Allowed dependencies include literals, already
@@ -11592,7 +11657,8 @@ emitted.
 #### Constant Storage
 
 Compile-time finalization is separate from iterator representation and
-SpecConstr. Eligible constant list values become explicit
+SpecConstr. Eligible constant list values, and the value-form expressions bodies keep
+("Value-Form Expressions Stay In Their Bodies"), become explicit
 `static_data_candidate` nodes, and direct LIR lowering emits their bytes into
 the data segment. This is why a constant list consumed through `.iter()` can
 have zero runtime list allocation in a size cart even though the eval allocation
@@ -17632,7 +17698,9 @@ body ("Literal Arguments"), or the body converts it through its dictionary.
 An expression compile-time evaluation hoisted and stored is read from its
 stored value wherever it occurs, as `.lss` reads it, except in the entry
 wrapper that computes it, when its evaluation failed (it runs in place), and
-for a guarded binding's right-hand side.
+for a guarded binding's right-hand side. A value-form expression its body
+keeps is read from the static data its initializer freezes, unless its value
+is an immediate ("Value-Form Expressions Stay In Their Bodies").
 
 A value whose type is closed inside a generic body is an ordinary local with
 an ordinary layout, lowered with the same statements `.lss` emits. The

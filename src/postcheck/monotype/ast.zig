@@ -1999,7 +1999,20 @@ pub const RuntimeSchemaRequest = struct {
 };
 
 /// Request to make a Monotype value available as static data.
-pub const StaticDataValue = Common.StaticDataRequest;
+pub const StaticDataValue = union(enum) {
+    /// A checked constant's stored value, or one stored node of it.
+    stored: Common.StaticDataRequest,
+    /// A value-form expression its body keeps
+    /// (`CompileTimeRootTable.inline_literals`), built by the candidate's
+    /// initializer expression.
+    inline_literal: InlineLiteralStaticData,
+};
+
+/// The value-form expression `expr` of `module` that its body keeps.
+pub const InlineLiteralStaticData = struct {
+    module: checked.ModuleId,
+    expr: can.CIR.Expr.Idx,
+};
 
 /// Errors reported by Monotype program-view call-target verification.
 pub const CallTargetVerifyError = enum {
