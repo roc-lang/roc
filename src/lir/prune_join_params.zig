@@ -53,7 +53,7 @@ const no_write = std.math.maxInt(u32);
 
 /// Prune one procedure with task-local scratch; rewritten LIR stays in the store.
 /// `guarded_reads` holds the static data slots whose reads can fail (see
-/// `ProcPasses.runPruneJoinParams`); a read of one is never deleted.
+/// `ProcPasses.runSegmentTimed`); a read of one is never deleted.
 pub fn runProc(store: *LirStore, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator, guarded_reads: ?*const std.DynamicBitSetUnmanaged) Allocator.Error!void {
     var pass = Pass.init(store, proc_id, scratch_allocator, guarded_reads);
     defer pass.deinit();

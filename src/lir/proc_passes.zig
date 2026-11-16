@@ -43,28 +43,54 @@ pub const Phase = enum {
 /// The number of procedure-local phases.
 pub const phase_count = @typeInfo(Phase).@"enum".field_names.len;
 
+/// Phases a segment may hold several of: none reads another procedure's
+/// body, allocates fresh join identities, or prepares layouts from an
+/// earlier phase's output, so running them one after another on one shard
+/// gives each the input the commit of the phase before it would.
+pub fn fusible(phase: Phase) bool {
+    return switch (phase) {
+        .branch_expectation, .trmc, .scalarize, .prune_join_params => true,
+        .forwarding_join, .tag_fusion, .loop_append, .range, .box_reuse => false,
+    };
+}
+
 /// Per-phase durations and procedure counts, recorded only when a caller
-/// asks for detailed timing. Phases run on the coordinating thread, so the
-/// fields are plain.
+/// asks for detailed timing. Segments run on the coordinating thread, so the
+/// fields are plain; each lane measures its phases in its own row, folded
+/// after the segment's run. A segment's elapsed time, preparation, rewrite,
+/// capacity, task time and commit are recorded under its first phase.
 pub const Timing = struct {
     std_io: std.Io,
-    /// Each phase's elapsed time, from layout preparation to its last commit.
+    /// Each segment's elapsed time, from layout preparation to its last
+    /// commit.
     wall_ns: [phase_count]u64 = @splat(0),
     /// Layout preparation and the scan admitting procedures.
     prepare_ns: [phase_count]u64 = @splat(0),
     /// Elapsed time of the rewrite callbacks, on the workers or inline.
     rewrite_ns: [phase_count]u64 = @splat(0),
-    /// The rewrite callbacks' own time, summed over workers.
+    /// Each phase's own rewrites, summed over workers.
     worker_ns: [phase_count]u64 = @splat(0),
     /// The workers' capacity over the rewrite: its elapsed time times the
     /// executor's worker count, or the elapsed time when it ran inline.
     capacity_ns: [phase_count]u64 = @splat(0),
+    /// The segment's whole task callbacks, summed over workers: its phases
+    /// together with cloning each procedure and comparing it with its
+    /// source.
+    segment_worker_ns: [phase_count]u64 = @splat(0),
     /// Validation and the ordered commit of rewritten procedures.
     commit_ns: [phase_count]u64 = @splat(0),
     /// Procedures the phase admitted and rewrote.
     visited: [phase_count]u64 = @splat(0),
-    /// Admitted procedures whose rewrite changed them.
+    /// Admitted procedures that this phase changed and no earlier phase of
+    /// its segment had.
     changed: [phase_count]u64 = @splat(0),
+    lanes: []Lane = &.{},
+
+    /// One lane's phase times; lanes never share a cache line.
+    const Lane = struct {
+        ns: [phase_count]u64 = @splat(0),
+        _padding: [std.atomic.cache_line]u8 = undefined,
+    };
 
     fn now(self: *const Timing) i96 {
         return std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
@@ -82,7 +108,9 @@ pub const ParallelMetrics = struct {
     prepared_statement_rows: u64 = 0,
     appended_statements: u64 = 0,
     peak_retained_shards: u64 = 0,
+    /// Procedures each phase ran on, admitted or checked.
     committed_by_phase: [phase_count]u64 = @splat(0),
+    /// Procedures each phase changed that no earlier phase of its segment had.
     changed_by_phase: [phase_count]u64 = @splat(0),
 
     /// Accumulate completed lowering runs without treating a peak as a sum.
@@ -126,24 +154,47 @@ fn laneScratch(comptime T: type, lane: *TaskExecutor.LaneState) Allocator.Error!
     return &box.value;
 }
 
+fn phaseMask(phase: Phase) u16 {
+    return @as(u16, 1) << @intCast(@backingInt(phase));
+}
+
+/// The body a phase rewrites, or null when the phase has nothing to rewrite.
+fn phaseBody(store: *const LirStore, phase: Phase, proc: LIR.LirProcSpecId) ?LIR.CFStmtId {
+    return switch (phase) {
+        .forwarding_join => ForwardingJoinInline.rewritableProcBody(store, proc),
+        .tag_fusion => TagCaseFusion.rewritableProcBody(store, proc),
+        .scalarize => ScalarizeJoins.rewritableProcBody(store, proc),
+        .branch_expectation, .trmc, .prune_join_params, .loop_append, .range, .box_reuse => BodyClone.rewritableProcBody(store, proc),
+    };
+}
+
 const TaskContext = struct {
     source: *const LirStore,
     layouts: *const layout.Store,
-    phase: Phase,
+    /// The segment's phases, run in order on one shard.
+    phases: []const Phase,
     proc: LIR.LirProcSpecId,
-    /// The procedure's shapes excluded it from this phase; the task runs only
-    /// to verify that the phase indeed rewrites nothing, and never commits.
+    /// The procedure's shapes excluded it from every phase of the segment;
+    /// the task runs only to verify that the phases indeed rewrite nothing,
+    /// and never commits.
     verify_only: bool = false,
     /// Static data reads the compile-time value guards will guard; see
-    /// `runPruneJoinParams`.
+    /// `runSegmentTimed`.
     guarded_reads: ?*const std.DynamicBitSetUnmanaged = null,
     shard: ?LirStore = null,
     failed: bool = false,
     completed: bool = false,
     changed: bool = false,
+    /// The phases that ran on the procedure, admitted or checked.
+    ran: u16 = 0,
+    /// The phases whose shapes admitted the procedure.
+    visited: u16 = 0,
+    /// The first phase that changed the procedure.
+    first_changed: ?Phase = null,
     trmc_report: ?Trmc.Report = null,
     first_fresh_join: u32 = 0,
     fresh_join_count: u32 = 0,
+    timing: ?*Timing = null,
 
     fn run(context_opaque: *anyopaque, worker: TaskExecutor.Worker) ?*anyopaque {
         const self: *TaskContext = @ptrCast(@alignCast(context_opaque));
@@ -154,46 +205,95 @@ const TaskContext = struct {
     }
 
     fn executeOnLane(self: *TaskContext, worker: TaskExecutor.Worker) Allocator.Error!void {
-        try self.execute(worker.allocator, worker.scratch, worker.lane_state);
+        try self.execute(worker.allocator, worker.scratch, worker.lane_state, worker.id);
     }
 
-    fn execute(self: *TaskContext, output_allocator: Allocator, scratch_allocator: Allocator, lane: *TaskExecutor.LaneState) Allocator.Error!void {
-        const analysis = switch (self.phase) {
-            .forwarding_join, .tag_fusion, .loop_append, .range, .box_reuse => try laneScratch(BodyClone.AnalysisScratch, lane),
-            .branch_expectation, .trmc, .prune_join_params, .scalarize => null,
-        };
+    fn execute(self: *TaskContext, output_allocator: Allocator, scratch_allocator: Allocator, lane: *TaskExecutor.LaneState, lane_id: usize) Allocator.Error!void {
         var shard = try self.source.cloneForProcRewriteWithMarks(output_allocator, self.proc, try laneScratch(LirStore.RewriteMarks, lane));
         errdefer shard.deinit();
-        switch (self.phase) {
-            .branch_expectation => try BranchExpectation.runProc(&shard, self.proc, scratch_allocator),
-            .trmc => self.trmc_report = try Trmc.runProcWithScratch(&shard, self.layouts, self.proc, try laneScratch(Trmc.LaneScratch, lane)),
-            .forwarding_join, .tag_fusion => {
-                var joins = BodyClone.JoinParamIndex.init(scratch_allocator);
-                defer joins.deinit();
-                joins.next_join_point = self.first_fresh_join;
-                if (self.phase == .forwarding_join) {
-                    try ForwardingJoinInline.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, &joins, analysis.?);
-                } else {
-                    try TagCaseFusion.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, &joins, analysis.?);
-                    try KnownTagJump.runProc(&shard, self.proc, scratch_allocator, &joins);
-                }
-                self.fresh_join_count = joins.next_join_point - self.first_fresh_join;
-            },
-            .prune_join_params => try PruneJoinParams.runProc(&shard, self.proc, scratch_allocator, self.guarded_reads),
-            .scalarize => try ScalarizeJoins.runProcWithScratch(&shard, self.layouts, self.proc, try laneScratch(ScalarizeJoins.LaneScratch, lane)),
-            .loop_append => try LoopAppendPromote.runProcInLane(&shard, self.layouts, self.proc, try laneScratch(LoopAppendPromote.LaneScratch, lane), analysis.?),
-            .range => {
-                var joins = BodyClone.JoinParamIndex.init(scratch_allocator);
-                defer joins.deinit();
-                joins.next_join_point = self.first_fresh_join;
-                try RangeProve.runProcWithScratch(&shard, self.layouts, self.proc, try laneScratch(RangeProve.LaneScratch, lane), analysis.?, &joins);
-                self.fresh_join_count = joins.next_join_point - self.first_fresh_join;
-            },
-            .box_reuse => try BoxReuse.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
+        var next_join = self.first_fresh_join;
+        var changed = false;
+        for (self.phases) |phase| {
+            if (phaseBody(&shard, phase, self.proc) == null) continue;
+            const spec = shard.getProcSpecImmediate(self.proc);
+            const admitted = shapesAdmit(spec.shapes.merged(shard.shapes), phase);
+            // Debug builds also run a phase the shapes exclude, on every
+            // procedure no earlier phase of the segment changed, and fail
+            // if it would rewrite anything.
+            if (!admitted and (builtin.mode != .debug or changed)) continue;
+            const started: i96 = if (self.timing) |active| active.now() else 0;
+            try self.runPhase(&shard, phase, &next_join, scratch_allocator, lane);
+            if (self.timing) |active| active.lanes[lane_id].ns[@backingInt(phase)] +|= active.since(started);
+            self.ran |= phaseMask(phase);
+            const now_changed = shard.procRewriteChanged();
+            if (!admitted) {
+                if (now_changed) base.invariant("LIR pass {s} rewrote procedure {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @backingInt(self.proc), spec.shapes });
+                continue;
+            }
+            self.visited |= phaseMask(phase);
+            if (now_changed and !changed) self.first_changed = phase;
+            changed = changed or now_changed;
         }
+        self.fresh_join_count = next_join - self.first_fresh_join;
         self.changed = shard.procRewriteChanged();
         self.shard = shard;
     }
+
+    fn runPhase(self: *TaskContext, shard: *LirStore, phase: Phase, next_join: *u32, scratch_allocator: Allocator, lane: *TaskExecutor.LaneState) Allocator.Error!void {
+        const analysis = switch (phase) {
+            .forwarding_join, .tag_fusion, .loop_append, .range, .box_reuse => try laneScratch(BodyClone.AnalysisScratch, lane),
+            .branch_expectation, .trmc, .prune_join_params, .scalarize => null,
+        };
+        switch (phase) {
+            .branch_expectation => try BranchExpectation.runProc(shard, self.proc, scratch_allocator),
+            .trmc => self.trmc_report = try Trmc.runProcWithScratch(shard, self.layouts, self.proc, try laneScratch(Trmc.LaneScratch, lane)),
+            .forwarding_join, .tag_fusion => {
+                var joins = BodyClone.JoinParamIndex.init(scratch_allocator);
+                defer joins.deinit();
+                joins.next_join_point = next_join.*;
+                if (phase == .forwarding_join) {
+                    try ForwardingJoinInline.runProcWithScratch(shard, self.layouts, self.proc, scratch_allocator, &joins, analysis.?);
+                } else {
+                    try TagCaseFusion.runProcWithScratch(shard, self.layouts, self.proc, scratch_allocator, &joins, analysis.?);
+                    try KnownTagJump.runProc(shard, self.proc, scratch_allocator, &joins);
+                }
+                next_join.* = joins.next_join_point;
+            },
+            .prune_join_params => try PruneJoinParams.runProc(shard, self.proc, scratch_allocator, self.guarded_reads),
+            .scalarize => try ScalarizeJoins.runProcWithScratch(shard, self.layouts, self.proc, try laneScratch(ScalarizeJoins.LaneScratch, lane)),
+            .loop_append => try LoopAppendPromote.runProcInLane(shard, self.layouts, self.proc, try laneScratch(LoopAppendPromote.LaneScratch, lane), analysis.?),
+            .range => {
+                var joins = BodyClone.JoinParamIndex.init(scratch_allocator);
+                defer joins.deinit();
+                joins.next_join_point = next_join.*;
+                try RangeProve.runProcWithScratch(shard, self.layouts, self.proc, try laneScratch(RangeProve.LaneScratch, lane), analysis.?, &joins);
+                next_join.* = joins.next_join_point;
+            },
+            .box_reuse => try BoxReuse.runProcWithScratch(shard, self.layouts, self.proc, scratch_allocator, analysis.?),
+        }
+    }
+};
+
+/// The smallest summed frame size of the procedures one lane claims at a
+/// time, so short procedures share a claim.
+const min_chunk_locals = 64;
+
+/// The procedure tasks of one segment as the items of an ordered run.
+const SegmentBatch = struct {
+    pub const Error = Allocator.Error;
+
+    contexts: []TaskContext,
+    source: *const LirStore,
+
+    pub fn weight(self: *const SegmentBatch, index: usize) u64 {
+        return 1 + @as(u64, self.source.getProcSpecImmediate(self.contexts[index].proc).frame_locals.len);
+    }
+
+    pub fn runItem(self: *SegmentBatch, index: usize, worker: TaskExecutor.Worker) Error!void {
+        try self.contexts[index].executeOnLane(worker);
+    }
+
+    pub fn commitItem(_: *SegmentBatch, _: usize) Error!void {}
 };
 
 /// Apply one phase using the same rewrite/commit boundary for serial and
@@ -206,7 +306,7 @@ pub fn run(
     executor: ?TaskExecutor.Executor,
     metrics: ?*ParallelMetrics,
 ) Allocator.Error!void {
-    return runTimed(allocator, store, layouts, phase, executor, metrics, null);
+    return runSegmentTimed(allocator, store, layouts, &.{phase}, executor, metrics, null, null);
 }
 
 /// `run`, recording the phase's durations and procedure counts in `timing`
@@ -220,45 +320,42 @@ pub fn runTimed(
     metrics: ?*ParallelMetrics,
     timing: ?*Timing,
 ) Allocator.Error!void {
-    return runWithGuardedReads(allocator, store, layouts, phase, executor, metrics, timing, null);
+    return runSegmentTimed(allocator, store, layouts, &.{phase}, executor, metrics, timing, null);
 }
 
-/// The `prune_join_params` phase of a program that reads compile-time values.
-/// `guarded_reads` holds each static data slot whose reads
+/// Apply a segment of phases in order: one task per procedure clones it once,
+/// runs every phase of the segment its shapes admit on that one shard, and
+/// the segment commits once, in procedure order, after every task. A segment
+/// of several phases holds only `fusible` ones, so each phase reads exactly
+/// what the ordered commit of the phase before it would have left. No
+/// callback can observe another procedure's output.
+///
+/// `guarded_reads`, for a segment holding `prune_join_params` in a program
+/// that reads compile-time values, holds each static data slot whose reads
 /// `comptime_value_guards.insert` will guard: such a read fails when the
 /// value's evaluation failed, so it is never a pure definition to delete.
-pub fn runPruneJoinParams(
+pub fn runSegmentTimed(
     allocator: Allocator,
     store: *LirStore,
     layouts: *layout.Store,
-    executor: ?TaskExecutor.Executor,
-    metrics: ?*ParallelMetrics,
-    timing: ?*Timing,
-    guarded_reads: *const std.DynamicBitSetUnmanaged,
-) Allocator.Error!void {
-    return runWithGuardedReads(allocator, store, layouts, .prune_join_params, executor, metrics, timing, guarded_reads);
-}
-
-fn runWithGuardedReads(
-    allocator: Allocator,
-    store: *LirStore,
-    layouts: *layout.Store,
-    phase: Phase,
+    phases: []const Phase,
     executor: ?TaskExecutor.Executor,
     metrics: ?*ParallelMetrics,
     timing: ?*Timing,
     guarded_reads: ?*const std.DynamicBitSetUnmanaged,
 ) Allocator.Error!void {
-    const phase_index = @backingInt(phase);
-    const phase_started: i96 = if (timing) |active| active.now() else 0;
+    std.debug.assert(phases.len != 0);
+    if (phases.len > 1) for (phases) |phase| std.debug.assert(fusible(phase));
+    const leader = @backingInt(phases[0]);
+    const segment_started: i96 = if (timing) |active| active.now() else 0;
     defer if (timing) |active| {
-        active.wall_ns[phase_index] +|= active.since(phase_started);
+        active.wall_ns[leader] +|= active.since(segment_started);
     };
-    switch (phase) {
+    for (phases) |phase| switch (phase) {
         .trmc => try Trmc.prepareLayouts(store, layouts),
         .box_reuse => try BoxReuse.prepareLayouts(store, layouts),
         .branch_expectation, .forwarding_join, .tag_fusion, .prune_join_params, .scalarize, .loop_append, .range => {},
-    }
+    };
     var contexts = std.ArrayList(TaskContext).empty;
     defer {
         for (contexts.items) |*context| if (context.shard) |*shard| shard.deinit();
@@ -271,30 +368,34 @@ fn runWithGuardedReads(
         // branch, call, join, or loop for a phase to rewrite, and ARC places
         // no reference count in it.
         if (store.getProcSpecImmediate(proc).is_static_initializer) continue;
-        const body = switch (phase) {
-            .forwarding_join => ForwardingJoinInline.rewritableProcBody(store, proc),
-            .tag_fusion => TagCaseFusion.rewritableProcBody(store, proc),
-            .scalarize => ScalarizeJoins.rewritableProcBody(store, proc),
-            .branch_expectation, .trmc, .prune_join_params, .loop_append, .range, .box_reuse => BodyClone.rewritableProcBody(store, proc),
-        };
-        if (body == null) continue;
-        const admitted = phaseAdmits(store, phase, proc);
+        // A phase can add shapes only by running, so a procedure no phase
+        // of the segment admits now is one none of them would rewrite.
+        var has_body = false;
+        var admitted = false;
+        for (phases) |phase| {
+            if (phaseBody(store, phase, proc) == null) continue;
+            has_body = true;
+            if (phaseAdmits(store, phase, proc)) admitted = true;
+        }
+        if (!has_body) continue;
         if (!admitted and builtin.mode != .debug) continue;
         try contexts.append(allocator, .{
             .source = store,
             .layouts = layouts,
-            .phase = phase,
+            .phases = phases,
             .proc = proc,
             .verify_only = !admitted,
+            .timing = timing,
             .guarded_reads = guarded_reads,
         });
     }
-    if (timing) |active| active.prepare_ns[phase_index] +|= active.since(phase_started);
+    if (timing) |active| active.prepare_ns[leader] +|= active.since(segment_started);
     if (contexts.items.len == 0) return;
 
     // Only the coordinator scans the phase's identity domain. Workers reserve
     // fresh joins above this boundary; ordered commit rebases only those IDs.
-    const first_fresh_join = switch (phase) {
+    // A segment of several phases allocates none.
+    const first_fresh_join = switch (phases[0]) {
         .forwarding_join, .tag_fusion, .range => BodyClone.firstFreshJoinPoint(store),
         .branch_expectation, .trmc, .prune_join_params, .scalarize, .loop_append, .box_reuse => 0,
     };
@@ -302,38 +403,40 @@ fn runWithGuardedReads(
     const prefix = store.captureBodyPrefix();
     const layout_count = layouts.layoutCount();
     const parallel = if (executor) |value| value.worker_count > 1 and contexts.items.len > 1 else false;
+    if (timing) |active| {
+        active.lanes = try allocator.alloc(Timing.Lane, if (parallel) executor.?.lane_count else 1);
+        for (active.lanes) |*lane| lane.* = .{};
+    }
+    defer if (timing) |active| {
+        for (active.lanes) |lane| for (&active.worker_ns, lane.ns) |*total, ns| {
+            total.* +|= ns;
+        };
+        allocator.free(active.lanes);
+        active.lanes = &.{};
+    };
     const rewrite_started: i96 = if (timing) |active| active.now() else 0;
     if (parallel) {
-        const tasks = try allocator.alloc(TaskExecutor.Task, contexts.items.len);
-        defer allocator.free(tasks);
-        const completions = try allocator.alloc(TaskExecutor.Completion, contexts.items.len);
-        defer allocator.free(completions);
-        var timed: ?TaskExecutor.TimedTasks = if (timing) |active| try TaskExecutor.TimedTasks.init(allocator, contexts.items.len, active.std_io) else null;
-        defer if (timed) |*measured| measured.deinit(allocator);
-        for (contexts.items, tasks, 0..) |*context, *task, index| {
-            task.* = .{ .id = index, .context = context, .run = TaskContext.run };
-            if (timed) |*measured| task.* = measured.wrap(index, task.*);
-        }
+        var batch: SegmentBatch = .{ .contexts = contexts.items, .source = store };
+        var ordered: ?TaskExecutor.OrderedTiming = if (timing) |active| .{ .std_io = active.std_io } else null;
+        var sequential_lane = TaskExecutor.LaneState.init(allocator);
+        defer sequential_lane.deinit();
         if (metrics) |counts| {
-            counts.tasks_submitted +|= @intCast(tasks.len);
-            counts.peak_retained_shards = @max(counts.peak_retained_shards, tasks.len);
+            counts.tasks_submitted +|= @intCast(contexts.items.len);
+            counts.peak_retained_shards = @max(counts.peak_retained_shards, contexts.items.len);
         }
-        // Executor.run bounds active callbacks. Retained output is at most the
-        // phase's rewritten bodies, never a whole-program copy per procedure.
-        try executor.?.run(tasks, completions);
-        for (completions) |completion| {
-            if (completion.id >= contexts.items.len) invariant("LIR pass returned an unknown task");
-            const context = &contexts.items[completion.id];
-            if (context.completed) invariant("LIR pass completed one task more than once");
-            if (completion.worker_id >= executor.?.lane_count) invariant("LIR pass returned an invalid worker lane");
-            if (completion.value != @as(*anyopaque, @ptrCast(context))) invariant("LIR pass returned the wrong task context");
-            context.completed = true;
-        }
+        // Retained output is at most the segment's rewritten bodies, never a
+        // whole-program copy per procedure. Every rewrite reads only the
+        // frozen store, and the commit below runs once every rewrite has
+        // finished, so the run's own commit does nothing.
+        try TaskExecutor.runOrdered(SegmentBatch, allocator, &batch, contexts.items.len, executor.?, &sequential_lane, .{
+            .min_chunk_weight = min_chunk_locals,
+            .timing = if (ordered) |*active| active else null,
+        });
+        for (contexts.items) |*context| context.completed = true;
         if (timing) |active| {
-            const elapsed = active.since(rewrite_started);
-            active.rewrite_ns[phase_index] +|= elapsed;
-            active.worker_ns[phase_index] +|= timed.?.totalNs(contexts.items.len);
-            active.capacity_ns[phase_index] +|= elapsed *| @as(u64, executor.?.worker_count);
+            active.rewrite_ns[leader] +|= active.since(rewrite_started);
+            active.segment_worker_ns[leader] +|= ordered.?.worker_ns;
+            active.capacity_ns[leader] +|= ordered.?.capacity_ns;
         }
     } else {
         var scratch = base.SingleThreadArena.init(allocator);
@@ -341,24 +444,25 @@ fn runWithGuardedReads(
         var lane = TaskExecutor.LaneState.init(allocator);
         defer lane.deinit();
         for (contexts.items) |*context| {
-            try context.execute(allocator, scratch.allocator(), &lane);
+            try context.execute(allocator, scratch.allocator(), &lane, 0);
             context.completed = true;
             _ = scratch.reset(.retain_capacity);
         }
         if (timing) |active| {
             const elapsed = active.since(rewrite_started);
-            active.rewrite_ns[phase_index] +|= elapsed;
-            active.worker_ns[phase_index] +|= elapsed;
-            active.capacity_ns[phase_index] +|= elapsed;
+            active.rewrite_ns[leader] +|= elapsed;
+            active.segment_worker_ns[leader] +|= elapsed;
+            active.capacity_ns[leader] +|= elapsed;
         }
     }
     const commit_started: i96 = if (timing) |active| active.now() else 0;
     defer if (timing) |active| {
-        active.commit_ns[phase_index] +|= active.since(commit_started);
+        active.commit_ns[leader] +|= active.since(commit_started);
         for (contexts.items) |context| {
-            if (context.verify_only) continue;
-            active.visited[phase_index] += 1;
-            active.changed[phase_index] += @intFromBool(context.changed);
+            for (phases) |phase| {
+                if ((context.visited & phaseMask(phase)) != 0) active.visited[@backingInt(phase)] += 1;
+            }
+            if (context.first_changed) |phase| active.changed[@backingInt(phase)] += 1;
         }
     };
     if (!std.meta.eql(prefix, store.captureBodyPrefix()) or layout_count != layouts.layoutCount()) {
@@ -379,12 +483,15 @@ fn runWithGuardedReads(
     var next_fresh_join = first_fresh_join;
     for (contexts.items) |*context| {
         const shard = &context.shard.?;
+        if (parallel) if (metrics) |counts| {
+            counts.tasks_committed +|= 1;
+            for (phases) |phase| {
+                if ((context.ran & phaseMask(phase)) != 0) counts.committed_by_phase[@backingInt(phase)] +|= 1;
+            }
+            if (context.first_changed) |phase| counts.changed_by_phase[@backingInt(phase)] +|= 1;
+        };
         if (context.verify_only) {
-            if (context.changed) base.invariant("LIR pass {s} rewrote procedure {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @backingInt(context.proc), store.getProcSpecImmediate(context.proc).shapes });
-            if (parallel) if (metrics) |counts| {
-                counts.tasks_committed +|= 1;
-                counts.committed_by_phase[@backingInt(phase)] +|= 1;
-            };
+            if (context.changed) base.invariant("LIR pass segment starting with {s} rewrote procedure {d} whose shapes {any} excluded it from every phase", .{ @tagName(phases[0]), @backingInt(context.proc), store.getProcSpecImmediate(context.proc).shapes });
             shard.deinit();
             context.shard = null;
             continue;
@@ -400,9 +507,6 @@ fn runWithGuardedReads(
             next_fresh_join = reservation.next;
         }
         if (parallel) if (metrics) |counts| {
-            counts.tasks_committed +|= 1;
-            counts.committed_by_phase[@backingInt(phase)] +|= 1;
-            counts.changed_by_phase[@backingInt(phase)] +|= @intFromBool(context.changed);
             counts.prepared_statement_rows +|= @intCast(shard.procRewriteStatementIds().len);
             counts.appended_statements +|= @intCast(shard.cf_stmts.len());
         };
@@ -415,7 +519,11 @@ fn runWithGuardedReads(
 /// Whether the procedure's recorded shapes admit it to the phase: the phase
 /// can only rewrite a shape the body's flags say it contains.
 fn phaseAdmits(store: *const LirStore, phase: Phase, proc: LIR.LirProcSpecId) bool {
-    const shapes = store.getProcSpecImmediate(proc).shapes;
+    return shapesAdmit(store.getProcSpecImmediate(proc).shapes, phase);
+}
+
+/// Whether `shapes` admit a body to the phase.
+fn shapesAdmit(shapes: LIR.ProcShapes, phase: Phase) bool {
     return switch (phase) {
         .branch_expectation => shapes.switch_stmt,
         .trmc => shapes.self_call,
@@ -494,7 +602,7 @@ test "procedure rewrite ownership includes statements reached through shared met
             .body = .some(body),
             .ret_layout = .u64,
         }, .none);
-        context.* = .{ .source = &store, .layouts = undefined, .phase = .tag_fusion, .proc = proc };
+        context.* = .{ .source = &store, .layouts = undefined, .phases = &.{.tag_fusion}, .proc = proc };
     }
     const prefix = store.captureBodyPrefix();
     for (&contexts) |*context| {
@@ -538,7 +646,7 @@ test "issue 11325 procedure counting reuses lane storage across distant local ID
         var context: TaskContext = .{
             .source = &store,
             .layouts = &layouts,
-            .phase = .box_reuse,
+            .phases = &.{.box_reuse},
             .proc = @fromBackingInt(@intCast(index)),
         };
         _ = TaskContext.run(&context, .{
@@ -564,7 +672,7 @@ fn testLaneCountingAllocation(allocator: Allocator, store: *LirStore, layouts: *
     var context: TaskContext = .{
         .source = store,
         .layouts = layouts,
-        .phase = .box_reuse,
+        .phases = &.{.box_reuse},
         .proc = proc,
     };
     _ = TaskContext.run(&context, .{
