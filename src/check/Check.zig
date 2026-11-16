@@ -15937,6 +15937,9 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
 
     var keep_oracle = try HoistedRootKeepOracle.init(self.gpa, self.selected_hoisted_roots.items, keep_roots);
     defer keep_oracle.deinit(self.gpa);
+    var reads: std.ArrayListUnmanaged(u32) = .empty;
+    defer reads.deinit(self.gpa);
+    keep_oracle.reads = &reads;
 
     var kept_count: usize = 0;
     var kept_expr_count: u32 = 0;
@@ -15944,6 +15947,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     var kept_validation_count: u32 = 0;
     for (self.selected_hoisted_roots.items, 0..) |*root, i| {
         keep_oracle.current_root_index = i;
+        reads.clearRetainingCapacity();
         const intrinsic = !self.selectedHoistedRootNamesRetiredBinder(root.*) and
             (root.body == .pattern_error or root.body == .valueless_binding or !self.hoistExprInvalidated(root.expr)) and
             !try self.hoistedRootReachesRejectedCode(root.*) and
@@ -15960,6 +15964,9 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         if (!deps) continue;
 
         keep_roots[i] = true;
+        // An earlier root whose binding this kept root reads stays a root:
+        // the evaluation reads it by reference.
+        for (reads.items) |read| self.selected_hoisted_roots.items[read].read_by_root = true;
         kept_count += 1;
         switch (root.body) {
             .expr => kept_expr_count += 1,
@@ -16403,6 +16410,9 @@ const HoistedRootKeepOracle = struct {
     expr_roots: collections.DenseMapUnmanaged(CIR.Expr.Idx, u32) = .empty,
     keep_roots: []const bool,
     current_root_index: usize = 0,
+    /// When set, the selected roots whose bindings the current root reads
+    /// and finds kept, by index, in the order it reads them.
+    reads: ?*std.ArrayListUnmanaged(u32) = null,
 
     fn init(
         allocator: Allocator,
@@ -16513,11 +16523,13 @@ fn hoistedRootBindingIsKept(
     pattern: CIR.Pattern.Idx,
     context: *const HoistedDependencyContext,
     keep_oracle: *const HoistedRootKeepOracle,
-) bool {
-    return self.patternIsTopLevel(pattern) or
+) Allocator.Error!bool {
+    if (self.patternIsTopLevel(pattern) or
         self.promoted_local_procedure_patterns.contains(pattern) or
-        context.contains(pattern) or
-        (keep_oracle.selectedPatternIsKept(pattern) orelse false);
+        context.contains(pattern)) return true;
+    const kept = keep_oracle.selectedPatternIsKept(pattern) orelse return false;
+    if (kept) if (keep_oracle.reads) |reads| try reads.append(self.gpa, keep_oracle.pattern_roots.get(pattern).?);
+    return kept;
 }
 
 /// One expression's own check; the subexpressions it depends on go on
@@ -16538,7 +16550,7 @@ fn hoistedRootExprStep(
 
     const gpa = self.gpa;
     return switch (self.cir.store.getExpr(expr)) {
-        .e_lookup_local => |lookup| self.hoistedRootBindingIsKept(lookup.pattern_idx, context, keep_oracle),
+        .e_lookup_local => |lookup| try self.hoistedRootBindingIsKept(lookup.pattern_idx, context, keep_oracle),
         .e_lookup_external,
         .e_lookup_associated_local,
         .e_lookup_associated,

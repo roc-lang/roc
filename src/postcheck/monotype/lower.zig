@@ -5782,10 +5782,34 @@ const ConstExprAddress = struct {
 };
 
 const StaticDataUse = struct {
-    module: checked.ModuleId,
-    node: checked.ConstNodeId,
-    checked_type: checked.CheckedTypeId,
+    source: StaticDataSource,
     ty: Type.TypeId,
+};
+
+/// What a static datum holds, apart from its type: a stored constant node,
+/// or a value-form expression its body keeps.
+const StaticDataSource = union(enum) {
+    stored: struct {
+        module: checked.ModuleId,
+        node: checked.ConstNodeId,
+        checked_type: checked.CheckedTypeId,
+    },
+    inline_literal: Ast.InlineLiteralStaticData,
+
+    fn eql(a: StaticDataSource, b: StaticDataSource) bool {
+        return switch (a) {
+            .stored => |left| switch (b) {
+                .stored => |right| moduleBytesEqual(left.module.bytes, right.module.bytes) and
+                    left.node == right.node and
+                    left.checked_type == right.checked_type,
+                .inline_literal => false,
+            },
+            .inline_literal => |left| switch (b) {
+                .stored => false,
+                .inline_literal => |right| moduleBytesEqual(left.module.bytes, right.module.bytes) and left.expr == right.expr,
+            },
+        };
+    }
 };
 
 /// A restored string lowers as its own bytes and capacity (see
@@ -5804,6 +5828,22 @@ fn constStaticDataStorage(view: ModuleView, node: checked.ConstNodeId) Common.St
         .nominal => |nominal| current = nominal.backing,
         .pending => Common.invariant("pending const reached static storage metadata production"),
         .zst, .scalar, .fn_value, .list, .box, .tuple, .record, .tag, .crash, .checked_error => return .aggregate,
+    };
+}
+
+/// The storage a value-form expression its body keeps needs: a string's
+/// backing for a string literal, possibly inside nominal wrappers, and an
+/// aggregate otherwise.
+fn inlineLiteralStorage(view: ModuleView, expr: CIR.Expr.Idx) Common.StaticDataStorage {
+    var current = expr;
+    while (true) switch (view.bodies.exprData(current)) {
+        .nominal => |nominal| current = nominal.backing_expr,
+        .str => |segments| {
+            var len: u64 = 0;
+            for (segments) |segment| len += view.bodies.text(view.bodies.exprData(segment).str_segment).len;
+            return .{ .string_backing = len };
+        },
+        .numeral, .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return .aggregate,
     };
 }
 
@@ -12738,27 +12778,27 @@ const Builder = struct {
 
     fn commitStaticDataValue(
         self: *Builder,
-        const_locator: checked.ConstLocator,
-        node: ?checked.ConstNodeId,
-        checked_type: checked.CheckedTypeId,
+        value: Ast.StaticDataValue,
         ty: Type.TypeId,
     ) Allocator.Error!Common.StaticDataId {
-        const const_node = self.constNode(const_locator, node);
         const use = StaticDataUse{
-            .module = const_node.module.key,
-            .node = const_node.id,
-            .checked_type = checked_type,
+            .source = switch (value) {
+                .stored => |request| blk: {
+                    const const_node = self.constNode(request.const_locator, request.node);
+                    break :blk .{ .stored = .{
+                        .module = const_node.module.key,
+                        .node = const_node.id,
+                        .checked_type = request.checked_type,
+                    } };
+                },
+                .inline_literal => |literal| .{ .inline_literal = literal },
+            },
             .ty = ty,
         };
         if (self.static_data_ids.get(use)) |existing| return existing;
 
         for (self.static_data_uses.items, 0..) |existing, index| {
-            if (!moduleBytesEqual(existing.module.bytes, use.module.bytes) or
-                existing.node != use.node or
-                existing.checked_type != use.checked_type)
-            {
-                continue;
-            }
+            if (!existing.source.eql(use.source)) continue;
             if (!try self.program.types.typeEql(&self.program.names, existing.ty, use.ty)) continue;
 
             const id: Common.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
@@ -12769,11 +12809,7 @@ const Builder = struct {
         try self.program.ensureStaticDataValueCapacity(1);
         try self.static_data_uses.ensureUnusedCapacity(self.allocator, 1);
         try self.static_data_ids.ensureUnusedCapacity(1);
-        const id = self.program.addStaticDataValueAssumeCapacity(.{
-            .const_locator = const_locator,
-            .node = node,
-            .checked_type = checked_type,
-        });
+        const id = self.program.addStaticDataValueAssumeCapacity(value);
         if (@backingInt(id) != self.static_data_uses.items.len) {
             Common.invariant("Monotype static-data use index diverged from program id");
         }
@@ -15282,12 +15318,7 @@ const Builder = struct {
         // function body, preserving the prior eager assignment of durable ids.
         for (body_draft.static_data_requests.items, static_data_ids) |request, *id| {
             const coordinator_ty = try request.ty.sealCommitted(committed_types);
-            id.* = try self.commitStaticDataValue(
-                request.const_locator,
-                request.node.get(),
-                request.checked_type,
-                coordinator_ty,
-            );
+            id.* = try self.commitStaticDataValue(request.value, coordinator_ty);
         }
         const fn_slots = try self.allocator.alloc(?Ast.FnSlot, body_draft.fns.items.len);
         errdefer self.allocator.free(fn_slots);
@@ -19438,25 +19469,25 @@ const StaticDataPartRoot = struct {
 /// Draft-local static-data identity. Graph types remain qualified by the body
 /// that owns them until ordered commit seals the request into program storage.
 const DraftStaticDataRequestAddress = struct {
-    module: checked.ModuleId,
-    node: checked.ConstNodeId,
-    checked_type: checked.CheckedTypeId,
-    checked_type_module: checked.ModuleId,
+    source: union(enum) {
+        stored: struct {
+            module: checked.ModuleId,
+            node: checked.ConstNodeId,
+            checked_type: checked.CheckedTypeId,
+            checked_type_module: checked.ModuleId,
+        },
+        inline_literal: Ast.InlineLiteralStaticData,
+    },
     ty: DraftTypeCell,
 };
 
 const DraftStaticDataRequest = struct {
-    const_locator: checked.ConstLocator,
-    node: collections.OptionalId(checked.ConstNodeId),
-    module: checked.ModuleId,
-    const_node: checked.ConstNodeId,
-    checked_type: checked.CheckedTypeId,
-    checked_type_module: checked.ModuleId,
+    value: Ast.StaticDataValue,
     ty: DraftTypeCell,
 };
 
 comptime {
-    std.debug.assert(@sizeOf(DraftStaticDataRequest) == 136);
+    std.debug.assert(@sizeOf(DraftStaticDataRequest) <= 136);
 }
 
 /// A generated-codec contract instantiated in one graph, with the boundary
@@ -22956,6 +22987,10 @@ const BodyContext = struct {
     /// value is discarded, so the root has nothing to restore there; the
     /// statement lowers its original expression, keeping its failure in place.
     in_place_statement_expr: ?ExprSite = null,
+    /// A value-form expression its body keeps whose own value is being
+    /// lowered as its static data candidate's initializer
+    /// (`InlineLiteralTask`). The step that lowers the value consumes it.
+    inline_literal_inner: ?ExprSite = null,
     /// Generated local for the top-level constant root currently being
     /// restored. Recursive references to that exact checked const identity
     /// consume this local so the restored value becomes an explicit recursive
@@ -23220,13 +23255,27 @@ const BodyContext = struct {
         ty: DraftTypeCell,
     ) Allocator.Error!DraftStaticDataId {
         const const_node = self.builder.constNode(const_locator, node);
-        const address: DraftStaticDataRequestAddress = .{
-            .checked_type_module = checked_type_module,
-            .module = const_node.module.key,
-            .node = const_node.id,
-            .checked_type = checked_type,
+        return try self.draftStaticDataRequestAt(.{
+            .source = .{ .stored = .{
+                .checked_type_module = checked_type_module,
+                .module = const_node.module.key,
+                .node = const_node.id,
+                .checked_type = checked_type,
+            } },
             .ty = ty,
-        };
+        }, .{ .stored = .{
+            .const_locator = const_locator,
+            .node = node,
+            .checked_type = checked_type,
+        } });
+    }
+
+    /// The draft static data request at `address`, requesting `value`.
+    fn draftStaticDataRequestAt(
+        self: *BodyContext,
+        address: DraftStaticDataRequestAddress,
+        value: Ast.StaticDataValue,
+    ) Allocator.Error!DraftStaticDataId {
         if (self.draft.static_data_request_ids.get(address)) |existing| return existing;
 
         try self.draft.static_data_requests.ensureUnusedCapacity(self.allocator, 1);
@@ -23235,15 +23284,7 @@ const BodyContext = struct {
         errdefer _ = self.draft.static_data_request_ids.remove(address);
         const id: DraftStaticDataId =
             @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.static_data_requests.items.len))));
-        self.draft.static_data_requests.appendAssumeCapacity(.{
-            .checked_type_module = checked_type_module,
-            .const_locator = const_locator,
-            .node = .of(node),
-            .module = const_node.module.key,
-            .const_node = const_node.id,
-            .checked_type = checked_type,
-            .ty = ty,
-        });
+        self.draft.static_data_requests.appendAssumeCapacity(.{ .value = value, .ty = address.ty });
         entry.value_ptr.* = id;
         return id;
     }
@@ -33198,6 +33239,8 @@ const BodyContext = struct {
         /// An interpolation: its compile-time conversion, then its assembler
         /// called with the parts' values.
         interpolation: InterpolationLowerTask,
+        /// A value-form expression its body keeps, read as static data.
+        inline_literal: InlineLiteralTask,
     };
 
     const InterpolationLowerTask = struct {
@@ -36113,6 +36156,7 @@ const BodyContext = struct {
             .cell_inner,
             .type_inner,
             .expr,
+            .inline_literal,
             .closed_low_level,
             .closed_procedure,
             .closed_operands_at_node,
@@ -36173,7 +36217,64 @@ const BodyContext = struct {
             .scheme_alias => |*task| return self.stepSchemeAlias(task, input),
             .callsite_intrinsic => |*task| return self.stepCallsiteIntrinsic(task, input),
             .interpolation => |*task| return self.stepInterpolationLower(task, input),
+            .inline_literal => |*task| return self.stepInlineLiteral(frame, task, input),
         }
+    }
+
+    /// A value-form expression its body keeps
+    /// (`CompileTimeRootTable.inline_literals`), and the step that lowers
+    /// its own value.
+    const InlineLiteralTask = struct {
+        expr: ExprSite,
+        inner: union(enum) {
+            cell: struct { cell: DraftTypeCell, expected_node: NodeId },
+            ty: Type.TypeId,
+            own,
+        },
+    };
+
+    /// Whether `expr_id` is a value-form expression its body keeps that is
+    /// read as a static data candidate here, rather than built in place: it
+    /// is not the value its own candidate's initializer is lowering.
+    fn inlineLiteralSite(self: *BodyContext, expr_id: ExprSite) bool {
+        const node = exprSourceNode(self.view, expr_id) orelse return false;
+        if (!self.view.compile_time_roots.isInlineLiteral(node)) return false;
+        if (self.inline_literal_inner) |inner| if (inner == expr_id) {
+            self.inline_literal_inner = null;
+            return false;
+        };
+        return true;
+    }
+
+    /// The static data candidate of a value-form expression its body keeps
+    /// (design.md "Value-Form Expressions Stay In Their Bodies"): the
+    /// expression's own value, lowered as usual, is the candidate's
+    /// initializer. LIR lowering reads an aggregate from the static data the
+    /// initializer freezes, and builds an immediate in place, exactly as it
+    /// treats a stored constant's candidate.
+    fn stepInlineLiteral(self: *BodyContext, frame: *LowerFrame, task: *InlineLiteralTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        if (frame.cursor == 0) {
+            frame.cursor = 1;
+            self.inline_literal_inner = task.expr;
+            return switch (task.inner) {
+                .cell => |cell| requestLowerTask(self, .{ .cell_inner = .{ .expr = task.expr, .cell = cell.cell, .expected_node = cell.expected_node } }),
+                .ty => |ty| requestLowerTask(self, .{ .type_inner = .{ .expr = task.expr, .ty = ty } }),
+                .own => requestLowerTask(self, .{ .expr_inner = .{ .expr = task.expr } }),
+            };
+        }
+        if (self.inline_literal_inner != null) Common.invariant("a value-form expression's initializer never lowered its own value");
+        const lowered = input.?.exprValue();
+        const node = exprSourceNode(self.view, task.expr).?;
+        const cell = self.exprTypeCell(lowered);
+        const id = try self.draftStaticDataRequestAt(.{
+            .source = .{ .inline_literal = .{ .module = self.view.key, .expr = node } },
+            .ty = cell,
+        }, .{ .inline_literal = .{ .module = self.view.key, .expr = node } });
+        return loweredExprStep(try self.addExprWithTypeCell(cell, .{ .static_data_candidate = .{
+            .static_data = id,
+            .storage = inlineLiteralStorage(self.view, node),
+            .value = .{ .runtime = lowered },
+        } }));
     }
 
     /// An interpolation's conversion receives its literal segments and returns
@@ -36456,6 +36557,10 @@ const BodyContext = struct {
         if (try self.restoredHoistedExprAtNode(checked_expr, expected_node)) |restored| {
             return loweredExprStep(restored);
         }
+        if (self.inlineLiteralSite(checked_expr)) {
+            frame.cursor = 7;
+            return requestLowerTask(self, .{ .inline_literal = .{ .expr = checked_expr, .inner = .{ .cell = .{ .cell = cell, .expected_node = expected_node } } } });
+        }
         frame.cursor = 5;
         switch (expr.data) {
             .lookup_local => |lookup| return try self.lookupExprAtNodeStep(checked_expr, lookup.resolved, expected_node),
@@ -36627,6 +36732,10 @@ const BodyContext = struct {
             .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         if (try self.restoredHoistedExprAtType(checked_expr, ty)) |restored| return loweredExprStep(restored);
+        if (self.inlineLiteralSite(checked_expr)) {
+            frame.cursor = 3;
+            return requestLowerTask(self, .{ .inline_literal = .{ .expr = checked_expr, .inner = .{ .ty = ty } } });
+        }
         switch (expr.data) {
             .runtime_error => |runtime_error| {
                 frame.cursor = 3;
@@ -36745,6 +36854,10 @@ const BodyContext = struct {
         if (exprSourceNode(self.view, expr_id) != null and self.view.hoisted_constants.lookupByExpr(expr_id.node()) != null) {
             const expr_node = try self.lowerExprTypeNode(expr_id);
             if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return self.exprInnerDone(task, restored);
+        }
+        if (self.inlineLiteralSite(expr_id)) {
+            frame.cursor = 1;
+            return requestLowerTask(self, .{ .inline_literal = .{ .expr = expr_id, .inner = .own } });
         }
         switch (expr.data) {
             // A literal conversion is the leaf that resolves its checked

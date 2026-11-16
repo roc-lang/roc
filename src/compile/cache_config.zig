@@ -403,7 +403,10 @@ pub const Constants = struct {
     /// 195: combines the three independent 194 entries.
     /// 194: checked artifacts index their compile-time roots by pattern.
     /// 196: combines the 194 entry above with the 195 entry.
-    pub const CACHE_VERSION = 196;
+    /// 197: selected hoisted roots record whether a kept root reads their
+    ///      binding, and checked artifacts list the value-form expressions
+    ///      their bodies keep.
+    pub const CACHE_VERSION = 197;
 };
 
 /// Configuration for the Roc cache system.

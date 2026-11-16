@@ -4,7 +4,9 @@
 //! the writer stores the value and stored type the evaluator stores for
 //! every kind of value-form root, and an expression that calls,
 //! dispatches, reads a definition, converts through a custom type, or that
-//! checking rejects stays with the evaluator.
+//! checking rejects stays with the evaluator. They also pin which selected
+//! expressions in value form are no roots at all (design.md "Value-Form
+//! Expressions Stay In Their Bodies").
 
 const std = @import("std");
 const base = @import("base");
@@ -55,7 +57,9 @@ const platform_files = [_]SourceFile{
 /// lists of numbers, strings, records, tuples, tags and zero-sized values,
 /// records, tuples, single-tag, enum-like and payload unions, `Try`,
 /// nominal tags and records, a recursive nominal, repeated equal long
-/// literals, and the hoisted constants of a function body.
+/// literals, and a local binding a kept root reads. The lists `parse`
+/// concatenates with runtime data and the binding `labels` of `measure` are
+/// no roots: their bodies keep them.
 const corpus =
     \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
     \\import pf.Echo
@@ -178,8 +182,17 @@ const corpus =
     \\    }
     \\}
     \\
+    \\measure : List(U8) -> U64
+    \\measure = |input| {
+    \\    base = [1.U8, 2, 3]
+    \\    total = List.len(base)
+    \\    labels = ["x", "y"]
+    \\    List.len(input) + total + List.len(List.concat(labels, [Str.inspect(List.len(input))]))
+    \\}
+    \\
     \\main! = |args| {
     \\    Echo.line!(Str.inspect(parse([])))
+    \\    Echo.line!(Str.inspect(measure([])))
     \\    Echo.line!(Str.inspect(List.len(args)))
     \\    Ok({})
     \\}
@@ -379,8 +392,9 @@ const WriterMatchesEvaluatorError = CheckAppError || error{
     WrongKind,
     RootNotCompleted,
     ValueDiffers,
-    TooFewHoistedValueFormRoots,
     TooFewRootsCompletedDirectly,
+    WrongInlineLiteralCount,
+    InlineLiteralIsRoot,
 };
 
 fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMatchesEvaluatorError!void {
@@ -439,9 +453,30 @@ fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMat
         };
     }
     try std.testing.expectEqual(@as(usize, 51), constants);
-    // The lists `parse` concatenates.
-    if (hoisted < 2) return error.TooFewHoistedValueFormRoots;
-    if (written.rootsCompletedDirectly() < constants + hoisted) return error.TooFewRootsCompletedDirectly;
+    // `base` in `measure`, which the root `List.len(base)` reads.
+    try std.testing.expectEqual(@as(usize, 1), hoisted);
+    if (written.rootsCompletedDirectly() < constants + hoisted) {
+        std.debug.print("{d} roots were completed directly, fewer than {d}\n", .{ written.rootsCompletedDirectly(), constants + hoisted });
+        return error.TooFewRootsCompletedDirectly;
+    }
+    // The two lists `parse` concatenates with runtime data, and the
+    // right-hand side of `labels`, which only runtime code reads. The blocks
+    // `parse` returns from its branches are not in value form, so they stay
+    // evaluated roots.
+    for ([_]*const Artifact{ left, right }) |artifact| {
+        const inline_literals = artifact.compile_time_roots.inline_literals.items();
+        if (inline_literals.len != 3) {
+            std.debug.print("{d} value-form expressions are kept in their bodies, not 3\n", .{inline_literals.len});
+            return error.WrongInlineLiteralCount;
+        }
+        for (artifact.compile_time_roots.roots.items()) |root| {
+            const expr = root.expr.get() orelse continue;
+            if (artifact.compile_time_roots.isInlineLiteral(expr)) {
+                std.debug.print("root {d} ({s}) evaluates a value-form expression its body keeps\n", .{ @backingInt(root.id), @tagName(root.kind) });
+                return error.InlineLiteralIsRoot;
+            }
+        }
+    }
 }
 
 test "the checked-value writer stores each value-form root as the boxy evaluator does" {

@@ -267,7 +267,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
 
     const top_a = findStoredCompileTimeRootI64(app_view, .constant, 40) orelse return error.TopLevelFortyNotFound;
     const top_b = findStoredCompileTimeRootI64(app_view, .constant, 41) orelse return error.TopLevelFortyOneNotFound;
-    const indirect_top = findStoredCompileTimeRootI64(app_view, .constant, 456) orelse return error.IndirectTopLevelConstNotFound;
+    _ = findStoredCompileTimeRootI64(app_view, .constant, 456) orelse return error.IndirectTopLevelConstNotFound;
     const tuple_left = findStoredI64(app_view, 40) orelse return error.HoistedTupleLeftExtractionNotFound;
     const tuple_right = findStoredI64(app_view, 6) orelse return error.HoistedTupleRightExtractionNotFound;
     const record_extraction = findStoredI64(app_view, 44) orelse return error.HoistedRecordExtractionNotFound;
@@ -277,7 +277,10 @@ test "hoisted local constants are finalized and restored during runtime lowering
     const match_alias = findStoredI64(app_view, 46) orelse return error.HoistedMatchAliasExtractionNotFound;
     const ordinary_call = findStoredI64(app_view, 77) orelse return error.HoistedOrdinaryCallNotFound;
     const block_value = findStoredI64(app_view, 53) orelse return error.HoistedBlockValueNotFound;
-    const indirect_local = findStoredI64(app_view, 123) orelse return error.IndirectHoistedLocalNotFound;
+    // `indirect_local` is a value-form binding only runtime code reads, so its
+    // body keeps it (design.md "Value-Form Expressions Stay In Their Bodies").
+    if (findStoredI64(app_view, 123) != null) return error.ValueFormLocalWasHoisted;
+    try std.testing.expect(app_artifact.compile_time_roots.inline_literals.items().len >= 1);
     _ = findStoredI64(app_view, 91) orelse return error.HoistedStaticDispatchCallNotFound;
     try std.testing.expect(countStoredHoistedI64(app_view, 42) >= 2);
     try std.testing.expect(countCompileTimeRootKind(app_artifact, .callable_binding) >= 1);
@@ -294,7 +297,6 @@ test "hoisted local constants are finalized and restored during runtime lowering
     try expectRootRequestBefore(app_artifact, top_b.id, match_alias.root);
     try expectRootRequestBefore(app_artifact, top_b.id, ordinary_call.root);
     try expectRootRequestBefore(app_artifact, top_b.id, block_value.root);
-    try expectRootRequestBefore(app_artifact, indirect_local.root, indirect_top.id);
     try expectPatternExtractionRoots(app_artifact);
 
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests.items());
