@@ -8427,43 +8427,30 @@ pub const Builder = struct {
     const FrameParam = struct { position: usize, param: u32 };
 
     /// The dictionary `demand` names, or null after appending to `demands`
-    /// the uncomposed frame dictionaries composing it reads. A frame whose
-    /// edge passes on a dictionary of a frame below it (`forwardedFrameParam`)
-    /// holds that frame's dictionary, so a chain of such frames is followed
-    /// down to the frame that composes it.
+    /// the uncomposed frame dictionaries composing it reads. Each frame
+    /// composes through its own parameter interface, including when its
+    /// evidence forwards a dictionary from a frame below it.
     fn frameDictionaryAfterReads(self: *Builder, demand: FrameParam, demands: *std.ArrayList(FrameParam)) Allocator.Error!?Word {
-        var forwarding = std.ArrayList(*?Word).empty;
-        defer forwarding.deinit(self.allocator);
-        var at = demand;
-        const dictionary = while (true) {
-            const scope = self.alias_scopes.items[at.position];
-            const slot = std.mem.findScalar(u32, scope.params, at.param) orelse invariant("evidence named a dictionary parameter its alias scope does not have");
-            if (scope.declaration) |declaration| if (declaration.dicts[slot] == null) {
-                // Only a requirement naming a type the callee's body declares
-                // (a captured codec requirement whose format is a local type)
-                // composes a dictionary that reaches the callee's local
-                // procedures, so only such a slot is ever being built while one
-                // is. A local procedure's own scheme names a declaring slot only
-                // through a requirement on one of the callee's quantified
-                // variables, which the callee's annotation states outside its
-                // body and so cannot name a type its body declares; a captured
-                // requirement on a structural receiver resolves structurally.
-                invariant("a local procedure's own scheme names a declaration context's dictionary while it is built");
-            };
-            const deferred = scope.deferred_dicts orelse break scope.dicts[slot];
-            if (deferred.composed[slot]) |composed| break composed;
-            if (forwardedFrameParam(deferred, at.param)) |below| {
-                try forwarding.append(self.allocator, &deferred.composed[slot]);
-                at = below;
-                continue;
-            }
-            const unread = demands.items.len;
-            try self.frameReads(deferred, at.param, demands);
-            if (demands.items.len != unread) return null;
-            break try self.composeFrameDictionary(at.position, at.param, slot);
+        const scope = self.alias_scopes.items[demand.position];
+        const slot = std.mem.findScalar(u32, scope.params, demand.param) orelse invariant("evidence named a dictionary parameter its alias scope does not have");
+        if (scope.declaration) |declaration| if (declaration.dicts[slot] == null) {
+            // Only a requirement naming a type the callee's body declares
+            // (a captured codec requirement whose format is a local type)
+            // composes a dictionary that reaches the callee's local
+            // procedures, so only such a slot is ever being built while one
+            // is. A local procedure's own scheme names a declaring slot only
+            // through a requirement on one of the callee's quantified
+            // variables, which the callee's annotation states outside its
+            // body and so cannot name a type its body declares; a captured
+            // requirement on a structural receiver resolves structurally.
+            invariant("a local procedure's own scheme names a declaration context's dictionary while it is built");
         };
-        for (forwarding.items) |composed| composed.* = dictionary;
-        return dictionary;
+        const deferred = scope.deferred_dicts orelse return scope.dicts[slot];
+        if (deferred.composed[slot]) |composed| return composed;
+        const unread = demands.items.len;
+        try self.frameReads(deferred, demand.param, demands);
+        if (demands.items.len != unread) return null;
+        return try self.composeFrameDictionary(demand.position, demand.param, slot);
     }
 
     /// Append to `demands` each uncomposed literal chain frame dictionary
@@ -8506,19 +8493,6 @@ pub const Builder = struct {
                 }
             },
             .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
-        };
-    }
-
-    /// The frame and parameter a literal chain frame's dictionary parameter
-    /// `param` is, when the frame's edge passes it a dictionary of a frame
-    /// below the edge unchanged: evidence naming a scope of the chain. Null
-    /// for any other evidence, and for a scope of the worker's own, which no
-    /// frame holds.
-    fn forwardedFrameParam(deferred: DeferredDictionaries, param: u32) ?FrameParam {
-        if (param >= deferred.evidence.len) return null;
-        return switch (deferred.evidence[param].resolution) {
-            .constraint => |constraint| forwardedConstraint(deferred, constraint.index),
-            .direct, .structural, .from_scheme, .from_callable, .checked_error, .unreachable_value => null,
         };
     }
 
