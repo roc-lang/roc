@@ -1258,6 +1258,11 @@ pub const Converter = struct {
     const Frame = struct {
         module: ModuleIndex,
         ty: checked.CheckedTypeId,
+        /// The checked payload of `ty`, read once by `leaf`.
+        payload: checked.CheckedTypePayload,
+        /// `rootHasIdentityVariables` of `ty`, as `leaf` found it; null
+        /// when the converter seals undetermined kinds and memoizes nothing.
+        identity_variables: ?bool,
         /// The children converted so far, in `results`.
         results_start: usize,
         /// Children still to convert, in `pending`.
@@ -1287,35 +1292,40 @@ pub const Converter = struct {
         // reaching one is shared only between scopes that name none.
         var shared: ?bool = null;
         var root_reaches = false;
-        if (try self.leaf(module, ty, env, &shared, &root_reaches)) |done| return done;
-        try self.pushFrame(&frames, &pending, results.items.len, module, ty);
+        switch (try self.leaf(module, ty, env, &shared, &root_reaches)) {
+            .done => |done| return done,
+            .composite => |composite| try self.pushFrame(&frames, &pending, results.items.len, module, ty, composite),
+        }
         while (frames.items.len > 0) {
             const top = &frames.items[frames.items.len - 1];
             if (top.pending_next < pending.items.len) {
                 const child = pending.items[top.pending_next];
                 top.pending_next += 1;
                 var child_reaches = false;
-                if (try self.leaf(child.module, child.ty, env, &shared, &child_reaches)) |done| {
-                    try results.append(allocator, done);
-                    try reaches.append(allocator, child_reaches);
-                } else {
-                    if (frames.items.len > 1_000_000) invariant("checked type conversion nested past every finite type");
-                    try self.pushFrame(&frames, &pending, results.items.len, child.module, child.ty);
+                switch (try self.leaf(child.module, child.ty, env, &shared, &child_reaches)) {
+                    .done => |done| {
+                        try results.append(allocator, done);
+                        try reaches.append(allocator, child_reaches);
+                    },
+                    .composite => |composite| {
+                        if (frames.items.len > 1_000_000) invariant("checked type conversion nested past every finite type");
+                        try self.pushFrame(&frames, &pending, results.items.len, child.module, child.ty, composite);
+                    },
                 }
                 continue;
             }
             const frame = frames.pop().?;
             const children = results.items[frame.results_start..];
-            const built = try self.finish(frame.module, frame.ty, children, env);
+            const built = try self.finish(frame.module, frame.ty, frame.payload, children, env);
             const built_reaches = std.mem.findScalar(bool, reaches.items[frame.results_start..], true) != null or
-                self.endsInUncommittedTail(frame.module, frame.ty);
+                self.payloadEndsInUncommittedTail(frame.module, frame.payload);
             results.shrinkRetainingCapacity(frame.results_start);
             reaches.shrinkRetainingCapacity(frame.results_start);
             pending.shrinkRetainingCapacity(frame.pending_start);
             // A type with no identity variables converts the same under
             // every environment that names no closed row node it reaches.
             const memo: Store.ClosedMemo = .{ .ty = built, .reaches_row_node = built_reaches };
-            if (!self.seal_undetermined_kinds and !try rootHasIdentityVariables(self.modules.get(frame.module), frame.ty) and (!built_reaches or try self.namesNoRow(env, &shared))) {
+            if (frame.identity_variables == false and (!built_reaches or try self.namesNoRow(env, &shared))) {
                 try self.store.closed_memo.put(allocator, .{ .module = frame.module, .ty = frame.ty }, memo);
             } else if (schemeKey(frame.module, frame.ty, env)) |key| {
                 if (!self.seal_undetermined_kinds) try self.store.scheme_memo.put(allocator, key, memo);
@@ -1370,8 +1380,13 @@ pub const Converter = struct {
     /// tail variable, a tag union's in an uncommitted tag tail. Only such a
     /// type is a closed row node of a scope (`Program.appendClosedRowNodes`).
     fn endsInUncommittedTail(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId) bool {
+        return self.payloadEndsInUncommittedTail(module, self.modules.get(module).types().payload(ty));
+    }
+
+    /// `endsInUncommittedTail` of the type whose checked payload is `payload`.
+    fn payloadEndsInUncommittedTail(self: Converter, module: ModuleIndex, payload: checked.CheckedTypePayload) bool {
         const types = self.modules.get(module).types();
-        var current = switch (types.payload(ty)) {
+        var current = switch (payload) {
             .record => |record| record.ext,
             .tag_union => |tag_union| tag_union.ext,
             .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .empty_tag_union, .field_kind => return false,
@@ -1412,25 +1427,34 @@ pub const Converter = struct {
         return self.tailNodeAt(env, index);
     }
 
+    /// What `leaf` finds for a type: its node, or the checked payload of a
+    /// type whose children convert first, with whether it reaches an
+    /// identity variable (`Frame.identity_variables`).
+    const Leaf = union(enum) {
+        done: TypeId,
+        composite: struct { payload: checked.CheckedTypePayload, identity_variables: ?bool },
+    };
+
     /// The node for `ty` when it needs no children converted first.
     /// `reaches` says whether the node reaches a record or tag union a
     /// scope can name as a closed row node (`ClosedMemo`).
-    fn leaf(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env, shared: *?bool, reaches: *bool) Allocator.Error!?TypeId {
+    fn leaf(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env, shared: *?bool, reaches: *bool) Allocator.Error!Leaf {
         reaches.* = false;
         if (env.lookupIndex(module, ty)) |index| {
             // A closed row node of the scope converts as its own structure.
             if (self.tailNodeAt(env, index) == null) {
                 reaches.* = self.endsInUncommittedTail(module, ty);
-                return env.bound[index];
+                return .{ .done = env.bound[index] };
             }
         }
-        if (self.platformIdentity(module, ty)) |solved| return solved;
+        if (self.platformIdentity(module, ty)) |solved| return .{ .done = solved };
         const view = self.modules.get(module);
-        if (!self.seal_undetermined_kinds and !try rootHasIdentityVariables(view, ty)) {
+        const identity_variables: ?bool = if (self.seal_undetermined_kinds) null else try rootHasIdentityVariables(view, ty);
+        if (identity_variables == false) {
             if (self.store.closed_memo.get(.{ .module = module, .ty = ty })) |memo| {
                 if (!memo.reaches_row_node or try self.namesNoRow(env, shared)) {
                     reaches.* = memo.reaches_row_node;
-                    return memo.ty;
+                    return .{ .done = memo.ty };
                 }
             }
         }
@@ -1438,11 +1462,12 @@ pub const Converter = struct {
             if (schemeKey(module, ty, env)) |key| {
                 if (self.store.scheme_memo.get(key)) |memo| {
                     reaches.* = memo.reaches_row_node;
-                    return memo.ty;
+                    return .{ .done = memo.ty };
                 }
             }
         }
-        return switch (view.types().payload(ty)) {
+        const payload = view.types().payload(ty);
+        const node: ?TypeId = switch (payload) {
             .pending => invariant("a pending checked type reached Boxy lowering"),
             .err => invariant("an erroneous checked type reached Boxy lowering"),
             .flex, .rigid => |variable| try self.sealVariable(variable),
@@ -1458,6 +1483,8 @@ pub const Converter = struct {
             .field_kind => |kind| try self.store.committedKind(kind == .optional),
             .alias, .record, .tuple, .function, .tag_union => null,
         };
+        if (node) |done| return .{ .done = done };
+        return .{ .composite = .{ .payload = payload, .identity_variables = identity_variables } };
     }
 
     /// The distinct flex and rigid variables the checked type `root` of
@@ -1531,12 +1558,12 @@ pub const Converter = struct {
         return try self.store.emptyTagUnion();
     }
 
-    fn pushFrame(self: Converter, frames: *std.ArrayList(Frame), pending: *std.ArrayList(Child), results_start: usize, module: ModuleIndex, ty: checked.CheckedTypeId) Allocator.Error!void {
+    fn pushFrame(self: Converter, frames: *std.ArrayList(Frame), pending: *std.ArrayList(Child), results_start: usize, module: ModuleIndex, ty: checked.CheckedTypeId, composite: @FieldType(Leaf, "composite")) Allocator.Error!void {
         const allocator = self.store.allocator;
         const pending_start = pending.items.len;
         const view = self.modules.get(module);
         const types = view.types();
-        switch (types.payload(ty)) {
+        switch (composite.payload) {
             .alias => |alias| try pending.append(allocator, .{ .module = module, .ty = alias.backing }),
             .record => |record| {
                 var current_fields = record.fields;
@@ -1596,18 +1623,20 @@ pub const Converter = struct {
         try frames.append(allocator, .{
             .module = module,
             .ty = ty,
+            .payload = composite.payload,
+            .identity_variables = composite.identity_variables,
             .results_start = results_start,
             .pending_start = pending_start,
             .pending_next = pending_start,
         });
     }
 
-    fn finish(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, children: []const TypeId, env: Env) Allocator.Error!TypeId {
+    fn finish(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, payload: checked.CheckedTypePayload, children: []const TypeId, env: Env) Allocator.Error!TypeId {
         const allocator = self.store.allocator;
         const view = self.modules.get(module);
         const types = view.types();
         const name_store = view.nameStore();
-        switch (types.payload(ty)) {
+        switch (payload) {
             .alias => return children[0],
             .tuple => return try self.store.intern(.{ .tuple = children }),
             .function => |function| return try self.store.intern(.{ .function = .{
