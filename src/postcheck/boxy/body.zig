@@ -8595,10 +8595,10 @@ pub const Builder = struct {
     /// holds that frame's dictionary, so a chain of such frames is followed
     /// down to the frame that composes it.
     fn frameDictionaryAfterReads(self: *Builder, demand: FrameParam, demands: *std.ArrayList(FrameParam)) Allocator.Error!?Word {
-        var forwarding = std.ArrayList(*?Word).empty;
+        var forwarding = std.ArrayList(ForwardingStep).empty;
         defer forwarding.deinit(self.allocator);
         var at = demand;
-        const dictionary = while (true) {
+        var dictionary = while (true) {
             const scope = self.alias_scopes.items[at.position];
             const slot = std.mem.findScalar(u32, scope.params, at.param) orelse invariant("evidence named a dictionary parameter its alias scope does not have");
             // A declaration context's frame holds the context's dictionaries,
@@ -8607,7 +8607,7 @@ pub const Builder = struct {
             const deferred = scope.deferred_dicts orelse break scope.dicts[slot];
             if (deferred.composed[slot]) |composed| break composed;
             if (forwardedFrameParam(deferred, at.param)) |below| {
-                try forwarding.append(self.allocator, &deferred.composed[slot]);
+                try forwarding.append(self.allocator, .{ .composed = &deferred.composed[slot], .frame = at, .below = below });
                 at = below;
                 continue;
             }
@@ -8616,8 +8616,39 @@ pub const Builder = struct {
             if (demands.items.len != unread) return null;
             break try self.composeFrameDictionary(at.position, at.param, slot);
         };
-        for (forwarding.items) |composed| composed.* = dictionary;
+        // Each frame holds the dictionary at the interface its own
+        // requirement names, so each step down the chain is adapted from
+        // the frame below's interface to its own, lowest first, as evidence
+        // handing a scope's dictionary on is (`dictionaryOfAt`).
+        var index = forwarding.items.len;
+        while (index > 0) {
+            index -= 1;
+            const forward = forwarding.items[index];
+            dictionary = try self.adaptForwardedFrameDictionary(dictionary, forward.frame, forward.below);
+            forward.composed.* = dictionary;
+        }
         return dictionary;
+    }
+
+    /// A frame dictionary that is a lower frame's passed on unchanged by the
+    /// frame's edge: where it is stored, the frame and parameter it is, and
+    /// the frame and parameter it passes on.
+    const ForwardingStep = struct { composed: *?Word, frame: FrameParam, below: FrameParam };
+
+    /// `dictionary`, the dictionary of parameter `below.param` of the frame
+    /// at `below.position`, which the edge of the frame at `frame.position`
+    /// passes on for its parameter `frame.param`, at the interface that
+    /// parameter's requirement names.
+    fn adaptForwardedFrameDictionary(self: *Builder, dictionary: Word, frame: FrameParam, below: FrameParam) Allocator.Error!Word {
+        const deferred = self.alias_scopes.items[frame.position].deferred_dicts orelse invariant("a frame passing on a dictionary holds no deferred dictionaries");
+        if (frame.param >= deferred.context.params.len) return dictionary;
+        const converter = self.program.converter();
+        const expected = try converter.convert(deferred.context.module, deferred.context.params[frame.param].callable_ty, deferred.context.env);
+        const requirements = self.alias_scopes.items[below.position].requirements;
+        if (below.param >= requirements.params.len) invariant("evidence named a parameter its scope does not have");
+        const declared = try converter.convert(requirements.module, requirements.params[below.param].callable_ty, requirements.env);
+        const own = try self.program.dictionaryTypeAtEdge(self.allocator, declared, expected);
+        return try self.adaptDictionary(dictionary, own, expected);
     }
 
     /// Append to `demands` each uncomposed literal chain frame dictionary
