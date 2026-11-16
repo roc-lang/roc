@@ -11155,9 +11155,15 @@ itself; the fused arm releases that variant's payload instead, or nothing when
 the variant owns nothing. A fused arm copies exactly the statements its
 variant rewrite changes, together with what copying them forces: their
 predecessors, readers of locals they define, and jumps to joins they declare,
-where a jump reads its target's parameters. Copied definitions are renamed.
-Every other arm statement is shared with the original arm, which partial
-fusion retains for opaque producers; copying unchanged statements would
+where a jump reads its target's parameters. Copied definitions are renamed,
+and a copied jump bridges a renamed parameter of the join it leaves for. A
+join the arm jumps to may also read a local the arm defines without taking it
+as a parameter (a `.boxy` or-pattern's shared body reads the binders each
+alternative writes), so a copied definition of a local that a statement
+outside the arm reads, other than a join parameter, keeps its local: the copy
+defines it as the original arm does, and exactly one of the two runs on any
+path into the join. Every other arm statement is shared with the original
+arm, which partial fusion retains for opaque producers; copying unchanged statements would
 duplicate every later candidate they contain, growing a procedure
 exponentially in its number of sequential matches. Join scalarization then removes
 aggregate fixed points when every initializer, field read, and tag payload
@@ -11177,7 +11183,8 @@ the number of fusions.
 Hoisting a tag consumer's enclosing continuation joins requires exclusive
 structural entry from that consumer. If an outside statement also enters a
 wrapper, fusion first clones the consumer subtree with fresh join identities
-and local binders, preserving its external inputs and enclosing jump targets.
+and local binders, preserving its external inputs, enclosing jump targets, and
+every binder a statement outside the subtree reads.
 The original shared continuation keeps its original remainder. Fusion then
 plans against the private clone; it must never copy a shared declaration's
 identity into a second reachable statement or redirect another entry through
