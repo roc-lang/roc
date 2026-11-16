@@ -514,7 +514,36 @@ const Overrides = struct {
         const value = @as(*align(1) const i64, @ptrCast(args.?)).*;
         @as(*align(1) RocStr, @ptrCast(ret.?)).* = RocStr.fromSliceSmall(if (value == 4) "four" else "other");
     }
+
+    const long_inspection = "an inspection long enough that it is stored on the heap";
+
+    fn inspectAsLong(ops: *RocOps, ret: ?[*]u8, _: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, _: *?*const anyopaque) callconv(.c) void {
+        @as(*align(1) RocStr, @ptrCast(ret.?)).* = bigStr(long_inspection, ops);
+    }
 };
+
+test "a value whose inspection is its override's result alone allocates only the override's text" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    const long = erased_callable.allocate(&Overrides.inspectAsLong, null, 0, ops);
+    const methods: desc_mod.Methods = .{ .is_eq = null, .to_hash = null, .to_inspect = long };
+    const nominal = env.descs.nominal(desc_mod.scalarDesc(.i64), &methods, false);
+    var slot: Slot = .{};
+    slot.write(0, i64, 4);
+
+    const before = env.test_env.total_allocations;
+    try expectInspect(&env, nominal, slot.ptr(), Overrides.long_inspection);
+    try testing.expectEqual(before + 1, env.test_env.total_allocations);
+
+    // Text around the override's results is written into the output.
+    const list_desc = env.descs.list(nominal);
+    var list_slot: Slot = .{};
+    list_slot.write(0, RocList, i64List(&.{ 4, 5 }, ops));
+    try expectInspect(&env, list_desc, list_slot.ptr(), "[" ++ Overrides.long_inspection ++ ", " ++ Overrides.long_inspection ++ "]");
+    walk.decref(list_desc, list_slot.ptr(), ops);
+    erased_callable.decref(long, ops);
+}
 
 test "hashing feeds the hasher builtins in structural order" {
     var env = Env.init();

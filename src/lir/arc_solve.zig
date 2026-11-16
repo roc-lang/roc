@@ -3044,10 +3044,11 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             const assign = store.stmtRow(assign_stmt.data);
             if (assign.reuse_closure) solveInvariant("erased call was marked transferring before ARC");
             try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
-            // A call that can repack its closure's allocation as its result
-            // demands the closure's unit. Any other call transfers the unit
-            // only when it dies there anyway, and otherwise borrows it.
-            if (assign.result_reuse) try solver.binding_facts.append(allocator, .{ .demand = LIR.erasedCallOwner(assign) });
+            // An erased call demands its closure's unit: where the unit dies
+            // at the call, emission moves it into the callee, which reads the
+            // captures out of it unshared and can repack it as its result.
+            // Where it does not die there, the call borrows it.
+            try solver.binding_facts.append(allocator, .{ .demand = LIR.erasedCallOwner(assign) });
             const args = store.getLocalSpan(assign.args);
             for (0..GuardedList.borrowLen(args)) |index| {
                 const arg = GuardedList.at(args, index);
@@ -3380,7 +3381,8 @@ fn liftDynStmtFacts(solver: *Solver, current: LIR.CFStmtId, target: ?LIR.LocalId
             const call = op.call_erased;
             if (call.reuse_closure) solveInvariant("erased call was marked transferring before ARC");
             try solver.binding_facts.append(allocator, .{ .fresh = defined });
-            if (call.result_reuse) try solver.binding_facts.append(allocator, .{ .demand = LIR.erasedCallOwner(call) });
+            // As for `assign_call_erased`: the call demands its closure's unit.
+            try solver.binding_facts.append(allocator, .{ .demand = LIR.erasedCallOwner(call) });
             if (call.args) |args| {
                 try solver.binding_facts.append(allocator, .{ .demand = args });
                 try liftVisibilitySeed(solver, args);

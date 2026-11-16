@@ -2232,20 +2232,19 @@ fn finishLoweredOutput(
     // calls and changes allocation sites, and ARC panics on pre-existing RC
     // statements (see src/lir/trmc.zig).
     try runProcedurePass(allocator, &lowered.lir_result, pass_target, .trmc, pass_timing);
-    if (target.specialization_strategy == .lss) {
-        if (target.inline_mode == .none) {
-            var single_use_scope = PassStepScope.begin(target.timing, .single_use_inline);
-            try SingleUseInline.run(&lowered.lir_result);
-            single_use_scope.end();
-            try runProcedurePass(allocator, &lowered.lir_result, pass_target, .forwarding_join, pass_timing);
-        }
-        // Every inline mode produces tag-valued joins whose body matches the
-        // tag at once: the iterator-fusion clone in `.none`, and the checked
-        // wrappers substituted at their call sites in `.wrappers`, whose
-        // `Try` results the caller matches immediately.
-        if (target.fuse_tag_cases) {
-            try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion, pass_timing);
-        }
+    if (target.specialization_strategy == .lss and target.inline_mode == .none) {
+        var single_use_scope = PassStepScope.begin(target.timing, .single_use_inline);
+        try SingleUseInline.run(&lowered.lir_result);
+        single_use_scope.end();
+        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .forwarding_join, pass_timing);
+    }
+    // Every strategy and inline mode produces tag-valued joins whose body
+    // matches the tag at once: the iterator-fusion clone in `.none`, the
+    // checked wrappers substituted at their call sites in `.wrappers`, whose
+    // `Try` results the caller matches immediately, and a flag loop's merge
+    // join under either strategy, whose header switches on the flag.
+    if (target.fuse_tag_cases) {
+        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion, pass_timing);
     }
     // Every mode: a join parameter nothing reads still keeps its written
     // value alive past any consuming call on the entry path. Scalarization

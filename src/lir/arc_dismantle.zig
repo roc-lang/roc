@@ -720,7 +720,11 @@ const Analysis = struct {
         if (!self.rc_local[local_index]) return false;
         const fields = ProductFields.of(self.store, self.layouts, local) orelse return false;
         if (self.solution.isBorrowed(local) and !self.is_param[local_index] and self.projected_root[local_index] == .none and self.view_root.items[local_index] == .none) return false;
-        if (self.solution.isJoinParam(local) and !self.explicit_init_join[local_index]) return false;
+        // A procedure parameter that a self-tail loop's join also declares,
+        // and that no statement writes, is bound once, by the call: every
+        // iteration reads the one value the call passed, and the field flow
+        // follows the loop's back edge like any other path.
+        if (self.solution.isJoinParam(local) and !self.explicit_init_join[local_index] and !self.is_param[local_index]) return false;
         if (self.solution.maybeUninitializedCondition(local) != null) return false;
 
         for (0..fields.len()) |i| {
@@ -1750,6 +1754,20 @@ fn wholeMoveSite(
         if (bind.op.kind != .local or bind.target == local or solution.isBorrowed(bind.target)) return null;
         if (!namesContainer(analysis, local, view, bind.op.source)) return null;
         return .{ .stmt = stmt_id, .next = bind.next, .position = 0 };
+    }
+    if (whole_use.* == .assign_struct) {
+        // A fresh aggregate owns what it stores, so the field holding the
+        // container receives it whole like an owned call position.
+        const build = whole_use.assign_struct;
+        if (build.target == local) return null;
+        const fields = store.getLocalSpan(build.fields);
+        var found: ?WholeMoveSite = null;
+        for (0..GuardedList.borrowLen(fields)) |position| {
+            if (!namesContainer(analysis, local, view, GuardedList.at(fields, position))) continue;
+            if (found != null or position > std.math.maxInt(u8)) return null;
+            found = .{ .stmt = stmt_id, .next = build.next, .position = @intCast(position) };
+        }
+        return found;
     }
     if (whole_use.* != .assign_call) return null;
     const stmt = whole_use.assign_call;
