@@ -16255,8 +16255,11 @@ consulted.
 
 The accepted side is pinned by `issue 13055: method on a weak top-level number
 used through a function called twice`, `issue 13055: method on a weak
-top-level interpolation used through a function called twice` and `issue
-13055: a use's copied requirement chooses the weak literal's type` in
+top-level interpolation used through a function called twice`, the two
+`issue 13055: a method that calls a method on a weak top-level ...,
+dispatched from another def` tests (a nominal type's method, reached by
+dispatch, copies its requirements like any other generalized function) and
+`issue 13055: a use's copied requirement chooses the weak literal's type` in
 `type_checking_integration.zig`. The rejected side is pinned by `issue 13055:
 copied requirements that need different types for a weak literal are
 rejected` and `issue 13055: a copied requirement no default satisfies is
