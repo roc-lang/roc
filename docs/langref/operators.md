@@ -85,11 +85,13 @@ Here, `user_requested_default` is only called if `config_missing` is `False`.
 
 ### Arithmetic Operators
 
-`+`, `-`, `*`, `/`, `//`, and `%` call methods on their left operand. The result has the
-left operand's type. The right operand usually has the same type as the left one, but it doesn't
-have to; that's up to the method. [Static dispatch](static-dispatch#operators) covers how to
-define these methods for your own types, and [numbers](numbers) covers what they do on the
-builtin number types (including what happens on overflow and division by zero).
+`+`, `-`, `*`, `/`, `//`, and `%` call methods on their left operand. Both operands and the
+result all have the same type. That's how a number literal gets its type from whatever it's
+combined with: in `count + 1`, the `1` is whatever type `count` is.
+
+[Static dispatch](static-dispatch#operators) covers how to define these methods for your own
+types, and [numbers](numbers) covers what they do on the builtin number types (including what
+happens on overflow and division by zero).
 
 ### Comparison Operators
 
@@ -196,6 +198,42 @@ expression. Also note that `|>` groups before binary operators like `+`, so `1 +
 ### `!` (`.not()`)
 
 `!x` is sugar for `x.not()`. The operand and result have the same type.
+
+On a [`Bool`](../Bool), `!x` calls `Bool.not`, so `!True` is `False`. On your own type, it calls
+that type's `not` method:
+
+```roc
+Switch := [On, Off].{
+	not : Switch -> Switch
+	not = |s| match s {
+		On => Off
+		Off => On
+	}
+}
+
+s : Switch
+s = Switch.On
+
+flipped = !s # Switch.Off
+```
+
+Tags like `True` and `False` don't have a type that has methods until something
+decides which [nominal tag union](tag-unions#nominal-tag-unions) they belong to. So when
+the operand of `!` is a tag union and nothing else decides its type (no annotation, `if`
+condition, or function argument, for example), it's a `Bool`. That's why this works even
+though nothing says `done` is a `Bool`:
+
+```roc
+done = False
+keep_going = !done # True
+```
+
+This only happens where the `!` is written. A function like `flip = |x| !x` has the type
+`a -> a where [a.not : a -> a]`, so `flip(True)` gives an error at compile time, because the tag
+union `[True]` has no `not` method. Writing `flip(Bool.True)` works.
+
+These also give an error at compile time: `!Foo`, because `Bool` has no `Foo` tag, and `!"hi"`,
+because `Str` has no `not` method.
 
 ## Unary Postfix Operators
 

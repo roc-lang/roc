@@ -100,6 +100,22 @@ process = |result| match result {
 
 This is equivalent to writing `.._` but is more concise.
 
+### Methods on Open Tag Unions
+
+Calling a method on a value whose tag union type ends in a named `..others`, including comparing
+it with `==`, works the same way as it does for [open records](records#methods-on-open-records).
+The caller might pass a tag union with more tags, or a [nominal tag union](#nominal-tag-unions)
+with these tags, so the `where` clause goes on `others`, and there `others` stands for the whole
+tag union:
+
+```roc
+is_red : [Red, ..others] -> Bool where [others.is_eq : others, others -> Bool]
+is_red = |color| color == Red
+```
+
+`is_red(Green)` is `False`, and `is_red(Fn(|x| x))` gives an error at compile time, because
+functions can't be compared with `==`.
+
 ### Closed Tag Unions
 
 ⚠️ The `..[]` syntax shown in this section is planned for after 0.1.0 and has not been implemented yet. It is intended to restrict a tag union's ability to be extended, which is very rare but occasionally useful.
@@ -242,6 +258,32 @@ Here, `Ok(age)` and `Err(InvalidAge)` are structural tags, but since they're use
 
 This works as long as the structural tag is one that the nominal tag union actually has, with a
 compatible payload. `Ok(1, 2)` or `Maybe(5)` could not become a `Try`.
+
+It also only works for tags the compiler worked out the type of, not for a structural tag
+union type you wrote out in an annotation. An annotation means exactly the type it says:
+
+```roc
+Light := [Red, Green]
+
+pick_inferred = |n| if n > 0 Red else Green
+
+pick : U64 -> [Red, Green]
+pick = |n| if n > 0 Red else Green
+
+a : Light
+a = pick_inferred(1) # This is fine.
+
+b : Light
+b = pick(1) # ERROR! pick returns [Red, Green], which is not a Light.
+```
+
+The same goes the other way: a `Light` can't be used where an annotation says
+`[Red, Green]`. To fix either one, write `Light` in the annotation instead of the tag
+union type.
+
+Each call to `pick_inferred` decides for itself whether its result becomes a `Light`, so
+`pick_inferred(2)` can still be used as a plain `[Red, Green]` somewhere else. A call to `pick`
+can still be used as a wider structural tag union, like `[Red, Green, Blue]`.
 
 > Note that this doesn't work with [opaque](#opaque-tag-unions) tag unions outside the module
 > that defines them, since their tags are hidden there.

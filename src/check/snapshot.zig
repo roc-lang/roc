@@ -39,6 +39,7 @@ pub const SnapshotFlex = struct {
     name: ?Ident.Idx,
     var_: Var,
     constraints: SnapshotStaticDispatchConstraintSafeList.Range,
+    literal: types.Flex.Literal = .none,
 };
 
 /// A snapshotted rigid (bound) type variable with name and constraints.
@@ -146,6 +147,7 @@ pub const SnapshotStaticDispatchConstraint = struct {
     fn_content: SnapshotContentIdx,
     source_fn_var: Var,
     origin: @FieldType(types.StaticDispatchConstraint, "origin"),
+    receiver: types.StaticDispatchConstraint.Receiver = .holder,
 };
 
 const Var = types.Var;
@@ -240,6 +242,7 @@ const IdentityFrame = struct {
     fill: SnapshotFill,
     result: SnapshotIdentityResult,
     name: ?Ident.Idx,
+    literal: types.Flex.Literal = .none,
     constraints: []const types.StaticDispatchConstraint,
     idx: u32 = 0,
     scratch_top: u32,
@@ -645,11 +648,18 @@ pub const Store = struct {
                 return true;
             },
             .flex => |flex| {
+                // An uncommitted record tail reads as the closed row it stands
+                // for (design.md "Uncommitted Record Tails").
+                if (resolved.desc.flags.uncommitted_record_tail) {
+                    try self.finishFrame(fill, SnapshotContent{ .structure = .empty_record });
+                    return true;
+                }
                 if (flex.constraints.len() == 0) {
                     try self.finishFrame(fill, SnapshotContent{ .flex = SnapshotFlex{
                         .name = flex.name,
                         .var_ = resolved.var_,
                         .constraints = try self.static_dispatch_constraints.appendSlice(self.gpa, &.{}),
+                        .literal = flex.literal,
                     } });
                     return true;
                 }
@@ -657,6 +667,7 @@ pub const Store = struct {
                     .fill = fill,
                     .result = .flex,
                     .name = flex.name,
+                    .literal = flex.literal,
                     .constraints = store.sliceStaticDispatchConstraints(flex.constraints),
                     .scratch_top = self.scratch_static_dispatch_constraints.top(),
                 } });
@@ -832,6 +843,7 @@ pub const Store = struct {
                             .name = frame.name,
                             .var_ = frame.fill.resolved_var,
                             .constraints = range,
+                            .literal = frame.literal,
                         } },
                         .rigid => SnapshotContent{ .rigid = SnapshotRigid{
                             .name = frame.name.?,
@@ -847,6 +859,7 @@ pub const Store = struct {
                         .fn_content = self.pending_values.pop().?,
                         .source_fn_var = frame.constraints[frame.idx].fn_var,
                         .origin = frame.constraints[frame.idx].origin,
+                        .receiver = frame.constraints[frame.idx].receiver,
                     });
                     frame.idx += 1;
                     frame.stage = .head;

@@ -4,9 +4,11 @@
 //! provides those symbols for the synthetic default platform on targets whose
 //! process entrypoint is the C runtime's `main`.
 
+const std = @import("std");
 const builtin = @import("builtin");
 const default_platform_options = @import("default_platform_options");
 
+const memory_fault = @import("memory_fault");
 const RocStr = @import("roc_str_view").RocStr;
 const RocList = @import("roc_str_view").RocList;
 const roc_args = @import("roc_args");
@@ -161,7 +163,176 @@ fn runtimeInit() callconv(.c) void {
         _ = c._setmode(1, c.O_BINARY);
         _ = c._setmode(2, c.O_BINARY);
     }
+    stack_overflow_reporting.install();
 }
+
+/// Reports a stack overflow on stderr and exits with status 1. Every other
+/// fatal fault keeps the operating system's own termination.
+const stack_overflow_reporting = if (builtin.os.tag.isDarwin())
+    darwin_stack_overflow
+else if (builtin.os.tag == .windows)
+    windows_stack_overflow
+else
+    struct {
+        fn install() void {}
+    };
+
+/// Darwin delivers a stack overflow as `SIGBUS` or `SIGSEGV` at an address in
+/// the guard region below the stack. Both signals are classified with
+/// `memory_fault.classifyFault`, the function the compiler's own crash handler
+/// uses, from the fault address, the interrupted stack pointer and the main
+/// thread's stack bounds, which is the thread Roc code runs on.
+const darwin_stack_overflow = struct {
+    const alt_stack_size: usize = 64 * 1024;
+
+    /// The handler's own stack: the overflowed stack has no room left for it.
+    var alt_stack: [alt_stack_size]u8 align(16) = undefined;
+    var main_stack_bounds: ?memory_fault.StackBounds = null;
+
+    const Thread = *opaque {};
+    extern fn pthread_self() Thread;
+    extern fn pthread_get_stackaddr_np(thread: Thread) usize;
+    extern fn pthread_get_stacksize_np(thread: Thread) usize;
+    extern fn getpagesize() c_int;
+    extern fn sigaltstack(stack: ?*const std.c.stack_t, old_stack: ?*std.c.stack_t) c_int;
+    extern fn sigaction(sig: std.c.SIG, action: ?*const std.c.Sigaction, old_action: ?*std.c.Sigaction) c_int;
+    extern fn raise(sig: std.c.SIG) c_int;
+    extern fn _exit(code: c_int) noreturn;
+
+    /// The prefix of Darwin's `ucontext_t` up to `uc_mcontext` (`_ucontext.h`).
+    const Ucontext = extern struct {
+        onstack: i32,
+        sigmask: std.c.sigset_t,
+        stack: std.c.stack_t,
+        link: ?*anyopaque,
+        mcsize: u64,
+        mcontext: *const Mcontext,
+    };
+
+    /// The prefix of Darwin's `mcontext` up to the stack pointer
+    /// (`_mcontext.h`).
+    const Mcontext = if (builtin.cpu.arch == .aarch64)
+        extern struct {
+            far: u64 align(16),
+            esr: u64,
+            x: [30]u64,
+            lr: u64,
+            sp: u64,
+        }
+    else if (builtin.cpu.arch == .x86_64)
+        extern struct {
+            trapno: u16,
+            cpu: u16,
+            err: u32,
+            faultvaddr: u64,
+            rax: u64,
+            rbx: u64,
+            rcx: u64,
+            rdx: u64,
+            rdi: u64,
+            rsi: u64,
+            rbp: u64,
+            sp: u64,
+        }
+    else
+        @compileError("the Darwin default platform runtime supports only aarch64 and x86_64");
+
+    fn install() void {
+        const thread = pthread_self();
+        const stack_high = pthread_get_stackaddr_np(thread);
+        const stack_size = pthread_get_stacksize_np(thread);
+        main_stack_bounds = memory_fault.StackBounds.init(stack_high - stack_size, stack_high, @intCast(getpagesize()), null, null);
+
+        const stack: std.c.stack_t = .{ .sp = &alt_stack, .size = @intCast(alt_stack_size), .flags = 0 };
+        if (sigaltstack(&stack, null) != 0) {
+            writeAll(2, "Roc runtime failed to install signal stack\n");
+            _exit(1);
+        }
+        installHandler(.SEGV);
+        installHandler(.BUS);
+    }
+
+    fn installHandler(sig: std.c.SIG) void {
+        const action: std.c.Sigaction = .{
+            .handler = .{ .sigaction = handleFault },
+            .mask = 0,
+            .flags = std.c.SA.SIGINFO | std.c.SA.ONSTACK,
+        };
+        if (sigaction(sig, &action, null) != 0) {
+            writeAll(2, "Roc runtime failed to install signal handler\n");
+            _exit(1);
+        }
+    }
+
+    fn handleFault(sig: std.c.SIG, info: *const std.c.siginfo_t, context: ?*anyopaque) callconv(.c) void {
+        const stack_pointer: ?usize = if (context) |raw| blk: {
+            const ucontext: *const Ucontext = @ptrCast(@alignCast(raw));
+            break :blk @intCast(ucontext.mcontext.sp);
+        } else null;
+        switch (memory_fault.classifyFault(@intFromPtr(info.addr), stack_pointer, main_stack_bounds)) {
+            .stack_overflow => {
+                writeAll(2, runtime_shared.stack_overflow_message);
+                _exit(1);
+            },
+            .access_violation => {
+                // The signal stays blocked until this handler returns, so the
+                // raised one is delivered then, under the default action.
+                const default_action: std.c.Sigaction = .{ .handler = .{ .handler = null }, .mask = 0, .flags = 0 };
+                _ = sigaction(sig, &default_action, null);
+                _ = raise(sig);
+            },
+        }
+    }
+};
+
+/// Windows raises `EXCEPTION_STACK_OVERFLOW` for exactly this fault, so the
+/// exception code alone identifies it. The handler runs on what remains of the
+/// overflowed stack, within the guarantee `SetThreadStackGuarantee` reserves.
+const windows_stack_overflow = struct {
+    const DWORD = u32;
+    const EXCEPTION_STACK_OVERFLOW: DWORD = 0xC00000FD;
+    const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
+    const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
+    const stack_guarantee: u32 = 32 * 1024;
+
+    const ExceptionRecord = extern struct {
+        code: DWORD,
+        flags: DWORD,
+        record: ?*ExceptionRecord,
+        address: ?*anyopaque,
+        parameter_count: DWORD,
+        information: [15]usize,
+    };
+
+    const ExceptionPointers = extern struct {
+        record: *ExceptionRecord,
+        context: *anyopaque,
+    };
+
+    const Handler = *const fn (*ExceptionPointers) callconv(.winapi) i32;
+
+    extern "kernel32" fn AddVectoredExceptionHandler(first: u32, handler: Handler) callconv(.winapi) ?*anyopaque;
+    extern "kernel32" fn SetThreadStackGuarantee(size: *u32) callconv(.winapi) i32;
+    extern "kernel32" fn GetStdHandle(handle: DWORD) callconv(.winapi) ?*anyopaque;
+    extern "kernel32" fn WriteFile(file: ?*anyopaque, buffer: [*]const u8, len: DWORD, written: ?*DWORD, overlapped: ?*anyopaque) callconv(.winapi) i32;
+    extern "kernel32" fn GetCurrentProcess() callconv(.winapi) *anyopaque;
+    extern "kernel32" fn TerminateProcess(process: *anyopaque, exit_code: u32) callconv(.winapi) i32;
+
+    fn install() void {
+        var guarantee = stack_guarantee;
+        _ = SetThreadStackGuarantee(&guarantee);
+        _ = AddVectoredExceptionHandler(1, handleException);
+    }
+
+    fn handleException(pointers: *ExceptionPointers) callconv(.winapi) i32 {
+        if (pointers.record.code != EXCEPTION_STACK_OVERFLOW) return EXCEPTION_CONTINUE_SEARCH;
+        const message = runtime_shared.stack_overflow_message;
+        var written: DWORD = 0;
+        _ = WriteFile(GetStdHandle(STD_ERROR_HANDLE), message.ptr, message.len, &written, null);
+        _ = TerminateProcess(GetCurrentProcess(), 1);
+        @trap();
+    }
+};
 
 fn defaultExit(code: u8) callconv(.c) noreturn {
     if (code == 0 and inline_expect_failed) c.exit(1);

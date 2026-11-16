@@ -2237,6 +2237,27 @@ test "a guarded root that crashes at compile time is left to runtime" {
     try std.testing.expectEqual(EchoAppCheck{ .has_errors = true, .non_exhaustive = true, .has_runtime_roots = true }, crashing_rhs);
 }
 
+test "a hoisted call of a function field read from a value checking rejected reports nothing more" {
+    // `f`'s right-hand side is a type mismatch, so its evaluation fails and
+    // no lambda reaches `g`. Evaluating `(f.g)(1)` reads `f` first, which
+    // fails with `f`'s own error: nothing beyond that mismatch is reported.
+    const result = try checkEchoApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\f : { g : U8 -> Str }
+        \\f = { g: |n| n }
+        \\
+        \\main! = |_args| {
+        \\    Echo.line!((f.g)(1))
+        \\    Ok({})
+        \\}
+    );
+    try std.testing.expect(result.has_errors);
+    try std.testing.expect(!result.comptime_crash);
+}
+
 const EchoAppCheck = struct {
     has_errors: bool = false,
     non_exhaustive: bool = false,
@@ -2656,6 +2677,7 @@ fn expectCompileTimeRootKindsPresent(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .interpolation_conversion,
             .literal_argument,
             .repl_expr,
             => {},
@@ -2740,7 +2762,7 @@ fn compileTimeRootKindMatchesRequest(
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
         .repl_expr => request_kind == .repl_expr,
-        .numeral_conversion, .quote_conversion, .literal_argument => request_kind == .compile_time_constant,
+        .numeral_conversion, .quote_conversion, .interpolation_conversion, .literal_argument => request_kind == .compile_time_constant,
     };
 }
 

@@ -1365,9 +1365,19 @@ test "Monotype returns consume the active specialization return cell" {
         "fn stepReturn(",
         "const InspectedTask = struct",
     );
-    try expectContains(lower_source, "self.current_return_target = .{ .lambda = lambda_id, .cell = body_ret_cell }");
+    try expectContains(lower_source, "self.current_return_target = .{ .lambda = lambda_id, .cell = body_ret_cell, .output = return_output }");
     try expectContains(lower_return, "task.lambda != target.lambda");
     try expectContains(lower_return, "requestLowerChild(self, task.expr, target.cell)");
+    // A return names its lambda's result, which the lambda settles once its
+    // body has selected an output witness.
+    try expectContains(lower_return, "task.target = target.output");
+    try expectNotContains(lower_return, "task.target = target.cell");
+    const finish_lambda = sourceSliceBetween(
+        lower_source,
+        "fn finishLambdaLowering(",
+        "fn restoreLambdaLowering(",
+    );
+    try expectContains(finish_lambda, "self.draft.return_targets.items[@backingInt(lowering.return_output)] = produced_ret_cell");
     try expectNotContains(lower_source, "returnTargetTypeCell");
 
     const lambda_node = sourceSliceBetween(
@@ -2026,19 +2036,10 @@ test "post-check lowerers define no helper twice with near-identical bodies" {
     // parameters, so any name defined twice with near-identical bodies is
     // either listed here, with its reason, or a copy to extract.
     const intended_per_scope = [_][]const u8{
-        // The const-restorer interface `runConstRestore` walks over: each
-        // scope's own expression store, id types, and node bookkeeping.
-        "constEmit",
-        "constNameStore",
-        "constTypeStore",
-        "finishConstRestoreLayer",
-        "finishConstRestoreData",
         // Each scope's emission primitives into its own expression store
-        // (`Ast.Program` for `Builder`, the body draft for `BodyContext`),
-        // and each store's record of a restored root read.
+        // (`Ast.Program` for `Builder`, the body draft for `BodyContext`).
         "localExpr",
         "bindPat",
-        "recordRestoredRootRead",
         // `AnyAll.Evaluation` leaf policies and the `EqDeriver` /
         // `HashDeriver` walker callbacks: one generic walk, one policy
         // struct per question.
@@ -2054,6 +2055,7 @@ test "post-check lowerers define no helper twice with near-identical bodies" {
         "leaf",
         "namedEnter",
         "tagPayloadOperand",
+        "tagUnionEnter",
         "tagUnionExit",
         // Conventional method names on unrelated types (sort orders,
         // lifecycle, map access, timing scopes, worker task entry points).

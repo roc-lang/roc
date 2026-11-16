@@ -693,6 +693,19 @@ const core_tests = [_]TestCase{
         .name = "optional record field: generalized constructor adopts optional slot layout",
         .source_kind = .module,
         .source =
+        \\make = |x, y| { a: x, b: y }
+        \\
+        \\record : { a ?: U8, b ?: U8 }
+        \\record = make(5, 20)
+        \\
+        \\main = (record.?a ?? 0) + (record.?b ?? 0)
+        ,
+        .expected = .{ .inspect_str = "25" },
+    },
+    .{
+        .name = "optional record field: a use of a generalized constructor gains no optional slot",
+        .source_kind = .module,
+        .source =
         \\make = |value| { a: value }
         \\
         \\record : { a ?: U8, b ?: U8 }
@@ -700,10 +713,31 @@ const core_tests = [_]TestCase{
         \\
         \\main = (record.?a ?? 0) + (record.?b ?? 20)
         ,
-        .expected = .{ .inspect_str = "25" },
+        .expected = .{ .problem = {} },
     },
     .{
         .name = "optional record field: construction width preserves nested iterator values",
+        .source_kind = .module,
+        .source =
+        \\wrap = |items, extra| { it: items.iter(), extra }
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    wrapped : { it : Iter(U64), extra ?: U64 }
+        \\    wrapped = wrap(items, 4)
+        \\    var $sum = 0
+        \\    for x in wrapped.it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum + (wrapped.?extra ?? 0)
+        \\}
+        \\
+        \\main = sum_it([1, 2, 3])
+        ,
+        .expected = .{ .inspect_str = "10" },
+    },
+    .{
+        .name = "optional record field: a use of a constructor holding an iterator gains no optional slot",
         .source_kind = .module,
         .source =
         \\wrap = |items| { it: items.iter() }
@@ -721,7 +755,7 @@ const core_tests = [_]TestCase{
         \\
         \\main = sum_it([1, 2, 3])
         ,
-        .expected = .{ .inspect_str = "6" },
+        .expected = .{ .problem = {} },
     },
     .{
         .name = "optional record field: generalized update cannot change a committed optional slot",
@@ -1966,7 +2000,7 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: boolean false", .source = "False", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: unary not true", .source = "!True", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: unary not false", .source = "!False", .expected = .{ .inspect_str = "True" } },
-    .{ .name = "inspect: unary not inferred parameter", .source = "{ negate = |value| !value\n (negate(True), negate(False)) }", .expected = .{ .inspect_str = "(False, True)" } },
+    .{ .name = "unary not of an inferred generic function on tag literals is a problem", .source = "{ negate = |value| !value\n (negate(True), negate(False)) }", .expected = .problem },
     .{
         .name = "inspect: unary not mutable flag in loop issue 11157",
         .source =
@@ -7280,16 +7314,30 @@ const core_tests = [_]TestCase{
         \\    u128 = |a, b| (a.plus_overflows(b), a.minus_overflows(b), a.times_overflows(b))
         \\    i128 = |a, b| (a.plus_overflows(b), a.minus_overflows(b), a.times_overflows(b))
         \\    (
-        \\        u8(U8.highest, 2), u8(3, 2),
+        \\        u8(U8.highest, 2), u8(3.U8, 2),
         \\        i8(I8.highest, 2), i8(I8.lowest, 1), i8(I8.lowest, -1),
-        \\        u64(U64.highest, 2), u64(3, 2),
+        \\        u64(U64.highest, 2), u64(3.U64, 2),
         \\        i64(I64.highest, 2), i64(I64.lowest, 1), i64(I64.lowest, -1),
-        \\        u128(U128.highest, 2), u128(3, 2),
+        \\        u128(U128.highest, 2), u128(3.U128, 2),
         \\        i128(I128.highest, 2), i128(I128.lowest, 1), i128(I128.lowest, -1),
         \\    )
         \\}
         ,
         .expected = .{ .inspect_str = "((True, False, True), (False, False, False), (True, False, True), (False, True, False), (True, False, True), (True, False, True), (False, False, False), (True, False, True), (False, True, False), (True, False, True), (True, False, True), (False, False, False), (True, False, True), (False, True, False), (True, False, True))" },
+    },
+    .{
+        // A number literal passed to a generalized function whose only use of
+        // it is a method call has no type to convert at, which is reported.
+        // The rejected call is a checked runtime error, so the program still
+        // lowers and crashes when it reaches the call.
+        .name = "inspect: method call on an undetermined number literal reports a problem and crashes at runtime",
+        .source =
+        \\{
+        \\    overflows = |a, b| (a.plus_overflows(b), a.minus_overflows(b), a.times_overflows(b))
+        \\    (overflows(U8.highest, 2), overflows(3, 2))
+        \\}
+        ,
+        .expected = .{ .problem_and_crash = {} },
     },
     .{
         .name = "inspect: integer saturating arithmetic covers every width and direction",

@@ -4648,11 +4648,16 @@ fn canonicalizeTopLevelTypeDecl(
     }
 }
 
+/// Whether the parser recorded this `return` as occupying its function's result
+/// position, so its keyword changes nothing about the program.
+fn isRedundantReturn(self: *const Self, node_idx: u32) bool {
+    return self.enclosing_lambda != null and self.expect_context == .none and
+        self.parse_ir.redundant_returns.isSet(node_idx);
+}
+
 /// Consume the parser's explicit function-result context without reanalyzing CIR.
 fn warnRedundantReturn(self: *Self, node_idx: u32, region: AST.TokenizedRegion) std.mem.Allocator.Error!void {
-    if (self.enclosing_lambda != null and self.expect_context == .none and
-        self.parse_ir.redundant_returns.isSet(node_idx))
-    {
+    if (self.isRedundantReturn(node_idx)) {
         try self.env.pushDiagnostic(.{ .redundant_return = .{
             .region = self.parse_ir.tokenizedRegionToRegion(region),
         } });
@@ -6957,6 +6962,13 @@ fn checkExposedTypeSurfaces(self: *Self) std.mem.Allocator.Error!void {
         try public_type_decls.put(gpa, stmt_idx, {});
     }
 
+    var renamed_nominals: RenamedNominals = .empty;
+    defer renamed_nominals.deinit(gpa);
+    try self.collectRenamedNominals(&public_type_decls, &renamed_nominals);
+    for (renamed_nominals.keys()) |nominal_idx| {
+        try public_type_decls.put(gpa, nominal_idx, {});
+    }
+
     var checked_public_nominals: std.AutoHashMapUnmanaged(Statement.Idx, void) = .{};
     defer checked_public_nominals.deinit(gpa);
 
@@ -6968,6 +6980,7 @@ fn checkExposedTypeSurfaces(self: *Self) std.mem.Allocator.Error!void {
 
         try self.checkPublicNominalStatementSurface(
             stmt_idx,
+            null,
             &public_type_decls,
             &checked_public_nominals,
         );
@@ -6976,9 +6989,163 @@ fn checkExposedTypeSurfaces(self: *Self) std.mem.Allocator.Error!void {
     for (public_roots.items) |root| {
         try self.checkPublicNominalStatementSurface(
             root.stmt_idx,
+            null,
             &public_type_decls,
             &checked_public_nominals,
         );
+    }
+
+    for (renamed_nominals.keys(), renamed_nominals.values()) |nominal_idx, alias_idx| {
+        const alias_header = self.env.store.getTypeHeader(self.env.store.getStatement(alias_idx).s_alias_decl.header);
+        try self.checkPublicNominalStatementSurface(
+            nominal_idx,
+            alias_header.name,
+            &public_type_decls,
+            &checked_public_nominals,
+        );
+    }
+}
+
+/// Each private local nominal declaration a public alias renames, mapped to
+/// the alias that names it, in the source order of the nominal declarations'
+/// first renaming aliases.
+const RenamedNominals = std.AutoArrayHashMapUnmanaged(Statement.Idx, Statement.Idx);
+
+/// Find the private local nominal declarations that public aliases rename
+/// (design.md "Exposed Type Surfaces"). When several public aliases rename one
+/// nominal declaration, the alias declared first in the source names it.
+fn collectRenamedNominals(
+    self: *Self,
+    public_type_decls: *const std.AutoHashMapUnmanaged(Statement.Idx, void),
+    renamed: *RenamedNominals,
+) std.mem.Allocator.Error!void {
+    const gpa = self.env.gpa;
+
+    var public_aliases = std.ArrayList(Statement.Idx).empty;
+    defer public_aliases.deinit(gpa);
+    var public_iter = public_type_decls.keyIterator();
+    while (public_iter.next()) |stmt_idx| {
+        if (self.env.store.getStatement(stmt_idx.*) == .s_alias_decl) try public_aliases.append(gpa, stmt_idx.*);
+    }
+    if (public_aliases.items.len == 0) return;
+    std.mem.sort(Statement.Idx, public_aliases.items, self, statementPrecedesInSource);
+
+    // An alias chain that never repeats a declaration takes fewer steps than
+    // the module has nodes.
+    const max_steps = self.env.store.nodes.len();
+
+    var positions = std.ArrayList(?u32).empty;
+    defer positions.deinit(gpa);
+    var next_positions = std.ArrayList(?u32).empty;
+    defer next_positions.deinit(gpa);
+
+    for (public_aliases.items) |alias_idx| {
+        const nominal_idx = (try self.aliasRenamedNominal(
+            alias_idx,
+            public_type_decls,
+            max_steps,
+            &positions,
+            &next_positions,
+        )) orelse continue;
+        const gop = try renamed.getOrPut(gpa, nominal_idx);
+        if (!gop.found_existing) gop.value_ptr.* = alias_idx;
+    }
+}
+
+fn statementPrecedesInSource(self: *Self, a: Statement.Idx, b: Statement.Idx) bool {
+    return self.env.store.getStatementRegion(a).start.offset < self.env.store.getStatementRegion(b).start.offset;
+}
+
+/// The private local nominal declaration that the public alias `alias_idx`
+/// renames: its annotation, with parentheses stripped and private local
+/// aliases followed, applies the nominal declaration to exactly the alias's own
+/// parameters, in order. `positions[k]` is the index of the public alias's
+/// parameter that the current alias's `k`th parameter stands for, or null
+/// when that parameter is bound to anything else.
+fn aliasRenamedNominal(
+    self: *Self,
+    alias_idx: Statement.Idx,
+    public_type_decls: *const std.AutoHashMapUnmanaged(Statement.Idx, void),
+    max_steps: usize,
+    positions: *std.ArrayList(?u32),
+    next_positions: *std.ArrayList(?u32),
+) std.mem.Allocator.Error!?Statement.Idx {
+    const gpa = self.env.gpa;
+    const alias = self.env.store.getStatement(alias_idx).s_alias_decl;
+    const public_params = self.env.store.sliceTypeAnnos(self.env.store.getTypeHeader(alias.header).args);
+
+    positions.clearRetainingCapacity();
+    for (0..public_params.len) |param_index| try positions.append(gpa, @as(u32, @intCast(param_index)));
+    var current_params = public_params;
+    var anno = alias.anno;
+
+    var steps: usize = 0;
+    while (steps < max_steps) : (steps += 1) {
+        const applied: struct { base: TypeAnno.LocalOrExternal, args: []const TypeAnno.Idx } =
+            switch (self.env.store.getTypeAnno(self.typeAnnoWithoutParens(anno))) {
+                .lookup => |lookup| .{ .base = lookup.base, .args = &.{} },
+                .apply => |apply| .{ .base = apply.base, .args = self.env.store.sliceTypeAnnos(apply.args) },
+                .rigid_var, .rigid_var_lookup, .underscore, .tag_union, .tag, .tuple, .record, .@"fn", .parens, .malformed => return null,
+            };
+        const target_idx = switch (applied.base) {
+            .local => |local| local.decl_idx,
+            .builtin, .external, .external_identity, .pending => return null,
+        };
+        // A public declaration has a public name of its own, and a public
+        // alias further along the chain does its own renaming.
+        if (public_type_decls.contains(target_idx)) return null;
+
+        next_positions.clearRetainingCapacity();
+        for (applied.args) |arg| {
+            try next_positions.append(gpa, self.aliasParamPosition(arg, current_params, positions.items));
+        }
+
+        const target = self.env.store.getStatement(target_idx);
+        if (target == .s_nominal_decl) {
+            const nominal_header = self.env.store.getTypeHeader(target.s_nominal_decl.header);
+            const nominal_params = self.env.store.sliceTypeAnnos(nominal_header.args);
+            if (nominal_params.len != public_params.len or next_positions.items.len != public_params.len) return null;
+            for (next_positions.items, 0..) |position, arg_index| {
+                if (position == null or position.? != arg_index) return null;
+            }
+            return target_idx;
+        }
+        if (target != .s_alias_decl) return null;
+        const next_alias = target.s_alias_decl;
+        const next_params = self.env.store.sliceTypeAnnos(self.env.store.getTypeHeader(next_alias.header).args);
+        if (next_params.len != next_positions.items.len) return null;
+        std.mem.swap(std.ArrayList(?u32), positions, next_positions);
+        current_params = next_params;
+        anno = next_alias.anno;
+    }
+    // Only a cyclic alias chain, which is reported where it is declared, takes
+    // that many steps.
+    return null;
+}
+
+/// The public alias parameter index that `arg` carries through an alias whose
+/// parameters are `params`, or null when `arg` is not one of those parameters.
+fn aliasParamPosition(
+    self: *Self,
+    arg: TypeAnno.Idx,
+    params: []const TypeAnno.Idx,
+    positions: []const ?u32,
+) ?u32 {
+    const arg_anno = self.env.store.getTypeAnno(self.typeAnnoWithoutParens(arg));
+    if (arg_anno != .rigid_var_lookup) return null;
+    const referenced = arg_anno.rigid_var_lookup.ref;
+    for (params, positions) |param, position| {
+        if (param == referenced) return position;
+    }
+    return null;
+}
+
+fn typeAnnoWithoutParens(self: *Self, anno_idx: TypeAnno.Idx) TypeAnno.Idx {
+    var current = anno_idx;
+    while (true) {
+        const anno = self.env.store.getTypeAnno(current);
+        if (anno != .parens) return current;
+        current = anno.parens.anno;
     }
 }
 
@@ -7055,9 +7222,13 @@ fn typeIsAtOrUnderPublicRoot(
     return false;
 }
 
+/// Check the backing of a public non-opaque nominal declaration. Warnings name
+/// the declaration by `public_name` when an alias gives it its public name,
+/// and by its own name otherwise.
 fn checkPublicNominalStatementSurface(
     self: *Self,
     stmt_idx: Statement.Idx,
+    public_name: ?Ident.Idx,
     public_type_decls: *const std.AutoHashMapUnmanaged(Statement.Idx, void),
     checked_public_nominals: *std.AutoHashMapUnmanaged(Statement.Idx, void),
 ) std.mem.Allocator.Error!void {
@@ -7070,7 +7241,7 @@ fn checkPublicNominalStatementSurface(
     if (nominal.is_opaque) return;
 
     const header = self.env.store.getTypeHeader(nominal.header);
-    try self.checkPublicNominalTypeSurface(header.name, nominal.anno, public_type_decls);
+    try self.checkPublicNominalTypeSurface(public_name orelse header.name, nominal.anno, public_type_decls);
 }
 
 fn checkPublicNominalTypeSurface(
@@ -9275,6 +9446,7 @@ fn warnTrailingTrySuffix(self: *Self, root: Expr.Idx) std.mem.Allocator.Error!vo
         .e_lambda,
         .e_binop,
         .e_unary_minus,
+        .e_unary_not,
         .e_field_access,
         .e_method_call,
         .e_dispatch_call,
@@ -10102,6 +10274,7 @@ const DefiniteInitAnalyzer = struct {
             else
                 seqJob(binop.lhs, Expr.Span{ .span = DataSpan.empty() }, binop.rhs),
             .e_unary_minus => |unary| .{ .expr = unary.expr },
+            .e_unary_not => |unary| .{ .expr = unary.expr },
             .e_field_access => |field| .{ .expr = field.receiver },
             .e_method_call => |call| seqJob(call.receiver, call.args, null),
             .e_dispatch_call => |call| seqJob(call.receiver, call.args, null),
@@ -10822,6 +10995,7 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = binop.rhs, .loop_depth = expr_frame.loop_depth } });
                     },
                     .e_unary_minus => |unary| try pending.append(stack_allocator, .{ .expr = .{ .idx = unary.expr, .loop_depth = expr_frame.loop_depth } }),
+                    .e_unary_not => |unary| try pending.append(stack_allocator, .{ .expr = .{ .idx = unary.expr, .loop_depth = expr_frame.loop_depth } }),
                     .e_field_access => |field| try pending.append(stack_allocator, .{ .expr = .{ .idx = field.receiver, .loop_depth = expr_frame.loop_depth } }),
                     .e_method_call => |call| {
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = call.receiver, .loop_depth = expr_frame.loop_depth } });
@@ -11866,6 +12040,7 @@ fn runExprKernel(
                     try self.warnRedundantReturn(@backingInt(idx), e.region);
                     try stacks.push(.finish_return, frame_allocator, .{
                         .region = self.parse_ir.tokenizedRegionToRegion(e.region),
+                        .redundant = self.isRedundantReturn(@backingInt(idx)),
                     });
                     try stacks.push(.parse, frame_allocator, .{ .idx = e.expr, .target = .scratch });
                 },
@@ -12310,6 +12485,7 @@ fn runExprKernel(
                             .next = next,
                             .region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region),
                             .final_expr = true,
+                            .redundant = self.isRedundantReturn(@backingInt(ast_stmt_idx)),
                         });
                         try stacks.push(.parse, frame_allocator, .{ .idx = return_stmt.expr, .target = .scratch });
                     },
@@ -12403,6 +12579,7 @@ fn runExprKernel(
                         .next = next,
                         .region = self.parse_ir.tokenizedRegionToRegion(r.region),
                         .final_expr = false,
+                        .redundant = false,
                     });
                     try stacks.push(.parse, frame_allocator, .{ .idx = r.expr, .target = .scratch });
                 },
@@ -12735,7 +12912,12 @@ fn runExprKernel(
             const expr = child_slots.items[result_start].expr;
             child_slots.shrinkRetainingCapacity(state.block.result_start);
             try self.warnTrailingTrySuffix(expr.idx);
-            if (state.final_expr) {
+            if (state.final_expr and state.redundant) {
+                // The return already occupies the function's result position,
+                // so the block's final expression is its operand.
+                const block_expr = try self.finishBlockState(state.block, expr);
+                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, block_expr);
+            } else if (state.final_expr) {
                 const return_expr_idx = if (self.expect_context != .none)
                     try self.env.pushMalformed(Expr.Idx, Diagnostic{ .control_flow_in_expect = .{
                         .region = state.region,
@@ -13165,6 +13347,13 @@ fn runExprKernel(
             const can_inner = child_slots.items[result_start].expr;
 
             try self.warnTrailingTrySuffix(can_inner.idx);
+            if (state.redundant) {
+                // The return already occupies the function's result position,
+                // so the expression is its operand.
+                child_slots.shrinkRetainingCapacity(result_start);
+                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, can_inner);
+                continue :expr_kernel_loop .dispatch;
+            }
             const return_expr = if (self.expect_context != .none)
                 try self.env.pushMalformed(Expr.Idx, Diagnostic{ .control_flow_in_expect = .{
                     .region = state.region,
@@ -13257,7 +13446,9 @@ fn runExprKernel(
                     .e_unary_minus = Expr.UnaryMinus.init(can_operand.idx),
                 }, state.region)
             else if (operator_token.tag == .OpBang)
-                try self.addBoolNotCall(can_operand.idx, state.region)
+                try self.env.addExpr(Expr{
+                    .e_unary_not = Expr.UnaryNot.init(can_operand.idx),
+                }, state.region)
             else
                 unreachable; // finish_unary is pushed only for OpUnaryMinus and OpBang operators
 
@@ -14423,42 +14614,6 @@ fn runExprKernel(
 
     std.debug.assert(child_slots.items.len == 0);
     return last_expr;
-}
-
-/// Logical negation always calls the compiler-owned Bool.not, independent of
-/// the operand's type and any source declarations shadowing Bool.
-fn addBoolNotCall(self: *Self, operand: Expr.Idx, region: Region) std.mem.Allocator.Error!Expr.Idx {
-    const callee = if (self.builtin_auto_imported_types.get(self.env.idents.bool)) |bool_info| blk: {
-        const bool_stmt = bool_info.statement_idx orelse
-            base.invariant("compiler invariant violated: auto-imported builtin type Bool has no declaration", .{});
-        const type_node = bool_info.env.getExposedNodeIndexByStatementIdx(bool_stmt) orelse
-            base.invariant("compiler invariant violated: auto-imported builtin type Bool has no exposed node", .{});
-        break :blk try self.canonicalizedExternalAssociatedLookup(
-            try self.getOrCreateCompilerBuiltinAutoImport(),
-            type_node,
-            self.env.idents.bool,
-            self.env.idents.not,
-            region,
-        );
-    } else blk: {
-        // Builtin.roc refers to its own Bool declaration, including forward
-        // references from definitions that precede Bool.not.
-        const builtin_ident = try self.env.insertIdent(Ident.for_text("Builtin"));
-        const owner_path = self.moduleParserTypePathForSegments(&.{ builtin_ident, self.env.idents.bool }) orelse
-            base.invariant("compiler invariant violated: Builtin.roc has no Builtin.Bool type path", .{});
-        const qualified = try self.insertQualifiedIdent("Builtin.Bool", "not");
-        const pattern = (try self.lookupOrCreateAssocValuePattern(owner_path, self.env.idents.not, qualified, region)) orelse
-            base.invariant("compiler invariant violated: Builtin.roc has no Builtin.Bool.not value", .{});
-        break :blk try self.canonicalizedAssociatedLookup(owner_path, self.env.idents.not, pattern, region);
-    };
-    const args_start = self.env.store.scratchExprTop();
-    try self.env.store.addScratchExpr(operand);
-    const args = try self.env.store.exprSpanFrom(args_start);
-    return self.env.addExpr(.{ .e_call = .{
-        .func = callee.idx,
-        .args = args,
-        .called_via = .unary_op,
-    } }, region);
 }
 
 fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allocator.Error!Expr.Idx {
@@ -16596,6 +16751,8 @@ const ExprFinishBlockReturnStmtWork = struct {
     next: usize,
     region: Region,
     final_expr: bool,
+    /// The parser recorded this return in its function's result position.
+    redundant: bool,
 };
 
 const ExprFinishBlockVarStmtWork = struct {
@@ -16708,6 +16865,8 @@ const ExprFinishCrashWork = struct {
 
 const ExprFinishReturnWork = struct {
     region: Region,
+    /// The parser recorded this return in its function's result position.
+    redundant: bool,
 };
 
 const ExprFinishTupleAccessWork = struct {

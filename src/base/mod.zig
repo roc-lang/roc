@@ -51,6 +51,8 @@ pub const recursive_digest = @import("recursive_digest.zig");
 /// SHA-256 on the CPU's SHA-256 instructions, interchangeable with `std.crypto.hash.sha2.Sha256`.
 pub const Sha256 = @import("sha256.zig").Sha256;
 pub const ModuleIdentity = @import("module_identity.zig");
+/// BLAKE3-256 of one input file's bytes, computed once per file read.
+pub const SourceDigest = @import("SourceDigest.zig");
 
 /// Single-threaded arena allocator, re-exported from `collections` for callers
 /// that already depend on `base`.
@@ -143,8 +145,6 @@ pub const CalledVia = enum {
     apply,
     /// Calling with an operator, e.g. `(1 + 2)`
     binop,
-    /// Logical negation `!foo`, desugared to a call to builtin Bool.not.
-    unary_op,
     /// This call is the result of desugaring string interpolation,
     /// e.g. "${first} ${last}" is transformed into `Str.concat(Str.concat(first, " "))` last.
     string_interpolation,
@@ -214,6 +214,7 @@ test "base tests" {
     std.testing.refAllDecls(@import("LowLevel.zig"));
     std.testing.refAllDecls(@import("memory_fault.zig"));
     std.testing.refAllDecls(@import("module_identity.zig"));
+    std.testing.refAllDecls(@import("SourceDigest.zig"));
     std.testing.refAllDecls(@import("parallel.zig"));
     std.testing.refAllDecls(post_check_task_executor);
     std.testing.refAllDecls(@import("Region.zig"));

@@ -100,7 +100,7 @@ fn constraints(self: *Self, snapshots: *const snapshot.Store, range: anytype) Al
         // independent requirements. Redirects preserve both facts.
         const entry = try self.raw_callables.getOrPut(self.gpa, constraint.source_fn_var);
         if (!entry.found_existing) entry.value_ptr.* = try self.store.freshRedirect(self.nodeVar(constraint.fn_content));
-        out.* = .{ .fn_name = constraint.fn_name, .fn_var = entry.value_ptr.*, .origin = constraint.origin };
+        out.* = .{ .fn_name = constraint.fn_name, .fn_var = entry.value_ptr.*, .origin = constraint.origin, .receiver = constraint.receiver };
     }
     return self.store.appendStaticDispatchConstraints(result);
 }
@@ -109,7 +109,7 @@ fn content(self: *Self, snapshots: *const snapshot.Store, captured: snapshot.Sna
     return switch (captured) {
         .err => .err,
         .recursive => unreachable, // identities were allocated before contents
-        .flex => |flex| .{ .flex = .{ .name = flex.name, .constraints = try self.constraints(snapshots, flex.constraints) } },
+        .flex => |flex| .{ .flex = .{ .name = flex.name, .constraints = try self.constraints(snapshots, flex.constraints), .literal = flex.literal } },
         .rigid => |rigid| .{ .rigid = .{ .name = rigid.name, .constraints = try self.constraints(snapshots, rigid.constraints) } },
         .alias => |alias| blk: {
             const args = try self.vars(snapshots, alias.vars);

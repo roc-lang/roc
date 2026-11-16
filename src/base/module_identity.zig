@@ -1,8 +1,9 @@
 //! Content-based module identity.
 //!
 //! A module's identity is a deep content hash: SHA-256 over the module's name,
-//! its source bytes, and the identity hashes of its resolved imports (a Merkle
-//! DAG over the transitive closure of module names and source bytes). It is a
+//! the digest of its source bytes (`SourceDigest`, BLAKE3-256), and the
+//! identity hashes of its resolved imports (a Merkle DAG over the transitive
+//! closure of module names and source bytes). It is a
 //! pure function of that closure—no coordinator-assigned display strings, no
 //! package names, no filesystem paths, no per-run state—so it satisfies the
 //! caching constraint that any id serialized in a stage's artifact must be a
@@ -28,10 +29,11 @@
 
 const std = @import("std");
 const Sha256 = @import("sha256.zig").Sha256;
+const SourceDigest = @import("SourceDigest.zig");
 
-/// The deep content hash of a module: SHA-256 of the module name, source
-/// bytes, and the sorted, deduplicated identity hashes of its resolved
-/// imports.
+/// The deep content hash of a module: SHA-256 of the module name, the digest
+/// of its source bytes, and the sorted, deduplicated identity hashes of its
+/// resolved imports.
 pub const Hash = [32]u8;
 
 /// Store-local dense index of a module identity hash in the owning store's
@@ -50,13 +52,14 @@ pub const Idx = enum(u32) {
 
 /// Domain separator so module identity hashes can never collide with other
 /// SHA-256 uses in the compiler (cache keys, type digests, ...).
-const domain_tag = "roc-module-content-identity-v1";
+const domain_tag = "roc-module-content-identity-v2";
 
 /// Maximum direct-import count handled without heap allocation.
 const inline_import_capacity = 32;
 
-/// Compute the deep content identity of a module from its name, source bytes,
-/// and the identity hashes of its resolved direct imports.
+/// Compute the deep content identity of a module from its name, the digest of
+/// its source bytes, and the identity hashes of its resolved direct imports.
+/// The source text is never read here; the module's one digest stands for it.
 ///
 /// Import hashes are sorted and deduplicated internally, so the result is a
 /// pure function of the SET of resolved import identities—independent of
@@ -65,7 +68,7 @@ const inline_import_capacity = 32;
 pub fn computeDeep(
     gpa: std.mem.Allocator,
     module_name: []const u8,
-    source: []const u8,
+    source_digest: SourceDigest,
     import_identities: []const Hash,
 ) std.mem.Allocator.Error!Hash {
     var inline_buf: [inline_import_capacity]Hash = undefined;
@@ -81,7 +84,7 @@ pub fn computeDeep(
     var hasher = Sha256.init(.{});
     hasher.update(domain_tag);
     hashLenPrefixed(&hasher, module_name);
-    hashLenPrefixed(&hasher, source);
+    hasher.update(&source_digest.bytes);
 
     var distinct: u32 = 0;
     for (sorted, 0..) |import_hash, i| {
@@ -122,10 +125,11 @@ test "computeDeep is order- and duplicate-insensitive over imports" {
     const gpa = std.testing.allocator;
     const a: Hash = @as([32]u8, @splat(1));
     const b: Hash = @as([32]u8, @splat(2));
+    const source = SourceDigest.of("x = 1");
 
-    const h1 = try computeDeep(gpa, "M", "x = 1", &.{ a, b });
-    const h2 = try computeDeep(gpa, "M", "x = 1", &.{ b, a });
-    const h3 = try computeDeep(gpa, "M", "x = 1", &.{ b, a, b, a });
+    const h1 = try computeDeep(gpa, "M", source, &.{ a, b });
+    const h2 = try computeDeep(gpa, "M", source, &.{ b, a });
+    const h3 = try computeDeep(gpa, "M", source, &.{ b, a, b, a });
     try std.testing.expectEqualSlices(u8, &h1, &h2);
     try std.testing.expectEqualSlices(u8, &h1, &h3);
 }
@@ -133,18 +137,42 @@ test "computeDeep is order- and duplicate-insensitive over imports" {
 test "computeDeep distinguishes name, source, and imports" {
     const gpa = std.testing.allocator;
     const a: Hash = @as([32]u8, @splat(1));
-    const base_hash = try computeDeep(gpa, "M", "x = 1", &.{a});
+    const source = SourceDigest.of("x = 1");
+    const base_hash = try computeDeep(gpa, "M", source, &.{a});
 
-    try std.testing.expect(!std.mem.eql(u8, &base_hash, &(try computeDeep(gpa, "N", "x = 1", &.{a}))));
-    try std.testing.expect(!std.mem.eql(u8, &base_hash, &(try computeDeep(gpa, "M", "x = 2", &.{a}))));
-    try std.testing.expect(!std.mem.eql(u8, &base_hash, &(try computeDeep(gpa, "M", "x = 1", &.{}))));
+    try std.testing.expect(!std.mem.eql(u8, &base_hash, &(try computeDeep(gpa, "N", source, &.{a}))));
+    try std.testing.expect(!std.mem.eql(u8, &base_hash, &(try computeDeep(gpa, "M", SourceDigest.of("x = 2"), &.{a}))));
+    try std.testing.expect(!std.mem.eql(u8, &base_hash, &(try computeDeep(gpa, "M", source, &.{}))));
 }
 
-test "computeDeep length-prefixes name and source (no concatenation ambiguity)" {
+test "computeDeep length-prefixes the name (no concatenation ambiguity)" {
     const gpa = std.testing.allocator;
-    const h1 = try computeDeep(gpa, "AB", "C", &.{});
-    const h2 = try computeDeep(gpa, "A", "BC", &.{});
+    // A name's tail never reads as the head of the fixed-width source digest
+    // that follows it.
+    var digest_bytes: [32]u8 = @splat('C');
+    const whole = SourceDigest{ .bytes = digest_bytes };
+    digest_bytes[0] = 'B';
+    const shifted = SourceDigest{ .bytes = digest_bytes };
+    const h1 = try computeDeep(gpa, "AB", whole, &.{});
+    const h2 = try computeDeep(gpa, "A", shifted, &.{});
     try std.testing.expect(!std.mem.eql(u8, &h1, &h2));
+}
+
+test "computeDeep reads the source through its digest alone" {
+    const gpa = std.testing.allocator;
+    const digest = SourceDigest.of("x = 1");
+    const import_hash: Hash = @as([32]u8, @splat(7));
+
+    var expected = Sha256.init(.{});
+    expected.update(domain_tag);
+    expected.update(&[_]u8{ 1, 0, 0, 0 });
+    expected.update("M");
+    expected.update(&digest.bytes);
+    expected.update(&[_]u8{ 1, 0, 0, 0 });
+    expected.update(&import_hash);
+
+    const actual = try computeDeep(gpa, "M", digest, &.{import_hash});
+    try std.testing.expectEqualSlices(u8, &expected.finalResult(), &actual);
 }
 
 test "computeDeep handles more imports than the inline buffer" {
@@ -153,8 +181,9 @@ test "computeDeep handles more imports than the inline buffer" {
     for (&many, 0..) |*h, i| {
         h.* = @as([32]u8, @splat(@intCast(i)));
     }
-    const h1 = try computeDeep(gpa, "M", "x = 1", &many);
+    const source = SourceDigest.of("x = 1");
+    const h1 = try computeDeep(gpa, "M", source, &many);
     std.mem.reverse(Hash, &many);
-    const h2 = try computeDeep(gpa, "M", "x = 1", &many);
+    const h2 = try computeDeep(gpa, "M", source, &many);
     try std.testing.expectEqualSlices(u8, &h1, &h2);
 }

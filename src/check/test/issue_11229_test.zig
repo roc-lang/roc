@@ -65,7 +65,7 @@ test "issue 11229 updating another field does not default an arithmetic receiver
     );
 }
 
-test "issue 11229 record update remains usable with heterogeneous user arithmetic" {
+test "issue 11229 record update remains usable with mixed-type user methods" {
     const src =
         \\Counter := { count: U32 }.{
         \\    times : Counter, U32 -> Counter
@@ -74,7 +74,7 @@ test "issue 11229 record update remains usable with heterogeneous user arithmeti
         \\    plus = |c, n| { count: c.count + n }
         \\}
         \\trigger = |state| {
-        \\    val = state.num * 10.U32 + 5.U32
+        \\    val = state.num.times(10.U32).plus(5.U32)
         \\    { ..state, num: val }
         \\}
         \\updated : Counter
@@ -133,5 +133,5 @@ test "issue 11229 expected shape does not erase real arithmetic obligations" {
     ;
     var env = try TestEnv.init("Test", src);
     defer env.deinit();
-    try env.assertFirstTypeError("Missing Method");
+    try env.assertFirstTypeError("Type Mismatch");
 }

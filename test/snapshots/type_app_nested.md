@@ -109,17 +109,15 @@ main! = |_| processNested([])
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 279)
-				(e-runtime-error (tag "erroneous_value_expr"))
-				(e-empty_list)))))
+			(e-runtime-error (tag "erroneous_value_expr")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt (type "List(Try(Str, Error)) -> List(Str)"))
-		(patt (type "_arg -> List(Str)")))
+		(patt (type "_arg -> _ret")))
 	(expressions
 		(expr (type "List(Try(Str, Error)) -> List(Str)"))
-		(expr (type "_arg -> List(Str)"))))
+		(expr (type "_arg -> _ret"))))
 ~~~

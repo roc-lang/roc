@@ -107,31 +107,7 @@ pub const Choice = struct {
 };
 
 /// The optimization strategy for the compilation of a Roc program
-pub const OptLevel = enum {
-    dev,
-    interpreter,
-    speed,
-    size,
-
-    /// What choosing the level means, for the help of flags that take one.
-    fn description(self: OptLevel) []const u8 {
-        return switch (self) {
-            .dev => "native dev backend, fast compilation",
-            .interpreter => "interpreted, no code generation",
-            .speed => "LLVM, optimized for execution speed",
-            .size => "LLVM, optimized for binary size",
-        };
-    }
-
-    /// Convert to the backend evaluation enum used by internal modules
-    pub fn toBackend(self: OptLevel) @import("eval").EvalBackend {
-        return switch (self) {
-            .interpreter => .interpreter,
-            .dev => .dev,
-            .size, .speed => .llvm,
-        };
-    }
-};
+pub const OptLevel = @import("lowering_policy.zig").OptLevel;
 
 /// Default optimization level for commands that favor fast compilation over
 /// fast output—`run`, `test`, `repl`, and `glue` all default here.
@@ -217,7 +193,14 @@ pub const CheckArgs = struct {
     root_source_url: ?[]const u8 = null, // internal: bundle URL provenance when the source was a URL or installed shorthand
     main_source_url: ?[]const u8 = null, // internal: bundle URL provenance when --main was a URL or installed shorthand
     opt: OptLevel = default_dev_opt, // accepted so one command line serves every command; checking ignores it
-    specialization_strategy: ?SpecializationStrategy = null, // the strategy whose evaluator completes compile-time roots; part of the checked-module cache identity
+    specialization_strategy: ?SpecializationStrategy = null, // accepted so one command line serves every command; checking ignores it
+};
+
+/// How a build that `roc` runs starts its published executable: the
+/// `argv[0]` the program sees and the arguments after it.
+pub const RunOutput = struct {
+    argv0: []const u8,
+    app_args: []const []const u8,
 };
 
 /// Arguments for `roc build`
@@ -241,6 +224,7 @@ pub const BuildArgs = struct {
     require_executable_output: bool = false, // reject static/shared library targets
     require_host_runnable_output: bool = false, // internal: reject targets that cannot run on this host
     suppress_build_status: bool = false, // suppress "Built..." output (used by `roc` execution)
+    run_output: ?RunOutput = null, // internal: start the published executable before releasing the build's state (used by `roc` execution)
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
     synthetic_output_basename: ?[]const u8 = null, // internal: default output name when the source was a shorthand/URL, not a path
     root_source_url: ?[]const u8 = null, // internal: bundle URL provenance when the source was a URL or installed shorthand
@@ -341,7 +325,7 @@ pub const ExperimentalLspArgs = struct {
 /// Arguments for `roc repl`
 pub const ReplArgs = struct {
     opt: OptLevel = default_dev_opt,
-    specialization_strategy: ?SpecializationStrategy = null,
+    specialization_strategy: ?SpecializationStrategy = null, // accepted so one command line serves every command; REPL evaluation ignores it
 };
 
 /// Arguments for `roc glue`
@@ -457,8 +441,8 @@ fn optLevelChoices(comptime levels: []const OptLevel) []const Choice {
 
 /// The values `--specialize` accepts, as `SpecializationStrategy.fromCliValue` reads them.
 const specialization_choices = [_]Choice{
-    .{ .name = "yes", .description = "lambda-set specialization (default)" },
-    .{ .name = "no", .description = "experimental boxy lowering" },
+    .{ .name = "yes", .description = "lambda-set specialization (the --opt=speed default)" },
+    .{ .name = "no", .description = "boxy lowering (the default otherwise)" },
 };
 
 /// A struct field's name, type and default, in the shape the argument checks read.
@@ -736,7 +720,7 @@ const specialize_flag: Flag = .{
     .form = .attached,
     .field = "specialization_strategy",
     .value_name = "<yes|no>",
-    .help = "Use lambda-set specialization (yes, default) or experimental boxy lowering (no)",
+    .help = "Use lambda-set specialization (yes, the --opt=speed default) or boxy lowering (no, the default otherwise)",
 };
 
 const target_flag: Flag = .{
@@ -857,6 +841,7 @@ const commands = [_]Command{
             "require_executable_output",
             "require_host_runnable_output",
             "suppress_build_status",
+            "run_output",
             "synthetic_output_basename",
             "root_source_url",
             "synthetic_default_platform",
@@ -3030,7 +3015,7 @@ test "golden help: roc --help" {
         \\
         \\Options:
         \\      --opt=<opt>                    Execution mode: dev (native dev backend, fast compilation), interpreter (interpreted, no code generation), speed (LLVM, optimized for execution speed), or size (LLVM, optimized for binary size) [default: dev]
-        \\      --specialize=<yes|no>          Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
+        \\      --specialize=<yes|no>          Use lambda-set specialization (yes, the --opt=speed default) or boxy lowering (no, the default otherwise)
         \\      --target=<target>              Target to compile for. A v1 in the name (x64v1musl) targets the oldest CPUs of that architecture. Defaults to native target with musl for static linking. One of:
         \\                                       x64musl, arm64musl, arm32musl                           - Linux (static, portable)
         \\                                       x64glibc, x64linux, arm64linux, arm64glibc, arm32linux  - Linux (dynamic, faster)
@@ -3073,7 +3058,7 @@ test "golden help: roc run --help" {
         \\
         \\Options:
         \\      --opt=<opt>                Execution mode: dev (native dev backend, fast compilation), interpreter (interpreted, no code generation), speed (LLVM, optimized for execution speed), or size (LLVM, optimized for binary size) [default: dev]
-        \\      --specialize=<yes|no>      Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
+        \\      --specialize=<yes|no>      Use lambda-set specialization (yes, the --opt=speed default) or boxy lowering (no, the default otherwise)
         \\      --target=<target>          Target to compile for. A v1 in the name (x64v1musl) targets the oldest CPUs of that architecture. Defaults to native target with musl for static linking. One of:
         \\                                   x64musl, arm64musl, arm32musl                           - Linux (static, portable)
         \\                                   x64glibc, x64linux, arm64linux, arm64glibc, arm32linux  - Linux (dynamic, faster)
@@ -3139,7 +3124,7 @@ test "golden help: roc build --help" {
         \\Options:
         \\      --output=<output>              The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
         \\      --opt=<opt>                    Build mode: dev (native dev backend, fast compilation), interpreter (interpreted, no code generation), speed (LLVM, optimized for execution speed), or size (LLVM, optimized for binary size) [default: speed]
-        \\      --specialize=<yes|no>          Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
+        \\      --specialize=<yes|no>          Use lambda-set specialization (yes, the --opt=speed default) or boxy lowering (no, the default otherwise)
         \\      --target=<target>              Target to compile for. A v1 in the name (x64v1musl) targets the oldest CPUs of that architecture. Defaults to native target with musl for static linking. One of:
         \\                                       x64musl, arm64musl, arm32musl                           - Linux (static, portable)
         \\                                       x64glibc, x64linux, arm64linux, arm64glibc, arm32linux  - Linux (dynamic, faster)
@@ -3219,7 +3204,7 @@ test "golden help: roc test --help" {
         \\
         \\Options:
         \\      --opt=<opt>                     Execution mode: dev (native dev backend, fast compilation), interpreter (interpreted, no code generation), speed (LLVM, optimized for execution speed), or size (LLVM, optimized for binary size) [default: dev]
-        \\      --specialize=<yes|no>           Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
+        \\      --specialize=<yes|no>           Use lambda-set specialization (yes, the --opt=speed default) or boxy lowering (no, the default otherwise)
         \\      --main=<main>                   The .roc file of the main app/package module to resolve dependencies from
         \\      --verbose                       Enable verbose output showing individual test results
         \\      --timings                       Show how long each compilation and test phase took
@@ -3246,7 +3231,7 @@ test "golden help: roc repl --help" {
         \\
         \\Options:
         \\      --opt=<opt>            Execution mode: dev (native dev backend, fast compilation), interpreter (interpreted, no code generation), speed (LLVM, optimized for execution speed), or size (LLVM, optimized for binary size) [default: dev]
-        \\      --specialize=<yes|no>  Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
+        \\      --specialize=<yes|no>  Use lambda-set specialization (yes, the --opt=speed default) or boxy lowering (no, the default otherwise)
         \\  -h, --help                 Print help
         \\
     );
@@ -3286,7 +3271,7 @@ test "golden help: roc glue --help" {
         \\
         \\Options:
         \\      --opt=<opt>            Compile and run the glue spec with dev (native dev backend, fast compilation), size (LLVM, optimized for binary size), or speed (LLVM, optimized for execution speed) [default: dev]
-        \\      --specialize=<yes|no>  Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
+        \\      --specialize=<yes|no>  Use lambda-set specialization (yes, the --opt=speed default) or boxy lowering (no, the default otherwise)
         \\      --no-cache             Disable compilation caching
         \\  -h, --help                 Print help
         \\

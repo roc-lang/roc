@@ -142,6 +142,7 @@ pub const Problem = union(enum) {
     match_alt_binder_missing: MatchAltBinderMissing,
     discarded_var_update: DiscardedVarUpdate,
     comptime_condition: ComptimeCondition,
+    generalization_nesting_too_deep: GeneralizationNestingTooDeep,
     derived_parser_error_row: DerivedParserErrorRow,
     derived_codec_open_record: DerivedCodecOpenRecord,
 
@@ -199,7 +200,7 @@ pub const PolymorphicRecursion = struct {
     region: base.Region,
 };
 
-/// Host-visible callable values must be directly boxed.
+/// Host-visible functions must be boxed, and `Iter` and `Stream` directly boxed.
 pub const HostedUnboxedFunction = struct {
     region: base.Region,
     path: ExtraStringIdx,
@@ -434,8 +435,8 @@ pub const ComptimeEvalError = struct {
 /// a formal parameter passed straight through nor a type without variables,
 /// so no finite set of instantiations covers the declaration).
 pub const InvalidNominalDeclRecursion = struct {
-    /// The declaration statement var (source of the report's region).
-    decl_var: Var,
+    /// The declaration statement's region, which the report highlights.
+    region: base.Region,
     /// Snapshot of the offending cyclic type for display.
     snapshot: SnapshotContentIdx,
     /// The declared type's name.
@@ -451,6 +452,8 @@ pub const InvalidNominalDeclRecursion = struct {
 /// Used for recursion errors, invalid extension types, etc.
 pub const VarWithSnapshot = struct {
     var_: Var,
+    /// The region the report highlights.
+    region: base.Region,
     snapshot: SnapshotContentIdx,
 
     /// If this type was found in a top-level def, the name of that def
@@ -653,6 +656,88 @@ pub const UnusedValue = struct {
 
 // type mismatch //
 
+/// Why the record of a use of a binding that quantified the record's tail
+/// could not become the type the use asked for (design.md "Uncommitted
+/// Record Tails"). A use may close that record or make it a nominal type
+/// with exactly its fields stored the same way; the report names what else
+/// the use asked for.
+pub const RecordTailRefusal = union(enum) {
+    /// The nominal type declares unnamed fields, so its values are not
+    /// stored like the record.
+    padded_nominal: PaddedNominal,
+    /// The use asked for an optional or defaulted field the record was
+    /// built without.
+    added_field: AddedField,
+    /// The binding compared or hashed the record as a plain one, so it stays
+    /// one (design.md "Methods On Open Rows"). The payload is the nominal
+    /// type the record was to become.
+    compared_plain: Ident.Idx,
+    /// The binding compared or hashed the tag union as a plain one, so it
+    /// stays one. The payload is the nominal type the tag union was to
+    /// become.
+    compared_plain_tags: Ident.Idx,
+    /// A nominal type over a record met a committed plain record (one an
+    /// annotation wrote, or one committed after it was built): a plain record
+    /// never becomes a nominal type, and a nominal type is never a plain
+    /// record.
+    plain_record: PlainRow,
+    /// A nominal type over a tag union met a committed plain tag union.
+    plain_tag_union: PlainRow,
+
+    /// Which refusal this is.
+    pub const Kind = std.meta.Tag(RecordTailRefusal);
+
+    /// A record the use asked to become a nominal type that declares unnamed
+    /// fields.
+    pub const PaddedNominal = struct {
+        /// The nominal type the record was to become.
+        nominal: Ident.Idx,
+        /// The record is one the binding takes apart with a record pattern,
+        /// rather than one it builds.
+        taken_apart: bool,
+        /// The nominal type has an optional or defaulted field the record
+        /// lacks, so a nominal record pattern for it must end with `..`.
+        omits_omittable_field: bool,
+    };
+
+    /// A record the use asked for a field it lacks.
+    pub const AddedField = struct {
+        /// The field the use asked for that the record lacks.
+        field: Ident.Idx,
+        /// The nominal type the record was to become, when it was one.
+        nominal: ?Ident.Idx,
+        /// The record is one the binding takes apart with a record pattern,
+        /// rather than one it builds.
+        taken_apart: bool,
+    };
+
+    /// A nominal type that met a committed plain row of its own kind, whose
+    /// labels fit the nominal's.
+    pub const PlainRow = struct {
+        /// The nominal type.
+        nominal: Ident.Idx,
+        /// Which side of the relation was the plain row.
+        plain_side: Side,
+        /// The nominal type declares unnamed fields.
+        nominal_padded: bool,
+        /// The nominal type is opaque and this module is not its module, so
+        /// its values can be neither built nor taken apart here.
+        nominal_opaque: bool,
+
+        pub const Side = enum { expected, actual };
+    };
+
+    /// Whether the record is one the binding takes apart with a record
+    /// pattern, rather than one it builds.
+    pub fn takenApart(self: RecordTailRefusal) bool {
+        return switch (self) {
+            .padded_nominal => |padded| padded.taken_apart,
+            .added_field => |added| added.taken_apart,
+            .compared_plain, .compared_plain_tags, .plain_record, .plain_tag_union => false,
+        };
+    }
+};
+
 /// Why a failed relation follows from a body-local type leaving the
 /// functions its identity depends on.
 pub const LocalTypeEscapeCause = union(enum) {
@@ -671,6 +756,9 @@ pub const LocalTypeEscapeCause = union(enum) {
 /// specific error depending on context.
 pub const TypeMismatch = struct {
     types: TypePair,
+    /// The region of the actual operand, which the report highlights unless
+    /// its context names a region of its own.
+    actual_region: base.Region,
     /// Where this type mismatch occurred (for contextual error messages)
     context: Context = .none,
     /// Exact structural evidence retained by unification so reports can show
@@ -697,6 +785,9 @@ pub const TypeMismatch = struct {
     /// once the escape rule reports that type (design.md "Body-Local Types
     /// Stay In Their Context").
     local_type_escape: ?LocalTypeEscapeCause = null,
+    /// Set when the relation failed because a use's record asked for more
+    /// than the record its binding built or took apart.
+    record_tail_refusal: ?RecordTailRefusal = null,
     /// How the report suggests turning the actual value into the expected
     /// builtin `Str`.
     str_conversion: StrConversion = .none,
@@ -748,9 +839,6 @@ pub const TypePair = struct {
     expected_snapshot: SnapshotContentIdx,
     actual_var: Var,
     actual_snapshot: SnapshotContentIdx,
-    /// The specific region where this constraint originated from (e.g., dot access expression)
-    /// If present, this region should be highlighted instead of the variable's region
-    constraint_origin_var: ?Var = null,
 };
 
 /// Exact mismatch operands selected by unification after a record-backed
@@ -797,6 +885,14 @@ pub const NonExhaustiveDestructure = struct {
     missing_patterns: MissingPatternsRange,
     /// This was discovered by compile-time evaluation taking the generated miss branch.
     empirical: bool = false,
+};
+
+/// Source nested generalization scopes deeper than a type descriptor's rank
+/// can record (`types.Rank.deepest`). `region` is the definition or
+/// expression whose scope first went past the limit. Reported once per
+/// module.
+pub const GeneralizationNestingTooDeep = struct {
+    region: base.Region,
 };
 
 /// A conditional expression was known while checking, so it will always make the same choice.
@@ -896,6 +992,8 @@ pub const StaticDispatch = union(enum) {
 pub const LocalValueMethod = struct {
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
+    /// The region of the dispatch's callable, which the report highlights.
+    fn_region: base.Region,
     method_name: Ident.Idx,
 };
 
@@ -973,8 +1071,14 @@ pub const UnresolvedDispatcher = struct {
 /// Error when you try to static dispatch on something that's not a nominal type
 pub const DispatcherNotNominal = struct {
     dispatcher_var: Var,
+    /// The dispatcher's region, which a literal's report shows when the
+    /// literal has no region of its own.
+    dispatcher_region: base.Region,
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
+    /// The region of the constraint's callable, highlighted when there is no
+    /// `owner_region`.
+    fn_region: base.Region,
     method_name: Ident.Idx,
     origin: types_mod.StaticDispatchConstraint.Origin,
     /// Region of the expression that owns the failed obligation (see
@@ -996,9 +1100,14 @@ pub const DispatcherNotNominal = struct {
 /// Error when you try to static dispatch but the dispatcher does not have that method
 pub const DispatcherDoesNotImplMethod = struct {
     dispatcher_var: Var,
+    /// The dispatcher's region (see `DispatcherNotNominal.dispatcher_region`).
+    dispatcher_region: base.Region,
     dispatcher_snapshot: SnapshotContentIdx,
     dispatcher_type: DispatcherType,
     fn_var: Var,
+    /// The region of the constraint's callable, highlighted when there is no
+    /// `owner_region`.
+    fn_region: base.Region,
     method_name: Ident.Idx,
     origin: types_mod.StaticDispatchConstraint.Origin,
     /// Region of the expression that owns the failed obligation: the use of a
@@ -1012,9 +1121,6 @@ pub const DispatcherDoesNotImplMethod = struct {
     /// Source region of the string literal for `from_literal` constraints of
     /// kind `quote` or `interpolation`
     string_literal_region: ?base.Region = null,
-    /// Set when the dispatcher is a record's or tag union's `..` extension,
-    /// whose obligation came from deriving the method for that whole type.
-    row_extension_of: ?RowExtension = null,
     /// How the report suggests turning the literal into the builtin `Str`
     /// when the dispatcher is `Str`.
     str_conversion: StrConversion = .none,
@@ -1024,15 +1130,18 @@ pub const DispatcherDoesNotImplMethod = struct {
     /// Set when the dispatcher is a context variable of a body-local type
     /// (`TypeMismatch.local_type_escape`).
     local_type_escape: ?LocalTypeEscapeCause = null,
+    /// Set when the method is called on a record or tag union whose row ends
+    /// in a row variable an annotation names, whose `where` clause lacks it.
+    annotated_row: ?AnnotatedRow = null,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };
 
-    pub const RowExtension = struct {
-        /// The record or tag union the extension belongs to.
-        row_snapshot: SnapshotContentIdx,
-        /// The extension's written name; null for an anonymous `..`.
-        ext_name: ?Ident.Idx,
+    pub const AnnotatedRow = struct {
+        /// The record or tag union the method is called on.
+        value_snapshot: SnapshotContentIdx,
+        /// The row variable's written name; null for an anonymous `..`.
+        row_name: ?Ident.Idx,
         kind: Kind,
 
         pub const Kind = enum { record, tag_union };
@@ -1045,6 +1154,9 @@ pub const TypeDoesNotSupportEquality = struct {
     dispatcher_var: Var,
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
+    /// The region of the constraint's callable, highlighted when there is no
+    /// `owner_region`.
+    fn_region: base.Region,
     origin: types_mod.StaticDispatchConstraint.Origin,
     /// Region of the expression that owns the failed obligation (see
     /// `DispatcherDoesNotImplMethod.owner_region`).
@@ -1056,6 +1168,9 @@ pub const TypeDoesNotSupportEquality = struct {
 pub const TypeDoesNotSupportMap = struct {
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
+    /// The region of the constraint's callable, highlighted when there is no
+    /// `owner_region`.
+    fn_region: base.Region,
     method_name: Ident.Idx,
     /// Region of the expression that owns the failed obligation (see
     /// `DispatcherDoesNotImplMethod.owner_region`).
@@ -1069,6 +1184,9 @@ pub const TypeDoesNotSupportMap = struct {
 pub const UndeterminedCodecType = struct {
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
+    /// The region of the constraint's callable, highlighted when there is no
+    /// `owner_region`.
+    fn_region: base.Region,
     method_name: Ident.Idx,
     /// Region of the expression that owns the failed obligation (see
     /// `DispatcherDoesNotImplMethod.owner_region`).
@@ -1083,6 +1201,8 @@ pub const UndeterminedCodecType = struct {
 pub const RecursiveDispatch = struct {
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
+    /// The region of the dispatch's callable, which the report highlights.
+    fn_region: base.Region,
     method_name: Ident.Idx,
     grown_from_snapshot: ?SnapshotContentIdx = null,
 };
@@ -1092,6 +1212,8 @@ pub const RecursiveDispatch = struct {
 /// Error when you try to use an opaque nominal type constructor
 pub const CannotAccessOpaqueNominal = struct {
     var_: Var,
+    /// The region of the use, which the report highlights.
+    region: base.Region,
     nominal_type_name: Ident.Idx,
 };
 
@@ -1104,6 +1226,8 @@ pub const CannotAccessOpaqueNominal = struct {
 /// 3. instantiateVar and copyVar preserve the nominal_type structure
 pub const NominalTypeResolutionFailed = struct {
     var_: Var,
+    /// The region of the use, which the report highlights.
+    region: base.Region,
     nominal_type_decl_var: Var,
 };
 
@@ -1111,6 +1235,8 @@ pub const NominalTypeResolutionFailed = struct {
 /// not a nominal type, so there is no nominal type to construct or match.
 pub const AliasNamesNoNominalType = struct {
     var_: Var,
+    /// The region of the use, which the report highlights.
+    region: base.Region,
     alias_name: Ident.Idx,
 };
 
