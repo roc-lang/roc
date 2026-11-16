@@ -9118,11 +9118,8 @@ body other than the body's local procedures it refers to (a sibling method
 it calls), and built from a declaration context each of those is itself
 built from the same context. A body building the dictionaries of a
 call of its own procedure builds its own local procedures from its worker
-chain, since they are this body's values. Restoring a stored generated runtime builds
-those values in the declaration context of the instance of the stored value's
-procedure that built it, which the value records, since compile-time
-evaluation stores none of them. Building a local procedure's value anywhere
-else is a compiler bug.
+chain, since they are this body's values. Building a local procedure's value
+anywhere else is a compiler bug.
 
 Boxy generated encoders call the same format methods, with the same callback
 protocols, as the checked derivation contract names. A tag union of any
@@ -9433,8 +9430,7 @@ variable. A compile-time constant holding such a codec's runtime stores it in
 each strategy's own form (Stored Function Values): `.boxy` stores the runtime
 worker's recipe, whose captures include the forwarded dictionaries the
 constructor captured, and `.lss` stores the generated runtime with the evidence
-of the procedure that built it, which Monotype restores it against. Neither strategy restores the other's function values, so Boxy never
-rebuilds a family's forwarded dictionaries from an `.lss` stored runtime.
+of the procedure that built it, which Monotype restores it against.
 
 A `ParseTagUnionSpec` describes exactly one union. A payload that is itself a
 tag union is parsed with that union's own spec, never with the enclosing
@@ -9548,19 +9544,10 @@ a value its app supplied for a requirement (`provided = required`), which was
 lowered from the app's bodies, and the platform's checked key covers its
 platform/app relation. The stored function was lowered from bodies that
 closure reaches, so one of its modules recorded an equal contract.
-Boxy resolves a stored function's codec dictionary edge from the same module,
-and builds the generated codec worker in it: the dictionary's requirement comes
-from the template's module and the shape from the use's module, and neither
-need hold the contract. A generic method selected for that dictionary, such as
-`List.encoder_for`, names its item and its format only in the encoder it
-returns, so Boxy relates the method to the requirement's position at the call,
-and the method's own codec requirements are read at what that relation binds.
 A variable of the template that built a stored nested function can reach neither
 the function's type nor its captures, as the format of an encoder a generic method
 returned does not, so the function keeps its template specialization's concrete
-type (`ConstFn.owner_fn_ty`) and Boxy relates the template to it. Relating a
-requirement to its selected method then binds the variables only that requirement
-names, for dictionaries and descriptors alike. A
+type (`ConstFn.owner_fn_ty`), which Monotype restores the function's owner at. A
 generated codec runtime body reads its edge in that body's module when that
 module holds an equal contract; otherwise, as for a custom format's contract
 reached through a Builtin method, it reads the edge the same way, from the storing
@@ -17309,8 +17296,7 @@ does not discharge stay variables of the family: a rigid tail names a row the
 enclosing scope chooses, and the other two may be a format's own error type or
 a producer's. Widening is the same conversion as any sealed result's, at the
 one place both rows are known: a family's constructor is adapted to the
-callable type of its use (`constructorAt`), and a stored runtime restored from
-its captures to the stored function's type (`restoreRuntime`).
+callable type of its use (`constructorAt`).
 
 A conversion worker belongs to the module that emits it and is memoized
 within that module only: two modules converting the same pair each carry
@@ -19221,7 +19207,9 @@ from that view without traversing stored graphs or types. A missing function
 representation is pending even when the other strategy has completed its value.
 Coordinator object eligibility, evaluation selection and Boxy reads use this
 same view. Pending reads use the existing compile-time root slots; runtime
-lowering never reconstructs another strategy's callable captures. Non-function
+lowering never reconstructs another strategy's callable captures, so Boxy
+restoring an `.lss` function value (`ConstValue.fn_value`) is a compiler
+invariant violation. Non-function
 values remain shared. Storing another representation replaces that root's
 previous debug observations rather than replaying both copies in one command.
 The baked Builtin producer completes both function representations before

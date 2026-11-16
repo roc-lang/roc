@@ -30,7 +30,6 @@ const layouts_mod = @import("layouts.zig");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
-const ExprId = check.CheckedBodies.ExprId;
 const static_dispatch = check.StaticDispatchRegistry;
 const LIR = lir_core.LIR;
 const LocalId = LIR.LocalId;
@@ -850,20 +849,6 @@ pub fn dictionary(b: *Builder, structural: static_dispatch.StructuralEvidence) A
     return try constructorAt(b, family, id, try b.convert(structural.callable_ty));
 }
 
-/// The dictionary of generated derivation `id` of `module_index` at the
-/// method callable type `callable`, for structural evidence an `.lss` stored
-/// function value recorded. A family with forwarded calls takes its
-/// dictionaries from the evidence of the use building it, which only a live
-/// use or a `.boxy` recipe's captures supply: Boxy never restores an `.lss`
-/// function value (design.md "Stored Function Values").
-pub fn dictionaryAt(b: *Builder, module_index: ModuleIndex, id: static_dispatch.GeneratedCodecDerivationId, callable: TypeId) Allocator.Error!Body.Word {
-    const family = try familyFor(b.program, module_index, id);
-    if (b.program.codec.families.items[family].forwarded_count != 0) {
-        invariant("Boxy restored a generated codec with forwarded calls from an .lss stored function value");
-    }
-    return try constructorAt(b, family, id, callable);
-}
-
 /// A family's constructor at a use whose constructor type is `actual`:
 /// the immortal callable capturing the family's local procedure values at
 /// the use's types and the dictionaries the use's evidence supplies for its
@@ -911,22 +896,6 @@ fn constructorAt(b: *Builder, family: u32, use_id: DerivationId, actual: TypeId)
     return try b.adaptDictionary(composed, try b.program.substitute(b.allocator, fam_.constructor_fn, bound), actual);
 }
 
-/// The function values of a family's local procedures in the active
-/// declaration, for restoring an `.lss` stored generated runtime. A family's
-/// forwarded dictionaries come from the evidence of the use building it,
-/// which only a live use or a `.boxy` recipe's captures supply: Boxy never
-/// restores an `.lss` function value (design.md "Stored Function Values").
-pub fn localValues(b: *Builder, family: u32, bound: []const TypeId, out: []LocalId) Allocator.Error!void {
-    const fam_ = b.program.codec.families.items[family];
-    const table = b.view.view.static_dispatch_plans;
-    for (fam_.locals.items, out) |local, *value| {
-        value.* = switch (local.source) {
-            .local_proc => |node| try b.localMethodValue(table.evidenceNode(node), try b.program.substitute(b.allocator, local.fn_ty, bound)),
-            .forwarded => invariant("Boxy restored a generated codec with forwarded calls from an .lss stored runtime"),
-        };
-    }
-}
-
 /// A structural `parser_for`/`encoder_for` dispatch: the derivation's
 /// constructor applied to the encoding operand.
 pub fn dispatch(b: *Builder, call_plan: static_dispatch.StaticDispatchCallPlan, operands: []const static_dispatch.StaticDispatchOperand, operand_types: []const TypeId, result_ty: TypeId) Allocator.Error!void {
@@ -938,33 +907,6 @@ pub fn dispatch(b: *Builder, call_plan: static_dispatch.StaticDispatchCallPlan, 
     try b.push(.{ .finish_erased_call = .{ .fn_ty = fn_ty, .arg_count = 1, .result = result_ty } });
     try b.pushOperand(operands[0], operand_types[0]);
     try b.pushValue(constructor);
-}
-
-/// A stored structural edge read in the module holding it.
-pub const StoredEdge = struct { module: ModuleIndex, callable_ty: checked.CheckedTypeId, id: ?DerivationId };
-
-/// The checked edge a stored function's structural evidence names. A codec
-/// edge reads as the first module of the storing module's stored-value
-/// closure (`StoredValueClosure`) that holds a contract with the edge's
-/// content and checked roots with its dispatcher and callable keys. The
-/// stored function was lowered from bodies that closure reaches, so one of
-/// its modules recorded the contract.
-pub fn storedEdge(b: *Builder, source: lower.ConstSource, edge: check.ConstStore.CheckedStructuralEdge) Allocator.Error!StoredEdge {
-    const codec = switch (edge) {
-        .recorded => |recorded| return .{
-            .module = b.program.moduleByKey(.{ .bytes = recorded.view.bytes }).index,
-            .callable_ty = recorded.callable_ty,
-            .id = recorded.generated_codec_derivation.get(),
-        },
-        .codec => |codec| codec,
-    };
-    var closure = StoredValueClosure{ .program = b.program, .allocator = b.allocator };
-    defer closure.deinit();
-    try closure.start(source.module);
-    while (try closure.next()) |module| {
-        if (try edgeIn(b.program.module(module), codec)) |found| return .{ .module = module, .callable_ty = found.callable_ty, .id = found.id };
-    }
-    invariant("a stored codec edge's contract was not held by its storing module's stored-value closure");
 }
 
 /// The modules whose bodies a module's stored values can come from, of those
@@ -1030,83 +972,6 @@ pub fn storedPieceHome(program: *Program, allocator: Allocator, store_module: Mo
         }
     }
     invariant("a stored codec piece's derivation was not held by its storing module's stored-value closure");
-}
-
-fn edgeIn(view: *const types.ModuleView, codec: check.ConstStore.StoredCodecEdge) Allocator.Error!?struct { callable_ty: checked.CheckedTypeId, id: DerivationId } {
-    _ = (try view.types().rootForKey(codec.dispatcher_key)) orelse return null;
-    const callable_ty = (try view.types().rootForKey(codec.callable_key)) orelse return null;
-    for (view.view.static_dispatch_plans.generated_codec_derivations.items(), 0..) |contract, index| {
-        if (std.mem.eql(u8, &contract.content.bytes, &codec.content.bytes)) return .{ .callable_ty = callable_ty, .id = @fromBackingInt(@intCast(index)) };
-    }
-    return null;
-}
-
-/// Restore a stored generated runtime: its family's runtime callable over
-/// the stored encoding and renamed names. Compile-time evaluation numbered
-/// those captures in the family's name order after the encoding.
-pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.ConstStore.ConstFnId, owner: check.CheckedNames.ProcTemplate, expr: ExprId, fn_ty: TypeId) Allocator.Error!void {
-    const program = b.program;
-    const stored = program.constStore(source).getFn(fn_id);
-    const owner_view = program.moduleByKey(.{ .bytes = owner.artifact.bytes });
-    const plan_id = switch (owner_view.bodies().exprData(expr)) {
-        .dispatch_call, .type_dispatch_call => owner_view.bodies().dispatchPlan(@backingInt(expr)) orelse invariant("a stored generated codec runtime's dispatch has no plan"),
-        .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a stored generated codec runtime does not name a dispatch"),
-    };
-    const plan = owner_view.view.static_dispatch_plans.plans.items()[@backingInt(plan_id)];
-    // A dispatch on a constrained variable reaches its derivation through
-    // the evidence the stored value's procedure was instantiated with.
-    const derivation_module, const derivation = if (plan.generated_codec_derivation.get()) |id| .{ owner_view.index, id } else switch (plan.resolution) {
-        .evidence_dependent => |dependent| blk: {
-            var frame_index = stored.evidence_frame_head orelse invariant("a stored generated codec runtime has no evidence");
-            for (0..dependent.index.depth) |_| frame_index = stored.evidence_frames[frame_index].parent.get() orelse
-                invariant("a stored generated codec runtime's evidence has fewer frames than its dispatch names");
-            const frame = stored.evidence_frames[frame_index];
-            if (dependent.index.index >= frame.roots_len) invariant("a stored generated codec runtime's evidence frame lacks its dispatch's parameter");
-            const roots = try b.storedEvidenceRoots(stored.evidence, frame.roots_start, frame.roots_len);
-            defer b.allocator.free(roots);
-            const structural = switch (stored.evidence.nodes[roots[dependent.index.index]]) {
-                .structural => |index| stored.evidence.structural(index).*,
-                .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => invariant("a stored generated codec runtime's evidence is not a structural derivation"),
-            };
-            const edge = try storedEdge(b, source, structural.checked orelse invariant("stored structural codec evidence records no checked edge"));
-            break :blk .{ edge.module, edge.id orelse invariant("stored structural codec evidence names no generated derivation") };
-        },
-        .direct_pending, .direct_closed, .direct_parametric, .structural, .checked_error, .@"unreachable" => invariant("a stored generated codec runtime's dispatch names no derivation"),
-    };
-    const family = try familyFor(program, derivation_module, derivation);
-    const worker = try runtimeWorker(program, family);
-    const captures = try runtimeCaptures(program, family);
-    const fam_ = program.codec.families.items[family];
-    const bound = try b.relateVariables(fam_.runtime_fn, fn_ty, fam_.env.vars.len);
-    defer b.allocator.free(bound);
-    const descs = try b.descWords(bound);
-    try b.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len), .descs = descs, .dicts = &.{}, .capture_types = captures, .worker_ty = try program.substitute(b.allocator, fam_.runtime_fn, bound), .ty = fn_ty } });
-    // The local procedures' function values follow the names; compile-time
-    // evaluation stores none of them, as a local procedure is a procedure
-    // of its declaring body, not a value the runtime holds. They are built
-    // in the declaration context of the stored value's procedure, which
-    // declares them, at the instance the value records.
-    const stored_count = 1 + fam_.names.items.len;
-    if (fam_.locals.items.len != 0) {
-        if (fam_.module != b.module) invariant("a stored generated codec calling local procedures is restored outside the module declaring them");
-        const values = try b.allocator.alloc(LocalId, fam_.locals.items.len);
-        defer b.allocator.free(values);
-        try b.storedRuntimeLocals(source, stored, owner, values, family, bound);
-        var local_index = values.len;
-        while (local_index > 0) {
-            local_index -= 1;
-            try b.push(.{ .push_value = values[local_index] });
-        }
-    }
-    var index = stored_count;
-    while (index > 0) {
-        index -= 1;
-        const needle = check.CheckedIds.CaptureId.generatedCheck(@intCast(index));
-        const node = for (stored.captures) |capture| {
-            if (capture.id == needle) break capture.value;
-        } else invariant("a stored generated codec runtime lacks one of its captures");
-        try b.push(.{ .restore = .{ .source = source, .node = node, .ty = captures[index] } });
-    }
 }
 
 /// The body of an intrinsic wrapper template's worker, whose explicit
