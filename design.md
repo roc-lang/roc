@@ -2315,9 +2315,10 @@ expression is data.
 
 A listed expression is read exactly as the stored constant its root would
 have held, so runtime code is unchanged: lowering reads an aggregate from
-immutable static data, and builds an immediate (a scalar, a discriminant-only
-tag, a small string under `.lss`, or a zero-sized value under `.boxy`) in
-place, which allocates nothing. The static data comes from a closed static
+immutable static data, and builds an immediate in place, which allocates
+nothing: a scalar (under `.lss` a string only when it is small, under `.boxy`
+any string, whose literal backing is image data too), a discriminant-only tag,
+or under `.boxy` a zero-sized value. The static data comes from a closed static
 initializer that builds the expression's value from its literals, which
 static data materialization evaluates at compile time into frozen image
 data with the static reference count; no runtime constructor runs, a read
