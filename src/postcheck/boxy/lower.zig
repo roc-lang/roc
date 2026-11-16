@@ -1486,7 +1486,11 @@ pub const Program = struct {
         const line = base.RegionInfo.lineIdx(line_starts, offset);
         const column = base.RegionInfo.columnIdx(line_starts, line, offset) catch
             invariant("checked node region resolved to an invalid line/column position");
-        return .{ .file = self.source_files[@backingInt(index)], .line = line + 1, .column = column + 1 };
+        const user_line = if (view.view.module_env.staged_source_map) |map|
+            map.userLineIdx(line, offset) orelse return base.SourceLoc.none
+        else
+            line;
+        return .{ .file = self.source_files[@backingInt(index)], .line = user_line + 1, .column = column + 1 };
     }
 
     /// The worker for a procedure template, requested if new.

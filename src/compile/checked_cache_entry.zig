@@ -249,6 +249,7 @@ pub fn restoreTyping(context: *Context, env: *ModuleEnv) Allocator.Error!?check.
     };
     try check.CheckingDependencies.bindOwners(&cached, &context.scope);
     cached.qualified_module_name = env.qualified_module_name;
+    cached.staged_source_map = env.staged_source_map;
     // The metadata returned below also reads the entry, which lives as
     // long as the environment.
     cached.loaded_entry = data.intoLoadedEntry();

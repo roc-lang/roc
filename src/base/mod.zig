@@ -27,6 +27,7 @@ comptime {
 pub const RegionInfo = @import("RegionInfo.zig");
 pub const SourceLoc = @import("source_loc.zig").SourceLoc;
 pub const SourceFileEntry = @import("source_loc.zig").SourceFileEntry;
+pub const StagedSourceMap = @import("source_loc.zig").StagedSourceMap;
 pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");
 pub const post_check_task_executor = @import("post_check_task_executor.zig");
@@ -128,6 +129,7 @@ test {
     std.testing.refAllDecls(@import("roc_version.zig"));
     std.testing.refAllDecls(@import("typo.zig"));
     std.testing.refAllDecls(line_record);
+    std.testing.refAllDecls(@import("source_loc.zig"));
 }
 
 /// Whether a function calls itself.

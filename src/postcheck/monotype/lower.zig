@@ -34005,10 +34005,14 @@ const BodyContext = struct {
         cursor.* = .{ .line_starts = line_starts, .line = line };
         const column = base.RegionInfo.columnIdx(line_starts, line, offset) catch
             Common.invariant("checked node region resolved to an invalid line/column position");
+        const user_line = if (self.view.module_env.staged_source_map) |map|
+            map.userLineIdx(line, offset) orelse return base.SourceLoc.none
+        else
+            line;
         return .{
             .file = self.source_file_id orelse
                 Common.invariant("expression-capable body context had no source-file identity"),
-            .line = line + 1,
+            .line = user_line + 1,
             .column = column + 1,
         };
     }

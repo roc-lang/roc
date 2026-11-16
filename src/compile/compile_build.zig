@@ -636,6 +636,18 @@ pub const BuildEnv = struct {
         self.synthetic_root_header_lines = header_lines;
     }
 
+    /// How the synthetic root's lines map to the user's file. The staging
+    /// keeps the user's source byte-for-byte after its header, so whatever
+    /// follows it is appended wiring.
+    fn syntheticRootSourceMap(self: *const BuildEnv) base.StagedSourceMap {
+        const original = self.synthetic_root_original_source orelse
+            return .{ .header_lines = self.synthetic_root_header_lines, .footer_start = std.math.maxInt(u32) };
+        return .{
+            .header_lines = self.synthetic_root_header_lines,
+            .footer_start = @intCast(self.synthetic_root_header_len + original.len),
+        };
+    }
+
     /// Declare that the root is a staged copy of the user's file at
     /// `user_path`; see the `staged_entry_user_path` field.
     pub fn setStagedEntryUserPath(self: *BuildEnv, user_path: []const u8) void {
@@ -952,7 +964,11 @@ pub const BuildEnv = struct {
         );
         coord.source_pin_version = self.source_pin_version;
         if (self.staged_entry_user_path) |user_path| {
-            if (self.discovered_root_abs) |staged_path| coord.staged_entry = .{ .staged_path = staged_path, .user_path = user_path };
+            if (self.discovered_root_abs) |staged_path| coord.staged_entry = .{
+                .staged_path = staged_path,
+                .user_path = user_path,
+                .source_map = self.syntheticRootSourceMap(),
+            };
         }
         // Enable hosted transform for platform modules - converts e_anno_only to e_hosted_lambda
         // This is required for roc build so that hosted functions can be called at runtime
