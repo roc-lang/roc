@@ -708,6 +708,23 @@ pub fn listIntTemplateWorkerIdentity(link_name: [32]u8, template: checked.Templa
     return .{ .bytes = hasher.finalResult() };
 }
 
+/// What names the worker at `binding` of the template named `template`
+/// within its module, whatever names the module: a stored function's recipe
+/// names a template's module by an entry of its module table, which the
+/// constant store renames as the reading lowering names modules
+/// (`ConstStore.hashGraph`), so the recipe's bytes after that table name
+/// no module themselves.
+pub fn templateNameDigest(template: checked.TemplateName, binding: TemplateBinding) [32]u8 {
+    var hasher = base.TypeDigestHasher.init();
+    hasher.update("roc.boxy.template_name.v1");
+    hashTemplateName(&hasher, template);
+    switch (binding) {
+        .generic => hasher.update(&.{0}),
+        .list_int => |item| hasher.update(&.{ 1, @backingInt(item) }),
+    }
+    return hasher.finalResult();
+}
+
 fn hashTemplateName(hasher: *base.TypeDigestHasher, template: checked.TemplateName) void {
     hasher.update(&.{@backingInt(std.meta.activeTag(template))});
     switch (template) {
@@ -1158,6 +1175,12 @@ pub const Program = struct {
             .generic => templateWorkerIdentity(self.modules.linkName(module_index), name),
             .list_int => |item| listIntTemplateWorkerIdentity(self.modules.linkName(module_index), name, item),
         };
+    }
+
+    /// What names module `module_index`'s template worker for `template` at
+    /// `binding` within the module (`templateNameDigest`).
+    pub fn templateNameWithin(self: *const Program, module_index: ModuleIndex, template: checked_names.CheckedProcedureTemplateId, binding: TemplateBinding) [32]u8 {
+        return templateNameDigest(self.module(module_index).view.templateName(template), binding);
     }
 
     /// The identity of the worker of module `module_index`'s default at
