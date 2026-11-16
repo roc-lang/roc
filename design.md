@@ -72,7 +72,7 @@ types and the descriptors in scope.
 ## UTF-8 validation
 
 `Str.from_utf8` and `Str.from_utf8_lossy` share one Zig builtin validator,
-`validateUtf8` in `src/builtins/str.zig`. It accepts exactly the well-formed
+`validate` in `src/builtins/utf8.zig`. It accepts exactly the well-formed
 sequences of Unicode Table 3-7 and, for ill-formed input, returns the zero-based
 start index of the first ill-formed sequence and its problem. The problem is
 decided in a fixed order: a byte that is neither ASCII nor C0-F7 is
@@ -82,16 +82,49 @@ F0-F7: 4), and a sequence running past the end of the input is
 outside 80-BF is `ExpectedContinuation`; otherwise the lead and second byte
 decide `OverlongEncoding`, `EncodesSurrogateHalf`, or `CodepointTooLarge`.
 
-Validation never decodes code points. While no sequence is in progress, ASCII
-is skipped in 32- and 16-byte blocks; a tail shorter than 16 bytes is checked
-with loads that may overlap already-validated bytes. Other bytes go through a
+Validation never decodes code points, and two kernels implement it with
+identical results. The DFA kernel skips ASCII in 32- and 16-byte blocks while no
+sequence is in progress, checks a tail shorter than 16 bytes with loads that may
+overlap already-validated bytes, and runs every other byte through a
 shift-based DFA over the nine states of Table 3-7: a 256-entry table of packed
 `u64` rows, one table load and one shift per byte, 16 bytes per unrolled chunk.
-Only a rejection reruns the DFA, out of line, from the start of the sequence in
-progress to find where the ill-formed sequence begins. The blocks use generic
-`@Vector(16, u8)` operations, so the pointer-width builtin bitcode stays
-target-independent (see "Backend Builtins"); targets without SIMD, such as
-`wasm32v1`, lower them to scalar instructions.
+The lookup kernel runs the Keiser-Lemire "lookup" algorithm as simdutf
+implements it, 32 bytes per step: three 16-entry tables, indexed by the high
+and low nibble of the previous byte and the high nibble of the current one, mark
+each byte pair's possible errors, and saturating subtractions mark where the
+third and fourth bytes of longer sequences must be continuation bytes. An
+all-ASCII step only checks that the previous step did not end inside a
+sequence, and the final 16-byte window ends at the last byte, overlapping bytes
+already checked, and also checks that the input does not end inside a
+sequence. Inputs shorter than 16 bytes use the DFA kernel. In both kernels only
+a rejection reruns the DFA, out of line, from the start of the sequence in
+progress to find where the ill-formed sequence begins.
+
+The kernel is fixed by the CPU features the builtins are compiled for
+(`Kernel.forCpu`), never by a runtime probe: a lookup kernel exactly when the
+features carry a 16-lane byte table lookup (x86 SSSE3 `pshufb`, AArch64 NEON
+`tbl`, Wasm simd128 `i8x16.swizzle`), and the DFA otherwise. Generic
+`@Vector(16, u8)` operations implement everything but the table lookup, which
+each lookup kernel names with its target's instruction. Where builtins are
+compiled decides what each backend runs:
+
+- A dev builtins object gets the kernel its own compile target selects. A
+  `v1` target links its default twin's object, so native objects carry no
+  instruction above the architecture baseline: x86-64 objects run the DFA
+  (SSE2 has no `pshufb`), AArch64 objects run the NEON kernel (NEON is part of
+  Armv8.0-A), and the `wasm32` object, compiled for Zig's default Wasm CPU
+  without simd128, runs the DFA.
+- The 64-bit LLVM payload is compiled before its target is known, so it
+  references its validation function by symbol, and the LLVM backend links one
+  of three separate payloads into it before pruning: the one built for the
+  kernel the target machine's CPU features select (the DFA, x86 SSSE3, or
+  AArch64 NEON), each compiled for exactly the features its kernel needs. The
+  default x86-64 level (x86-64-v3) gets SSSE3, `x64v1` targets the DFA, and
+  both AArch64 levels NEON. The 32-bit payload keeps the DFA inline.
+- The interpreter and compile-time evaluator run the compiler's own builtins,
+  whose kernel its compile target selects. The x86-64 Debug floor that adds
+  SSSE3 to the generic CPU model for the SHA-256 extension is not a promise
+  about the machine, so it selects the DFA.
 
 `Str.from_utf8` makes one validation pass and shares the input allocation on
 success. `Str.from_utf8_lossy` shares it for valid input too; for invalid input
@@ -125,7 +158,13 @@ bitwise operations, lane shifts, comparisons, bitmasks, and wrapping narrows
 used here lower to scalar instructions over sixteen-byte stack slots; list
 appends use the existing explicit LIR uniqueness data. BE lanes are byte-swapped with explicit
 shifts and masks before classification and narrowing. Bounds are checked before
-each full block; partial blocks use scalar decoding. Typed `load_units` APIs
+each full block; partial blocks use scalar decoding. The UTF-16 sizing pass
+also sizes each other 16-byte block of eight units at once when every
+surrogate in it is a high surrogate directly followed by a low one in the same
+block, as simdutf computes UTF-8 lengths from UTF-16: the block needs 8 bytes
+plus one per unit above 0x7F and one more per unit above 0x7FF, less one per
+surrogate, since a pair's two units encode as four bytes. Any other block is
+sized unit by unit, so every error keeps its kind and position. Typed `load_units` APIs
 remain available independently and do not implement byte decoding.
 
 The private Roc helpers return `{ index : U64, status : U8, string : Str }`;
@@ -3002,6 +3041,11 @@ its rounds need. The 32-bit payload keeps portable rounds inline, since no
 SHA-256 state is the builtin's own versioned format (the chaining words, the
 pending partial block, and the message length), independent of which rounds
 produced it, so saved states resume identically on every target.
+
+The 64-bit LLVM payload links its UTF-8 validation kernel the same way: it
+references `roc_builtins_utf8_validate`, and the LLVM backend links the payload
+built for the kernel the target machine's CPU features select (see "UTF-8
+validation").
 
 LLVM object emission must request function and data sections, and the final
 target linker must use section garbage collection where the target format

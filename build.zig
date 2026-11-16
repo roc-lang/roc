@@ -3065,6 +3065,18 @@ pub fn build(b: *std.Build) void {
         break :aarch64_sha2 query;
     });
 
+    // The 64-bit builtins bitcode references its UTF-8 validation by name (see
+    // `validate` in src/builtins/utf8.zig), and the LLVM backend links the
+    // definition for the kernel the target's CPU features select. Each of these
+    // payloads is compiled for exactly the features its kernel needs.
+    const utf8_dfa_bc_file = addUtf8KernelBitcode(b, "dfa", .{ .cpu_arch = .wasm64, .os_tag = .freestanding, .abi = .none });
+    const utf8_x86_ssse3_bc_file = addUtf8KernelBitcode(b, "x86_ssse3", x86_ssse3: {
+        var query: std.Target.Query = .{ .cpu_arch = .x86_64, .os_tag = .freestanding, .abi = .none, .cpu_model = .baseline };
+        query.cpu_features_add.addFeature(@backingInt(std.Target.x86.Feature.ssse3));
+        break :x86_ssse3 query;
+    });
+    const utf8_aarch64_neon_bc_file = addUtf8KernelBitcode(b, "aarch64_neon", .{ .cpu_arch = .aarch64, .os_tag = .freestanding, .abi = .none, .cpu_model = .baseline });
+
     const llvm_embedded_files = b.addWriteFiles();
     _ = llvm_embedded_files.addCopyFile(builtins32_bc_file, "builtins32.bc");
     _ = llvm_embedded_files.addCopyFile(builtins64_bc_file, "builtins64.bc");
@@ -3078,6 +3090,9 @@ pub fn build(b: *std.Build) void {
     _ = llvm_embedded_files.addCopyFile(builtins32_core_extern_stack_checked_bc_file, "builtins32_core_extern_stack_checked.bc");
     _ = llvm_embedded_files.addCopyFile(sha256_portable_bc_file, "sha256_portable.bc");
     _ = llvm_embedded_files.addCopyFile(sha256_x86_sha_bc_file, "sha256_x86_sha.bc");
+    _ = llvm_embedded_files.addCopyFile(utf8_dfa_bc_file, "utf8_dfa.bc");
+    _ = llvm_embedded_files.addCopyFile(utf8_x86_ssse3_bc_file, "utf8_x86_ssse3.bc");
+    _ = llvm_embedded_files.addCopyFile(utf8_aarch64_neon_bc_file, "utf8_aarch64_neon.bc");
     _ = llvm_embedded_files.addCopyFile(sha256_aarch64_sha2_bc_file, "sha256_aarch64_sha2.bc");
 
     // The private runtime every native LLVM object links, one per target that
@@ -3104,6 +3119,9 @@ pub fn build(b: *std.Build) void {
         \\pub const sha256_portable_bc = @embedFile("sha256_portable.bc");
         \\pub const sha256_x86_sha_bc = @embedFile("sha256_x86_sha.bc");
         \\pub const sha256_aarch64_sha2_bc = @embedFile("sha256_aarch64_sha2.bc");
+        \\pub const utf8_dfa_bc = @embedFile("utf8_dfa.bc");
+        \\pub const utf8_x86_ssse3_bc = @embedFile("utf8_x86_ssse3.bc");
+        \\pub const utf8_aarch64_neon_bc = @embedFile("utf8_aarch64_neon.bc");
         \\pub const builtins_bc = builtins64_bc;
         \\pub const PrivateRuntime = struct { target: @import("roc_target").RocTarget, bitcode: []const u8 };
         \\pub const private_runtimes = [_]PrivateRuntime{
@@ -5740,6 +5758,27 @@ fn addSha256RoundsBitcode(b: *std.Build, comptime rounds_name: []const u8, query
         .name = "roc_sha256_" ++ rounds_name ++ "_bc",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/builtins/sha256_rounds_lib.zig"),
+            .target = b.resolveTargetQuery(query),
+            .optimize = .fast,
+            .strip = true,
+            .pic = true,
+            .single_threaded = true,
+        }),
+    });
+    obj.root_module.omit_frame_pointer = true;
+    obj.root_module.stack_check = false;
+    obj.use_llvm = true;
+    obj.bundle_compiler_rt = false;
+    return bitcodeWithoutObject(obj);
+}
+
+/// LLVM bitcode for `src/builtins/utf8_kernel_lib.zig` compiled for `query`,
+/// whose CPU features select the UTF-8 validation kernel the payload defines.
+fn addUtf8KernelBitcode(b: *std.Build, comptime kernel_name: []const u8, query: std.Target.Query) std.Build.LazyPath {
+    const obj = b.addObject(.{
+        .name = "roc_utf8_" ++ kernel_name ++ "_bc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/utf8_kernel_lib.zig"),
             .target = b.resolveTargetQuery(query),
             .optimize = .fast,
             .strip = true,
