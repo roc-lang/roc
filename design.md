@@ -1568,14 +1568,30 @@ checker recovery. The recovery rules:
   at `echo!(letter)`, whose unification grounded the literal; `letter` is then
   bound from an erroneous value, and `Range.iter`'s `range_iter` requirement,
   which `echo!(letter)` made concrete, is withdrawn with that void relation.
-  Because checking
+  A requirement a value use's instantiation copied (a scheme's where-clause
+  or inferred requirement, `Check.use_instance_by_fn_var`), and what derives
+  from it, belongs the same way to the call whose callee that use is
+  (`Check.callee_use_calls`): the call relates the use's instance to its
+  arguments and result, so the requirement resolves under the call's
+  relation over its operands, whichever later unification grounds its
+  receiver; where it fails is still decided by the queued entry carrying
+  it. In `z = 1`, `s = apply(z)`, `_n = List.len(z)` with
+  `apply : p -> Str where [p.to_str : p -> Str]`, `List.len(z)` grounds both
+  the literal, which it rejects, and `apply`'s copied `to_str`; the `to_str`
+  failure belongs to `apply(z)`, which reads `z`, erroneous through its
+  name, so it is withdrawn and only the literal is reported. Because checking
   replaces rejected expressions with runtime errors, each expression's operands
   are captured when its checking begins (`relation_operands`). A relation is
   void when one of its operands is erroneous through a name: a use of a name
   that binds nothing, or whose source value (`binder_source_exprs`) is
-  erroneous in any way, or an expression checking retires with such an
-  operand (Erroneous Call Operand Retirement), so a name bound from such an
-  expression binds nothing either. An operand rejected in place is not read
+  erroneous in any way, or an expression that evaluates such an operand
+  before it produces its value (a call or another call-like consumer, as in
+  Erroneous Call Operand Retirement, and a construction: a list, record,
+  tuple, tag, or nominal value, an access, or a comparison; never a
+  conditional or match, which runs only one branch), so a name bound from
+  such an expression binds nothing either: `apply_l([z])`, `apply_r({ a: z })`,
+  and a loop binder over `[1, 2]` whose items a later use rejects read an
+  erroneous value through a name. An operand rejected in place is not read
   through a name; its rejection is reported by the relation that rejected it,
   which may be the relation reading it. Each erroneous value records the
   relation under which it was made erroneous, named by the expression that
