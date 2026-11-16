@@ -632,6 +632,12 @@ pub const Worker = struct {
     captures: []const checked.CheckedCapture = &.{},
     /// For a lambda worker: the stored type of each captured value.
     capture_types: []const TypeId = &.{},
+    /// For a lambda worker of a local procedure only direct calls reach
+    /// (`NestedProcSite.direct_calls_only`): an ordinary procedure taking
+    /// its captured values, then its explicit parameters, then its type
+    /// table, never packed as a function value (design.md "Function
+    /// Values").
+    direct: bool = false,
     /// The dictionaries in scope, by generalized scope, innermost first:
     /// each scope's runtime evidence-parameter indices. A template has its
     /// own scope; a lambda shares its outer worker's scopes; a generalized
@@ -1117,6 +1123,15 @@ pub const Program = struct {
     pub fn isLocalProc(self: *Program, module_index: ModuleIndex, expr: ExprId) Allocator.Error!bool {
         try self.indexBodyMetadata(module_index);
         return self.local_procs.contains(.{ .module = module_index, .expr = expr });
+    }
+
+    /// Whether the lambda or closure expression `expr` of `module_index` is
+    /// a local procedure only direct calls reach, as checking recorded at
+    /// its nested procedure site (`NestedProcSite.direct_calls_only`).
+    pub fn directCallsOnly(self: *Program, module_index: ModuleIndex, expr: ExprId) Allocator.Error!bool {
+        const site_index = (try self.nestedProcSite(module_index, expr)) orelse
+            invariant("a lambda or closure has no nested procedure site");
+        return self.module(module_index).view.nested_proc_sites.sites.items()[site_index].direct_calls_only;
     }
 
     pub fn omittedDefault(self: *Program, key: OmittedField) Allocator.Error!?checked.CheckedFieldDefault {
@@ -2291,15 +2306,20 @@ pub const Program = struct {
         };
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const identity = try self.workerIdentity(key);
+        // A local procedure only direct calls reach is an ordinary
+        // procedure; every other lambda is an erased worker.
+        const direct = try self.directCallsOnly(outer_worker.module, lambda_expr);
+        if (direct and key.lambda.captured_scheme) invariant("a local procedure only direct calls reach has a stored function value");
+        const abi: LIR.ProcAbi = if (direct) .roc else .erased_record;
         // A lambda of an imported worker is that worker's object's.
         const imported = outer_worker.imported;
-        const proc = if (imported) try self.addImportedProc(identity, outer_worker.module, .erased_record) else try self.result.store.addProcSpec(.{
+        const proc = if (imported) try self.addImportedProc(identity, outer_worker.module, abi) else try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
             .identity = identity,
             .emission_unit = LIR.EmissionUnit.module(@backingInt(outer_worker.module)),
             .args = .empty(),
             .ret_layout = .zst,
-            .abi = .erased_record,
+            .abi = abi,
         }, base.SourceLoc.none);
         try self.workers.append(self.allocator, .{
             .key = key,
@@ -2313,6 +2333,7 @@ pub const Program = struct {
             .ret = signature.ret,
             .captures = try self.arena.allocator().dupe(checked.CheckedCapture, captures),
             .capture_types = stored_capture_types,
+            .direct = direct,
             .dict_scopes = if (scope) |scheme| try std.mem.concat(self.arena.allocator(), []const u32, &.{ &.{scheme.dictionaries}, outer_worker.dict_scopes }) else outer_worker.dict_scopes,
             .dict_scope_params = if (scope) |scheme| try std.mem.concat(self.arena.allocator(), []const static_dispatch.EvidenceParamRecord, &.{ &.{scheme.params}, outer_worker.dict_scope_params }) else outer_worker.dict_scope_params,
             .own_descs = if (own) |scheme| (if (scheme.per_call) @intCast(scheme.scheme_vars.len) else 0) else 0,

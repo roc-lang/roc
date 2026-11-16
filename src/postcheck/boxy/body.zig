@@ -230,6 +230,11 @@ pub const Task = union(enum) {
     /// `params` and `ret` are the procedure's signature, `arg_types` the
     /// call's arguments' types and `result` its result's.
     finish_local_call: struct { closure: LocalId, words: []const Word, params: []const TypeId, ret: TypeId, arg_types: []const TypeId, result: TypeId },
+    /// Pop the arguments of a call of a local procedure only direct calls
+    /// reach and call its worker `callee` with `captures`, the arguments
+    /// (adapted from `arg_types` to `params` when `arg_types` is not empty),
+    /// and its table at `inputs` (`finishDirectLocalCall`).
+    finish_direct_local_call: struct { callee: WorkerId, captures: []const LocalId, inputs: []const Word, params: []const TypeId, arg_types: []const TypeId, ret: TypeId, result: TypeId },
     /// Push an interpolation's literal segments as the `List(Str)` of `ty`.
     segments_arg: struct { expr: ExprId, ty: TypeId },
     /// Pop an interpolation's assembler and call it with the interpolated
@@ -2306,6 +2311,7 @@ pub const Builder = struct {
             .lambda => |lambda| lambda,
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a lambda worker's expression is not a lambda"),
         };
+        if (worker.direct) return try self.lowerDirectLambdaBody(lambda);
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
 
@@ -2395,6 +2401,58 @@ pub const Builder = struct {
         try self.run();
         if (self.reuse_arg == null) _ = try self.beginReuseArg(.none);
         try self.finishErasedProc(entry, body_start, args.items, ret_layout, capture_ptr);
+    }
+
+    /// The body of a local procedure only direct calls reach
+    /// (`Worker.direct`): an ordinary procedure whose parameters are its
+    /// captured values, then its explicit parameters, then its type table
+    /// when it has inputs.
+    fn lowerDirectLambdaBody(self: *Builder, lambda: @FieldType(bodies_mod.ExprData, "lambda")) Allocator.Error!void {
+        const worker = self.currentWorker().*;
+        self.entry_hole = try self.newHole();
+        const entry = self.entry_hole;
+        // The table comes first: the parameters' descriptors are read from it.
+        if (self.program.inputCount(self.worker_id) != 0) try self.beginTable(try self.closedLocal(.opaque_ptr));
+        var args: std.ArrayList(LocalId) = .empty;
+        defer args.deinit(self.allocator);
+        for (worker.captures, worker.capture_types) |capture, capture_ty| {
+            const param = try self.localOf(capture_ty, .param);
+            try args.append(self.allocator, param);
+            const binder = capture.pattern;
+            if (self.bodies().binder(binder).recursive_value) {
+                // A recursive value's slot, as `lowerLambdaBody` binds one.
+                try self.recursive_slots.put(self.allocator, binder, param);
+                try self.binders.put(self.allocator, binder, try self.readRecursiveSlot(param, capture_ty));
+            } else {
+                try self.binders.put(self.allocator, binder, param);
+            }
+        }
+        if (lambda.args.len != worker.params.len) invariant("a lambda's arity differs from its type");
+        const params_start = args.items.len;
+        for (worker.params) |param_ty| try args.append(self.allocator, try self.localOf(param_ty, .param));
+        const instance_start = args.items.len;
+        if (self.table_local) |table| try args.append(self.allocator, table);
+        var ret_layout: layout.Idx = undefined;
+        if (try self.closed(worker.ret)) {
+            ret_layout = try self.program.layouts.layoutOf(worker.ret);
+        } else {
+            ret_layout = try self.program.result.layouts.dynamicLayout();
+            self.result_local = try self.localOf(worker.ret, .result);
+        }
+
+        const body_start = try self.newHole();
+        self.hole = body_start;
+        for (lambda.args, worker.params, args.items[params_start..instance_start]) |pattern, param_ty, param| try self.bindIrrefutable(pattern, param, param_ty);
+        try self.tasks.append(self.allocator, .ret);
+        try self.destination_types.put(self.allocator, lambda.body, worker.ret);
+        try self.tail_exprs.put(self.allocator, lambda.body, {});
+        try self.tasks.append(self.allocator, .{ .expr = lambda.body });
+        try self.run();
+
+        self.tail_calls.loop_params = args.items;
+        self.tail_calls.instance_start = instance_start;
+        defer self.tail_calls.loop_params = &.{};
+        try self.finishProc(entry, body_start, args.items, ret_layout);
     }
 
     /// An adapter's body (`WorkerKey.adapter`): each argument adapted to the
@@ -3345,6 +3403,7 @@ pub const Builder = struct {
                 }
             },
             .finish_local_call => |call| try self.finishLocalCall(call.closure, call.words, call.params, call.ret, call.arg_types, call.result),
+            .finish_direct_local_call => |call| try self.finishDirectLocalCall(call.callee, call.captures, call.inputs, call.params, call.arg_types, call.ret, call.result),
             .finish_hash => |hash| {
                 const hasher = self.popValue();
                 const value = self.popValue();
@@ -5470,6 +5529,7 @@ pub const Builder = struct {
     /// The immortal callable recipe of `closure`, adapted to its use's type.
     fn immortalRecipe(self: *Builder, closure: LocalProcClosure) Allocator.Error!Tables.RecipeId {
         if (closure.values.len != 0) invariant("an immortal function value captures a value, which methods never do");
+        if (self.program.worker(closure.callee).direct) invariant("a function value was built of a local procedure only direct calls reach");
         const scope = closure.static_scope orelse invariant("a static callable has no producer capture context");
         const arena = self.program.arena.allocator();
         const inputs = closure.inputs;
@@ -6289,6 +6349,7 @@ pub const Builder = struct {
         }
         if (local.is_alias) invariant("an alias is used only after its declaration binds it");
         const closure = try self.localProcClosure(local);
+        if (self.program.worker(closure.callee).direct) invariant("a function value was built of a local procedure only direct calls reach");
         // A procedure whose calls pass its table captures none.
         const inputs = closure.inputs;
         // A value built from entry locals only is built once, in the entry
@@ -6374,9 +6435,12 @@ pub const Builder = struct {
     /// A call of a generalized local procedure: its function value, called
     /// with an argument record of the call's instantiation of the
     /// procedure's own scheme (descriptors, then dictionaries) followed by
-    /// the explicit arguments.
+    /// the explicit arguments. A procedure only direct calls reach has no
+    /// function value: its worker is called with the values it captures,
+    /// the explicit arguments, and its table at that instantiation.
     pub fn lowerGeneralizedLocalCall(self: *Builder, expr_id: ExprId, call: @FieldType(bodies_mod.ExprData, "call"), local: checked.LocalProcedureBinding, scheme: lower.LocalScheme) Allocator.Error!void {
-        const closure = try self.localProcValue(local);
+        const direct = try self.program.directCallsOnly(self.module, local.expr);
+        const closure: ?LocalId = if (direct) null else try self.localProcValue(local);
         const evidence = self.view.view.static_dispatch_plans.siteEvidence(call.func) orelse &.{};
         // The procedure's own variables take the types the call's
         // instantiation of its type gives them; the enclosing scope's stay as
@@ -6442,8 +6506,20 @@ pub const Builder = struct {
         const target = self.program.worker(declared.callee).*;
         if (target.own_descs != own_types.len or target.own_dicts != scheme.dictionaries.len or target.own_literals != scheme.literal_requirements.len) invariant("a local procedure call's own words differ from its worker's");
         const table_inputs = try self.lambdaInputs(declared.callee, declared.scope_table, words);
+        if (direct) {
+            try self.push(.{ .finish_direct_local_call = .{
+                .callee = declared.callee,
+                .captures = declared.values,
+                .inputs = try self.program.arena.allocator().dupe(Word, table_inputs),
+                .params = try self.program.arena.allocator().dupe(TypeId, params),
+                .arg_types = arg_types,
+                .ret = ret,
+                .result = try self.exprType(expr_id),
+            } });
+            return try self.pushExprsReversed(call.args);
+        }
         try self.push(.{ .finish_local_call = .{
-            .closure = closure,
+            .closure = closure.?,
             .words = try self.program.arena.allocator().dupe(Word, &.{try self.tableWord(declared.callee, table_inputs)}),
             .params = try self.program.arena.allocator().dupe(TypeId, params),
             .ret = ret,
@@ -6473,6 +6549,73 @@ pub const Builder = struct {
         try self.emitDyn(record, .{ .record = .{ .desc = desc, .fields = try self.store.addLocalSpan(fields) } });
         const target = try self.callErased(closure, record, ret);
         try self.pushValue(try self.adaptValue(target, ret, result_ty));
+    }
+
+    /// A call of a local procedure only direct calls reach whose scheme is
+    /// not its own (`NestedProcSite.direct_calls_only`): its worker called
+    /// with the values it captures, the call's arguments at the call's
+    /// function type, and its table, whose inputs are the declaring worker's
+    /// table, as its function value would have captured them.
+    fn lowerDirectLocalCall(self: *Builder, expr_id: ExprId, call: @FieldType(bodies_mod.ExprData, "call"), local: checked.LocalProcedureBinding) Allocator.Error!void {
+        const closure = try self.localProcClosure(local);
+        const function = switch (self.program.store.get(try self.valueType(call.func))) {
+            .function => |function| function,
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a called value's type is not a function type"),
+        };
+        const params = try self.program.arena.allocator().dupe(TypeId, self.program.store.span(function.args));
+        if (params.len != call.args.len) invariant("a local procedure call's arity differs from its type");
+        try self.push(.{ .finish_direct_local_call = .{
+            .callee = closure.callee,
+            .captures = closure.values,
+            .inputs = closure.inputs,
+            .params = params,
+            .arg_types = &.{},
+            .ret = function.ret,
+            .result = try self.exprType(expr_id),
+        } });
+        try self.pushExprsReversed(call.args);
+    }
+
+    /// Pop the arguments of a call of a local procedure only direct calls
+    /// reach and call its worker `callee`: the values it captures, then the
+    /// arguments, adapted from `arg_types` to the procedure's `params` when
+    /// the call gives them (design.md "Field Kinds"), then its table at
+    /// `inputs`. A call from the procedure's own body at its own inputs
+    /// passes the table the body received, so a self tail call loops.
+    pub fn finishDirectLocalCall(self: *Builder, callee: WorkerId, captures: []const LocalId, inputs: []const Word, params: []const TypeId, arg_types: []const TypeId, ret: TypeId, result_ty: TypeId) Allocator.Error!void {
+        const args = try self.popValues(@intCast(params.len));
+        defer self.allocator.free(args);
+        if (arg_types.len != 0) {
+            for (args, arg_types, params) |*arg, arg_ty, param_ty| arg.* = try self.adaptValue(arg.*, arg_ty, param_ty);
+        }
+        const table: ?LocalId = if (self.isOwnTable(callee, inputs)) self.table_local else try self.tableLocal(callee, inputs);
+        const all = try self.allocator.alloc(LocalId, captures.len + args.len + @intFromBool(table != null));
+        defer self.allocator.free(all);
+        @memcpy(all[0..captures.len], captures);
+        @memcpy(all[captures.len..][0..args.len], args);
+        if (table) |local| all[all.len - 1] = local;
+        const target = try self.localOf(ret, .frame);
+        try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(callee).proc, .args = try self.store.addLocalSpan(all), .next = undefined } });
+        try self.pushValue(try self.adaptValue(target, ret, result_ty));
+    }
+
+    /// Whether the table of worker `callee` at `inputs` is this worker's own
+    /// table: `callee` is this worker, and each input is the same input of
+    /// this worker's table.
+    fn isOwnTable(self: *Builder, callee: WorkerId, inputs: []const Word) bool {
+        if (callee != self.worker_id or self.table_local == null) return false;
+        if (inputs.len != self.program.inputCount(callee)) return false;
+        for (inputs, 0..) |word, index| {
+            const named = switch (word) {
+                .recipe => |named| named,
+                .static => return false,
+            };
+            switch (self.recipes.get(self.recipes.resolve(named))) {
+                .input => |input| if (input != index) return false,
+                .inherited, .scope_table, .desc, .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => return false,
+            }
+        }
+        return true;
     }
 
     /// A procedure used as a function value at function type `use_ty`: an
@@ -7488,6 +7631,7 @@ pub const Builder = struct {
                     const scheme = try self.localScheme(scope_id);
                     if (!scheme.isEmpty()) return try self.lowerGeneralizedLocalCall(expr_id, call, local, scheme);
                 }
+                if (try self.program.directCallsOnly(self.module, local.expr)) return try self.lowerDirectLocalCall(expr_id, call, local);
                 return try self.lowerValueCall(expr_id, call);
             },
             .local_param, .local_value, .pattern_binder, .local_mutable_version, .platform_required_const, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_checked_error => return try self.lowerValueCall(expr_id, call),
@@ -9712,16 +9856,18 @@ pub const Builder = struct {
         return target;
     }
 
-    /// A function value: an erased callable of the lambda's worker, whose
-    /// captures hold the captured values and this worker's descriptors.
-    pub fn lowerClosure(self: *Builder, expr_id: ExprId, lambda_expr: ExprId, captures: []const checked.CheckedCapture) Allocator.Error!void {
-        // rejectCapturingMethods removes methods that transitively capture
-        // invocation-specific values before the registry records a target.
-        // Only that checked proof authorizes immutable capture edges here.
-        if (try self.program.localMethodBinding(self.module, lambda_expr)) |method| {
-            const closure = try self.localProcClosureWithCaptures(method, true);
-            return try self.pushValue(try self.materialize(.{ .recipe = try self.immortalRecipe(closure) }));
-        }
+    /// The worker of a lambda or closure expression `expr_id` (whose lambda
+    /// is `lambda_expr`, capturing `captures`) built in this body, the
+    /// values it captures here, which the expression's declaration records
+    /// (`declared_captures`), and their types (caller frees).
+    const ClosureWorker = struct {
+        callee: WorkerId,
+        values: []const LocalId,
+        capture_types: []TypeId,
+        generalized: ?lower.LocalScheme,
+    };
+
+    fn closureWorker(self: *Builder, expr_id: ExprId, lambda_expr: ExprId, captures: []const checked.CheckedCapture) Allocator.Error!ClosureWorker {
         // A generalized local procedure's type is converted with its own
         // scheme's variables in scope.
         const own: ?lower.LocalScheme = if (try self.program.localScope(self.module, lambda_expr)) |scope_id|
@@ -9739,15 +9885,54 @@ pub const Builder = struct {
         } else try self.exprType(expr_id);
         const generalized: ?lower.LocalScheme = if (own) |scheme| (if (scheme.isEmpty()) null else scheme) else null;
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
-        defer self.allocator.free(capture_types);
-        const values = try self.allocator.alloc(LocalId, captures.len);
-        defer self.allocator.free(values);
-        for (captures, capture_types, 0..) |capture, *capture_ty, index| {
+        errdefer self.allocator.free(capture_types);
+        const values = try self.program.arena.allocator().alloc(LocalId, captures.len);
+        for (captures, capture_types, values) |capture, *capture_ty, *value| {
             capture_ty.* = try self.capturedType(capture.pattern, try self.patternType(capture.pattern));
-            values[index] = self.capturedValue(capture.pattern) orelse invariant("a closure captured a binder this body never bound");
+            value.* = self.capturedValue(capture.pattern) orelse invariant("a closure captured a binder this body never bound");
         }
-        try self.declared_captures.put(self.allocator, lambda_expr, try self.program.arena.allocator().dupe(LocalId, values[0..captures.len]));
-        const callee = try self.program.lambdaWorker(self.worker_id, lambda_expr, captures, capture_types, fn_ty, generalized);
+        try self.declared_captures.put(self.allocator, lambda_expr, values);
+        return .{
+            .callee = try self.program.lambdaWorker(self.worker_id, lambda_expr, captures, capture_types, fn_ty, generalized),
+            .values = values,
+            .capture_types = capture_types,
+            .generalized = generalized,
+        };
+    }
+
+    /// The declaration of a local procedure only direct calls reach, when
+    /// `expr_id`, a declaration's value, is one (`NestedProcSite.direct_calls_only`):
+    /// it binds no value, and only creates the procedure's worker and
+    /// records the values it captures, which each call in this body passes.
+    fn declareDirectLocalProc(self: *Builder, expr_id: ExprId) Allocator.Error!bool {
+        const lambda_expr = switch (self.bodies().exprData(expr_id)) {
+            .lambda => expr_id,
+            .closure => |closure| closure.lambda,
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return false,
+        };
+        if (!try self.program.directCallsOnly(self.module, expr_id)) return false;
+        const made = try self.closureWorker(expr_id, lambda_expr, try self.program.siteCaptures(self.module, expr_id));
+        self.allocator.free(made.capture_types);
+        return true;
+    }
+
+    /// A function value: an erased callable of the lambda's worker, whose
+    /// captures hold the captured values and this worker's descriptors.
+    pub fn lowerClosure(self: *Builder, expr_id: ExprId, lambda_expr: ExprId, captures: []const checked.CheckedCapture) Allocator.Error!void {
+        // rejectCapturingMethods removes methods that transitively capture
+        // invocation-specific values before the registry records a target.
+        // Only that checked proof authorizes immutable capture edges here.
+        if (try self.program.localMethodBinding(self.module, lambda_expr)) |method| {
+            const closure = try self.localProcClosureWithCaptures(method, true);
+            return try self.pushValue(try self.materialize(.{ .recipe = try self.immortalRecipe(closure) }));
+        }
+        const made = try self.closureWorker(expr_id, lambda_expr, captures);
+        defer self.allocator.free(made.capture_types);
+        const callee = made.callee;
+        if (self.program.worker(callee).direct) invariant("a function value was built of a local procedure only direct calls reach");
+        const capture_types = made.capture_types;
+        const values = made.values;
+        const generalized = made.generalized;
         // The function value captures the lambda's table, whose inputs are
         // this worker's table, through which it reads this scope, then the
         // inputs its own scope adds. A generalized lambda that is not a
@@ -11036,6 +11221,8 @@ pub const Builder = struct {
                 // derivation) has no value, and every use of it resolves to
                 // what it requests.
                 if (self.bodies().exprData(decl.expr) == .anno_only) return;
+                // A local procedure only direct calls reach binds no value.
+                if (try self.declareDirectLocalProc(decl.expr)) return;
                 // A recursive value's binders get slots before its value is
                 // built, which the callables in the value capture, and the
                 // slots are filled once the value is bound.
