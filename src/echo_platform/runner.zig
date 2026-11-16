@@ -82,17 +82,23 @@ fn countNewlines(bytes: []const u8) u32 {
     return count;
 }
 
+const sep = std.fs.path.sep_str;
+
 /// Caller-controlled paths for the synthetic app & embedded platform files.
 /// Both the wasm and native flows generate a synthetic app whose `app [main!]`
-/// header references these paths.
+/// header references these paths. Each is a resolved absolute path in the
+/// host's path syntax (`std.fs.path`), the form `BuildEnv` resolves every
+/// module path into before reading it, so the virtual tree answers to exactly
+/// the paths the build asks for.
 pub const Paths = struct {
-    app_abs: []const u8 = "/app/main.roc",
-    platform_main: []const u8 = "/app/.roc_echo_platform/main.roc",
-    echo_module: []const u8 = "/app/.roc_echo_platform/Echo.roc",
-    cwd: []const u8 = "/app",
+    app_abs: []const u8 = sep ++ "app" ++ sep ++ "main.roc",
+    platform_main: []const u8 = sep ++ "app" ++ sep ++ ".roc_echo_platform" ++ sep ++ "main.roc",
+    echo_module: []const u8 = sep ++ "app" ++ sep ++ ".roc_echo_platform" ++ sep ++ "Echo.roc",
+    cwd: []const u8 = sep ++ "app",
     /// Prefix prepended to extra-file paths so `addFile("Greeting", ...)`
-    /// resolves as `<extras_prefix>Greeting.roc`. Must end with `/`.
-    extras_prefix: []const u8 = "/app/",
+    /// resolves as `<extras_prefix>Greeting.roc`. Must end with
+    /// `std.fs.path.sep`.
+    extras_prefix: []const u8 = sep ++ "app" ++ sep,
 };
 
 /// Inputs to `runEcho`. See field doc comments for the contract on each.
@@ -423,11 +429,12 @@ pub const EchoCtx = struct {
 fn virtualFileIsAtOrBelow(file: []const u8, path: []const u8) bool {
     if (!std.mem.startsWith(u8, file, path)) return false;
     if (file.len == path.len) return true;
-    return std.mem.endsWith(u8, path, "/") or file[path.len] == '/';
+    return std.mem.endsWith(u8, path, sep) or file[path.len] == std.fs.path.sep;
 }
 
 /// `virtualFileIsAtOrBelow` for the extra file `<prefix><name>.roc`: the file
-/// itself, or a directory containing `prefix`, which ends with `/`.
+/// itself, or a directory containing `prefix`, which ends with
+/// `std.fs.path.sep`.
 fn extraIsAtOrBelow(prefix: []const u8, name: []const u8, path: []const u8) bool {
     return matchesExtra(prefix, name, path) or virtualFileIsAtOrBelow(prefix, path);
 }
@@ -480,7 +487,7 @@ fn echoJoinPath(ctx_ptr: ?*anyopaque, _: std.Io, parts: []const []const u8, gpa:
 }
 fn echoCanonicalize(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, gpa: Allocator) Io.CanonicalizeError![]const u8 {
     const self = echoGetCtx(ctx_ptr);
-    const resolved = try std.fs.path.resolvePosix(gpa, &.{path});
+    const resolved = try std.fs.path.resolve(gpa, &.{path});
     if (self.isVirtualTreePath(resolved)) return resolved;
     gpa.free(resolved);
     return self.fallback.canonicalize(path, gpa);

@@ -93,6 +93,7 @@ pub fn main(init: std.process.Init) EchoNativeError!void {
 
     var extras = std.ArrayList(ExtraFile).empty;
     defer extras.deinit(arena);
+    defer for (extras.items) |extra| gpa.free(extra.content);
 
     const stderr_file: std.Io.File = .stderr();
 
@@ -115,10 +116,12 @@ pub fn main(init: std.process.Init) EchoNativeError!void {
         const name = spec[0..eq];
         const path = spec[eq + 1 ..];
         const content = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited);
+        errdefer gpa.free(content);
         try extras.append(arena, .{ .name = name, .content = content });
     }
 
     const source = try std.Io.Dir.cwd().readFileAlloc(io, app_path, gpa, .unlimited);
+    defer gpa.free(source);
 
     // Use a 128 MiB FBA so the pipeline behaves like the wasm case (single
     // contiguous heap)—this is also what the LIR image migration in
