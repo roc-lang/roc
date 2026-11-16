@@ -10625,13 +10625,13 @@ dedicated `selectGeneratedPrivateRepresentation` capability before lowering
 the dispatch. The capability exists only during relation production, requires
 an explicitly directed public-to-private edge, and rejects every class that
 contains an imported finished Monotype. Ordinary graph unification rejects the
-same edge, and rejects binding an unresolved checked variable to a private
-class; the one unresolved cell it does bind is an undetermined record field's
-runtime slot, which holds no representation (Field Kinds). This preserves
-producer selection for branch results without making public/private
-merging—or reopening a durable Monotype—available as a general unification
-behavior. If the requested public interface is already a finished
-Monotype, the producer relates its distinct private result to that immutable
+same edge, except for a codec representation (below). Outside a codec
+representation it also rejects binding an unresolved checked variable to a
+private class; the one unresolved cell it does bind is an undetermined record
+field's runtime slot, which holds no representation (Field Kinds). This preserves producer selection for branch
+results without making public/private merging—or reopening a durable
+Monotype—available as a general unification behavior. If the requested public
+interface is already a finished Monotype, the producer relates its distinct private result to that immutable
 interface without merging either class, and the enclosing procedure or
 compile-time wrapper carries the private result cell as its exact output
 witness. ConstStore preserves that witness beside the stored value, and restore
@@ -10761,7 +10761,13 @@ and nominal backings without making constructor inspection global to unrelated
 calls. If a control-flow prepass cannot see a private result before emission,
 the first exact private branch upgrades the selection and all already-emitted
 inhabited branches are retagged with that validated selection before the
-control-flow expression is finalized.
+control-flow expression is finalized. A branch whose value is only a public
+interface, such as a generic body's list item or tag payload instantiated at
+the public type its specialization substitutes for a variable, meets a
+finished private selection the same way: its public interface relates to the
+selection through the opaque interface relation and the branch takes the
+selection. Lambda Solved then joins the public interface into the selected
+representation, as it does for a retagged earlier branch.
 
 Call specialization and control-flow result selection consume that same exact
 constructor witness where the producer granted the capability. They propagate
@@ -10791,23 +10797,77 @@ the use lifted it into. When that nominal carries generated-private evidence,
 the public structure relates to the nominal's structural backing through the
 opaque relation, so every generated-private node stays distinct from its
 public counterpart, and the public class then takes the request's nominal.
-A checked type variable carries no public structure of its own, so one related
-to a generated-private named representation other than an iterator (such as a
-codec method's unannotated `FieldNames` parameter, constrained only by the
-methods it calls) denotes that representation itself, as a checked variable
-related to an imported generated iterator does. The same holds for an interface
-parameter standing for such a variable's substitution cell, as when that
-parameter passes through an unannotated generic helper. Body lowering relates
-an expression's checked type to a known Monotype that carries generated-private
-evidence through this same opaque relation, just as it relates a checked
-interface to a type cell carrying such evidence; any other known Monotype
-unifies. Joining the variable never
-collapses two different representations. The checker gives the variable one
-type, and a codec representation's generated backing is built only from its
-named type's arguments and never changes afterwards, so every representation
-one variable meets is the same type. A generated iterator's variable takes the
-iterator's public interface instead, because representation selection may
+A codec representation is the generated-private `FieldNames`, `FieldName` or
+`ParseTagUnionSpec` value a derived parser builds for a format's methods. It
+is the only runtime representation of its named type at its arguments: no
+value of the type has the declared public backing as its layout, and a
+`FieldNames` or `ParseTagUnionSpec` consumer reads the renamed field names
+from the generated backing. Every type that denotes such a value therefore
+takes the representation:
+
+- A checked type variable carries no public structure of its own, so one
+  related to a codec representation (such as a codec method's unannotated
+  `FieldNames` parameter, constrained only by the methods it calls) denotes
+  that representation itself, as a checked variable related to an imported
+  generated iterator does. The same holds for an interface parameter standing
+  for such a variable's substitution cell, as when that parameter passes
+  through an unannotated generic helper.
+- The representation's own checked-public named type denotes it too: the
+  `FieldNames(shape)` a codec contract substitutes for that parameter's
+  variable, the parameter's annotation, the type the checker infers for a
+  `ParseTagUnionSpec.parse` argument, or the type a body instantiates for a
+  list item, a tag payload, a helper's result or a captured binder that holds
+  the value. The opaque relation relates the two types' arguments and the
+  public class takes the representation, and ordinary unification joins the
+  two the same way. Ordinary unification still rejects every other
+  public/private edge.
+
+Such a join changes what the public class denotes, unlike a join of two
+classes with equal content. The graph therefore treats it as it treats a
+nominal/structural join and an iterator representation join: every active
+snapshot and every durable type sealed through either class is invalidated,
+and the public class's nodes give up the finished Monotypes they were
+imported as, together with the class's finished witness. A view of the public
+type taken before the join (a request sealed for a deferred callee, say)
+would otherwise outlive it, and the joined class would still read as the
+public type.
+
+Body lowering relates an expression's checked type to a known Monotype that
+carries generated-private evidence through the opaque relation, just as it
+relates a checked interface to a type cell carrying such evidence; any other
+known Monotype unifies. Joining never collapses two different
+representations. The checker gives the variable or public type one type, and
+a codec representation's generated backing is built only from its named
+type's arguments and never changes afterwards, so every representation it
+meets is the same type. A generated iterator's variable and public type keep
+the iterator's public interface instead, because representation selection may
 still join a live iterator's representation or force it dynamic.
+
+A value produced inside a callee reaches its caller the same way a
+callee-authored iterator representation does. A call whose result type holds
+a codec representation's public named type (a helper or format method that
+returns the result of `FieldNames.rename_fields`, say) has no argument that
+relates that result to its representation: only the callee's body does. The
+caller therefore lowers such a callee before it consumes the result, and
+adopts the completed result, exactly as it does for a public iterator
+result. A codec representation among the call's arguments does not hold that
+back, because unlike an iterator representation it never changes. A branch of
+an `if` or `match` that is such a call contributes the completed callee's
+result to the shared result selection, as a branch calling an iterator
+producer does.
+
+Because every `FieldNames` value is the generated representation, the
+`FieldNames` operations (`iter`, `for_size`, `shortest_name`, `longest_name`,
+`rename_fields`) read their names only from the generated backing. An
+operation reads its subject's type from its request, and some subject
+expressions (a `match`, or a call through a function value) have no evidence
+to hand the request before they are lowered. While the request still holds
+the subject's public named type, the subject is lowered first at the
+request's own cell, which gives that cell the representation, and the
+operation reads its argument types afterwards. A
+`FieldNames` argument without it is a compiler invariant violation; there is
+no lowering that reads a record's own field labels in its place, since that
+would silently drop the format's renames.
 
 Match lowering likewise relates each checked pattern interface to the exact
 scrutinee node without merging a generated-private root into that public
@@ -10965,11 +11025,7 @@ substituted checked wrappers of `.wrappers` mode produce exactly this shape at
 every call site (a `Try` built on each arm and matched at once by the caller),
 as does the iterator-fusion clone of `.none`. A producer edge may release
 values it has finished with between building the tag and jumping; those
-releases are carried onto the redirected edge. The join's body may begin with
-straight-line definitions that do not read the union, ahead of its match: an
-inlined call computes its other arguments there. They run whichever variant
-arrives, so each variant's continuation begins with its own copy of them,
-defining the same locals; nothing moves across a producer or an arm. An arm may release the union
+releases are carried onto the redirected edge. An arm may release the union
 itself; the fused arm releases that variant's payload instead, or nothing when
 the variant owns nothing. A fused arm copies exactly the statements its
 variant rewrite changes, together with what copying them forces: their
@@ -11543,6 +11599,11 @@ structural boundary wraps them around the result. Roc also preserves GHC's
 important distinction between purity and speculatability: knowing that an
 expression has no language-level effect does not prove that evaluating it early
 or not at all preserves strict source evaluation behavior.
+
+A direct call's arguments are one such sequence. When a later argument's clone
+produces strict bindings, they are placed ahead of the call, so every earlier
+argument's own work is first named in the chain at its position; left in the
+argument list it would run after them.
 
 This strict chain is the ordering proof. SpecConstr does not count effectful
 expressions, record emission windows, recover ordering from expression ids, or
@@ -18527,7 +18588,10 @@ build reuses its table. The compiler's compilation waits for the table, so
 embedding puts the tool's compilation and run (about a minute) on the path
 to the compiler. A Debug compiler therefore embeds nothing unless built
 with `-Dembed-builtin-unit=true`, so iterating on the compiler does not pay
-for it; every other optimize mode embeds by default.
+for it; every other optimize mode embeds by default. MiniCI builds its Debug
+compiler with that option (`minici_build_args` in src/build/minici.zig), so
+the CLI tests, which run `--no-cache` builds and compile-time evaluation,
+serve the Builtin from the table as every released compiler does.
 
 The table also carries the Builtin's digests (`boxy_interface.Digests`):
 its interface digest and its object input, which, since it imports
@@ -22879,7 +22943,13 @@ statement that consumes the result, so every path through a value-position join
 arrives by an explicit jump that tag-case fusion can see as a producer. A
 `match`, `if`, initialized-payload switch, or callable dispatch whose continuation
 is that jump delivers through the consumer rather than declaring a join of its
-own. The join a `match` or `if` declares for its own result is a consumer in the
+own. A direct call whose capture operands are all plain local reads builds its
+capture record next to the call statement, after its arguments: the record
+reads the same values there, and is not live across an argument that
+branches. A jump from a join point's remainder that supplies one tag union builds
+it in the parameter itself, as a value join's branches do, rather than in a
+temporary copied into the parameter; the parameters are in scope only in the
+body, so that argument cannot read them. The join a `match` or `if` declares for its own result is a consumer in the
 same sense while its branches are lowered, so a `match` or `if` that ends one
 of those branches jumps to it directly; a branch that is itself a branch never
 adds a join that only forwards the result outward. A loop's `break`s all continue at the statement after the loop, so a join
@@ -24767,6 +24837,34 @@ counter's floor that needs the bound on its increment, which itself takes
 rounds to settle). Assumptions are never retried against the proof data they
 already failed under, so each epoch revives each assumption at most once.
 
+An invariant is stated where a pass through the loop begins, so the value it
+bounds the parameter against must exist there. A bound is against a literal
+or a single-assignment local, so that value is a literal or a local that no
+statement in the loop's body defines; a parameter of the loop is assigned by
+every jump to it and is never what a bound is against. A back edge also
+proves bounds against locals the body defines, because such a local names a
+value of the pass that is ending. A loop that reads its list's length at the
+top of a pass and then appends three items ends that pass with the length
+three above that local. A loop whose list is read through an alias on the arm
+that leaves the loop has that alias name the list's length for the pass, and
+an append puts the new length one above it. Such a bound is never assumed.
+Where the next pass begins the local does not hold that pass's value yet, and
+no entry edge has a value of it at all, so the assumption could not verify
+and would only spend a proof round. Within that round the local would also
+name two values, the unknown one the head read and the one its definition
+gives it, and the bound restated between them would say that a value is below
+itself, which sends every sum refresh that meets it to its pass cap.
+
+An assumption that cannot verify costs rounds and never a wrong rewrite. A
+pending bound verifies only when the meet over every edge into the loop,
+entry edges included, holds it against the same root, and a root the head or
+the body made does not exist on an entry edge. Until it verifies, every proof
+that rests on it is deferred: an ordering query records the assumptions of
+the facts it relaxed through and a rewrite whose proof recorded any waits,
+and a value's own range, which rewrites that read ranges alone go by, takes
+only bounds that rest on no assumption. A round with a pending assumption
+persists nothing.
+
 Everything a round carries into later rounds (each merge's environment meet
 and ordering intersection, each loop's entry orderings, each loop parameter's
 bounds) is a list of bounds or orderings, each identified by what it bounds:
@@ -24823,6 +24921,368 @@ asserts both orderings; a holding `!=` edge makes an ordering the path already
 proves non-strict strict, so a counter tested against its limit with `!=` is
 known to lie strictly inside it. `bool_not` of a modeled comparison carries the
 complementary comparison, which is how `!=` reaches the prover.
+
+A loop rebinds a local only by assigning it something else. A parameter that
+every back edge sets to its own value, directly or through single-assignment
+aliases defined on the loop's cycle, holds its entry value on every pass:
+each alias reads the parameter after the pass began, when by induction it
+still held that value. Such a parameter is not assigned by the loop, so the
+orderings its entry edges carry about it hold throughout the loop, as they do
+for a local the loop never mentions on the left of an assignment. A
+tail-recursive procedure's pass-through arguments are the case in hand: the
+limit a recursive walk compares its index against is a parameter of the loop
+the walk becomes.
+
+### Hoisted length tests
+
+Everything above proves a check from a branch the procedure already has. A
+loop that walks a list by an index it stops at a literal, a local, or another
+list's length has no such branch: the index is tested against the list's own
+length on every pass because nothing relates the stopping bound to that
+length. The prover supplies the branch. When its rounds reach their fixpoint
+with a comparison on a loop's cycle still undecided, and one length test made
+where the loop is entered would decide it, the loop is guarded:
+
+```text
+join loop(params) { body }            join loop(params) { body }
+in remainder                    =>    in join guard() {
+                                             if base <= len(list) + c {
+                                                 join copy(params) { body' } in jump copy
+                                             } else {
+                                                 jump loop
+                                             }
+                                         } in remainder[jump loop := jump guard]
+```
+
+Every entry to the loop goes through the guard, which makes the test once. It
+enters a copy of the loop when the test holds and the loop as it was when it
+does not. Back edges of the copy return to the copy and back edges of the
+loop return to the loop, so neither asks again. The copy declares the loop's
+parameters and shares every local that is read or written outside the body;
+locals that live entirely inside the body are fresh in the copy. The guard
+sits in the loop's remainder, so every join the body jumps out to is still in
+scope for the copy. Loop append promotion versions its loops with the same
+split of locals (`body_clone.renamableBodyLocals`), and the plain copy here is
+`body_clone.cloneLoop`. That pass dispatches at the loop's head on every
+pass, because the ownership it dispatches on can change between passes; a
+length that cannot drop needs asking once.
+
+Guarding removes no check. The guard reads a length and a value and
+branches, and the copy is the body statement for statement, so whichever arm
+runs, the procedure computes what it computed before, out-of-bounds indices
+included. The checks leave the copy in the proof rounds that follow, which
+start over on the guarded procedure and find the test's holding edge on the
+copy's entry like any other branch. The length lower bound that edge states
+becomes a loop invariant of the copy by the induction above, and the copy's
+comparison folds from it. The qualifying rule below therefore decides only
+where a copy is worth emitting: a rule that admitted too much would cost
+code size, never correctness.
+
+A loop is guarded when all of the following hold.
+
+- A comparison on the loop's cycle is undecided at the fixpoint and is an
+  ordering, `x <= y + m` in the prover's form for either of its outcomes.
+- The path's orderings where the comparison stands give `x <= base + c1` and
+  `len(list) <= y + c2`. Then `base <= len(list) + (m - c1 - c2)` decides
+  the comparison, and it is the weakest test of that base against that list
+  that does, because difference constraints compose only along such a chain.
+- `base` is a literal, an integer local, or the length of a list a local
+  holds, and the local holds one value from the loop's entry to its exit. A
+  base bounds `x` through orderings that branches and definitions
+  established. The range of `x`'s type is not a base, so an index that is
+  merely a `U8` does not ask whether the list has 256 items.
+- `list` is a local holding one list from the loop's entry to its exit, or a
+  parameter of the loop none of whose back edges passes a list the prover
+  cannot show to be at least as long as the one the pass began with. An
+  in-place write (`list_set`, `list_set_in_place_unsafe`,
+  `list_map_write_unsafe`) keeps the length term, `list_map_prepare_reuse`
+  keeps the value, and an append adds one, so loops that overwrite or grow
+  the list qualify. A back edge that passes a list of unrelated length (a
+  drop, a sublist, a call's result) disqualifies the parameter.
+- The test is not already decided where the comparison stands. A test whose
+  two sides are one value, or whose failure the path's orderings prove, is
+  never asked: a pass that reaches the comparison would never run in the
+  copy.
+- The guard can read both sides where the loop is entered. Each is a local
+  that no statement in the loop's body defines, or a parameter of the loop
+  that the loop does not assign; a single-assignment alias defined in the
+  body stands for its source. Each is also a local a statement on the loop's
+  cycle reads. LIR initializes a local on every path to a read and every
+  entry reaches the cycle, so such a local is initialized at every entry,
+  and it is live there, so the guard's read does not keep a list alive past
+  what would have been its last use. The path's orderings often relate the
+  comparison to lists the procedure is finished with by the time the loop
+  runs (the argument an earlier write consumed, say); measuring one of those
+  would take away the uniqueness that write relies on, so they are never
+  measured. A local an `init_uninitialized` statement defines and a dynamic
+  local are never read by a guard, and a length some `list_len` read through
+  an item descriptor is never measured by one.
+- The loop encloses no other loop, and is neither a guarded loop nor a
+  guard's copy. A statement is therefore copied at most once by this step,
+  whatever the nesting, and the copy is spent on the innermost loop, where a
+  check runs most often. A check on the cycle of an outer loop but outside
+  its inner loops stays checked.
+- The loop's join has no retained locals and no maybe-uninitialized
+  parameters, which a second declaration of the join would have to restate.
+
+A comparison asks for one test. Several pairings of a base with a list can
+each decide the same comparison (an index below a literal is also below
+that literal plus any other value the path knows is not negative), and a
+guard that conjoined them would pass only for lists that satisfy all of
+them. The comparison asks for the outcome that holds before the one that
+fails, for the first list that has a test worth asking (a local the loop
+leaves alone before a parameter it carries, then by local), and for that
+list the weakest test: a test that implies another is dropped in its favor,
+and of tests that imply each other the first stands (a literal base, then
+locals and lengths by local).
+
+A checked addition asks for a test of its own kind. `a + b` on a loop's
+cycle crashes on overflow, or reports it, on every pass when nothing bounds
+the sum. It asks when:
+
+- it is an unsigned addition of at most 64 bits, in its crashing or
+  overflow-reporting form, that the fixpoint leaves unproven;
+- the path's orderings put one operand at most a literal `ceiling` below the
+  type's highest value, through a value whose own range ends below that
+  highest value: a literal, a list's length (below `2^63`), a masked or
+  narrower value. A counter kept below a local that may itself be the
+  type's highest value has no ceiling: all that bounds it is that it is
+  not the highest value, and the test that follows from that passes for
+  almost no step;
+- the other operand is at most `value + c`, where `value` is an integer
+  local or a list's length that holds one value from the loop's entry to
+  its exit and that the guard can read under the rules above.
+
+The test is the limit test `value <= max - ceiling - c`, a comparison of a
+loop-invariant value against a literal. It bounds the sum by `max` on every
+pass, and it is the weakest test of that value that does. Where several
+values bound the operand, the addition asks for the weakest of their tests,
+as a comparison does. A limit the value's own range already exceeds is not
+asked.
+
+Like a length test, a limit test changes no behavior and removes nothing by
+itself. The guard branches on it. When it holds no pass can overflow, and
+the copy runs; the rounds that follow prove the copy's addition exact from
+the test's edge and the loop's own bound, and only then is it rewritten to
+the proven form. When it fails the loop as written runs, with its checked
+addition. An execution in which the addition overflows fails the test
+(holding it would bound the sum), so it runs the loop as written and
+crashes at the same pass and the same statement, after the same effects,
+with the same message.
+
+A checked multiplication asks the same way. `a * b` asks when it is an
+unsigned multiplication of at most 64 bits, in its crashing or
+overflow-reporting form, that the fixpoint leaves unproven; one operand has
+a literal `ceiling` under the rule above; and the other is at most
+`value + c` for a loop-invariant `value` the guard can read. The test is
+the limit test `value <= max / ceiling - c`, with the division rounded
+down: `ceiling * (max / ceiling)` is at most `max`, so the product fits on
+every pass, and it is the weakest test of that value that bounds the
+product through that ceiling. A ceiling of zero or one asks for nothing,
+because the product is then at most the other operand and needs no test.
+The copy's multiplication is proved by the rule that two operands the
+path's orderings each put at or below a literal, whose product is at most
+`max`, multiply exactly. That rule applies wherever both bounds are known,
+with or without a guard; a bound that rests on an unverified loop
+assumption proves nothing until the assumption is verified.
+
+A checked subtraction asks for a test of the other kind. `a - b` is exact
+when `b <= a`, which is an ordering between two values, the same claim a
+comparison's outcome is. It asks when:
+
+- it is an unsigned subtraction of at most 64 bits, in its crashing or
+  overflow-reporting form, that the fixpoint leaves unproven;
+- the path's orderings give `b <= base + c1`, with `base` a literal, an
+  integer local or a list's length under the rules for a comparison's base;
+- they give `floor <= a + c2`, where `floor` is an integer local that
+  holds one value from the loop's entry to its exit, a list's length under
+  the rules for a comparison's list, or a literal: the least value the
+  orderings leave `a`, when that is above zero. A literal floor of zero
+  says nothing, and is never tested against.
+
+The test is `base <= floor + (0 - c1 - c2)`, by the same composition as a
+comparison's. A countdown `i - step` in a loop that runs while `i > low`
+asks whether `step <= low`; in one that runs while `i > 100` it asks
+whether `step <= 101`; a difference `high - low` of two values the loop
+never changes asks whether `low <= high`. Where several floors would do,
+the subtraction asks against the first that has a test worth asking (an
+integer local, then a length the loop leaves alone, then one it carries,
+then the literal), and for that floor the weakest test. A test against an
+integer local is asked with no offset above zero, because `floor + c`
+could pass the type's highest value: the test without the offset implies
+the one with it, so a loop that runs while `i > low` is tested for
+`step <= low` although `step <= low + 1` would do. A subtraction the
+loop's own test proves (a countdown that runs while `i >= step`) is proved
+at the fixpoint and asks for nothing.
+
+What a subtraction's or a multiplication's test guarantees is what an
+addition's does. The guard branches; the copy runs only when the test
+holds, and its operation is rewritten to the proven form only after the
+rounds prove it exact from the test's edge. An execution in which the
+operation would overflow, or pass zero, fails the test, runs the loop as
+written, and crashes at the same pass and statement with the same message.
+
+Signed integers ask for nothing, in any of the three operations. The
+prover tracks only unsigned integers of at most 64 bits: a signed local
+has no range, a signed comparison states no ordering, and a difference
+constraint `a <= b + c` between signed values would have to hold in a
+domain where both operands of an operation can be negative and the
+operation can leave its type at either end. Until signed values have
+ranges and orderings of their own, no test the guard could make would be
+followed by a proof. 128-bit integers are untracked for the same reason,
+and because the prover's own arithmetic is 128 bits wide.
+
+Two loop-invariant operands with no literal bound on either (a counter
+below a local limit stepped by a local step, or scaled by a local factor)
+would need a test that a sum or a product of two locals fits, which is not
+a comparison of one value against another and which the guard does not
+emit.
+
+Tests for one loop are conjoined: the copy runs only when every one holds,
+whatever they compare, so a loop still has at most one copy.
+Checks that ask for the same base against the same right side ask for the
+tightest of their tests, which decides all of them. A base or a floor that
+is a narrower unsigned integer is widened for the comparison; a nonzero
+offset is applied to the right side, after a test that the right side
+covers it when it is subtracted.
+
+The rule predicts that the copy loses a comparison, and the proof rounds
+decide. The prover's walks and persisted lists are bounded, so in a large
+procedure an ordering the rule counted on can fail to reach the comparison.
+A hoisted test's failing edge states nothing to the prover, so the loop
+itself is proved exactly as it was before the guard; at the next fixpoint
+its copy therefore holds fewer checks (ordering comparisons, and arithmetic
+that crashes on or reports overflow) exactly when a test decided one. A
+guard whose copy holds as many as its loop is withdrawn: the
+loop's entries return to the loop, the guard and the copy become
+unreachable, and the loop is not guarded again. Every rewrite outside the
+copy was proved from orderings that hold on the path through the loop as
+written, so it stands without the guard.
+
+Which loops are guarded depends only on the procedure: the demands are
+collected in the fixpoint round, sorted by loop, right side and base, and
+applied in that order.
+
+Looking for a test costs fact-graph walks, and only the fixpoint round's
+demands are used. The fixpoint is a round that rewrites nothing, defers
+nothing and seeds no assumption, so a check reached after the round has
+done any of those does not look. A comparison reached before the round has
+a length term for any list does not look either. `ROC_RANGE_PROVE_STATS` prints, per
+procedure, the proof rounds, the guards made and withdrawn, the proofs
+started over, and the walks spent looking.
+
+### Shared loop exits
+
+A loop join's body holds more than the loop. A `while` in the middle of a
+procedure lowers to a join whose body, on the arm that leaves the loop, runs
+on into the statements after it, so copying the body would copy the rest of
+the procedure with it. Every pass that emits a second version of a loop (the
+guard above, and loop append promotion's ownership and slack versioning)
+therefore first moves what follows the loop out of the body, with
+`body_clone.shareLoopExits`, and copies only what is left.
+
+A statement in the body is on the loop's cycle when a jump back to the
+loop's join is reachable from it, following straight-line successors, every
+arm of a branch, a join's remainder, and a jump to a join the body declares
+into that join's body. Every other statement of the body runs only after the
+pass that reaches it has decided to leave: nothing it does leads back to the
+head. An exit begins at such a statement that a cycle statement leads to
+directly (as a successor, a branch arm, a branch's continuation, or the body
+or remainder of a join on the cycle) and consists of every statement
+reachable from there. A loop has as many exits as it has such statements: a
+loop that leaves by its head and by a `return` in its body has two.
+
+An exit is shared when all of the following hold.
+
+- It has more than three statements. Sharing an exit adds the join that
+  declares it and a jump to it from each of the loop's two versions, and
+  copying it adds its statements once more, so a shorter exit (a lone
+  `ret`, or a result alias and a `ret`) is no smaller shared than copied
+  and stays in the body.
+- It is entered only at its first statement. No other exit begins inside
+  it, and no branch on the cycle has its continuation inside it. A
+  branch's arms reach its continuation without crossing a join, so where
+  arms run on into a continuation that is off the cycle, the exit that is
+  shared begins at the continuation and the arms' own statements stay in
+  the loop. Nor does any statement outside it lead to a statement inside
+  it other than the first: where two exits run together into the same
+  statements (a `break` that assigns a variable and then continues with
+  the code after the loop, which the loop's head also continues with),
+  neither is shared, and the statements from where they meet are an exit
+  of their own that both lead to. Sharing one of the two would copy what
+  they have in common once more.
+- Every jump inside it targets a join it declares itself or a join in scope
+  where the loop is declared.
+- It holds no statement of an exit already shared.
+- Every local it carries out of the loop and also defines is dead wherever
+  the exit jumps out to.
+
+Each shared exit gets a fresh join. What the exit carries out of the loop is
+explicit: every local it reads that the loop's parameters or the rest of the
+body define becomes a parameter of the join, and the join's body is a copy
+of the exit that reads those parameters in place of the locals. Every edge
+from the statements left in the body into the exit's first statement, a
+branch's continuation edge included, becomes one sequence that writes the
+parameters and jumps to the join; the arms of a branch whose continuation
+was shared thus still reach one shared suffix, which is that sequence. The
+joins are declared around every version of the loop
+(`body_clone.declareLoopExits`): at the top of the head's body for loop
+append promotion, whose copy is nested in that body, and around the loop
+and its guard for a hoisted length test. An exit that does not qualify
+stays in the body and is copied with it.
+
+Sharing an exit preserves the procedure's behavior. The exit runs the same
+statements on the same values, entered by a jump instead of by falling into
+them. Every jump still targets an enclosing join: the loop's versions lie
+inside the exit joins' remainders, and the exit's own jumps target joins
+that enclose the loop, which enclose the exit joins too. LIR initializes a
+local on every path to a read, and the exit reads each carried local without
+defining it, so each is initialized wherever the loop enters the exit and
+the parameter writes read nothing uninitialized. Ownership follows the
+ordinary join protocol: a carried value passes to the exit's join at the
+`initialize_join_param` write, inside whatever frame binds it, and the exit
+never reads a local that only a join inside the loop binds (reading such a
+local from outside that join is what ARC rejects). The copy of the loop
+writes the same parameters as the loop does, because they are read outside
+the body that is copied (`body_clone.keepExitParams`); every other local
+the exit read from the loop is now read only inside the loop and may be the
+copy's own.
+
+An exit may define a local the rest of the body also defines: a variable
+the loop assigns and the code after it assigns again. Two cases.
+
+- The exit defines the local before any read of it, on every path. It
+  never sees the loop's value, so the local is not carried, and the copy of
+  the exit keeps the local as it is.
+- Some path through the exit reads the local before defining it. The
+  loop's value is carried like any other, and the copy of the exit names
+  the parameter everywhere the exit named the local, definitions included.
+  Inside the copy every read sees the value it saw before. What changes is
+  that the exit no longer writes the local itself, and that is the same
+  procedure only when nothing that runs after the exit reads what the exit
+  left in it. An exit ends by returning or stopping, after which nothing
+  reads anything, or by jumping to a join outside itself. The condition is
+  that from the body of every such join, following the procedure's control
+  flow, no read of the local is reached before a definition of it. (An
+  exit can lead back into its own loop through an enclosing one, so reads
+  in the loop's body count like any others.) LIR initializes a local on
+  every path to a read, so the read that comes before a definition is also
+  what guarantees the local is initialized where the parameter is written.
+
+An exit that assigns a variable of an enclosing loop it has also read, and
+jumps back to that loop, fails the condition: the enclosing loop reads the
+variable. It stays in the body and is copied with it.
+
+For loop append promotion the shared exit is the body as promoted: a set in
+it dispatches on its owned flag and an append in it tests its limit,
+whichever version of the loop ran. Both versions pass it the flags and
+limits it reads, and a limit carried through unchecked appends still bounds
+the spare capacity from below. The slack dispatch still counts
+the appends an exit performs, which only makes it ask for more spare
+capacity than the copy needs.
+
+Statements after the loop are proved once, from what both versions agree on
+at the exit join, like any other merge.
 
 ### Saturating results and the other integer operations in the prover
 
@@ -27589,6 +28049,16 @@ call:
 - no borrow of it is live at the call, under the same lender/holder
   liveness rule the certifier evaluates
 
+A check that only reads its argument may read it through a view: a borrowed
+pure same-value alias that no statement consumes. A view holds no unit and has
+no origin of its own, and the count the check reads is that of the value it
+views, so the three conditions are asked of the local owning the viewed unit,
+with every link of the borrowed alias chain down to it free of holder-adding
+occurrences. This is the shape a Builtin wrapper leaves behind when its inlined
+parameter feeds an op that only inspects the list, such as `list_owned_unique`.
+The certifier accepts such a claim when the birth holds at the end of the
+argument's chain of single alias definitions.
+
 The first two conditions are one more monotone bit per local in the ARC
 solver—born unique, destroyed by any flow edge that can add a holder—
 over the same alias and call edges the solver already walks. The third is a
@@ -27637,6 +28107,14 @@ its existing value-flow edges once per candidate; validation and emission consum
 that classification. Tracked sources forward valid metadata, while sources
 entering the chain establish metadata for their actual allocation. A merged
 local's membership in the chain is not evidence about all of its definitions.
+A join parameter of the chain normally receives its metadata through added
+limit and flag parameters written beside each of its writes. A join
+parameter that some edge defines by direct assignment has no parameter write
+on that edge, so it is a merged local like any other value with several
+definitions: each definition, parameter write or assignment, sets the
+value's one shared limit local and one shared flag local. The promoted
+loop's own parameter is always a parameter in full, because loop versioning
+dispatches on its flag.
 A loop-parameter write that brings an outside list into the chain also prevents
 slack-based loop versioning: its new allocation may have less spare capacity
 than the loop head measured, even when that write measures fresh metadata.
@@ -27696,6 +28174,33 @@ versioned loop is not such a loop, and cloning it would double the emitted
 body for every level of nesting to remove one predictable branch per site;
 it keeps its flag-dispatched sets instead.
 
+The chain also follows the operations of an update that moves an item out
+of its slot and back in (`List.update`, below). `list_map_prepare_reuse`
+returns the list it consumed, so the limit and the flag pass through it;
+`list_move_out_unsafe` is a read; `list_map_write_unsafe` stores into the
+allocation it was given, and its contract is a uniquely owned non-slice
+list, so it leaves the flag at one and the limit unchanged. A transfer
+whose result has a use the pass does not model is itself an unmodeled use
+of its input: the chain ends at the input. A transfer through which a list
+entered a promoted chain is followed by that list's measurement and bounds
+the chain; no later chain of the same procedure flows through it.
+
+A `list_owned_unique` query on a carried value asks exactly what the
+value's ownership flag records, so it is a promotion site like an item
+overwrite: its chain threads the flag. The promoted body keeps the query
+as written. In the unique-only copy of a versioned loop, a query whose
+flag is known one is replaced by the constant one, and a switch on a local
+that only such a query defines is replaced by the arm that constant
+selects, so neither the query nor the copying arm remains in the hot loop.
+LIR initializes a local on every path to a read, which is why the query
+runs before any switch on its result within one pass through the body. The
+soundness argument is the one for overwrites: the flag is consulted only
+for the value it was computed for. A query on a value that a consuming use
+can split from another live use is not answered, and a query whose flag is
+measured inside the copy (a list entering the chain there) still asks.
+The pass recognizes these LIR operations wherever they occur; it never
+identifies a builtin by name.
+
 `List.clear` is its own low-level, `list_clear`, run by every backend as the
 `listClear` builtin: its result is never a slice and never shares an
 allocation, so unlike `list_sublist` its result is born unique, and a list
@@ -27734,7 +28239,8 @@ return to the copy, since consuming one iteration and its appends keeps the
 cover. Otherwise the body runs as promoted. A chain reaching several loops
 gives each its own bound and its own copy. The copy nests no other promoted
 loop, every append site in the body belongs to a checked chain, the chains
-carry only plain appends, no list enters a chain inside the loop, and no
+carry only plain appends (an ownership transfer, like an alias, hands its
+list on unchanged), no list enters a chain inside the loop, and no
 append site sits before the head test or inside a nested loop, where it
 would run more than once per iteration. A procedure call in the body is no
 obstacle: the copy removes a carried limit and a branch per append whether
@@ -27767,14 +28273,26 @@ on the original, unconsumed argument would allow ARC to move a preservation
 retain after that observation and incorrectly report a shared buffer as unique.
 
 `List.update` uses the same ownership-transfer protocol for its single selected
-item. After checking the index, it prepares the outer list and tests whether
-the allocation is reusable. A reusable list moves the selected item out of
-its slot, calls the updater with that owned value, and moves the result back
-into the vacated slot. This is what lets an updater mutate a uniquely owned
-refcounted item, such as an inner list, without a defensive copy. A shared
-outer list takes the ordinary checked replace path, which keeps the original
-list and selected item unchanged. Since `List.update` has the same item type
-on both sides, it needs no in-place representation cast.
+item. After checking the index, it prepares the outer list and asks
+`list_owned_unique` whether the allocation is reusable. A reusable list moves
+the selected item out of its slot, calls the updater with that owned value, and
+moves the result back into the vacated slot. This is what lets an updater
+mutate a uniquely owned refcounted item, such as an inner list, without a
+defensive copy. A shared outer list takes the ordinary checked set path, which
+keeps the original list and selected item unchanged. Since `List.update` has
+the same item type on both sides, it needs no in-place representation cast and
+no item-compatibility decision, so it asks the plain ownership question instead
+of `list_map_can_reuse`. That makes its test a runtime uniqueness check like
+any other, and both of its paths end in an operation whose result is a list
+declared unique (`list_move_in_unsafe` and `list_set`), so every `List.update`
+result is born unique: uniqueness inference deletes the test of each later
+update in a chain, and of every update in a loop whose entry value is proven
+unique. The in-place branch is present at every opt level, as it is for the
+sorts and `List.keep_if`.
+
+`list_map_can_reuse` is not a uniqueness-inference site. Its answer also
+depends on the layout decision below, and `List.map` asks it once per call
+rather than once per item, so a proof would remove one count read per map.
 
 The runtime meaning of `list_map_can_reuse` is "uniquely owned and not a
 seamless slice"—a slice's buffer points into the middle of an allocation
@@ -27789,7 +28307,7 @@ The in-place branch itself is dropped before it reaches LIR whenever the item
 representations are not interchangeable or the optimization is disabled
 (`TargetConfig.list_in_place_map`, on for `--opt=size`/`--opt=speed`, off for
 dev, interpreter, and compile-time evaluation), so ineligible map
-and update specializations never carry dead in-place machinery and dev builds
+specializations never carry dead in-place machinery and dev builds
 lower exactly the copy path. The fold is one instance of a layout-resolved
 match: a `match` whose scrutinee calls a Builtin wrapper of a low-level whose
 answer committed layouts decide (`list_map_can_reuse`, whose decided answer is
@@ -31754,6 +32272,23 @@ and installation phases under the same diagnostic.
 `ROC_TEST_COMMAND_WORK` prints deterministic test-command counters at exit.
 The specialization, evaluation, runtime LIR, ARC, static-data and native test
 execution producers increment their own counters. This variable uses the same developer-only gate.
+
+`ROC_RANGE_PROVE_STATS` prints one line of deterministic work counts for each
+procedure the range prover walks, named by its procedure id and its source
+name. The counts are the prover's `WorkStats`: proof rounds, the rounds that
+threaded Bool joins, and the proofs started over; loop guards made and
+withdrawn, the undecided checks examined for a hoisted test and the
+fact-graph walks spent looking for one; loop-invariant candidates admitted,
+verified and dead; regions and statements walked; slack walks and the roots
+they visited; and sum refreshes with the size of their closures, the passes
+and relaxations they ran, and how many stopped at the pass cap. Setting the
+variable also makes the lowering record procedure debug names, which it
+otherwise records only for the diagnostics that print them; a
+compiler-generated procedure has no source name and prints as `<unnamed>`.
+The counts measure what a procedure cost the prover and change nothing it
+proves. They are counted in every compiler, and the pipeline's `WorkMetrics`
+sums them over the lowered procedures for tests that pin how much work a
+shape costs.
 
 `ROC_PROFILE_ALLOCATIONS` attributes native test-root allocations on Linux x64.
 Each root owns its diagnostic table, aggregating allocation and reallocation
