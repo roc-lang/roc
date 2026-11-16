@@ -33211,7 +33211,7 @@ const BodyContext = struct {
         /// A deferred intrinsic emitted once the body's graph is sealed,
         /// with the arguments its call site lowered, if any.
         deferred_body: ?struct { pre_lowered_args: ?DraftSpan(DraftExprId) } = null,
-        stage: enum { start, deferred_prepared, deferred_args, args } = .start,
+        stage: enum { start, codec_subject, deferred_prepared, deferred_args, args } = .start,
         /// The checked arguments. Owned.
         args: []CIR.Expr.Idx = &.{},
         arg_tys: [checked.IntrinsicId.max_callsite_arity]Type.TypeId = undefined,
@@ -38913,7 +38913,30 @@ const BodyContext = struct {
                     // `FieldName(shape)` row.
                     if (unresolved) return loweredExprStep(try self.deferCallsiteIntrinsic(task, null));
                 }
+                // A `FieldNames` operation reads the generated representation
+                // of its subject, and the subject expression is what carries
+                // it: a `match`, or a call through a function value, has no
+                // evidence to hand the request beforehand. While the request
+                // still holds the subject's public named type, the subject
+                // is lowered at the request's own cell first, which gives
+                // that cell the representation, and the operation's argument
+                // types are read afterwards.
+                if (intrinsicReadsFieldNames(task.intrinsic) and
+                    try self.graph.containsCodecQuery(callable.args[0], .public_codec_interface))
+                {
+                    task.stage = .codec_subject;
+                    return requestLowerChild(self, ExprSite.read(task.args[0]), DraftTypeCell.fromGraphNode(callable.args[0]));
+                }
                 try self.beginCallsiteIntrinsicBody(task);
+                return try self.nextCallsiteIntrinsicArg(task);
+            },
+            .codec_subject => {
+                const subject = input.?.exprValue();
+                const callable = try self.graph.functionNodes(task.callable_node);
+                try relateRequestComponent(self.graph, callable.args[0], try self.exprTypeCell(subject).toGraphNode(self.graph));
+                try self.beginCallsiteIntrinsicBody(task);
+                task.lowered_args[0] = subject;
+                task.index = 1;
                 return try self.nextCallsiteIntrinsicArg(task);
             },
             .deferred_prepared => {
@@ -38928,6 +38951,15 @@ const BodyContext = struct {
                 return try self.nextCallsiteIntrinsicArg(task);
             },
         }
+    }
+
+    /// Whether a call-site intrinsic's first argument is a `FieldNames` value
+    /// it reads.
+    fn intrinsicReadsFieldNames(intrinsic: checked.IntrinsicId) bool {
+        return switch (intrinsic) {
+            .field_names_rename_fields, .field_names_shortest_name, .field_names_longest_name, .field_names_iter, .field_names_for_size => true,
+            else => false,
+        };
     }
 
     /// Reserve a call-site intrinsic's expression, emitted once its body's
@@ -64953,8 +64985,14 @@ const BodyContext = struct {
                     expected_node,
                 );
                 const fn_nodes = try self.graph.functionNodes(fn_node);
-                if (try self.graph.containsGeneratedPrivate(fn_nodes.ret)) break :blk fn_nodes.ret;
-                if (!try self.graph.containsIteratorInterface(fn_nodes.ret)) break :blk fn_nodes.ret;
+                // A codec representation's public named type in the result is
+                // callee-authored exactly as a public iterator result is
+                // (`completeDeferredIteratorResult`), so the branch's evidence
+                // is the completed callee's result.
+                if (!try self.graph.containsCodecQuery(fn_nodes.ret, .public_codec_interface)) {
+                    if (try self.graph.containsGeneratedPrivate(fn_nodes.ret)) break :blk fn_nodes.ret;
+                    if (!try self.graph.containsIteratorInterface(fn_nodes.ret)) break :blk fn_nodes.ret;
+                }
 
                 try self.ensureNestedCallablesAtNodes(call.args, fn_nodes.args);
                 const completed = try self.completedDirectCalleeAtNode(checked_value, target, source_fn_ty, fn_node);

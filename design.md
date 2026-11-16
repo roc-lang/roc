@@ -9847,11 +9847,20 @@ relates that result to its representation: only the callee's body does. The
 caller therefore lowers such a callee before it consumes the result, and
 adopts the completed result, exactly as it does for a public iterator
 result. A codec representation among the call's arguments does not hold that
-back, because unlike an iterator representation it never changes.
+back, because unlike an iterator representation it never changes. A branch of
+an `if` or `match` that is such a call contributes the completed callee's
+result to the shared result selection, as a branch calling an iterator
+producer does.
 
 Because every `FieldNames` value is the generated representation, the
 `FieldNames` operations (`iter`, `for_size`, `shortest_name`, `longest_name`,
-`rename_fields`) read their names only from the generated backing. A
+`rename_fields`) read their names only from the generated backing. An
+operation reads its subject's type from its request, and some subject
+expressions (a `match`, or a call through a function value) have no evidence
+to hand the request before they are lowered. While the request still holds
+the subject's public named type, the subject is lowered first at the
+request's own cell, which gives that cell the representation, and the
+operation reads its argument types afterwards. A
 `FieldNames` argument without it is a compiler invariant violation; there is
 no lowering that reads a record's own field labels in its place, since that
 would silently drop the format's renames.
