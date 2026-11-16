@@ -9393,8 +9393,9 @@ and the absolute index of its owner parameter in the checked module's evidence
 pool. Monotype uses the lexical coordinate; Boxy uses the owner index to bind
 and capture a dictionary without recovering ownership from a receiver type.
 The owner parameter records the first edge at its scheme's own scope that
-hands it on, with the parameter of the instantiated scheme that edge fills
-(`EvidenceParamRecord.forwarded`), so a caller building the requirement's
+hands it on, a use or a dispatch edge (whose evidence is the alias scope's
+when the edge is bound to an alias), with the parameter of the instantiated
+scheme that edge fills (`EvidenceParamRecord.forwarded`), so a caller building the requirement's
 codec reaches the instance of the procedure that declares the codec's local
 procedures (Sealed Result Rows). Every such edge instantiates its callee at
 the types the requirement's relation names and fills the callee's other
@@ -17185,7 +17186,20 @@ is adapted to the requirement the declaring function states, so a declaring
 function requiring `a.status : a -> [Ok(Str), Err(Str), Extra]` called by
 one requiring `b.status : b -> [Ok(Str), Err(Str)]` reads `Ok` back as `Ok`
 in a format method that dispatches through the declaring function's scope.
-A requirement handed on through several schemes is followed edge by edge.
+A requirement handed on through several schemes is followed edge by edge:
+the edge a requirement is handed on from can be a use of a procedure, of a
+procedure alias (top-level or local), or of a generalized local procedure of
+the body, or a dispatch edge, one bound to an alias among them. A local
+procedure's scope is entered at its use, at the types the use gives its
+variables and with the dictionaries the use's evidence gives its
+requirements, and the edge its own requirement records is read inside it;
+an alias chain is followed to the procedure it reaches, each alias's
+forwarded lookup filling the next scheme's parameter with the alias's own,
+as the lookup's evidence names it. Every generalized scope between an edge
+and the scheme a requirement belongs to captures the requirement in its own
+scheme, since the relation names a variable of a scope outside it, so the
+edge that hands a requirement on is always at the scope whose parameter it
+fills, at evidence depth zero.
 `test/cli/WidenClosedImplDeclarationContext.roc` runs that case and local
 procedures built from a declaration context whose own requirements and
 bodies call a method at a wider row; `test/cli/ForwardedLocalCodecRequirement.roc`

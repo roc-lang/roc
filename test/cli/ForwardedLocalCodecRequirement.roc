@@ -138,6 +138,68 @@ forward_twice : c -> (Str -> Try(Str, []))
     where [c.status : c -> [Ok(Str), Err(Str)]]
 forward_twice = |x| forward_custom(x)
 
+# The forwarding call sits in a local function of the caller's body,
+# capturing the caller's value, whose scope captures the requirement in turn.
+via_closure : b -> (Str -> Try(Str, []))
+    where [b.status : b -> [Ok(Str), Err(Str)]]
+via_closure = |x| {
+    go = |_n| with_custom(x)
+    go({})
+}
+
+# The local function is generic in a variable of its own, used at two types.
+via_closure_generic : b -> (Str -> Try(Str, []))
+    where [b.status : b -> [Ok(Str), Err(Str)]]
+via_closure_generic = |x| {
+    go = |n| {
+        _ignored = n
+        with_custom(x)
+    }
+    _other = go("s")
+    go(1.U8)
+}
+
+# The forwarding use names a procedure alias, top-level and local.
+fwd : a -> (Str -> Try(Str, [])) where [a.status : a -> [Ok(Str), Err(Str)]]
+fwd = with_custom
+
+via_alias : b -> (Str -> Try(Str, []))
+    where [b.status : b -> [Ok(Str), Err(Str)]]
+via_alias = |x| fwd(x)
+
+via_local_alias : b -> (Str -> Try(Str, []))
+    where [b.status : b -> [Ok(Str), Err(Str)]]
+via_local_alias = |x| {
+    local_fwd : c -> (Str -> Try(Str, [])) where [c.status : c -> [Ok(Str), Err(Str)]]
+    local_fwd = with_custom
+    local_fwd(x)
+}
+
+# The forwarding edge is a dispatch, of a method and of a method bound to an
+# alias, directly and through a dictionary.
+Maker(a) := [Maker(a)].{
+    build : Maker(a) -> (Str -> Try(Str, [])) where [a.status : a -> [Ok(Str), Err(Str)]]
+    build = |Maker.Maker(x)| with_custom(x)
+
+    built : Maker(a) -> (Str -> Try(Str, [])) where [a.status : a -> [Ok(Str), Err(Str)]]
+    built = build
+}
+
+via_method : b -> (Str -> Try(Str, []))
+    where [b.status : b -> [Ok(Str), Err(Str)]]
+via_method = |x| Maker.Maker(x).build()
+
+via_method_alias : b -> (Str -> Try(Str, []))
+    where [b.status : b -> [Ok(Str), Err(Str)]]
+via_method_alias = |x| Maker.Maker(x).built()
+
+through_dict : m -> (Str -> Try(Str, [])) where [m.built : m -> (Str -> Try(Str, []))]
+through_dict = |maker| maker.built()
+
+via_method_alias_dict : b -> (Str -> Try(Str, []))
+    where [b.status : b -> [Ok(Str), Err(Str)]]
+via_method_alias_dict = |x| through_dict(Maker.Maker(x))
+
 expect forward_format(Job.Pending)({ count: 7 }, "n") == Ok("n7")
 expect forward_custom(Job.Pending)("") == Ok("Ok(cv)")
 expect forward_custom(Job.Failed)("") == Ok("Err(broken)")
@@ -147,3 +209,10 @@ expect with_sibling(Job.Pending)("") == Ok("Ok(cv)")
 expect forward_sibling(Only.One)("") == Ok("Ok(only)")
 expect forward_twice(Job.Pending)("") == Ok("Ok(cv)")
 expect forward_twice(Job.Failed)("") == Ok("Err(broken)")
+expect via_closure(Job.Pending)("") == Ok("Ok(cv)")
+expect via_closure_generic(Job.Failed)("") == Ok("Err(broken)")
+expect via_alias(Job.Pending)("") == Ok("Ok(cv)")
+expect via_local_alias(Job.Failed)("") == Ok("Err(broken)")
+expect via_method(Job.Pending)("") == Ok("Ok(cv)")
+expect via_method_alias(Job.Failed)("") == Ok("Err(broken)")
+expect via_method_alias_dict(Job.Pending)("") == Ok("Ok(cv)")

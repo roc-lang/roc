@@ -14234,9 +14234,11 @@ const EvidencePass = struct {
         for (self.site_evidence.items) |site| {
             recordForwardedFrom(pool, self.evidence_refs.items[site.start..][0..site.len], .{ .use = @fromBackingInt(site.key) });
         }
+        // A node bound to an alias records the evidence of the alias's
+        // scope, whose parameters its chain hands on to the target's.
         for (self.evidence_nodes.items, 0..) |node, raw| switch (node.nested) {
-            .resolved => |span| recordForwardedFrom(pool, self.evidence_refs.items[span.start..][0..span.len], .{ .node = @fromBackingInt(@as(u32, @intCast(raw))) }),
-            .from_callable, .through_alias => {},
+            .resolved, .through_alias => |span| recordForwardedFrom(pool, self.evidence_refs.items[span.start..][0..span.len], .{ .node = @fromBackingInt(@as(u32, @intCast(raw))) }),
+            .from_callable => {},
         };
     }
 
