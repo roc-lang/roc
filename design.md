@@ -28159,13 +28159,21 @@ ownership decisions.
 
 The planner forms basic blocks once. Within each block it records disjoint
 read-before-write intervals, propagating only live-in requirements backward across
-block edges to a fixed point. Scratch columns are procedure-local and indexed by
+block edges to a fixed point. A procedure that is one block no edge enters has
+nothing to propagate, so its in-block intervals are its whole solution and it
+builds no block graph or loop forest. A multi-block procedure's block graph,
+loop forest and loop coverage live in an arena the plan keeps from procedure to
+procedure. Scratch columns are procedure-local and indexed by
 compact identities. There are no locals-wide rows per statement and no eagerly
 materialized pairwise interference graph. Slots are grouped by their required
 size and alignment and reused only after checking all remaining lifetime
 intervals, including holes and back edges. Single intervals are stored inline,
 without a heap allocation per local or slot. A queue retires occupied intervals
-so straight-line dead-temporary chains do not scan every earlier local.
+so straight-line dead-temporary chains do not scan every earlier local. When
+every value's lifetime is one interval, a slot returns from that queue only
+after its last reservation ends, so the most recently freed slot is the one
+the general check would choose, and the planner takes it without recording
+reservations.
 
 `ptr_alloca` backing cells have explicit procedure lifetime and are reserved
 separately from reusable local slots and instruction-selection scratch. Ordinary
