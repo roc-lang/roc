@@ -562,6 +562,14 @@ pub const Store = struct {
     declared_entries: std.ArrayList([]const DeclaredEntry) = .empty,
     span_arena: std.heap.ArenaAllocator,
     interned: std.HashMapUnmanaged(InternKey, TypeId, InternContext, std.hash_map.default_max_load_percentage) = .empty,
+    /// The node `intern` gave each primitive, the variable of each low index,
+    /// the empty record and the empty tag union, once one was asked for:
+    /// these leaves are asked for far more often than they are new, and
+    /// interned nodes never change.
+    primitive_ids: std.EnumArray(Primitive, ?TypeId) = .initFill(null),
+    variable_ids: std.ArrayList(collections.OptionalId(TypeId)) = .empty,
+    empty_record_id: ?TypeId = null,
+    empty_tag_union_id: ?TypeId = null,
     key_bytes: std.ArrayList(u8) = .empty,
     scratch_key: std.ArrayList(u8) = .empty,
 
@@ -666,6 +674,7 @@ pub const Store = struct {
         self.declared_entries.deinit(self.allocator);
         self.span_arena.deinit();
         self.interned.deinit(self.allocator);
+        self.variable_ids.deinit(self.allocator);
         self.key_bytes.deinit(self.allocator);
         self.scratch_key.deinit(self.allocator);
         self.name_texts.deinit(self.allocator);
@@ -1155,20 +1164,42 @@ pub const Store = struct {
     }
 
     pub fn primitive(self: *Store, value: Primitive) Allocator.Error!TypeId {
-        return self.intern(.{ .primitive = value });
+        const slot = self.primitive_ids.getPtr(value);
+        if (slot.*) |known| return known;
+        const id = try self.intern(.{ .primitive = value });
+        slot.* = id;
+        return id;
     }
 
     pub fn variable(self: *Store, index: u32) Allocator.Error!TypeId {
-        return self.intern(.{ .variable = index });
+        // Scope variables count up from zero; a relation's placeholder
+        // variables sit far above them (`Program.relateThroughRequirements`)
+        // and are interned without a slot here.
+        if (index >= cached_variable_count) return try self.intern(.{ .variable = index });
+        if (index < self.variable_ids.items.len) {
+            if (self.variable_ids.items[index].get()) |known| return known;
+        } else try self.variable_ids.appendNTimes(self.allocator, .none, index + 1 - self.variable_ids.items.len);
+        const id = try self.intern(.{ .variable = index });
+        self.variable_ids.items[index] = .some(id);
+        return id;
     }
 
+    /// How many of the lowest variable indices `variable` keeps a node for.
+    const cached_variable_count = 1 << 12;
+
     pub fn emptyRecord(self: *Store) Allocator.Error!TypeId {
-        return self.intern(.empty_record);
+        if (self.empty_record_id) |known| return known;
+        const id = try self.intern(.empty_record);
+        self.empty_record_id = id;
+        return id;
     }
 
     /// The empty tag union: a type with no values.
     pub fn emptyTagUnion(self: *Store) Allocator.Error!TypeId {
-        return self.intern(.{ .tag_union = .{ .tags = &.{}, .ext = null } });
+        if (self.empty_tag_union_id) |known| return known;
+        const id = try self.intern(.{ .tag_union = .{ .tags = &.{}, .ext = null } });
+        self.empty_tag_union_id = id;
+        return id;
     }
 };
 
