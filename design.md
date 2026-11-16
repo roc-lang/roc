@@ -158,7 +158,13 @@ bitwise operations, lane shifts, comparisons, bitmasks, and wrapping narrows
 used here lower to scalar instructions over sixteen-byte stack slots; list
 appends use the existing explicit LIR uniqueness data. BE lanes are byte-swapped with explicit
 shifts and masks before classification and narrowing. Bounds are checked before
-each full block; partial blocks use scalar decoding. Typed `load_units` APIs
+each full block; partial blocks use scalar decoding. The UTF-16 sizing pass
+also sizes each other 16-byte block of eight units at once when every
+surrogate in it is a high surrogate directly followed by a low one in the same
+block, as simdutf computes UTF-8 lengths from UTF-16: the block needs 8 bytes
+plus one per unit above 0x7F and one more per unit above 0x7FF, less one per
+surrogate, since a pair's two units encode as four bytes. Any other block is
+sized unit by unit, so every error keeps its kind and position. Typed `load_units` APIs
 remain available independently and do not implement byte decoding.
 
 The private Roc helpers return `{ index : U64, status : U8, string : Str }`;
