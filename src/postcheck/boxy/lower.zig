@@ -2068,8 +2068,8 @@ pub const Program = struct {
         }
         var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
         defer pending.deinit(self.allocator);
-        var seen: types.CheckedTypeMap(void) = .empty;
-        defer seen.deinit(self.allocator);
+        self.store.beginCheckedWalk();
+        defer self.store.endCheckedWalk();
         var index = evidence_params.len;
         while (index > 0) {
             index -= 1;
@@ -2078,7 +2078,7 @@ pub const Program = struct {
         }
         try pending.append(self.allocator, template.checked_fn_root);
         while (pending.pop()) |ty| {
-            if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
+            if (!try self.store.visitChecked(ty)) continue;
             if (self.converter().platformIdentity(module_index, ty) != null) continue;
             const start = pending.items.len;
             switch (types_view.payload(ty)) {
@@ -2150,11 +2150,11 @@ pub const Program = struct {
         const types_view = self.module(module_index).types();
         var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
         defer pending.deinit(self.allocator);
-        var seen: types.CheckedTypeMap(void) = .empty;
-        defer seen.deinit(self.allocator);
+        self.store.beginCheckedWalk();
+        defer self.store.endCheckedWalk();
         try pending.append(self.allocator, root);
         while (pending.pop()) |ty| {
-            if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
+            if (!try self.store.visitChecked(ty)) continue;
             switch (types_view.payload(ty)) {
                 .alias => |alias| try pending.append(self.allocator, alias.backing),
                 .record => |record| {

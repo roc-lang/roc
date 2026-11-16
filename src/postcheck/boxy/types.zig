@@ -535,6 +535,17 @@ pub fn CheckedTypeMap(comptime V: type) type {
             return range.getOrPut(gpa, key);
         }
 
+        pub fn count(self: *const Self) usize {
+            return self.source.count() + self.synthesized.count();
+        }
+
+        /// Empty the map, keeping its storage, in time proportional to the
+        /// entries it held.
+        pub fn clearRetainingCapacity(self: *Self) void {
+            self.source.clearRetainingCapacity();
+            self.synthesized.clearRetainingCapacity();
+        }
+
         pub fn deinit(self: *Self, gpa: Allocator) void {
             self.source.deinit(gpa);
             self.synthesized.deinit(gpa);
@@ -594,6 +605,13 @@ pub const Store = struct {
     declared_entries: std.ArrayList([]const DeclaredEntry) = .empty,
     span_arena: std.heap.ArenaAllocator,
     interned: std.HashMapUnmanaged(InternKey, TypeId, InternContext, std.hash_map.default_max_load_percentage) = .empty,
+    /// The checked types the current walk over a checked type has visited
+    /// (`beginCheckedWalk`). A fresh dense map per walk would allocate a
+    /// chunk for each id it meets and a directory spanning the ids between,
+    /// and free them all again, though a walk visits only a few types spread
+    /// over the module's whole id range; this one keeps its storage across
+    /// walks, so a walk pays only for the entries it adds.
+    checked_walk: CheckedTypeMap(void) = .empty,
     /// The node `intern` gave each primitive, the variable of each low index,
     /// the empty record and the empty tag union, once one was asked for:
     /// these leaves are asked for far more often than they are new, and
@@ -706,6 +724,7 @@ pub const Store = struct {
         self.declared_entries.deinit(self.allocator);
         self.span_arena.deinit();
         self.interned.deinit(self.allocator);
+        self.checked_walk.deinit(self.allocator);
         self.variable_ids.deinit(self.allocator);
         self.key_bytes.deinit(self.allocator);
         self.scratch_key.deinit(self.allocator);
@@ -1195,6 +1214,21 @@ pub const Store = struct {
         return .{ .name = name, .ty = ty, .kind = .inline_slot };
     }
 
+    /// Start a walk over checked types, which records the types it visits
+    /// with `visitChecked` and ends with `endCheckedWalk`. Walks do not nest.
+    pub fn beginCheckedWalk(self: *Store) void {
+        std.debug.assert(self.checked_walk.count() == 0);
+    }
+
+    /// Whether the current walk meets `ty` for the first time, recording it.
+    pub fn visitChecked(self: *Store, ty: checked.CheckedTypeId) Allocator.Error!bool {
+        return !(try self.checked_walk.getOrPut(self.allocator, ty)).found_existing;
+    }
+
+    pub fn endCheckedWalk(self: *Store) void {
+        self.checked_walk.clearRetainingCapacity();
+    }
+
     pub fn primitive(self: *Store, value: Primitive) Allocator.Error!TypeId {
         const slot = self.primitive_ids.getPtr(value);
         if (slot.*) |known| return known;
@@ -1527,11 +1561,11 @@ pub const Converter = struct {
         var found: std.ArrayList(checked.CheckedTypeId) = .empty;
         var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
         defer pending.deinit(scratch);
-        var seen: CheckedTypeMap(void) = .empty;
-        defer seen.deinit(scratch);
+        self.store.beginCheckedWalk();
+        defer self.store.endCheckedWalk();
         try pending.append(scratch, root);
         while (pending.pop()) |ty| {
-            if ((try seen.getOrPut(scratch, ty)).found_existing) continue;
+            if (!try self.store.visitChecked(ty)) continue;
             const start = pending.items.len;
             switch (types.payload(ty)) {
                 .flex, .rigid => try found.append(allocator, ty),
