@@ -29,13 +29,13 @@ main! = |args| {
 	n = args.len()
 	runtime = List.repeat(n + 5, 4000)
 
-	scalar_sum = scalars.fold(0, |acc, x| acc + x)
-	nested_sum = nested.fold(0, |acc, row| acc + row.fold(0, |a, x| a + x))
-	runtime_sum = runtime.fold(0, |acc, x| acc + x)
+	scalar_sum = scalars.fold(0.U64, |acc, x| acc + x)
+	nested_sum = nested.fold(0.U64, |acc, row| acc + row.fold(0.U64, |a, x| a + x))
+	runtime_sum = runtime.fold(0.U64, |acc, x| acc + x)
 	kept = keep_first(words, 2 + n)
 	extended = with_extra(table, "delta is longer than a small string too")
 	replaced = List.set(table, n, "a replacement string longer than small") ?? table
-	record_sum = records.fold(0, |acc, r| acc + r.n.to_u64() + Str.to_utf8(r.name).len())
+	record_sum = records.fold(0.U64, |acc, r| acc + r.n.to_u64() + Str.to_utf8(r.name).len())
 
 	echo!("scalars: ${scalars.len().to_str()} ${scalar_sum.to_str()}\n")
 	echo!("nested: ${nested.len().to_str()} ${nested_sum.to_str()}\n")

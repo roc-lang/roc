@@ -909,32 +909,42 @@ pub fn dispatch(b: *Builder, call_plan: static_dispatch.StaticDispatchCallPlan, 
     try b.pushValue(constructor);
 }
 
-/// The modules of one module's reflexive import closure that this lowering
-/// holds, in breadth-first direct-import order.
-const ImportClosure = struct {
+/// The modules whose bodies a module's stored values can come from, of those
+/// this lowering holds, breadth first: the module, then each module's direct
+/// imports in order, and after the lowering root's imports its platform
+/// relation modules, since a platform's constant can hold a value its app
+/// supplied for a requirement (design.md "Structural Serialization
+/// Methods").
+const StoredValueClosure = struct {
     program: *Program,
     allocator: Allocator,
     reached: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
     pending: std.ArrayList(ModuleIndex) = .empty,
     at: usize = 0,
 
-    fn deinit(self: *ImportClosure) void {
+    fn deinit(self: *StoredValueClosure) void {
         self.reached.deinit(self.allocator);
         self.pending.deinit(self.allocator);
     }
 
-    fn start(self: *ImportClosure, module: ModuleIndex) Allocator.Error!void {
+    fn start(self: *StoredValueClosure, module: ModuleIndex) Allocator.Error!void {
         try self.reached.put(self.allocator, self.program.module(module).key.bytes, {});
         try self.pending.append(self.allocator, module);
     }
 
-    fn next(self: *ImportClosure) Allocator.Error!?ModuleIndex {
+    fn next(self: *StoredValueClosure) Allocator.Error!?ModuleIndex {
         if (self.at == self.pending.items.len) return null;
         const module = self.pending.items[self.at];
         self.at += 1;
         for (self.program.module(module).view.direct_import_module_keys) |imported| {
             if ((try self.reached.getOrPut(self.allocator, imported.bytes)).found_existing) continue;
             try self.pending.append(self.allocator, self.program.modules.by_key.get(imported.bytes) orelse continue);
+        }
+        if (module == self.program.modules.views.items[0].index) {
+            for (self.program.modules.relations.items) |relation| {
+                if ((try self.reached.getOrPut(self.allocator, self.program.module(relation).key.bytes)).found_existing) continue;
+                try self.pending.append(self.allocator, relation);
+            }
         }
         return module;
     }
@@ -944,16 +954,16 @@ const ImportClosure = struct {
 /// `store_module`'s constants names `piece` (`pieceFamilyRoot`). A family is
 /// shared by every module whose derivation has its content, so its own
 /// module can be one the storing module does not import. A piece of a
-/// family is named by the first module of the storing module's reflexive
-/// import closure, in breadth-first direct-import order, holding a
-/// derivation with the family's content: the stored function was lowered
-/// from bodies that closure reaches, so one of its modules recorded the
-/// derivation. A piece of no family is named by the storing module.
+/// family is named by the first module of the storing module's stored-value
+/// closure (`StoredValueClosure`) holding a derivation with the family's
+/// content: the stored function was lowered from bodies that closure
+/// reaches, so one of its modules recorded the derivation. A piece of no
+/// family is named by the storing module.
 pub fn storedPieceHome(program: *Program, allocator: Allocator, store_module: ModuleIndex, piece: Piece) Allocator.Error!struct { ModuleIndex, u32 } {
     if (piece.family == no_family) return .{ store_module, no_family };
     const family = program.codec.families.items[piece.family];
     const owner = program.module(family.module).view.static_dispatch_plans.generated_codec_derivations.items()[@backingInt(family.root)];
-    var closure = ImportClosure{ .program = program, .allocator = allocator };
+    var closure = StoredValueClosure{ .program = program, .allocator = allocator };
     defer closure.deinit();
     try closure.start(store_module);
     while (try closure.next()) |module| {
@@ -961,7 +971,7 @@ pub fn storedPieceHome(program: *Program, allocator: Allocator, store_module: Mo
             if (derivation.kind == owner.kind and std.mem.eql(u8, &derivation.content.bytes, &owner.content.bytes)) return .{ module, @intCast(index) };
         }
     }
-    invariant("a stored codec piece's derivation was not held by its storing module's import closure");
+    invariant("a stored codec piece's derivation was not held by its storing module's stored-value closure");
 }
 
 /// The body of an intrinsic wrapper template's worker, whose explicit
@@ -1415,7 +1425,7 @@ const Gen = struct {
     /// The inputs of the family's workers: the descriptors of its types,
     /// which this worker's are.
     fn familyInputs(self: *Gen) Allocator.Error![]Body.Word {
-        return try self.b.descInputWords(0, self.b.var_descs.len);
+        return try self.b.descInputWords(0, self.b.scopeCounts().descs);
     }
 
     /// Renamed name `index` of the family's names.
@@ -1459,7 +1469,7 @@ const Gen = struct {
         const params = try b.allocator.alloc(LocalId, worker.params.len + @intFromBool(has_table));
         if (has_table) {
             params[worker.params.len] = try b.closedLocal(.opaque_ptr);
-            try b.beginTable(params[worker.params.len], 0);
+            try b.beginTable(params[worker.params.len]);
         }
         for (params[0..worker.params.len], worker.params) |*param, ty| param.* = try b.localOf(ty, .param);
         const ret_layout = try self.resultLayout(worker.ret);
@@ -1496,8 +1506,14 @@ const Gen = struct {
             slot.* = if (index < worker.capture_types.len) try self.layoutOf(worker.capture_types[index]) else .opaque_ptr;
             if (slot.* != .zst) all_zero_sized = false;
         }
+        // The reuse argument holds this worker's own callable, whose closed
+        // capture record a packing of the same layout repacks.
+        const reuse: Builder.ReuseKind = if (capture_layouts.len == 0)
+            .none
+        else
+            .{ .static = try b.captureLayout(worker.capture_types, @intFromBool(has_table)) };
         // A capture record of zero-sized values has no storage to read.
-        var start = try b.beginErasedWorker(if (all_zero_sized) &.{} else capture_layouts);
+        var start = try b.beginErasedWorker(if (all_zero_sized) &.{} else capture_layouts, reuse);
         if (all_zero_sized and capture_layouts.len != 0) {
             b.allocator.free(start.captures);
             start.captures = try b.allocator.alloc(LocalId, capture_layouts.len);
@@ -1506,7 +1522,7 @@ const Gen = struct {
                 try b.emitEntry(.{ .assign_struct = .{ .target = capture.*, .fields = LIR.LocalSpan.empty(), .next = undefined } });
             }
         }
-        if (has_table) try b.beginTable(start.captures[worker.capture_types.len], 0);
+        if (has_table) try b.beginTable(start.captures[worker.capture_types.len]);
         return try self.finishErasedStart(worker, start);
     }
 
@@ -1517,7 +1533,10 @@ const Gen = struct {
         const b = self.b;
         b.entry_hole = try b.newHole();
         const capture_ptr = try b.closedLocal(.opaque_ptr);
-        _ = try b.beginReuseArg(.none);
+        // The reuse argument holds this worker's own dynamic capture record,
+        // which owns the capture views `dynamicCaptures` reads, so it exists
+        // before them.
+        _ = try b.beginReuseArg(.dynamic);
         const start: Builder.ErasedStart = .{
             .entry = b.entry_hole,
             .body_start = undefined,
@@ -1554,17 +1573,8 @@ const Gen = struct {
         const b = self.b;
         defer b.allocator.free(frame.args);
         defer b.allocator.free(frame.start.captures);
-        var proc_args: std.ArrayList(LocalId) = .empty;
-        defer proc_args.deinit(b.allocator);
-        if (frame.record) |record| try proc_args.append(b.allocator, record);
-        const reuse = b.reuse_arg orelse invariant("an erased codec worker finished without its reuse argument");
-        try proc_args.append(b.allocator, frame.start.capture_ptr);
-        try proc_args.append(b.allocator, reuse);
-        try b.finishProc(frame.start.entry, frame.body_start, proc_args.items, frame.ret_layout);
-        const proc = b.store.getProcSpecPtr(b.currentWorker().proc);
-        proc.erased_capture_arg = .of(frame.start.capture_ptr);
-        proc.erased_reuse_arg = .of(reuse);
-        proc.abi = .erased_record;
+        const args: []const LocalId = if (frame.record) |*record| record[0..1] else &.{};
+        try b.finishErasedProc(frame.start.entry, frame.body_start, args, frame.ret_layout, frame.start.capture_ptr);
     }
 
     /// Bind a callback's trailing encoding and names captures.

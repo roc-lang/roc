@@ -161,13 +161,16 @@ pub const PublishError = CheckedArtifact.CompileTimeFinalizer.Error;
 /// Errors that can occur while type-checking a module.
 pub const TypeCheckModuleError = Allocator.Error || PublishError || error{Internal};
 
-/// Build CTFE finalization options from the package compiler context.
+/// Build CTFE finalization options from the package compiler context, for a
+/// compilation whose compile-time roots `strategy`'s evaluator completes.
 pub fn compileTimeFinalizationOptions(
     max_threads: usize,
     roc_ctx: *CoreCtx,
     timing: ?*eval.CompileTimeFinalization.Timing,
+    strategy: base.SpecializationStrategy,
 ) eval.CompileTimeFinalization.Options {
     return .{
+        .strategy = strategy,
         .max_threads = max_threads,
         .std_io = roc_ctx.std_io,
         .timing = timing,
@@ -245,7 +248,7 @@ pub const ArtifactPublicationInputs = struct {
     problem_store: ?*check.problem.Store = null,
     /// Waits on the published module's key slots.
     io: std.Io,
-    ctfe_options: eval.CompileTimeFinalization.Options = .{},
+    ctfe_options: eval.CompileTimeFinalization.Options,
     evaluation_phase: @FieldType(CheckedArtifact.PublishInputs, "evaluation_phase") = .immediate,
     /// How this module's compile-time roots were established. Part of the
     /// checked-artifact cache identity. See `Can.Validation`.
@@ -429,7 +432,6 @@ pub fn canonicalizeAndTypeCheckModule(
         env,
         imported_envs,
         module_envs_out,
-        &env.store.regions,
         module_builtin_ctx,
     );
     checker.fixupTypeWriter();
@@ -580,7 +582,6 @@ pub fn typeCheckModule(
         imported_envs,
         owner_envs,
         &module_envs_map,
-        &env.store.regions,
         module_builtin_ctx,
     );
     checker.platform_requirements = platform_requirements;

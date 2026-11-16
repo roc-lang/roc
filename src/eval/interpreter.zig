@@ -1851,6 +1851,11 @@ pub const Interpreter = struct {
                     );
                 }
 
+                // A tag union local whose residual shell names its one slot
+                // copies a payload whose stored unit has left; only its tag
+                // is readable.
+                if (path_len == 0 and residual_shell_absent_fields.len != 0) return;
+
                 const payload_layout = tag_union_info.variants.get(disc).payload_layout;
                 if (self.helper.sizeOf(payload_layout) == 0) return;
 

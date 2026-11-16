@@ -450,7 +450,11 @@ const Pass = struct {
             if (!try self.scalarizeProc(proc_id, body)) break;
             changed = true;
         }
-        if (changed) try erased_owner.resolveProcReuseSources(self.allocator, self.store, self.layouts, proc_id);
+        if (changed) {
+            var scratch = erased_owner.Scratch.init(self.allocator);
+            defer scratch.deinit();
+            try erased_owner.resolveProcReuseSources(&scratch, self.store, self.layouts, proc_id);
+        }
     }
 
     fn deinit(self: *Pass) void {

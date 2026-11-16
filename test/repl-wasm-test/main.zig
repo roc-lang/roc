@@ -271,4 +271,13 @@ pub fn main(init: std.process.Init) anyerror!void {
     try sendAndCheck(interface, gpa,
         \\{"protocol":1,"id":20,"op":"eval","params":{"source":"import Other\nOther.emit!({ name: \"log\", payload: \"not Repl\" })"}}
     , &.{ "\"status\":\"diagnostic\"", "\"code\":\"compile_error\"", "Effectful Compile Time Expression", "\"events\":[]", "\"completed\":false", "\"stop_reason\":\"diagnostic\"", "\"committed_count\":1" }, &.{ "This REPL only supports the hosted function Repl.emit!.", "\"kind\":\"effect\"" });
+
+    try sendAndRequire(interface, gpa,
+        \\{"protocol":1,"id":21,"op":"clear"}
+    , &.{"\"changed\":true"});
+
+    // A definition holding function values, and an expression calling them.
+    try sendAndRequire(interface, gpa,
+        \\{"protocol":1,"id":22,"op":"eval","params":{"source":"table = [|n| n + 1, |n| n * 2]\ntable.fold(40, |acc, f| f(acc))"}}
+    , &.{ "\"name\":\"table\"", "\"committed\":true", "\"value\":\"82.0\"" });
 }

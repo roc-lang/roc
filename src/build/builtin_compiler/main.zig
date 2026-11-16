@@ -157,9 +157,10 @@ fn serializeBuiltinArtifact(
     defer typed_modules.deinit();
 
     // The baked artifact serves either strategy's programs and no
-    // compilation reopens it; its evaluation completes every root, as every
-    // compilation's does.
-    const finalizer_options: comptime_finalizer.Options = .{};
+    // compilation reopens it, so its evaluation completes every root in both
+    // strategies' representations: the `.lss` evaluation first, then the
+    // `.boxy` form of every root holding a function value.
+    const finalizer_options: comptime_finalizer.Options = .{ .strategy = .lss, .complete_baked_module = true };
     var artifact = try check.CheckedArtifact.publishFromTypedModule(
         gpa,
         &typed_modules,
@@ -385,7 +386,6 @@ fn compileModule(
         module_env,
         imported_envs.items,
         &module_envs,
-        &module_env.store.regions,
         builtin_ctx,
     );
     checker.fixupTypeWriter();
@@ -409,7 +409,6 @@ fn compileModule(
             source_path,
             imported_envs.items,
             &checker.import_mapping,
-            &checker.regions,
             null,
         );
         defer report_builder.deinit();

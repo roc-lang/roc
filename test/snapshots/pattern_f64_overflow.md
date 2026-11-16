@@ -14,9 +14,27 @@ match x {
 }
 ~~~
 # EXPECTED
-NIL
+INVALID NUMBER - pattern_f64_overflow.md:2:5:2:10
 # PROBLEMS
-NIL
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Number")
+		(region (start 2 5) (end 2 10))
+		(headline
+			(reflow "This number literal does not fit in the inferred type."))
+		(document
+			(source-region (file "pattern_f64_overflow.md") (start 2 5) (end 2 10) (annotation error) (line-text "    1e100 => \"very large number\""))
+			(line-break)
+			(reflow "The inferred type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -66,46 +84,7 @@ match x {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-match
-	(match
-		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(branches
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-num-from-numeral)))
-				(value
-					(e-string
-						(e-literal (string "very large number")))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-num-from-numeral)))
-				(value
-					(e-string
-						(e-literal (string "very small number")))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-num-from-numeral)))
-				(value
-					(e-string
-						(e-literal (string "near f64 max")))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-small-dec)))
-				(value
-					(e-string
-						(e-literal (string "zero")))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-assign (ident "value"))))
-				(value
-					(e-string
-						(e-literal (string "other"))))))))
+(e-runtime-error (tag "erroneous_value_expr"))
 ~~~
 # TYPES
 ~~~clojure
