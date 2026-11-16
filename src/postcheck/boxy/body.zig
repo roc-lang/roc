@@ -5356,6 +5356,9 @@ pub const Builder = struct {
     /// each row node of that procedure takes the type at its position there
     /// (design.md "Procedure Aliases").
     fn lowerAliasUse(self: *Builder, expr_id: ExprId, local: checked.LocalProcedureBinding, use_ty: TypeId) Allocator.Error!void {
+        if (base.dev_diagnostics.isSet(.trace_boxy_work)) {
+            std.debug.print("boxy-work: alias use module={d} alias={d} type={d}\n", .{ @backingInt(self.module), @backingInt(local.expr), @backingInt(use_ty) });
+        }
         const scope_id = local.dispatch_scope orelse invariant("an alias without a generalized scheme is bound where it is declared");
         const scheme = try self.localScheme(scope_id);
         const outer_count = self.env.vars.len;
@@ -8951,65 +8954,21 @@ pub const Builder = struct {
     const FrameParam = struct { position: usize, param: u32 };
 
     /// The dictionary `demand` names, or null after appending to `demands`
-    /// the uncomposed frame dictionaries composing it reads. A frame whose
-    /// edge passes on a dictionary of a frame below it (`forwardedFrameParam`)
-    /// holds that frame's dictionary, so a chain of such frames is followed
-    /// down to the frame that composes it.
+    /// the uncomposed frame dictionaries composing it reads. Each frame
+    /// composes through its own parameter interface, including when its
+    /// evidence forwards a dictionary from a frame below it.
     fn frameDictionaryAfterReads(self: *Builder, demand: FrameParam, demands: *std.ArrayList(FrameParam)) Allocator.Error!?Word {
-        var forwarding = std.ArrayList(ForwardingStep).empty;
-        defer forwarding.deinit(self.allocator);
-        var at = demand;
-        var dictionary = while (true) {
-            const scope = self.alias_scopes.items[at.position];
-            const slot = std.mem.findScalar(u32, scope.params, at.param) orelse invariant("evidence named a dictionary parameter its alias scope does not have");
-            // A declaration context's frame holds the context's dictionaries,
-            // a slot still being built standing for its reserved recipe.
-            if (scope.declaration) |declaration| break try self.declarationDictionary(declaration, slot);
-            const deferred = scope.deferred_dicts orelse break scope.dicts[slot];
-            if (deferred.composed[slot]) |composed| break composed;
-            if (forwardedFrameParam(deferred, at.param)) |below| {
-                try forwarding.append(self.allocator, .{ .composed = &deferred.composed[slot], .frame = at, .below = below });
-                at = below;
-                continue;
-            }
-            const unread = demands.items.len;
-            try self.frameReads(deferred, at.param, demands);
-            if (demands.items.len != unread) return null;
-            break try self.composeFrameDictionary(at.position, at.param, slot);
-        };
-        // Each frame holds the dictionary at the interface its own
-        // requirement names, so each step down the chain is adapted from
-        // the frame below's interface to its own, lowest first, as evidence
-        // handing a scope's dictionary on is (`dictionaryOfAt`).
-        var index = forwarding.items.len;
-        while (index > 0) {
-            index -= 1;
-            const forward = forwarding.items[index];
-            dictionary = try self.adaptForwardedFrameDictionary(dictionary, forward.frame, forward.below);
-            forward.composed.* = dictionary;
-        }
-        return dictionary;
-    }
-
-    /// A frame dictionary that is a lower frame's passed on unchanged by the
-    /// frame's edge: where it is stored, the frame and parameter it is, and
-    /// the frame and parameter it passes on.
-    const ForwardingStep = struct { composed: *?Word, frame: FrameParam, below: FrameParam };
-
-    /// `dictionary`, the dictionary of parameter `below.param` of the frame
-    /// at `below.position`, which the edge of the frame at `frame.position`
-    /// passes on for its parameter `frame.param`, at the interface that
-    /// parameter's requirement names.
-    fn adaptForwardedFrameDictionary(self: *Builder, dictionary: Word, frame: FrameParam, below: FrameParam) Allocator.Error!Word {
-        const deferred = self.alias_scopes.items[frame.position].deferred_dicts orelse invariant("a frame passing on a dictionary holds no deferred dictionaries");
-        if (frame.param >= deferred.context.params.len) return dictionary;
-        const converter = self.program.converter();
-        const expected = try converter.convert(deferred.context.module, deferred.context.params[frame.param].callable_ty, deferred.context.env);
-        const requirements = self.alias_scopes.items[below.position].requirements;
-        if (below.param >= requirements.params.len) invariant("evidence named a parameter its scope does not have");
-        const declared = try converter.convert(requirements.module, requirements.params[below.param].callable_ty, requirements.env);
-        const own = try self.program.dictionaryTypeAtEdge(self.allocator, declared, expected);
-        return try self.adaptDictionary(dictionary, own, expected);
+        const scope = self.alias_scopes.items[demand.position];
+        const slot = std.mem.findScalar(u32, scope.params, demand.param) orelse invariant("evidence named a dictionary parameter its alias scope does not have");
+        // A declaration context's frame holds the context's dictionaries,
+        // a slot still being built standing for its reserved recipe.
+        if (scope.declaration) |declaration| return try self.declarationDictionary(declaration, slot);
+        const deferred = scope.deferred_dicts orelse return scope.dicts[slot];
+        if (deferred.composed[slot]) |composed| return composed;
+        const unread = demands.items.len;
+        try self.frameReads(deferred, demand.param, demands);
+        if (demands.items.len != unread) return null;
+        return try self.composeFrameDictionary(demand.position, demand.param, slot);
     }
 
     /// Append to `demands` each uncomposed literal chain frame dictionary
@@ -9052,19 +9011,6 @@ pub const Builder = struct {
                 }
             },
             .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
-        };
-    }
-
-    /// The frame and parameter a literal chain frame's dictionary parameter
-    /// `param` is, when the frame's edge passes it a dictionary of a frame
-    /// below the edge unchanged: evidence naming a scope of the chain. Null
-    /// for any other evidence, and for a scope of the worker's own, which no
-    /// frame holds.
-    fn forwardedFrameParam(deferred: DeferredDictionaries, param: u32) ?FrameParam {
-        if (param >= deferred.evidence.len) return null;
-        return switch (deferred.evidence[param].resolution) {
-            .constraint => |constraint| forwardedConstraint(deferred, constraint.index),
-            .direct, .structural, .from_scheme, .from_callable, .checked_error, .unreachable_value => null,
         };
     }
 
@@ -11101,11 +11047,14 @@ pub const Builder = struct {
                 // each use lowers its right-hand side at the use's
                 // instantiation (`lowerAliasUse`). A scheme with no variable
                 // is generalized too when the alias's type holds an
-                // uncommitted tag tail, which each use copies and may lift.
+                // uncommitted tag tail, which each use copies and may lift
+                // (the dispatch scope's `holds_uncommitted_tag_tail`).
                 if (self.bodies().binder(decl.pattern).is_scheme_alias) {
                     if (try self.program.localScope(self.module, decl.expr)) |scope_id| {
                         const scheme = try self.localScheme(scope_id);
-                        if (!scheme.isEmpty() or try self.program.holdsUncommittedTagTail(self.module, self.bodies().exprType(decl.expr))) return;
+                        const scope = self.view.view.checked_procedure_templates.dispatch_scopes.items()[@backingInt(scope_id)];
+                        if (std.debug.runtime_safety) std.debug.assert(scope.holds_uncommitted_tag_tail == try self.program.holdsUncommittedTagTail(self.module, self.bodies().exprType(decl.expr)));
+                        if (!scheme.isEmpty() or scope.holds_uncommitted_tag_tail) return;
                     }
                 }
                 // A destructuring scheme alias binds nothing either: each

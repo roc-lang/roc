@@ -5974,7 +5974,7 @@ pub const InstGraph = struct {
 
     /// Whether selecting `private_node` as the representation of
     /// `public_node` goes from public to private. Selection joins class
-    /// roots, so the direction is a fact of the roots: the private side's
+    /// roots, so the roots alone determine the direction: the private side's
     /// root is generated-private evidence and the public side's is not. A
     /// public root may still hold generated-private types among its
     /// arguments, as `Iter(() -> Iter(U8))` holds the produced iterator its

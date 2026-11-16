@@ -1715,14 +1715,14 @@ const Decoder = struct {
         return try self.program.store.internName(self.take(len));
     }
 
-    const TemplateRef = struct { id: checked_names.CheckedProcedureTemplateId, identity: [32]u8 };
+    const DecodedTemplate = struct { id: checked_names.CheckedProcedureTemplateId, identity: [32]u8 };
 
     /// The template of module `module_index` an encoding names by its
     /// worker's identity at `binding` (`Encoder.templateRef`): in a link's
     /// encoding, at the position its export record gives it in the module's
     /// current checked module; in a recipe, at the position the recipe
     /// lists.
-    fn template(self: *Decoder, module_index: types.ModuleIndex, binding: lower.TemplateBinding) TemplateRef {
+    fn template(self: *Decoder, module_index: types.ModuleIndex, binding: lower.TemplateBinding) DecodedTemplate {
         const identity = self.take(32)[0..32].*;
         const template_id: checked_names.CheckedProcedureTemplateId = if (self.link_names) blk: {
             const unit = self.program.moduleUnit() orelse invariant("a link's encoding of a worker was read outside a module unit");
