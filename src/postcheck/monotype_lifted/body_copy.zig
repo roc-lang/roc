@@ -266,7 +266,10 @@ const Copier = struct {
             .checked_error,
             .comptime_exhaustiveness_failed,
             => {},
-            .let_ => Common.invariant("a `let` expression reached a lifted body copy"),
+            .let_ => |binding| {
+                try self.child(binding.value);
+                try self.child(binding.rest);
+            },
             .lambda, .def_ref, .fn_def => Common.invariant("an unlifted function reached a lifted body copy"),
             .list, .tuple => |items| try self.childExprs(items),
             .tag => |tag| try self.childExprs(tag.payloads),
@@ -481,7 +484,10 @@ const Copier = struct {
             .checked_error,
             .comptime_exhaustiveness_failed,
             => {},
-            .let_ => Common.invariant("a `let` expression reached a lifted body copy"),
+            .let_ => |*binding| {
+                binding.value = taken.one();
+                binding.rest = taken.one();
+            },
             .lambda, .def_ref, .fn_def => Common.invariant("an unlifted function reached a lifted body copy"),
             .list, .tuple => |*items| items.* = try self.takeExprs(&taken, items.*),
             .tag => |*tag| tag.payloads = try self.takeExprs(&taken, tag.payloads),
@@ -594,11 +600,11 @@ const Copier = struct {
             .crash,
             .checked_error,
             .comptime_exhaustiveness_failed,
-            .let_,
             .lambda,
             .def_ref,
             .fn_def,
             => unreachable, // `begin` queues an assembly only for the forms below
+            .let_ => 2,
             .list, .tuple => |items| items.len,
             .tag => |tag| tag.payloads.len,
             .low_level => |call| call.args.len,
@@ -733,4 +739,24 @@ test "a renaming copy adds again only the expressions on a path to a renamed rea
     try std.testing.expectEqual(captured, t.program.getExpr(read_captured).data.local);
 
     try std.testing.expectEqual(untouched, try copyRenamingReads(&t.program, untouched, &renames));
+}
+
+test "a renaming copy renames reads under a `let` that a SpecConstr body can hold" {
+    var t = try sequenced.TestProgram.init(std.testing.allocator);
+    defer t.deinit();
+    const captured = try t.program.addLocal(@fromBackingInt(@intCast(1)), t.ty);
+    const bound = try t.program.addLocal(@fromBackingInt(@intCast(2)), t.ty);
+    const own = try t.program.addLocal(@fromBackingInt(@intCast(3)), t.ty);
+    const bind = try t.program.addPat(.{ .ty = t.ty, .data = .{ .bind = bound } });
+    const rest = try t.expr(.{ .local = bound });
+    const root = try t.expr(.{ .let_ = .{ .bind = bind, .value = try t.expr(.{ .local = captured }), .rest = rest } });
+
+    var renames: Renames = .empty;
+    defer renames.deinit(std.testing.allocator);
+    try renames.put(std.testing.allocator, captured, own);
+
+    const copied = t.program.getExpr(try copyRenamingReads(&t.program, root, &renames)).data.let_;
+    try std.testing.expectEqual(bind, copied.bind);
+    try std.testing.expectEqual(rest, copied.rest);
+    try std.testing.expectEqual(own, t.program.getExpr(copied.value).data.local);
 }
