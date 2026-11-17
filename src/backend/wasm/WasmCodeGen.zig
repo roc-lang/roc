@@ -9860,6 +9860,9 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             try self.emitProcTableIndex(c.proc);
             try self.emitBytesAddress(c.capture);
             try self.emitBindingGet(try self.procLocalBinding(frame));
+            // No hot-reload header or drop on wasm.
+            try self.emitI32Const(0);
+            try self.emitI32Const(0);
             try self.emitBoxyRuntimeCall(.closure_frame);
             try self.bindReturnedScalar(dst, .i32);
         } else {
