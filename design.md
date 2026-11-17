@@ -2376,8 +2376,10 @@ any other image data.
 - `.boxy` lowering reads a listed expression whose committed layout is not
   an immediate from the slot of its initializer worker
   (`WorkerKey.inline_literal`, `Program.inlineLiteralSlot`), one per
-  expression per program; the initializer lowers the expression's own value
-  (`Builder.inlineLiteralRead`).
+  expression and committed reader type per program. The initializer builds
+  the value at that type, including its widened rows; freezing a narrower
+  layout and reading it as the wider one would corrupt its discriminant and
+  payload. Each read still allocates nothing (`Builder.inlineLiteralRead`).
 - Monotype builds a listed number, string, tag with no payload, or empty
   record in place, through any nominal wrapping or block with no statements,
   exactly as it restores a stored constant of that shape, so branch folding
