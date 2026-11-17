@@ -14167,6 +14167,32 @@ fn wasmSectionPayload(bytes: []const u8, wanted: u8) (std.Io.Reader.TakeLeb128Er
     return null;
 }
 
+/// The index of the first segment in a wasm data section payload whose bytes
+/// contain `needle`, or null when none does.
+fn wasmDataSegmentContaining(data_section: []const u8, needle: []const u8) (std.Io.Reader.TakeLeb128Error || error{UnsupportedDataSegment})!?u32 {
+    var reader = std.Io.Reader.fixed(data_section);
+    const count = try reader.takeLeb128(u32);
+    for (0..count) |index| {
+        // Flags 0: active in memory 0. 1: passive, with no offset.
+        // 2: active in an explicitly indexed memory.
+        const flags = try reader.takeLeb128(u32);
+        if (flags > 2) return error.UnsupportedDataSegment;
+        if (flags == 2) _ = try reader.takeLeb128(u32);
+        if (flags != 1) try skipWasmI32ConstExpr(&reader);
+        const len = try reader.takeLeb128(u32);
+        const bytes = try reader.take(len);
+        if (std.mem.find(u8, bytes, needle) != null) return @intCast(index);
+    }
+    return null;
+}
+
+/// Skip an `i32.const <n> end` offset expression.
+fn skipWasmI32ConstExpr(reader: *std.Io.Reader) (std.Io.Reader.TakeLeb128Error || error{UnsupportedDataSegment})!void {
+    if (try reader.takeByte() != 0x41) return error.UnsupportedDataSegment;
+    _ = try reader.takeLeb128(i32);
+    if (try reader.takeByte() != 0x0b) return error.UnsupportedDataSegment;
+}
+
 /// Runtime symbol names can occur in the embedded LIR's data section; only
 /// entries in the wasm export section cross the platform boundary.
 fn wasmHasExport(bytes: []const u8, wanted: []const u8) (std.Io.Reader.TakeLeb128Error || error{InvalidWasmHeader})!bool {
@@ -15062,11 +15088,13 @@ fn customIssue12848WasmSharedHelperEmittedOnce(
 /// Under `--opt=size` on wasm32, every static-data constant reaches the
 /// final link as its own `.rodata.<symbol>` segment. The link drops the ones
 /// nothing references and merges the rest into one standard output segment,
-/// so the module's data section holds a few active segments rather than one
-/// per constant. The fixture's six label strings would each be a segment of
-/// their own, so the section holds fewer segments than that. The fixture's
-/// marker constant is named only by a branch the optimizer proves dead, so
-/// its bytes must be absent from the module.
+/// rather than giving each constant an active segment of its own, so the
+/// fixture's six label strings all lie in one data segment. Binaryen's memory
+/// packing then splits the merged segment around long runs of zero bytes,
+/// which zero-filled memory already holds, so the module's segment count
+/// depends on where the program's static data has zeros and is not what this
+/// measures. The fixture's marker constant is named only by a branch the
+/// optimizer proves dead, so its bytes must be absent from the module.
 /// https://github.com/roc-lang/roc/issues/13029
 fn customIssue13029WasmSizeStaticDataSegmentsMerged(
     io: std.Io,
@@ -15075,7 +15103,14 @@ fn customIssue13029WasmSizeStaticDataSegmentsMerged(
     timer: *harness.Timer,
     timeout_ms: u64,
 ) ?TestResult {
-    const label_constants = 6;
+    const labels = [_][]const u8{
+        "the first label is too long to be stored inline",
+        "the second label is too long to be stored inline",
+        "the third label is too long to be stored inline",
+        "the fourth label is too long to be stored inline",
+        "the fifth label is too long to be stored inline",
+        "the sixth label is too long to be stored inline",
+    };
     const unused_marker = "UNREACHABLE-STATIC-CONSTANT-MARKER";
     const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "static-data.wasm" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
@@ -15099,7 +15134,7 @@ fn customIssue13029WasmSizeStaticDataSegmentsMerged(
     const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
         return customFailure(allocator, timer, "static data wasm execution failed: {}", .{err});
     // The host's input is 21 bytes long, so the program picks label 3.
-    const expected = "the fourth label is too long to be stored inline";
+    const expected = labels[3];
     if (!std.mem.eql(u8, result, expected)) {
         return customFailure(allocator, timer, "static data wasm returned \"{s}\", expected \"{s}\"", .{ result, expected });
     }
@@ -15110,11 +15145,18 @@ fn customIssue13029WasmSizeStaticDataSegmentsMerged(
     const data = wasmSectionPayload(wasm_bytes, 11) catch |err|
         return customFailure(allocator, timer, "failed to read the static data module's sections: {}", .{err});
     const section = data orelse return customFailure(allocator, timer, "the static data module has no data section", .{});
-    var reader = std.Io.Reader.fixed(section);
-    const segment_count = reader.takeLeb128(u32) catch |err|
-        return customFailure(allocator, timer, "failed to read the data segment count: {}", .{err});
-    if (segment_count >= label_constants) {
-        return customFailure(allocator, timer, "the data section holds {d} segments, expected fewer than the fixture's {d} label constants: static data constants were not merged into standard output segments", .{ segment_count, label_constants });
+    var first_segment: ?u32 = null;
+    for (labels) |label| {
+        const segment = wasmDataSegmentContaining(section, label) catch |err|
+            return customFailure(allocator, timer, "failed to read the static data module's data segments: {}", .{err});
+        const index = segment orelse return customFailure(allocator, timer, "no data segment holds the label \"{s}\"", .{label});
+        const first = first_segment orelse {
+            first_segment = index;
+            continue;
+        };
+        if (index != first) {
+            return customFailure(allocator, timer, "the label \"{s}\" is in data segment {d} and the first label in segment {d}: static data constants were not merged into one standard output segment", .{ label, index, first });
+        }
     }
     if (std.mem.find(u8, wasm_bytes, unused_marker) != null) {
         return customFailure(allocator, timer, "the module holds a static constant nothing references: the link kept it", .{});
