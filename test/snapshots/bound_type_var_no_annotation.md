@@ -210,7 +210,7 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 283)
+			(e-dispatch-call (method "plus") (constraint-fn-var 279)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "n"))))
@@ -228,20 +228,20 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "num"))
-					(e-call (constraint-fn-var 287)
+					(e-call (constraint-fn-var 283)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "text"))
-					(e-call (constraint-fn-var 290)
+					(e-call (constraint-fn-var 286)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-string
 							(e-literal (string "hello")))))
 				(s-let
 					(p-assign (ident "pair"))
-					(e-call (constraint-fn-var 295)
+					(e-call (constraint-fn-var 291)
 						(e-lookup-local
 							(p-assign (ident "combine")))
 						(e-lookup-local
@@ -250,7 +250,7 @@ main! = |_| {
 							(p-assign (ident "text")))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 298)
+					(e-call (constraint-fn-var 294)
 						(e-lookup-local
 							(p-assign (ident "addOne")))
 						(e-num (value "5"))))

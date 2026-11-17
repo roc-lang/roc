@@ -693,10 +693,11 @@ active_scheme_root: ?Var = null,
 /// before any body checking (annotated-scheme pre-pass). A reference to such
 /// a def before its body has been checked instantiates this scheme—exactly
 /// like a reference to an imported scheme copy—and never requires the body.
-/// The def itself is checked entirely on the ordinary path (its annotation is
-/// generated again, in the body's frame, sharing vars with the body so
-/// dispatch-evidence publication sees one coherent scheme); references after
-/// that use the def's own pattern var as always.
+/// The def itself is checked entirely on the ordinary path (its annotation
+/// stands in the body's frame, taken over from the pre-pass or generated
+/// again, sharing vars with the body so dispatch-evidence publication sees
+/// one coherent scheme); references after that use the def's own pattern var
+/// as always.
 predeclared_scheme_vars: std.ArrayListUnmanaged(?Var) = .empty,
 /// Identity slots of every predeclared annotation (top-level and block-local),
 /// keyed by the annotation. A use of a predeclared scheme is recorded against
@@ -705,6 +706,25 @@ predeclared_scheme_vars: std.ArrayListUnmanaged(?Var) = .empty,
 predeclared_slots: collections.DenseMapUnmanaged(CIR.Annotation.Idx, PredeclaredSlots) = .empty,
 /// Backing storage for `PredeclaredSlots` ranges.
 predeclared_slot_vars: std.ArrayListUnmanaged(Var) = .empty,
+/// Backing storage for `PredeclaredSlots.retained`. Freed once every body
+/// has been checked (`releaseRetainedAnnotations`).
+retained_annotation_vars: std.ArrayListUnmanaged(Var) = .empty,
+/// Backing storage for `PredeclaredSlots.retained_identities`.
+retained_identities: std.ArrayListUnmanaged(RetainedIdentity) = .empty,
+/// How many predeclared annotations still hold a retained generation
+/// (`PredeclaredSlots.retained`).
+retained_annotation_count: u32 = 0,
+/// Whether the annotation a predeclaration is generating can be taken over
+/// by its definition's body (`PredeclaredSlots.retained`): so far the
+/// generation has only built types, so generating the annotation again
+/// where its body is checked would build the same ones. Every step whose
+/// effect depends on where or when the body generates the annotation
+/// clears it.
+annotation_generation_is_retainable: bool = false,
+/// The instances and ground subtrees that the retainable generation in
+/// progress recorded for later references to read
+/// (`instantiateVarPolarized`).
+retainable_generation_shared_roots: std.ArrayListUnmanaged(Var) = .empty,
 /// Backing storage for `PendingPredeclaredSchemeUse.fresh` and
 /// `WaitingPredeclaredDispatchUse.fresh`: one use's copies of its predeclared
 /// scheme's identity slots, in `appendPredeclaredUseFreshVars` layout. Reclaimed
@@ -1944,6 +1964,11 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .predeclared_scheme_vars = .keyed,
     .predeclared_slots = .keyed,
     .predeclared_slot_vars = .keyed,
+    .retained_annotation_vars = .keyed,
+    .retained_identities = .keyed,
+    .retained_annotation_count = .keyed,
+    .annotation_generation_is_retainable = .lexical,
+    .retainable_generation_shared_roots = .scratch,
     .predeclared_use_fresh_vars = .keyed,
     .waiting_predeclared_dispatch_uses = .boundary,
     .pending_predeclared_use_relations = .boundary,
@@ -3551,10 +3576,10 @@ const PredeclaredSlots = struct {
     shares_holes: bool,
     /// Enumerated from the pristine predeclared scheme at its first use.
     predeclared: ?VarRange = null,
-    /// Enumerated when the body generates the annotation, before anything
-    /// unifies with it. Every predeclared annotation records this, because a
-    /// use that arrives while the body is being checked is only discovered
-    /// after the generation.
+    /// Enumerated when the body generates the annotation or takes over its
+    /// retained generation, before anything unifies with it. Every
+    /// predeclared annotation records this, because a use that arrives while
+    /// the body is being checked is only discovered after that.
     body: ?VarRange = null,
     /// Whether the predeclared scheme has evidence params, computed at the
     /// first use whose substitution is otherwise empty.
@@ -3562,6 +3587,27 @@ const PredeclaredSlots = struct {
     /// Whether the binding's own scheme is final: the boundary that publishes
     /// it has related every pending use, and a later use is related at once.
     published: bool = false,
+    /// Set while the annotation's nodes still hold the generation the scheme
+    /// was copied from, for the definition's body to take over
+    /// (`takeOverRetainedAnnotation`): the pool entries of the classes that
+    /// generation made for itself.
+    retained: ?VarRange = null,
+    /// For a retained generation, each of its identities with the copy the
+    /// scheme holds (a range of `Check.retained_identities`). They say which
+    /// identity of the annotation each of the scheme's slots is the copy of,
+    /// so a body that takes the generation over has `body` enumerated from
+    /// them when a use first reads it.
+    retained_identities: ?VarRange = null,
+    /// The body took the retained generation over, so `body` follows from
+    /// `retained_identities`.
+    body_took_over: bool = false,
+};
+
+/// One identity of a retained annotation generation and its copy in the
+/// predeclared scheme.
+const RetainedIdentity = struct {
+    scheme: Var,
+    body: Var,
 };
 
 /// Where one use of a predeclared scheme happened, for relating it to the
@@ -5149,6 +5195,20 @@ fn noteRigidVarLookupForLocalProcedures(self: *Self, rigid_var: CIR.TypeAnno.Idx
     self.markLocalProcedureCandidatesContextualFrom(depth);
 }
 
+/// A type-rooted call or associated lookup through a type variable alias
+/// (`Outer : a`) reads the aliased variable's requirements, so it looks that
+/// variable up, as an annotation naming it does: a local function making one
+/// through an alias of an enclosing function's variable depends on that
+/// function, wherever the alias is declared.
+fn noteTypeVarAliasForLocalProcedures(self: *Self, type_var_anno: CIR.TypeAnno.Idx) Allocator.Error!void {
+    switch (self.cir.store.getTypeAnno(type_var_anno)) {
+        .rigid_var => try self.noteRigidVarLookupForLocalProcedures(type_var_anno),
+        .rigid_var_lookup => |lookup| try self.noteRigidVarLookupForLocalProcedures(lookup.ref),
+        .underscore, .malformed => {},
+        .lookup, .apply, .tag_union, .tag, .tuple, .record, .@"fn", .parens => unreachable, // a type variable alias names a type variable
+    }
+}
+
 /// A reference to a type declared inside a function body depends on its
 /// context (design.md "Body-Local Type Context"): the enclosing type
 /// variables its annotation names, and those its methods name, directly or
@@ -5159,7 +5219,13 @@ fn noteRigidVarLookupForLocalProcedures(self: *Self, rigid_var: CIR.TypeAnno.Idx
 /// local bindings like any other, and a candidate depends on them only
 /// through the references and dispatches recorded for it.
 fn noteTypeDeclReferenceForLocalProcedures(self: *Self, decl_idx: CIR.Statement.Idx) Allocator.Error!void {
+    switch (self.cir.store.getStatement(decl_idx)) {
+        .s_type_var_alias => |alias| return try self.noteTypeVarAliasForLocalProcedures(alias.type_var_anno),
+        .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_decl, .s_var, .s_var_uninitialized, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_type_anno, .s_runtime_error => {},
+    }
     if (try self.isModuleTypeDecl(decl_idx)) return;
+    // The reference is recorded for the functions being checked around it.
+    self.annotation_generation_is_retainable = false;
     if (self.type_decl_generation_frames.items.len > 0) {
         const frame = &self.type_decl_generation_frames.items[self.type_decl_generation_frames.items.len - 1];
         if (self.local_type_context_depths.get(decl_idx)) |depth| frame.noteContextDepth(depth);
@@ -12209,7 +12275,9 @@ fn instantiateVarPolarized(
     // An instance that is not ground still has ground subtrees, identical in
     // every instance at this position: the declaration's own ground subtrees,
     // copied. The latest instance's ground subtrees that are still ground are
-    // read by the next instance instead of being copied again.
+    // read by the next instance instead of being copied again. An instance
+    // that reads all of them, and takes no copy from its context, has exactly
+    // those maximal ground subtrees, so the recorded ones stand for it too.
     var shared_subtrees = self.shared_subtrees_scratch;
     self.shared_subtrees_scratch = .empty;
     defer {
@@ -12220,9 +12288,14 @@ fn instantiateVarPolarized(
             shared_subtrees.deinit(self.gpa);
         }
     }
+    var reads_every_recorded_subtree = false;
     if (evidence == .none) {
         if (self.polarized_instance_subtrees.get(instance_key)) |entries| {
             try self.groundSubtreeEntries(entries.items, &shared_subtrees);
+            reads_every_recorded_subtree = shared_subtrees.items.len == entries.items.len and
+                self.codec_instance_copies.len == 0 and
+                self.method_receiver_context.len == 0 and
+                self.typeDeclTemplateContext(var_to_instantiate).len == 0;
         }
     }
     var opened_marker_exts: std.ArrayListUnmanaged(Instantiator.OpenedMarkerExt) = .empty;
@@ -12242,11 +12315,23 @@ fn instantiateVarPolarized(
     if (evidence == .none) {
         if (opened_marker_exts.items.len == 0 and try self.varIsGround(instantiated)) {
             try self.ground_polarized_instances.put(self.gpa, instance_key, instantiated);
+            if (self.annotation_generation_is_retainable) {
+                try self.retainable_generation_shared_roots.append(self.gpa, instantiated);
+            }
         } else {
             const slot = try self.polarized_instance_subtrees.getOrPut(self.gpa, instance_key);
             if (!slot.found_existing) slot.value_ptr.* = .empty;
-            slot.value_ptr.clearRetainingCapacity();
-            try self.maximalGroundSubtreeCopies(instantiated, slot.value_ptr);
+            if (reads_every_recorded_subtree) {
+                try self.debugAssertMaximalGroundSubtreeCopies(instantiated, slot.value_ptr.items);
+            } else {
+                slot.value_ptr.clearRetainingCapacity();
+                try self.maximalGroundSubtreeCopies(instantiated, slot.value_ptr);
+                if (self.annotation_generation_is_retainable) {
+                    for (slot.value_ptr.items) |entry| {
+                        try self.retainable_generation_shared_roots.append(self.gpa, entry.copy);
+                    }
+                }
+            }
         }
     }
     return instantiated;
@@ -12456,6 +12541,27 @@ fn maximalGroundSubtreeCopies(self: *Self, instance_root: Var, entries: *std.Arr
     }
 }
 
+/// Debug builds verify that `recorded` is what `maximalGroundSubtreeCopies`
+/// finds for `instance_root`, the instance `instantiateVarPolarized` just made
+/// by reading every one of them.
+fn debugAssertMaximalGroundSubtreeCopies(self: *Self, instance_root: Var, recorded: []const Instantiator.SharedSubtree) Allocator.Error!void {
+    if (builtin.mode != .debug) return;
+    var found: std.ArrayListUnmanaged(Instantiator.SharedSubtree) = .empty;
+    defer found.deinit(self.gpa);
+    try self.maximalGroundSubtreeCopies(instance_root, &found);
+    var matches = found.items.len == recorded.len;
+    for (found.items) |entry| {
+        if (!matches) break;
+        matches = for (recorded) |known| {
+            if (self.types.resolveVar(known.source).var_ == self.types.resolveVar(entry.source).var_ and
+                self.types.resolveVar(known.copy).var_ == self.types.resolveVar(entry.copy).var_) break true;
+        } else false;
+    }
+    if (!matches) {
+        base.invariant("type checker invariant violated: an instance that read every recorded ground subtree has {d} maximal ground subtrees, not the {d} recorded", .{ found.items.len, recorded.len });
+    }
+}
+
 /// Append to `kept` the entries whose copies are still ground types.
 fn groundSubtreeEntries(self: *Self, entries: []const Instantiator.SharedSubtree, kept: *std.ArrayListUnmanaged(Instantiator.SharedSubtree)) Allocator.Error!void {
     var marks = self.takeGroundMarks();
@@ -12612,6 +12718,20 @@ fn expectedTypeBackup(self: *Self, expected_var: Var, env: *Env) std.mem.Allocat
     const copy = try self.instantiateVarOrphan(expected_var, env, env.rank(), .use_last_var);
     if (hash) |key| try self.ground_expected_backups.put(self.gpa, key, copy);
     return .{ .var_ = copy, .shared = false };
+}
+
+/// The pristine copy of a taken-over annotation that its predeclared scheme
+/// already is (`takeOverRetainedAnnotation`), or null when the scheme is not
+/// one. The scheme was copied from the very generation the body took over,
+/// and no requirement was deduplicated in it, so it is the copy
+/// `expectedTypeBackup` would take now. A scheme that quantifies a variable
+/// is only ever instantiated, so it stays pristine, and like a shared backup
+/// it is copied by the consumer that needs to unify with it. A scheme that
+/// quantifies nothing is shared by its uses, which relate to it directly.
+fn retainedAnnotationBackup(self: *Self, annotation_idx: CIR.Annotation.Idx) ?ExpectedTypeBackup {
+    const scheme_var = self.predeclaredSchemeVarForAnnotation(annotation_idx);
+    if (self.types.resolveVar(scheme_var).desc.rank != .generalized) return null;
+    return .{ .var_ = scheme_var, .shared = true };
 }
 
 /// A structural hash of a ground type, or null when any variable leaf is
@@ -12988,6 +13108,8 @@ fn instantiateVarHelpFromScheme(
     // Neither enqueueing nor copying a requirement adds or removes a scheme,
     // so the scheme's index holds for both.
     const mb_scheme_idx = self.typeSchemeIndexForRoot(scheme_source);
+    // A scheme's requirements are registered for the frame that copies them.
+    if (mb_scheme_idx != null) self.annotation_generation_is_retainable = false;
     if (!shape_validation) {
         if (mb_scheme_idx) |scheme_idx| try self.enqueueLocalSchemeRequirements(scheme_idx, env);
     }
@@ -13358,6 +13480,8 @@ inline fn registerInstantiatedVar(
     // double-process and shift error attribution.
     if (fresh_resolved.word.kind == .flex) {
         if (fresh_constraints.len() > 0) {
+            // A constrained copy is registered for the frame that makes it.
+            self.annotation_generation_is_retainable = false;
             // Every constraint copied out of a selected dispatch
             // target belongs to that edge's derivation chain,
             // literal conversions included: recursive-dispatch
@@ -15587,6 +15711,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         try self.ensureGroupChecked(group_index, &env);
         std.debug.assert(env.rank() == .outermost);
     }
+    try self.releaseRetainedAnnotations();
 
     // Finally, type-check top-level statements (like expect)
     // These are separate from defs and need to be checked after all defs are processed
@@ -19444,6 +19569,10 @@ fn judgeAmbiguityCandidate(
     // An unpinned row tail is closed by its row default, and the empty row
     // satisfies every constraint this one carries.
     if (candidate.position == .row_tail and self.rowDefaultDischargesConstraints(constraints_range)) return;
+    // A private codec instance's copy of a variable its template quantifies
+    // stands for that variable: its requirements are the template's, which
+    // each use of the template answers at its own types.
+    if (self.isFinalCodecInstanceCopy(resolved_var)) return;
 
     const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
     const selection = try self.selectAmbiguityConstraint(
@@ -19515,6 +19644,16 @@ fn judgeAmbiguityCandidate(
         .instantiation_expr = candidate.instantiation_expr,
         .source = candidate.source,
     });
+}
+
+/// Whether `resolved_var` is a private codec instance's copy of a variable its
+/// template quantifies (`finalCodecRelationInstance`), which nothing but that
+/// instance reaches.
+fn isFinalCodecInstanceCopy(self: *Self, resolved_var: Var) bool {
+    for (self.final_codec_instance_copy_pairs.items) |pair| {
+        if (self.types.resolveVar(pair.copy).var_ == resolved_var) return true;
+    }
+    return false;
 }
 
 fn instantiationArgumentsCanPin(
@@ -21309,8 +21448,8 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
 
     // For-clause aliases live in the platform root's module-level scope, so a
     // requirement other than the declaring one can reference an alias by name;
-    // bind each alias once for the whole requires clause and share the app's
-    // instantiated declaration across every requirement that mentions it.
+    // infer each alias once for the whole requires clause and share its app
+    // variable across every requirement that mentions it.
     var alias_bindings = std.ArrayListUnmanaged(ForClauseAliasBinding).empty;
     defer alias_bindings.deinit(self.gpa);
     try self.collectForClauseAliasBindings(input, env, &alias_bindings);
@@ -21320,7 +21459,7 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
     var alias_source_substitutions = std.AutoHashMap(copy_import.AliasSource, Var).init(self.gpa);
     defer alias_source_substitutions.deinit();
     for (alias_bindings.items) |binding| {
-        const app_type_var = binding.app_type_var.get() orelse continue;
+        const app_type_var = binding.app_type_var;
         try alias_var_substitutions.put(binding.platform_alias_var, app_type_var);
         try alias_var_substitutions.put(binding.platform_identity_var, app_type_var);
         try alias_source_substitutions.put(binding.platform_alias_source, app_type_var);
@@ -21328,14 +21467,13 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
 
     for (input.env.requires_types.items(), 0..) |required_type, requires_idx| {
         const required_ident = try self.copyPlatformIdent(input.env, required_type.ident);
-        const instantiated = (try self.instantiatePlatformRequiredType(
+        const instantiated = try self.instantiatePlatformRequiredType(
             input,
             required_type,
             env,
-            alias_bindings.items,
             &alias_var_substitutions,
             &alias_source_substitutions,
-        )) orelse continue;
+        );
         var identity_vars_owned = true;
         defer if (identity_vars_owned) self.gpa.free(instantiated.identity_vars);
 
@@ -21437,20 +21575,9 @@ fn instantiatePlatformRequiredType(
     input: PlatformRequirementInput,
     required_type: ModuleEnv.RequiredType,
     env: *Env,
-    bindings: []const ForClauseAliasBinding,
     alias_var_substitutions: *const collections.DenseMap(Var, Var),
     alias_source_substitutions: *const std.AutoHashMap(copy_import.AliasSource, Var),
-) std.mem.Allocator.Error!?InstantiatedRequirement {
-    const declared_aliases = input.env.for_clause_aliases.sliceRange(required_type.type_aliases);
-    for (declared_aliases) |alias| {
-        const binding = forClauseAliasBinding(bindings, alias.alias_stmt_idx) orelse {
-            base.invariant("platform requirement for-clause alias was not collected for the requires clause", .{});
-        };
-        // The alias's app declaration was not found; the diagnostic was
-        // emitted when the clause's bindings were collected.
-        if (binding.app_type_var == .none) return null;
-    }
-
+) std.mem.Allocator.Error!InstantiatedRequirement {
     // Enumerate the requirement type's identity variables (flex/rigid) in the
     // platform's store, in canonical slot order—the same first-encounter
     // order the platform's published requirement payload assigns them.
@@ -21461,15 +21588,6 @@ fn instantiatePlatformRequiredType(
         ModuleEnv.varFrom(required_type.type_anno),
     );
     defer self.gpa.free(platform_identity_vars);
-
-    // Aliases are module-scoped, so an entry can use an alias declared by an
-    // earlier flat entry even though it is absent from `declared_aliases`.
-    for (platform_identity_vars) |platform_var| {
-        const binding = forClauseAliasBindingForIdentity(bindings, platform_var) orelse continue;
-        // The alias's app declaration was not found; the diagnostic was
-        // emitted when the clause's bindings were collected.
-        if (binding.app_type_var == .none) return null;
-    }
 
     const copied = try self.copyVarWithSourceSubstitutions(
         ModuleEnv.varFrom(required_type.type_anno),
@@ -21494,7 +21612,7 @@ fn instantiatePlatformRequiredType(
 
     // `instantiateVar` keyed `var_map` by the copied store's resolved vars.
     // Clause-bound identities were replaced during copying and already are
-    // the exact app declaration; every other identity must have been visited
+    // shared app inference variables; every other identity must have been visited
     // and instantiated with the requirement root.
     for (platform_identity_vars, identity_vars) |platform_var, *slot_var| {
         if (alias_var_substitutions.get(platform_var)) |app_type_var| {
@@ -21515,21 +21633,17 @@ fn instantiatePlatformRequiredType(
     return .{ .expected_var = expected_var, .identity_vars = identity_vars };
 }
 
-/// An app type declaration bound to a requires clause's for-clause alias
-/// (`[Model : model]` binds `Model` to the app's own `Model` declaration).
-/// A null `app_type_var` records that the app declares no such type; the
-/// diagnostic was emitted when the binding was collected.
+/// One app inference variable for a platform's module-scoped abstract type.
+/// The app's required values determine it, not an app-side type name.
 const ForClauseAliasBinding = struct {
-    /// Exact declaration locator in the platform root. Names are consulted
-    /// only while resolving the app-side declaration at the language boundary;
-    /// copied occurrences match this declaration identity thereafter.
+    /// Exact declaration locator in the platform root.
     platform_alias_stmt_idx: CIR.Statement.Idx,
     /// Resolved platform-store roots replaced during cross-module copying.
     platform_alias_var: Var,
     platform_identity_var: Var,
     /// Declaration identity shared by every application of this alias.
     platform_alias_source: copy_import.AliasSource,
-    app_type_var: collections.OptionalId(Var),
+    app_type_var: Var,
 };
 
 comptime {
@@ -21543,22 +21657,15 @@ fn forClauseAliasBinding(bindings: []const ForClauseAliasBinding, platform_alias
     return null;
 }
 
-fn forClauseAliasBindingForIdentity(bindings: []const ForClauseAliasBinding, platform_identity_var: Var) ?ForClauseAliasBinding {
-    for (bindings) |binding| {
-        if (binding.platform_identity_var == platform_identity_var) return binding;
-    }
-    return null;
-}
-
-/// Bind every for-clause alias of the platform's requires clause to the app's
-/// own type declaration, instantiating each declaration once so all
-/// requirements that mention an alias share one binder.
+/// Allocate each binder at outermost rank so checking and instantiating
+/// individual app definitions cannot generalize it away from sibling requirements.
 fn collectForClauseAliasBindings(
     self: *Self,
     input: PlatformRequirementInput,
     env: *Env,
     bindings: *std.ArrayListUnmanaged(ForClauseAliasBinding),
 ) std.mem.Allocator.Error!void {
+    std.debug.assert(env.rank() == .outermost);
     for (input.env.requires_types.items()) |required_type| {
         const aliases = input.env.for_clause_aliases.sliceRange(required_type.type_aliases);
         for (aliases) |alias| {
@@ -21581,35 +21688,13 @@ fn collectForClauseAliasBindings(
                 },
             };
             const platform_identity_var = input.env.types.resolveVar(ModuleEnv.varFrom(alias_anno)).var_;
-            const alias_ident = try self.copyPlatformIdent(input.env, alias.alias_name);
-
-            const app_type_stmt = self.appTypeDeclByIdent(alias_ident) orelse {
-                const value_region = try self.topLevelValueRegionByIdent(alias_ident);
-                const app_region = value_region orelse self.appModuleRegion();
-                _ = try self.problems.appendProblem(.{ .platform_alias_not_found = .{
-                    .expected_alias_ident = alias_ident,
-                    .app_region = app_region,
-                    .platform_region = input.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias.alias_stmt_idx)),
-                    .ctx = if (value_region == null) .not_found else .found_but_not_type,
-                } });
-                try bindings.append(self.gpa, .{
-                    .platform_alias_stmt_idx = alias.alias_stmt_idx,
-                    .platform_alias_var = platform_alias_resolved.var_,
-                    .platform_identity_var = platform_identity_var,
-                    .platform_alias_source = platform_alias_source,
-                    .app_type_var = .none,
-                });
-                continue;
-            };
-
-            const app_type_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(app_type_stmt));
-            const app_type_var = try self.instantiateVar(ModuleEnv.varFrom(app_type_stmt), env, .{ .explicit = app_type_region }, .none);
+            const app_type_var = try self.fresh(env, self.appModuleRegion());
             try bindings.append(self.gpa, .{
                 .platform_alias_stmt_idx = alias.alias_stmt_idx,
                 .platform_alias_var = platform_alias_resolved.var_,
                 .platform_identity_var = platform_identity_var,
                 .platform_alias_source = platform_alias_source,
-                .app_type_var = .some(app_type_var),
+                .app_type_var = app_type_var,
             });
         }
     }
@@ -21617,11 +21702,6 @@ fn collectForClauseAliasBindings(
 
 fn copyPlatformIdent(self: *Self, platform_env: *const ModuleEnv, ident: Ident.Idx) std.mem.Allocator.Error!Ident.Idx {
     return try self.cir.insertIdent(Ident.for_text(platform_env.getIdent(ident)));
-}
-
-fn appTypeDeclByIdent(self: *Self, ident: Ident.Idx) ?CIR.Statement.Idx {
-    if (self.findLocalTypeDeclByNameInSpan(self.cir.type_decls, ident)) |stmt_idx| return stmt_idx;
-    return self.findLocalTypeDeclByNameInSpan(self.cir.forward_type_decls, ident);
 }
 
 fn exposedAppDefByIdent(self: *Self, ident: Ident.Idx) ?CIR.Def.Idx {
@@ -21668,90 +21748,6 @@ fn topLevelDefByIdent(self: *Self, ident: Ident.Idx) ?CIR.Def.Idx {
     for (self.cir.store.sliceDefs(self.cir.top_level_value_defs)) |def_idx| {
         const def_ident = self.getPatternIdent(self.cir.store.getDef(def_idx).pattern) orelse continue;
         if (def_ident == ident) return def_idx;
-    }
-    return null;
-}
-
-fn topLevelValueRegionByIdent(self: *Self, ident: Ident.Idx) Allocator.Error!?Region {
-    if (self.topLevelDefByIdent(ident)) |def_idx| {
-        return self.defPatternRegion(def_idx);
-    }
-    return try self.topLevelTagConstructorRegionByIdent(ident);
-}
-
-fn topLevelTagConstructorRegionByIdent(self: *Self, ident: Ident.Idx) Allocator.Error!?Region {
-    for (0..self.cir.all_statements.span.len) |stmt_offset| {
-        const stmt_idx = self.cir.store.statementAt(self.cir.all_statements, stmt_offset);
-        const stmt = self.cir.store.getStatement(stmt_idx);
-        const anno_idx = switch (stmt) {
-            .s_alias_decl => |alias| alias.anno,
-            .s_nominal_decl => |nominal| nominal.anno,
-            .s_decl,
-            .s_var,
-            .s_var_uninitialized,
-            .s_reassign,
-            .s_crash,
-            .s_dbg,
-            .s_expr,
-            .s_expect,
-            .s_for,
-            .s_while,
-            .s_infinite_loop,
-            .s_breakable_loop,
-            .s_break,
-            .s_return,
-            .s_import,
-            .s_where_alias_decl,
-            .s_type_anno,
-            .s_type_var_alias,
-            .s_runtime_error,
-            => continue,
-        };
-        if (try self.typeAnnoTagRegionByIdent(anno_idx, ident)) |region| return region;
-    }
-    return null;
-}
-
-fn typeAnnoTagRegionByIdent(self: *Self, root: CIR.TypeAnno.Idx, wanted: Ident.Idx) Allocator.Error!?Region {
-    // Search the annotation in source order: each popped node pushes its
-    // children last-first.
-    var pending: std.ArrayList(CIR.TypeAnno.Idx) = .empty;
-    defer pending.deinit(self.gpa);
-    try pending.append(self.gpa, root);
-    while (pending.pop()) |anno_idx| {
-        const start = pending.items.len;
-        switch (self.cir.store.getTypeAnno(anno_idx)) {
-            .tag_union => |tag_union| {
-                try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tag_union.tags));
-                if (tag_union.ext) |ext| try pending.append(self.gpa, ext);
-            },
-            .tag => |tag| {
-                if (tag.name == wanted) {
-                    return self.cir.store.getTypeAnnoRegion(anno_idx);
-                }
-                try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tag.args));
-            },
-            .apply => |apply| try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(apply.args)),
-            .record => |record| {
-                for (self.cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
-                    try pending.append(self.gpa, self.cir.store.getAnnoRecordField(field_idx).ty);
-                }
-                if (record.ext) |ext| try pending.append(self.gpa, ext);
-            },
-            .tuple => |tuple| try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tuple.elems)),
-            .@"fn" => |func| {
-                try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(func.args));
-                try pending.append(self.gpa, func.ret);
-            },
-            .parens => |parens| try pending.append(self.gpa, parens.anno),
-            .rigid_var,
-            .rigid_var_lookup,
-            .underscore,
-            .lookup,
-            .malformed,
-            => {},
-        }
-        std.mem.reverse(CIR.TypeAnno.Idx, pending.items[start..]);
     }
     return null;
 }
@@ -22299,7 +22295,11 @@ fn appliedAnnotation(self: *const Self, pattern_idx: CIR.Pattern.Idx, annotation
 /// any body is checked. A reference to an annotated def—by name or by
 /// dispatch—then instantiates the scheme and never requires the referenced
 /// body to have been checked; bodies are later checked on the ordinary path,
-/// in graph order like everything else.
+/// in graph order like everything else. The scheme is a disjoint copy of the
+/// annotation's generation, as `predeclareAnnotationScheme` describes; the
+/// generation itself stays in the annotation's nodes for the body to take
+/// over when it only built types (`BodyGeneration.may_take_over`), and is
+/// unwound as there otherwise.
 fn predeclareAnnotatedDefSchemes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     std.debug.assert(env.rank() == .outermost);
     for (0..self.cir.all_defs.span.len) |def_offset| {
@@ -22307,7 +22307,7 @@ fn predeclareAnnotatedDefSchemes(self: *Self, env: *Env) std.mem.Allocator.Error
         const def = self.cir.store.getDef(def_idx);
         const annotation_idx = def.annotation orelse continue;
         if (!self.annotationIsPredeclarableScheme(def.pattern, annotation_idx)) continue;
-        const scheme = try self.predeclareAnnotationScheme(annotation_idx, env);
+        const scheme = try self.predeclareAnnotationSchemeHelp(annotation_idx, env, null, .may_take_over);
         self.setPredeclaredSchemeVar(def_idx, scheme.scheme_var);
         try self.registerPredeclaredSlots(annotation_idx, scheme);
     }
@@ -22375,7 +22375,7 @@ fn predeclareAnnotationScheme(
     annotation_idx: CIR.Annotation.Idx,
     env: *Env,
 ) std.mem.Allocator.Error!PredeclaredScheme {
-    return self.predeclareAnnotationSchemeHelp(annotation_idx, env, null);
+    return self.predeclareAnnotationSchemeHelp(annotation_idx, env, null, .regenerates);
 }
 
 /// Like `predeclareAnnotationScheme`, for an annotation containing `_`
@@ -22399,7 +22399,7 @@ fn predeclareAnnotationSchemeKeepingHolesShared(
     env: *Env,
     hole_rank: Rank,
 ) std.mem.Allocator.Error!PredeclaredScheme {
-    return self.predeclareAnnotationSchemeHelp(annotation_idx, env, hole_rank);
+    return self.predeclareAnnotationSchemeHelp(annotation_idx, env, hole_rank, .regenerates);
 }
 
 /// A standalone scheme predeclared from an annotation, and whether it shares
@@ -22407,6 +22407,20 @@ fn predeclareAnnotationSchemeKeepingHolesShared(
 const PredeclaredScheme = struct {
     scheme_var: Var,
     shares_holes: bool,
+    /// See `PredeclaredSlots.retained`.
+    retained: ?VarRange = null,
+    /// See `PredeclaredSlots.retained_identities`.
+    retained_identities: ?VarRange = null,
+};
+
+/// What a definition's body does about its predeclared annotation.
+const BodyGeneration = enum {
+    /// It generates the annotation again.
+    regenerates,
+    /// It takes over the predeclaration's generation when that generation
+    /// only built types (`annotation_generation_is_retainable`), and
+    /// generates the annotation again otherwise.
+    may_take_over,
 };
 
 fn predeclareAnnotationSchemeHelp(
@@ -22414,6 +22428,7 @@ fn predeclareAnnotationSchemeHelp(
     annotation_idx: CIR.Annotation.Idx,
     env: *Env,
     hole_rank: ?Rank,
+    body_generation: BodyGeneration,
 ) std.mem.Allocator.Error!PredeclaredScheme {
     const problems_len = self.problems.len();
     const snapshots_mark = self.snapshots.mark();
@@ -22422,18 +22437,41 @@ fn predeclareAnnotationSchemeHelp(
     try self.pushGeneralizationScope(env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(annotation_idx)), &.{});
     const saved_predeclaring = self.predeclaring_annotation;
     const saved_active_scheme_root = self.active_scheme_root;
+    const saved_retainable = self.annotation_generation_is_retainable;
     self.predeclaring_annotation = true;
     try self.activateSchemeOwner(ModuleEnv.varFrom(annotation_idx));
     defer {
         self.predeclaring_annotation = saved_predeclaring;
         self.active_scheme_root = saved_active_scheme_root;
+        self.annotation_generation_is_retainable = saved_retainable;
     }
+    // A `where` clause's relations belong to the scheme that generates
+    // them, a host-boundary annotation is read before its definition is
+    // checked, and a scope without a rank of its own shares its pool.
+    self.annotation_generation_is_retainable = body_generation == .may_take_over and
+        hole_rank == null and
+        env.var_pool.generalizesInnermostScope() and
+        self.cir.store.getAnnotation(annotation_idx).where == null and
+        !self.host_boundary_annotations.contains(annotation_idx);
+    self.retainable_generation_shared_roots.clearRetainingCapacity();
+    const generation_pool_start = env.var_pool.getVarsForRank(env.rank()).len;
+    const generation_deferred_start = env.deferred_static_dispatch_constraints.len();
     // An annotation checks no expression or pattern, so it records no field
     // kind or tuple access judgment of its own; every pending one belongs to
     // an enclosing frame and is judged at that frame's boundary, never here.
     const pending_judgments_before = self.pendingAccessJudgmentCounts();
     try self.generateAnnotationType(annotation_idx, env);
     std.debug.assert(std.meta.eql(pending_judgments_before, self.pendingAccessJudgmentCounts()));
+    // A generation that reported a problem, made its annotation erroneous
+    // or deferred a relation is the body's to repeat, and so is every
+    // generation once the module holds an error, as no body takes one over
+    // then (`takeOverRetainedAnnotation`).
+    const generation_only_built_types = self.annotation_generation_is_retainable and
+        self.problems.len() == problems_len and
+        !self.cir.store.getAnnotation(annotation_idx).erroneous and
+        !self.types.mayContainErrorState() and
+        env.deferred_static_dispatch_constraints.len() == generation_deferred_start;
+    self.annotation_generation_is_retainable = false;
 
     // For a hole-sharing predeclaration, collect the live hole vars first: the
     // orphan copy below SHARES them (the scheme references the live vars), and
@@ -22458,6 +22496,21 @@ fn predeclareAnnotationSchemeHelp(
     try shared_vars.appendSlice(self.gpa, live_holes.items);
     try self.collectEnclosingRigidVars(annotation_idx, &shared_vars);
 
+    // The scope's pool holds only the generation's classes until the scheme
+    // is copied below.
+    const generation_recorded_shared = self.retainable_generation_shared_roots.items.len != 0;
+    const retained: ?VarRange = if (generation_only_built_types and shared_vars.items.len == 0)
+        try self.retainGenerationVars(env, generation_pool_start)
+    else
+        null;
+    // A retained generation's own classes take their rank from the body
+    // that takes them over, so this scope has nothing to generalize in
+    // them. What the generation recorded for later references to read is
+    // not retained and settles with this scope.
+    if (retained != null and !generation_recorded_shared) {
+        env.var_pool.shrinkRank(env.rank(), generation_pool_start);
+    }
+
     const scheme_var = if (shared_vars.items.len > 0)
         try self.instantiateVarOrphanSharingVars(
             ModuleEnv.varFrom(annotation_idx),
@@ -22474,6 +22527,8 @@ fn predeclareAnnotationSchemeHelp(
             .use_last_var,
         );
 
+    const retained_identities: ?VarRange = if (retained != null) try self.recordRetainedIdentities() else null;
+
     if (hole_rank) |hr| {
         for (live_holes.items) |hole_var| {
             const resolved_hole = self.types.resolveVar(hole_var);
@@ -22484,8 +22539,15 @@ fn predeclareAnnotationSchemeHelp(
     try self.linkDeferredUsesFrom(env.rank());
     try self.generalizeRank(env, &.{scheme_var});
     // Problems raised here are discarded below; the annotation's own check
-    // reports them against the def.
-    try self.deduplicateGeneralizedDispatchRequirements(scheme_var, null, env);
+    // reports them against the def. A retained generation wrote no `where`
+    // requirement and copied none, and every row it built was validated as
+    // it was generated, so its scheme has no requirement to deduplicate and
+    // no row to normalize.
+    if (retained != null) {
+        try self.debugAssertNothingToDeduplicate(scheme_var);
+    } else {
+        try self.deduplicateGeneralizedDispatchRequirements(scheme_var, null, env);
+    }
     try self.publishBindingScheme(scheme_var);
     env.var_pool.popRank();
 
@@ -22496,7 +22558,7 @@ fn predeclareAnnotationSchemeHelp(
     if (!nesting_limit_reported) {
         if (self.generalization_nesting_limit_region) |region| try self.reportGeneralizationNestingLimit(region);
     }
-    try self.resetAnnotationNodes(annotation_idx);
+    if (retained == null) try self.resetAnnotationNodes(annotation_idx);
 
     if (hole_rank) |hr| {
         // The reset gave each live hole a fresh unbound class at the outermost
@@ -22519,7 +22581,120 @@ fn predeclareAnnotationSchemeHelp(
         try self.hole_shared_vars.appendSlice(self.gpa, shared_vars.items);
         try self.hole_shared_schemes.put(self.gpa, scheme_var, .{ .start = start, .len = len });
     }
-    return .{ .scheme_var = scheme_var, .shares_holes = live_holes.items.len > 0 };
+    return .{
+        .scheme_var = scheme_var,
+        .shares_holes = live_holes.items.len > 0,
+        .retained = retained,
+        .retained_identities = retained_identities,
+    };
+}
+
+/// Record each identity of the retained generation with its copy in the
+/// scheme, from the copy `var_map` still holds.
+fn recordRetainedIdentities(self: *Self) Allocator.Error!VarRange {
+    const start: u32 = @intCast(self.retained_identities.items.len);
+    var copies = self.var_map.iterator();
+    while (copies.next()) |copy| {
+        if (!canonical_type_keys.isIdentityVariable(self.types.resolveVar(copy.key_ptr.*).desc)) continue;
+        try self.retained_identities.append(self.gpa, .{ .scheme = copy.value_ptr.*, .body = copy.key_ptr.* });
+    }
+    return .{ .start = start, .len = @intCast(self.retained_identities.items.len - start) };
+}
+
+/// Debug builds verify that `deduplicateGeneralizedDispatchRequirements`
+/// would leave `scheme_var`, the scheme of a retained generation, as it is:
+/// no row repeats a label, no identity holds two requirements, and the
+/// scheme holds none.
+fn debugAssertNothingToDeduplicate(self: *Self, scheme_var: Var) Allocator.Error!void {
+    if (builtin.mode != .debug) return;
+    self.canonical_key_writer.setReportDuplicateRows(true);
+    defer self.canonical_key_writer.setReportDuplicateRows(false);
+    const identity_vars = try self.canonical_key_writer.identityVarsFromVarIgnoringConstraints(scheme_var);
+    defer self.gpa.free(identity_vars);
+    if (self.canonical_key_writer.takeDuplicateRow() != null) {
+        base.invariant("type checker invariant violated: a retained annotation generation built a row that repeats a label", .{});
+    }
+    for (identity_vars) |identity_var| {
+        const constraints = contentConstraintRange(self.types.resolveVar(identity_var).desc.content) orelse continue;
+        if (constraints.len() > 1) {
+            base.invariant("type checker invariant violated: a retained annotation generation built an identity with {d} requirements", .{constraints.len()});
+        }
+    }
+    if (self.typeSchemeIndexForRoot(scheme_var) != null) {
+        base.invariant("type checker invariant violated: the scheme of a retained annotation generation holds requirements", .{});
+    }
+}
+
+/// Record the classes that the annotation generation which just ran in
+/// `env`'s innermost scope made for itself: every class of that scope's
+/// rank in its pool from `pool_start` on, except the instances and ground
+/// subtrees the generation recorded for later references to read. Generating
+/// the annotation again would make the former afresh and read the latter.
+fn retainGenerationVars(self: *Self, env: *Env, pool_start: usize) Allocator.Error!VarRange {
+    const scope_rank = env.rank();
+    var shared = try self.computeGroundMarksKnowing(self.retainable_generation_shared_roots.items, null, .any);
+    defer self.releaseGroundMarks(&shared);
+    self.retainable_generation_shared_roots.clearRetainingCapacity();
+    const start: u32 = @intCast(self.retained_annotation_vars.items.len);
+    for (env.var_pool.getVarsForRank(scope_rank)[pool_start..]) |pool_var| {
+        const resolved = self.types.resolveVar(pool_var);
+        if (resolved.desc.rank != scope_rank or shared.index_of.contains(resolved.var_)) continue;
+        try self.retained_annotation_vars.append(self.gpa, pool_var);
+    }
+    self.retained_annotation_count += 1;
+    return .{ .start = start, .len = @intCast(self.retained_annotation_vars.items.len - start) };
+}
+
+/// Hand a predeclared annotation's retained generation to its definition's
+/// body, which `env` is about to check: the classes that generation made
+/// for itself take the rank the body would generate them at, and join that
+/// rank's pool. Returns false when the body is to generate the annotation
+/// itself, because nothing is retained or because generating it now might
+/// not build what was retained. The annotation's type variable lookups mark
+/// the local functions being checked around the body. Once anything in the
+/// module is erroneous, a mismatch may have made an instance or ground
+/// subtree that later references share erroneous, and a new generation
+/// copies such a declaration afresh and records its copy for the references
+/// after it.
+fn takeOverRetainedAnnotation(self: *Self, annotation_idx: CIR.Annotation.Idx, env: *Env) Allocator.Error!bool {
+    if (self.retained_annotation_count == 0) return false;
+    const slots = self.predeclared_slots.getPtr(annotation_idx) orelse return false;
+    const retained = slots.retained orelse return false;
+    slots.retained = null;
+    self.retained_annotation_count -= 1;
+
+    const generates_differently = self.local_procedure_candidate_stack.items.len != 0 or
+        self.types.mayContainErrorState();
+    if (generates_differently) {
+        slots.retained_identities = null;
+        try self.resetAnnotationNodes(annotation_idx);
+        return false;
+    }
+
+    const rank = env.rank();
+    for (retained.slice(self.retained_annotation_vars.items)) |var_| {
+        try self.types.setDescRank(self.types.resolveVar(var_).desc_idx, rank);
+        try env.var_pool.addVarToRank(var_, rank);
+    }
+    return true;
+}
+
+/// Reset the nodes of every predeclared annotation whose retained generation
+/// no body took over, so an annotation no body generated holds no type.
+fn releaseRetainedAnnotations(self: *Self) Allocator.Error!void {
+    if (self.retained_annotation_count != 0) {
+        for (0..self.cir.all_defs.span.len) |def_offset| {
+            const def = self.cir.store.getDef(self.cir.store.defAt(self.cir.all_defs, def_offset));
+            const annotation_idx = def.annotation orelse continue;
+            const slots = self.predeclared_slots.getPtr(annotation_idx) orelse continue;
+            if (slots.retained == null) continue;
+            slots.retained = null;
+            slots.retained_identities = null;
+            try self.resetAnnotationNodes(annotation_idx);
+        }
+        self.retained_annotation_count = 0;
+    }
+    self.retained_annotation_vars.clearAndFree(self.gpa);
 }
 
 const HoleSharedRun = struct { start: u32, len: u32 };
@@ -22557,7 +22732,12 @@ fn retainUndecidedHoles(self: *const Self, holes: *std.ArrayListUnmanaged(Var)) 
 /// predeclared again each time its statement is checked, and each check
 /// generates the body annotation afresh, so re-registration starts over.
 fn registerPredeclaredSlots(self: *Self, annotation_idx: CIR.Annotation.Idx, scheme: PredeclaredScheme) Allocator.Error!void {
-    try self.predeclared_slots.put(self.gpa, annotation_idx, .{ .scheme_var = scheme.scheme_var, .shares_holes = scheme.shares_holes });
+    try self.predeclared_slots.put(self.gpa, annotation_idx, .{
+        .scheme_var = scheme.scheme_var,
+        .shares_holes = scheme.shares_holes,
+        .retained = scheme.retained,
+        .retained_identities = scheme.retained_identities,
+    });
 }
 
 fn predeclaredSlotsPtr(self: *Self, annotation_idx: CIR.Annotation.Idx) *PredeclaredSlots {
@@ -22609,18 +22789,24 @@ fn appendPredeclaredIdentitySlots(self: *Self, scheme_var: Var, var_: Var) Alloc
 }
 
 /// Record the body side of a predeclared annotation's identity slots at the
-/// moment the body generates the annotation, then record every dispatch use
+/// moment the body has its annotation, then record every dispatch use
 /// that was waiting for them. Annotations that were not predeclared have no
 /// entry and cost one map lookup.
 fn recordPredeclaredBodySlots(self: *Self, annotation_idx: CIR.Annotation.Idx) Allocator.Error!void {
     const slots = self.predeclared_slots.getPtr(annotation_idx) orelse return;
-    if (slots.body != null) return;
-    const start: u32 = @intCast(self.predeclared_slot_vars.items.len);
-    try self.appendPredeclaredIdentitySlots(slots.scheme_var, ModuleEnv.varFrom(annotation_idx));
-    slots.body = .{
-        .start = start,
-        .len = @intCast(self.predeclared_slot_vars.items.len - start),
-    };
+    if (slots.body != null or slots.body_took_over) return;
+    if (slots.retained_identities != null) {
+        // The body took the retained generation over: its slots follow from
+        // the scheme's (`predeclaredBodySlots`).
+        slots.body_took_over = true;
+    } else {
+        const start: u32 = @intCast(self.predeclared_slot_vars.items.len);
+        try self.appendPredeclaredIdentitySlots(slots.scheme_var, ModuleEnv.varFrom(annotation_idx));
+        slots.body = .{
+            .start = start,
+            .len = @intCast(self.predeclared_slot_vars.items.len - start),
+        };
+    }
     if (self.waiting_predeclared_dispatch_uses.items.len == 0) return;
 
     var write: usize = 0;
@@ -22646,6 +22832,36 @@ fn recordPredeclaredBodySlots(self: *Self, annotation_idx: CIR.Annotation.Idx) A
     }
     self.waiting_predeclared_dispatch_uses.shrinkRetainingCapacity(write);
     self.reclaimPredeclaredUseFreshVars();
+}
+
+/// The body side of a predeclared annotation's identity slots. A body that
+/// generated its annotation enumerated them then. A body that took the
+/// retained generation over has the very identities the scheme's slots were
+/// copied from, so its slot i is the identity whose copy the scheme's slot i
+/// is.
+fn predeclaredBodySlots(self: *Self, annotation_idx: CIR.Annotation.Idx) Allocator.Error![]const Var {
+    const predeclared_len = (try self.predeclaredSchemeSlots(annotation_idx)).len;
+    const slots = self.predeclaredSlotsPtr(annotation_idx);
+    if (slots.body == null) {
+        if (!slots.body_took_over) {
+            base.invariant("type checker invariant violated: predeclared scheme use read its body's slots before the body had its annotation", .{});
+        }
+        const identities_range = slots.retained_identities orelse
+            base.invariant("type checker invariant violated: a body took over an annotation generation whose identities were not recorded", .{});
+        const identities = self.retained_identities.items[identities_range.start..][0..identities_range.len];
+        const start: u32 = @intCast(self.predeclared_slot_vars.items.len);
+        try self.predeclared_slot_vars.ensureUnusedCapacity(self.gpa, predeclared_len);
+        const predeclared = slots.predeclared.?.slice(self.predeclared_slot_vars.items);
+        for (predeclared) |slot_var| {
+            const slot_root = self.types.resolveVar(slot_var).var_;
+            const body_var = for (identities) |identity| {
+                if (self.types.resolveVar(identity.scheme).var_ == slot_root) break identity.body;
+            } else base.invariant("type checker invariant violated: a predeclared scheme slot is the copy of no identity of the generation it was copied from", .{});
+            self.predeclared_slot_vars.appendAssumeCapacity(body_var);
+        }
+        slots.body = .{ .start = start, .len = @intCast(predeclared_len) };
+    }
+    return slots.body.?.slice(self.predeclared_slot_vars.items);
 }
 
 /// Fresh-var storage is referenced only by pending and waiting uses, so it is
@@ -22700,11 +22916,8 @@ fn appendPredeclaredUseFreshVars(self: *Self, annotation_idx: CIR.Annotation.Idx
 /// body has already solved to structure cannot be a quantified variable of
 /// the binding's scheme, so it needs no entry.
 fn appendPredeclaredUsePairs(self: *Self, annotation_idx: CIR.Annotation.Idx, use_copies: []const Var) Allocator.Error!void {
+    const body = try self.predeclaredBodySlots(annotation_idx);
     const predeclared = try self.predeclaredSchemeSlots(annotation_idx);
-    const slots = self.predeclaredSlotsPtr(annotation_idx);
-    const body_range = slots.body orelse
-        base.invariant("type checker invariant violated: predeclared scheme use composed before its body generated the annotation", .{});
-    const body = body_range.slice(self.predeclared_slot_vars.items);
     if (body.len != predeclared.len) {
         base.invariant("type checker invariant violated: predeclared scheme and body annotation enumerated different identity slots", .{});
     }
@@ -22912,9 +23125,7 @@ fn relatePredeclaredUse(
     quantified_from: ?Rank,
     env: *Env,
 ) Allocator.Error!void {
-    const body_range = self.predeclaredSlotsPtr(annotation_idx).body orelse
-        base.invariant("type checker invariant violated: predeclared scheme use related before its body generated the annotation", .{});
-    const body = body_range.slice(self.predeclared_slot_vars.items);
+    const body = try self.predeclaredBodySlots(annotation_idx);
     var images = self.predeclared_use_images orelse collections.DenseMap(Var, Var).init(self.gpa);
     self.predeclared_use_images = null;
     defer {
@@ -23014,7 +23225,8 @@ fn recordPredeclaredDispatchUse(
         .region = region,
         .def_name = null,
     };
-    if (self.predeclaredSlotsPtr(annotation_idx).body != null) {
+    const target_slots = self.predeclaredSlotsPtr(annotation_idx);
+    if (target_slots.body != null or target_slots.body_took_over) {
         return self.recordInFlightPredeclaredSchemeUse(annotation_idx, .dispatch_target, node_idx, @backingInt(constraint_fn_var), scheme_root, policy, site, env);
     }
     try self.waiting_predeclared_dispatch_uses.append(self.gpa, .{
@@ -25245,9 +25457,9 @@ const ImplicitOpenExtRange = struct {
 /// the binding that owns it named by source region.
 ///
 /// The owner is stamped HERE—at the audit—rather than where the extension is
-/// minted: `generateAnnotationType` knows only the annotation, and it runs
-/// speculatively during `predeclareAnnotationScheme` and is rolled back, so a
-/// region recorded at the mint cannot be trusted to survive.
+/// minted: `generateAnnotationType` knows only the annotation, and a
+/// predeclaration's generation is discarded unless the body takes it over, so
+/// a region recorded at the mint cannot be trusted to survive.
 const LateImplicitOpenExtAudit = struct {
     ext: ImplicitOpenExt,
     /// Source region of the right-hand side of the binding whose annotation
@@ -27782,6 +27994,8 @@ fn beginTypeGen(self: *Self, frames: *std.ArrayList(TypeGenFrame), request: Type
             }
             try frames.ensureUnusedCapacity(self.gpa, 1);
             try self.type_decl_generation_frames.ensureUnusedCapacity(self.gpa, 1);
+            // The declaration is generated where its first reference is.
+            self.annotation_generation_is_retainable = false;
             self.setTypeDeclGenerationState(decl_idx, .generating);
             self.type_decl_generation_frames.appendAssumeCapacity(.{
                 .decl = decl_idx,
@@ -28388,6 +28602,8 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
                         // variable - each place that references it should reference
                         // the same var.
                         if (self.isForClauseAliasStatement(local.decl_idx)) {
+                            // The annotation joins a variable every reference shares.
+                            self.annotation_generation_is_retainable = false;
                             _ = try self.unify(anno_var, ModuleEnv.varFrom(local.decl_idx), env);
                             return anno_gen_done;
                         }
@@ -28845,6 +29061,8 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
                 try self.recordTypeDeclDependencyFromContext(ctx, local.decl_idx);
                 const decl_var = ModuleEnv.varFrom(local.decl_idx);
                 if (self.isForClauseAliasStatement(local.decl_idx)) {
+                    // The annotation joins a variable every reference shares.
+                    self.annotation_generation_is_retainable = false;
                     try self.generateForClauseAliasApplication(anno_var, decl_var, anno_arg_vars, env);
                     return anno_gen_done;
                 }
@@ -29308,6 +29526,8 @@ fn stepRecordAnnoGen(self: *Self, frame: *AnnoGenFrame, rec: std.meta.fieldInfo(
                     // typing and purity wait for finalize. Predeclaration's
                     // side effects are unwound, so only the body-pass
                     // materialization records.
+                    // The body generates the annotation again to record it.
+                    self.annotation_generation_is_retainable = false;
                     if (!self.predeclaring_annotation) {
                         const seen = try self.pending_default_seen.getOrPut(self.gpa, default_expr_idx);
                         if (!seen.found_existing) {
@@ -31768,7 +31988,8 @@ fn beginExprCheckFrame(
         }
 
         if (expected.annotation) |annotation_idx| {
-            try self.generateAnnotationType(annotation_idx, env);
+            const took_over = try self.takeOverRetainedAnnotation(annotation_idx, env);
+            if (!took_over) try self.generateAnnotationType(annotation_idx, env);
             if (self.bounding_annotation == annotation_idx) {
                 self.bounding_annotation = null;
                 try self.boundAnnotationRows(annotation_idx);
@@ -31776,7 +31997,10 @@ fn beginExprCheckFrame(
             try self.recordPredeclaredBodySlots(annotation_idx);
             frame.annotation = annotation_idx;
             const anno_var = ModuleEnv.varFrom(annotation_idx);
-            const anno_backup = try self.expectedTypeBackup(anno_var, env);
+            const anno_backup = if (took_over)
+                self.retainedAnnotationBackup(annotation_idx) orelse try self.expectedTypeBackup(anno_var, env)
+            else
+                try self.expectedTypeBackup(anno_var, env);
             break :blk .{
                 try self.fresh(env, expr_region),
                 AnnoVars{
@@ -37860,8 +38084,9 @@ fn isStatementNodeTag(tag: CIR.Node.Tag) bool {
 const AnnoVars = struct {
     anno_var: Var,
     anno_var_backup: Var,
-    /// The backup is a cached pristine copy shared with other frames, so a
-    /// consumer must take its own copy before unifying with it.
+    /// The backup is a pristine copy shared with other frames (a cached
+    /// expected-type copy, or a taken-over annotation's predeclared scheme),
+    /// so a consumer must take its own copy before unifying with it.
     backup_shared: bool = false,
     context: problem.Context,
 };

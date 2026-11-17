@@ -12751,6 +12751,49 @@ test "issue 13055: expect uses a function that calls a method on a weak literal"
     });
 }
 
+// A nominal type's method is a generalized function like any other, and a
+// method call dispatched to it copies its requirements on the weak literal.
+test "issue 13055: a method that calls a method on a weak top-level number, dispatched from another def" {
+    const source =
+        \\weak = 5
+        \\Thing := { n : U8 }.{
+        \\    show = |_t| weak.to_str().repeat(2)
+        \\    each = |_t, g| [weak.to_str().repeat(2)].map(g)
+        \\}
+        \\t = Thing.{ n: 1 }
+        \\shown = t.show()
+        \\lengths = t.each(|s| s.count_utf8_bytes())
+        \\selves = t.each(|s| s)
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "Dec" },
+        .{ .def = "shown", .expected = "Str" },
+        .{ .def = "lengths", .expected = "List(U64)" },
+        .{ .def = "selves", .expected = "List(Str)" },
+    });
+}
+
+test "issue 13055: a method that calls a method on a weak top-level interpolation, dispatched from another def" {
+    const source =
+        \\x = "q"
+        \\weak = "a${x}b"
+        \\Thing := { n : U8 }.{
+        \\    show = |_t| weak.repeat(2)
+        \\    each = |_t, g| [weak.repeat(2)].map(g)
+        \\}
+        \\t = Thing.{ n: 1 }
+        \\shown = t.show()
+        \\lengths = t.each(|s| s.count_utf8_bytes())
+        \\selves = t.each(|s| s)
+    ;
+    try checkTypesModuleDefs(source, &[_]DefAndExpectation{
+        .{ .def = "weak", .expected = "Str" },
+        .{ .def = "shown", .expected = "Str" },
+        .{ .def = "lengths", .expected = "List(U64)" },
+        .{ .def = "selves", .expected = "List(Str)" },
+    });
+}
+
 // The copy's argument decides the literal exactly as the direct operation
 // `weak + 3.U8` does: the default must satisfy the copy.
 test "issue 13055: a use's copied requirement chooses the weak literal's type" {
