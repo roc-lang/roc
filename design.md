@@ -14081,53 +14081,18 @@ Both lowerers preserve all four parameters in generated spec identities.
 
 A dict holds one entry per key, and its key type's `is_eq` decides which keys
 are one key: `0.0` and `-0.0` as `F64`, or two spellings of a key whose equality
-ignores case. A wire format can carry two such entries, and what becomes of them
-is the format's decision, so the dict parsing protocol has a required method
-for it, checked and reported missing like the other `parse_dict_*` methods:
+ignores case. A wire format can carry two such entries. A derived dict parser
+adds each entry with `Dict.insert`, so a later entry whose key equals an earlier
+one replaces it: the dict holds the later key and its value, at the position the
+earlier entry occupied. This is the language's rule for every format, not a
+format decision, so the dict parsing protocol has no method for it and no
+format can change it.
 
-```roc
-encoding.parse_dict_duplicate_key : encoding, state -> Try([KeepFirst(state), KeepLast(state)], err)
-```
-
-A derived dict parser reads an entry's key, calls `parse_dict_after_key`, reads
-the value, and adds the entry with the dictionary-owned builtin
-
-```roc
-Dict.insert_fresh : Dict(k, v), k, v -> [Inserted(Dict(k, v)), Occupied({ dict : Dict(k, v), key : k, value : v })]
-```
-
-which probes once and never overwrites. `Inserted` carries the dict with the
-entry added. `Occupied` carries the unchanged dict with the key and value handed
-back, so the caller owns them again without having retained them across the
-call. Only on `Occupied` does the parser call `parse_dict_duplicate_key`, with
-the state after the entry's value. `KeepFirst(state)` continues with the
-unchanged dict, `KeepLast(state)` continues with `Dict.insert` of the returned
-key and value, which replaces both the held key and its value in place, and an
-`Err` is returned from the parser under the same format-owned error rules as
-every other protocol method (Derived Parser Format-Owned Errors). Either way
-parsing continues from the state the method returned. There is no default
-answer and no optional-method discovery: a format without the method cannot
-parse a dict.
-
-Checking validates `with_capacity`, `insert`, and `insert_fresh` on the dict
-(`Check.validateDictConstructionMethods`) and the format method beside the
-other dict protocol methods, and records each as a generated codec call. Both
-lowerers consume those recorded calls: Monotype through
-`prepareDictCollectionCodecCalls` and `prepareParseDictFormatCodecCalls`,
-`.boxy` through the family's checked call table. The `insert_fresh` outcome row
-is built in two places that must agree, `Check.freshDictInsertFreshOutcomeVar`
-and `graphDictInsertFreshOutcome` in the Monotype lowerer.
-
-The builtin JSON format answers `KeepLast`, so a repeated object name keeps the
-value given last.
-
-Pinned by `test/cli/ParserDictDuplicateKey.roc` under both strategies (each
-answer with the collision at the first, a middle, and the last entry, counted
-and terminated dicts, unequal keys, heap-allocated keys and values, a key type
-whose equality is coarser than its wire form, and JSON),
-`test/repros/issue-13057/Probe.roc` (signed zeros as `F64` keys), and
-`test/cli/ParserMissingDictDuplicateKeyMethod.roc` (rejected: a format without
-the method).
+Pinned by `test/cli/ParserDictDuplicateKey.roc` under both strategies (the
+collision at the first, a middle, and the last entry, a key given three times,
+counted and terminated dicts, unequal keys, heap-allocated keys and values, a
+key type whose equality is coarser than its wire form, and JSON) and
+`test/repros/issue-13057/Probe.roc` (signed zeros as `F64` keys).
 
 ### Parked Codec Relations Validate A Private Instance
 
