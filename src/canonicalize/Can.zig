@@ -6064,15 +6064,24 @@ fn beginDefiningBoundVars(self: *Self, pattern_idx: Pattern.Idx, reassign_target
         self.scratch_defining_bound_vars.clearFrom(start + @as(u32, @intCast(write)));
     }
 
-    const added = self.scratch_defining_bound_vars.sliceFromStart(start);
-    try self.defining_bound_positions.ensureUnusedCapacity(self.env.gpa, @intCast(added.len));
-    for (added, 0..) |bound, index| {
-        const entry = self.defining_bound_positions.getOrPutAssumeCapacity(bound);
-        // A malformed duplicate binder may occur twice in the same pattern.
-        // Its first position still owns the entry for this initializer.
-        if (!entry.found_existing) entry.value_ptr.* = start + @as(u32, @intCast(index));
+    const span = self.scratch_defining_bound_vars.spanFrom(if (self.defining_bound_vars) |outer| outer.start else start);
+    // A singleton context needs only one identity comparison, not an index.
+    // On its first extension, index that existing binder along with the new
+    // ones; an already-indexed context only adds its new suffix.
+    if (span.len > 1) {
+        const index_start = if (self.defining_bound_vars) |outer|
+            if (outer.len > 1) start else outer.start
+        else
+            start;
+        const indexed = self.scratch_defining_bound_vars.sliceFromStart(index_start);
+        try self.defining_bound_positions.ensureUnusedCapacity(self.env.gpa, @intCast(indexed.len));
+        for (indexed, 0..) |bound, index| {
+            const entry = self.defining_bound_positions.getOrPutAssumeCapacity(bound);
+            // A malformed duplicate binder may occur twice in one pattern.
+            if (!entry.found_existing) entry.value_ptr.* = index_start + @as(u32, @intCast(index));
+        }
     }
-    return self.scratch_defining_bound_vars.spanFrom(if (self.defining_bound_vars) |outer| outer.start else start);
+    return span;
 }
 
 /// Restore the saved eager context, retiring only this initializer's additions.
@@ -6089,9 +6098,11 @@ fn endDefiningBoundVars(self: *Self, saved: ?DataSpan) void {
             }
             break :blk if (outer.start == cur.start) outer.start + outer.len else cur.start;
         } else cur.start;
-        for (self.scratch_defining_bound_vars.sliceFromStart(restore_top)) |bound| {
-            if (self.defining_bound_positions.get(bound)) |position| {
-                if (position >= restore_top) _ = self.defining_bound_positions.remove(bound);
+        if (self.defining_bound_positions.count() != 0) {
+            for (self.scratch_defining_bound_vars.sliceFromStart(restore_top)) |bound| {
+                if (self.defining_bound_positions.get(bound)) |position| {
+                    if (position >= restore_top) _ = self.defining_bound_positions.remove(bound);
+                }
             }
         }
         self.scratch_defining_bound_vars.clearFrom(restore_top);
@@ -6102,6 +6113,8 @@ fn endDefiningBoundVars(self: *Self, saved: ?DataSpan) void {
 /// Whether the binding is unfinished in this eager initialization context.
 fn isDefiningBoundVar(self: *Self, pattern_idx: Pattern.Idx) bool {
     const span = self.defining_bound_vars orelse return false;
+    if (span.len == 0) return false;
+    if (span.len == 1) return self.scratch_defining_bound_vars.sliceFromSpan(span)[0] == pattern_idx;
     const position = self.defining_bound_positions.get(pattern_idx) orelse return false;
     return position >= span.start and position - span.start < span.len;
 }

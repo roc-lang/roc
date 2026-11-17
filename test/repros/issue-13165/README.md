@@ -64,7 +64,9 @@ explicit, rather than clearing the state at ordinary lexical scopes.
 Continue excluding existing `var` reassignment targets: their old values
 are available while computing the replacement.
 
-The implementation keeps a sparse index of simultaneously active binders
+Singleton contexts compare their one canonical binder directly, without
+allocating or maintaining an index. Multi-binding contexts keep a sparse
+index of simultaneously active binders
 beside the existing initializer scratch stack. It does not enlarge the
 binding records touched by every name lookup, allocate a module-wide
 pattern-id column, or retain entries for completed declarations.

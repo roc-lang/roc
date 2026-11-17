@@ -73,6 +73,22 @@ test "issue 13165: a match branch cannot read its enclosing unfinished binding" 
     try testing.expectEqual(@as(usize, 1), self_references);
 }
 
+test "singleton initializer contexts need no membership index" {
+    var env = try TestEnv.init(
+        \\|input| {
+        \\    first = input + 1
+        \\    second = first + 1
+        \\    second
+        \\}
+    );
+    defer env.deinit();
+    _ = try env.canonicalizeExpr();
+    const diagnostics = try env.getDiagnostics();
+    defer testing.allocator.free(diagnostics);
+    try testing.expectEqual(@as(usize, 0), diagnostics.len);
+    try testing.expectEqual(@as(u32, 0), env.can.defining_bound_positions.capacity());
+}
+
 test "unfinished bindings survive eager blocks guards loops and nested initializers" {
     const sources = [_][]const u8{
         \\|take_early| {

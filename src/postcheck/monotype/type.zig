@@ -918,10 +918,12 @@ pub const Store = struct {
     pub const ContainmentQuery = enum { iterator_interface, generated_private, producer_interface };
 
     fn cachedContainment(self: *const Store, index: usize, comptime query: ContainmentQuery) ?bool {
+        if (comptime query == .producer_interface) return null;
         return self.type_cache.unsafeRawItemsForView()[index].get(query);
     }
 
     fn setCachedContainment(self: *Store, index: usize, comptime query: ContainmentQuery, answer: bool) void {
+        if (comptime query == .producer_interface) return;
         self.type_cache.set(index, self.type_cache.get(index).with(query, answer));
     }
 
@@ -940,15 +942,17 @@ pub const Store = struct {
         while (self.iterator_interface_pending.pop()) |ty| {
             const ty_index = @backingInt(ty);
             if (self.iterator_interface_visit_epochs.testAndInsert(ty)) continue;
-            try self.iterator_interface_visited.append(self.allocator, ty);
             self.requireConstructed(ty);
-            if (ty != root) {
-                if (self.cachedContainment(ty_index, query)) |cached| {
-                    if (cached) {
-                        self.setCachedContainment(root_index, query, true);
-                        return true;
+            if (comptime query != .producer_interface) {
+                try self.iterator_interface_visited.append(self.allocator, ty);
+                if (ty != root) {
+                    if (self.cachedContainment(ty_index, query)) |cached| {
+                        if (cached) {
+                            self.setCachedContainment(root_index, query, true);
+                            return true;
+                        }
+                        continue;
                     }
-                    continue;
                 }
             }
             switch (self.get(ty)) {
@@ -5110,7 +5114,12 @@ test "producer interface containment includes nested codecs iterators and privat
                 .backing = .{ .ty = leaf, .use = .inspectable },
             }),
         };
-        for (shapes) |shape| try std.testing.expectEqual(owner != null, try store.containsProducerInterface(shape));
+        for (shapes) |shape| {
+            const visited_capacity = store.iterator_interface_visited.capacity;
+            try std.testing.expectEqual(owner != null, try store.containsProducerInterface(shape));
+            // Only cached queries need a second list of nodes to stamp.
+            try std.testing.expectEqual(visited_capacity, store.iterator_interface_visited.capacity);
+        }
 
         const transaction = store.beginTransaction();
         const recursive = try transaction.reserve(&store);

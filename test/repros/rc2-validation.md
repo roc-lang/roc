@@ -46,22 +46,29 @@ The measurements cover the combined changes, not isolated attribution to
 each fix. No Git history comparison or source reset was used.
 
 Each workload had one warmup per binary, followed by six measured runs per
-binary in alternating before/after order. `/usr/bin/time -l` supplied CPU
-and peak RSS; a monotonic clock measured wall time. No builds from this
+binary in alternating before/after order. `/usr/bin/time -l` supplied CPU,
+retired instructions, and peak RSS; a monotonic clock measured wall time. No builds from this
 thread ran during the measurement. Other machine activity was uncontrolled.
+These are the final measurements after review removed no-op cache writes
+and added the allocation-free singleton initializer path.
 
 | Workload | Before median | After median | Before range | After range |
 | --- | ---: | ---: | ---: | ---: |
-| Check 2,001 sequential bindings, no cache | 336.5 ms | 334.8 ms | 328.0–368.5 ms | 317.2–377.7 ms |
-| Check 1,024-element destructuring, no cache | 192.6 ms | 190.0 ms | 177.2–210.9 ms | 179.3–210.0 ms |
-| Test 256 closed method calls, specialize, no cache | 334.2 ms | 325.5 ms | 290.7–445.2 ms | 295.3–409.5 ms |
-| JSON round-trip tests, specialize, no cache | 3,086.4 ms | 3,027.7 ms | 2,883.7–3,395.2 ms | 2,832.1–3,454.2 ms |
-| Check sequential bindings, warm cache | 68.0 ms | 69.8 ms | 67.2–69.2 ms | 69.2–70.8 ms |
+| Check 2,001 sequential bindings, no cache | 303.3 ms | 306.4 ms | 287.5–312.9 ms | 293.7–321.3 ms |
+| Check 1,024-element destructuring, no cache | 162.5 ms | 166.8 ms | 156.9–178.6 ms | 166.0–177.0 ms |
+| Test 256 closed method calls, specialize, no cache | 300.8 ms | 304.0 ms | 290.3–313.9 ms | 298.0–310.1 ms |
+| JSON round-trip tests, specialize, no cache | 2,717.0 ms | 2,734.3 ms | 2,564.0–2,803.4 ms | 2,536.3–2,987.4 ms |
+| Check sequential bindings, warm cache | 80.9 ms | 89.8 ms | 75.0–84.5 ms | 83.5–107.2 ms |
 
-Median user+system CPU times were unchanged at the timer's precision for
-the sequential, wide, closed-call, and warm-cache cases. JSON CPU time was
-5.795 s before and 5.870 s after. Median peak RSS ranged from 58–245 MiB;
-each after median was 0.1–0.5 MiB below its before median.
+Median retired-instruction changes were +0.24% for sequential checking,
+-0.36% for wide destructuring, +0.23% for closed calls, +0.06% for JSON,
+and +1.66% for warm-cache checking. The singleton path reduced the
+sequential case's roughly 1% instruction increase in the preceding candidate.
+
+Median user+system CPU times before/after were 0.285/0.290 s, 0.150/0.150 s,
+0.280/0.280 s, 5.680/5.725 s, and 0.060/0.070 s respectively.
+Median peak RSS ranged from 58–245 MiB; each after median was 0.1–0.4 MiB
+below its before median.
 
 The sequential input chains `n0 = input + 1` through `n2000`. The wide
 input destructures 1,024 copies of a function argument, then sums the
@@ -70,7 +77,9 @@ nominal's scalar-returning method and checks the result. The JSON input
 is `test/cli/JsonEncodeRoundTrip.roc`. Local binaries, generated inputs,
 raw logs, and results are retained in the ignored `.tmp/rc2-perf/`.
 
-These results show no large end-to-end regression in the sampled Debug
-workloads. They do not establish a speedup, statistical equivalence, or
-global optimality. In particular, the warm-cache median increased by
-1.8 ms, and optimized production compiler workloads remain unmeasured.
+The uncached samples show small instruction-count changes and overlapping
+wall-time ranges. The warm-cache median increased by 8.9 ms, with a 1.66%
+instruction increase; that result is not evidence of performance neutrality.
+These uncontrolled Debug samples do not establish a speedup, statistical
+equivalence, or global optimality. Optimized production compiler workloads
+remain unmeasured.
