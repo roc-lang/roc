@@ -31630,12 +31630,17 @@ or stack pointer change, is a compiler invariant violation. Code the host provid
 business and needs no room.
 
 Compiler-owned code compiled ahead of time follows the same rule. Builtins
-never recurse. The runtime functions that walk values and layouts of any depth
-call `builtins.stack_guard.check` at their entry, which compiles to nothing
-except in the stack-checked twins of the embedded wasm builtins, boxy runtime,
-and LLVM builtins bitcode, whose roots declare `roc_wasm_stack_checks`. Only a
-platform that reserves low memory links those twins, so no other build carries
-a check.
+never recurse on their own; the queued drop builtins call back into generated
+helpers that can call them again. They and the runtime functions that walk
+values and layouts of any depth call `builtins.stack_guard.check` at their
+entry, which compiles to nothing except in the stack-checked twins of the
+embedded wasm builtins, boxy runtime, and LLVM builtins bitcode, whose roots
+declare `roc_wasm_stack_checks`. Only a platform that reserves low memory
+links those twins, so no other build carries a check. The builtins and Boxy
+runtime twins are compiled without position independence, so every check
+names `__stack_low` by a relocated `i32.const`, the one form `StackRoom` reads
+a check's bound from; position-independent code would load that address from
+a GOT global instead.
 
 A failed check calls `roc_wasm_stack_overflow`, which sets the stack pointer
 below `__stack_low` and traps. Every wasm module exports `__stack_pointer`,

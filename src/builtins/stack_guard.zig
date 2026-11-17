@@ -3,10 +3,14 @@
 //! A wasm platform that reserves the addresses below its `global_base` has its
 //! stack above static data, where nothing traps an overflow, so every function
 //! that can recurse checks the stack bounds at its entry. Builtins never
-//! recurse; the runtime functions that walk values and layouts of any depth
-//! call `check` first. It compiles to nothing unless the object's root declares
+//! recurse on their own; the queued drop builtins, which call back into
+//! generated helpers that can call them again, and the runtime functions that
+//! walk values and layouts of any depth call `check` first. It compiles to
+//! nothing unless the object's root declares
 //! `pub const roc_wasm_stack_checks = true;`, which only the stack-checked wasm
-//! runtime objects do, so every other build pays nothing for it.
+//! runtime objects do, so every other build pays nothing for it. Those objects
+//! are compiled without position independence, so `__stack_low` is named by
+//! the relocated `i32.const` the stack room analysis reads.
 
 const builtin = @import("builtin");
 
