@@ -12411,67 +12411,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.rc_helper_scheduled.clearRetainingCapacity();
         }
 
-        fn emitCallRcHelperFromStackSlots(
-            self: *Self,
-            helper: RcHelperVariant,
-            ptr_slot: i32,
-            count_slot: ?i32,
-        ) Allocator.Error!void {
-            const arg0 = self.getArgumentRegister(0);
-            try self.emitLoad(.w64, arg0, frame_ptr, ptr_slot);
-
-            switch (helper.key.op) {
-                .incref => {
-                    const arg1 = self.getArgumentRegister(1);
-                    try self.emitLoad(.w64, arg1, frame_ptr, count_slot.?);
-                },
-                .decref, .free => {},
-                .decref_queued => {
-                    const arg1 = self.getArgumentRegister(1);
-                    if (self.rc_queue_slot) |queue_slot| {
-                        try self.emitLoad(.w64, arg1, frame_ptr, queue_slot);
-                    } else {
-                        try self.codegen.emitLoadImm(arg1, 0);
-                    }
-                },
-                .host_drop => hostDropInRcStatement(),
-            }
-
-            try self.emitPendingRcCall(helper);
-            try self.scheduleRcHelper(helper);
-        }
-
+        /// Call `helper` on the value at `[frame + base_offset]`: its address
+        /// goes straight into the first argument register and, for an incref,
+        /// `count` into the second.
         fn emitRcHelperCallAtStackOffset(
             self: *Self,
             helper: RcHelperVariant,
             base_offset: i32,
             count: u32,
         ) Allocator.Error!void {
-            const ptr_slot = self.codegen.allocStackSlot(8);
-            const ptr_reg = try self.allocTempGeneral();
-
-            try self.emitMovRegReg(ptr_reg, frame_ptr);
-            if (base_offset != 0) {
-                try self.emitAddPtrImmAny(ptr_reg, ptr_reg, base_offset);
-            }
-            try self.emitStore(.w64, frame_ptr, ptr_slot, ptr_reg);
-            self.codegen.freeGeneral(ptr_reg);
-
+            try self.emitLeaStack(self.getArgumentRegister(0), base_offset);
             switch (helper.key.op) {
-                .incref => {
-                    const count_slot = self.codegen.allocStackSlot(8);
-                    const count_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(count_reg, count);
-                    try self.emitStore(.w64, frame_ptr, count_slot, count_reg);
-                    self.codegen.freeGeneral(count_reg);
-                    try self.emitCallRcHelperFromStackSlots(helper, ptr_slot, count_slot);
-                },
-                .decref, .free => {
-                    try self.emitCallRcHelperFromStackSlots(helper, ptr_slot, null);
-                },
+                .incref => try self.codegen.emitLoadImm(self.getArgumentRegister(1), count),
+                .decref, .free => {},
                 .decref_queued => queuedDropInRcStatement(),
                 .host_drop => hostDropInRcStatement(),
             }
+            try self.emitPendingRcCall(helper);
+            try self.scheduleRcHelper(helper);
         }
 
         fn emitExplicitRcHelperCallForValue(
@@ -12514,9 +12471,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             ptr_reg: GeneralReg,
             count_slot: ?i32,
         ) Allocator.Error!void {
-            const ptr_slot = self.codegen.allocStackSlot(8);
-            try self.emitStore(.w64, frame_ptr, ptr_slot, ptr_reg);
-            try self.emitCallRcHelperFromStackSlots(helper, ptr_slot, count_slot);
+            const arg0 = self.getArgumentRegister(0);
+            if (ptr_reg != arg0) try self.emitMovRegReg(arg0, ptr_reg);
+            switch (helper.key.op) {
+                .incref => try self.emitLoad(.w64, self.getArgumentRegister(1), frame_ptr, count_slot.?),
+                .decref, .free => {},
+                .decref_queued => {
+                    const arg1 = self.getArgumentRegister(1);
+                    if (self.rc_queue_slot) |queue_slot| {
+                        try self.emitLoad(.w64, arg1, frame_ptr, queue_slot);
+                    } else {
+                        try self.codegen.emitLoadImm(arg1, 0);
+                    }
+                },
+                .host_drop => hostDropInRcStatement(),
+            }
+            try self.emitPendingRcCall(helper);
+            try self.scheduleRcHelper(helper);
         }
 
         /// Layout-keyed element callback addresses for a list builtin.
@@ -16434,7 +16405,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
                         .x86_64 => {
                             const stack_offset = self.codegen.allocStackSlot(4);
-                            try self.codegen.emit.movRegImm64(.R11, bits);
+                            try self.codegen.emit.movRegImm(.R11, bits);
                             try self.codegen.emit.movMemReg(.w32, .RBP, stack_offset, .R11);
                             try self.codegen.emit.movssRegMem(reg, .RBP, stack_offset);
                         },
@@ -16464,7 +16435,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             },
                             .x86_64 => {
                                 const stack_offset = self.codegen.allocStackSlot(8);
-                                try self.codegen.emit.movRegImm64(.R11, @bitCast(bits));
+                                try self.codegen.emit.movRegImm(.R11, @bitCast(bits));
                                 try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset, .R11);
                                 try self.codegen.emit.movsdRegMem(reg, .RBP, stack_offset);
                             },
