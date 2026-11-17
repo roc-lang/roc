@@ -18,7 +18,7 @@ const foo_source =
     \\}
 ;
 
-fn expectDiagnostic(env: *TestEnv, expected: std.meta.Tag(CIR.Diagnostic)) !void {
+fn expectDiagnostic(env: *TestEnv, expected: std.meta.Tag(CIR.Diagnostic)) (std.mem.Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
     try std.testing.expect(!env.parse_ast.hasErrors());
     const diagnostics = try env.module_env.getDiagnostics();
     defer env.gpa.free(diagnostics);
