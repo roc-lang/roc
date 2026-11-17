@@ -14,7 +14,7 @@ const GuardedList = collections.GuardedList;
 /// Post-check inline analysis mode.
 pub const Mode = enum {
     none,
-    /// Retain standalone procedures, with iterator fusion in SpecConstr. Only
+    /// Retain standalone procedures. Only
     /// wrappers whose bodies the compiler provides (`provides_low_level`) are
     /// inlined, since substituting them makes no caller's code depend on
     /// another procedure's source.

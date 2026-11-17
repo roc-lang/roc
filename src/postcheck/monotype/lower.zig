@@ -37939,7 +37939,7 @@ const BodyContext = struct {
                                 .expected_ret_cell = expected_ret_cell,
                             } });
                         },
-                        .intrinsic, .graph_participating => {},
+                        .intrinsic => {},
                     },
                     .local_proc, .structural, .callable_binding => {},
                 }
@@ -37949,7 +37949,7 @@ const BodyContext = struct {
                 switch (node.target.kind) {
                     .procedure => |procedure| switch (procedure.runtime_target) {
                         .low_level => |op| task.direct_parametric_low_level = op,
-                        .procedure, .intrinsic, .graph_participating => {},
+                        .procedure, .intrinsic => {},
                     },
                     .local_proc, .structural, .callable_binding => {},
                 }
@@ -40465,7 +40465,7 @@ const BodyContext = struct {
                     intrinsic
                 else
                     Common.invariant("non-call-site intrinsic had a call-site method runtime target"),
-                .procedure, .low_level, .graph_participating => null,
+                .procedure, .low_level => null,
             },
             .local_proc, .structural, .callable_binding => null,
         };
@@ -53394,7 +53394,7 @@ const BodyContext = struct {
         };
         const runtime_target = procedure.runtime_target;
         switch (runtime_target) {
-            .intrinsic, .graph_participating => return null,
+            .intrinsic => return null,
             .procedure, .low_level => {},
         }
 
@@ -53407,7 +53407,7 @@ const BodyContext = struct {
         return switch (runtime_target) {
             .low_level => function.ret,
             .procedure => function.ret,
-            .intrinsic, .graph_participating => unreachable, // intrinsic and graph-participating targets returned null above
+            .intrinsic => unreachable, // intrinsic targets returned null above
         };
     }
 

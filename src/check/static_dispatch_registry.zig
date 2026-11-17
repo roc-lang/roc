@@ -154,16 +154,9 @@ pub const BuiltinOwner = enum(u8) {
     iter,
     stream,
 };
-/// The builtin `Iter`/`Stream` nominals hold their step closure by value inside
-/// a finite backing record. Later stages consult this to keep that closure a
-/// lambda set (inline captures) instead of erasing it to a boxed callable.
-pub fn isIteratorOwner(owner: BuiltinOwner) bool {
-    return iteratorOwner(owner) != null;
-}
-
 /// The public iterator types. `Iter` steps purely and `Stream` steps
-/// effectfully; their representation, producer operations, and minted chains
-/// are otherwise one shared protocol keyed by this owner.
+/// effectfully; their backing records otherwise share one topology keyed by
+/// this owner.
 pub const IteratorOwner = enum(u8) {
     iter,
     stream,
@@ -187,326 +180,6 @@ pub fn iteratorOwner(owner: BuiltinOwner) ?IteratorOwner {
     };
 }
 
-/// Producer-owned identity of an internal iterator representation. This is
-/// shared by Monotype and ConstStore so crossing that boundary never depends
-/// on the ordinal layout of two separately maintained enums. A kind names the
-/// producing operation, not the public type: a minted `Stream` map and a minted
-/// `Iter` map are both `.map`, distinguished by their declaration identity.
-pub const IteratorKind = enum(u8) {
-    none,
-    custom,
-    list,
-    list_rev,
-    str,
-    single,
-    numeric_until,
-    numeric_to,
-    map,
-    keep_if,
-    drop_if,
-    take_first,
-    drop_first,
-    concat,
-    append,
-    with_index,
-    step_by,
-    from_iter,
-    forced_dynamic,
-
-    /// See `IteratorComponentTopology`. Null for `none` (no minted kind) and
-    /// `forced_dynamic` (no static topology).
-    pub fn componentTopology(self: IteratorKind) ?IteratorComponentTopology {
-        return switch (self) {
-            .none, .forced_dynamic => null,
-            .numeric_until, .numeric_to => .source_without_components,
-            .custom, .list, .list_rev, .str, .single => .source_with_components,
-            .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append, .with_index, .step_by, .from_iter => .adapter,
-        };
-    }
-};
-
-/// Structural role of a minted iterator kind's nominal component arguments.
-/// This is the one partition consumed by Monotype's mint-depth assignment,
-/// graph depth finalization, and expected-producer request shaping; consumers
-/// must never re-derive it independently, since a kind classified as source
-/// in one consumer and adapter in another compiles clean and mints the wrong
-/// representation far from the edit.
-pub const IteratorComponentTopology = enum {
-    /// A source whose construction inputs initialize generated step state
-    /// without being stored as nominal component arguments (ranges). Its
-    /// representation depth is exactly one.
-    source_without_components,
-    /// A source that stores its construction inputs as nominal components.
-    /// Its representation depth is exactly one.
-    source_with_components,
-    /// An adapter over iterator components; its representation depth derives
-    /// from those components.
-    adapter,
-};
-
-/// Semantic identity assigned to compiler-owned iterator procedures while
-/// checking still has the defining builtin declaration in hand. An id names
-/// an operation, not the public type that provides it: `Iter.map` and
-/// `Stream.map` carry the same `.map` stamp, and every consumer reads which
-/// public type it is lowering from the solved result type. The Builtin
-/// definitions carrying each stamp are declared once, per owner, by
-/// `builtinNames`.
-pub const IteratorProcedureId = enum(u8) {
-    identity,
-    next,
-    custom,
-    single,
-    list_iter,
-    list_iter_rev,
-    str_iter_utf8,
-    map,
-    keep_if,
-    drop_if,
-    take_first,
-    drop_first,
-    concat,
-    append,
-    with_index,
-    step_by,
-    from_iter,
-    /// `Range.iter` and the numeric `range_iter` implementations it
-    /// dispatches to. They produce iterators but mint no representation of
-    /// their own: the result is exactly the `Iter.custom` chain the numeric
-    /// implementation builds.
-    range_iter,
-    numeric_range_iter,
-    numeric_to,
-    numeric_until,
-    from_step,
-    range_done,
-
-    /// Whether this exact checked procedure returns an iterator value. Keep
-    /// this exhaustive: adding an iterator procedure must declare its producer
-    /// role here instead of letting a later pass infer it from result shape.
-    pub fn producesIteratorValue(self: IteratorProcedureId) bool {
-        return switch (self) {
-            .next,
-            .range_done,
-            => false,
-            .identity,
-            .custom,
-            .single,
-            .list_iter,
-            .list_iter_rev,
-            .str_iter_utf8,
-            .map,
-            .keep_if,
-            .drop_if,
-            .take_first,
-            .drop_first,
-            .concat,
-            .append,
-            .with_index,
-            .step_by,
-            .from_iter,
-            .range_iter,
-            .numeric_range_iter,
-            .numeric_to,
-            .numeric_until,
-            .from_step,
-            => true,
-        };
-    }
-
-    /// Whether Monotype's representation-graph protocol owns this operation's
-    /// result. The delegating range producers are ordinary procedures there:
-    /// their result representation is completed from their bodies, like any
-    /// procedure that returns an iterator. Keep this exhaustive.
-    pub fn participatesInRepresentationGraph(self: IteratorProcedureId) bool {
-        return switch (self) {
-            .range_iter,
-            .numeric_range_iter,
-            => false,
-            .identity,
-            .next,
-            .custom,
-            .single,
-            .list_iter,
-            .list_iter_rev,
-            .str_iter_utf8,
-            .map,
-            .keep_if,
-            .drop_if,
-            .take_first,
-            .drop_first,
-            .concat,
-            .append,
-            .with_index,
-            .step_by,
-            .from_iter,
-            .numeric_to,
-            .numeric_until,
-            .from_step,
-            .range_done,
-            => true,
-        };
-    }
-
-    /// The minted iterator kind this procedure constructs, or null for
-    /// procedures that pass through or consume an existing iterator
-    /// (`Iter.iter`, `next`) and the internal step constructors. This is
-    /// the one producer-to-kind mapping; Monotype's per-procedure request
-    /// construction reads it instead of restating kinds beside each arm.
-    pub fn iteratorKind(self: IteratorProcedureId) ?IteratorKind {
-        return switch (self) {
-            .identity, .next, .range_iter, .numeric_range_iter, .from_step, .range_done => null,
-            .custom => .custom,
-            .single => .single,
-            .list_iter => .list,
-            .list_iter_rev => .list_rev,
-            .str_iter_utf8 => .str,
-            .map => .map,
-            .keep_if => .keep_if,
-            .drop_if => .drop_if,
-            .take_first => .take_first,
-            .drop_first => .drop_first,
-            .concat => .concat,
-            .append => .append,
-            .with_index => .with_index,
-            .step_by => .step_by,
-            .from_iter => .from_iter,
-            .numeric_to => .numeric_to,
-            .numeric_until => .numeric_until,
-        };
-    }
-
-    /// Whether the checker must keep a call to this producer out of hoist
-    /// root/cover position so its closed source expression stays available as
-    /// a separate hoist root.
-    ///
-    /// List-backed conversions need this so an inline collection remains
-    /// available for static-data hoisting, and the `Iter.iter` identity needs
-    /// it so its step-closure-bearing result is never selected as a
-    /// static-data root itself. Adapter inputs are already iterator
-    /// expressions, while ranges and custom iterators have no eager source
-    /// expression to preserve.
-    pub fn preservesHoistableSourceInput(self: IteratorProcedureId) bool {
-        return switch (self) {
-            .list_iter, .list_iter_rev, .identity => true,
-            .next,
-            .custom,
-            .single,
-            .str_iter_utf8,
-            .map,
-            .keep_if,
-            .drop_if,
-            .take_first,
-            .drop_first,
-            .concat,
-            .append,
-            .with_index,
-            .step_by,
-            .from_iter,
-            .range_iter,
-            .numeric_range_iter,
-            .numeric_to,
-            .numeric_until,
-            .from_step,
-            .range_done,
-            => false,
-        };
-    }
-
-    /// The Builtin definitions stamped with this operation, by the public
-    /// iterator type whose values they produce or consume. Every operation
-    /// answers for both owners, so an operation added to one type states
-    /// explicitly whether, and under which definitions, the other type
-    /// provides it; the stamp table is generated from this alone.
-    pub fn builtinNames(self: IteratorProcedureId) IteratorProcedureNames {
-        return switch (self) {
-            .identity => .{ .iter = &.{"Builtin.Iter.iter"}, .stream = &.{"Builtin.Stream.stream"} },
-            .next => .{ .iter = &.{"Builtin.Iter.next"}, .stream = &.{"Builtin.Stream.next!"} },
-            .custom => .{ .iter = &.{"Builtin.Iter.custom"}, .stream = &.{"Builtin.Stream.custom"} },
-            .single => .{ .iter = &.{"Builtin.Iter.single"}, .stream = &.{} },
-            .list_iter => .{ .iter = &.{"Builtin.List.iter"}, .stream = &.{} },
-            .list_iter_rev => .{ .iter = &.{"Builtin.List.iter_rev"}, .stream = &.{} },
-            .str_iter_utf8 => .{ .iter = &.{"Builtin.Str.iter_utf8"}, .stream = &.{} },
-            .map => .{ .iter = &.{"Builtin.Iter.map"}, .stream = &.{ "Builtin.Stream.map", "Builtin.Stream.map!" } },
-            .keep_if => .{ .iter = &.{"Builtin.Iter.keep_if"}, .stream = &.{"Builtin.Stream.keep_if"} },
-            .drop_if => .{ .iter = &.{"Builtin.Iter.drop_if"}, .stream = &.{"Builtin.Stream.drop_if"} },
-            .take_first => .{ .iter = &.{"Builtin.Iter.take_first"}, .stream = &.{"Builtin.Stream.take_first"} },
-            .drop_first => .{ .iter = &.{"Builtin.Iter.drop_first"}, .stream = &.{"Builtin.Stream.drop_first"} },
-            .concat => .{ .iter = &.{"Builtin.Iter.concat"}, .stream = &.{} },
-            .append => .{ .iter = &.{"Builtin.Iter.append"}, .stream = &.{} },
-            .with_index => .{ .iter = &.{ "iter_with_index", "Builtin.with_index" }, .stream = &.{ "stream_with_index", "Builtin.stream_with_index" } },
-            .step_by => .{ .iter = &.{ "iter_step_by", "Builtin.step_by" }, .stream = &.{} },
-            .from_iter => .{ .iter = &.{"Builtin.Iter.stream"}, .stream = &.{"Builtin.Stream.from_iter"} },
-            .range_iter => .{ .iter = &.{"Builtin.Num.Range.iter"}, .stream = &.{} },
-            .numeric_range_iter => .{ .iter = &.{ "range_iter_standard", "Builtin.range_iter_standard", "range_iter_float", "Builtin.range_iter_float" }, .stream = &.{} },
-            .numeric_to => .{ .iter = &numeric_to_names, .stream = &.{} },
-            .numeric_until => .{ .iter = &numeric_until_names, .stream = &.{} },
-            .from_step => .{ .iter = &.{ "iter_from_step", "Builtin.from_step" }, .stream = &.{ "stream_from_step", "Builtin.stream_from_step" } },
-            .range_done => .{ .iter = &.{ "range_done", "Builtin.range_done" }, .stream = &.{} },
-        };
-    }
-};
-
-/// Builtin definitions carrying one `IteratorProcedureId`, per public
-/// iterator type. An empty list means that type does not provide the
-/// operation.
-pub const IteratorProcedureNames = struct {
-    iter: []const []const u8,
-    stream: []const []const u8,
-
-    pub fn forOwner(self: IteratorProcedureNames, owner: IteratorOwner) []const []const u8 {
-        return switch (owner) {
-            .iter => self.iter,
-            .stream => self.stream,
-        };
-    }
-};
-
-const IteratorProcedureNameEntry = struct { []const u8, IteratorProcedureId };
-
-// Single-sourced from BuiltinLowLevel so the numeric roster cannot drift from
-// the low-level registration tables. `to`/`until` need `minus_try` and
-// therefore exclude IEEE floats.
-const iterator_to_until_numeric_type_names = can.BuiltinLowLevel.non_float_numeric_type_names;
-
-fn numericMethodNames(comptime numerics: anytype, comptime method: []const u8) [numerics.len][]const u8 {
-    var out: [numerics.len][]const u8 = undefined;
-    for (numerics, 0..) |numeric, index| out[index] = "Builtin.Num." ++ numeric ++ "." ++ method;
-    return out;
-}
-
-const numeric_to_names = numericMethodNames(iterator_to_until_numeric_type_names, "to");
-const numeric_until_names = numericMethodNames(iterator_to_until_numeric_type_names, "until");
-
-const iterator_procedure_name_entries = blk: {
-    @setEvalBranchQuota(10_000);
-    var count: usize = 0;
-    for (std.enums.values(IteratorProcedureId)) |procedure| {
-        for (std.enums.values(IteratorOwner)) |owner| count += procedure.builtinNames().forOwner(owner).len;
-    }
-    var entries: [count]IteratorProcedureNameEntry = undefined;
-    var index: usize = 0;
-    for (std.enums.values(IteratorProcedureId)) |procedure| {
-        for (std.enums.values(IteratorOwner)) |owner| {
-            for (procedure.builtinNames().forOwner(owner)) |name| {
-                entries[index] = .{ name, procedure };
-                index += 1;
-            }
-        }
-    }
-    break :blk entries;
-};
-
-const iterator_procedure_by_name = std.StaticStringMap(IteratorProcedureId).initComptime(&iterator_procedure_name_entries);
-
-/// Return the compiler-owned iterator role assigned to a Builtin definition.
-pub fn iteratorProcedureForEnvDef(env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?IteratorProcedureId {
-    if (env.module_role != .builtin) return null;
-    const def = env.store.getDef(def_idx);
-    const pattern = env.store.getPattern(def.pattern);
-    if (pattern != .assign) return null;
-    return iterator_procedure_by_name.get(env.getIdent(pattern.assign.ident));
-}
-
 /// Every method name a hoist-preserving iterator conversion can be reached
 /// through. The checker uses this as a cheap pre-filter before resolving a
 /// receiver and looking up its binding, and answers from a user-defined
@@ -516,22 +189,31 @@ pub fn iteratorProcedureForEnvDef(env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?
 /// decide the answer.
 pub const hoist_preserving_method_names = [_][]const u8{ "iter", "iter_rev", "stream" };
 
-/// Builtin nominals whose iterator conversions delegate to a registered
-/// producer (`Dict.iter` calls `List.iter` on its backing entries, and so on).
-/// They carry no `IteratorProcedureId` of their own—their iterator
-/// representation arrives through procedure-return propagation—but their
-/// closed receiver must stay hoistable exactly like the producer they
+/// Builtin conversions whose eager receiver stays a separate hoist root:
+/// `List.iter` and `List.iter_rev` keep an inline collection available for
+/// static-data hoisting, and the `Iter.iter`/`Stream.stream` identities keep
+/// their step-closure-bearing result from being selected as a static-data
+/// root itself.
+pub const hoist_preserving_producer_names = [_][]const u8{ "Builtin.List.iter", "Builtin.List.iter_rev", "Builtin.Iter.iter", "Builtin.Stream.stream" };
+
+/// Builtin nominals whose iterator conversions delegate to a hoist-preserving
+/// producer (`Dict.iter` calls `List.iter` on its backing entries, and so
+/// on). Their closed receiver stays hoistable exactly like the producer they
 /// delegate to.
 const hoist_preserving_delegating_owners = [_][]const u8{ "Builtin.Dict", "Builtin.Set", "Builtin.Num.Range" };
 
 /// Built from the two rosters above rather than listed separately, so the
 /// delegating names cannot drift from the method names the checker
 /// pre-filters on.
-const hoist_preserving_delegating_producer_names = blk: {
-    var entries: [hoist_preserving_delegating_owners.len * hoist_preserving_method_names.len]struct {
+const hoist_preserving_names = blk: {
+    var entries: [hoist_preserving_producer_names.len + hoist_preserving_delegating_owners.len * hoist_preserving_method_names.len]struct {
         []const u8,
     } = undefined;
     var index: usize = 0;
+    for (hoist_preserving_producer_names) |name| {
+        entries[index] = .{name};
+        index += 1;
+    }
     for (hoist_preserving_delegating_owners) |owner| {
         for (hoist_preserving_method_names) |method| {
             entries[index] = .{owner ++ "." ++ method};
@@ -541,34 +223,20 @@ const hoist_preserving_delegating_producer_names = blk: {
     break :blk std.StaticStringMap(void).initComptime(&entries);
 };
 
-/// Producer definition names, exposed so the naming invariant that ties them
-/// to `hoist_preserving_method_names` can be asserted outside this file (the
-/// type checker's own sources may not compare strings).
-pub const iterator_procedure_names = iterator_procedure_name_entries;
-
 /// Whether this exact Builtin procedure needs its eager receiver preserved as
-/// a separate hoist root. Iterator identity covers public producers, the
-/// delegating Dict/Set conversions preserve their receiver the same way, and
-/// the generated FieldNames iterator is an intrinsic with the same
+/// a separate hoist root: the producers and delegating conversions named
+/// above, and the generated FieldNames iterator, an intrinsic with the same
 /// source-lifetime requirement.
 pub fn procedurePreservesHoistableSourceInputForEnvDef(env: *const ModuleEnv, def_idx: CIR.Def.Idx) bool {
     if (env.module_role != .builtin) return false;
-    if (iteratorProcedureForEnvDef(env, def_idx)) |producer| {
-        return producer.preservesHoistableSourceInput();
-    }
     const def = env.store.getDef(def_idx);
     const pattern = env.store.getPattern(def.pattern);
-    if (pattern == .assign and hoist_preserving_delegating_producer_names.has(env.getIdent(pattern.assign.ident))) {
+    if (pattern == .assign and hoist_preserving_names.has(env.getIdent(pattern.assign.ident))) {
         return true;
     }
     const expr = env.store.getExpr(def.expr);
     if (expr != .e_anno_only) return false;
     return can.BuiltinLowLevel.intrinsicAnnotation(env, expr.e_anno_only.ident) == .field_names_iter;
-}
-
-/// Return the compiler-owned iterator role assigned to a Builtin definition.
-pub fn iteratorProcedureForDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?IteratorProcedureId {
-    return iteratorProcedureForEnvDef(module.moduleEnvConst(), def_idx);
 }
 
 /// Public `MethodKey` declaration.
@@ -580,83 +248,43 @@ pub const MethodKey = struct {
 /// Producer-authored runtime category for an exact procedure method target.
 pub const ProcedureRuntimeTarget = union(enum(u8)) {
     /// A normal Roc procedure specialization.
-    procedure: OrdinaryProcedureTarget,
+    procedure,
     /// One exact producer-authored low-level operation. Monotype emits this
     /// operation directly and must not request a procedure specialization.
     low_level: base.LowLevel,
     /// An annotation-only compiler intrinsic whose monomorphic implementation
     /// is emitted directly at the checked call site.
     intrinsic: can.BuiltinLowLevel.IntrinsicId,
-    /// A compiler-authored operation whose runtime representation must
-    /// participate in Monotype's graph protocol. The optional procedure
-    /// identity selects an exact iterator construction/lowering protocol;
-    /// representation-sensitive consumers such as methods on `Iter` and
-    /// `Stream` require the graph without selecting such a protocol.
-    /// Consumers must not infer this category from a callable's body or result
-    /// shape.
-    graph_participating: GraphParticipatingTarget,
-
-    pub fn iteratorProcedure(self: ProcedureRuntimeTarget) ?IteratorProcedureId {
-        return switch (self) {
-            .procedure => |target| target.iterator_procedure,
-            .graph_participating => |target| target.iterator_procedure,
-            .low_level, .intrinsic => null,
-        };
-    }
-};
-
-/// An ordinary procedure target. An iterator producer outside the
-/// representation-graph protocol still records its exact identity here, so
-/// post-check iterator fusion admits calls to it.
-pub const OrdinaryProcedureTarget = struct {
-    iterator_procedure: ?IteratorProcedureId = null,
-};
-
-/// Producer-authored graph requirements for a representation-sensitive target.
-pub const GraphParticipatingTarget = struct {
-    iterator_procedure: ?IteratorProcedureId = null,
 };
 
 /// Exact checked procedure selected for a method registry entry.
 pub const ProcedureMethodTarget = struct {
     proc: canonical.ProcedureValueRef,
     template: canonical.ProcedureTemplateRef,
-    runtime_target: ProcedureRuntimeTarget = .{ .procedure = .{} },
+    runtime_target: ProcedureRuntimeTarget = .procedure,
 };
 
 fn procedureRuntimeTargetForDef(
     module: TypedCIR.Module,
     def_idx: CIR.Def.Idx,
-    method_owner: MethodOwner,
 ) ProcedureRuntimeTarget {
     return procedureRuntimeTarget(
         intrinsicForProcedureDef(module, def_idx),
-        iteratorProcedureForDef(module, def_idx),
         module.moduleEnvConst().providedLowLevelForDef(def_idx),
-        method_owner,
     );
 }
 
-/// The runtime category of a method of `method_owner` whose target is the
-/// procedure with these producer-recorded roles.
+/// The runtime category of a method whose target is the procedure with
+/// these producer-recorded roles.
 pub fn procedureRuntimeTarget(
     intrinsic: ?can.BuiltinLowLevel.IntrinsicId,
-    iterator_procedure: ?IteratorProcedureId,
     provided_low_level: ?base.LowLevel,
-    method_owner: MethodOwner,
 ) ProcedureRuntimeTarget {
     if (intrinsic) |id| {
         if (id.callsiteArity() != null) return .{ .intrinsic = id };
     }
-    if (iterator_procedure) |iterator| return if (iterator.participatesInRepresentationGraph())
-        .{ .graph_participating = .{ .iterator_procedure = iterator } }
-    else
-        .{ .procedure = .{ .iterator_procedure = iterator } };
-    if (std.meta.activeTag(method_owner) == .builtin and isIteratorOwner(method_owner.builtin)) {
-        return .{ .graph_participating = .{} };
-    }
     if (provided_low_level) |op| return .{ .low_level = op };
-    return .{ .procedure = .{} };
+    return .procedure;
 }
 
 /// Exact compiler-intrinsic identity for an annotation-only builtin procedure.
@@ -863,7 +491,7 @@ pub const MethodRegistry = struct {
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 
     /// `referenced_targets` resolves a method binding that is no procedure
-    /// of its own: `methodBindingTarget(binding, binding_expr, method_owner)`
+    /// of its own: `methodBindingTarget(binding, binding_expr)`
     /// returns the `ReferencedMethodTarget` its value reaches (through
     /// references, or its own compile-time root for a computed callable), or
     /// null for an associated value that is not a callable.
@@ -944,7 +572,7 @@ pub const MethodRegistry = struct {
                         break :blk .{ .procedure = .{
                             .proc = .{ .artifact = template.artifact, .proc_base = proc_base },
                             .template = template,
-                            .runtime_target = procedureRuntimeTargetForDef(module, def_idx, method_owner),
+                            .runtime_target = procedureRuntimeTargetForDef(module, def_idx),
                         } };
                     },
                 }
@@ -953,7 +581,7 @@ pub const MethodRegistry = struct {
                 break :blk promoted.kind;
             } else if (localProcedureTargetForMethodBinding(module, module_index, entry.key.owner, entry.value)) |local|
                 .{ .local_proc = local }
-            else if (try referencedMethodTarget(module, referenced_targets, entry.value, method_owner)) |referenced| switch (referenced) {
+            else if (try referencedMethodTarget(module, referenced_targets, entry.value)) |referenced| switch (referenced) {
                 // A method bound to a rejected binding is a rejected
                 // declaration, exactly like one whose own value checking
                 // rejected.
@@ -1118,10 +746,9 @@ fn referencedMethodTarget(
     module: TypedCIR.Module,
     referenced_targets: anytype,
     binding: ModuleEnv.MethodBinding,
-    method_owner: MethodOwner,
 ) Allocator.Error!?ReferencedMethodTarget {
     const expr_idx = methodBindingExpr(module, binding) orelse return null;
-    return try referenced_targets.methodBindingTarget(binding, expr_idx, method_owner);
+    return try referenced_targets.methodBindingTarget(binding, expr_idx);
 }
 
 fn unsupportedGeneratedMethodBinding(
@@ -2024,9 +1651,10 @@ pub const IteratorStepTopology = struct {
     skip_payload_ty: CheckedTypeId,
 };
 
-/// Checker-owned labels that define the public iterator representation.
-/// Monotype consumes these exact ids when refining the public backing into a
-/// private generated iterator; it never recovers field or tag roles from text.
+/// Checker-owned labels of the public iterator backing record. Monotype
+/// consumes these exact ids where the compiler itself builds or reads an
+/// iterator value (the `FieldNames` intrinsic and the `for` step shape); it
+/// never recovers field or tag roles from text.
 pub const IteratorRepresentationTopology = struct {
     len_field: canonical.RecordFieldLabelId,
     step_field: canonical.RecordFieldLabelId,

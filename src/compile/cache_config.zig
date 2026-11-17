@@ -423,7 +423,9 @@ pub const Constants = struct {
     ///      and generalized local scopes record whether their scheme holds an
     ///      uncommitted tag tail.
     /// 199: combines the 198 entry with the 194 entry above.
-    pub const CACHE_VERSION = 199;
+    /// 200: checked bindings and stored constant types carry no iterator
+    ///      representation fields.
+    pub const CACHE_VERSION = 200;
 };
 
 /// Configuration for the Roc cache system.

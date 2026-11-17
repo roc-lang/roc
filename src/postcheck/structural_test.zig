@@ -1715,14 +1715,11 @@ test "post-check invariant helper is failure-only" {
 test "hoist-preserving iterator producers are reachable through their method names" {
     // The checker pre-filters hoist classification on
     // `hoist_preserving_method_names` before resolving a receiver, so every
-    // producer that answers "preserves hoistable source input" must be
-    // reachable through one of those names; one that is not would silently
-    // stop having its receiver hoisted. This lives here because the type
+    // hoist-preserving producer must be reachable through one of those names;
+    // one that is not would silently stop having its receiver hoisted. This lives here because the type
     // checker's own sources may not compare strings.
     const registry = check.StaticDispatchRegistry;
-    for (registry.iterator_procedure_names) |entry| {
-        if (!entry[1].preservesHoistableSourceInput()) continue;
-        const qualified_name = entry[0];
+    for (registry.hoist_preserving_producer_names) |qualified_name| {
         const start = if (std.mem.findScalarLast(u8, qualified_name, '.')) |dot| dot + 1 else 0;
         const method = qualified_name[start..];
         var reachable = false;

@@ -1089,7 +1089,7 @@ pub const RootRequest = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(RootRequest) == 248);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(RootRequest) == 244);
 }
 
 /// Public `RootRequestTable` declaration.
@@ -2674,10 +2674,6 @@ fn isHostedProcedureExpr(expr: CIR.Expr) bool {
 
 fn intrinsicForProcedureDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?IntrinsicId {
     return static_dispatch.intrinsicForProcedureDef(module, def_idx);
-}
-
-fn iteratorProcedureForDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?IteratorProcedureId {
-    return static_dispatch.iteratorProcedureForDef(module, def_idx);
 }
 
 /// Record the reachability semantics introduced by the canonical
@@ -11373,8 +11369,6 @@ pub const CheckedProcedureBody = union(enum) {
 /// Public compiler-intrinsic identity published by canonicalization.
 pub const IntrinsicId = can.BuiltinLowLevel.IntrinsicId;
 
-pub const IteratorProcedureId = static_dispatch.IteratorProcedureId;
-
 /// Producer-recorded reason a procedure result may be unreachable when its
 /// final Monotype is uninhabited. Consumers use this metadata directly rather
 /// than rediscovering compiler-provided low-level bodies.
@@ -11865,8 +11859,6 @@ pub const ProcedureUseTemplate = struct {
     /// Post-check consumers must not derive this by walking binding bodies or
     /// exported template closures.
     intrinsic: ?IntrinsicId = null,
-    /// Producer-recorded semantic role for compiler-owned iterator procedures.
-    iterator_procedure: ?IteratorProcedureId = null,
     /// Producer-owned reachability fact for a compiler-provided result.
     runtime_result_provenance: ?RuntimeResultProvenance,
 };
@@ -12591,7 +12583,6 @@ fn categorizeTopLevelValueRef(
                     .template = hosted.template,
                 } },
                 .intrinsic = null,
-                .iterator_procedure = null,
                 .runtime_result_provenance = null,
             } }
         else
@@ -12601,7 +12592,6 @@ fn categorizeTopLevelValueRef(
                     .binding = binding,
                 } },
                 .intrinsic = intrinsicForProcedureDef(module, entry.def),
-                .iterator_procedure = iteratorProcedureForDef(module, entry.def),
                 .runtime_result_provenance = runtimeResultProvenanceForProcedureDef(module, entry.def),
             } },
     };
@@ -12643,7 +12633,6 @@ fn categorizeImportedValueRef(
         return .{ .imported_proc = .{
             .binding = .{ .imported = binding.binding },
             .intrinsic = binding.intrinsic,
-            .iterator_procedure = binding.iterator_procedure,
             .runtime_result_provenance = binding.runtime_result_provenance,
         } };
     }
@@ -12684,7 +12673,6 @@ fn categorizeResolvedAssociatedValueRef(
         return .{ .imported_proc = .{
             .binding = .{ .imported = binding.binding },
             .intrinsic = binding.intrinsic,
-            .iterator_procedure = binding.iterator_procedure,
             .runtime_result_provenance = binding.runtime_result_provenance,
         } };
     }
@@ -22886,7 +22874,7 @@ fn checkedDispatchPlanNeedsRelation(
     return switch (plan.resolution) {
         .direct_closed, .direct_parametric => |direct| switch (plans.evidenceNode(direct.evidence).target.kind) {
             .procedure => |procedure| switch (procedure.runtime_target) {
-                .graph_participating, .intrinsic => true,
+                .intrinsic => true,
                 .procedure, .low_level => false,
             },
             .local_proc, .callable_binding => false,
@@ -23497,7 +23485,6 @@ fn platformRequiredValueUseWithRelation(
                 .binding = proc_use.procedure.binding,
                 .source_fn_ty_payload = relation.requested_source_ty_payload,
                 .intrinsic = proc_use.procedure.intrinsic,
-                .iterator_procedure = proc_use.procedure.iterator_procedure,
                 .runtime_result_provenance = proc_use.procedure.runtime_result_provenance,
             },
             .root_evidence = .{
@@ -24390,7 +24377,6 @@ fn platformRequiredProcedureUse(
         } },
         .source_fn_ty_payload = null,
         .intrinsic = null,
-        .iterator_procedure = exported_binding.iterator_procedure,
         .runtime_result_provenance = exported_binding.runtime_result_provenance,
     };
 }
@@ -27383,7 +27369,7 @@ const TemplateDemandPass = struct {
         };
         switch (procedure.runtime_target) {
             .procedure, .low_level => {},
-            .intrinsic, .graph_participating => return null,
+            .intrinsic => return null,
         }
         return .{
             .template = procedure.template,
@@ -29247,7 +29233,6 @@ test "ExportedProcedureBindingTable: serialize/relocate preserves rows and closu
         .source_scheme = @fromBackingInt(@intCast(1)),
         .body = .{ .callable_eval_template = @fromBackingInt(@intCast(3)) },
         .intrinsic = .str_inspect,
-        .iterator_procedure = .map,
         .runtime_result_provenance = .list_element_read,
         .template_closure = stored,
     });
@@ -29260,7 +29245,6 @@ test "ExportedProcedureBindingTable: serialize/relocate preserves rows and closu
 
     try std.testing.expectEqual(@as(usize, 1), rt.loaded.bindings.items().len);
     try std.testing.expectEqual(IntrinsicId.str_inspect, rt.loaded.bindings.items()[0].intrinsic.?);
-    try std.testing.expectEqual(IteratorProcedureId.map, rt.loaded.bindings.items()[0].iterator_procedure.?);
     try std.testing.expectEqual(
         RuntimeResultProvenance.list_element_read,
         rt.loaded.bindings.items()[0].runtime_result_provenance.?,
@@ -31119,7 +31103,6 @@ pub const ImportedProcedureBindingView = struct {
     source_scheme: CheckedTypeSchemeId,
     body: ProcedureBindingBody,
     intrinsic: ?IntrinsicId = null,
-    iterator_procedure: ?IteratorProcedureId = null,
     runtime_result_provenance: ?RuntimeResultProvenance,
     template_closure: StoredImportedTemplateClosure = .{},
 };
@@ -31194,7 +31177,6 @@ pub const ExportedProcedureBindingTable = struct {
                 .source_scheme = binding.source_scheme,
                 .body = binding.body,
                 .intrinsic = null,
-                .iterator_procedure = null,
                 .runtime_result_provenance = null,
                 .template_closure = stored_closure,
             });
@@ -31218,7 +31200,6 @@ pub const ExportedProcedureBindingTable = struct {
                 .source_scheme = binding.source_scheme,
                 .body = binding.body,
                 .intrinsic = intrinsicForProcedureDef(module, def_idx),
-                .iterator_procedure = iteratorProcedureForDef(module, def_idx),
                 .runtime_result_provenance = runtimeResultProvenanceForProcedureDef(module, def_idx),
                 .template_closure = stored_closure,
             });
@@ -33592,7 +33573,7 @@ pub const CheckedModuleArtifact = struct {
                         );
                     }
                 },
-                .procedure, .low_level, .graph_participating => {
+                .procedure, .low_level => {
                     if (template_intrinsic) |intrinsic| {
                         if (intrinsic.callsiteArity() != null) {
                             base.invariant(
@@ -35633,7 +35614,6 @@ const MethodBindingTargets = struct {
         self: *MethodBindingTargets,
         binding: ModuleEnv.MethodBinding,
         binding_expr: CIR.Expr.Idx,
-        method_owner: static_dispatch.MethodOwner,
     ) Allocator.Error!?static_dispatch.ReferencedMethodTarget {
         // The module whose references the current lookup is in: null for
         // this one.
@@ -35675,7 +35655,7 @@ const MethodBindingTargets = struct {
                     .hosted => |hosted| hosted,
                     .top_level, .imported, .platform_required => checkedArtifactInvariant("a procedure use with no binding body was not hosted", .{}),
                 };
-                return self.procedureTarget(null, hosted.proc, hosted.template, use, method_owner);
+                return self.procedureTarget(null, hosted.proc, hosted.template, use);
             };
             switch (body.body) {
                 .direct_template => |direct| {
@@ -35683,7 +35663,7 @@ const MethodBindingTargets = struct {
                         .checked => |template| template,
                         .lifted, .synthetic => checkedArtifactInvariant("a method's procedure alias reached a template checking did not publish", .{}),
                     };
-                    return self.procedureTarget(body.view, direct.proc_value, template, use, method_owner);
+                    return self.procedureTarget(body.view, direct.proc_value, template, use);
                 },
                 // A reference to a computed callable is not a forward: the
                 // method calls that binding's evaluated value.
@@ -35740,7 +35720,6 @@ const MethodBindingTargets = struct {
         proc: canonical.ProcedureValueRef,
         template_ref: canonical.ProcedureTemplateRef,
         use: ProcedureUseTemplate,
-        method_owner: static_dispatch.MethodOwner,
     ) static_dispatch.ReferencedMethodTarget {
         const table: *const CheckedProcedureTemplateTable = if (view) |imported| imported.checked_procedure_templates else self.templates;
         const names: *const canonical.CanonicalNameStore = if (view) |imported| imported.canonical_names else self.names;
@@ -35768,9 +35747,7 @@ const MethodBindingTargets = struct {
                 .template = template_ref,
                 .runtime_target = static_dispatch.procedureRuntimeTarget(
                     use.intrinsic,
-                    use.iterator_procedure,
                     template.provided_low_level,
-                    method_owner,
                 ),
             } },
             .callable = .{ .template_root = template.checked_fn_root },
@@ -38340,8 +38317,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x33, 0x3D, 0xDC, 0x0F, 0x7C, 0x04, 0x4B, 0xD6, 0x23, 0xCB, 0x42, 0x2D, 0xD6, 0xB3, 0xD8, 0xC6,
-        0x7D, 0x5A, 0x02, 0xF3, 0xC8, 0xE9, 0x53, 0x0F, 0x34, 0xEA, 0x66, 0x36, 0x0F, 0xA0, 0xE6, 0x8E,
+        0x02, 0x32, 0x8E, 0x01, 0x48, 0xA9, 0x07, 0xD8, 0xA3, 0xA9, 0xF4, 0xAE, 0xE2, 0xDF, 0xB2, 0xE1,
+        0x70, 0x26, 0x5E, 0x2D, 0xD4, 0x67, 0x6E, 0x45, 0xB5, 0x19, 0x57, 0xFC, 0x55, 0x79, 0xB3, 0x98,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -38455,7 +38432,7 @@ test "template dispatch classification separates direct calls from graph relatio
                 .kind = .{ .procedure = .{
                     .proc = undefined,
                     .template = undefined,
-                    .runtime_target = .{ .graph_participating = .{ .iterator_procedure = .map } },
+                    .runtime_target = .{ .intrinsic = .str_inspect },
                 } },
                 .callable_ty = callable_ty,
             },
