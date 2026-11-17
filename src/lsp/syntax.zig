@@ -3304,6 +3304,7 @@ pub const SyntaxChecker = struct {
         var session = try BuildSession.init(self.allocator, self.std_io, candidate.envPtr(), uri, edit.text.items, self.workspace_root);
         defer session.deinit();
         if (!session.build_succeeded or !documentParsedCleanly(candidate.envPtr(), session.absolute_path)) return false;
+        if (!original.has_reports and self.documentHasReports(session.absolute_path, session.drained_reports)) return false;
         const env = session.getModuleEnv() orelse return false;
         const after = try candidate.sourceSymbols(env, resolveSourceMethod);
         const declaration = symbols.bindings.get(pattern) orelse return false;

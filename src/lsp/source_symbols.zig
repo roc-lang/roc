@@ -185,6 +185,17 @@ pub const Index = struct {
             const after_region = candidate.env.store.getRegionAt(ModuleEnv.nodeIdxFrom(after));
             if (!std.meta.eql(edit_.mapRegion(before_region), after_region)) return false;
         }
+        // Checking also records erroneous source nodes independently of
+        // canonicalization diagnostics. An edit must not introduce a rejected
+        // dispatch or a type error while leaving the lexical reads unchanged.
+        const old_errors = self.env.erroneous_nodes.items();
+        const new_errors = candidate.env.erroneous_nodes.items();
+        if (old_errors.len != new_errors.len) return false;
+        for (old_errors, new_errors) |before, after| {
+            const before_region = self.env.store.getRegionAt(@fromBackingInt(before.node_idx));
+            const after_region = candidate.env.store.getRegionAt(@fromBackingInt(after.node_idx));
+            if (!std.meta.eql(edit_.mapRegion(before_region), after_region)) return false;
+        }
         return true;
     }
 };
