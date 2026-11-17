@@ -318,6 +318,17 @@ pub const Target = opaque {
 pub const initializeAllTargets = ZigLLVMInitializeAllTargets;
 extern fn ZigLLVMInitializeAllTargets() void;
 
+/// Set the most stores LLVM's code generator expands an `llvm.memcpy`,
+/// `llvm.memmove` or `llvm.memset` into, for both size and speed. The
+/// setting is process-wide and read during code generation, so every compile
+/// sets it before it emits.
+pub const setMemoryIntrinsicStoreLimit = ZigLLVMSetMemoryIntrinsicStoreLimit;
+extern fn ZigLLVMSetMemoryIntrinsicStoreLimit(limit: c_uint) void;
+
+/// The `setMemoryIntrinsicStoreLimit` value that selects the target's own
+/// limits.
+pub const memory_intrinsic_target_default: c_uint = 0;
+
 // Individual target initialization functions (standard LLVM C API)
 // These register target info, codegen, machine code, asm printer, and asm parser
 // components for each supported architecture.
@@ -424,7 +435,9 @@ pub fn compileBitcodeToObject(
         .lower_memory_intrinsics_to_loops = false,
     };
 
-    // Emit object file
+    // Emit object file with the target's own memory intrinsic expansion
+    // limits, which a compile in this process may have changed.
+    setMemoryIntrinsicStoreLimit(memory_intrinsic_target_default);
     var emit_error: [*:0]const u8 = undefined;
     if (target_machine.emitToFile(module, &emit_error, &emit_options)) {
         return emit_error;

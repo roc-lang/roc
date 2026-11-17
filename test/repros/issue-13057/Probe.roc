@@ -1,8 +1,8 @@
 Probe :: [].{}
 
 # https://github.com/roc-lang/roc/issues/13057
-# Two physically distinct signed-zero keys must not silently lose an entry
-# when decoded under numeric equality. Bitwise equality preserves both.
+# Two physically distinct signed-zero keys are one key under numeric equality,
+# so the derived parser keeps the value given last. Bitwise equality keeps both.
 Error : [InvalidValue]
 State : List(U64)
 
@@ -21,9 +21,6 @@ Format := [Default].{
 
     parse_dict_after_entry : Format, State -> Try([Continue(State), Done(State)], Error)
     parse_dict_after_entry = |_, _| Err(InvalidValue)
-
-    parse_dict_duplicate_key : Format, State -> Try([KeepFirst(State), KeepLast(State)], Error)
-    parse_dict_duplicate_key = |_, _| Err(InvalidValue)
 
     parse_key_start : Format, State -> Try(State, Error)
     parse_key_start = |_, state| Ok(state)
@@ -81,9 +78,12 @@ expect {
     }
 }
 
-# Numeric equality cannot represent both entries: decoding must refuse loss.
+# Numeric equality makes the two zeros one key, which keeps the value given last.
 expect {
     result : Try(Dict(F64, U64), Error)
     result = decode([0, 1, 0x8000000000000000, 2])
-    result.is_err()
+    match result {
+        Ok(values) => values.len() == 1 and values.get(0.0) == Ok(2)
+        Err(_) => False
+    }
 }

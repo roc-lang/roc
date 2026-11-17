@@ -17,7 +17,6 @@
 const std = @import("std");
 const collections = @import("collections");
 const OptionalLocal = collections.OptionalId(LocalId);
-const OptionalType = collections.OptionalId(TypeId);
 const base = @import("base");
 const can = @import("can");
 const check = @import("check");
@@ -195,7 +194,6 @@ pub const Task = union(enum) {
     /// Pop a stored function's captured values and pack them with its type
     /// table at `inputs` (`stored_fn.zig`).
     finish_stored_fn: struct { worker: WorkerId, shape: StoredFn.CaptureShape, inputs: []const Word, capture_types: []const TypeId, capture_descs: []const Word },
-    finish_restore_closure: struct { worker: WorkerId, count: u32, descs: []const Word, dicts: []const Word, capture_types: []const TypeId, worker_ty: TypeId, ty: TypeId },
     /// Restore stored constant `node` at `ty` as static data alone: push
     /// its slot on `Builder.static_parts` and read nothing. A stored value
     /// built from parts is restored this way, so the body holds one read of
@@ -3459,14 +3457,6 @@ pub const Builder = struct {
                     try self.pushValue(try self.staticClosure(stored.worker, values, stored.capture_types, stored.inputs, !try self.allClosed(stored.shape.values), stored.capture_descs));
                 }
             },
-            .finish_restore_closure => |closure| {
-                const values = try self.popValues(closure.count);
-                defer self.allocator.free(values);
-                const worker = self.program.worker(closure.worker).*;
-                const inputs: []const Word = if (self.program.perCall(closure.worker)) &.{} else try self.scopeInputs(closure.worker, try std.mem.concat(self.program.arena.allocator(), Word, &.{ closure.descs, closure.dicts }));
-                const packed_closure = try self.staticClosure(closure.worker, values, closure.capture_types, inputs, !try self.allClosed(worker.capture_types), null);
-                try self.pushValue(try self.adaptValue(packed_closure, closure.worker_ty, closure.ty));
-            },
             .restore_part => |restore| try self.restorePartStep(restore.source, restore.node, restore.ty),
             .value_part => try self.static_parts.append(self.allocator, try self.constantSlot(self.popValue())),
             .read_static_part => try self.pushValue(try self.staticRead(self.popStaticPart())),
@@ -6264,7 +6254,13 @@ pub const Builder = struct {
                 try self.push(if (enum_tag) |name| .{ .read_static_enum = .{ .ty = raw_ty, .name = name } } else .read_static_part);
                 try self.restorePartStep(source, node, raw_ty);
             },
-            .fn_value => |fn_id| try self.restoreFn(source, fn_id, raw_ty),
+            // Each strategy stores and restores only its own function
+            // representation (design.md "Stored Function Values"): a `.boxy`
+            // program's plans store every function as `.boxy_fn`
+            // (`ConstStoreWriter.planFunctionStrategy`), and
+            // `CompileTimeRoot.payloadFor(.boxy)` is `.pending` for an `.lss`
+            // value containing functions, so Boxy evaluates that root itself.
+            .fn_value => invariant("Boxy restored an .lss stored function value"),
         }
     }
 
@@ -6406,204 +6402,6 @@ pub const Builder = struct {
         try self.static_parts.append(self.allocator, slot);
     }
 
-    /// Restore stored function value `fn_id` of `module`'s const store as
-    /// an erased callable.
-    /// Restore a function value compile-time evaluation stored, used at the
-    /// closed function type `fn_ty`.
-    pub fn restoreFn(self: *Builder, source: lower.ConstSource, fn_id: check.ConstStore.ConstFnId, fn_ty: TypeId) Allocator.Error!void {
-        const const_store = self.program.constStore(source);
-        const stored = const_store.getFn(fn_id);
-        switch (stored.fn_def) {
-            // A procedure template's value, whether a checked body, a hosted
-            // procedure, or a checked-generated procedure.
-            .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated => |ref| {
-                // The value calls the template through its entry.
-                const target = try self.program.templateRefScopeWorker(ref);
-                const target_worker = self.program.worker(target).*;
-                const formal = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
-                // A scheme variable only the target's requirements mention is
-                // fixed by relating those requirements' methods.
-                const bound = (try self.program.instantiateTarget(target, formal, fn_ty)).bound;
-                const dicts = try self.storedDictionaries(source, stored, target, bound);
-                defer self.allocator.free(dicts);
-                const hidden = try self.allocator.alloc(Word, bound.len + dicts.len);
-                defer self.allocator.free(hidden);
-                for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
-                @memcpy(hidden[bound.len..], dicts);
-                const entry = try self.program.methodEntryWorker(target);
-                try self.pushValue(try self.materialize(try self.composeDictionary(entry, hidden)));
-            },
-            .nested => |nested| {
-                // A closure of a defaulted field's expression belongs to the
-                // worker evaluating that default, which has no scheme and no
-                // dictionaries of its own.
-                const owner_worker = if (nested.default_root) |identity| blk: {
-                    const declaring = self.program.modules.by_identity.get(identity.bytes) orelse invariant("a stored default-root closure's module is not in this lowering");
-                    const declaring_view = self.program.module(declaring);
-                    const default_site = declaring_view.view.nested_proc_sites.sites.items()[@backingInt(nested.site)];
-                    break :blk switch (default_site.owner) {
-                        .default_root => |default_expr| try self.program.defaultWorker(declaring, default_expr),
-                        .template => invariant("a stored default-root closure's site is owned by a template"),
-                    };
-                } else try self.program.templateRefScope(nested.owner);
-                const owner = self.program.worker(owner_worker).*;
-                const owner_view = self.program.module(owner.module);
-                const site = owner_view.view.nested_proc_sites.sites.items()[@backingInt(nested.site)];
-                const site_expr = site.checked_expr.get() orelse invariant("a stored closure's site has no checked expression");
-                const expr = owner_view.bodies().expr(site_expr);
-                const lambda_expr = switch (expr.data) {
-                    .lambda => site_expr,
-                    .closure => |closure| closure.lambda,
-                    .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a stored closure's site is not a lambda or closure"),
-                };
-                const captures = try self.program.runtimeCaptures(owner_view, @backingInt(nested.site));
-                // The closure in its owner's scope (and, for a generalized
-                // lambda, its own scheme's), whose variables the stored
-                // value's type instantiates; the value captures them all.
-                const own_scope = try self.program.localScope(owner.module, lambda_expr);
-                const own: ?lower.LocalScheme = if (own_scope) |scope_id| blk: {
-                    var scheme = try self.localSchemeIn(owner_view, scope_id);
-                    if (scheme.isEmpty()) break :blk null;
-                    scheme.per_call = false;
-                    break :blk scheme;
-                } else null;
-                const scope_vars = if (own) |scheme| try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ owner.scheme_vars, scheme.scheme_vars }) else try self.allocator.dupe(checked.CheckedTypeId, owner.scheme_vars);
-                defer self.allocator.free(scope_vars);
-                const variables = try self.allocator.alloc(TypeId, scope_vars.len);
-                defer self.allocator.free(variables);
-                for (variables, 0..) |*variable, index| variable.* = try self.program.store.variable(@intCast(index));
-                const generic: types.Env = .{ .module = owner.module, .vars = scope_vars, .bound = variables };
-                const generic_fn = try self.program.converter().convert(owner.module, expr.ty, generic);
-                const capture_types = try self.allocator.alloc(TypeId, captures.len);
-                defer self.allocator.free(capture_types);
-                const stored_captures = try self.allocator.alloc(check.ConstStore.ConstCapture, captures.len);
-                defer self.allocator.free(stored_captures);
-                // The variables relate through the function's type and
-                // through the stored captures' types, which can mention
-                // variables the function's type does not.
-                var relations: std.ArrayList([2]TypeId) = .empty;
-                defer relations.deinit(self.allocator);
-                try relations.append(self.allocator, .{ generic_fn, fn_ty });
-                for (captures, capture_types, stored_captures) |capture, *capture_ty, *stored_capture| {
-                    capture_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().patternType(capture.pattern), generic);
-                    stored_capture.* = for (stored.captures) |candidate| {
-                        if (std.meta.eql(candidate.id, capture.capture_id)) break candidate;
-                    } else invariant("a stored closure lacks one of its site's captures");
-                    // A site's runtime captures are binders of enclosing
-                    // frames; a recursive-binding capture holds a top-level
-                    // root, which the restored closure reaches through its
-                    // own top-level reference and its site never lists.
-                    if (stored_capture.kind != .lexical) invariant("a closure site's runtime capture matched a stored recursive-binding capture");
-                    // A capture of erased function type names no signature
-                    // to relate; its type is its site's, at the variables
-                    // the rest relates.
-                    if (!try self.constTypeHasErased(source, stored_capture.ty)) {
-                        try relations.append(self.allocator, .{ capture_ty.*, try self.constType(source, stored_capture.ty) });
-                    }
-                }
-                // A scheme variable neither the value's type nor its captures
-                // mention reaches no value of the restored closure from
-                // outside; it seals as every scope seals a variable no use
-                // relates.
-                const related = try self.relateVariablesPartial(relations.items, scope_vars.len);
-                defer self.allocator.free(related);
-                // A variable only the closure's requirements mention (its own
-                // scheme's, then its owner's) is fixed by relating those
-                // requirements' methods.
-                {
-                    var params: std.ArrayList(static_dispatch.EvidenceParamRecord) = .empty;
-                    defer params.deinit(self.allocator);
-                    if (own) |scheme| {
-                        const templates = owner_view.view.checked_procedure_templates;
-                        const scope_params = lower.poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool.items(), templates.dispatch_scopes.items()[@backingInt(own_scope.?)].evidence_params);
-                        for (scheme.dictionaries) |param_index| try params.append(self.allocator, scope_params[param_index]);
-                    }
-                    if (owner.dictionary_params.len != 0) {
-                        const owner_params = self.templateEvidenceParams(owner_worker);
-                        for (owner.dictionary_params) |param_index| try params.append(self.allocator, owner_params[param_index]);
-                    }
-                    // A derived codec's or map's instantiation is the
-                    // callable its stored evidence recorded: its own
-                    // scheme's frame, then its owner's.
-                    var recorded: std.ArrayList([2]TypeId) = .empty;
-                    defer recorded.deinit(self.allocator);
-                    if (own) |scheme| if (scheme.dictionaries.len != 0) {
-                        const head = stored.evidence_frame_head orelse invariant("a stored generalized lambda with dictionaries has no evidence");
-                        const templates = owner_view.view.checked_procedure_templates;
-                        const scope_params = lower.poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool.items(), templates.dispatch_scopes.items()[@backingInt(own_scope.?)].evidence_params);
-                        try self.recordedDerivedCallables(source, stored, head, scope_params, owner.module, generic, &recorded);
-                    };
-                    if (owner.dictionary_params.len != 0) {
-                        var frame_index = stored.evidence_frame_head orelse invariant("a stored function value with dictionaries has no evidence");
-                        while (stored.evidence_frames[frame_index].parent.get()) |parent| frame_index = parent;
-                        try self.recordedDerivedCallables(source, stored, frame_index, self.templateEvidenceParams(owner_worker), owner.module, generic, &recorded);
-                    }
-                    const from_edges = try self.relateVariablesPartial(recorded.items, scope_vars.len);
-                    defer self.allocator.free(from_edges);
-                    for (related, from_edges) |*slot, determined| {
-                        if (slot.* == .none) slot.* = determined;
-                    }
-                    try self.program.relateThroughRequirements(owner.module, scope_vars, params.items, related);
-                }
-                const bound = try self.allocator.alloc(TypeId, scope_vars.len);
-                defer self.allocator.free(bound);
-                for (related, bound, scope_vars) |ty, *slot, variable| slot.* = ty.get() orelse try self.program.converter().sealedScheme(owner.module, variable);
-                try self.program.resolveKindSlots(try self.program.schemeKinds(&.{generic_fn}, scope_vars.len), bound);
-                const concrete: types.Env = .{ .module = owner.module, .vars = scope_vars, .bound = bound };
-                const concrete_capture_types = try self.allocator.alloc(TypeId, captures.len);
-                defer self.allocator.free(concrete_capture_types);
-                for (captures, concrete_capture_types) |capture, *concrete_ty| {
-                    concrete_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().patternType(capture.pattern), concrete);
-                }
-                const worker = try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, generic_fn, own);
-                const descs = try self.program.arena.allocator().alloc(Word, bound.len);
-                for (bound, descs) |ty, *desc| desc.* = try self.descWord(ty);
-                const owner_dicts = if (nested.default_root != null) try self.allocator.alloc(Word, 0) else try self.storedDictionaries(source, stored, owner_worker, bound[0..owner.scheme_vars.len]);
-                defer self.allocator.free(owner_dicts);
-                // A generalized lambda's own dictionaries are the stored
-                // evidence's innermost frame, its own scope's, ahead of its
-                // owner's.
-                const own_dicts: []Word = if (own) |scheme| own: {
-                    if (scheme.dictionaries.len == 0) break :own try self.allocator.alloc(Word, 0);
-                    const head = stored.evidence_frame_head orelse invariant("a stored generalized lambda with dictionaries has no evidence");
-                    const frame = stored.evidence_frames[head];
-                    if (frame.scope() == .root) invariant("a stored generalized lambda's innermost evidence frame is its procedure's");
-                    const templates = owner_view.view.checked_procedure_templates;
-                    const params = lower.poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool.items(), templates.dispatch_scopes.items()[@backingInt(own_scope.?)].evidence_params);
-                    const roots = try self.storedEvidenceTrees(source, stored.evidence, frame.roots_start, frame.roots_len, params, concrete);
-                    defer self.allocator.free(roots);
-                    const out = try self.allocator.alloc(Word, scheme.dictionaries.len);
-                    for (scheme.dictionaries, out) |param_index, *dict| dict.* = roots[param_index] orelse invariant("a stored dictionary's evidence denotes no dictionary");
-                    break :own out;
-                } else try self.allocator.alloc(Word, 0);
-                defer self.allocator.free(own_dicts);
-                // The closure's literal arguments, derived from its scopes'
-                // types as a stored closure records no edge.
-                const closure_worker = self.program.worker(worker).*;
-                const literals = try self.allocator.alloc(Word, closure_worker.own_literals + closure_worker.capturedLiteralCount());
-                defer self.allocator.free(literals);
-                try self.derivedLiteralArgs(worker, bound, literals);
-                const dicts = try std.mem.concat(self.allocator, Word, &.{ own_dicts, owner_dicts, literals });
-                defer self.allocator.free(dicts);
-                try self.push(.{ .finish_restore_closure = .{
-                    .worker = worker,
-                    .count = @intCast(captures.len),
-                    .descs = descs,
-                    .dicts = try self.program.arena.allocator().dupe(Word, dicts),
-                    .capture_types = try self.program.arena.allocator().dupe(TypeId, concrete_capture_types),
-                    .worker_ty = try self.program.converter().convert(owner.module, expr.ty, concrete),
-                    .ty = fn_ty,
-                } });
-                var index = captures.len;
-                while (index > 0) {
-                    index -= 1;
-                    try self.push(.{ .restore = .{ .source = source, .node = stored_captures[index].value, .ty = concrete_capture_types[index] } });
-                }
-            },
-            inline .parser_runtime, .encoder_for_runtime => |runtime| try Codec.restoreRuntime(self, source, fn_id, runtime.owner, runtime.expr, fn_ty),
-        }
-    }
-
     /// Restore a completed function as immutable code and capture references.
     pub fn restoreStoredFn(self: *Builder, source: lower.ConstSource, recipe: []const u8, captures: []const checked.ConstNodeId) Allocator.Error!void {
         const decoded = try StoredFn.decode(self, recipe);
@@ -6619,47 +6417,6 @@ pub const Builder = struct {
             index -= 1;
             try self.push(.{ .restore = .{ .source = source, .node = captures[index], .ty = capture_types[index] } });
         }
-    }
-
-    /// The function values of generated codec family `family`'s local
-    /// procedures, at its variables' types `bound`, for restoring stored
-    /// generated runtime `stored` of procedure `owner`, into `out`. The
-    /// procedures are local procedures of `owner`'s body, built in the
-    /// declaration context of the instance of `owner` that built the
-    /// runtime: its function type, which the value records, and its stored
-    /// evidence.
-    pub fn storedRuntimeLocals(self: *Builder, source: lower.ConstSource, stored: check.ConstStore.ConstFn, owner: check.CheckedNames.ProcTemplate, out: []LocalId, family: u32, bound: []const TypeId) Allocator.Error!void {
-        const owner_worker = try self.program.templateRefScopeWorker(owner);
-        const target = self.program.worker(owner_worker).*;
-        const owner_fn_ty = stored.owner_fn_ty orelse invariant("a stored generated runtime calling local procedures records no instance of its procedure");
-        const formal = try self.program.store.intern(.{ .function = .{ .args = target.params, .ret = target.ret, .effectful = false } });
-        const owner_bound = (try self.program.instantiateTarget(owner_worker, formal, try self.constType(source, owner_fn_ty))).bound;
-        const descs = try self.allocator.alloc(Word, owner_bound.len);
-        defer self.allocator.free(descs);
-        for (owner_bound, descs) |ty, *desc| desc.* = try self.descWord(ty);
-        const restored = try self.storedDictionaries(source, stored, owner_worker, owner_bound);
-        defer self.allocator.free(restored);
-        const dicts = try self.allocator.alloc(?Word, restored.len);
-        defer self.allocator.free(dicts);
-        for (dicts, restored) |*dict, dictionary| dict.* = dictionary;
-        const building = try self.allocator.alloc(bool, restored.len);
-        defer self.allocator.free(building);
-        @memset(building, false);
-        const literals = try self.allocator.alloc(Word, target.literal_params);
-        defer self.allocator.free(literals);
-        try self.derivedLiteralArgs(owner_worker, owner_bound, literals);
-        var declaration: Declaration = .{
-            .worker = owner_worker,
-            .bound = owner_bound,
-            .words = .{ .descs = descs, .literals = literals },
-            .dicts = dicts,
-            .building = building,
-            .source = .restored,
-            .outer = self.declaration,
-        };
-        self.declaration = &declaration;
-        defer self.declaration = declaration.outer;
-        try Codec.localValues(self, family, bound, out);
     }
 
     /// The lambda worker of expression `lambda_expr` of the worker
@@ -6692,88 +6449,6 @@ pub const Builder = struct {
         return try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, generic_fn, own);
     }
 
-    /// The dictionaries a stored function value's procedure was
-    /// instantiated with: for each of the worker `owner`'s dictionary
-    /// parameters, the dictionary its stored evidence denotes, with the
-    /// owner's scheme variables bound to `bound`.
-    pub fn storedDictionaries(self: *Builder, source: lower.ConstSource, stored: check.ConstStore.ConstFn, owner: WorkerId, bound: []const TypeId) Allocator.Error![]Word {
-        const owner_worker = self.program.worker(owner).*;
-        const dicts = try self.allocator.alloc(Word, owner_worker.dictionary_params.len);
-        errdefer self.allocator.free(dicts);
-        if (dicts.len == 0) return dicts;
-        // The procedure's evidence is the outermost frame's roots.
-        var frame_index = stored.evidence_frame_head orelse invariant("a stored function value with dictionaries has no evidence");
-        while (stored.evidence_frames[frame_index].parent.get()) |parent| frame_index = parent;
-        const frame = stored.evidence_frames[frame_index];
-        if (frame.scope() != .root) invariant("a stored function value's outermost evidence frame is not its procedure's");
-        const owner_record = self.program.worker(owner).*;
-        const roots = try self.storedEvidenceTrees(source, stored.evidence, frame.roots_start, frame.roots_len, self.templateEvidenceParams(owner), .{ .module = owner_record.module, .vars = owner_record.scheme_vars, .bound = bound });
-        defer self.allocator.free(roots);
-        for (owner_worker.dictionary_params, dicts) |param_index, *dict| {
-            dict.* = roots[param_index] orelse invariant("a stored dictionary's evidence denotes no dictionary");
-        }
-        return dicts;
-    }
-
-    /// Append, for each derived codec or map root of stored evidence frame
-    /// `frame_index` (whose roots are `params`, over `env`), the parameter's
-    /// callable type paired with the instantiated callable its stored edge
-    /// recorded.
-    fn recordedDerivedCallables(self: *Builder, source: lower.ConstSource, stored: check.ConstStore.ConstFn, frame_index: u32, params: []const static_dispatch.EvidenceParamRecord, module_index: types.ModuleIndex, env: types.Env, out: *std.ArrayList([2]TypeId)) Allocator.Error!void {
-        const frame = stored.evidence_frames[frame_index];
-        const roots = try self.storedEvidenceRoots(stored.evidence, frame.roots_start, frame.roots_len);
-        defer self.allocator.free(roots);
-        for (roots, 0..) |node_index, position| switch (stored.evidence.nodes[node_index]) {
-            .structural => |index| if (stored.evidence.structural(index).checked) |checked_edge| {
-                if (position >= params.len) invariant("stored evidence has more entries than its scope has evidence parameters");
-                const edge = try Codec.storedEdge(self, source, checked_edge);
-                const edge_callable = try self.program.converter().convert(edge.module, edge.callable_ty, .{ .module = edge.module, .vars = &.{}, .bound = &.{} });
-                try out.append(self.allocator, .{ try self.program.converter().convert(module_index, params[position].callable_ty, env), edge_callable });
-            },
-            .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
-        };
-    }
-
-    /// The node indices of `count` stored evidence trees starting at
-    /// `start`: each tree's root, skipping its nested evidence and callable
-    /// contracts.
-    pub fn storedEvidenceRoots(self: *Builder, evidence: check.ConstStore.ConstFnEvidenceVector, start: u32, count: u32) Allocator.Error![]u32 {
-        const roots = try self.allocator.alloc(u32, count);
-        errdefer self.allocator.free(roots);
-        // Entries left to read in each open vector; the outermost is the
-        // roots.
-        var open: std.ArrayList(u32) = .empty;
-        defer open.deinit(self.allocator);
-        try open.append(self.allocator, count);
-        var cursor: u32 = start;
-        var root_count: u32 = 0;
-        while (open.items.len > 0) {
-            const top = &open.items[open.items.len - 1];
-            if (top.* == 0) {
-                _ = open.pop();
-                continue;
-            }
-            top.* -= 1;
-            if (open.items.len == 1) {
-                roots[root_count] = cursor;
-                root_count += 1;
-            }
-            if (cursor >= evidence.nodes.len) invariant("stored evidence ended before its declared vector length");
-            const node = evidence.nodes[cursor];
-            cursor += 1;
-            const contracts = evidence.trailingTrees(node);
-            if (contracts != 0) try open.append(self.allocator, contracts);
-            switch (node) {
-                .target => |target| switch (evidence.target(target).nested) {
-                    .resolved => |nested| if (nested.count != 0) try open.append(self.allocator, nested.count),
-                    .from_callable => {},
-                },
-                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
-            }
-        }
-        return roots;
-    }
-
     /// A template worker's evidence parameters.
     pub fn templateEvidenceParams(self: *Builder, worker_id: WorkerId) []const static_dispatch.EvidenceParamRecord {
         const key = switch (self.program.worker(worker_id).key) {
@@ -6783,158 +6458,6 @@ pub const Builder = struct {
         const view = self.program.module(key.module).view;
         const template = view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
         return lower.poolSlice(static_dispatch.EvidenceParamRecord, view.checked_procedure_templates.evidence_params_pool.items(), template.evidence_params);
-    }
-
-    /// The dictionaries of the stored evidence trees of `owner`'s evidence
-    /// parameters, `count` pre-order trees starting at `start`: a target's
-    /// nested vector is the evidence of the target's own parameters, and
-    /// each entry's callable contracts, which no dictionary reads, follow
-    /// it. A target takes the instantiation its parameter's callable type,
-    /// bound by its owner's instantiation, relates it to.
-    pub fn storedEvidenceTrees(self: *Builder, source: lower.ConstSource, evidence: check.ConstStore.ConstFnEvidenceVector, start: u32, count: u32, root_params: []const static_dispatch.EvidenceParamRecord, root_env: types.Env) Allocator.Error![]?Word {
-        const Parsed = struct {
-            node: u32,
-            /// The parsed target whose nested vector holds this entry and
-            /// the entry's position there; null for a root.
-            parent: ?u32,
-            position: u32,
-            /// Whether the entry is a callable contract.
-            contract: bool = false,
-            children: std.ArrayList(u32) = .empty,
-            target: ?WorkerId = null,
-            bound: []const TypeId = &.{},
-        };
-        var parsed: std.ArrayList(Parsed) = .empty;
-        defer {
-            for (parsed.items) |*entry| {
-                entry.children.deinit(self.allocator);
-                self.allocator.free(entry.bound);
-            }
-            parsed.deinit(self.allocator);
-        }
-        // An open vector: its entries left to read and read so far, and the
-        // parsed target whose nested evidence it is; contracts and roots
-        // have no owner.
-        const Open = struct { remaining: u32, read: u32 = 0, owner: ?u32, contracts: bool };
-        var open: std.ArrayList(Open) = .empty;
-        defer open.deinit(self.allocator);
-        var roots: std.ArrayList(u32) = .empty;
-        defer roots.deinit(self.allocator);
-        try open.append(self.allocator, .{ .remaining = count, .owner = null, .contracts = false });
-        var cursor: u32 = start;
-        while (open.items.len > 0) {
-            const top = &open.items[open.items.len - 1];
-            if (top.remaining == 0) {
-                _ = open.pop();
-                continue;
-            }
-            top.remaining -= 1;
-            const position = top.read;
-            top.read += 1;
-            const contracts_vector = top.contracts;
-            const parent = top.owner;
-            const is_root = open.items.len == 1;
-            if (cursor >= evidence.nodes.len) invariant("stored evidence ended before its declared vector length");
-            const node = evidence.nodes[cursor];
-            cursor += 1;
-            const index: u32 = @intCast(parsed.items.len);
-            if (contracts_vector) {
-                try parsed.append(self.allocator, .{ .node = cursor - 1, .parent = null, .position = 0, .contract = true });
-            } else {
-                try parsed.append(self.allocator, .{ .node = cursor - 1, .parent = parent, .position = position });
-                if (parent) |owner_index| try parsed.items[owner_index].children.append(self.allocator, index);
-                if (is_root) try roots.append(self.allocator, index);
-            }
-            // A structural entry's forwarded evidence trees follow its
-            // contracts and, like them, carry no evidence parameter.
-            const contracts = evidence.trailingTrees(node);
-            if (contracts != 0) try open.append(self.allocator, .{ .remaining = contracts, .owner = null, .contracts = true });
-            switch (node) {
-                .target => |target| switch (evidence.target(target).nested) {
-                    .resolved => |nested| if (nested.count != 0) try open.append(self.allocator, .{ .remaining = nested.count, .owner = index, .contracts = false }),
-                    .from_callable => {},
-                },
-                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
-            }
-        }
-        // Parents precede their children: bind each target's scheme from
-        // its parameter's callable type at its parent's instantiation.
-        const callables = try self.allocator.alloc(OptionalType, parsed.items.len);
-        defer self.allocator.free(callables);
-        const dispatchers = try self.allocator.alloc(OptionalType, parsed.items.len);
-        defer self.allocator.free(dispatchers);
-        for (parsed.items, callables, dispatchers) |*entry, *callable, *dispatcher| {
-            callable.* = .none;
-            dispatcher.* = .none;
-            if (entry.contract) continue;
-            const params, const env: types.Env = if (entry.parent) |p| blk: {
-                const parent = parsed.items[p];
-                const owner_record = self.program.worker(parent.target.?).*;
-                break :blk .{ self.templateEvidenceParams(parent.target.?), .{ .module = owner_record.module, .vars = owner_record.scheme_vars, .bound = parent.bound } };
-            } else .{ root_params, root_env };
-            if (entry.position >= params.len) invariant("stored evidence has more entries than its owner has evidence parameters");
-            const param = params[entry.position];
-            callable.* = .some(try self.program.converter().convert(env.module, param.callable_ty, env));
-            dispatcher.* = .some(try self.program.converter().convert(env.module, param.dispatcher_ty, env));
-            switch (evidence.nodes[entry.node]) {
-                .target => |target_index| {
-                    const stored = evidence.target(target_index).*;
-                    const target = try self.methodTargetWorker(stored.method);
-                    const target_worker = self.program.worker(target).*;
-                    const formal = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
-                    entry.target = target;
-                    // A scheme variable only the target's own requirements
-                    // mention is fixed by relating those requirements'
-                    // methods (`Program.instantiateTarget`).
-                    entry.bound = try self.allocator.dupe(TypeId, (try self.program.instantiateTarget(target, formal, callable.get().?)).bound);
-                },
-                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
-            }
-        }
-        // Children follow their parents, so the reverse order builds every
-        // nested dictionary before the dictionary that captures it.
-        const dicts = try self.allocator.alloc(?Word, parsed.items.len);
-        defer self.allocator.free(dicts);
-        @memset(dicts, null);
-        var index = parsed.items.len;
-        while (index > 0) {
-            index -= 1;
-            const entry = parsed.items[index];
-            if (callables[index] == .none) continue;
-            dicts[index] = switch (evidence.nodes[entry.node]) {
-                .target => blk: {
-                    const target_worker = self.program.worker(entry.target.?).*;
-                    const hidden = try self.allocator.alloc(Word, entry.bound.len + target_worker.dictionary_params.len + target_worker.literal_params);
-                    defer self.allocator.free(hidden);
-                    for (entry.bound, hidden[0..entry.bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
-                    try self.derivedLiteralArgs(entry.target.?, entry.bound, hidden[entry.bound.len + target_worker.dictionary_params.len ..]);
-                    for (target_worker.dictionary_params, hidden[entry.bound.len..][0..target_worker.dictionary_params.len]) |param_index, *dict| {
-                        if (param_index >= entry.children.items.len) invariant("stored method evidence does not cover its target's dictionaries");
-                        dict.* = dicts[entry.children.items[param_index]] orelse invariant("a stored dictionary's evidence denotes no dictionary");
-                    }
-                    break :blk try self.composeDictionary(try self.program.methodEntryWorker(entry.target.?), hidden);
-                },
-                .structural => |structural_index| try self.storedStructuralDictionary(source, evidence.structural(structural_index).*, dispatchers[index].get().?, callables[index].get().?),
-                // Evidence no dictionary reads restores to none.
-                .from_callable, .from_scheme, .unreachable_value, .checked_error => null,
-            };
-        }
-        const result = try self.allocator.alloc(?Word, roots.items.len);
-        for (roots.items, result) |root, *dict| dict.* = dicts[root];
-        return result;
-    }
-
-    pub fn storedStructuralDictionary(self: *Builder, source: lower.ConstSource, stored: check.ConstStore.ConstFnStructuralEvidence, dispatcher: TypeId, callable: TypeId) Allocator.Error!?Word {
-        const method: lower.StructuralMethod = switch (stored.derivation) {
-            .equality => .is_eq,
-            .hash => .to_hash,
-            .parser, .encoder => {
-                const edge = try Codec.storedEdge(self, source, stored.checked orelse invariant("stored structural codec evidence records no checked edge"));
-                return try Codec.dictionaryAt(self, edge.module, edge.id orelse invariant("stored structural codec evidence names no generated derivation"), callable);
-            },
-            .map, .map_effectful => |plan| return try self.structuralMapDictionary(plan, stored.derivation == .map_effectful, callable),
-        };
-        return try self.composeDictionary(try self.program.structuralWorker(self.module, method), &.{try self.descWord(dispatcher)});
     }
 
     /// A read of immutable target data. No runtime constructor exists.
@@ -8179,37 +7702,6 @@ pub const Builder = struct {
         return .{ .hidden = hidden, .bound = bound, .ret = ret };
     }
 
-    /// Whether stored type evidence `root` of `source` holds an erased
-    /// function type, which names no signature.
-    fn constTypeHasErased(self: *Builder, source: lower.ConstSource, root: check.ConstStore.ConstTypeId) Allocator.Error!bool {
-        const const_types = &self.program.constStore(source).type_store;
-        var stack: std.ArrayList(check.ConstStore.ConstTypeId) = .empty;
-        defer stack.deinit(self.allocator);
-        var seen: collections.DenseMapUnmanaged(check.ConstStore.ConstTypeId, void) = .empty;
-        defer seen.deinit(self.allocator);
-        try stack.append(self.allocator, root);
-        while (stack.pop()) |id| {
-            if ((try seen.getOrPut(self.allocator, id)).found_existing) continue;
-            switch (const_types.get(id)) {
-                .erased => return true,
-                .primitive, .zst => {},
-                .list, .box => |child| try stack.append(self.allocator, child),
-                .tuple => |range| try stack.appendSlice(self.allocator, const_types.typeSpan(range)),
-                .record => |range| for (const_types.fieldSpan(range)) |field| {
-                    try stack.append(self.allocator, field.ty);
-                    if (field.value_ty.get()) |value_ty| try stack.append(self.allocator, value_ty);
-                },
-                .tag_union => |range| for (const_types.tagSpan(range)) |tag| try stack.appendSlice(self.allocator, const_types.typeSpan(tag.payloads)),
-                .func => |func| {
-                    try stack.appendSlice(self.allocator, const_types.typeSpan(func.args));
-                    try stack.append(self.allocator, func.ret);
-                },
-                .named => |named| try stack.appendSlice(self.allocator, const_types.typeSpan(named.args)),
-            }
-        }
-        return false;
-    }
-
     /// The Boxy type of a stored constant's type evidence `root` in the
     /// constant store of `source`.
     pub fn constType(self: *Builder, source: lower.ConstSource, root: check.ConstStore.ConstTypeId) Allocator.Error!TypeId {
@@ -8337,9 +7829,10 @@ pub const Builder = struct {
                     for (context, args[named.args.len..]) |formal, *arg| arg.* = try self.program.converter().convert(declaring, formal, self.env);
                     break :blk try self.program.converter().nominalAt(declaring, declaration.declaration_root, args);
                 },
-                // Only a closure's capture holds an erased function type, and
-                // its restore relates no such capture (`constTypeHasErased`).
-                .erased => invariant("a stored type converted for Boxy holds an erased function type, which only captures, which relate none, hold"),
+                // An erased function type is the type of an `.lss` function
+                // value or of its captures, which Boxy never restores (design.md
+                // "Stored Function Values").
+                .erased => invariant("a stored type converted for Boxy holds an erased function type"),
             };
             try done.put(self.allocator, frame.id, converted);
         }

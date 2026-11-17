@@ -652,6 +652,19 @@ void ZigLLVMParseCommandLineOptions(size_t argc, const char *const *argv) {
     cl::ParseCommandLineOptions(argc, argv);
 }
 
+void ZigLLVMSetMemoryIntrinsicStoreLimit(unsigned limit) {
+    // LLVM's code generator reads these options each time it decides whether
+    // to expand an llvm.memcpy, llvm.memmove or llvm.memset into loads and
+    // stores, and a value of 0 means the target's own limits.
+    auto &options = cl::getRegisteredOptions();
+    for (const char *name : {"max-store-memcpy", "max-store-memmove", "max-store-memset"}) {
+        auto entry = options.find(name);
+        if (entry == options.end())
+            llvm_unreachable("LLVM registers the memory intrinsic store limit options");
+        *static_cast<cl::opt<unsigned> *>(entry->second) = limit;
+    }
+}
+
 // Initialize all LLVM targets for compilation
 void ZigLLVMInitializeAllTargets() {
     LLVMInitializeAllTargetInfos();

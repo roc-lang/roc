@@ -536,6 +536,10 @@ pub const Result = struct {
     /// name their owner through this table; nothing resolves an owner from
     /// row order or from the procedure a row ended up in.
     lowering_modules: std.ArrayList(checked.ModuleId) = .empty,
+    /// Each lowering module by the identity this program's failure meanings
+    /// name it by (`LirStore.lowering_module_identities`), so a consumer
+    /// reads a meaning in checked keys by one lookup per module it names.
+    modules_by_failure_identity: std.AutoHashMapUnmanaged([32]u8, LIR.LoweringModuleId) = .empty,
     expect_sites: std.ArrayList(LIR.ExpectSite) = .empty,
     expect_site_ids: std.AutoHashMapUnmanaged(ExpectSiteKey, LIR.ExpectSiteId) = .empty,
 
@@ -552,6 +556,7 @@ pub const Result = struct {
         const allocator = self.store.allocator;
         self.comptime_sites.deinit(allocator);
         self.lowering_modules.deinit(allocator);
+        self.modules_by_failure_identity.deinit(allocator);
         self.expect_site_ids.deinit(allocator);
         self.expect_sites.deinit(allocator);
         for (self.static_data_values.items) |value| if (value.parts) |parts| allocator.free(parts.children);
@@ -598,21 +603,48 @@ pub const Result = struct {
         return id;
     }
 
-    /// Publish the lowering's checked module table. The producer writes it
-    /// once, before any consumer resolves an owner out of it.
+    /// Publish a program's checked module table. The producer writes it
+    /// once, before any consumer resolves an owner out of it. A program's
+    /// failure meanings name each module by its checked key.
     pub fn setLoweringModules(self: *Result, modules: []const checked.ModuleId) Allocator.Error!void {
         self.lowering_modules.clearRetainingCapacity();
-        self.store.lowering_module_keys.clearRetainingCapacity();
-        for (modules) |module| _ = try self.appendLoweringModule(module);
+        self.modules_by_failure_identity.clearRetainingCapacity();
+        self.store.lowering_module_identities.clearRetainingCapacity();
+        for (modules) |module| _ = try self.appendLoweringModule(module, module.bytes);
     }
 
-    /// Give a checked module the next dense lowering id.
-    pub fn appendLoweringModule(self: *Result, module: checked.ModuleId) Allocator.Error!LIR.LoweringModuleId {
+    /// Give a checked module the next dense lowering id. `identity` is what
+    /// the program's failure meanings name the module by
+    /// (`LirStore.lowering_module_identities`): its checked key in a
+    /// program, its link name in a module unit.
+    pub fn appendLoweringModule(self: *Result, module: checked.ModuleId, identity: [32]u8) Allocator.Error!LIR.LoweringModuleId {
         const id: LIR.LoweringModuleId = @fromBackingInt(@intCast(self.lowering_modules.items.len));
         try self.lowering_modules.ensureUnusedCapacity(self.store.allocator, 1);
-        try self.store.lowering_module_keys.append(self.store.allocator, module.bytes);
+        const named = try self.modules_by_failure_identity.getOrPut(self.store.allocator, identity);
+        if (named.found_existing) base.invariant("two lowering modules share the identity failure meanings name them by", .{});
+        named.value_ptr.* = id;
+        try self.store.lowering_module_identities.append(self.store.allocator, identity);
         self.lowering_modules.appendAssumeCapacity(module);
         return id;
+    }
+
+    /// `meaning`, read from this program's code or from an object it loaded,
+    /// with every module it names by checked key: a module unit's code and
+    /// its objects name modules by link name, which this program's table
+    /// maps to the modules it lowers (design.md "Compile-Time Failure
+    /// Sites").
+    pub fn meaningByCheckedKey(self: *const Result, meaning: LIR.FailureMeaning) LIR.FailureMeaning {
+        return switch (meaning) {
+            .checked_error => .checked_error,
+            .literal_rejection => |literal| .{ .literal_rejection = .{ .module = self.checkedKeyOfFailureIdentity(literal.module), .node = literal.node, .kind = literal.kind } },
+            .exhaustiveness => |failure| .{ .exhaustiveness = .{ .module = self.checkedKeyOfFailureIdentity(failure.module), .checked_site = failure.checked_site } },
+            .failed_value => |value| .{ .failed_value = .{ .module = self.checkedKeyOfFailureIdentity(value.module), .producer = value.producer } },
+        };
+    }
+
+    fn checkedKeyOfFailureIdentity(self: *const Result, identity: [32]u8) [32]u8 {
+        const id = self.modules_by_failure_identity.get(identity) orelse base.invariant("a failure meaning names a module its program does not lower", .{});
+        return self.lowering_modules.items[@backingInt(id)].bytes;
     }
 
     /// The dense id this program gave a checked module, when the module was
