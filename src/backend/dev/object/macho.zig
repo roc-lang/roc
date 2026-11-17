@@ -879,6 +879,9 @@ pub const MachOWriter = struct {
                 try relocs.append(arena, .{ .section = group[1], .offset = rel.section_offset, .kind = kind, .symbol = @intCast(num_syms + text_section_ordinal - 1), .addend = address });
             }
         };
+        // The references between debug sections, which the encoded object
+        // leaves unrelocated, as `UnitImage` derives them from its bytes.
+        try UnitImage.addMachODebugOffsetRelocs(arena, sections, @intCast(num_syms), &relocs);
         return .{ .sections = sections, .symbols = symbols, .relocs = relocs.items, .text_section = 0, .static_data_section = 1, .x86_64 = x86_64 };
     }
 
@@ -1042,6 +1045,38 @@ test "DWARF references between debug sections are section-relative" {
     try std.testing.expectEqual(@as(u64, 7), std.mem.readInt(u64, section_data[12..20], .little));
     try std.testing.expectEqual(@as(u32, 1), MachOWriter.textRelocationCount(&relocs));
     try std.testing.expectEqual(@as(u2, 2), MachOWriter.debugRelocLength(.four));
+}
+
+test "issue 13145: an image relocates the same debug offsets from the writer as from the written object" {
+    const allocator = std.testing.allocator;
+    const Dwarf = @import("../Dwarf.zig");
+    var dwarf = try Dwarf.build(allocator, "roc test", &.{"main"}, &.{}, &.{}, 4);
+    defer dwarf.deinit(allocator);
+    var writer = try MachOWriter.init(allocator, .aarch64);
+    defer writer.deinit();
+    writer.setCode(&.{ 0xc0, 0x03, 0x5f, 0xd6 });
+    _ = try writer.addSymbol(.{ .name = "f", .section = 1, .offset = 0, .is_external = true });
+    writer.debug = .{ .line = dwarf.debug_line, .abbrev = dwarf.debug_abbrev, .info = dwarf.debug_info, .line_relocs = dwarf.line_relocs, .info_relocs = dwarf.info_relocs };
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(allocator);
+    try writer.write(&output);
+
+    const options: UnitImage.BuildOptions = .{ .keep_debug = true, .atoms = .whole };
+    const from_bytes = try UnitImage.build(allocator, &.{output.items}, options);
+    defer allocator.free(from_bytes);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const from_writer = try UnitImage.buildObjects(allocator, &.{try writer.imageObject(arena.allocator(), true)}, options);
+    defer allocator.free(from_writer);
+    try std.testing.expectEqualSlices(u8, from_bytes, from_writer);
+
+    // The unit's abbreviation offset and line program are relocated.
+    var targets: [2]u32 = .{ 0, 0 };
+    for ((try UnitImage.View.init(from_bytes)).localSites()) |site| {
+        if (site.target_region == @backingInt(UnitImage.Region.debug_abbrev)) targets[0] += 1;
+        if (site.target_region == @backingInt(UnitImage.Region.debug_line)) targets[1] += 1;
+    }
+    try std.testing.expectEqual([2]u32{ 1, 1 }, targets);
 }
 
 test "DWARF sections relocate only text addresses in the written object" {
