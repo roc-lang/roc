@@ -953,10 +953,12 @@ build_report = |screens, confirms, diagnostics| {
 					"|---|---|---|---|---|---|",
 				]
 				var $notable = 0
+				var $noisy = 0.U64
 				for row in screen.rows {
 					confirm = confirm_rows.find_first(|c| c.name == row.name)
 					o = outcome(row, confirm)
-					$notable = $notable + (if (o == Fine or o == Faster) 0 else 1)
+					$notable = $notable + (if (o == Fine or o == Faster or o == Noisy) 0 else 1)
+					$noisy = $noisy + (if (o == Noisy) 1 else 0)
 					confirm_cell =
 						match confirm {
 							Ok(c) => measured_cell(c)
@@ -982,18 +984,19 @@ build_report = |screens, confirms, diagnostics| {
 							$skipped_lines = $skipped_lines.append("- ${where_} was not measured: ${row.note}")
 							$annotations = $annotations.append("::warning title=Perf benchmark skipped::${os} ${row.name} was not measured: ${row.note}")
 						}
-						Noisy => {
-							$annotations = $annotations.append("::notice title=Perf benchmark inconclusive::${os} ${row.name} was too noisy to decide after ${row.pairs.to_str()} pairs (${change(row.low)} to ${change(row.high)}).")
-						}
-						Faster | Fine => {}
+						# Too noisy to decide is routine on shared runners and needs
+						# no action, so it is only shown in the table.
+						Noisy | Faster | Fine => {}
 					}
 				}
 				diagnostic = diagnostics.find_first(|d| d.os == os).map_ok(|d| d.text) ?? ""
 				table = $lines |> Str.join_with("\n")
 				title = "${os} (${screen.cpu})"
+				count = screen.rows.len().to_str()
 				section =
 					if $notable == 0 and diagnostic.is_empty() {
-						"<details><summary>${title}: all ${screen.rows.len().to_str()} benchmarks fine</summary>\n\n${table}\n\n</details>\n"
+						verdict = if ($noisy == 0) "all ${count} benchmarks fine" else "no regressions, ${$noisy.to_str()} of ${count} benchmarks too noisy to decide"
+						"<details><summary>${title}: ${verdict}</summary>\n\n${table}\n\n</details>\n"
 					} else {
 						"### ${title}\n\n${table}\n\n${diagnostic}"
 					}
@@ -1042,6 +1045,12 @@ expect {
 	screen = { phase: "screen", os: "linux", cpu: "cpu", rows: [{ ..sample_row, verdict: "ok" }] }
 	report = build_report([screen, { ..screen, os: "macos" }, { ..screen, os: "windows" }], [], [])
 	!report.failed and report.annotations.is_empty() and report.summary.contains("<details><summary>linux (cpu): all 1 benchmarks fine")
+}
+
+expect {
+	screen = { phase: "screen", os: "linux", cpu: "cpu", rows: [{ ..sample_row, verdict: "inconclusive" }, { ..sample_row, verdict: "ok" }] }
+	report = build_report([screen, { ..screen, os: "macos" }, { ..screen, os: "windows" }], [], [])
+	!report.failed and report.annotations.is_empty() and report.summary.contains("linux (cpu): no regressions, 1 of 2 benchmarks too noisy to decide")
 }
 
 report! : List(Str) => Try({}, _)
