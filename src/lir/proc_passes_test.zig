@@ -36,6 +36,7 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
     };
     fixture.fusion_joins = joins;
     for (0..8) |index| {
+        const body_mark = store.bodyMark();
         const selector = try store.addLocal(.{ .layout_idx = .u64 });
         const result = try store.addLocal(.{ .layout_idx = .u64 });
         const outer = try store.addLocal(.{ .layout_idx = if (phase == .tag_fusion) .bool else .u64 });
@@ -140,7 +141,7 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
                 .remainder = initialize_carried,
             },
         }, .test_fixture);
-        _ = try store.addProcSpec(.{
+        const proc = try store.addProcSpec(.{
             .identity = core.LIR.ProcIdentity.forTest(@intCast(index)),
             .name = store.freshSyntheticSymbol(),
             .args = try store.addLocalSpan(&.{selector}),
@@ -149,6 +150,7 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
             .iterator_fusion_scope = true,
             .ret_layout = .u64,
         }, .none);
+        try store.recordBodyChunk(proc, body_mark);
     }
     return fixture;
 }
@@ -205,6 +207,7 @@ const Fixture = struct {
         // More procedures than lanes exercises replenishment as well as a
         // reversed first group. Each body has a concrete scalarization.
         for (0..8) |_| {
+            const body_mark = self.store.bodyMark();
             const number = try self.store.addLocal(.{ .layout_idx = .i64 });
             const text = try self.store.addLocal(.{ .layout_idx = .str });
             const wrapper = try self.store.addLocal(.{ .layout_idx = pair });
@@ -220,13 +223,14 @@ const Fixture = struct {
                 .fields = try self.store.addLocalSpan(&.{ number, text }),
                 .next = read,
             } }, .test_fixture);
-            _ = try self.store.addProcSpec(.{
+            const proc = try self.store.addProcSpec(.{
                 .identity = core.LIR.ProcIdentity.forTest(@intCast(self.store.procSpecCount())),
                 .name = self.store.freshSyntheticSymbol(),
                 .args = try self.store.addLocalSpan(&.{ number, text }),
                 .body = .some(body),
                 .ret_layout = .i64,
             }, .none);
+            try self.store.recordBodyChunk(proc, body_mark);
         }
         return self;
     }
@@ -272,6 +276,7 @@ const Fixture = struct {
             .{ .index = 1, .layout = .str },
         });
         for (0..8) |index| {
+            const body_mark = self.store.bodyMark();
             const state = try self.store.addLocal(.{ .layout_idx = pair });
             const input = try self.store.addLocal(.{ .layout_idx = pair });
             const number = try self.store.addLocal(.{ .layout_idx = .i64 });
@@ -303,13 +308,14 @@ const Fixture = struct {
                 .body = read_number,
                 .remainder = set,
             } }, .test_fixture);
-            _ = try self.store.addProcSpec(.{
+            const proc = try self.store.addProcSpec(.{
                 .identity = core.LIR.ProcIdentity.forTest(@intCast(self.store.procSpecCount())),
                 .name = self.store.freshSyntheticSymbol(),
                 .args = try self.store.addLocalSpan(&.{input}),
                 .body = .some(body),
                 .ret_layout = .i64,
             }, .none);
+            try self.store.recordBodyChunk(proc, body_mark);
         }
         return self;
     }
@@ -468,6 +474,7 @@ fn wrapFusionInForwarder(fixture: *Fixture) std.mem.Allocator.Error!void {
     for (0..store.procSpecCount()) |index| {
         const id: core.LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
         const proc = store.getProcSpec(id);
+        const body_mark = store.bodyMark();
         const outer = try store.addLocal(.{ .layout_idx = .u64 });
         const inner = try store.addLocal(.{ .layout_idx = .u64 });
         const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = @fromBackingInt(@intCast(4)) } }, .test_fixture);
@@ -504,6 +511,7 @@ fn wrapFusionInForwarder(fixture: *Fixture) std.mem.Allocator.Error!void {
         const frame_span = try store.addLocalSpan(frame.items);
         store.getProcSpecPtr(id).body = .some(body);
         store.getProcSpecPtr(id).frame_locals = frame_span;
+        try store.recordBodyChunk(id, body_mark);
     }
 }
 
@@ -782,6 +790,7 @@ test "LIR proc pass prunes unread join parameters to a fixed point" {
     const LIR = core.LIR;
     var store = core.LirStore.init(testing.allocator);
     defer store.deinit();
+    const body_mark = store.bodyMark();
     var layouts = try layout.Store.init(testing.allocator, .u64);
     defer layouts.deinit();
     var join_ids = body_clone.JoinParamIndex.init(testing.allocator);
@@ -828,6 +837,7 @@ test "LIR proc pass prunes unread join parameters to a fixed point" {
         .body = .some(outer),
         .ret_layout = .u64,
     }, .none);
+    try store.recordBodyChunk(proc, body_mark);
 
     var metrics: passes.ParallelMetrics = .{};
     try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
@@ -862,6 +872,7 @@ test "LIR proc pass deletes pure definitions that only fed pruned join parameter
     const LIR = core.LIR;
     var store = core.LirStore.init(testing.allocator);
     defer store.deinit();
+    const body_mark = store.bodyMark();
     var layouts = try layout.Store.init(testing.allocator, .u64);
     defer layouts.deinit();
     var join_ids = body_clone.JoinParamIndex.init(testing.allocator);
@@ -903,6 +914,7 @@ test "LIR proc pass deletes pure definitions that only fed pruned join parameter
         .body = .some(join),
         .ret_layout = .u64,
     }, .none);
+    try store.recordBodyChunk(proc, body_mark);
 
     var metrics: passes.ParallelMetrics = .{};
     try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
@@ -919,6 +931,7 @@ test "LIR proc pass prunes a join parameter whose only reader is a dead definiti
     const LIR = core.LIR;
     var store = core.LirStore.init(testing.allocator);
     defer store.deinit();
+    const body_mark = store.bodyMark();
     var layouts = try layout.Store.init(testing.allocator, .u64);
     defer layouts.deinit();
     var join_ids = body_clone.JoinParamIndex.init(testing.allocator);
@@ -951,6 +964,7 @@ test "LIR proc pass prunes a join parameter whose only reader is a dead definiti
         .body = .some(join),
         .ret_layout = .u64,
     }, .none);
+    try store.recordBodyChunk(proc, body_mark);
 
     var metrics: passes.ParallelMetrics = .{};
     try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
@@ -968,6 +982,7 @@ test "LIR proc pass keeps join parameters that are read or are procedure argumen
     const LIR = core.LIR;
     var store = core.LirStore.init(testing.allocator);
     defer store.deinit();
+    const body_mark = store.bodyMark();
     var layouts = try layout.Store.init(testing.allocator, .u64);
     defer layouts.deinit();
     var join_ids = body_clone.JoinParamIndex.init(testing.allocator);
@@ -995,6 +1010,7 @@ test "LIR proc pass keeps join parameters that are read or are procedure argumen
         .body = .some(join),
         .ret_layout = .u64,
     }, .none);
+    try store.recordBodyChunk(proc, body_mark);
 
     var metrics: passes.ParallelMetrics = .{};
     try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
@@ -1008,6 +1024,7 @@ test "LIR proc pass range phase admits a body whose only provable statement is a
     const LIR = core.LIR;
     var store = core.LirStore.init(testing.allocator);
     defer store.deinit();
+    const body_mark = store.bodyMark();
     var layouts = try layout.Store.init(testing.allocator, .u64);
     defer layouts.deinit();
 
@@ -1036,6 +1053,7 @@ test "LIR proc pass range phase admits a body whose only provable statement is a
         .body = .some(body),
         .ret_layout = .bool,
     }, .none);
+    try store.recordBodyChunk(proc, body_mark);
 
     const shapes = store.getProcSpecImmediate(proc).shapes;
     try testing.expect(shapes.unsigned_compare);
@@ -1054,6 +1072,7 @@ test "LIR proc pass range phase admits a body whose only provable statement is a
     const LIR = core.LIR;
     var store = core.LirStore.init(testing.allocator);
     defer store.deinit();
+    const body_mark = store.bodyMark();
     var layouts = try layout.Store.init(testing.allocator, .u64);
     defer layouts.deinit();
 
@@ -1076,6 +1095,7 @@ test "LIR proc pass range phase admits a body whose only provable statement is a
         .body = .some(body),
         .ret_layout = .u8x16,
     }, .none);
+    try store.recordBodyChunk(proc, body_mark);
 
     const shapes = store.getProcSpecImmediate(proc).shapes;
     try testing.expect(shapes.simd_concat_shift);

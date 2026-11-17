@@ -480,13 +480,10 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         // Immediate loading
 
-        /// Load immediate value into register
+        /// Load immediate value into register, with the shortest move that
+        /// produces it.
         pub fn emitLoadImm(self: *Self, dst: GeneralReg, value: i64) Allocator.Error!void {
-            if (value >= std.math.minInt(i32) and value <= std.math.maxInt(i32)) {
-                try self.emit.movRegImm32(dst, @intCast(value));
-            } else {
-                try self.emit.movRegImm64(dst, value);
-            }
+            try self.emit.movRegImm(dst, value);
         }
 
         pub fn emitLoadDataAddress(self: *Self, dst: GeneralReg, symbol: SymbolTable.Id) Allocator.Error!void {
@@ -567,14 +564,14 @@ test "prologue and epilogue" {
     // With no callee-saved registers used and 0 stack allocation:
     // push rbp: 55 (1 byte)
     // mov rbp, rsp: 48 89 E5 (3 bytes)
-    // sub rsp, <callee_saved_area>: 48 81 EC xx xx xx xx (7 bytes)—always reserves callee-saved area
+    // sub rsp, <callee_saved_area>: 48 83 EC xx (4 bytes)—always reserves callee-saved area
     // (no MOV saves since callee_saved_used = 0)
     // (no MOV restores since callee_saved_used = 0)
     // mov rsp, rbp: 48 89 EC (3 bytes)
     // pop rbp: 5D (1 byte)
     // ret: C3 (1 byte)
-    // Total: 16 bytes
-    try std.testing.expectEqual(@as(usize, 16), code.len);
+    // Total: 13 bytes
+    try std.testing.expectEqual(@as(usize, 13), code.len);
     try std.testing.expectEqual(@as(u8, 0x55), code[0]); // push rbp
     try std.testing.expectEqual(@as(u8, 0xC3), code[code.len - 1]); // ret
 }
@@ -907,21 +904,14 @@ test "emitPrologueWithAlloc produces 16-byte aligned frame" {
 
     const code = cg.getCode();
 
-    // Find the SUB RSP instruction and verify the immediate is 16-byte aligned
-    // sub rsp, imm32 = 48 81 EC xx xx xx xx
-    for (0..code.len -| 6) |i| {
-        if (code[i] == 0x48 and code[i + 1] == 0x81 and code[i + 2] == 0xEC) {
-            // Extract the 32-bit immediate (little-endian)
-            const imm = @as(u32, code[i + 3]) |
-                (@as(u32, code[i + 4]) << 8) |
-                (@as(u32, code[i + 5]) << 16) |
-                (@as(u32, code[i + 6]) << 24);
-
-            // The allocated size should be 16-byte aligned
-            try std.testing.expect(imm % 16 == 0);
-            break;
-        }
-    }
+    // Find the SUB RSP instruction and verify the immediate is 16-byte aligned:
+    // sub rsp, imm8 = 48 83 EC xx, or sub rsp, imm32 = 48 81 EC xx xx xx xx.
+    const imm: u32 = for (0..code.len -| 3) |i| {
+        if (code[i] != 0x48 or code[i + 2] != 0xEC) continue;
+        if (code[i + 1] == 0x83) break code[i + 3];
+        if (code[i + 1] == 0x81) break std.mem.readInt(u32, code[i + 3 ..][0..4], .little);
+    } else return error.TestUnexpectedResult;
+    try std.testing.expect(imm % 16 == 0);
 }
 
 test "MacCodeGen matches LinuxCodeGen (both System V)" {
