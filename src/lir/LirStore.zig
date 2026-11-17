@@ -1062,6 +1062,9 @@ tail_call_builder: ?*TailCallBuilder = null,
 /// The row of `stmt_sources` holding each source this store added. Never
 /// persisted.
 stmt_source_rows: std.AutoHashMapUnmanaged(StmtSource, StmtSourceId) = .empty,
+/// The source `internStmtSource` last interned and the row it returned,
+/// which stays that source's row until `stmt_source_rows` is cleared.
+last_stmt_source: ?struct { source: StmtSource, id: StmtSourceId } = null,
 rc_effect_rows: std.AutoHashMapUnmanaged(lir_defs.LowLevel.RcEffect, lir_defs.StmtRowId(lir_defs.LowLevel.RcEffect)) = .empty,
 /// Shapes of the statements appended to this store since the accumulator was
 /// last reset: the body being lowered, or a procedure rewrite's additions.
@@ -1159,6 +1162,7 @@ pub fn releaseCode(self: *Self) void {
     }
     self.rc_effect_rows.clearAndFree(self.allocator);
     self.stmt_source_rows.clearAndFree(self.allocator);
+    self.last_stmt_source = null;
 }
 
 /// Releases all storage owned by this LIR store.
@@ -1402,6 +1406,17 @@ fn stmtSource(self: *const Self, id: StmtSourceId) StmtSource {
 
 /// The row holding `source`, adding one when no visible row does.
 fn internStmtSource(self: *Self, source: StmtSource) Allocator.Error!StmtSourceId {
+    // A producer states one source for a run of statements, so the row the
+    // last call returned answers most calls without a lookup.
+    if (self.last_stmt_source) |last| {
+        if (last.source.region.eq(source.region) and std.meta.eql(last.source.loc, source.loc)) return last.id;
+    }
+    const id = try self.lookupOrAddStmtSource(source);
+    self.last_stmt_source = .{ .source = source, .id = id };
+    return id;
+}
+
+fn lookupOrAddStmtSource(self: *Self, source: StmtSource) Allocator.Error!StmtSourceId {
     if (self.body_coordinator) |coordinator| {
         // A body worker reads its frozen coordinator's rows.
         if (coordinator.stmt_source_rows.get(source)) |existing| return existing;
