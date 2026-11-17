@@ -81,6 +81,7 @@ test "issue 13106: reject import aliases including forward uses and patterns" {
     inline for (.{
         "import Foo exposing [Bool]",
         "import Foo exposing [Bool as Bool]",
+        "import Foo exposing [Bool.*]",
         "import Foo.Bool",
         "import Foo as Bool",
     }) |import_source| {
@@ -151,4 +152,20 @@ test "issue 13106: rejected Bool does not change compiler-owned negation" {
     defer env.deinit();
     try expectDiagnostic(&env, .builtin_import_conflict);
     try env.assertDefTypeOptions("negated", "Bool", .{ .allow_type_errors = false, .allow_can_errors = true });
+}
+
+test "issue 13106: rejected builtin aliases retire literal suffixes and backing patterns" {
+    var foo = try TestEnv.init("Foo", foo_source);
+    defer foo.deinit();
+    try expectDiagnostic(&foo, .builtin_type_shadowed_warning);
+
+    var env = try TestEnv.initWithImport("Main",
+        \\import Foo exposing [Bool as U8]
+        \\Main := []
+        \\value = 1.U8
+        \\constructed = U8.(Yes)
+        \\unwrap = |U8.(x)| x
+    , "Foo", &foo);
+    defer env.deinit();
+    try expectDiagnostic(&env, .builtin_import_conflict);
 }
