@@ -7390,6 +7390,13 @@ platform module. Header validation inspects all declarations, while the
 provided-exports view contains only entries with non-null `local_def`. Rejected
 declarations also produce source diagnostics.
 
+A provided entrypoint cannot quantify type variables: the host supplies no
+Roc instantiation. Checking rejects both annotated and inferred polymorphism,
+using the definition's existing binding-scheme classification, and retires the
+definition and its ABI type as explicit checked-error recovery. A platform's
+shared abstract identities are not quantified by an entrypoint and remain
+valid in its type.
+
 A platform requirement's for-clause alias names an abstract type inside the
 platform; its actual type is inferred from the app's required values. An app
 declaration with the same name has no special meaning. The platform checks
@@ -7402,6 +7409,12 @@ The solved identity slots carry the inferred types into the pairing; no copied
 platform-owned alias enters the solved app graph. Nothing in the app's checked
 module needs a pairing as a type owner, so the app is checked against the
 platform's sealed requirement surface and nothing else.
+
+In `[Model : model] for program : ...`, the declaring signature uses `model`,
+not `Model`. The alias enters module scope after that signature, for platform
+definitions and subsequent requirements. A lowercase `model` in a separate
+function annotation introduces a fresh variable; it does not name that
+platform identity.
 
 The platform root's checked module is the same whether or not an app pairs
 with it: checking it never depends on an app, and its cache entry is keyed by

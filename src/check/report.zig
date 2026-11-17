@@ -1146,6 +1146,9 @@ pub const ReportBuilder = struct {
             .host_boundary_optional_field => |data| {
                 return self.buildHostBoundaryOptionalFieldReport(data);
             },
+            .polymorphic_provided_function => |data| {
+                return self.buildPolymorphicProvidedFunctionReport(data);
+            },
             .platform_hosted_section => |data| {
                 return self.buildPlatformHostedSection(data);
             },
@@ -5645,6 +5648,29 @@ pub const ReportBuilder = struct {
             D.bytes("Box").withAnnotation(.inline_code),
             D.bytes("so the host only ever sees that pointer."),
         });
+    }
+
+    fn buildPolymorphicProvidedFunctionReport(self: *Self, data: problem_mod.PolymorphicProvidedFunction) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Polymorphic Provided Function", "A function provided to the host cannot have type variables.", .runtime_error);
+        errdefer report.deinit();
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
+        try report.document.addLineBreaks(2);
+        try report.document.addReflowingText("Its type is:");
+        try report.document.addLineBreak();
+        try report.document.addAnnotated(try report.addOwnedString(try self.getFormattedString(data.snapshot)), .code_block);
+        try report.document.addLineBreaks(2);
+        try report.document.addReflowingText("The host cannot instantiate a polymorphic Roc function. Give this entrypoint a monomorphic type; platform abstract aliases are allowed.");
+        if (data.suggestion) |suggestion| {
+            try report.document.addLineBreaks(2);
+            try D.renderSlice(&.{
+                D.bytes("Use"),
+                D.ident(suggestion.alias).withAnnotation(.inline_code),
+                D.bytes("instead of"),
+                D.ident(suggestion.variable).withAnnotation(.inline_code),
+                D.bytes("here. The lowercase variable in this function's type is independent of the platform requirement's binder."),
+            }, self, &report);
+        }
+        return report;
     }
 
     fn buildHostBoundaryOpenRowReport(self: *Self, data: HostBoundaryOpenRow) Allocator.Error!Report {

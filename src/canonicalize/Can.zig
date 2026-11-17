@@ -6554,7 +6554,8 @@ fn resolvePlatformProvides(
 /// 1. Introduces the rigid type variables (e.g., `model`) into a temporary scope
 /// 2. Creates aliases (e.g., `Model`) that refer to the SAME type as the rigid
 /// 3. Canonicalizes the entrypoint type annotation with rigids in scope
-/// 4. Stores the required type for type checking
+/// 4. Publishes the aliases for use outside the declaring signature
+/// 5. Stores the required type for type checking
 ///
 /// IMPORTANT: Both the rigid (`model`) and the alias (`Model`) reference the
 /// same rigid variable
@@ -6574,8 +6575,8 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
         // For each alias:
         // 1. Create a type annotation for the rigid and introduce it to the
         //    type var scope
-        // 2. Create a type alias, pointing to the rigid and introduce at the
-        //    root scope
+        // 2. Create a type alias pointing to the rigid, without exposing it
+        //    inside the signature that introduces this binder
         // 3. Store the alias for later use during type checking
         for (self.parse_ir.store.forClauseTypeAliasSlice(entry.type_aliases)) |alias_idx| {
             const alias = self.parse_ir.store.getForClauseTypeAlias(alias_idx);
@@ -6587,9 +6588,7 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
             // Get the alias name (uppercase, e.g., "Model")
             const alias_name = self.parse_ir.tokens.resolveIdentifier(alias.alias_name) orelse continue;
 
-            // Create a SINGLE type annotation for this rigid variable
-            // IMPORTANT: We use the rigid_name in the annotation, but introduce it
-            // under BOTH names in the scope
+            // The binder and its eventual alias share one identity.
             const rigid_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
                 .name = rigid_name,
             } }, alias_region);
@@ -6597,11 +6596,6 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
             // Introduce the rigid (model) into the type variable scope
             _ = try self.scopeIntroduceTypeVar(rigid_name, rigid_anno_idx);
 
-            // IMPORTANT: Also introduce Model as a type alias in the module-level scope.
-            // This allows platform functions to use `Box(Model)` in their type signatures.
-            // The alias points to the same rigid annotation, which will be unified with
-            // the app's concrete type during type checking.
-            //
             // Create a type header for the alias (no type parameters)
             const alias_header = CIR.TypeHeader{
                 .name = alias_name,
@@ -6618,17 +6612,6 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
                 },
             };
             const alias_stmt_idx = try self.env.addStatement(alias_stmt, alias_region);
-
-            // Add to the module-level scope (index 0) as a local_alias binding.
-            // This makes Model available for use in type annotations throughout the platform module.
-            const alias_decision = try Scope.introduceTypeBinding(
-                self.env.gpa,
-                self.scopes.items,
-                0,
-                alias_name,
-                Scope.TypeBindingInput{ .local_alias = alias_stmt_idx },
-            );
-            try self.handleTypeBindingDecision(alias_name, alias_region, alias_decision, true);
 
             // Store the alias mapping for use during type checking
             _ = try self.env.for_clause_aliases.append(self.env.gpa, .{
@@ -6657,6 +6640,20 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
         // But disallows regular undeclared type variables.
         var type_anno_ctx = TypeAnnoCtx.init(.for_clause_anno);
         const type_anno_idx = try self.runTypeAnnoKernel(entry.type_anno, &type_anno_ctx);
+
+        // The declaring signature uses the lowercase binder; platform code
+        // and subsequent requirements may name the resulting abstract alias.
+        for (self.env.for_clause_aliases.sliceRange(type_aliases_range)) |alias| {
+            const alias_region = self.env.store.getStatementRegion(alias.alias_stmt_idx);
+            const alias_decision = try Scope.introduceTypeBinding(
+                self.env.gpa,
+                self.scopes.items,
+                0,
+                alias.alias_name,
+                Scope.TypeBindingInput{ .local_alias = alias.alias_stmt_idx },
+            );
+            try self.handleTypeBindingDecision(alias.alias_name, alias_region, alias_decision, true);
+        }
 
         // Store the required type in the module env
         _ = try self.env.requires_types.append(self.env.gpa, .{

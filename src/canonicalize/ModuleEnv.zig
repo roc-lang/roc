@@ -2334,6 +2334,25 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText(" is not declared in this scope.");
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
+            // Scope construction keeps a for-clause alias out of its own
+            // requirement. Its recorded binder supplies the correction only
+            // on this diagnostic path, not on every successful type lookup.
+            for (self.requires_types.items()) |requirement| {
+                if (data.region.start.offset < requirement.region.start.offset or
+                    data.region.end.offset > requirement.region.end.offset) continue;
+                for (self.for_clause_aliases.sliceRange(requirement.type_aliases)) |alias| {
+                    if (!alias.alias_name.eql(data.name)) continue;
+                    const variable_name = try report.addOwnedString(self.getIdent(alias.rigid_name));
+                    try report.document.addLineBreaks(2);
+                    try report.document.addReflowingText("Use the type variable ");
+                    try report.document.addInlineCode(variable_name);
+                    try report.document.addReflowingText(" in the requirement that introduces it. The alias ");
+                    try report.document.addInlineCode(owned_type_name);
+                    try report.document.addReflowingText(" is available outside this signature, including in functions provided to the host.");
+                    break;
+                }
+            }
+
             break :blk report;
         },
         .type_alias_but_needed_nominal => |data| blk: {
