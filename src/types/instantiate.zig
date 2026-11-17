@@ -85,6 +85,26 @@ pub fn instantiateNominalBacking(
     current_rank: Rank,
     purpose: Instantiator.Purpose,
 ) std.mem.Allocator.Error!Var {
+    return (try walkNominalBacking(store, idents, var_map, decl, args, current_rank, purpose)).opened;
+}
+
+/// What one walk of a declaration's backing template made.
+const BackingWalk = struct {
+    opened: Var,
+    /// Whether the copy names a variable of the template itself, one the walk
+    /// shared rather than copied.
+    shared_any: bool,
+};
+
+fn walkNominalBacking(
+    store: *TypesStore,
+    idents: *const base.Ident.Store,
+    var_map: *@import("collections").DenseMap(Var, Var),
+    decl: types_mod.NominalDecl,
+    args: []const Var,
+    current_rank: Rank,
+    purpose: Instantiator.Purpose,
+) std.mem.Allocator.Error!BackingWalk {
     const formals = store.sliceVars(decl.formals);
     std.debug.assert(formals.len == args.len);
 
@@ -133,8 +153,408 @@ pub fn instantiateNominalBacking(
     const minted_start: u32 = @intCast(store.len());
     const opened = try instantiator.instantiateVar(decl.backing);
     try store.markNominalBackingStructure(opened, minted_start, @intCast(store.len()));
-    return opened;
+    return .{ .opened = opened, .shared_any = instantiator.shared_any };
 }
+
+/// One opening of a nominal declaration's backing for unification.
+pub const BackingOpening = struct {
+    opened: Var,
+    /// Whether every variable the opening minted holds structure, so none
+    /// carries a binding of its own.
+    structure_only: bool,
+};
+
+/// Open `decl`'s backing for an application with args `application_args`,
+/// exactly as `instantiateNominalBacking` does with purpose `.instantiation`,
+/// through the openings `store` has recorded (`BackingOpenings`).
+pub fn openNominalBackingRecorded(
+    store: *TypesStore,
+    idents: *const base.Ident.Store,
+    var_map: *DenseMap(Var, Var),
+    decl_idx: types_mod.NominalDecl.Idx,
+    decl: types_mod.NominalDecl,
+    application_args: []const Var,
+    current_rank: Rank,
+) std.mem.Allocator.Error!BackingOpening {
+    const openings = &store.backing_openings;
+    // The args are read after the opening appends to the store's pools,
+    // which may move the pool an application's args are a slice of.
+    openings.args.clearRetainingCapacity();
+    try openings.args.appendSlice(store.gpa, application_args);
+    const args = openings.args.items;
+    const known = openings.recordings.get(decl_idx);
+    if (known) |recording| {
+        if (recording.replayable and recording.recordsDecl(decl)) {
+            return .{ .opened = try openings.replay(store, recording, args, current_rank), .structure_only = true };
+        }
+    }
+
+    const start: BackingOpenings.PoolLens = .of(store);
+    const ground_epoch = store.groundEpoch();
+    const walk = try walkNominalBacking(store, idents, var_map, decl, args, current_rank, .instantiation);
+    const structure_only = structureOnly(store, start.vars);
+    if (known) |recording| {
+        if (recording.recordsDecl(decl)) return .{ .opened = walk.opened, .structure_only = structure_only };
+    }
+    try openings.record(store, var_map, decl_idx, decl, args, walk, structure_only, start, store.groundEpoch() -% ground_epoch);
+    return .{ .opened = walk.opened, .structure_only = structure_only };
+}
+
+/// Whether every variable minted from `minted_start` on holds structure.
+fn structureOnly(store: *const TypesStore, minted_start: u32) bool {
+    const end: u32 = @intCast(store.len());
+    var minted = minted_start;
+    while (minted < end) : (minted += 1) {
+        switch (store.resolveVar(@fromBackingInt(minted)).desc.content) {
+            .flex, .rigid => return false,
+            .alias, .structure, .field_presence, .err => {},
+        }
+    }
+    return true;
+}
+
+/// The openings of nominal declaration backings a type store has recorded
+/// for replay (`openNominalBackingRecorded`).
+///
+/// An opening walks a declaration's backing template, which is never
+/// unified against, substituting the application's args for the
+/// declaration's formals without reading them, and gives every variable it
+/// mints the same rank. When the variables an opening mints hold structure
+/// alone and name nothing but each other and the args, the opening is a
+/// fixed run of writes to the store: descriptors minted in order, and runs
+/// of vars-pool entries, record fields and tags. Every opening of the same
+/// declaration makes that run with the minted variables, pool positions,
+/// args and rank renamed. The first such opening of a declaration is
+/// recorded with every variable named by its place among the minted
+/// variables or the args and every pool range by its place in the run; each
+/// later opening replays the record, writing what the walk would write, in
+/// the order it would write it.
+pub const BackingOpenings = struct {
+    recordings: std.AutoHashMapUnmanaged(types_mod.NominalDecl.Idx, Recording) = .empty,
+    /// Every recording's minted descriptors, in minting order.
+    rows: std.ArrayListUnmanaged(types_mod.Descriptor.Row) = .empty,
+    /// Every recording's run of vars-pool entries.
+    pool: std.ArrayListUnmanaged(Var) = .empty,
+    fields: std.ArrayListUnmanaged(RecordField) = .empty,
+    tags: std.ArrayListUnmanaged(Tag) = .empty,
+    /// Checked builds only: each recording's template variables and the rows
+    /// they held when it was made, which every replay checks are unchanged.
+    pinned: std.ArrayListUnmanaged(Pinned) = .empty,
+    /// One replay's renamed runs, before they are appended to the store.
+    replay_pool: std.ArrayListUnmanaged(Var) = .empty,
+    replay_fields: std.ArrayListUnmanaged(RecordField) = .empty,
+    replay_tags: std.ArrayListUnmanaged(Tag) = .empty,
+    /// The args of the opening in progress.
+    args: std.ArrayListUnmanaged(Var) = .empty,
+
+    /// A recorded variable reference: the index of a minted variable, or
+    /// `arg_ref` with the index of an application arg.
+    const Ref = u32;
+    const arg_ref: Ref = 1 << 30;
+
+    const Recording = struct {
+        /// The declaration's template and formals when it was recorded.
+        backing: Var,
+        formals: Var.SafeList.Range,
+        /// False for a declaration whose openings mint a variable that holds
+        /// no structure or name a template variable: they are walked.
+        replayable: bool,
+        rows_start: u32 = 0,
+        minted: u32 = 0,
+        pool_start: u32 = 0,
+        pool_len: u32 = 0,
+        fields_start: u32 = 0,
+        fields_len: u32 = 0,
+        tags_start: u32 = 0,
+        tags_len: u32 = 0,
+        pinned_start: u32 = 0,
+        pinned_len: u32 = 0,
+        opened: Ref = 0,
+        /// How far the opening advanced the store's ground epoch.
+        ground_epoch_advance: u64 = 0,
+
+        fn recordsDecl(self: Recording, decl: types_mod.NominalDecl) bool {
+            return self.backing == decl.backing and
+                self.formals.start == decl.formals.start and self.formals.count == decl.formals.count;
+        }
+    };
+
+    const Pinned = struct {
+        var_: Var,
+        row: types_mod.Descriptor.Row,
+    };
+
+    /// The lengths of the pools an opening appends to.
+    const PoolLens = struct {
+        vars: u32,
+        pool: u32,
+        fields: u32,
+        tags: u32,
+
+        fn of(store: *const TypesStore) PoolLens {
+            return .{
+                .vars = @intCast(store.len()),
+                .pool = store.varsPoolLen(),
+                .fields = store.record_fields.len(),
+                .tags = store.tags.len(),
+            };
+        }
+    };
+
+    pub fn deinit(self: *BackingOpenings, gpa: std.mem.Allocator) void {
+        self.recordings.deinit(gpa);
+        self.rows.deinit(gpa);
+        self.pool.deinit(gpa);
+        self.fields.deinit(gpa);
+        self.tags.deinit(gpa);
+        self.pinned.deinit(gpa);
+        self.replay_pool.deinit(gpa);
+        self.replay_fields.deinit(gpa);
+        self.replay_tags.deinit(gpa);
+        self.args.deinit(gpa);
+    }
+
+    /// Record the opening `walk` just made from `start` on, when it can be
+    /// replayed. An opening whose args repeat a variable is not recorded:
+    /// its references to that variable do not say which arg they stand for.
+    fn record(
+        self: *BackingOpenings,
+        store: *TypesStore,
+        var_map: *DenseMap(Var, Var),
+        decl_idx: types_mod.NominalDecl.Idx,
+        decl: types_mod.NominalDecl,
+        args: []const Var,
+        walk: BackingWalk,
+        structure_only: bool,
+        start: PoolLens,
+        ground_epoch_advance: u64,
+    ) std.mem.Allocator.Error!void {
+        const gpa = store.gpa;
+        for (args, 0..) |arg, index| {
+            for (args[index + 1 ..]) |other| if (arg == other) return;
+        }
+        const unreplayable: Recording = .{ .backing = decl.backing, .formals = decl.formals, .replayable = false };
+        if (!structure_only or walk.shared_any) {
+            try self.recordings.put(gpa, decl_idx, unreplayable);
+            return;
+        }
+        const end = PoolLens.of(store);
+        std.debug.assert(end.vars - start.vars < arg_ref);
+        const renamer: Renamer = .{ .start = start, .end = end, .args = args };
+
+        var recording: Recording = .{
+            .backing = decl.backing,
+            .formals = decl.formals,
+            .replayable = true,
+            .rows_start = @intCast(self.rows.items.len),
+            .minted = end.vars - start.vars,
+            .pool_start = @intCast(self.pool.items.len),
+            .pool_len = end.pool - start.pool,
+            .fields_start = @intCast(self.fields.items.len),
+            .fields_len = end.fields - start.fields,
+            .tags_start = @intCast(self.tags.items.len),
+            .tags_len = end.tags - start.tags,
+            .opened = renamer.ref(walk.opened),
+            .ground_epoch_advance = ground_epoch_advance,
+        };
+
+        try self.rows.ensureUnusedCapacity(gpa, recording.minted);
+        var minted = start.vars;
+        while (minted < end.vars) : (minted += 1) {
+            const resolved = store.resolveVar(@fromBackingInt(minted));
+            std.debug.assert(@backingInt(resolved.var_) == minted);
+            self.rows.appendAssumeCapacity(renamer.recordRow(store.rowAt(resolved.desc_idx)));
+        }
+        try self.pool.ensureUnusedCapacity(gpa, recording.pool_len);
+        for (store.vars.items[start.pool..end.pool]) |entry| {
+            self.pool.appendAssumeCapacity(if (TypesStore.isVarsPoolLengthSlot(entry)) entry else @fromBackingInt(renamer.ref(entry)));
+        }
+        try self.fields.ensureUnusedCapacity(gpa, recording.fields_len);
+        var field_idx = start.fields;
+        while (field_idx < end.fields) : (field_idx += 1) {
+            var field = store.record_fields.get(@fromBackingInt(field_idx));
+            field.presence.var_ = @fromBackingInt(renamer.ref(field.presence.var_));
+            if (field.presence.presenceVar()) |presence_var| field.presence.presence_var = @fromBackingInt(renamer.ref(presence_var));
+            self.fields.appendAssumeCapacity(field);
+        }
+        try self.tags.ensureUnusedCapacity(gpa, recording.tags_len);
+        var tag_idx = start.tags;
+        while (tag_idx < end.tags) : (tag_idx += 1) {
+            var tag = store.tags.get(@fromBackingInt(tag_idx));
+            tag.args.start = @fromBackingInt(renamer.poolOffset(@backingInt(tag.args.start)));
+            self.tags.appendAssumeCapacity(tag);
+        }
+        if (std.debug.runtime_safety) {
+            recording.pinned_start = @intCast(self.pinned.items.len);
+            var mapped = var_map.iterator();
+            while (mapped.next()) |entry| {
+                const resolved = store.resolveVar(entry.key_ptr.*);
+                try self.pinned.append(gpa, .{ .var_ = resolved.var_, .row = store.rowAt(resolved.desc_idx) });
+            }
+            recording.pinned_len = @as(u32, @intCast(self.pinned.items.len)) - recording.pinned_start;
+        }
+        try self.recordings.put(gpa, decl_idx, recording);
+    }
+
+    /// Make the opening `recording` records for args `args` at rank `rank`.
+    fn replay(
+        self: *BackingOpenings,
+        store: *TypesStore,
+        recording: Recording,
+        args: []const Var,
+        rank: Rank,
+    ) std.mem.Allocator.Error!Var {
+        const gpa = store.gpa;
+        if (std.debug.runtime_safety) {
+            for (self.pinned.items[recording.pinned_start..][0..recording.pinned_len]) |pinned| {
+                const resolved = store.resolveVar(pinned.var_);
+                if (resolved.var_ != pinned.var_ or !std.meta.eql(store.rowAt(resolved.desc_idx), pinned.row)) {
+                    base.invariant("a nominal declaration's backing template changed after an opening of it was recorded", .{});
+                }
+            }
+        }
+        const start = PoolLens.of(store);
+        const renamer: Renamer = .{ .start = start, .end = undefined, .args = args };
+
+        if (recording.pool_len != 0) {
+            self.replay_pool.clearRetainingCapacity();
+            try self.replay_pool.ensureUnusedCapacity(gpa, recording.pool_len);
+            for (self.pool.items[recording.pool_start..][0..recording.pool_len]) |entry| {
+                self.replay_pool.appendAssumeCapacity(if (TypesStore.isVarsPoolLengthSlot(entry)) entry else renamer.varOf(@backingInt(entry)));
+            }
+            const pool_start = try store.appendVarsPoolEntries(self.replay_pool.items);
+            std.debug.assert(pool_start == start.pool);
+        }
+        if (recording.fields_len != 0) {
+            self.replay_fields.clearRetainingCapacity();
+            try self.replay_fields.ensureUnusedCapacity(gpa, recording.fields_len);
+            for (self.fields.items[recording.fields_start..][0..recording.fields_len]) |recorded| {
+                var field = recorded;
+                field.presence.var_ = renamer.varOf(@backingInt(field.presence.var_));
+                if (field.presence.presenceVar()) |presence_var| field.presence.presence_var = renamer.varOf(@backingInt(presence_var));
+                self.replay_fields.appendAssumeCapacity(field);
+            }
+            const fields = try store.appendRecordFields(self.replay_fields.items);
+            std.debug.assert(@backingInt(fields.start) == start.fields);
+        }
+        if (recording.tags_len != 0) {
+            self.replay_tags.clearRetainingCapacity();
+            try self.replay_tags.ensureUnusedCapacity(gpa, recording.tags_len);
+            for (self.tags.items[recording.tags_start..][0..recording.tags_len]) |recorded| {
+                var tag = recorded;
+                tag.args.start = @fromBackingInt(renamer.poolIndex(@backingInt(tag.args.start)));
+                self.replay_tags.appendAssumeCapacity(tag);
+            }
+            const tags = try store.appendTags(self.replay_tags.items);
+            std.debug.assert(@backingInt(tags.start) == start.tags);
+        }
+        for (self.rows.items[recording.rows_start..][0..recording.minted], 0..) |recorded, offset| {
+            var row = renamer.replayRow(recorded);
+            row.word.rank = rank;
+            const minted = try store.registerEncodedRow(row);
+            std.debug.assert(@backingInt(minted) == start.vars + offset);
+        }
+        store.advanceGroundEpoch(recording.ground_epoch_advance);
+        return renamer.varOf(recording.opened);
+    }
+
+    /// Names variables and pool positions of one opening: the variables it
+    /// mints and the pool runs it appends start at `start`.
+    const Renamer = struct {
+        start: PoolLens,
+        end: PoolLens,
+        args: []const Var,
+
+        const empty_vars_start: u32 = @backingInt(Var.SafeList.Range.empty_start);
+
+        /// The reference a recorded opening makes to `var_`, which is one
+        /// it minted or one of its args.
+        fn ref(self: Renamer, var_: Var) Ref {
+            const raw: u32 = @backingInt(var_);
+            if (raw >= self.start.vars and raw < self.end.vars) return raw - self.start.vars;
+            for (self.args, 0..) |arg, index| {
+                if (arg == var_) return arg_ref | @as(u32, @intCast(index));
+            }
+            base.invariant("an opening of a nominal backing that shared no template variable named a variable it neither minted nor took as an arg", .{});
+        }
+
+        /// The variable `ref` names in a replay.
+        fn varOf(self: Renamer, ref_: Ref) Var {
+            if (ref_ & arg_ref != 0) return self.args[ref_ & ~arg_ref];
+            return @fromBackingInt(self.start.vars + ref_);
+        }
+
+        /// A stored vars-range start as its place in the opening's pool run.
+        fn poolOffset(self: Renamer, stored: u32) u32 {
+            if (stored == empty_vars_start) return stored;
+            std.debug.assert(stored > self.start.pool and stored <= self.end.pool);
+            return stored - self.start.pool;
+        }
+
+        /// The stored vars-range start a place in the pool run names in a
+        /// replay.
+        fn poolIndex(self: Renamer, offset: u32) u32 {
+            if (offset == empty_vars_start) return offset;
+            return self.start.pool + offset;
+        }
+
+        /// A range of fields or tags as its place in the opening's run. A
+        /// range holding nothing names no run.
+        fn runOffset(payload: *types_mod.Descriptor.Payload, run_start: u32, run_end: u32) void {
+            if (payload[1] == 0) return;
+            std.debug.assert(payload[0] >= run_start and payload[0] + payload[1] <= run_end);
+            payload[0] -= run_start;
+        }
+
+        fn recordRow(self: Renamer, stored: types_mod.Descriptor.Row) types_mod.Descriptor.Row {
+            var row = stored;
+            switch (row.word.kind) {
+                .alias, .nominal_type => row.payload[1] = self.poolOffset(row.payload[1]),
+                .tuple => row.payload[0] = self.poolOffset(row.payload[0]),
+                .fn_pure, .fn_effectful, .fn_unbound => {
+                    row.payload[0] = self.poolOffset(row.payload[0]);
+                    row.payload[1] = self.ref(@fromBackingInt(row.payload[1]));
+                    row.payload[2] = self.poolOffset(row.payload[2]);
+                },
+                .record => {
+                    runOffset(&row.payload, self.start.fields, self.end.fields);
+                    row.payload[2] = self.ref(@fromBackingInt(row.payload[2]));
+                },
+                .tag_union => {
+                    runOffset(&row.payload, self.start.tags, self.end.tags);
+                    row.payload[2] = self.ref(@fromBackingInt(row.payload[2]));
+                },
+                .empty_record, .empty_tag_union, .field_presence, .err => {},
+                .flex, .rigid => unreachable, // a recorded opening mints structure only
+            }
+            return row;
+        }
+
+        fn replayRow(self: Renamer, recorded: types_mod.Descriptor.Row) types_mod.Descriptor.Row {
+            var row = recorded;
+            switch (row.word.kind) {
+                .alias, .nominal_type => row.payload[1] = self.poolIndex(row.payload[1]),
+                .tuple => row.payload[0] = self.poolIndex(row.payload[0]),
+                .fn_pure, .fn_effectful, .fn_unbound => {
+                    row.payload[0] = self.poolIndex(row.payload[0]);
+                    row.payload[1] = @backingInt(self.varOf(row.payload[1]));
+                    row.payload[2] = self.poolIndex(row.payload[2]);
+                },
+                .record => {
+                    if (row.payload[1] != 0) row.payload[0] += self.start.fields;
+                    row.payload[2] = @backingInt(self.varOf(row.payload[2]));
+                },
+                .tag_union => {
+                    if (row.payload[1] != 0) row.payload[0] += self.start.tags;
+                    row.payload[2] = @backingInt(self.varOf(row.payload[2]));
+                },
+                .empty_record, .empty_tag_union, .field_presence, .err => {},
+                .flex, .rigid => unreachable, // a recorded opening mints structure only
+            }
+            return row;
+        }
+    };
+};
 
 /// Reusable heap buffers backing `Instantiator`'s explicit worklist. Owned by
 /// the `TypesStore` so every instantiation against a store reuses the same
@@ -487,6 +907,9 @@ pub const Instantiator = struct {
     /// treated as a `Try`, so a `Try` error row reached through a declaration
     /// reference is a nested position like any other nominal argument.
     try_nominal: ?TryNominalIdent = null,
+    /// Set when the walk shared a source variable instead of copying it, so
+    /// the copy names a variable of the source graph.
+    shared_any: bool = false,
 
     /// How to recognize the builtin `Try(ok, err)` nominal while walking. Both
     /// spellings are needed for the same reason `builtinNominalDeclForIdentInEnv`
@@ -1117,6 +1540,7 @@ pub const Instantiator = struct {
             .flex, .rigid, .field_presence, .err => true,
         };
         if (!force_root_copy and self.share_leaves and is_leaf and !is_polarity_marker) {
+            self.shared_any = true;
             try machine.value_stack.append(self.store.gpa, resolved_var);
             return true;
         }
@@ -1124,6 +1548,7 @@ pub const Instantiator = struct {
             const copy_structure = self.copy_scheme_structure and !is_leaf and
                 !self.reach_known_empty and (machine.reach_state.?.get(resolved_var) orelse false);
             if (!copy_structure and !is_polarity_marker) {
+                self.shared_any = true;
                 try machine.value_stack.append(self.store.gpa, resolved_var);
                 return true;
             }
