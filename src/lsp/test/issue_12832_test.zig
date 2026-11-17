@@ -9,6 +9,7 @@ const LspRange = lsp.cir_queries.LspRange;
 const integration_spec = @import("integration_spec.zig");
 const test_env = @import("integration_env.zig");
 
+/// Issue 12832 integration specs exported to the LSP harness.
 pub const specs = [_]integration_spec.Spec{
     .{ .name = "issue 12832: prepare rename on an associated function annotation", .run = prepareAnnotation },
     .{ .name = "issue 12832: prepare rename on an associated function definition", .run = prepareDefinition },

@@ -3313,12 +3313,8 @@ pub const SyntaxChecker = struct {
         return symbols.preservesBindings(after, &edit);
     }
 
-    fn resolveSourceMethod(env: *ModuleEnv, expr: CIR.Expr) source_symbols.MethodTarget {
-        const method, const receiver_var = switch (expr) {
-            inline .e_method_call, .e_dispatch_call => |call| .{ call.method_name, ModuleEnv.varFrom(call.receiver) },
-            else => return .unresolved,
-        };
-        const owner = resolveMethodOwnerForLookup(env, receiver_var) orelse return .unresolved;
+    fn resolveSourceMethod(env: *ModuleEnv, receiver: CIR.Expr.Idx, method: base.Ident.Idx) source_symbols.MethodTarget {
+        const owner = resolveMethodOwnerForLookup(env, ModuleEnv.varFrom(receiver)) orelse return .unresolved;
         if (owner.builtin_origin or owner.origin_module != env.selfModuleIdentity()) return .external;
         const binding = env.lookupMethodBindingForOwnerConst(owner.owner, method) orelse return .unresolved;
         return .{ .local = env.store.getDef(binding.def_idx).pattern };

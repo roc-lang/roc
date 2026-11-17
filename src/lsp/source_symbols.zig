@@ -16,20 +16,24 @@ const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const Region = base.Region;
 
+/// Where a method call's implementation lives, as far as a source rename can tell.
 pub const MethodTarget = union(enum) {
     local: CIR.Pattern.Idx,
     external,
     unresolved,
 };
 
-pub const ResolveMethod = *const fn (*ModuleEnv, CIR.Expr) MethodTarget;
+/// Resolves a receiver method call to the binding that implements it.
+pub const ResolveMethod = *const fn (env: *ModuleEnv, receiver: CIR.Expr.Idx, method_name: base.Ident.Idx) MethodTarget;
 
+/// A renameable binding's source name and the region where it is declared.
 pub const Binding = struct {
     name: []const u8,
     region: Region,
     associated: bool,
 };
 
+/// One written occurrence of a binding's name in the document source.
 pub const Occurrence = struct {
     region: Region,
     pattern: CIR.Pattern.Idx,
@@ -285,7 +289,25 @@ const Walk = struct {
             .s_decl => |decl| decl.anno,
             .s_var => |decl| decl.anno,
             .s_var_uninitialized => |decl| decl.anno,
-            else => null,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_alias_decl,
+            .s_nominal_decl,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => null,
         };
         if (anno) |idx| self.annotation(pattern_idx, idx) catch |err| {
             self.oom = err;
@@ -314,26 +336,81 @@ const Walk = struct {
                 const region = self.read_names.get(RegionKey.of(env.store.getExprRegion(idx))) orelse return;
                 try self.append(env.store.getDef(lookup.target_def_idx).pattern, region, false);
             },
-            inline .e_method_call, .e_dispatch_call, .e_type_method_call, .e_type_dispatch_call => |call| {
-                const name = env.common.idents.getText(call.method_name);
-                // Operators and other desugarings have no replaceable method
-                // token. Changing their implementation's name cannot rewrite
-                // the surface syntax as a name-for-name edit.
-                if (!std.mem.eql(u8, env.getSource(call.method_name_region), name)) {
-                    try self.index.unresolved_methods.append(self.index.allocator, name);
-                    return;
-                }
-                switch (self.resolve_method(env, value)) {
-                    .local => |patt| try self.append(patt, call.method_name_region, false),
-                    .external => {},
-                    .unresolved => try self.index.unresolved_methods.append(self.index.allocator, name),
-                }
-            },
+            .e_method_call => |call| try self.methodCall(call.method_name, call.method_name_region, call.receiver),
+            .e_dispatch_call => |call| try self.methodCall(call.method_name, call.method_name_region, call.receiver),
+            .e_type_method_call => |call| try self.methodCall(call.method_name, call.method_name_region, null),
+            .e_type_dispatch_call => |call| try self.methodCall(call.method_name, call.method_name_region, null),
             .e_method_eq, .e_structural_eq => try self.index.unresolved_methods.append(self.index.allocator, env.getIdent(env.idents.is_eq)),
             .e_structural_hash => try self.index.unresolved_methods.append(self.index.allocator, env.getIdent(env.idents.to_hash)),
             .e_dbg => try self.index.unresolved_methods.append(self.index.allocator, env.getIdent(env.idents.to_inspect)),
             .e_interpolation => try self.index.unresolved_methods.append(self.index.allocator, env.getIdent(env.idents.from_interpolation)),
-            else => {},
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_str_segment,
+            .e_str,
+            .e_bytes_literal,
+            .e_lookup_external,
+            .e_deferred_import_ref,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_required,
+            .e_list,
+            .e_empty_list,
+            .e_tuple,
+            .e_match,
+            .e_if,
+            .e_call,
+            .e_record,
+            .e_empty_record,
+            .e_block,
+            .e_tag,
+            .e_nominal,
+            .e_nominal_external,
+            .e_zero_argument_tag,
+            .e_closure,
+            .e_lambda,
+            .e_binop,
+            .e_unary_minus,
+            .e_field_access,
+            .e_tuple_access,
+            .e_runtime_error,
+            .e_crash,
+            .e_expect_err,
+            .e_expect,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_derived_method,
+            .e_return,
+            .e_break,
+            .e_for,
+            .e_hosted_lambda,
+            .e_run_low_level,
+            => {},
+        }
+    }
+
+    fn methodCall(self: *Walk, method_name: base.Ident.Idx, method_name_region: Region, receiver: ?CIR.Expr.Idx) Allocator.Error!void {
+        const env = self.index.env;
+        const name = env.common.idents.getText(method_name);
+        // Operators and other desugarings have no replaceable method
+        // token. Changing their implementation's name cannot rewrite
+        // the surface syntax as a name-for-name edit.
+        if (!std.mem.eql(u8, env.getSource(method_name_region), name)) {
+            try self.index.unresolved_methods.append(self.index.allocator, name);
+            return;
+        }
+        const target: MethodTarget = if (receiver) |receiver_idx| self.resolve_method(env, receiver_idx, method_name) else .unresolved;
+        switch (target) {
+            .local => |patt| try self.append(patt, method_name_region, false),
+            .external => {},
+            .unresolved => try self.index.unresolved_methods.append(self.index.allocator, name),
         }
     }
 };
