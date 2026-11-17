@@ -30778,21 +30778,31 @@ const BodyContext = struct {
         // RECORDED the materialization, while `self.view` is the declaring
         // module—its template table does not contain that owner.
         if (self.in_default_expr) return;
-        var scopes = std.ArrayList(EvidenceScope).empty;
-        defer scopes.deinit(self.allocator);
-        var frame = chain;
+        const saved_evidence = self.evidence;
+        defer self.evidence = saved_evidence;
+        const template = self.view.templates.get(self.owner_template.template);
+        if (chain.parent == null) {
+            self.evidence = chain;
+            return self.instantiateTemplateDispatchRelations(template, switch (chain.scope.lexical) {
+                .root => null,
+                .generalized => |scope| scope,
+            });
+        }
+        // Borrow the stable input chain, never the self.evidence field that
+        // replay replaces. Depth/index references are relative to each frame.
+        var frames = std.ArrayList(*const EvidenceChain).empty;
+        defer frames.deinit(self.allocator);
+        var frame = &chain;
         while (true) {
             if (!names.procedureTemplateRefEql(frame.scope.owner, self.owner_template)) {
                 Common.invariant("stored function evidence belonged to a different checked template");
             }
-            try scopes.append(self.allocator, frame.scope);
-            frame = (frame.parent orelse break).*;
+            try frames.append(self.allocator, frame);
+            frame = frame.parent orelse break;
         }
-        const template = self.view.templates.get(self.owner_template.template);
-        var index = scopes.items.len;
-        while (index > 0) {
-            index -= 1;
-            switch (scopes.items[index].lexical) {
+        while (frames.pop()) |owner| {
+            self.evidence = owner.*;
+            switch (owner.scope.lexical) {
                 .root => try self.instantiateTemplateDispatchRelations(template, null),
                 .generalized => |scope| try self.instantiateTemplateDispatchRelations(template, scope),
             }

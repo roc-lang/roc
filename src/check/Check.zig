@@ -20828,20 +20828,23 @@ fn defInOnStackGroup(self: *const Self, def_idx: CIR.Def.Idx) bool {
     return self.activeGroupFrameIndex(group_index) != null;
 }
 
-/// The effect a call contributes when its callee is an in-flight member of the
-/// recursive group being checked. A declared pure/effectful tag on an
-/// in-flight recursive scheme must not seed the body's fixpoint. An inferred
-/// unbound slot, however, is a real directed edge between SCC members and must
-/// survive until the boundary resolves the group. A callee that is not a
-/// function has already failed the call-shape relation, which owns that
-/// diagnostic; it is not a callable, so it contributes no effect.
-fn inFlightRecursiveCallEffectState(self: *const Self, func_var: Var) FunctionEffectState {
-    return switch (self.types.resolveThroughAliases(func_var).desc.content) {
+/// A call's execution effect and its contribution to recursive body inference
+/// are distinct: a declared effectful call cannot be hoisted, but its annotation
+/// must not circularly seed the recursive group's inferred effects.
+const CallEffects = struct {
+    execution: FunctionEffectState,
+    body: FunctionEffectState,
+};
+
+/// Unfinished inferred slots remain directed dependencies until the group
+/// settles. Terminal annotations need no solver query.
+fn inFlightRecursiveCallEffects(self: *const Self, func_var: Var) CallEffects {
+    const execution: FunctionEffectState = switch (self.types.resolveThroughAliases(func_var).desc.content) {
         .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .structure => |flat| switch (flat) {
             .fn_unbound => .unresolved,
+            .fn_effectful => .effectful,
             .fn_pure,
-            .fn_effectful,
             .record,
             .tuple,
             .nominal_type,
@@ -20852,6 +20855,7 @@ fn inFlightRecursiveCallEffectState(self: *const Self, func_var: Var) FunctionEf
         },
         .flex, .rigid, .field_presence, .err => .pure,
     };
+    return .{ .execution = execution, .body = if (execution == .effectful) .pure else execution };
 }
 
 /// Whether a call's callee is a recursive reference to a def that has not
@@ -35630,13 +35634,18 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
     // Argument unification above is the point at which an effect-polymorphic
     // callback can become pure or effectful. Resolve the directed formula
     // now, never from the pre-unification function tag.
-    const call_effect_state: FunctionEffectState = if (self.callTargetIsInFlightRecursiveRef(call.func))
-        self.inFlightRecursiveCallEffectState(func_var)
-    else
-        try self.functionEffectState(func_var);
-    switch (call_effect_state) {
+    const recursive = self.callTargetIsInFlightRecursiveRef(call.func);
+    const effects = if (recursive)
+        self.inFlightRecursiveCallEffects(func_var)
+    else blk: {
+        const effect = try self.functionEffectState(func_var);
+        break :blk CallEffects{ .execution = effect, .body = effect };
+    };
+    const call_effect_state = effects.execution;
+    if (call_effect_state == .effectful) self.markCurrentHoistObservableEffect();
+    switch (effects.body) {
         .effectful => task.does_fx = true,
-        .unresolved => if (state.callee_scheme != null and !self.callTargetIsInFlightRecursiveRef(call.func))
+        .unresolved => if (state.callee_scheme != null and !recursive)
             try self.recordFreshCalleeEffectDependencies(func_var)
         else
             try self.recordCurrentFunctionEffectDependency(func_var),

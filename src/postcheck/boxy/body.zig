@@ -367,6 +367,17 @@ const DeferredDictionaries = struct {
     /// The template worker whose call instance the frame is, whose body can
     /// declare local procedures its dictionaries call (`Declaration`).
     declaring: ?WorkerId = null,
+    /// Only a declaration-context read needs the complete runtime instance.
+    /// Ordinary literal conversion reads the projected requirement interface.
+    callable: Callable = .none,
+    substitution: []const checked.CheckedTypeId = &.{},
+
+    const Callable = union(enum) {
+        none,
+        function: checked.CheckedTypeId,
+        /// A constant's entry wrapper takes no arguments and returns this type.
+        value: checked.CheckedTypeId,
+    };
 };
 
 /// Where a literal chain frame's literal arguments come from.
@@ -396,6 +407,7 @@ const Declaration = struct {
     worker: WorkerId,
     /// The callee's scheme types, in this body's variables.
     bound: []const TypeId,
+    bound_ready: bool = true,
     /// The descriptors and literal arguments; a literal chain frame's are
     /// composed when a procedure first reads them (`declarationWords`).
     words: ?Words,
@@ -526,11 +538,7 @@ const AliasChain = struct {
     bound: []const TypeId,
     dicts: []const Word,
     literals: []const Word,
-    /// The evidence filling `first`'s scope.
-    evidence: []const static_dispatch.CheckedEvidence,
     literal_source: AliasLiterals,
-    /// A literal chain's frames, which stay entered under the target's.
-    chain_frame: bool,
     /// The function type of the use the chain serves: the use's own type,
     /// or the callable a dispatch edge instantiated the alias's scheme at
     /// (`EvidenceTargetInstantiation.alias`). Every alias of the chain has
@@ -570,10 +578,6 @@ pub const Builder = struct {
     /// Arguments"). Each is read on first use (`materialize`).
     layout: Tables.InputLayout = .{},
     /// The thunk composed for each `literal_argument` root this body reads.
-    /// Set while `enterEdge` builds a frame's call instance, whose
-    /// dictionaries the frame composes as it reads them, and whose
-    /// descriptors no frame reads: its scheme's types are its `env`.
-    chain_frame: bool = false,
     root_thunks: std.AutoHashMapUnmanaged(RootThunkKey, Word) = .empty,
     /// While lowering a literal thunk's or literal argument root's chain:
     /// where its frames start in `alias_scopes`. An edge argument or
@@ -4956,22 +4960,18 @@ pub const Builder = struct {
                 };
                 const callee = try self.program.templateRefWorker(procedure.template);
                 const subst = table.site_substitutions.items()[node.subst.start..][0..node.subst.len];
-                var deferred = false;
-                self.chain_frame = true;
-                defer self.chain_frame = false;
-                const instance = switch (node.instantiation) {
-                    .alias => try self.aliasTargetInstance(node, callee, edge),
+                return switch (node.instantiation) {
+                    .alias => try self.enterLiteralAliasTarget(node, callee),
                     .monomorphic, .callable, .derived_from_callable => switch (node.nested) {
-                        .resolved => blk: {
-                            deferred = true;
-                            break :blk try self.callInstanceAt(callee, subst, table.nestedEvidence(node), try self.instantiationCallable(node.instantiation), edge);
-                        },
+                        .resolved => try self.enterProjectedWorkerFrame(callee, subst, table.nestedEvidence(node), edge, switch (node.instantiation) {
+                            .callable, .derived_from_callable => |callable| .{ .function = callable },
+                            .monomorphic => .none,
+                            .alias => unreachable, // the enclosing switch entered the alias-chain branch
+                        }),
                         .from_callable => invariant("callable-derived evidence carries no substitution, so checking records no literal edge for it"),
                         .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
                     },
                 };
-                defer self.allocator.free(instance.hidden);
-                return try self.enterWorkerFrame(callee, instance, if (deferred) edge else null);
             },
             // The platform's invocation of the app procedure: its frame
             // derives its dictionaries and literal arguments from its types,
@@ -5011,15 +5011,8 @@ pub const Builder = struct {
                                 },
                                 .callable_eval => invariant("a literal argument's edge uses a computed callable"),
                             };
-                            const use_ty = try self.convert(self.bodies().exprType(expr));
-                            self.chain_frame = true;
-                            defer self.chain_frame = false;
-                            const instance = if (tag == .platform_required_proc)
-                                try self.requiredInstanceAt(callee, ref, self.siteSubstitution(expr), use_ty, edge)
-                            else
-                                try self.callInstanceAt(callee, self.siteSubstitution(expr), self.view.view.static_dispatch_plans.siteEvidence(expr) orelse &.{}, use_ty, edge);
-                            defer self.allocator.free(instance.hidden);
-                            return try self.enterWorkerFrame(callee, instance, edge);
+                            if (tag == .platform_required_proc) invariant("a platform requirement's use is no literal argument edge");
+                            return try self.enterProjectedWorkerFrame(callee, self.siteSubstitution(expr), self.view.view.static_dispatch_plans.siteEvidence(expr) orelse &.{}, edge, .{ .function = self.bodies().exprType(expr) });
                         },
                         // A use of a constant instantiates its entry
                         // procedure's scheme, as a read of its value does.
@@ -5031,13 +5024,7 @@ pub const Builder = struct {
                                 .reserved, .stored_const, .unimplemented => invariant("a literal argument's edge uses a constant with no entry procedure"),
                             };
                             const callee = try self.program.templateRefWorker(eval.entry_template);
-                            const read_ty = try self.exprType(expr);
-                            const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = read_ty, .effectful = false } });
-                            self.chain_frame = true;
-                            defer self.chain_frame = false;
-                            const instance = try self.callInstanceAt(callee, self.siteSubstitution(expr), self.view.view.static_dispatch_plans.siteEvidence(expr) orelse &.{}, fn_ty, edge);
-                            defer self.allocator.free(instance.hidden);
-                            return try self.enterWorkerFrame(callee, instance, edge);
+                            return try self.enterProjectedWorkerFrame(callee, self.siteSubstitution(expr), self.view.view.static_dispatch_plans.siteEvidence(expr) orelse &.{}, edge, .{ .value = self.bodies().exprType(expr) });
                         },
                         .local_param, .local_value, .local_mutable_version, .pattern_binder, .platform_required_const, .platform_required_declaration, .platform_required_checked_error => invariant("a literal argument's edge uses no procedure"),
                     }
@@ -5052,34 +5039,81 @@ pub const Builder = struct {
         }
     }
 
-    /// Enter the frame of the template worker `callee` called with
-    /// `instance`.
-    fn enterWorkerFrame(self: *Builder, callee: WorkerId, instance: CallInstance, deferred_edge: ?checked.LiteralEdge) Allocator.Error![]const checked.LiteralRequirement {
+    /// A literal frame borrows the checked substitution. It has no runtime
+    /// arguments, result representation, or hidden descriptor table to build.
+    fn enterProjectedWorkerFrame(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence, edge: checked.LiteralEdge, callable: DeferredDictionaries.Callable) Allocator.Error![]const checked.LiteralRequirement {
         const target = self.program.worker(callee).*;
         const arena = self.program.arena.allocator();
-        const dicts: []const Word = if (instance.deferred_dicts != null or target.dictionary_params.len == 0) &.{} else instance.hidden[instance.bound.len..][0..target.dictionary_params.len];
-        const literals = instance.hidden[instance.bound.len + target.dictionary_params.len ..];
-        if (literals.len != target.literal_params) invariant("a call instance's literal arguments differ from its target's literal_requirements");
+        const variables = target.scheme_vars[0 .. target.scheme_vars.len - target.row_nodes.len];
+        const env = try types.Projection.init(arena, target.module, variables, try self.program.keptSubstitution(callee, subst), self.module, self.env, .{ .module = target.module, .vars = &.{}, .bound = &.{} });
+        var requirements = self.ownScopeRequirements(callee, &.{});
+        requirements.env = env;
+        var dictionaries = try self.deferredDictionaries(evidence, requirements, target.dictionary_params.len);
+        dictionaries.declaring = callee;
+        dictionaries.callable = callable;
+        dictionaries.substitution = subst;
         const literal_requirements: []const checked.LiteralRequirement = if (target.literal_scopes.len == 0) &.{} else target.literal_scopes[0];
-        const deferred: ?DeferredLiterals = if (deferred_edge) |edge| blk: {
-            const args = self.view.view.checked_procedure_templates.literalEdgeArgs(edge);
-            if (args.len != literals.len) invariant("an edge's literal arguments do not cover its callee's literal requirements");
-            break :blk .{ .edge = .{ .args = args, .module = self.module, .view = self.view, .env = self.env } };
-        } else null;
+        const args = self.view.view.checked_procedure_templates.literalEdgeArgs(edge);
+        if (args.len != target.literal_params) invariant("an edge's literal arguments do not cover its callee's literal requirements");
+        const deferred: DeferredLiterals = .{ .edge = .{ .args = args, .module = self.module, .view = self.view, .env = self.env } };
         self.module = target.module;
         self.view = self.program.module(target.module);
-        self.env = .{ .module = target.module, .vars = target.scheme_vars, .bound = instance.bound };
+        self.env = env;
         try self.alias_scopes.append(self.allocator, .{
             .params = target.dictionary_params,
-            .requirements = self.ownScopeRequirements(callee, instance.bound),
-            .dicts = try arena.dupe(Word, dicts),
-            .literals = if (deferred == null) try arena.dupe(Word, literals) else &.{},
+            .requirements = requirements,
+            .dicts = &.{},
             .literal_requirements = literal_requirements,
             .deferred = deferred,
-            .deferred_dicts = instance.deferred_dicts,
+            .deferred_dicts = dictionaries,
             .saved_env = self.env,
         });
         return literal_requirements;
+    }
+
+    /// A dispatch through an exact alias retains every lexical evidence frame,
+    /// but projects none of the aliases' unrelated type arguments.
+    fn enterLiteralAliasTarget(self: *Builder, node: static_dispatch.EvidenceNode, callee: WorkerId) Allocator.Error![]const checked.LiteralRequirement {
+        const table = self.view.view.static_dispatch_plans;
+        var alias_step = self.aliasTargetFirstStep(node);
+        var subst: []const checked.CheckedTypeId = table.site_substitutions.items()[node.subst.start..][0..node.subst.len];
+        var evidence = table.aliasScopeEvidence(node);
+        while (true) {
+            const env = try types.Projection.init(self.program.arena.allocator(), alias_step.module, alias_step.vars, subst, self.module, self.env, .{ .module = alias_step.module, .vars = &.{}, .bound = &.{} });
+            const context: ParamContext = .{ .module = alias_step.module, .params = alias_step.params, .env = env };
+            var dictionaries = try self.deferredDictionaries(evidence, context, alias_step.params.len);
+            dictionaries.covered = true;
+            self.module = alias_step.module;
+            self.view = self.program.module(alias_step.module);
+            self.env = env;
+            try self.alias_scopes.append(self.allocator, .{
+                .params = try self.runtimeParams(alias_step.params),
+                .requirements = context,
+                .dicts = &.{},
+                .deferred_dicts = dictionaries,
+                .saved_env = env,
+            });
+            const lookup = alias_step.lookup;
+            subst = self.siteSubstitution(lookup);
+            evidence = self.view.view.static_dispatch_plans.siteEvidence(lookup) orelse &.{};
+            const ref_id = self.view.view.resolved_value_refs.lookupIdByExpr(lookup) orelse invariant("an alias's forwarded lookup has no resolved reference");
+            const ref = self.view.view.resolved_value_refs.records.items()[@backingInt(ref_id)].ref;
+            switch (ref) {
+                .local_proc => |local| {
+                    if (!local.is_alias) invariant("an alias chain reaches a non-alias local procedure");
+                    alias_step = self.localAliasStep(self.module, local.expr, local.dispatch_scope);
+                },
+                .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |use| switch (try self.procedureUseCallee(use)) {
+                    .alias => |alias| alias_step = self.callableEvalAliasStep(alias.module, alias.template),
+                    .worker => |target| {
+                        if (target != callee) invariant("an alias's forwarded lookup reaches another target");
+                        return try self.enterProjectedWorkerFrame(callee, subst, evidence, .{ .use = lookup }, .{ .function = self.bodies().exprType(lookup) });
+                    },
+                    .callable_eval => invariant("an exact procedure alias reaches a computed callable"),
+                },
+                .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc => invariant("an alias's forwarded lookup names no procedure"),
+            }
+        }
     }
 
     /// Enter the scope of exact procedure alias `alias` as the site `site`
@@ -5087,9 +5121,8 @@ pub const Builder = struct {
     /// those its forwarded lookup's scheme gives it.
     fn enterAliasFrame(self: *Builder, alias: AliasCallee, site: ExprId) Allocator.Error![]const checked.LiteralRequirement {
         const alias_step = self.callableEvalAliasStep(alias.module, alias.template);
-        const bound = try self.aliasScopeBound(alias_step, self.siteSubstitution(site), try self.exprType(site));
         const evidence = self.view.view.static_dispatch_plans.siteEvidence(site) orelse &.{};
-        const env: types.Env = .{ .module = alias_step.module, .vars = alias_step.vars, .bound = bound };
+        const env = try types.Projection.init(self.program.arena.allocator(), alias_step.module, alias_step.vars, self.siteSubstitution(site), self.module, self.env, .{ .module = alias_step.module, .vars = &.{}, .bound = &.{} });
         const requirements: ParamContext = .{ .module = alias_step.module, .params = alias_step.params, .env = env };
         const deferred_dicts = try self.deferredDictionaries(evidence, requirements, alias_step.params.len);
         const args = self.view.view.checked_procedure_templates.literalEdgeArgs(.{ .use = site });
@@ -5116,15 +5149,11 @@ pub const Builder = struct {
         const arena = self.program.arena.allocator();
         const scheme = try self.localScheme(scope_id);
         const subst = self.siteSubstitution(site);
-        if (subst.len != 0 and subst.len != scheme.scheme_vars.len) invariant("a local scope's site substitution differs from its scheme");
-        const own_types = try arena.alloc(TypeId, scheme.scheme_vars.len);
-        for (own_types, scheme.scheme_vars, 0..) |*own_ty, variable, index| {
-            own_ty.* = if (index < subst.len and self.view.types().payload(subst[index]) != .err)
-                try self.convert(subst[index])
-            else
-                try self.program.converter().sealedScheme(self.module, variable);
-        }
-        const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
+        const context: ParamContext = .{
+            .module = self.module,
+            .params = self.scopeParams(scope_id),
+            .env = try types.Projection.init(arena, self.module, scheme.scheme_vars, subst, self.module, self.env, self.env),
+        };
         const evidence = self.view.view.static_dispatch_plans.siteEvidence(site) orelse &.{};
         const deferred_dicts = try self.deferredDictionaries(evidence, context, scheme.dictionaries.len);
         const args = self.view.view.checked_procedure_templates.literalEdgeArgs(.{ .use = site });
@@ -5867,6 +5896,7 @@ pub const Builder = struct {
         for (declaration.forwards.items) |forward| {
             if (forward.param == param) return forward.declaration;
         }
+        try self.materializeDeclarationTypes(declaration);
         const arena = self.program.arena.allocator();
         switch (declaration.scope) {
             .procedure => {},
@@ -5875,18 +5905,13 @@ pub const Builder = struct {
             .alias => |alias| {
                 const dicts = try arena.alloc(Word, declaration.dicts.len);
                 for (dicts, 0..) |*dict, slot| dict.* = try self.declarationDictionary(declaration, slot);
-                const saved_chain_frame = self.chain_frame;
-                defer self.chain_frame = saved_chain_frame;
-                self.chain_frame = false;
                 const instance = try self.aliasChainInstance(.{
                     .callee = declaration.worker,
                     .first = alias.first,
                     .bound = declaration.bound,
                     .dicts = dicts,
                     .literals = alias.literals,
-                    .evidence = alias.evidence,
                     .literal_source = alias.literal_source,
-                    .chain_frame = false,
                     .call_fn = alias.call_fn,
                 });
                 return try self.recordForwardedDeclaration(declaration, param, .{ .callee = declaration.worker, .instance = instance, .param = try self.aliasChainParam(alias.first, param) });
@@ -5901,17 +5926,14 @@ pub const Builder = struct {
         const saved_env = self.env;
         const saved_foreign = self.foreign_scopes;
         const saved_scopes = self.alias_scopes.items.len;
-        const saved_chain_frame = self.chain_frame;
         defer {
             self.module = saved_module;
             self.view = saved_view;
             self.env = saved_env;
             self.foreign_scopes = saved_foreign;
             self.alias_scopes.shrinkRetainingCapacity(saved_scopes);
-            self.chain_frame = saved_chain_frame;
         }
         // The instance is composed in full, whatever frame reads it.
-        self.chain_frame = false;
         self.module = context.module;
         self.view = self.program.module(context.module);
         try self.view.bodies().demandIndex();
@@ -7237,9 +7259,7 @@ pub const Builder = struct {
     /// One instantiation of a direct call of a template worker: its hidden
     /// arguments (owned by the caller), the types its scheme variables take
     /// (arena-owned), and the callee's result type at that instantiation.
-    /// A literal chain frame's instance sets only the literal arguments the
-    /// frame reads eagerly in `hidden`: `deferred_dicts` holds its dictionaries.
-    pub const CallInstance = struct { hidden: []Word, bound: []const TypeId, ret: TypeId, deferred_dicts: ?DeferredDictionaries = null };
+    pub const CallInstance = struct { hidden: []Word, bound: []const TypeId, ret: TypeId };
 
     /// `hiddenArgsAt` with the instantiation it computed.
     pub fn callInstanceAt(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence, call_fn: ?TypeId, edge: checked.LiteralEdge) Allocator.Error!CallInstance {
@@ -7277,27 +7297,9 @@ pub const Builder = struct {
     /// when it is not this body's module's, resolved in that module at the
     /// instance's bindings of the callee's scheme.
     fn callInstanceFrom(self: *Builder, callee: WorkerId, bound: []const TypeId, evidence: []const static_dispatch.CheckedEvidence, evidence_owner: ?*const types.ModuleView, edge: checked.LiteralEdge) Allocator.Error!CallInstance {
-        // Only this instance's frame reads as it goes, not the instances its
-        // dictionaries are built from.
-        const chain_frame = self.chain_frame;
-        self.chain_frame = false;
         const target = self.program.worker(callee).*;
         const hidden = try self.allocator.alloc(Word, bound.len + target.dictionary_params.len + target.literal_params);
         errdefer self.allocator.free(hidden);
-        if (chain_frame) {
-            const ret = try self.program.signatureAt(callee, target.ret, bound);
-            if (target.dictionary_params.len == 0) return .{ .hidden = hidden, .bound = bound, .ret = ret };
-            const context = self.templateParamContext(callee, bound);
-            var deferred = try self.deferredDictionaries(evidence, context, target.dictionary_params.len);
-            deferred.declaring = callee;
-            if (evidence_owner) |owner| {
-                deferred.module = owner.index;
-                deferred.view = owner;
-                deferred.env = context.env;
-                deferred.foreign_scopes = self.alias_scopes.items.len;
-            }
-            return .{ .hidden = hidden, .bound = bound, .ret = ret, .deferred_dicts = deferred };
-        }
         for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
         const literals = hidden[bound.len + target.dictionary_params.len ..];
         if (edge == .literal) {
@@ -7396,6 +7398,7 @@ pub const Builder = struct {
     /// the first read of a literal chain frame's.
     fn declarationWords(self: *Builder, declaration: *Declaration) Allocator.Error!Declaration.Words {
         if (declaration.words) |words| return words;
+        try self.materializeDeclarationTypes(declaration);
         const frame = switch (declaration.source) {
             .frame => |frame| frame,
             .call, .restored, .forwarded => invariant("a call's declaration context has no descriptors or literal arguments"),
@@ -7905,8 +7908,6 @@ pub const Builder = struct {
         const table = self.view.view.static_dispatch_plans;
         const alias = node.target.alias orelse invariant("an alias-instantiated target has no alias binding");
         const alias_module = self.program.moduleByKey(alias.module).index;
-        const chain_frame = self.chain_frame;
-        self.chain_frame = false;
         const first = self.aliasTargetFirstStep(node);
         // The edge's instantiation of the first alias's scope, in this body.
         const node_subst = table.site_substitutions.items()[node.subst.start..][0..node.subst.len];
@@ -7928,11 +7929,9 @@ pub const Builder = struct {
             .callee = callee,
             .first = first,
             .bound = bound,
-            .dicts = if (chain_frame) &.{} else try self.aliasUseDictionaries(callee, bound, .{ .first = first, .evidence = evidence, .literals = &.{}, .literal_source = literal_source, .call_fn = call_fn }),
+            .dicts = try self.aliasUseDictionaries(callee, bound, .{ .first = first, .evidence = evidence, .literals = &.{}, .literal_source = literal_source, .call_fn = call_fn }),
             .literals = &.{},
-            .evidence = evidence,
             .literal_source = literal_source,
-            .chain_frame = chain_frame,
             .call_fn = call_fn,
         });
     }
@@ -7976,9 +7975,7 @@ pub const Builder = struct {
             .bound = bound,
             .dicts = try self.aliasUseDictionaries(target, bound, alias),
             .literals = alias.literals,
-            .evidence = evidence,
             .literal_source = alias.literal_source,
-            .chain_frame = false,
             .call_fn = call_fn,
         });
     }
@@ -7997,9 +7994,7 @@ pub const Builder = struct {
             .bound = scope.bound,
             .dicts = scope.dicts,
             .literals = &.{},
-            .evidence = &.{},
             .literal_source = .derived,
-            .chain_frame = false,
             .call_fn = call_fn,
         });
     }
@@ -8072,13 +8067,11 @@ pub const Builder = struct {
     fn aliasChainInstance(self: *Builder, chain: AliasChain) Allocator.Error!CallInstance {
         const arena = self.program.arena.allocator();
         const callee = chain.callee;
-        const chain_frame = chain.chain_frame;
         var alias_step = chain.first;
         var bound = chain.bound;
         var dicts = chain.dicts;
         var literals = chain.literals;
         var literal_source = chain.literal_source;
-        var step_evidence = chain.evidence;
 
         const saved_module = self.module;
         const saved_view = self.view;
@@ -8090,28 +8083,16 @@ pub const Builder = struct {
             self.view = saved_view;
             self.env = saved_env;
             self.foreign_scopes = saved_foreign;
-            if (!chain_frame) self.alias_scopes.shrinkRetainingCapacity(saved_scopes);
+            self.alias_scopes.shrinkRetainingCapacity(saved_scopes);
         }
         while (true) {
-            // A chain's alias scopes stay entered under the frame of the
-            // procedure they reach, each read in the scope before it.
             const requirements: ParamContext = .{ .module = alias_step.module, .params = alias_step.params, .env = .{ .module = alias_step.module, .vars = alias_step.vars, .bound = bound } };
-            const deferred_dicts: ?DeferredDictionaries = if (chain_frame) blk: {
-                if (step_evidence.len != alias_step.params.len) invariant("an alias scope's evidence differs from its requirements");
-                var deferred = try self.deferredDictionaries(step_evidence, requirements, alias_step.params.len);
-                deferred.covered = true;
-                break :blk deferred;
-            } else null;
             self.module = alias_step.module;
             self.view = self.program.module(alias_step.module);
             self.env = requirements.env;
-            if (chain_frame) {
-                try self.alias_scopes.append(self.allocator, .{ .params = try self.runtimeParams(alias_step.params), .requirements = requirements, .dicts = &.{}, .literals = &.{}, .literal_requirements = &.{}, .deferred_dicts = deferred_dicts, .saved_env = self.env });
-            } else {
-                self.alias_scopes.shrinkRetainingCapacity(saved_scopes);
-                try self.alias_scopes.append(self.allocator, .{ .params = self.runtimeParams(alias_step.params) catch return error.OutOfMemory, .requirements = requirements, .dicts = dicts, .literals = literals, .literal_requirements = &.{}, .saved_env = self.env });
-                self.foreign_scopes = saved_scopes;
-            }
+            self.alias_scopes.shrinkRetainingCapacity(saved_scopes);
+            try self.alias_scopes.append(self.allocator, .{ .params = try self.runtimeParams(alias_step.params), .requirements = requirements, .dicts = dicts, .literals = literals, .literal_requirements = &.{}, .saved_env = self.env });
+            self.foreign_scopes = saved_scopes;
             const lookup_subst = self.siteSubstitution(alias_step.lookup);
             const evidence = self.view.view.static_dispatch_plans.siteEvidence(alias_step.lookup) orelse &.{};
             const ref_id = self.view.view.resolved_value_refs.lookupIdByExpr(alias_step.lookup) orelse
@@ -8145,9 +8126,7 @@ pub const Builder = struct {
                     const target_bound = try arena.dupe(TypeId, owned_bound);
                     const hidden = try self.allocator.alloc(Word, target_bound.len + target.dictionary_params.len + target.literal_params);
                     errdefer self.allocator.free(hidden);
-                    if (!chain_frame) {
-                        for (target_bound, hidden[0..target_bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
-                    }
+                    for (target_bound, hidden[0..target_bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
                     const target_literals = hidden[target_bound.len + target.dictionary_params.len ..];
                     switch (literal_source) {
                         .edge => |literal_args| @memcpy(target_literals, literal_args),
@@ -8157,11 +8136,6 @@ pub const Builder = struct {
                     const ret = try self.program.signatureAt(callee, target.ret, target_bound);
                     if (target.dictionary_params.len == 0) return .{ .hidden = hidden, .bound = target_bound, .ret = ret };
                     const context = self.templateParamContext(callee, target_bound);
-                    if (chain_frame) {
-                        var deferred = try self.deferredDictionaries(evidence, context, target.dictionary_params.len);
-                        deferred.covered = true;
-                        return .{ .hidden = hidden, .bound = target_bound, .ret = ret, .deferred_dicts = deferred };
-                    }
                     for (target.dictionary_params, hidden[target_bound.len..][0..target.dictionary_params.len]) |param_index, *dict| {
                         if (param_index >= evidence.len) invariant("an alias's forwarded lookup's evidence does not cover its target's dictionaries");
                         dict.* = try self.paramDictionary(evidence, param_index, context);
@@ -8184,11 +8158,7 @@ pub const Builder = struct {
             if (lookup_subst.len != next.vars.len) invariant("an alias's forwarded lookup's substitution differs from the next alias's scope");
             const next_bound = try arena.alloc(TypeId, lookup_subst.len);
             for (lookup_subst, next_bound) |checked_ty, *ty| ty.* = try self.convert(checked_ty);
-            if (chain_frame) {
-                step_evidence = evidence;
-            } else {
-                dicts = try self.scopeDictionaries(next, next_bound, evidence);
-            }
+            dicts = try self.scopeDictionaries(next, next_bound, evidence);
             literals = switch (literal_source) {
                 .scopes => try self.aliasLiteralArgs(next, .{ .use = alias_step.lookup }),
                 .edge, .derived => &.{},
@@ -8729,11 +8699,43 @@ pub const Builder = struct {
         return dictionary;
     }
 
+    /// Only a local procedure reading its declaration's runtime table needs
+    /// the complete instance. Converting a literal's dictionary does not.
+    fn materializeDeclarationTypes(self: *Builder, declaration: *Declaration) Allocator.Error!void {
+        if (declaration.bound_ready) return;
+        const frame = switch (declaration.source) {
+            .frame => |frame| frame,
+            .call, .restored, .forwarded => invariant("a non-frame declaration has unmaterialized types"),
+        };
+        const deferred = frame.scope.deferred_dicts.?;
+        declaration.bound = blk: {
+            const saved_module = self.module;
+            const saved_view = self.view;
+            const saved_env = self.env;
+            defer {
+                self.module = saved_module;
+                self.view = saved_view;
+                self.env = saved_env;
+            }
+            self.module = deferred.module;
+            self.view = self.program.module(self.module);
+            self.env = deferred.env;
+            const callable = switch (deferred.callable) {
+                .none => null,
+                .function => |ty| try self.convert(ty),
+                .value => |ty| try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = try self.convert(ty), .effectful = false } }),
+            };
+            const owned = try self.boundTypesAt(declaration.worker, deferred.substitution, callable);
+            defer self.allocator.free(owned);
+            break :blk try self.program.arena.allocator().dupe(TypeId, owned);
+        };
+        declaration.bound_ready = true;
+    }
+
     /// Dictionary `slot` of the literal chain frame at `position`, a call
     /// instance of template worker `declaring`, built in the frame's
     /// declaration context.
     fn frameDeclarationDictionary(self: *Builder, position: usize, declaring: WorkerId, deferred: DeferredDictionaries, slot: usize) Allocator.Error!Word {
-        const bound = deferred.context.env.bound;
         const dicts = try self.allocator.dupe(?Word, deferred.composed);
         defer self.allocator.free(dicts);
         const building = try self.allocator.alloc(bool, dicts.len);
@@ -8741,7 +8743,8 @@ pub const Builder = struct {
         @memset(building, false);
         var declaration: Declaration = .{
             .worker = declaring,
-            .bound = bound,
+            .bound = deferred.context.env.bound,
+            .bound_ready = false,
             .words = null,
             .dicts = dicts,
             .building = building,
