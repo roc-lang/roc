@@ -25890,8 +25890,7 @@ const TypeVarMentionFlags = packed struct(u8) {
     /// A path passes through an argument of a builtin nominal whose runtime
     /// representation that argument's structure decides, not just its layout:
     /// the field-name tables of `FieldNames`, `FieldName`, and
-    /// `ParseTagUnionSpec`, and the iterator representation of `Iter` and
-    /// `Stream`.
+    /// `ParseTagUnionSpec`.
     decides_representation: bool = false,
     _padding: u4 = 0,
 
@@ -25995,7 +25994,10 @@ const TypeVarMentions = struct {
                     var arg_flags = step.flags;
                     if (nominal.builtin) |builtin_nominal| switch (builtin_nominal) {
                         .list, .box => arg_flags.outside_container = false,
-                        .fields, .field, .parse_tag_union_spec, .iter, .stream => arg_flags.decides_representation = true,
+                        .fields, .field, .parse_tag_union_spec => arg_flags.decides_representation = true,
+                        // Their backing record's step function mentions every
+                        // argument.
+                        .iter, .stream => arg_flags.under_function = true,
                         .bool, .try_, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
                     };
                     for (nominal.args) |arg| try sink.push(arg, arg_flags);

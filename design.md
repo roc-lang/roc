@@ -20927,7 +20927,9 @@ a container, and one under a function or a representation-deciding builtin is
 an exact mention. Each declaration's reach of its formals is computed once per
 module, the first time a type names it, as the least fixed point over the
 declarations whose backings name one another. Builtin nominals keep their
-fixed argument rules. A body that is
+fixed argument rules, which state the same facts about their backings: an
+argument of `Iter` or `Stream` is under a function, since their backing
+record's step function mentions it. A body that is
 not a checked Roc body (an intrinsic, an entry wrapper, a hosted procedure, or
 an unimplemented declaration, whose crash body still returns at its declared
 type) demands all of every variable.
