@@ -2384,6 +2384,8 @@ pub const Coordinator = struct {
     program_finalization_ns: u64 = 0,
     /// Whether per-module compile-time lowering collects fine-grained timings.
     detailed_lowering_timing: bool = false,
+    /// Whether checked-artifact publication times each of its steps.
+    detailed_publication_timing: bool = false,
 
     /// Build statistics
     cache_hits: u32,
@@ -4882,12 +4884,20 @@ pub const Coordinator = struct {
         staged_path: []const u8,
         /// The user's file.
         user_path: []const u8,
+        /// How the staged copy's lines map to the user's file.
+        source_map: base.StagedSourceMap,
     };
 
     /// The path a crash report names for a module at `path`.
     fn crashReportPath(self: *const Coordinator, path: []const u8) []const u8 {
         const staged = self.staged_entry orelse return path;
         return if (std.mem.eql(u8, path, staged.staged_path)) staged.user_path else path;
+    }
+
+    /// The line map of a module at `path` when it is the staged entry.
+    fn stagedSourceMap(self: *const Coordinator, path: []const u8) ?base.StagedSourceMap {
+        const staged = self.staged_entry orelse return null;
+        return if (std.mem.eql(u8, path, staged.staged_path)) staged.source_map else null;
     }
 
     /// Execute a task inline with explicit worker allocators.
@@ -5664,6 +5674,7 @@ pub const Coordinator = struct {
         // Identical modules in different packages share this entry, so the
         // package-qualified name comes from the module being installed.
         cached_env.qualified_module_name = mod.qualified_name;
+        cached_env.staged_source_map = current_env.staged_source_map;
 
         const artifact_serialized: *const check.CheckedArtifact.CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(artifact_buffer.ptr));
         // The envelope establishes completeness and layout compatibility.
@@ -6455,6 +6466,9 @@ pub const Coordinator = struct {
             // The bare `display_module_name_idx` is unchanged, and it keeps
             // any directory segments the logical module name carries.
             env.qualified_module_name = mod.qualified_name;
+            // Like the display name, how a staged entry's lines map back to
+            // the user's file is workspace information, never part of an entry.
+            env.staged_source_map = self.stagedSourceMap(mod.path);
 
             if (can.BuiltinLowLevel.isBuiltinModule(env)) {
                 try can.BuiltinLowLevel.apply(env);
@@ -8299,6 +8313,7 @@ pub const Coordinator = struct {
             .{ .explicit = task.deferred_imports },
             task.missing_public_types,
             task.typing_context,
+            self.detailed_publication_timing,
         );
         defer typecheck_output.deinit();
         // On error the coordinator still owns the input environment. Transfer
@@ -9641,6 +9656,134 @@ fn writeReuseFixture(tmp: *std.testing.TmpDir, app: []const u8) (std.Io.Dir.Crea
     try tmp.dir.createDirPath(std.testing.io, "cache");
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data = reuse_platform });
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = app });
+}
+
+/// Lower the echo app at `app_path` for runtime, as the staged entry
+/// `staged` when given, and return the lines its statements name in the
+/// app's own file.
+fn stagedEntryRuntimeLines(
+    allocator: Allocator,
+    cache_dir: []const u8,
+    app_path: []const u8,
+    staged: ?Coordinator.StagedEntry,
+    strategy: base.SpecializationStrategy,
+) CheckedModuleCacheRunError![]u32 {
+    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    var cache_manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = cache_dir }, roc_ctx);
+    defer cache_manager.deinit();
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        try sharedBuiltinModules(),
+        build_options.compiler_compatibility_id,
+        &cache_manager,
+        roc_ctx,
+        strategy,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+    coord.staged_entry = staged;
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+    try coord.start();
+    try coord.discoverAppFromPath(arena_impl.allocator(), .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+    const target: lir.CheckedPipeline.TargetConfig = .{ .target_usize = .native };
+    coord.runtime_lowering = .{ .target = target };
+    try coord.finishCheckedProgram(.executable_artifacts);
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const app_env = coord.appRootCheckedArtifact().moduleEnvConst();
+    const expected_map: ?base.StagedSourceMap = if (staged) |entry| entry.source_map else null;
+    try std.testing.expect(std.meta.eql(expected_map, app_env.staged_source_map));
+
+    const session = &coord.program_session.?;
+    var lowered = session.takeRuntime(allocator, session.runtime_roots, target) catch |err| switch (err) {
+        error.HostedFunctionNotBound => return error.TestUnexpectedResult,
+        else => |other| return other,
+    };
+    defer lowered.deinit();
+    const store = &lowered.lir_result.store;
+    var lines = std.ArrayList(u32).empty;
+    errdefer lines.deinit(allocator);
+    for (0..store.cfStmtCount()) |index| {
+        const loc = store.stmtLoc(@fromBackingInt(@as(u32, @intCast(index))));
+        if (!loc.hasLocation()) continue;
+        if (!std.mem.eql(u8, store.sourceFileName(loc.file), app_env.module_name)) continue;
+        try lines.append(allocator, loc.line);
+    }
+    return try lines.toOwnedSlice(allocator);
+}
+
+test "issue 13124: a staged entry's lowered code names the user's lines" {
+    if (is_freestanding) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Staged like the playground's echo runner: a header before the user's
+    // file and the `echo!` wiring after it.
+    const header =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\
+    ;
+    const user =
+        \\shout = |s| Str.concat(s, "!")
+        \\
+        \\main! = |args| {
+        \\    echo!(shout(args.len().to_str()))
+        \\    Ok({})
+        \\}
+        \\
+    ;
+    const footer =
+        \\
+        \\echo! = |msg| Echo.line!(msg)
+        \\
+    ;
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    try tmp.dir.createDirPath(std.testing.io, ".roc_echo_platform");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = ".roc_echo_platform/main.roc", .data = echo_platform_root_source });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = ".roc_echo_platform/Echo.roc", .data = echo_platform_echo_source });
+    // Not `main.roc`: the platform's root is a `main` module too, and the
+    // lines are told apart by module name.
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = header ++ user ++ footer });
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+
+    const staged: Coordinator.StagedEntry = .{
+        .staged_path = app,
+        .user_path = "app.roc",
+        .source_map = .{ .header_lines = 4, .footer_start = header.len + user.len },
+    };
+    const user_lines = std.mem.count(u8, user, "\n");
+    const echo_call_line = 4;
+
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        // Cold, then warm from the checked-module cache the cold build stored.
+        for (0..2) |_| {
+            const lines = try stagedEntryRuntimeLines(allocator, cache, app, staged, strategy);
+            defer allocator.free(lines);
+            // Every line is one of the user's, the header's lines are not
+            // counted, and the wiring after the user's file has no location.
+            for (lines) |line| try std.testing.expect(line >= 1 and line <= user_lines);
+            try std.testing.expect(std.mem.findScalar(u32, lines, echo_call_line) != null);
+        }
+
+        // The same text compiled as itself names its own lines, so it shares
+        // no cached code with the staged entry.
+        const own_lines = try stagedEntryRuntimeLines(allocator, cache, app, null, strategy);
+        defer allocator.free(own_lines);
+        try std.testing.expect(std.mem.findScalar(u32, own_lines, echo_call_line + 4) != null);
+    }
 }
 
 test "imported edits recompute nominal literal results and changed conversions" {

@@ -4205,10 +4205,10 @@ pub const Interpreter = struct {
                 args_buf.ptr,
                 arg_offsets,
                 ret_buf.ptr,
-            ) catch |err| return self.invariantFailedError(
-                "hosted call C-ABI lowering failed for proc {d}: {s}",
-                .{ @backingInt(proc_id), @errorName(err) },
-            );
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.UnsupportedArch => unreachable, // this branch is compiled only where the trampoline is available
+            };
         } else {
             const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
             // Architectures without a register-image trampoline (e.g. wasm32, where
@@ -4556,7 +4556,7 @@ pub const Interpreter = struct {
                 .{@backingInt(helper.layout_idx)},
             );
         }
-        self.layoutRuntime().performRcPlan(self.valueHooks(), plan, val, count, atomicity);
+        self.layoutRuntime().performRcPlan(self.valueHooks(), plan, val, count, atomicity, null);
     }
 
     // ── RcEffect conformance observation (debug builds only) ──
@@ -4584,15 +4584,17 @@ pub const Interpreter = struct {
                 if (rs.isSmallStr()) break :blk null;
                 break :blk rc_conformance.allocationAt(rs.getAllocationPtr());
             },
-            .list_decref => rc_conformance.allocationAt(valueToRocList(val).getAllocationDataPtr(&self.roc_ops)),
-            .box_decref, .erased_callable_decref => rc_conformance.allocationAt(val.read(?[*]u8)),
+            .list_decref, .list_decref_queued => rc_conformance.allocationAt(valueToRocList(val).getAllocationDataPtr(&self.roc_ops)),
+            .box_decref, .box_decref_queued, .erased_callable_decref => rc_conformance.allocationAt(val.read(?[*]u8)),
             .noop,
             .str_incref,
             .str_free,
             .list_incref,
             .list_free,
+            .list_free_queued,
             .box_incref,
             .box_free,
+            .box_free_queued,
             .erased_callable_incref,
             .erased_callable_free,
             .struct_,
@@ -4650,16 +4652,16 @@ pub const Interpreter = struct {
         switch (plan) {
             // The walk always asks for decref plans, so the incref and free
             // shapes of each plan never reach here.
-            .noop, .str_incref, .list_incref, .box_incref, .erased_callable_incref, .str_free, .list_free, .box_free, .erased_callable_free => {},
+            .noop, .str_incref, .list_incref, .box_incref, .erased_callable_incref, .str_free, .list_free, .list_free_queued, .box_free, .box_free_queued, .erased_callable_free => {},
             .str_decref => {
                 const rs = valueToRocStr(val);
                 if (rs.isSmallStr()) return;
                 if (rc_conformance.allocationAt(rs.getAllocationPtr())) |found| sink.add(found.rc_addr);
             },
-            .list_decref => |list_plan| {
+            inline .list_decref, .list_decref_queued => |list_plan| {
                 const rl = valueToRocList(val);
                 if (rc_conformance.allocationAt(rl.getAllocationDataPtr(&self.roc_ops))) |found| sink.add(found.rc_addr);
-                const child_key = list_plan.child orelse return;
+                const child_key = @as(?layout_mod.RcHelperKey, list_plan.child) orelse return;
                 const bytes = rl.bytes orelse return;
                 const child_plan = self.layout_store.rcHelperPlan(child_key);
                 for (0..rl.len()) |index| {
@@ -4667,10 +4669,10 @@ pub const Interpreter = struct {
                     self.conformanceCollectPlan(child_plan, elem, sink, depth + 1);
                 }
             },
-            .box_decref => |box_plan| {
+            inline .box_decref, .box_decref_queued => |box_plan| {
                 const alloc_ptr = val.read(?[*]u8);
                 if (rc_conformance.allocationAt(alloc_ptr)) |found| sink.add(found.rc_addr);
-                const child_key = box_plan.child orelse return;
+                const child_key = @as(?layout_mod.RcHelperKey, box_plan.child) orelse return;
                 const data_ptr = self.readBoxedDataPointer(val) orelse return;
                 self.conformanceCollectPlan(self.layout_store.rcHelperPlan(child_key), .{ .ptr = data_ptr }, sink, depth + 1);
             },

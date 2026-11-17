@@ -1323,7 +1323,6 @@ fn countMatchExprRoots(test_env: *const TestEnv) usize {
             .e_nominal_external,
             .e_binop,
             .e_unary_minus,
-            .e_unary_not,
             .e_field_access,
             .e_interpolation,
             .e_structural_eq,
@@ -2374,4 +2373,76 @@ test "issue 11993 - generic is_eq whose evidence is a rejected capturing local i
     defer test_env.deinit();
 
     try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
+}
+
+test "hoist roots exclude a recursive call of an annotated effectful function" {
+    var test_env = try TestEnv.init("Test",
+        \\echo! : Str => {}
+        \\echo! = |_| {}
+        \\
+        \\forever! : () => {}
+        \\forever! = || {
+        \\    echo!("again")
+        \\    forever!()
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots exclude a recursive call of an inferred effectful function" {
+    var test_env = try TestEnv.init("Test",
+        \\echo! : Str => {}
+        \\echo! = |_| {}
+        \\
+        \\loop! = || {
+        \\    echo!("again")
+        \\    U64.max(loop!(), 1)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots exclude mutually recursive calls of effectful functions" {
+    var test_env = try TestEnv.init("Test",
+        \\echo! : Str => {}
+        \\echo! = |_| {}
+        \\
+        \\ping! : () => U64
+        \\ping! = || {
+        \\    echo!("ping")
+        \\    pong!()
+        \\}
+        \\
+        \\pong! : () => U64
+        \\pong! = || {
+        \\    echo!("pong")
+        \\    ping!()
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots keep a recursive call of a pure function" {
+    var test_env = try TestEnv.init("Test",
+        \\count : U64 -> U64
+        \\count = |n| if n == 0 0 else count(n - 1)
+        \\
+        \\main = |arg| {
+        \\    x = count(3)
+        \\    x + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), test_env.checker.selectedHoistedRoots().len);
 }

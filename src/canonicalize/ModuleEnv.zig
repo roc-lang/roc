@@ -1112,6 +1112,13 @@ display_module_name_idx: Ident.Idx,
 /// checked, fresh or loaded from a cache. Empty for environments built outside
 /// the coordinator; `qualifiedModuleName` then reports the bare name.
 qualified_module_name: []const u8,
+/// How this module's source lines up with the user's file when the CLI
+/// compiles it from a staged copy (a default app), so post-check source
+/// locations name the user's lines. Workspace information like
+/// `qualified_module_name`: never serialized, and recorded by the coordinator
+/// on every environment it installs for the staged entry module. Hashed into
+/// the module's source inputs, since lowered code carries its locations.
+staged_source_map: ?base.StagedSourceMap = null,
 /// Env-local module identity table: dense `base.ModuleIdentity.Idx` -> 32-byte
 /// deep content hash (see `base.module_identity`). Entry ids are the
 /// `origin_module` values stored on nominal/alias types in this env's type
@@ -4145,6 +4152,7 @@ pub const Serialized = extern struct {
         .Owner = Self,
         .owner_only_fields = &.{
             "qualified_module_name", // Workspace information, recorded by the coordinator.
+            "staged_source_map", // Workspace information, recorded by the coordinator.
             "loaded_entry", // The process-local mapping or buffer a loaded environment lives in.
         },
         .serialized_only_fields = &.{

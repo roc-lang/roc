@@ -393,6 +393,10 @@ pub const MonoLlvmCodeGen = struct {
     /// so the argument local's own slot address never escapes into the call.
     /// Follows `wip`: saved and restored wherever the active function swaps.
     rc_arg_scratch: ?LlvmBuilder.Value = null,
+    /// While a `decref_queued` helper's body is emitted: the drop queue it
+    /// received, which it passes to each `decref_queued` child and each
+    /// queued teardown. Null in every other body, which passes a null queue.
+    rc_queue_arg: ?LlvmBuilder.Value = null,
     /// Shims that give cold-path builtin calls the preserve_most convention,
     /// indexed by `BuiltinSymbol`. See `emitBuiltinCall`.
     cold_shims: [builtin_symbol_count]?ColdShim = @splat(null),
@@ -1332,16 +1336,61 @@ pub const MonoLlvmCodeGen = struct {
         ) catch return error.OutOfMemory;
     }
 
+    /// Gives the generated function under construction an artificial
+    /// subprogram and puts its instructions at line 0 in it. LLVM keeps the
+    /// locations of inlined code only in callers that have a subprogram, so
+    /// every generated function that calls Roc procs needs one.
+    fn beginGeneratedFunctionDebugInfo(
+        self: *MonoLlvmCodeGen,
+        name: LlvmBuilder.Metadata.String,
+        linkage_name: LlvmBuilder.Metadata.String,
+        loc: SourceLoc,
+    ) Error!void {
+        const builder, const wip = try self.builderAndWip();
+        if (wip.strip) return;
+        const compile_unit = self.debug_compile_unit.unwrap() orelse return;
+        const line = if (loc.hasLocation()) loc.line else 0;
+        const func = wip.function;
+        const subprogram = builder.debugSubprogram(
+            try self.debugFileFor(builder, loc.file),
+            name,
+            linkage_name,
+            line,
+            line,
+            builder.debugSubroutineType(null) catch return error.OutOfMemory,
+            .{
+                .di_flags = .{ .Artificial = true },
+                .sp_flags = .{
+                    .Definition = true,
+                    .LocalToUnit = func.ptrConst(builder).global.ptrConst(builder).linkage == .internal,
+                },
+            },
+            compile_unit,
+        ) catch return error.OutOfMemory;
+        func.setSubprogram(subprogram, builder);
+        wip.debug_location = .{ .location = .{
+            .line = 0,
+            .column = 0,
+            .scope = subprogram.toOptional(),
+            .inlined_at = .none,
+        } };
+    }
+
+    fn beginEntrypointWrapperDebugInfo(self: *MonoLlvmCodeGen, symbol_name: []const u8, entry_proc: LirProcSpecId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        if (builder.strip) return;
+        const name = builder.metadataString(symbol_name) catch return error.OutOfMemory;
+        try self.beginGeneratedFunctionDebugInfo(name, name, self.store.procLoc(entry_proc));
+    }
+
     fn procDebugName(
         self: *MonoLlvmCodeGen,
         builder: *LlvmBuilder,
         proc_id: LirProcSpecId,
         proc: LirProcSpec,
     ) Error!LlvmBuilder.Metadata.String {
-        if (self.enable_default_platform_diagnostics) {
-            if (self.store.procDebugName(proc_id)) |name| {
-                return builder.metadataString(name) catch return error.OutOfMemory;
-            }
+        if (self.store.procDebugName(proc_id)) |name| {
+            return builder.metadataString(name) catch return error.OutOfMemory;
         }
         return try self.procSymbolDebugName(builder, proc_id, proc);
     }
@@ -2284,6 +2333,10 @@ pub const MonoLlvmCodeGen = struct {
         var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = driver.function, .strip = builder.strip }) catch return error.OutOfMemory;
         defer wip.deinit();
         self.wip = &wip;
+        if (!builder.strip) {
+            const name = builder.metadataString(driver.function.name(builder).slice(builder).?) catch return error.OutOfMemory;
+            try self.beginGeneratedFunctionDebugInfo(name, name, .none);
+        }
         const ptr_ty = try self.ptrType();
         const pending_ptr = self.tail_pending_ptr.?;
         const args_ptr = self.tail_args_ptr.?;
@@ -2667,6 +2720,11 @@ pub const MonoLlvmCodeGen = struct {
         var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = packed_fn, .strip = builder.strip }) catch return error.OutOfMemory;
         defer wip.deinit();
         self.wip = &wip;
+        if (!builder.strip) try self.beginGeneratedFunctionDebugInfo(
+            try self.procDebugName(builder, proc_id, proc),
+            try self.procSymbolDebugName(builder, proc_id, proc),
+            self.store.procLoc(proc_id),
+        );
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
         if (self.stack_checks) try self.emitStackCheck(packed_fn);
@@ -2850,14 +2908,12 @@ pub const MonoLlvmCodeGen = struct {
         if (!builder.strip) {
             const proc_loc = self.store.procLoc(proc_id);
             const file = try self.debugFileFor(builder, proc_loc.file);
-            const name_str = if (self.enable_default_platform_diagnostics)
-                try self.procDebugName(builder, proc_id, proc)
-            else
-                try self.procSymbolDebugName(builder, proc_id, proc);
-            const linkage_name_str = if (self.enable_default_platform_diagnostics)
-                try self.procSymbolDebugName(builder, proc_id, proc)
-            else
-                name_str;
+            // The debug name is the procedure's source name and the linkage
+            // name is its symbol, so a debugger shows the Roc function and
+            // still finds the code. A compiler-generated procedure has only
+            // its symbol.
+            const name_str = try self.procDebugName(builder, proc_id, proc);
+            const linkage_name_str = try self.procSymbolDebugName(builder, proc_id, proc);
             const subprogram = builder.debugSubprogram(
                 file,
                 name_str,
@@ -3250,10 +3306,11 @@ pub const MonoLlvmCodeGen = struct {
             self.rc_arg_scratch = outer_rc_scratch;
         }
 
-        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = wrapper, .strip = true }) catch return error.OutOfMemory;
+        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = wrapper, .strip = builder.strip }) catch return error.OutOfMemory;
         defer wip.deinit();
         self.wip = &wip;
         self.rc_arg_scratch = null;
+        if (entry_proc) |proc_id| try self.beginEntrypointWrapperDebugInfo(symbol_name, proc_id);
 
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
@@ -3361,6 +3418,7 @@ pub const MonoLlvmCodeGen = struct {
         defer wip.deinit();
         self.wip = &wip;
         self.rc_arg_scratch = null;
+        try self.beginEntrypointWrapperDebugInfo(symbol_name, entry_proc);
 
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
@@ -12768,6 +12826,7 @@ pub const MonoLlvmCodeGen = struct {
                 .free,
                 => self.clearDeferredStrCapture(local),
                 .host_drop => llvmInvariantFmt("RC statement used a host-shaped drop adapter", .{}),
+                .decref_queued => llvmInvariantFmt("RC statement used a queued drop helper", .{}),
             }
             return;
         }
@@ -12800,10 +12859,10 @@ pub const MonoLlvmCodeGen = struct {
         try self.emitRcHelperCall(helper_key, atomicity, rc_ptr, count_value);
     }
 
-    /// Backend cache key for one generated RC helper. `HelperKey.encode` packs
-    /// the op into bits 32..33, so the atomicity bit goes above it.
+    /// Backend cache key for one generated RC helper. `HelperKey.encode` uses
+    /// its low `encoded_bits` bits, so the atomicity bit goes above them.
     fn rcHelperCacheKey(helper_key: layout.RcHelperKey, atomicity: RcAtomicity) u64 {
-        return helper_key.encode() | (@as(u64, @backingInt(atomicity)) << 34);
+        return helper_key.encode() | (@as(u64, @backingInt(atomicity)) << layout.RcHelperKey.encoded_bits);
     }
 
     fn staticDataRequiresRcHelper(
@@ -12830,7 +12889,7 @@ pub const MonoLlvmCodeGen = struct {
         const roles = layout.rc_helper.abiParams(op);
         for (roles, 0..) |role, i| {
             buf[i] = switch (role) {
-                .value_ptr, .ops_ptr => ptr_ty,
+                .value_ptr, .ops_ptr, .drop_queue => ptr_ty,
                 .count => self.ptrSizedIntType(),
             };
         }
@@ -12878,7 +12937,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.addGeneratedFunctionStackProbeAttrs(&attrs);
         switch (helper_key.op) {
             .incref => {},
-            .decref, .free, .host_drop => {
+            .decref, .free, .host_drop, .decref_queued => {
                 // Drop/free helpers include the recursive teardown code for a layout.
                 // Keeping them out of line prevents LLVM from cloning large cleanup
                 // trees into hot callers such as generated parsers. This does not
@@ -12928,6 +12987,7 @@ pub const MonoLlvmCodeGen = struct {
 
         const outer_wip = self.wip;
         const outer_rc_scratch = self.rc_arg_scratch;
+        const outer_rc_queue = self.rc_queue_arg;
         const outer_ret = self.ret_ptr_arg;
         const outer_args = self.args_ptr_arg;
         const outer_capture = self.capture_ptr_arg;
@@ -12937,6 +12997,7 @@ pub const MonoLlvmCodeGen = struct {
         defer {
             self.wip = outer_wip;
             self.rc_arg_scratch = outer_rc_scratch;
+            self.rc_queue_arg = outer_rc_queue;
             self.ret_ptr_arg = outer_ret;
             self.args_ptr_arg = outer_args;
             self.capture_ptr_arg = outer_capture;
@@ -12949,6 +13010,7 @@ pub const MonoLlvmCodeGen = struct {
         defer wip.deinit();
         self.wip = &wip;
         self.rc_arg_scratch = null;
+        self.rc_queue_arg = if (helper_key.op == .decref_queued) wip.arg(1) else null;
         self.ret_ptr_arg = null;
         self.args_ptr_arg = null;
         self.capture_ptr_arg = null;
@@ -12969,8 +13031,9 @@ pub const MonoLlvmCodeGen = struct {
         const count_value: ?LlvmBuilder.Value = switch (helper_key.op) {
             .incref => wip.arg(1),
             // A `host_drop` adapter's second argument is the published on-drop
-            // ABI's ops slot, which the generated body ignores.
-            .decref, .free, .host_drop => null,
+            // ABI's ops slot, which the generated body ignores, and a
+            // `decref_queued` helper's is its drop queue (`rc_queue_arg`).
+            .decref, .free, .host_drop, .decref_queued => null,
         };
         const is_null = wip.icmp(.eq, value_ptr, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         _ = wip.brCond(is_null, done, body, .else_likely) catch return error.OutOfMemory;
@@ -13005,6 +13068,10 @@ pub const MonoLlvmCodeGen = struct {
             .box_incref => try self.emitRcHelperBoxIncref(value_ptr, count_value.?, atomicity),
             .box_decref => |box_plan| try self.emitRcHelperBoxDrop(box_plan, value_ptr, atomicity, LowLevelBuiltins.rcHelper(.box_decref, tableAtomicity(atomicity))),
             .box_free => |box_plan| try self.emitRcHelperBoxDrop(box_plan, value_ptr, atomicity, LowLevelBuiltins.rcHelper(.box_free, .atomic)),
+            .list_decref_queued => |list_plan| try self.emitRcHelperQueuedListDrop(list_plan, value_ptr, atomicity, queuedDropMode(atomicity)),
+            .list_free_queued => |list_plan| try self.emitRcHelperQueuedListDrop(list_plan, value_ptr, atomicity, .free),
+            .box_decref_queued => |box_plan| try self.emitRcHelperQueuedBoxDrop(box_plan, value_ptr, atomicity, queuedDropMode(atomicity)),
+            .box_free_queued => |box_plan| try self.emitRcHelperQueuedBoxDrop(box_plan, value_ptr, atomicity, .free),
             .erased_callable_incref => try self.emitRcHelperErasedCallableIncref(value_ptr, count_value.?, atomicity),
             .erased_callable_decref => try self.emitRcHelperErasedCallableDrop(value_ptr, LowLevelBuiltins.rcHelper(.erased_callable_decref, tableAtomicity(atomicity))),
             .erased_callable_free => try self.emitRcHelperErasedCallableDrop(value_ptr, LowLevelBuiltins.rcHelper(.erased_callable_free, .atomic)),
@@ -13022,8 +13089,63 @@ pub const MonoLlvmCodeGen = struct {
         switch (helper_key.op) {
             .incref => _ = try self.callFunctionIndex(func, &.{ value_ptr, count_value.? }, false),
             .decref, .free => _ = try self.callFunctionIndex(func, &.{value_ptr}, false),
+            .decref_queued => _ = try self.callFunctionIndex(func, &.{ value_ptr, try self.rcQueueValue() }, false),
             .host_drop => llvmInvariantFmt("RC statement used a host-shaped drop adapter", .{}),
         }
+    }
+
+    /// The queue a helper passes to a `decref_queued` child or a queued
+    /// teardown: the one it received, or null in a helper that received none.
+    fn rcQueueValue(self: *MonoLlvmCodeGen) Error!LlvmBuilder.Value {
+        if (self.rc_queue_arg) |queue| return queue;
+        const builder = self.builder orelse return error.CompilationFailed;
+        return builder.nullValue(try self.ptrType()) catch return error.OutOfMemory;
+    }
+
+    fn queuedDropMode(atomicity: RcAtomicity) builtins.utils.DropMode {
+        return switch (atomicity) {
+            .atomic => .decref_atomic,
+            .single_thread => .decref_single_thread,
+        };
+    }
+
+    /// Drop a list on a cycle of its type through the queued teardown
+    /// builtin (`builtins.utils.DropQueue`). The builtin takes the list by
+    /// address, which is the helper's value pointer.
+    fn emitRcHelperQueuedListDrop(self: *MonoLlvmCodeGen, list_plan: layout.RcQueuedListPlan, value_ptr: LlvmBuilder.Value, atomicity: RcAtomicity, mode: builtins.utils.DropMode) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const child_fn = try self.declareRefcountedRcHelper(list_plan.child, atomicity);
+        try self.callBuiltinVoid(
+            .list_drop_queued,
+            &.{ try self.ptrType(), .i32, self.ptrSizedIntType(), try self.ptrType(), try self.ptrType(), .i32 },
+            &.{
+                value_ptr,
+                builder.intValue(.i32, list_plan.elem_alignment) catch return error.OutOfMemory,
+                builder.intValue(self.ptrSizedIntType(), list_plan.elem_width) catch return error.OutOfMemory,
+                child_fn.toValue(builder),
+                try self.rcQueueValue(),
+                builder.intValue(.i32, @backingInt(mode)) catch return error.OutOfMemory,
+            },
+        );
+    }
+
+    /// Drop a box on a cycle of its type through the queued teardown
+    /// builtin (`builtins.utils.DropQueue`).
+    fn emitRcHelperQueuedBoxDrop(self: *MonoLlvmCodeGen, box_plan: layout.RcQueuedBoxPlan, value_ptr: LlvmBuilder.Value, atomicity: RcAtomicity, mode: builtins.utils.DropMode) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const payload_ptr = try self.loadPointer(value_ptr);
+        const child_fn = try self.declareRefcountedRcHelper(box_plan.child, atomicity);
+        try self.callBuiltinVoid(
+            .box_drop_queued,
+            &.{ try self.ptrType(), .i32, try self.ptrType(), try self.ptrType(), .i32 },
+            &.{
+                payload_ptr,
+                builder.intValue(.i32, box_plan.elem_alignment) catch return error.OutOfMemory,
+                child_fn.toValue(builder),
+                try self.rcQueueValue(),
+                builder.intValue(.i32, @backingInt(mode)) catch return error.OutOfMemory,
+            },
+        );
     }
 
     fn loadStrDataPtrForRc(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value) Error!LlvmBuilder.Value {
@@ -15621,6 +15743,65 @@ test "standalone LLVM modules define cyclic frozen data and procedure pointers" 
     }
 }
 
+test "issue 12943: debug info names a procedure by its source name on every platform" {
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const result = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = result,
+        .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
+        .next = ret,
+    } }, .test_fixture);
+    const named = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(0),
+        .args = .empty(),
+        .body = .some(body),
+        .ret_layout = .u64,
+        .frame_locals = try store.addLocalSpan(&.{result}),
+    }, .none);
+    try store.setProcDebugName(named, "App.answer");
+    const generated = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
+        .args = .empty(),
+        .body = .some(body),
+        .ret_layout = .u64,
+        .frame_locals = try store.addLocalSpan(&.{result}),
+    }, .none);
+    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .x86_64, .os_tag = .linux });
+    // A real platform's object: no default-platform runtime or diagnostics.
+    var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, target);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    codegen.emit_debug_info = true;
+    var builder = try codegen.createBuilder("issue_12943");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+    try codegen.buildEntrypointModule(&builder, "issue_12943", &.{});
+    var ir: std.Io.Writer.Allocating = .init(allocator);
+    defer ir.deinit();
+    try builder.print(&ir.writer);
+
+    var named_symbol: [lir.ProcIdentity.symbol_name_len]u8 = undefined;
+    _ = store.getProcSpec(named).identity.writeSymbolName(&named_symbol);
+    var generated_symbol: [lir.ProcIdentity.symbol_name_len]u8 = undefined;
+    _ = store.getProcSpec(generated).identity.writeSymbolName(&generated_symbol);
+    var expected: std.Io.Writer.Allocating = .init(allocator);
+    defer expected.deinit();
+    try expected.writer.print("name: \"App.answer\", linkageName: \"{s}\"", .{named_symbol});
+    try std.testing.expect(std.mem.find(u8, ir.written(), expected.written()) != null);
+    // A procedure with no source name is shown by its symbol.
+    expected.clearRetainingCapacity();
+    try expected.writer.print("name: \"{s}\", linkageName: \"{s}\"", .{ generated_symbol, generated_symbol });
+    try std.testing.expect(std.mem.find(u8, ir.written(), expected.written()) != null);
+}
+
 test "frozen relocation offsets are bounded before host indexing for either target width" {
     const allocator = std.testing.allocator;
     inline for (.{ std.Target.Cpu.Arch.wasm32, std.Target.Cpu.Arch.aarch64 }) |arch| {
@@ -15827,6 +16008,62 @@ fn printedMetadataDef(ir: []const u8, id: []const u8) ?[]const u8 {
     const needle = std.fmt.bufPrint(&needle_buf, "\n{s} = ", .{id}) catch return null;
     const def = ir[(std.mem.find(u8, ir, needle) orelse return null) + 1 ..];
     return def[0 .. std.mem.findScalar(u8, def, '\n') orelse def.len];
+}
+
+test "issue 13125: generated functions that call procs have debug subprograms" {
+    // Wrappers and adapters around a proc need a subprogram, or LLVM drops the
+    // locations of the proc code it inlines into them; the verifier then also
+    // requires a location on each of their calls.
+    const gpa = std.testing.allocator;
+    var store = lir.LirStore.init(gpa);
+    defer store.deinit();
+    var layouts = try layout.Store.init(gpa, .u64);
+    defer layouts.deinit();
+    try store.setSourceFiles(&.{.{ .name = "main", .qualified_name = "main", .module_identity = @splat(0) }});
+    const arg = try store.addLocal(.{ .layout_idx = .i64 });
+    const args = try store.addLocalSpan(&.{arg});
+    const body = try store.addCFStmt(.{ .ret = .{ .value = arg } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = lir.LIR.Symbol.fromRaw(0),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
+        .args = args,
+        .frame_locals = args,
+        .body = .some(body),
+        .ret_layout = .i64,
+    }, .{ .file = 0, .line = 3, .column = 1 });
+    var symbol_buf: [lir.LIR.ProcIdentity.symbol_name_len]u8 = undefined;
+    const adapter_name = store.getProcSpec(proc).identity.writeSymbolName(&symbol_buf);
+
+    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .x86_64, .os_tag = .linux });
+    inline for (.{ MonoLlvmCodeGen.ProgramKind.platform, MonoLlvmCodeGen.ProgramKind.in_process }) |program_kind| {
+        var codegen = MonoLlvmCodeGen.initForLinkedObject(gpa, &store, target);
+        defer codegen.deinit();
+        codegen.layout_store = &layouts;
+        codegen.program_kind = program_kind;
+        codegen.emit_debug_info = true;
+        var ir: std.Io.Writer.Allocating = .init(gpa);
+        defer ir.deinit();
+        try codegen.printEntrypointModule("issue_13125", &.{.{
+            .symbol_name = "roc_main",
+            .proc = proc,
+            .arg_layouts = &.{.i64},
+            .ret_layout = .i64,
+        }}, &ir.writer);
+
+        for ([_][]const u8{ "roc_main", adapter_name }) |name| {
+            const function = printedFunction(ir.written(), name) orelse return error.TestUnexpectedResult;
+            var lines = std.mem.splitScalar(u8, function, '\n');
+            const define_line = lines.first();
+            try std.testing.expect(std.mem.find(u8, define_line, " !dbg !") != null);
+            var calls: usize = 0;
+            while (lines.next()) |line| {
+                if (std.mem.find(u8, line, "call ") == null) continue;
+                calls += 1;
+                try std.testing.expect(std.mem.find(u8, line, ", !dbg !") != null);
+            }
+            try std.testing.expect(calls > 0);
+        }
+    }
 }
 
 test "issue 12505: addressed Bool alias materializes its SSA source" {

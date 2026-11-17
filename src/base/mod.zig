@@ -27,6 +27,7 @@ comptime {
 pub const RegionInfo = @import("RegionInfo.zig");
 pub const SourceLoc = @import("source_loc.zig").SourceLoc;
 pub const SourceFileEntry = @import("source_loc.zig").SourceFileEntry;
+pub const StagedSourceMap = @import("source_loc.zig").StagedSourceMap;
 pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");
 pub const post_check_task_executor = @import("post_check_task_executor.zig");
@@ -128,6 +129,7 @@ test {
     std.testing.refAllDecls(@import("roc_version.zig"));
     std.testing.refAllDecls(@import("typo.zig"));
     std.testing.refAllDecls(line_record);
+    std.testing.refAllDecls(@import("source_loc.zig"));
 }
 
 /// Whether a function calls itself.
@@ -145,6 +147,8 @@ pub const CalledVia = enum {
     apply,
     /// Calling with an operator, e.g. `(1 + 2)`
     binop,
+    /// Logical negation `!foo`, desugared to a call to builtin Bool.not.
+    unary_op,
     /// This call is the result of desugaring string interpolation,
     /// e.g. "${first} ${last}" is transformed into `Str.concat(Str.concat(first, " "))` last.
     string_interpolation,

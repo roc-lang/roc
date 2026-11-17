@@ -49,9 +49,6 @@ pub const Input = struct {
     roots: Common.RootRequests,
     target_usize: base.target.TargetUsize,
     inline_expects: enum { run, omit } = .run,
-    /// Name each procedure in the LIR store by the kind of worker it is,
-    /// for dumps and tests that read the program.
-    proc_debug_names: bool = false,
     /// Allow `List.map` to reuse a unique input list's allocation (see
     /// `SolvedLirLower.Options.list_in_place_map`).
     list_in_place_map: bool = false,
@@ -396,8 +393,8 @@ pub const WorkerKey = union(enum) {
     static_data: u32,
     /// The initializer of the static data a value-form expression of
     /// `module` that its body keeps reads (`CompileTimeRootTable.inline_literals`):
-    /// it builds the expression's value, for static data materialization.
-    inline_literal: struct { module: ModuleIndex, expr: ExprId },
+    /// it builds the expression's value at the reader's committed type.
+    inline_literal: struct { module: ModuleIndex, expr: ExprId, ty: TypeId },
     /// The method of a dictionary whose checked evidence resolves its slot
     /// to a crash: a dispatch checking rejected, or one no value can reach
     /// (design.md "Static Dispatch In Monotype"). Calling it crashes.
@@ -1752,7 +1749,22 @@ pub const Program = struct {
         const line = base.RegionInfo.lineIdx(line_starts, offset);
         const column = base.RegionInfo.columnIdx(line_starts, line, offset) catch
             invariant("checked node region resolved to an invalid line/column position");
-        return .{ .file = self.source_files[@backingInt(index)], .line = line + 1, .column = column + 1 };
+        const user_line = if (view.view.module_env.staged_source_map) |map|
+            map.userLineIdx(line, offset) orelse return base.SourceLoc.none
+        else
+            line;
+        return .{ .file = self.source_files[@backingInt(index)], .line = user_line + 1, .column = column + 1 };
+    }
+
+    /// The source location a procedure template's worker reports: where the
+    /// template's body begins. A wrapper the compiler provides has none.
+    fn templateLoc(self: *const Program, module_index: ModuleIndex, template: checked.CheckedProcedureTemplate) base.SourceLoc {
+        const region = switch (template.body) {
+            .checked_body => |expr| self.module(module_index).bodies().env.store.getNodeRegion(@fromBackingInt(@backingInt(expr))),
+            .unimplemented => |unimplemented| unimplemented.region,
+            .intrinsic_wrapper, .entry_wrapper => return base.SourceLoc.none,
+        };
+        return self.sourceLoc(module_index, region);
     }
 
     /// The worker for a procedure template, requested if new.
@@ -1875,7 +1887,7 @@ pub const Program = struct {
             .emission_unit = LIR.EmissionUnit.module(@backingInt(module_index)),
             .args = .empty(),
             .ret_layout = .zst,
-        }, base.SourceLoc.none);
+        }, self.templateLoc(module_index, template));
         try self.workers.append(self.allocator, .{
             .key = key,
             .proc = proc,
@@ -1945,7 +1957,7 @@ pub const Program = struct {
             .emission_unit = LIR.EmissionUnit.module(@backingInt(module_index)),
             .args = .empty(),
             .ret_layout = .zst,
-        }, base.SourceLoc.none);
+        }, self.templateLoc(module_index, template));
         var int_worker = generic;
         int_worker.key = key;
         int_worker.proc = proc;
@@ -2271,11 +2283,6 @@ pub const Program = struct {
     pub fn templateRefScopeWorker(self: *Program, ref: checked_names.ProcedureTemplateRef) Allocator.Error!WorkerId {
         const view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
         return try self.templateScopeWorker(view.index, ref.template);
-    }
-
-    pub fn templateRefScope(self: *Program, ref: checked_names.ProcedureTemplateRef) Allocator.Error!WorkerId {
-        const view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
-        return try self.templateScope(view.index, ref.template);
     }
 
     /// The erased-callable worker of a lambda or closure expression of the
@@ -3615,7 +3622,7 @@ pub const Program = struct {
     /// data materialization freezes what it builds, so a read allocates
     /// nothing and the value's reference count is the static one.
     pub fn inlineLiteralSlot(self: *Program, module_index: ModuleIndex, expr: ExprId, ty: TypeId) Allocator.Error!LIR.StaticDataId {
-        const key: WorkerKey = .{ .inline_literal = .{ .module = module_index, .expr = expr } };
+        const key: WorkerKey = .{ .inline_literal = .{ .module = module_index, .expr = expr, .ty = ty } };
         if (self.worker_ids.get(key)) |existing| return self.inline_literal_slots.get(existing).?;
         if (!self.store.isClosed(ty)) invariant("a value-form expression a body keeps has an open type");
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
@@ -4841,30 +4848,28 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     if (input.timing) |timing| step_started = timing.lap(step_started, .export_needs);
     if (base.dev_diagnostics.isSet(.perf_map)) try recordPerfNames(program);
 
-    if (input.proc_debug_names) {
-        for (program.workers.items) |worker| {
-            // A template's worker carries its procedure's source name.
-            const name: []const u8 = switch (worker.key) {
-                .codec => |piece| switch (program.codec.pieces.items[piece].kind) {
-                    inline .constructor, .runtime, .encode_helper, .parse_helper, .record_body, .tuple_body, .list_body, .dict_body, .tag_body, .value_thunk, .key_thunk, .tag_spec, .field_names_step => |kind| "boxy.codec." ++ @tagName(kind),
-                },
-                .template => |key| blk: {
-                    const view = program.module(key.module);
-                    const template = view.view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
-                    const names = view.nameStore();
-                    const export_name = names.procBase(template.proc_base).export_name.get() orelse break :blk switch (key.binding) {
-                        .generic => "boxy.template",
-                        .list_int => |item| try std.fmt.allocPrint(program.arena.allocator(), "boxy.template{s}", .{item.nameSuffix()}),
-                    };
-                    break :blk switch (key.binding) {
-                        .generic => names.exportNameText(export_name),
-                        .list_int => |item| try std.fmt.allocPrint(program.arena.allocator(), "{s}{s}", .{ names.exportNameText(export_name), item.nameSuffix() }),
-                    };
-                },
-                inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => |_, kind| "boxy." ++ @tagName(kind),
-            };
-            try program.result.store.setProcDebugName(worker.proc, name);
-        }
+    for (program.workers.items) |worker| {
+        // A template's worker carries its procedure's source name.
+        const name: []const u8 = switch (worker.key) {
+            .codec => |piece| switch (program.codec.pieces.items[piece].kind) {
+                inline .constructor, .runtime, .encode_helper, .parse_helper, .record_body, .tuple_body, .list_body, .dict_body, .tag_body, .value_thunk, .key_thunk, .tag_spec, .field_names_step => |kind| "boxy.codec." ++ @tagName(kind),
+            },
+            .template => |key| blk: {
+                const view = program.module(key.module);
+                const template = view.view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
+                const names = view.nameStore();
+                const export_name = names.procBase(template.proc_base).export_name.get() orelse break :blk switch (key.binding) {
+                    .generic => "boxy.template",
+                    .list_int => |item| try std.fmt.allocPrint(program.arena.allocator(), "boxy.template{s}", .{item.nameSuffix()}),
+                };
+                break :blk switch (key.binding) {
+                    .generic => names.exportNameText(export_name),
+                    .list_int => |item| try std.fmt.allocPrint(program.arena.allocator(), "{s}{s}", .{ names.exportNameText(export_name), item.nameSuffix() }),
+                };
+            },
+            inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => |_, kind| "boxy." ++ @tagName(kind),
+        };
+        try program.result.store.setProcDebugName(worker.proc, name);
     }
     program.result.finishExpectSites();
     var runtime_schemas = try @import("runtime_schemas.zig").collect(program, schema_roots.items);
@@ -5144,7 +5149,10 @@ fn seedSourceFiles(program: *Program) Allocator.Error!void {
             .module_identity = program.modules.linkName(view.index),
         };
         program.source_files[module_position] = @intCast(file_index);
-        program.lowering_module_ids[module_position] = try program.result.appendLoweringModule(view.key);
+        // A module unit's object outlives the compilation that built it, and
+        // its key covers each module's link name but not its checked key.
+        const failure_identity = if (program.moduleUnit() != null) program.modules.linkName(view.index) else view.key.bytes;
+        program.lowering_module_ids[module_position] = try program.result.appendLoweringModule(view.key, failure_identity);
     }
     try program.result.store.setSourceFiles(files);
 }

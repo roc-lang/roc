@@ -26,10 +26,16 @@ pub const CheckingWork = struct {
     fresh_check_ns: u64 = 0,
     /// Checked-artifact publication; the coordinator subtracts local CTFE.
     publication_ns: u64 = 0,
+    /// Each publication step's time, recorded only under detailed timing.
+    publication_steps: CheckedArtifact.PublicationTiming = .{},
 
     pub fn add(self: *CheckingWork, other: CheckingWork) void {
         inline for (@typeInfo(CheckingWork).@"struct".field_names) |field| {
-            @field(self, field) += @field(other, field);
+            if (comptime std.mem.eql(u8, field, "publication_steps")) {
+                self.publication_steps.add(other.publication_steps);
+            } else {
+                @field(self, field) += @field(other, field);
+            }
         }
     }
 };
@@ -253,6 +259,8 @@ pub const ArtifactPublicationInputs = struct {
     /// How this module's compile-time roots were established. Part of the
     /// checked-artifact cache identity. See `Can.Validation`.
     validation: Can.Validation = .checking,
+    /// Receives each publication step's time under detailed timing.
+    timing: ?*CheckedArtifact.PublicationTiming = null,
 };
 
 fn importedArtifactsCoverImportedEnvs(
@@ -540,6 +548,7 @@ pub fn typeCheckModule(
     deferred_imports: can.ImportResolution.Imports,
     missing_public_types: []const []const u8,
     typing_context: ?*checked_cache_entry.Context,
+    detailed_publication_timing: bool,
 ) TypeCheckModuleError!TypeCheckOutput {
     const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
 
@@ -633,6 +642,7 @@ pub fn typeCheckModule(
             .ctfe_options = ctfe_options,
             .evaluation_phase = .post_frontend,
             .validation = validation,
+            .timing = if (detailed_publication_timing) &work.publication_steps else null,
         },
     );
     errdefer checked_artifact.deinit(artifact_alloc);
@@ -678,8 +688,10 @@ pub fn publishCheckedArtifactFromCheckedModuleWithStorage(
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     publication: ArtifactPublicationInputs,
 ) PublishError!CheckedArtifact.CheckedModuleArtifact {
+    var clock = CheckedArtifact.PublicationClock.start(publication.io, publication.timing);
     var typed = try CheckedModules.initForRootModule(gpa, env, imported_envs);
     defer typed.modules.deinit();
+    clock.lap(.typed_modules);
     return publishFromPrebuiltModules(gpa, &typed.modules, typed.module_idx, module_env_storage, imported_artifacts, publication);
 }
 
@@ -713,6 +725,7 @@ pub fn publishFromPrebuiltModules(
             .evaluation_phase = publication.evaluation_phase,
             .problem_store = publication.problem_store,
             .validation = publication.validation,
+            .timing = publication.timing,
         },
     );
 }

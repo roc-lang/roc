@@ -547,6 +547,7 @@ pub fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.Target
             .optimization = optimization,
             .target_ptr_width_bits = @intCast(target_usize.size() * 8),
             .sha256_rounds = builtins.sha256.Rounds.forCpu(resolved_target.cpu),
+            .utf8_kernel = builtins.utf8.Kernel.forCpu(resolved_target.cpu),
             .cpu = cpu,
             .features = features,
         },
