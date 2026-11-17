@@ -304,7 +304,7 @@ fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || er
         try std.testing.expectEqual(LIR.ProcIdentity.forTest(1), proc.identity);
     }
     try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpecImmediate(unrelated).native_code_revision);
-    var clone = try program.store.cloneForProcRewrite(allocator, owners[0]);
+    var clone = try program.store.cloneForBodyShard(allocator);
     defer clone.deinit();
     try std.testing.expectEqual(@as(u64, 1), clone.getProcSpecImmediate(owners[0]).native_code_revision);
 }

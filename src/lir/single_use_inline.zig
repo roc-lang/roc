@@ -293,7 +293,9 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite, scratc
         .parent = store.stmtInlineScope(site.stmt),
     });
     // Every statement appended from here on joins the caller's body, so the
-    // shapes the store records for them are the caller's.
+    // shapes the store records for them are the caller's, and the rows they
+    // occupy are the caller's next body chunk.
+    const body_mark = store.bodyMark();
     const outer_shapes = store.shapes;
     store.shapes = .{};
     defer store.shapes = outer_shapes.merged(store.shapes);
@@ -333,6 +335,7 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite, scratc
         } }, boundary_origin);
     }
     try store.replaceCFStmt(site.stmt, store.getCFStmt(cloned_body), store.stmtOrigin(cloned_body));
+    try store.recordBodyChunk(site.caller, body_mark);
 
     const caller = store.getProcSpecPtr(site.caller);
     // A body-level shape such as a loop is recorded on the callee rather than
@@ -475,6 +478,7 @@ test "single-use inline gives the caller the shapes of the body it receives" {
 
     // The callee compares two constants, which is the only statement the
     // range prover can decide, and its producer recorded a loop.
+    const callee_mark = store.bodyMark();
     const lhs = try store.addLocal(.{ .layout_idx = .u64 });
     const rhs = try store.addLocal(.{ .layout_idx = .u64 });
     const equal = try store.addLocal(.{ .layout_idx = .bool });
@@ -499,10 +503,12 @@ test "single-use inline gives the caller the shapes of the body it receives" {
         .ret_layout = .bool,
         .shapes = .{ .loop = true },
     }, .none);
+    try store.recordBodyChunk(callee, callee_mark);
     try testing.expect(store.getProcSpecImmediate(callee).shapes.unsigned_compare);
 
     // The caller's own body is a call and a return.
     store.shapes = .{};
+    const caller_mark = store.bodyMark();
     const result_local = try store.addLocal(.{ .layout_idx = .bool });
     const caller_ret = try store.addCFStmt(.{ .ret = .{ .value = result_local } }, .test_fixture);
     const caller_body = try store.addCFStmt(.{ .assign_call = .{
@@ -520,11 +526,14 @@ test "single-use inline gives the caller the shapes of the body it receives" {
         .frame_locals = try store.addLocalSpan(&.{result_local}),
         .ret_layout = .bool,
     }, .none);
+    try store.recordBodyChunk(caller, caller_mark);
     try result.root_procs.append(testing.allocator, caller);
     try testing.expect(!store.getProcSpecImmediate(caller).shapes.unsigned_compare);
     try testing.expect(!store.getProcSpecImmediate(caller).shapes.loop);
 
     try run(&result);
+    // The inlined body is the caller's second chunk.
+    try testing.expectEqual(@as(usize, 2), store.procBodyChunks(caller).len);
 
     const inlined = store.getProcSpecImmediate(caller).shapes;
     try testing.expect(inlined.unsigned_compare);
