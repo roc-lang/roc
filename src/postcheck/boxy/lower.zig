@@ -396,8 +396,8 @@ pub const WorkerKey = union(enum) {
     static_data: u32,
     /// The initializer of the static data a value-form expression of
     /// `module` that its body keeps reads (`CompileTimeRootTable.inline_literals`):
-    /// it builds the expression's value, for static data materialization.
-    inline_literal: struct { module: ModuleIndex, expr: ExprId },
+    /// it builds the expression's value at the reader's committed type.
+    inline_literal: struct { module: ModuleIndex, expr: ExprId, ty: TypeId },
     /// The method of a dictionary whose checked evidence resolves its slot
     /// to a crash: a dispatch checking rejected, or one no value can reach
     /// (design.md "Static Dispatch In Monotype"). Calling it crashes.
@@ -3615,7 +3615,7 @@ pub const Program = struct {
     /// data materialization freezes what it builds, so a read allocates
     /// nothing and the value's reference count is the static one.
     pub fn inlineLiteralSlot(self: *Program, module_index: ModuleIndex, expr: ExprId, ty: TypeId) Allocator.Error!LIR.StaticDataId {
-        const key: WorkerKey = .{ .inline_literal = .{ .module = module_index, .expr = expr } };
+        const key: WorkerKey = .{ .inline_literal = .{ .module = module_index, .expr = expr, .ty = ty } };
         if (self.worker_ids.get(key)) |existing| return self.inline_literal_slots.get(existing).?;
         if (!self.store.isClosed(ty)) invariant("a value-form expression a body keeps has an open type");
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
