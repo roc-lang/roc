@@ -60,6 +60,7 @@ const AnyAll = collections.AnyAll;
 const WriteFirstSlice = collections.WriteFirstSlice;
 const MonoType = @import("../monotype/type.zig");
 const Lifted = @import("../monotype_lifted/ast.zig");
+const OwnCaptures = @import("../monotype_lifted/own_captures.zig");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 
@@ -356,6 +357,7 @@ fn runWith(
     // `program.deinit()` is the only cleanup a later error needs.
     var program = Ast.Program.init(allocator, lifted);
     errdefer program.deinit();
+    try OwnCaptures.run(&program.lifted);
     program.binding_groups = try program.lifted.bindingGroups(allocator);
 
     var counters: WorkCounters = .{};

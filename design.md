@@ -23059,13 +23059,29 @@ Every lifted function's type is registered before any body is solved.
 Definitions are output in `FnId` order because consumers reach functions only
 through explicit references.
 
+Lambda Solved's first step gives every lifted function with captures capture
+slots of its own (`monotype_lifted/own_captures.zig`). Lifting names a
+closure's capture slots by the locals of the function that defined it, so its
+body reads the definer's locals; Lambda Solved IR instead treats a capture
+slot like a parameter. Each slot gets a fresh local, a copy of the slot local
+with its complete identity (binder, `CaptureId`, checked capture id, capture
+kind), so capture operands still match their slots by `CaptureId`, and the
+function's body reads those locals: only the expressions on a path from the
+body's root to a read of a captured local (a `local` expression, an
+initialized-payload switch's payload, or a local a join point retains) are
+added again (`body_copy.copyRenamingReads`). A capture operand then meets its
+slot only through the reference that supplies it, exactly as an argument meets
+its parameter: through the reference's instantiation when the function's group
+is generalized.
+
 Bodies are solved one binding group at a time. A binding group is a strongly
 connected component of the lifted-function reference graph, whose edges are
-the functions a body names (`fn_ref` and direct `call_proc`), plus one edge
-back from a capturing function to every function that names it with capture
-operands. The operands read locals of the naming function's scope, so the
-back edge puts a closure in one group with every function whose locals it
-captures, and no group's types depend on locals another group binds. The
+the functions a body names (`fn_ref` and direct `call_proc`). Since no
+function's body reads a local another function binds, a closure is in one
+group with the function that defined it only when it names that function
+too, as a recursive step closure names the adapter that builds it; a local
+function that captures local values is generalized and specialized like any
+other function. The
 groups are listed callee-first, and a group's functions in ascending `FnId`
 order (`Lifted.Program.bindingGroups`). The groups are a pure function of the
 final lifted program's explicit references, which SpecConstr may still
@@ -23355,6 +23371,33 @@ group, as the paper's unit is the strongly connected definition; recursive
 references inside a group use the group's own types, so no group is
 polymorphically recursive.
 
+The paper generalizes only top-level definitions: a lambda's capture is its
+own binder with its own type (`λ[x : τ1 = e1](y : τ2). e2`, filled by the
+capture expression at construction), but that type shares the lambda-set
+variables of the definition enclosing the lambda. Lambda Solved generalizes
+every lifted function, closures included, which goes beyond what the paper
+proves; it is sound for these reasons:
+
+- A lifted function is closed over its parameters and its capture slots,
+  which are locals of its own (above), so it is a definition in the paper's
+  sense: its body's types depend on nothing another function binds, and a
+  capture operand meets its slot only through the reference that supplies
+  it, as an argument meets its parameter.
+- A member is identified by its lambda and its instantiation, and every
+  instantiation carries its own copy of the member's capture span. A value
+  built at one reference therefore carries exactly the captures that
+  reference's operands unified with, and the set it flows into records which
+  instantiation built it.
+- Recursive references within a binding group use the group's own types, so
+  a closure that names its definer (a step closure that rebuilds its adapter)
+  stays monomorphic together with it.
+- What the capture slot's type shares with the definer is not quantified:
+  the definer's local and the closure's slot meet at the reference, so a
+  join the definer makes on the captured local after the closure is built
+  (another closure flowing into it) reaches that instantiation's capture
+  image by ordinary unification. Only the classes the closure's group owns and
+  its environment does not reach are quantified, as for any group.
+
 Ownership is explicit. Every type variable class has an owner
 (`Type.Store.owners`): the binding group whose solving created it, numbered
 from `first_group_owner`. Variables created before any group is solved
@@ -23411,10 +23454,12 @@ one pass over the member pool.
 Generalized groups are visited callers first, so every instantiation of a
 group exists when the group is visited: each was made at a reference in an
 already specialized body, or copied there with a member that names it.
-Instantiations are compared as infinite types: from the images of the
-group's function types, pairs of types are assumed equal while their parts
-are compared, so cycles close; members compare by lambda and by their
-instantiations, which compare the same way unless their group is already
+Instantiations are compared as infinite types: from the images of every
+scheme node, pairs of types are assumed equal while their parts are compared,
+so cycles close. The function types' images alone do not single out an
+instantiation: one set can hold two members of one lambda at two
+instantiations, whose captures a path from the function type cannot tell
+apart. Members compare by lambda and by their instantiations, which compare the same way unless their group is already
 specialized, when they compare by instance. Any difference fails the whole
 comparison, so equality is exact: the assumed pairs are a bisimulation. Equal
 instantiations are one instance, and their images are linked into one class

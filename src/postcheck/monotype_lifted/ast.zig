@@ -1575,16 +1575,11 @@ pub const Program = struct {
         if (fn_count == 0) return .empty;
         if (fn_count >= std.math.maxInt(u32)) return error.OutOfMemory;
 
-        // Every function each function references, in one flat list, and
-        // the back edges from each capturing function to the functions that
-        // name it with capture operands.
-        var named = std.ArrayList(u32).empty;
-        defer named.deinit(allocator);
-        const named_starts = try allocator.alloc(u32, fn_count + 1);
-        defer allocator.free(named_starts);
-        const BackEdge = struct { from: u32, to: u32 };
-        var back_edges = std.ArrayList(BackEdge).empty;
-        defer back_edges.deinit(allocator);
+        // Every function each function references, in one flat list.
+        var edges = std.ArrayList(u32).empty;
+        defer edges.deinit(allocator);
+        const edge_starts = try allocator.alloc(u32, fn_count + 1);
+        defer allocator.free(edge_starts);
         // The function whose body first reached each expression, and the
         // functions whose bodies share an expression with another's.
         const no_fn = std.math.maxInt(u32);
@@ -1598,7 +1593,7 @@ pub const Program = struct {
         var pending = std.ArrayList(ExprChild).empty;
         defer pending.deinit(allocator);
         for (0..fn_count) |raw| {
-            named_starts[raw] = std.math.cast(u32, named.items.len) orelse return error.OutOfMemory;
+            edge_starts[raw] = std.math.cast(u32, edges.items.len) orelse return error.OutOfMemory;
             const fn_id: FnId = @fromBackingInt(@intCast(raw));
             switch (self.getFn(fn_id).body) {
                 .roc => |body_expr| try pending.append(allocator, .{ .expr = body_expr }),
@@ -1615,45 +1610,16 @@ pub const Program = struct {
                         sharing.set(raw);
                     }
                     const data = self.getExpr(expr_id).data;
-                    if (data == .fn_ref) {
-                        const callee = @backingInt(data.fn_ref.fn_id);
-                        try named.append(allocator, callee);
-                        if (data.fn_ref.captures.len != 0) try back_edges.append(allocator, .{ .from = callee, .to = @intCast(raw) });
-                    }
+                    if (data == .fn_ref) try edges.append(allocator, @backingInt(data.fn_ref.fn_id));
                     if (data == .call_proc) switch (data.call_proc.callee) {
-                        .lifted => |lifted_callee| {
-                            const callee = @backingInt(lifted_callee);
-                            try named.append(allocator, callee);
-                            if (data.call_proc.captures.len != 0) try back_edges.append(allocator, .{ .from = callee, .to = @intCast(raw) });
-                        },
+                        .lifted => |callee| try edges.append(allocator, @backingInt(callee)),
                         .func => Common.invariant("unlifted call target reached Monotype Lifted binding groups"),
                     };
                     try appendChildren(allocator, self, expr_id, &pending);
                 },
             };
         }
-        named_starts[fn_count] = std.math.cast(u32, named.items.len) orelse return error.OutOfMemory;
-
-        const edge_starts = try allocator.alloc(u32, fn_count + 1);
-        defer allocator.free(edge_starts);
-        @memset(edge_starts, 0);
-        for (0..fn_count) |raw| edge_starts[raw + 1] = named_starts[raw + 1] - named_starts[raw];
-        for (back_edges.items) |edge| edge_starts[edge.from + 1] += 1;
-        for (0..fn_count) |raw| edge_starts[raw + 1] += edge_starts[raw];
-        var edges = std.ArrayList(u32).empty;
-        defer edges.deinit(allocator);
-        try edges.resize(allocator, edge_starts[fn_count]);
-        const fill = try allocator.alloc(u32, fn_count);
-        defer allocator.free(fill);
-        for (0..fn_count) |raw| {
-            const names_of = named.items[named_starts[raw]..named_starts[raw + 1]];
-            @memcpy(edges.items[edge_starts[raw]..][0..names_of.len], names_of);
-            fill[raw] = edge_starts[raw] + @as(u32, @intCast(names_of.len));
-        }
-        for (back_edges.items) |edge| {
-            edges.items[fill[edge.from]] = edge.to;
-            fill[edge.from] += 1;
-        }
+        edge_starts[fn_count] = std.math.cast(u32, edges.items.len) orelse return error.OutOfMemory;
 
         const fns = try allocator.alloc(FnId, fn_count);
         errdefer allocator.free(fns);
@@ -2489,11 +2455,11 @@ pub const ExprSearch = enum { found, skip, descend, children };
 
 /// The strongly connected components of the lifted-function reference graph,
 /// whose edges are the functions a body names (`fn_ref` and direct
-/// `call_proc`), plus one edge back from a capturing function to every
-/// function that names it with capture operands. Those operands read locals
-/// of the naming function's scope, so the back edge puts a closure in one
-/// group with every function whose locals it captures: no group's types
-/// depend on locals another group binds. Every lifted function belongs to
+/// `call_proc`). A capture operand is supplied by the reference that names
+/// the function, like an argument, and the function's body reads capture
+/// slots of its own (`own_captures.zig`), so a closure joins the group of a
+/// function whose locals it captures only when it also names that function.
+/// Every lifted function belongs to
 /// exactly one group. Groups are listed callee-first: a group follows every
 /// group its functions reference, so the functions of one group reference
 /// each other or earlier groups only. Within a group, functions are in

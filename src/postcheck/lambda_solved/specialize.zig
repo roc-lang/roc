@@ -309,12 +309,13 @@ const Pass = struct {
         if (row_a.images == null or row_b.images == null) return false;
         const entry = try self.assumed_insts.getOrPut(self.allocator, pairKey(@backingInt(a), @backingInt(b)));
         if (entry.found_existing) return true;
-        const scheme = poly_.schemes.items[row_a.group];
-        const group_size = self.program.binding_groups.group(row_a.group).len;
-        const roots = poly_.fn_roots.items[scheme.fn_roots_start..][0..group_size];
+        // Every scheme node's image, not only the function types': a set
+        // can hold two members of one lambda at two instantiations, so the
+        // path from a function type to a member's captures does not single
+        // out one instantiation's captures.
         const images_a = poly_.instImages(a);
         const images_b = poly_.instImages(b);
-        for (roots) |position| try self.pending.append(self.allocator, .{ images_a[position], images_b[position] });
+        for (images_a, images_b) |image_a, image_b| try self.pending.append(self.allocator, .{ image_a, image_b });
         return true;
     }
 

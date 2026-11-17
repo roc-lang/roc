@@ -15653,11 +15653,11 @@ const poly_functions =
     \\
 ;
 
-// A closure that captures a local of its enclosing function is solved in
-// one binding group with that function, so the captured local's type is
-// never quantified on its own: both of `helper`'s callbacks meet in its one
-// parameter set.
-test "lambda set generalization: a capturing closure is not generalized apart from its parent" {
+// A closure's capture slots are locals of its own, supplied by the reference
+// that names it, so a local helper that captures a local of its enclosing
+// function is generalized like any other function: each call site
+// instantiates it with its own callback, and no set merges the two.
+test "lambda set generalization: a capturing local helper applied to two closures" {
     try expectPolymorphism(
         \\main : I64
         \\main = {
@@ -15667,7 +15667,86 @@ test "lambda set generalization: a capturing closure is not generalized apart fr
         \\    dbg total
         \\    total
         \\}
-    , "10", .{ .multi_member_sets = 1, .cloned_fns = 0, .instances = 2 });
+    , "10", .{ .multi_member_sets = 0, .cloned_fns = 1, .instances = 4 });
+}
+
+// A capturing closure inside a capturing closure: each level is its own
+// group, and each instance of the outer helper instantiates the inner one
+// at the outer instance's callback.
+test "lambda set generalization: a capturing closure nested two levels deep" {
+    try expectPolymorphism(
+        \\main : I64
+        \\main = {
+        \\    k = 3.I64
+        \\    outer = |g| {
+        \\        inner = |h| h(k) + g(k)
+        \\        inner(|v| v + 1) + inner(|v| v * 2)
+        \\    }
+        \\    total = outer(|v| v - 1) + outer(|v| v + 10)
+        \\    dbg total
+        \\    total
+        \\}
+    , "50", .{ .multi_member_sets = 0, .cloned_fns = 4, .instances = 10 });
+}
+
+// A recursive capturing closure and a capturing closure inside it that calls
+// it back reference each other, so they are one binding group with one
+// scheme: each call site's instance copies both.
+test "lambda set generalization: mutually recursive capturing closures" {
+    try expectPolymorphism(
+        \\main : I64
+        \\main = {
+        \\    k = 2.I64
+        \\    walk = |f, n|
+        \\        if n == 0 {
+        \\            f(k)
+        \\        } else {
+        \\            step = |m| walk(f, m)
+        \\            step(n - 1)
+        \\        }
+        \\    total = walk(|v| v * 10, 3) + walk(|v| v + 100, 2)
+        \\    dbg total
+        \\    total
+        \\}
+    , "122", .{ .multi_member_sets = 0, .cloned_fns = 2, .instances = 6 });
+}
+
+// The definer joins the captured local's set with another closure after the
+// capturing closure is built. The closure's capture slot is instantiated at
+// its reference and unified with the captured local there, so the later join
+// reaches the closure's capture too: the closure dispatches over the joined
+// set.
+test "lambda set generalization: a capture stays tied to the local its definer joins later" {
+    try expectPolymorphism(
+        \\main : I64
+        \\main = {
+        \\    g = |v| v + 1
+        \\    c = |x| g(x) * 10
+        \\    h = if c(1) > 5 { g } else { |v| v * 2 }
+        \\    total = c(2) + h(3)
+        \\    dbg total
+        \\    total
+        \\}
+    , "34", .{ .multi_member_sets = 1, .cloned_fns = 1, .instances = 10 });
+}
+
+// A closure that captures a callable escapes its definer and is called
+// remotely: each call of the definer instantiates the closure with the
+// callable it captures there.
+test "lambda set generalization: an escaping closure capturing a callable" {
+    try expectPolymorphism(
+        \\make : (I64 -> I64) -> (I64 -> I64)
+        \\make = |f| |x| f(x) + 1
+        \\
+        \\main : I64
+        \\main = {
+        \\    a = make(|v| v * 2)
+        \\    b = make(|v| v - 3)
+        \\    total = a(10) + b(10)
+        \\    dbg total
+        \\    total
+        \\}
+    , "29", .{ .multi_member_sets = 0, .cloned_fns = 2, .instances = 6 });
 }
 
 // A local helper that captures nothing is its own binding group, so each
@@ -15686,6 +15765,8 @@ test "lambda set generalization: a local helper applied at two sites with differ
 
 // A closure returned from a generalized function is instantiated at each
 // remote use; two uses at equal instantiations share the function itself.
+// The closure is a group of its own, so `make_adder` and the closure each
+// count one instance.
 test "lambda set generalization: an escaping closure instantiated remotely" {
     try expectPolymorphism(
         \\make_adder : I64 -> (I64 -> I64)
@@ -15699,7 +15780,7 @@ test "lambda set generalization: an escaping closure instantiated remotely" {
         \\    dbg total
         \\    total
         \\}
-    , "33", .{ .multi_member_sets = 0, .cloned_fns = 0, .instances = 1 });
+    , "33", .{ .multi_member_sets = 0, .cloned_fns = 0, .instances = 2 });
 }
 
 // Two mutually recursive functions are one binding group with one scheme:
