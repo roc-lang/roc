@@ -513,6 +513,7 @@ const copied_diagnostic_shapes = [_]DiagnosticShape{
     .{ .cir = "nominal_type_redeclared", .tag = .diag_nominal_type_redeclared, .payload = "diag_ident_with_region", .names = &.{ "name", "original_region" } },
     .{ .cir = "type_shadowed_warning", .tag = .diag_type_shadowed_warning, .payload = "diag_ident_with_region", .names = &.{ "name", "original_region" } },
     .{ .cir = "builtin_type_shadowed_warning", .tag = .diag_builtin_type_shadowed_warning, .payload = "diag_single_ident", .names = &.{"name"} },
+    .{ .cir = "builtin_import_conflict", .tag = .diag_builtin_import_conflict, .payload = "diag_single_ident", .names = &.{"name"} },
     .{ .cir = "duplicate_record_field", .tag = .diag_duplicate_record_field, .payload = "diag_ident_with_region", .names = &.{ "field_name", "original_region" } },
     .{ .cir = "duplicate_pattern_binder", .tag = .diag_duplicate_pattern_binder, .payload = "diag_ident_with_region", .names = &.{ "ident", "original_region" } },
     .{ .cir = "duplicate_tag", .tag = .diag_duplicate_tag, .payload = "diag_ident_with_region", .names = &.{ "tag_name", "original_region" } },
@@ -746,6 +747,7 @@ const DiagnosticNodeTag = enum {
     diag_nominal_type_redeclared,
     diag_type_shadowed_warning,
     diag_builtin_type_shadowed_warning,
+    diag_builtin_import_conflict,
     diag_type_parameter_conflict,
     diag_unused_variable,
     diag_used_underscore_variable,
@@ -1249,7 +1251,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 96;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 97;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -5485,6 +5487,7 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .nominal_type_redeclared,
         .type_shadowed_warning,
         .builtin_type_shadowed_warning,
+        .builtin_import_conflict,
         .unused_variable,
         .used_underscore_variable,
         .duplicate_record_field,
@@ -5658,6 +5661,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_nominal_type_redeclared,
         .diag_type_shadowed_warning,
         .diag_builtin_type_shadowed_warning,
+        .diag_builtin_import_conflict,
         .diag_unused_variable,
         .diag_used_underscore_variable,
         .diag_duplicate_record_field,

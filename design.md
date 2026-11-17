@@ -3594,6 +3594,13 @@ are unchanged. Repository checks use the same exact character policy.
 
 ### Platform Dependencies
 
+Dependency edges require package headers, or platform headers when explicitly
+marked `platform`. Ordinary modules remain valid standalone check roots but are
+never dependency packages. Resolution validates the final selected targets before
+compilation, including URL cache hits and dependency replacements. Header scans
+preserve dependency source regions through sidecars so rejection points at the
+declaring header without reparsing successful graphs.
+
 An app or package header may mark at most one dependency with the `platform`
 keyword. The marked edge is preserved explicitly through parsing and package
 resolution; later compilation stages must not infer platform identity by
@@ -4301,6 +4308,15 @@ Because the error already explains the name, the module's own type of that
 name does not also report `builtin_type_shadowed_warning`. Qualified lookup
 and platform hosted resolution consult the builtin auto-import table before
 user imports; that order is correct only because these names are reserved.
+
+Imports also cannot bind an auto-imported builtin type name, whether through
+`exposing`, an exposed-item alias, a nested import, or a module alias. Importing
+the builtin itself under its own name is not a conflict. Rejection is owned by
+the declaring lexical scope, including its forward-visible imports. Rejected
+names produce explicit error nodes at uses rather than resolving to the builtin
+or producing secondary missing-member and invalid-tag reports. Compiler-inserted
+builtin operations retain their compiler-owned identities. Local type declaration
+shadowing policy is separate and unchanged.
 
 ### Control Flow and Var Writes Inside `expect`
 

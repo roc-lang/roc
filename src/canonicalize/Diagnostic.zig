@@ -414,6 +414,10 @@ pub const Diagnostic = union(enum) {
         name: Ident.Idx,
         region: Region,
     },
+    builtin_import_conflict: struct {
+        name: Ident.Idx,
+        region: Region,
+    },
     type_parameter_conflict: struct {
         name: Ident.Idx,
         parameter_name: Ident.Idx,
@@ -604,6 +608,7 @@ pub const Diagnostic = union(enum) {
             .nominal_type_redeclared => |d| d.redeclared_region,
             .type_shadowed_warning => |d| d.region,
             .builtin_type_shadowed_warning => |d| d.region,
+            .builtin_import_conflict => |d| d.region,
             .type_parameter_conflict => |d| d.region,
             .unused_variable => |d| d.region,
             .used_underscore_variable => |d| d.region,
@@ -694,6 +699,27 @@ pub const Diagnostic = union(enum) {
 
         try addOwnedSourceRegion(&report, new_region_info, .warning_highlight, filename, source, line_starts);
 
+        return report;
+    }
+
+    /// Imports cannot introduce names reserved for auto-imported builtin types.
+    pub fn buildBuiltinImportConflictReport(
+        allocator: Allocator,
+        type_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) Allocator.Error!Report {
+        var report = try Report.init(allocator, "Builtin Import Conflict", "", .runtime_error);
+        errdefer report.deinit();
+        const owned_name = try report.addOwnedString(type_name);
+        try report.headline.addText("This import cannot bind ");
+        try report.headline.addUnqualifiedSymbol(owned_name);
+        try report.headline.addText(" because that name is reserved for a builtin type.");
+        try report.document.addReflowingText("Use `as` to give the imported type a different name.");
+        try report.document.addLineBreak();
+        try addOwnedSourceRegion(&report, region_info, .error_highlight, filename, source, line_starts);
         return report;
     }
 

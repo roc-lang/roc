@@ -1897,6 +1897,9 @@ pub fn pushDiagnostic(self: *Self, reason: CIR.Diagnostic) std.mem.Allocator.Err
 /// Creates a malformed node that represents a runtime error in the IR.
 pub fn pushMalformed(self: *Self, comptime RetIdx: type, reason: CIR.Diagnostic) std.mem.Allocator.Error!RetIdx {
     comptime if (!isCastable(RetIdx)) @compileError("Idx type " ++ @typeName(RetIdx) ++ " is not castable");
+    // The import declaration owns this error. Every use of its rejected name
+    // carries the same explicit recovery reason without reporting it again.
+    if (reason == .builtin_import_conflict) return self.pushRuntimeErrorExpr(RetIdx, reason);
     const diag_idx = try self.addDiagnostic(reason);
     const region = getDiagnosticRegion(reason);
     const malformed_idx = try self.addMalformed(diag_idx, region);
@@ -4023,6 +4026,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getLineStartsAll(),
             );
         },
+        .builtin_import_conflict => |data| try CIR.Diagnostic.buildBuiltinImportConflictReport(
+            allocator,
+            self.getIdent(data.name),
+            self.calcRegionInfo(data.region),
+            filename,
+            self.getSourceAll(),
+            self.getLineStartsAll(),
+        ),
         .builtin_type_shadowed_warning => |data| blk: {
             const new_region_info = self.calcRegionInfo(data.region);
             break :blk try CIR.Diagnostic.buildBuiltinTypeShadowedWarningReport(
