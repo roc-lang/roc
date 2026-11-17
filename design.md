@@ -26556,7 +26556,14 @@ accepts neither and only follows the explicit decisions.
 Exact ownership and certifier path snapshots use persistent sparse proc-local
 state. A control-flow fork shares the unchanged state root, and a transition
 stores only bounded-depth paths to changed `OwnedEntry` values, liveness words,
-or certifier `State` entries.
+or certifier `State` entries. A procedure whose domain is small keeps that state
+by value instead: a liveness, dead-unit or resource row over at most 128 bits
+is held inline in two words, and an ownership set over at most 128 resources
+holds its present resources in an inline mask, with only the nonzero residual
+masks of dismantlable aggregates in its persistent tree. A fork then copies
+words, and a transition neither allocates nor follows a pointer. The two forms
+give every operation the same answer, so which one a procedure uses never
+changes a decision.
 Fresh one-owner states update their paths in place until the first fork; meets
 share equal subtrees and allocate only changed subtrees. Procedure width is
 therefore paid once by the producer-owned domains and summaries, not once per
@@ -29044,6 +29051,20 @@ the list of instruction sets lives only in `isa.zig`. Code that runs generated
 code in-process asks `isa.host`, never `RocTarget.detectNative`, which maps an
 architecture without a code generator to one that has one.
 
+An explicit reference-count statement on a stack value computes the value's
+address directly into the helper's first argument register and loads an
+incref's count directly into the second; neither passes through a frame slot.
+
+The x86-64 encoder picks each instruction's encoding from the operand values it
+is handed, all of which are final when it is emitted: a memory operand takes a
+one-byte displacement when the displacement fits a signed byte, a group-1
+arithmetic or compare instruction takes the sign-extended imm8 form when its
+immediate fits one, and an immediate load is the zero-extending 32-bit move,
+the sign-extending one or `movabs`, whichever is shortest. An instruction whose
+bytes are patched after emission keeps a fixed-form encoder: `call`, `jmp` and
+`jcc` with rel32, the RIP-relative `lea`, and the seven-byte `REX.W C7`
+immediate load whose field a relocatable expect site's relocation names.
+
 ## Dev Backend Register Lifetimes
 
 `LirCodeGen` is the sole authority for LIR local locations. Every assigned
@@ -29096,13 +29117,21 @@ ownership decisions.
 
 The planner forms basic blocks once. Within each block it records disjoint
 read-before-write intervals, propagating only live-in requirements backward across
-block edges to a fixed point. Scratch columns are procedure-local and indexed by
+block edges to a fixed point. A procedure that is one block no edge enters has
+nothing to propagate, so its in-block intervals are its whole solution and it
+builds no block graph or loop forest. A multi-block procedure's block graph,
+loop forest and loop coverage live in an arena the plan keeps from procedure to
+procedure. Scratch columns are procedure-local and indexed by
 compact identities. There are no locals-wide rows per statement and no eagerly
 materialized pairwise interference graph. Slots are grouped by their required
 size and alignment and reused only after checking all remaining lifetime
 intervals, including holes and back edges. Single intervals are stored inline,
 without a heap allocation per local or slot. A queue retires occupied intervals
-so straight-line dead-temporary chains do not scan every earlier local.
+so straight-line dead-temporary chains do not scan every earlier local. When
+every value's lifetime is one interval, a slot returns from that queue only
+after its last reservation ends, so the most recently freed slot is the one
+the general check would choose, and the planner takes it without recording
+reservations.
 
 `ptr_alloca` backing cells have explicit procedure lifetime and are reserved
 separately from reusable local slots and instruction-selection scratch. Ordinary
