@@ -234,10 +234,10 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 457)
+				(e-call (constraint-fn-var 464)
 					(e-lookup-local
 						(p-assign (ident "advance")))
-					(e-call (constraint-fn-var 456)
+					(e-call (constraint-fn-var 463)
 						(e-lookup-local
 							(p-assign (ident "retreat")))
 						(e-record

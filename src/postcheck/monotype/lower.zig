@@ -63420,7 +63420,7 @@ const BodyContext = struct {
         if (runtime.args.len != 2) Common.invariant("structural encoder runtime did not have value and state arguments");
         const encoding_node = boundary.args[0];
         const state_node = runtime.args[1];
-        const exact = try self.requiredGeneratedCodecTarget("encode_key_start", key_node);
+        const exact = try self.requiredGeneratedCodecTarget("encode_key_start", null);
         if (self.preparedRequiredCodecCallExists(boundary_expr, .encoder, exact)) return false;
 
         const target_node = exact.callable_node;

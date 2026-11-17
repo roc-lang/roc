@@ -9759,6 +9759,15 @@ proof-equivalent to the role's first call under the specialization identity's
 equality, with types compared modulo transparent aliases like the role itself;
 each occurrence's evidence nodes are distinct allocations with equal content.
 
+The encoder's `encode_key_start` gate has no key-type argument: its checked
+role depends only on the owning derivation's encoding, state, and error
+context. Each derivation validates and records one subject-free gate role,
+reused for every composite key shape in that body. Nested generated nominal
+derivations own separate roles. Reuse happens before method instantiation or
+expected-type allocation, and preparation and emission consume the same
+subject-free identity. Runtime execution still calls the gate for every key,
+propagates its error, and passes its successful state to that key's encoder.
+
 Monotype instantiates a generated-codec contract once at the codec boundary.
 A contract (or structural-evidence) instantiation context instantiates each
 closed checked type as an unread leaf of the Monotype it denotes. The graph
@@ -12306,6 +12315,26 @@ ambiguity, or evidence worklists. The copy and its projected relation belong to
 one commit-probe, so a rejected aggregate relation retains neither the copy nor any
 partial unification. Rejection is diagnosed by the owning full-shape relation.
 
+Record constructions retain the complete accepted projected row, not just
+their supplied payload slots. The finished literal relates to that row before
+its uncommitted tail can close at an enclosing function boundary; empty
+record literals follow the same rule. This preserves the explicit nominal
+and omitted-default decisions on the constructor that must realize them.
+
+A call with a checked callable shape projects its expected result onto the
+instantiated return slot before checking its arguments. Shared formal variables
+therefore carry result context into argument constructions, including implicit
+nominal records with defaults. This is structural guidance, not a new scheme
+use or a replacement for the owning result relation. A rejected projection
+rolls back without poisoning the callee or reporting an argument error.
+Calls without result context allocate no copy or probe; existing projected
+cells are reused, and successful relations are retained. An unprojected
+unknown or rigid leaf supplies no structural guidance: its shape-only copy
+would be an unconstrained flex. Such leaves allocate no copy or probe;
+projected cells still relate to preserve the enclosing shape's equalities.
+Calls with no
+arguments and closed monomorphic method targets need no such guidance.
+
 A record update carries its base variable and supplied field identity as
 borrowed context. A consuming aggregate reads the current row on demand,
 including aliases and extensions; a nominal base requires the same opacity
@@ -12371,6 +12400,16 @@ polymorphism a program could use. The rule reads only explicit context:
   fit (a different arity, or erroneous context) is rolled back with its copy,
   and the owning relation reports the mismatch exactly as without the seed.
 - An annotated lambda is checked against its annotation and is not seeded.
+
+The successful skeleton relation also retains its return slot as structural
+context for the body and explicit returns. That slot is not an annotation:
+inferred return composition and the enclosing argument relation still own
+their checks. Only constructors consume this guidance; the contextual result
+is never unified directly with the body's returned value. Doing that would
+feed a callback's composed error row back into a tail-called function's result.
+Otherwise early result guidance through a call such as
+`List.map` would constrain the callback's signature without guiding the
+record constructions that must supply its defaulted result.
 
 Pinned by `src/check/test/issue_13006_test.zig`. Accepted: a lambda in an
 annotated record field, tuple item, list item, tag payload, and record
@@ -17044,6 +17083,10 @@ Other solved-graph mutations:
   the original type. Only successful ordinary unification with the aggregate
   skeleton commits the expected-shape relation; the owning relation still checks the actual
   value against the complete expected type.
+- `seedCallResultFromContext`—policy: Expected Shape Context (above). Projects
+  result context onto an instantiated call's return slot before argument
+  construction, using the same commit-probe and copy policy as aggregates.
+  The ordinary owning result relation remains authoritative.
 - `relateSameMethodRequirementsAtBoundary` (`relateSameMethodRequirements`
   committed probe)—policy: one requirement per method on a type about to be
   generalized, as declared in Static Dispatch At The Checked Boundary

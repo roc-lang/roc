@@ -456,7 +456,7 @@ roundtrip = parse_show("hi")
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(d-let
 		(p-assign (ident "unpinned_ret"))
-		(e-call (constraint-fn-var 406)
+		(e-call (constraint-fn-var 408)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-empty_record)))
 	(d-let
