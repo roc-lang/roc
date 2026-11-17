@@ -1804,6 +1804,9 @@ fn int128BinaryWrapper(comptime T: type, comptime op: anytype) fn (*u64, *u64, u
 /// Dec multiply (decomposed)
 pub const roc_builtins_dec_mul = decBinaryWrapper(dec.mulOrPanicC);
 
+/// Dec saturating multiply (decomposed)
+pub const roc_builtins_dec_mul_saturated = decBinaryWrapper(dec.mulSaturatedC);
+
 /// Dec divide (decomposed)
 pub const roc_builtins_dec_div = decBinaryWrapper(dec.divC);
 

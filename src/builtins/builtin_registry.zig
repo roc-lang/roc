@@ -172,6 +172,7 @@ pub const BuiltinFn = enum {
     i128_to_dec_try_unsafe,
     u128_to_dec_try_unsafe,
     dec_mul,
+    dec_mul_saturated,
     dec_div,
     dec_div_trunc,
     dec_pow,

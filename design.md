@@ -25144,6 +25144,15 @@ correspondingly offer no `_try`, `_wrap`, or `_saturated` forms on `F32` and
 `F64`. Fast-math flags are the float analogue of no-wraparound assertions; they
 change results and are not enabled.
 
+Decimal multiplication rescales the exact wide product before testing the
+sign-dependent fixed-point bounds. `dec_mul` crashes on overflow;
+`dec_mul_saturated` returns the appropriate bound. Both use the same arithmetic
+kernel, including truncation toward zero and the extra negative magnitude at
+`Dec.lowest`. Saturation is a distinct operation so it computes the wide product
+only once. A division-based operand threshold is not equivalent: the division
+can overflow for fractional factors, and truncating it can reject products
+that fit.
+
 The names state what happens rather than using "checked", which fails to
 distinguish three members that all check. `_overflows` is present tense because
 it asks about a hypothetical addition rather than reporting on one that ran.

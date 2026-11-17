@@ -5688,6 +5688,12 @@ pub const MonoLlvmCodeGen = struct {
             .num_negate, .num_negate_checked => try self.emitNumericNegate(target, op, GuardedList.at(arg_locals, 0)),
             .num_abs, .num_abs_checked => try self.emitNumericAbs(target, op, GuardedList.at(arg_locals, 0)),
             .num_abs_diff => try self.emitNumericAbsDiff(target, arg_locals),
+            .dec_mul_saturated => {
+                const lhs = try self.loadLocalScalar(GuardedList.at(arg_locals, 0), .dec);
+                const rhs = try self.loadLocalScalar(GuardedList.at(arg_locals, 1), .dec);
+                const result = try self.callI128BinaryBuiltin(LowLevelBuiltins.decBinaryArith(op), lhs, rhs);
+                try self.storeLocalScalar(target, .dec, result);
+            },
             .num_pow => if (self.localLayout(target) == .dec)
                 try self.emitDecPow(target, arg_locals)
             else
@@ -12563,6 +12569,7 @@ pub const MonoLlvmCodeGen = struct {
     /// emits maps to.
     fn boxyListOp(op: lir.LowLevel) ?BoxyListOp {
         return switch (op) {
+            .dec_mul_saturated => null,
             .boxed_sequence_pack, .boxed_sequence_unpack => null,
             .list_capacity => .capacity,
             .list_slack_unique => .slack_unique,
@@ -12609,6 +12616,7 @@ pub const MonoLlvmCodeGen = struct {
         const list_size = RocList.word_count * self.targetWordSize();
 
         switch (op) {
+            .dec_mul_saturated => {},
             .boxed_sequence_pack, .boxed_sequence_unpack => unreachable, // sequence operations never carry list element descriptors
             .list_prefetch => return,
             .list_len => {

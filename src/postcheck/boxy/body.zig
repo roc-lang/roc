@@ -9200,6 +9200,7 @@ pub const Builder = struct {
         // `Box(function)` is the function's erased callable: boxing or
         // unboxing one is the callable itself.
         switch (op) {
+            .dec_mul_saturated => {},
             .boxed_sequence_pack, .boxed_sequence_unpack => invariant("LIR-only sequence operation reached checked-body lowering"),
             .box_box => if (store.get(result_ty) == .box and store.get(store.get(result_ty).box) == .function) return try self.pushValue(args[0]),
             .box_unbox, .box_unbox_borrowed => if (store.get(result_ty) == .function) return try self.pushValue(args[0]),
@@ -9215,6 +9216,7 @@ pub const Builder = struct {
             return try self.pushValue(target);
         }
         switch (op) {
+            .dec_mul_saturated => {},
             .boxed_sequence_pack, .boxed_sequence_unpack => invariant("LIR-only sequence operation reached a generic source operation"),
             .box_box => {
                 const target = try self.localOf(result_ty, .frame);
