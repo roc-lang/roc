@@ -610,7 +610,7 @@ inline fn free_ptr_to_refcount(
 /// Reads a count for an update that follows. A count other threads may update
 /// is read atomically; the value only selects the static-data and debug paths,
 /// so it needs no ordering against those updates.
-inline fn loadRefcount(refcount_ptr: *const isize, atomicity: RcAtomicity) isize {
+pub inline fn loadRefcount(refcount_ptr: *const isize, atomicity: RcAtomicity) isize {
     return switch (atomicity) {
         .single_thread => refcount_ptr.*,
         .atomic => @atomicLoad(isize, refcount_ptr, .monotonic),

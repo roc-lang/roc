@@ -225,11 +225,14 @@ pub fn hotReloadAdjustedCapturePtr(capture_ptr: ?[*]u8) ?[*]u8 {
 
 /// Whether `data_ptr` is a callable built in a procedure's frame
 /// (`utils.REFCOUNT_FRAME`): its retains, releases and frees do nothing, and
-/// the procedure that built it releases its capture.
-pub fn isFrame(data_ptr: ?[*]u8) bool {
+/// the procedure that built it releases its capture. `atomicity` is that of
+/// the count update the caller is about to make: a heap callable's count may
+/// be updated by other threads under `.atomic`, so its word is then read
+/// atomically.
+pub fn isFrame(data_ptr: ?[*]u8, atomicity: utils.RcAtomicity) bool {
     const ptr = data_ptr orelse return false;
     const rc_ptr: *const isize = @ptrCast(@alignCast(ptr - @sizeOf(usize)));
-    return rc_ptr.* == utils.REFCOUNT_FRAME;
+    return utils.loadRefcount(rc_ptr, atomicity) == utils.REFCOUNT_FRAME;
 }
 
 /// Mark the frame storage of a callable whose frame has ended. A debug
@@ -246,7 +249,7 @@ pub fn incref(data_ptr: ?[*]u8, amount: isize, roc_ops: *RocOps) callconv(.c) vo
 
 /// Increment the outer refcount using the given count-update atomicity.
 pub fn increfWithAtomicity(data_ptr: ?[*]u8, amount: isize, atomicity: utils.RcAtomicity, roc_ops: *RocOps) void {
-    if (isFrame(data_ptr)) return;
+    if (isFrame(data_ptr, atomicity)) return;
     utils.increfDataPtr(data_ptr, amount, atomicity, roc_ops);
 }
 
@@ -258,13 +261,15 @@ pub fn decref(data_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
 /// Decrement the outer refcount using the given count-update atomicity,
 /// running `on_drop` if this was the final ref.
 pub fn decrefWithAtomicity(data_ptr: ?[*]u8, atomicity: utils.RcAtomicity, roc_ops: *RocOps) void {
-    if (isFrame(data_ptr)) return;
+    if (isFrame(data_ptr, atomicity)) return;
     if (utils.releaseDataPtr(data_ptr, atomicity, roc_ops)) free(data_ptr, roc_ops);
 }
 
 /// Run final-drop logic and free the boxed-erased-callable allocation.
 pub fn free(data_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
-    if (isFrame(data_ptr)) return;
+    // A heap callable's caller owns its only reference, so no other thread
+    // updates the count.
+    if (isFrame(data_ptr, .single_thread)) return;
     if (data_ptr) |ptr| {
         const payload = payloadPtr(ptr);
         if (payload.on_drop) |on_drop| {
@@ -284,13 +289,13 @@ test "a frame callable's retains, releases and frees do nothing" {
     const callable = data_ptr + payload_alignment;
     @as(*isize, @ptrCast(@alignCast(callable - @sizeOf(usize)))).* = utils.REFCOUNT_FRAME;
     payloadPtr(callable).* = .{ .callable_fn_ptr = &RepackTestState.callable, .on_drop = &RepackTestState.oldDrop, .capture_size = 0 };
-    try std.testing.expect(isFrame(callable));
+    try std.testing.expect(isFrame(callable, .atomic));
     incref(callable, 3, ops);
     increfWithAtomicity(callable, 1, .single_thread, ops);
     decref(callable, ops);
     decrefWithAtomicity(callable, .single_thread, ops);
     free(callable, ops);
-    try std.testing.expect(isFrame(callable));
+    try std.testing.expect(isFrame(callable, .atomic));
     try std.testing.expect(!utils.isUnique(callable, ops));
     try std.testing.expectEqual(@as(usize, 0), RepackTestState.old_drop_count);
     try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());

@@ -18731,7 +18731,12 @@ erased-callable retain, release and free do nothing when they read it, and
 it is never unique, so no repack, uniqueness test or capture move ever
 reuses frame storage, and a callee's ordinary ownership of its function
 parameter, including transferring it to an erased call's reuse channel or
-freeing it in a unique variant, is harmless. The dev backend, LLVM, wasm and
+freeing it in a unique variant, is harmless. The retain and release test
+the word with the same atomicity as the count update they guard: a heap
+callable's count may be updated by another thread under atomic reference
+counting, so its word is then loaded atomically (monotonic, which costs a
+plain load on every target), while the frame marker itself is written once,
+before the callable is reachable, and never again. The dev backend, LLVM, wasm and
 the interpreter all build frame callables; each follows the flag. The
 interpreter keeps a frame callable in its activation's storage and, in a
 Debug build, retires it when the activation ends, so any later retain,
