@@ -1,8 +1,9 @@
 //! Procedure-local LIR rewrites over frozen phase inputs.
 //!
-//! Workers own sparse copies of writable rows and append-only output. A phase
-//! commits in procedure order only after every callback has finished, keeping
-//! identities independent of worker count without copying a store per task.
+//! Workers own copies of their procedure's body chunk rows, the rows they may
+//! write, and append-only output. A phase commits in procedure order only
+//! after every callback has finished, keeping identities independent of
+//! worker count without copying a store per task.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -210,7 +211,7 @@ const TaskContext = struct {
     }
 
     fn execute(self: *TaskContext, output_allocator: Allocator, scratch_allocator: Allocator, lane: *TaskExecutor.LaneState, lane_id: usize) Allocator.Error!void {
-        var shard = try self.source.cloneForProcRewriteWithMarks(output_allocator, self.proc, try laneScratch(LirStore.RewriteMarks, lane));
+        var shard = try self.source.cloneForProcRewrite(output_allocator, self.proc);
         errdefer shard.deinit();
         var next_join = self.first_fresh_join;
         var changed = false;
@@ -515,7 +516,7 @@ pub fn runSegmentTimed(
             next_fresh_join = reservation.next;
         }
         if (parallel) if (metrics) |counts| {
-            counts.prepared_statement_rows +|= @intCast(shard.procRewriteStatementIds().len);
+            counts.prepared_statement_rows +|= shard.procRewriteStatementCount();
             counts.appended_statements +|= @intCast(shard.cf_stmts.len());
         };
         if (context.trmc_report) |report| Trmc.reportProc(store, layouts, context.proc, report);
@@ -562,11 +563,17 @@ fn reserveJoins(first_fresh: u32, next: u32, count: u32) error{JoinIdExhausted}!
 fn validateWritableOwnership(allocator: Allocator, contexts: []const TaskContext) (Allocator.Error || error{SharedWritableStatement})!void {
     var owners = collections.DenseMap(u32, LIR.LirProcSpecId).init(allocator);
     defer owners.deinit();
-    for (contexts) |*context| {
-        for (context.shard.?.procRewriteStatementIds()) |id| {
-            const entry = try owners.getOrPut(id);
-            if (entry.found_existing and entry.value_ptr.* != context.proc) return error.SharedWritableStatement;
-            entry.value_ptr.* = context.proc;
+    inline for (LirStore.rewrite_columns) |field| {
+        owners.clearRetainingCapacity();
+        for (contexts) |*context| {
+            for (context.shard.?.procRewriteChunks()) |chunk| {
+                const range = @field(chunk, field);
+                for (range.start..range.start + range.len) |id| {
+                    const entry = try owners.getOrPut(@intCast(id));
+                    if (entry.found_existing and entry.value_ptr.* != context.proc) return error.SharedWritableStatement;
+                    entry.value_ptr.* = context.proc;
+                }
+            }
         }
     }
 }
@@ -593,12 +600,15 @@ test "procedure rewrite ownership includes statements reached through shared met
     var store = LirStore.init(allocator);
     defer store.deinit();
     const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const shared = store.bodyMark();
     const shared_body = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = shared_body }});
+    const shared_end = store.bodyMark();
     var contexts: [2]TaskContext = undefined;
     var initialized: usize = 0;
     defer for (contexts[0..initialized]) |*context| context.shard.?.deinit();
     for (&contexts, 0..) |*context, i| {
+        const own = store.bodyMark();
         const fallback = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
         const body = try store.addCFStmt(.{ .switch_stmt = .{
             .cond = value,
@@ -612,6 +622,12 @@ test "procedure rewrite ownership includes statements reached through shared met
             .body = .some(body),
             .ret_layout = .u64,
         }, .none);
+        // Each procedure's chunks hold the shared rows its body reaches.
+        try store.addBodyChunk(proc, .{
+            .cf_stmts = .{ .start = shared.cf_stmts, .len = shared_end.cf_stmts - shared.cf_stmts },
+            .cf_switch_branches = .{ .start = shared.cf_switch_branches, .len = shared_end.cf_switch_branches - shared.cf_switch_branches },
+        });
+        try store.recordBodyChunk(proc, own);
         context.* = .{ .source = &store, .layouts = undefined, .phases = &.{.tag_fusion}, .proc = proc };
     }
     const prefix = store.captureBodyPrefix();
@@ -637,9 +653,10 @@ test "issue 11325 procedure counting reuses lane storage across distant local ID
     for (0..100000) |_| _ = try store.addLocal(.{ .layout_idx = .u64 });
     const high = try store.addLocal(.{ .layout_idx = .u64 });
     for (0..16) |index| {
+        const body_mark = store.bodyMark();
         const ret = try store.addCFStmt(.{ .ret = .{ .value = high } }, .test_fixture);
         const body = try store.addCFStmt(.{ .assign_ref = .{ .target = high, .op = .local(low), .next = ret } }, .test_fixture);
-        _ = try store.addProcSpec(.{
+        const proc = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(@intCast(index)),
             .args = try store.addLocalSpan(&.{low}),
@@ -647,6 +664,7 @@ test "issue 11325 procedure counting reuses lane storage across distant local ID
             .body = .some(body),
             .ret_layout = .u64,
         }, .none);
+        try store.recordBodyChunk(proc, body_mark);
     }
     var meter = testing.FailingAllocator.init(testing.allocator, .{});
     var lane = TaskExecutor.LaneState.init(meter.allocator());
@@ -702,6 +720,7 @@ test "issue 11325 lane registration and counting allocation failures release sto
     var layouts = try layout.Store.init(testing.allocator, .u64);
     defer layouts.deinit();
     const local = try store.addLocal(.{ .layout_idx = .u64 });
+    const body_mark = store.bodyMark();
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(0),
@@ -710,5 +729,6 @@ test "issue 11325 lane registration and counting allocation failures release sto
         .body = .some(try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture)),
         .ret_layout = .u64,
     }, .none);
+    try store.recordBodyChunk(proc, body_mark);
     try testing.checkAllAllocationFailures(testing.allocator, testLaneCountingAllocation, .{ &store, &layouts, proc });
 }
