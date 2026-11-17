@@ -52,7 +52,7 @@ test "issue 13113: provides accepts the platform abstract alias" {
     try env.assertDefType("release_for_host", "Box(Model) -> {}");
 }
 
-fn expectRejectedProvidedType(comptime annotation: []const u8) !void {
+fn expectRejectedProvidedType(comptime annotation: []const u8) TestEnv.TestEnvError!void {
     var env = try TestEnv.init("Platform", platformSource("model", annotation));
     defer env.deinit();
 
