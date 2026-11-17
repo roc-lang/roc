@@ -23,7 +23,7 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 24;
+pub const format_version: u32 = 25;
 
 const magic = "RBXO";
 
@@ -141,6 +141,13 @@ pub const ExportRecord = struct {
     /// (`LIR.LirProcSpec.rc_outcomes`); empty when it publishes none. The
     /// variant is an export of its own, with its own record.
     rc_outcomes: []const u32 = &.{},
+    /// The worker's function parameters that never outlive its call
+    /// (`LIR.LirProcSpec.nonescaping_fn_params`): an importer's calls build
+    /// the callables they pass there in their own frames.
+    nonescaping_fn_params: u64 = 0,
+    /// The worker's function parameters a call may hand over through the
+    /// erased ABI's reuse channel (`LIR.LirProcSpec.capture_reuse_fn_params`).
+    capture_reuse_fn_params: u64 = 0,
     /// The worker's encoded needs list, for a worker that takes a type
     /// table (`LirProgram.Result.boxy_table_needs`); empty otherwise.
     table_needs: []const u8 = &.{},
@@ -179,7 +186,7 @@ pub fn exportRecordsDigest(allocator: Allocator, records: []const ExportRecord) 
         }
     }.lessThan);
     var hasher = base.Sha256.init(.{});
-    hasher.update("roc.boxy.export_records.v3");
+    hasher.update("roc.boxy.export_records.v4");
     for (sorted) |record| {
         hasher.update(&record.identity);
         inline for (.{ record.rc_borrowed_params, record.rc_ret_lenders, record.rc_read_only_params, record.rc_ret_unique_fields }) |word| hasher.update(std.mem.asBytes(&word));
@@ -189,6 +196,9 @@ pub fn exportRecordsDigest(allocator: Allocator, records: []const ExportRecord) 
         // An importer's calls may demand the published outcome variant.
         hasher.update(std.mem.asBytes(&@as(u32, @intCast(record.rc_outcomes.len))));
         hasher.update(std.mem.sliceAsBytes(record.rc_outcomes));
+        // An importer's calls build frame callables for these parameters.
+        hasher.update(std.mem.asBytes(&record.nonescaping_fn_params));
+        hasher.update(std.mem.asBytes(&record.capture_reuse_fn_params));
         // An importer fills the worker's tables from its needs.
         hasher.update(std.mem.asBytes(&@as(u32, @intCast(record.table_needs.len))));
         hasher.update(record.table_needs);
@@ -310,6 +320,8 @@ pub fn encodeParts(allocator: Allocator, entry: Entry) Allocator.Error!Encoded {
         for (record.rc_ret_conditions) |word| try appendU32(&bytes, allocator, word);
         try appendU32(&bytes, allocator, @intCast(record.rc_outcomes.len));
         for (record.rc_outcomes) |word| try appendU32(&bytes, allocator, word);
+        try appendU64(&bytes, allocator, record.nonescaping_fn_params);
+        try appendU64(&bytes, allocator, record.capture_reuse_fn_params);
         try appendU32(&bytes, allocator, @intCast(record.table_needs.len));
         try bytes.appendSlice(allocator, record.table_needs);
         try appendU32(&bytes, allocator, record.template);
@@ -447,6 +459,8 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         const outcomes = try allocator.alloc(u32, outcome_count);
         errdefer allocator.free(outcomes);
         for (outcomes) |*word| word.* = try reader.word32();
+        record.nonescaping_fn_params = try reader.word64();
+        record.capture_reuse_fn_params = try reader.word64();
         const needs_len = try reader.word32();
         const needs = try allocator.dupe(u8, try reader.take(needs_len));
         record.rc_ret_conditions = conditions;
@@ -670,7 +684,7 @@ test "a Boxy object entry round-trips through its bytes" {
     const conditions = [_]u32{ 3, 9 };
     var entry: Entry = .{
         .exports = &.{
-            .{ .identity = @splat(1), .rc_borrowed_params = 5, .rc_ret_lenders = 1, .rc_read_only_params = 4, .rc_ret_unique_fields = 0, .rc_ret_borrowed = true, .rc_ret_unique = false, .may_leave_pending = true, .rc_ret_conditions = &conditions, .rc_outcomes = &.{ 0, 0, 1, 1 }, .template = 6, .visible = true },
+            .{ .identity = @splat(1), .rc_borrowed_params = 5, .rc_ret_lenders = 1, .rc_read_only_params = 4, .rc_ret_unique_fields = 0, .rc_ret_borrowed = true, .rc_ret_unique = false, .may_leave_pending = true, .rc_ret_conditions = &conditions, .rc_outcomes = &.{ 0, 0, 1, 1 }, .nonescaping_fn_params = 6, .capture_reuse_fn_params = 2, .template = 6, .visible = true },
             .{ .identity = @splat(2), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 2, .rc_ret_borrowed = false, .rc_ret_unique = true, .may_leave_pending = false, .rc_ret_conditions = &.{} },
         },
         .exports_digest = undefined,
@@ -754,6 +768,12 @@ test "an export records digest is a function of the records in identity order" {
     try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{ first, changed })));
     changed = second;
     changed.rc_outcomes = &.{ 1, 1 };
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{ first, changed })));
+    changed = second;
+    changed.nonescaping_fn_params = 1;
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{ first, changed })));
+    changed = second;
+    changed.capture_reuse_fn_params = 1;
     try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{ first, changed })));
     changed = second;
     changed.table_needs = "needs";
@@ -869,6 +889,8 @@ test "a Boxy object export digest round-trip releases every failed allocation" {
                 .may_leave_pending = true,
                 .rc_ret_conditions = &.{ 3, 9 },
                 .rc_outcomes = &.{ 0, 2 },
+                .nonescaping_fn_params = 3,
+                .capture_reuse_fn_params = 1,
                 .table_needs = "table needs",
             }};
             const digest = try exportRecordsDigest(allocator, records);
