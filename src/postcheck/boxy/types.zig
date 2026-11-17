@@ -510,18 +510,61 @@ pub const Env = struct {
     }
 };
 
+/// A map keyed by checked type ids. Those live in two ranges, source
+/// variables counting up from zero and synthesized types counting up from
+/// the high bit (`check.CheckedTypeIds`), and a `DenseMap`'s chunk directory
+/// spans every chunk between the lowest and highest key it holds, so one
+/// map holding a key of each range would allocate, clear and free a
+/// directory over half the 32-bit id space. This keeps one map per range.
+pub fn CheckedTypeMap(comptime V: type) type {
+    return struct {
+        const Self = @This();
+        const Range = collections.DenseMapUnmanaged(checked.CheckedTypeId, V);
+
+        source: Range = .empty,
+        synthesized: Range = .empty,
+
+        pub const empty: Self = .{};
+
+        pub fn get(self: *const Self, key: checked.CheckedTypeId) ?V {
+            return if (check.CheckedTypeIds.isSynthesized(key)) self.synthesized.get(key) else self.source.get(key);
+        }
+
+        pub fn getOrPut(self: *Self, gpa: Allocator, key: checked.CheckedTypeId) Allocator.Error!Range.GetOrPutResult {
+            const range = if (check.CheckedTypeIds.isSynthesized(key)) &self.synthesized else &self.source;
+            return range.getOrPut(gpa, key);
+        }
+
+        pub fn count(self: *const Self) usize {
+            return self.source.count() + self.synthesized.count();
+        }
+
+        /// Empty the map, keeping its storage, in time proportional to the
+        /// entries it held.
+        pub fn clearRetainingCapacity(self: *Self) void {
+            self.source.clearRetainingCapacity();
+            self.synthesized.clearRetainingCapacity();
+        }
+
+        pub fn deinit(self: *Self, gpa: Allocator) void {
+            self.source.deinit(gpa);
+            self.synthesized.deinit(gpa);
+            self.* = undefined;
+        }
+    };
+}
+
 /// The position of each variable of a scope's variable list `vars`, for
 /// `Env.lookup`: a variable listed twice (an enclosing scheme's variable that
 /// a generalized local's scheme lists again) is at its first position, where
 /// a scan finds it.
 pub const VarPositions = struct {
     vars: []const checked.CheckedTypeId,
-    map: collections.DenseMapUnmanaged(checked.CheckedTypeId, u32) = .empty,
+    map: CheckedTypeMap(u32) = .empty,
 
     pub fn init(allocator: Allocator, vars: []const checked.CheckedTypeId) Allocator.Error!VarPositions {
         var positions: VarPositions = .{ .vars = vars };
         errdefer positions.deinit(allocator);
-        try positions.map.ensureTotalCapacity(allocator, vars.len);
         for (vars, 0..) |variable, index| {
             const entry = try positions.map.getOrPut(allocator, variable);
             if (!entry.found_existing) entry.value_ptr.* = @intCast(index);
@@ -562,6 +605,21 @@ pub const Store = struct {
     declared_entries: std.ArrayList([]const DeclaredEntry) = .empty,
     span_arena: std.heap.ArenaAllocator,
     interned: std.HashMapUnmanaged(InternKey, TypeId, InternContext, std.hash_map.default_max_load_percentage) = .empty,
+    /// The checked types the current walk over a checked type has visited
+    /// (`beginCheckedWalk`). A fresh dense map per walk would allocate a
+    /// chunk for each id it meets and a directory spanning the ids between,
+    /// and free them all again, though a walk visits only a few types spread
+    /// over the module's whole id range; this one keeps its storage across
+    /// walks, so a walk pays only for the entries it adds.
+    checked_walk: CheckedTypeMap(void) = .empty,
+    /// The node `intern` gave each primitive, the variable of each low index,
+    /// the empty record and the empty tag union, once one was asked for:
+    /// these leaves are asked for far more often than they are new, and
+    /// interned nodes never change.
+    primitive_ids: std.EnumArray(Primitive, ?TypeId) = .initFill(null),
+    variable_ids: std.ArrayList(collections.OptionalId(TypeId)) = .empty,
+    empty_record_id: ?TypeId = null,
+    empty_tag_union_id: ?TypeId = null,
     key_bytes: std.ArrayList(u8) = .empty,
     scratch_key: std.ArrayList(u8) = .empty,
 
@@ -666,6 +724,8 @@ pub const Store = struct {
         self.declared_entries.deinit(self.allocator);
         self.span_arena.deinit();
         self.interned.deinit(self.allocator);
+        self.checked_walk.deinit(self.allocator);
+        self.variable_ids.deinit(self.allocator);
         self.key_bytes.deinit(self.allocator);
         self.scratch_key.deinit(self.allocator);
         self.name_texts.deinit(self.allocator);
@@ -1154,21 +1214,58 @@ pub const Store = struct {
         return .{ .name = name, .ty = ty, .kind = .inline_slot };
     }
 
+    /// Start a walk over checked types, which records the types it visits
+    /// with `visitChecked` and ends with `endCheckedWalk`. Walks do not nest.
+    pub fn beginCheckedWalk(self: *Store) void {
+        std.debug.assert(self.checked_walk.count() == 0);
+    }
+
+    /// Whether the current walk meets `ty` for the first time, recording it.
+    pub fn visitChecked(self: *Store, ty: checked.CheckedTypeId) Allocator.Error!bool {
+        return !(try self.checked_walk.getOrPut(self.allocator, ty)).found_existing;
+    }
+
+    pub fn endCheckedWalk(self: *Store) void {
+        self.checked_walk.clearRetainingCapacity();
+    }
+
     pub fn primitive(self: *Store, value: Primitive) Allocator.Error!TypeId {
-        return self.intern(.{ .primitive = value });
+        const slot = self.primitive_ids.getPtr(value);
+        if (slot.*) |known| return known;
+        const id = try self.intern(.{ .primitive = value });
+        slot.* = id;
+        return id;
     }
 
     pub fn variable(self: *Store, index: u32) Allocator.Error!TypeId {
-        return self.intern(.{ .variable = index });
+        // Scope variables count up from zero; a relation's placeholder
+        // variables sit far above them (`Program.relateThroughRequirements`)
+        // and are interned without a slot here.
+        if (index >= cached_variable_count) return try self.intern(.{ .variable = index });
+        if (index < self.variable_ids.items.len) {
+            if (self.variable_ids.items[index].get()) |known| return known;
+        } else try self.variable_ids.appendNTimes(self.allocator, .none, index + 1 - self.variable_ids.items.len);
+        const id = try self.intern(.{ .variable = index });
+        self.variable_ids.items[index] = .some(id);
+        return id;
     }
 
+    /// How many of the lowest variable indices `variable` keeps a node for.
+    const cached_variable_count = 1 << 12;
+
     pub fn emptyRecord(self: *Store) Allocator.Error!TypeId {
-        return self.intern(.empty_record);
+        if (self.empty_record_id) |known| return known;
+        const id = try self.intern(.empty_record);
+        self.empty_record_id = id;
+        return id;
     }
 
     /// The empty tag union: a type with no values.
     pub fn emptyTagUnion(self: *Store) Allocator.Error!TypeId {
-        return self.intern(.{ .tag_union = .{ .tags = &.{}, .ext = null } });
+        if (self.empty_tag_union_id) |known| return known;
+        const id = try self.intern(.{ .tag_union = .{ .tags = &.{}, .ext = null } });
+        self.empty_tag_union_id = id;
+        return id;
     }
 };
 
@@ -1227,6 +1324,11 @@ pub const Converter = struct {
     const Frame = struct {
         module: ModuleIndex,
         ty: checked.CheckedTypeId,
+        /// The checked payload of `ty`, read once by `leaf`.
+        payload: checked.CheckedTypePayload,
+        /// `rootHasIdentityVariables` of `ty`, as `leaf` found it; null
+        /// when the converter seals undetermined kinds and memoizes nothing.
+        identity_variables: ?bool,
         /// The children converted so far, in `results`.
         results_start: usize,
         /// Children still to convert, in `pending`.
@@ -1260,26 +1362,31 @@ pub const Converter = struct {
         // reaching one is shared only between scopes that name none.
         var shared: ?bool = null;
         var root_reaches = false;
-        if (try self.leaf(module, ty, env, &shared, &root_reaches)) |done| return done;
-        try self.pushFrame(&frames, &pending, results.items.len, module, ty);
+        switch (try self.leaf(module, ty, env, &shared, &root_reaches)) {
+            .done => |done| return done,
+            .composite => |composite| try self.pushFrame(&frames, &pending, results.items.len, module, ty, composite),
+        }
         while (frames.items.len > 0) {
             const top = &frames.items[frames.items.len - 1];
             if (top.pending_next < pending.items.len) {
                 const child = pending.items[top.pending_next];
                 top.pending_next += 1;
                 var child_reaches = false;
-                if (try self.leaf(child.module, child.ty, env, &shared, &child_reaches)) |done| {
-                    try results.append(allocator, done);
-                    try reaches.append(allocator, child_reaches);
-                } else {
-                    if (frames.items.len > 1_000_000) invariant("checked type conversion nested past every finite type");
-                    try self.pushFrame(&frames, &pending, results.items.len, child.module, child.ty);
+                switch (try self.leaf(child.module, child.ty, env, &shared, &child_reaches)) {
+                    .done => |done| {
+                        try results.append(allocator, done);
+                        try reaches.append(allocator, child_reaches);
+                    },
+                    .composite => |composite| {
+                        if (frames.items.len > 1_000_000) invariant("checked type conversion nested past every finite type");
+                        try self.pushFrame(&frames, &pending, results.items.len, child.module, child.ty, composite);
+                    },
                 }
                 continue;
             }
             const frame = frames.pop().?;
             const children = results.items[frame.results_start..];
-            const built = try self.finish(frame.module, frame.ty, children, env);
+            const built = try self.finish(frame.module, frame.ty, frame.payload, children, env);
             const built_reaches = frame.ends_in_uncommitted_tail or std.mem.findScalar(bool, reaches.items[frame.results_start..], true) != null;
             results.shrinkRetainingCapacity(frame.results_start);
             reaches.shrinkRetainingCapacity(frame.results_start);
@@ -1287,7 +1394,7 @@ pub const Converter = struct {
             // A type with no identity variables converts the same under
             // every environment that names no closed row node it reaches.
             const memo: Store.ClosedMemo = .{ .ty = built, .reaches_row_node = built_reaches };
-            if (!self.seal_undetermined_kinds and !try rootHasIdentityVariables(self.modules.get(frame.module), frame.ty) and (!built_reaches or try self.namesNoRow(env, &shared))) {
+            if (frame.identity_variables == false and (!built_reaches or try self.namesNoRow(env, &shared))) {
                 try self.store.closed_memo.put(allocator, .{ .module = frame.module, .ty = frame.ty }, memo);
             } else if (schemeKey(frame.module, frame.ty, env)) |key| {
                 if (!self.seal_undetermined_kinds) try self.store.scheme_memo.put(allocator, key, memo);
@@ -1363,10 +1470,18 @@ pub const Converter = struct {
         return self.tailNodeAt(env, index);
     }
 
+    /// What `leaf` finds for a type: its node, or the checked payload of a
+    /// type whose children convert first, with whether it reaches an
+    /// identity variable (`Frame.identity_variables`).
+    const Leaf = union(enum) {
+        done: TypeId,
+        composite: struct { payload: checked.CheckedTypePayload, identity_variables: ?bool },
+    };
+
     /// The node for `ty` when it needs no children converted first.
     /// `reaches` says whether the node reaches a record or tag union a
     /// scope can name as a closed row node (`ClosedMemo`).
-    fn leaf(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env, shared: *?bool, reaches: *bool) Allocator.Error!?TypeId {
+    fn leaf(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env, shared: *?bool, reaches: *bool) Allocator.Error!Leaf {
         reaches.* = false;
         if (env.lookupIndex(module, ty)) |index| {
             // A closed row node of the scope converts as its own structure.
@@ -1377,16 +1492,17 @@ pub const Converter = struct {
                     .record, .tag_union => true,
                     .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .empty_tag_union, .field_kind => false,
                 };
-                return env.bound[index];
+                return .{ .done = env.bound[index] };
             }
         }
-        if (self.platformIdentity(module, ty)) |solved| return solved;
+        if (self.platformIdentity(module, ty)) |solved| return .{ .done = solved };
         const view = self.modules.get(module);
-        if (!self.seal_undetermined_kinds and !try rootHasIdentityVariables(view, ty)) {
+        const identity_variables: ?bool = if (self.seal_undetermined_kinds) null else try rootHasIdentityVariables(view, ty);
+        if (identity_variables == false) {
             if (self.store.closed_memo.get(.{ .module = module, .ty = ty })) |memo| {
                 if (!memo.reaches_row_node or try self.namesNoRow(env, shared)) {
                     reaches.* = memo.reaches_row_node;
-                    return memo.ty;
+                    return .{ .done = memo.ty };
                 }
             }
         }
@@ -1394,11 +1510,12 @@ pub const Converter = struct {
             if (schemeKey(module, ty, env)) |key| {
                 if (self.store.scheme_memo.get(key)) |memo| {
                     reaches.* = memo.reaches_row_node;
-                    return memo.ty;
+                    return .{ .done = memo.ty };
                 }
             }
         }
-        return switch (view.types().payload(ty)) {
+        const payload = view.types().payload(ty);
+        const node: ?TypeId = switch (payload) {
             .pending => invariant("a pending checked type reached Boxy lowering"),
             .err => invariant("an erroneous checked type reached Boxy lowering"),
             .flex, .rigid => |variable| try self.sealVariable(variable),
@@ -1414,6 +1531,8 @@ pub const Converter = struct {
             .field_kind => |kind| try self.store.committedKind(kind == .optional),
             .alias, .record, .tuple, .function, .tag_union => null,
         };
+        if (node) |done| return .{ .done = done };
+        return .{ .composite = .{ .payload = payload, .identity_variables = identity_variables } };
     }
 
     /// The distinct flex and rigid variables the checked type `root` of
@@ -1424,11 +1543,11 @@ pub const Converter = struct {
         var found: std.ArrayList(checked.CheckedTypeId) = .empty;
         var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
         defer pending.deinit(scratch);
-        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
-        defer seen.deinit(scratch);
+        self.store.beginCheckedWalk();
+        defer self.store.endCheckedWalk();
         try pending.append(scratch, root);
         while (pending.pop()) |ty| {
-            if ((try seen.getOrPut(scratch, ty)).found_existing) continue;
+            if (!try self.store.visitChecked(ty)) continue;
             const start = pending.items.len;
             switch (types.payload(ty)) {
                 .flex, .rigid => try found.append(allocator, ty),
@@ -1487,13 +1606,13 @@ pub const Converter = struct {
         return try self.store.emptyTagUnion();
     }
 
-    fn pushFrame(self: Converter, frames: *std.ArrayList(Frame), pending: *std.ArrayList(Child), results_start: usize, module: ModuleIndex, ty: checked.CheckedTypeId) Allocator.Error!void {
+    fn pushFrame(self: Converter, frames: *std.ArrayList(Frame), pending: *std.ArrayList(Child), results_start: usize, module: ModuleIndex, ty: checked.CheckedTypeId, composite: @FieldType(Leaf, "composite")) Allocator.Error!void {
         const allocator = self.store.allocator;
         const pending_start = pending.items.len;
         const view = self.modules.get(module);
         const types = view.types();
         var ends_in_uncommitted_tail = false;
-        switch (types.payload(ty)) {
+        switch (composite.payload) {
             .alias => |alias| try pending.append(allocator, .{ .module = module, .ty = alias.backing }),
             .record => |record| {
                 var current_fields = record.fields;
@@ -1557,6 +1676,8 @@ pub const Converter = struct {
         try frames.append(allocator, .{
             .module = module,
             .ty = ty,
+            .payload = composite.payload,
+            .identity_variables = composite.identity_variables,
             .results_start = results_start,
             .pending_start = pending_start,
             .pending_next = pending_start,
@@ -1564,12 +1685,12 @@ pub const Converter = struct {
         });
     }
 
-    fn finish(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, children: []const TypeId, env: Env) Allocator.Error!TypeId {
+    fn finish(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, payload: checked.CheckedTypePayload, children: []const TypeId, env: Env) Allocator.Error!TypeId {
         const allocator = self.store.allocator;
         const view = self.modules.get(module);
         const types = view.types();
         const name_store = view.nameStore();
-        switch (types.payload(ty)) {
+        switch (payload) {
             .alias => return children[0],
             .tuple => return try self.store.intern(.{ .tuple = children }),
             .function => |function| return try self.store.intern(.{ .function = .{
@@ -1989,6 +2110,7 @@ pub const Converter = struct {
     /// whatever its text (design.md "Name Identity"): the runtime node's id
     /// digests the declaring module's link name and the declaration.
     fn declName(self: Converter, decl: NominalDeclKey, text: []const u8) Allocator.Error!NameId {
+        if (self.store.decl_name_ids.get(decl)) |existing| return existing;
         const view = self.modules.get(decl.module);
         const declaration = view.types().nominalDeclarationById(decl.decl);
         // Declarations sharing a name are told apart by their order, which
