@@ -6023,13 +6023,30 @@ pub const InstGraph = struct {
         row_width: RowWidthRelation,
     ) Allocator.Error!void {
         self.requireRelationProduction();
-        if (try self.containsGeneratedPrivate(public_node) or !try self.containsGeneratedPrivate(private_node)) {
+        if (!try self.isGeneratedPrivateSelectionDirection(public_node, private_node)) {
             Common.invariant("generated-private representation selection received incorrect public/private direction");
         }
         if (try self.containsFinishedMono(public_node) or try self.containsFinishedMono(private_node)) {
             Common.invariant("finished Monotype reached generated-private representation selection");
         }
         try self.unifyRootsTransitively(public_node, private_node, true, row_width);
+    }
+
+    /// Whether selecting `private_node` as the representation of
+    /// `public_node` goes from public to private. Selection joins class
+    /// roots, so the roots alone determine the direction: the private side's
+    /// root is generated-private evidence and the public side's is not. A
+    /// public root may still hold generated-private types among its
+    /// arguments, as `Iter(() -> Iter(U8))` holds the produced iterator its
+    /// items return, and those arguments relate as the components they are.
+    /// Where neither root is generated-private, the private side holds a
+    /// generated-private component and the public side holds none.
+    fn isGeneratedPrivateSelectionDirection(self: *InstGraph, public_node: NodeId, private_node: NodeId) Allocator.Error!bool {
+        const public_root = self.nodes.items[@backingInt(self.find(public_node))];
+        const private_root = self.nodes.items[@backingInt(self.find(private_node))];
+        if (self.contentIsGeneratedPrivateRoot(private_root)) return !self.contentIsGeneratedPrivateRoot(public_root);
+        if (self.contentIsGeneratedPrivateRoot(public_root)) return false;
+        return !try self.containsGeneratedPrivate(public_node) and try self.containsGeneratedPrivate(private_node);
     }
 
     fn relateOpaqueInterfacePair(

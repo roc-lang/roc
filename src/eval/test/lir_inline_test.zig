@@ -1315,6 +1315,10 @@ fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
     lifted_owned = false;
     lifted = undefined;
     defer solved.deinit();
+    if ((try postcheck.LambdaSolved.Specialize.run(allocator, &solved)).cloned_fns != 0) {
+        procedure_usage.deinit();
+        procedure_usage = try postcheck.MonotypeLifted.SpecConstr.collectProcedureUsage(allocator, &solved.lifted);
+    }
 
     var inline_plan = try postcheck.SolvedInline.analyze(allocator, .wrappers, procedure_usage.view(), &solved);
     defer inline_plan.deinit();
@@ -15029,6 +15033,822 @@ test "sealed result rows: an annotated result row is a static worker and widenin
         }
     }
     try runtime_env.checkForLeaks();
+}
+
+// Lambda-set specialization over a user-declared iterator. `MyIter` is shaped
+// like the builtin `Iter` (a record whose `step` closure returns the next item
+// and the rest), but it is an ordinary nominal type: Monotype gives every
+// `MyIter(I64)` occurrence one type and mints nothing for it, so these tests
+// measure what Lambda Solved decides for a chain independently of iterator
+// minting. Each program is measured twice: after the SpecConstr variant of
+// inline mode `.none` (iterator fusion only), which leaves every adapter one
+// function shared by its call sites, and after the `.wrappers` variant, which
+// also clones functions per known call pattern.
+//
+// The nominal form (`:=`) is the measured one; the opaque form (`::`) solves
+// and lowers the same way (see the opaque test).
+//
+// The adapters come in two forms. `next`-based adapters call one shared
+// `MyIter.next`, as the builtin adapters call `Iter.next`, so every iterator
+// value of the program reaches that one function. Direct adapters read
+// `(iterator.step)()` themselves, so an iterator value reaches only the
+// functions that consume it.
+
+fn myIterDecl(comptime kind: []const u8, comptime advance: fn (comptime []const u8) []const u8) []const u8 {
+    return "MyIter(item) " ++ kind ++ " { step : () -> [One({ item : item, rest : MyIter(item) }), Skip({ rest : MyIter(item) }), Done] }.{\n" ++
+        \\    from_list : List(item) -> MyIter(item)
+        \\    from_list = |list| MyIter.from_list_at(list, 0)
+        \\
+        \\    from_list_at : List(item), U64 -> MyIter(item)
+        \\    from_list_at = |list, index|
+        \\        MyIter.{
+        \\            step: ||
+        \\                match List.get(list, index) {
+        \\                    Ok(item) => One({ item, rest: MyIter.from_list_at(list, index + 1) })
+        \\                    Err(_) => Done
+        \\                },
+        \\        }
+        \\
+        \\    next : MyIter(item) -> [One({ item : item, rest : MyIter(item) }), Skip({ rest : MyIter(item) }), Done]
+        \\    next = |iterator| (iterator.step)()
+        \\
+        \\    map : MyIter(a), (a -> b) -> MyIter(b)
+        \\    map = |iterator, transform|
+        \\        MyIter.{
+        \\            step: ||
+        \\
+    ++ "                match " ++ advance("iterator") ++ " {\n" ++
+        \\                    Done => Done
+        \\                    Skip({ rest }) => Skip({ rest: MyIter.map(rest, transform) })
+        \\                    One({ item, rest }) => One({ item: transform(item), rest: MyIter.map(rest, transform) })
+        \\                },
+        \\        }
+        \\
+        \\    keep_if : MyIter(a), (a -> Bool) -> MyIter(a)
+        \\    keep_if = |iterator, predicate|
+        \\        MyIter.{
+        \\            step: ||
+        \\
+    ++ "                match " ++ advance("iterator") ++ " {\n" ++
+        \\                    Done => Done
+        \\                    Skip({ rest }) => Skip({ rest: MyIter.keep_if(rest, predicate) })
+        \\                    One({ item, rest }) =>
+        \\                        if predicate(item) {
+        \\                            One({ item, rest: MyIter.keep_if(rest, predicate) })
+        \\                        } else {
+        \\                            Skip({ rest: MyIter.keep_if(rest, predicate) })
+        \\                        }
+        \\                },
+        \\        }
+        \\
+        \\    fold : MyIter(a), acc, (acc, a -> acc) -> acc
+        \\    fold = |iterator, init, step| {
+        \\        var $state = init
+        \\        var $rest = iterator
+        \\        while Bool.True {
+        \\
+    ++ "            match " ++ advance("$rest") ++ " {\n" ++
+        \\                Done => break
+        \\                Skip({ rest }) => {
+        \\                    $rest = rest
+        \\                }
+        \\                One({ item, rest }) => {
+        \\                    $state = step($state, item)
+        \\                    $rest = rest
+        \\                }
+        \\            }
+        \\        }
+        \\        $state
+        \\    }
+        \\}
+        \\
+        \\
+    ;
+}
+
+fn advanceWithNext(comptime iterator: []const u8) []const u8 {
+    return "MyIter.next(" ++ iterator ++ ")";
+}
+
+fn advanceDirectly(comptime iterator: []const u8) []const u8 {
+    return "(" ++ iterator ++ ".step)()";
+}
+
+const my_iter_with_next = myIterDecl(":=", advanceWithNext);
+const my_iter_direct = myIterDecl(":=", advanceDirectly);
+const my_iter_opaque_with_next = myIterDecl("::", advanceWithNext);
+
+/// What Lambda Solved decided for the callable slots a program's type tables
+/// (function, local, expression and pattern types) reach.
+const LambdaSetCensus = struct {
+    /// Solved lambda-set classes holding two or more members.
+    multi_member_sets: usize = 0,
+    /// The largest member count of any solved lambda-set class.
+    max_members: usize = 0,
+    /// Lambda-set classes whose captured values contain a value of the same
+    /// class, which layout can represent only through a recursion box.
+    self_containing_sets: usize = 0,
+};
+
+/// Census of the program Lambda Solved produces for `source` when the lifted
+/// program reaching it went through the SpecConstr variant `inline_mode`
+/// selects in the pipeline: call-pattern cloning for `.wrappers`, iterator
+/// fusion only for `.none`.
+fn lambdaSolvedSetCensus(source: []const u8, inline_mode: lir.CheckedPipeline.InlineMode) TestError!LambdaSetCensus {
+    return lambdaSolvedSetCensusInOrder(source, inline_mode, .binding_groups, null, null);
+}
+
+/// `lambdaSolvedSetCensus`, solving bodies in `order`. With `classes`, also
+/// appends a description of how the solved lambda-set classes partition the
+/// callable slots that the function and local types reach: a walk of those
+/// types in a fixed order that numbers each class when it first meets it
+/// and writes that number (and, the first time, the class's members) at
+/// every meeting. Two solves with the same partition write the same words.
+fn lambdaSolvedSetCensusInOrder(
+    source: []const u8,
+    inline_mode: lir.CheckedPipeline.InlineMode,
+    order: postcheck.LambdaSolved.Solve.BodyOrder,
+    classes: ?*std.ArrayList(u32),
+    specialized: ?*postcheck.LambdaSolved.Specialize.Census,
+) TestError!LambdaSetCensus {
+    const allocator = std.testing.allocator;
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
+    defer allocator.free(import_views);
+
+    var view_index: usize = 0;
+    if (resources.borrowed_builtin_artifact) |builtin_artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
+        view_index += 1;
+    }
+    for (resources.import_artifacts) |*artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
+        view_index += 1;
+    }
+
+    var mono = try postcheck.Monotype.Lower.run(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = import_views,
+        },
+        .{ .requests = resources.checked_artifact.root_requests.requests.items() },
+        .{},
+    );
+    var mono_owned = true;
+    errdefer if (mono_owned) mono.deinit();
+
+    var lifted = try postcheck.MonotypeLifted.Lift.run(allocator, mono);
+    mono_owned = false;
+    mono = undefined;
+    var lifted_owned = true;
+    errdefer if (lifted_owned) lifted.deinit();
+
+    if (inline_mode == .none) {
+        try postcheck.MonotypeLifted.SpecConstr.runIteratorFusion(allocator, &lifted);
+    } else {
+        var procedure_usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted, .all_calls);
+        procedure_usage.deinit();
+    }
+
+    var solved = try postcheck.LambdaSolved.Solve.runInOrder(allocator, lifted, order);
+    lifted_owned = false;
+    lifted = undefined;
+    defer solved.deinit();
+    const specialize_census = try postcheck.LambdaSolved.Specialize.run(allocator, &solved);
+    if (specialized) |out| out.* = specialize_census;
+
+    const SolvedType = postcheck.LambdaSolved.Type;
+    const types = solved.types.view();
+    var census: LambdaSetCensus = .{};
+    var visited = collections.DenseMap(SolvedType.TypeVarId, void).init(allocator);
+    defer visited.deinit();
+    var pending: std.ArrayList(SolvedType.TypeVarId) = .empty;
+    defer pending.deinit(allocator);
+
+    // Only the classes the program's type tables reach: a class no table
+    // reaches is no value's representation.
+    var reached = collections.DenseMap(SolvedType.TypeVarId, void).init(allocator);
+    defer reached.deinit();
+    var sets: std.ArrayList(SolvedType.TypeVarId) = .empty;
+    defer sets.deinit(allocator);
+    for ([_][]const SolvedType.TypeVarId{ solved.fn_tys.items, solved.local_tys.items, solved.expr_tys.items, solved.pat_tys.items }) |table| {
+        try pending.appendSlice(allocator, table);
+    }
+    while (pending.pop()) |next| {
+        const root = types.root(next);
+        if ((try reached.getOrPut(root)).found_existing) continue;
+        switch (types.get(root)) {
+            .record => |fields| for (types.fieldSpan(fields)) |field| {
+                try pending.append(allocator, field.ty);
+                if (field.value_ty.get()) |value_ty| try pending.append(allocator, value_ty);
+            },
+            .tuple => |items| try pending.appendSlice(allocator, types.span(items)),
+            .tag_union => |tags| for (types.tagSpan(tags)) |tag| try pending.appendSlice(allocator, types.span(tag.payloads)),
+            .list, .box => |elem| try pending.append(allocator, elem),
+            .named => |named| {
+                try pending.appendSlice(allocator, types.span(named.args));
+                if (named.backing.get()) |backing| try pending.append(allocator, backing.ty);
+            },
+            .func => |func| {
+                try pending.appendSlice(allocator, types.span(func.args));
+                try pending.append(allocator, func.callable);
+                try pending.append(allocator, func.ret);
+            },
+            .lambda_set => |members| {
+                try sets.append(allocator, root);
+                for (types.memberSpan(members)) |member| {
+                    for (types.captureSpan(member.captures)) |capture| try pending.append(allocator, capture.ty);
+                }
+            },
+            .erased => |erased| for (types.memberSpan(erased.members)) |member| {
+                for (types.captureSpan(member.captures)) |capture| try pending.append(allocator, capture.ty);
+            },
+            .link, .unbound, .primitive, .zst, .hole, .mono => {},
+        }
+    }
+
+    for (sets.items) |set_ty| {
+        const members = types.get(set_ty).lambda_set;
+        if (members.count() >= 2) census.multi_member_sets += 1;
+        census.max_members = @max(census.max_members, members.count());
+
+        // Walk the runtime values a member's captures hold: a function value
+        // holds its callable slot, never its argument or result types, and an
+        // erased callable holds its captures behind a pointer.
+        visited.clearRetainingCapacity();
+        pending.clearRetainingCapacity();
+        for (types.memberSpan(members)) |member| {
+            for (types.captureSpan(member.captures)) |capture| try pending.append(allocator, capture.ty);
+        }
+        const contains_itself = while (pending.pop()) |next| {
+            const root = types.root(next);
+            if (root == set_ty) break true;
+            if ((try visited.getOrPut(root)).found_existing) continue;
+            switch (types.get(root)) {
+                .record => |fields| for (types.fieldSpan(fields)) |field| try pending.append(allocator, field.ty),
+                .tuple => |items| try pending.appendSlice(allocator, types.span(items)),
+                .tag_union => |tags| for (types.tagSpan(tags)) |tag| try pending.appendSlice(allocator, types.span(tag.payloads)),
+                .list, .box => |elem| try pending.append(allocator, elem),
+                .named => |named| if (named.backing.get()) |backing| {
+                    try pending.append(allocator, backing.ty);
+                } else {
+                    try pending.appendSlice(allocator, types.span(named.args));
+                },
+                .func => |func| try pending.append(allocator, func.callable),
+                .lambda_set => |inner| for (types.memberSpan(inner)) |member| {
+                    for (types.captureSpan(member.captures)) |capture| try pending.append(allocator, capture.ty);
+                },
+                .link, .unbound, .primitive, .erased, .zst, .hole, .mono => {},
+            }
+        } else false;
+        if (contains_itself) census.self_containing_sets += 1;
+    }
+
+    if (classes) |out| {
+        var class_ids = collections.DenseMap(SolvedType.TypeVarId, u32).init(allocator);
+        defer class_ids.deinit();
+        var walked = collections.DenseMap(SolvedType.TypeVarId, void).init(allocator);
+        defer walked.deinit();
+        var stack: std.ArrayList(SolvedType.TypeVarId) = .empty;
+        defer stack.deinit(allocator);
+        var children: std.ArrayList(SolvedType.TypeVarId) = .empty;
+        defer children.deinit(allocator);
+        for ([_][]const SolvedType.TypeVarId{ solved.fn_tys.items, solved.local_tys.items }) |table| {
+            for (table) |table_ty| {
+                try stack.append(allocator, table_ty);
+                while (stack.pop()) |next| {
+                    const root = types.root(next);
+                    children.clearRetainingCapacity();
+                    switch (types.get(root)) {
+                        .lambda_set => |members| {
+                            const entry = try class_ids.getOrPut(root);
+                            if (entry.found_existing) {
+                                try out.append(allocator, entry.value_ptr.*);
+                                continue;
+                            }
+                            entry.value_ptr.* = @intCast(class_ids.count() - 1);
+                            try out.append(allocator, entry.value_ptr.*);
+                            try out.append(allocator, @intCast(members.count()));
+                            for (types.memberSpan(members)) |member| {
+                                try out.append(allocator, @backingInt(member.lambda));
+                                for (types.captureSpan(member.captures)) |capture| try children.append(allocator, capture.ty);
+                            }
+                        },
+                        .record => |fields| {
+                            if ((try walked.getOrPut(root)).found_existing) continue;
+                            for (types.fieldSpan(fields)) |field| try children.append(allocator, field.ty);
+                        },
+                        .tuple => |items| {
+                            if ((try walked.getOrPut(root)).found_existing) continue;
+                            try children.appendSlice(allocator, types.span(items));
+                        },
+                        .tag_union => |tags| {
+                            if ((try walked.getOrPut(root)).found_existing) continue;
+                            for (types.tagSpan(tags)) |tag| try children.appendSlice(allocator, types.span(tag.payloads));
+                        },
+                        .list, .box => |elem| {
+                            if ((try walked.getOrPut(root)).found_existing) continue;
+                            try children.append(allocator, elem);
+                        },
+                        .named => |named| {
+                            if ((try walked.getOrPut(root)).found_existing) continue;
+                            try children.appendSlice(allocator, types.span(named.args));
+                            if (named.backing.get()) |backing| try children.append(allocator, backing.ty);
+                        },
+                        .func => |func| {
+                            if ((try walked.getOrPut(root)).found_existing) continue;
+                            try children.appendSlice(allocator, types.span(func.args));
+                            try children.append(allocator, func.callable);
+                            try children.append(allocator, func.ret);
+                        },
+                        .link, .unbound, .primitive, .erased, .zst, .hole, .mono => {},
+                    }
+                    var index = children.items.len;
+                    while (index > 0) {
+                        index -= 1;
+                        try stack.append(allocator, children.items[index]);
+                    }
+                }
+            }
+        }
+    }
+    return census;
+}
+
+/// The LIR counters that show how a user iterator chain was represented.
+const UserIterLirCounters = struct {
+    box_box_count: usize,
+    erased_call_count: usize,
+    packed_erased_fn_count: usize,
+    switch_count: usize,
+    direct_call_count: usize,
+};
+
+fn userIterLirCounters(lowered: *const lir.CheckedPipeline.LoweredProgram) TestError!UserIterLirCounters {
+    const allocator = std.testing.allocator;
+    return .{
+        .box_box_count = try reachableProcShapeFieldTotal(allocator, lowered, "box_box_count"),
+        .erased_call_count = try reachableProcShapeFieldTotal(allocator, lowered, "erased_call_count"),
+        .packed_erased_fn_count = try reachableProcShapeFieldTotal(allocator, lowered, "packed_erased_fn_count"),
+        .switch_count = try reachableProcShapeFieldTotal(allocator, lowered, "switch_count"),
+        .direct_call_count = try reachableProcShapeFieldTotal(allocator, lowered, "direct_call_count"),
+    };
+}
+
+/// Lower `source` at `inline_mode`, run it, and require its one `dbg` event
+/// to be `expected_dbg`.
+fn lowerAndRunUserIter(source: []const u8, inline_mode: lir.CheckedPipeline.InlineMode, expected_dbg: []const u8) TestError!UserIterLirCounters {
+    const allocator = std.testing.allocator;
+    var optimized = try lowerModuleWithOptions(allocator, source, inline_mode, .{ .tag_reachability = true });
+    defer optimized.deinit(allocator);
+
+    var run = try runLoweredWithHostEvents(allocator, &optimized.lowered);
+    defer run.deinit(allocator);
+    try std.testing.expectEqual(eval.RuntimeHostEnv.Termination.returned, run.termination);
+    try std.testing.expectEqual(@as(usize, 1), run.events.len);
+    switch (run.events[0]) {
+        .dbg => |msg| try std.testing.expectEqualStrings(expected_dbg, msg),
+        .expect_failed, .crashed, .effect => return error.TestUnexpectedResult,
+    }
+    return try userIterLirCounters(&optimized.lowered);
+}
+
+/// What one user-iterator program is expected to solve and lower to at one
+/// inline mode.
+const UserIterExpectation = struct {
+    multi_member_sets: usize,
+    max_members: usize,
+    self_containing_sets: usize,
+    box_box_count: usize,
+    erased_call_count: usize = 0,
+    packed_erased_fn_count: usize = 0,
+};
+
+/// Measure `source` at `inline_mode`, run it (its one `dbg` event must be
+/// `expected_dbg`), and compare with `expected`. A mismatch prints what was
+/// observed and returns false, so one test reports every mode it measures.
+fn userIterMatches(
+    name: []const u8,
+    source: []const u8,
+    inline_mode: lir.CheckedPipeline.InlineMode,
+    expected_dbg: []const u8,
+    expected: UserIterExpectation,
+) TestError!bool {
+    const census = try lambdaSolvedSetCensus(source, inline_mode);
+    const counters = try lowerAndRunUserIter(source, inline_mode, expected_dbg);
+    const observed: UserIterExpectation = .{
+        .multi_member_sets = census.multi_member_sets,
+        .max_members = census.max_members,
+        .self_containing_sets = census.self_containing_sets,
+        .box_box_count = counters.box_box_count,
+        .erased_call_count = counters.erased_call_count,
+        .packed_erased_fn_count = counters.packed_erased_fn_count,
+    };
+    if (std.meta.eql(observed, expected)) return true;
+    std.debug.print("user iter {s} [{s}]: observed {any}\n", .{ name, @tagName(inline_mode), observed });
+    return false;
+}
+
+/// The expectations of one program at both inline modes.
+const UserIterCase = struct {
+    name: []const u8,
+    source: []const u8,
+    dbg: []const u8,
+    none: UserIterExpectation,
+    wrappers: UserIterExpectation,
+};
+
+fn expectUserIterCases(cases: []const UserIterCase) TestError!void {
+    var all_match = true;
+    for (cases) |case| {
+        all_match = (try userIterMatches(case.name, case.source, .none, case.dbg, case.none)) and all_match;
+        all_match = (try userIterMatches(case.name, case.source, .wrappers, case.dbg, case.wrappers)) and all_match;
+    }
+    if (!all_match) return error.TestUnexpectedResult;
+}
+
+/// The lowering a chain reaches once every lambda set is specialized per
+/// chain: no set holds two members, none contains itself, and nothing is
+/// boxed or erased.
+const user_iter_fused: UserIterExpectation = .{
+    .multi_member_sets = 0,
+    .max_members = 1,
+    .self_containing_sets = 0,
+    .box_box_count = 0,
+};
+
+const user_iter_chain_main =
+    \\main : I64
+    \\main = {
+    \\    offset = 10.I64
+    \\    add_offset = |x| x + offset
+    \\    total = MyIter.from_list([1.I64, 2, 3, 4]).map(add_offset).keep_if(|x| x > 12).fold(0, |acc, x| acc + x)
+    \\    dbg total
+    \\    total
+    \\}
+;
+
+// (a) A `map(f).keep_if(g)` chain over a list, consumed at once. Its target
+// is `user_iter_fused` for every case at both modes. With `next`-based
+// adapters, every iterator value of the chain reaches the one `MyIter.next`,
+// so their step closures share one lambda set, which then contains itself
+// through the captured upstream iterator and is boxed. Direct adapters fuse
+// at `.none`; after `.wrappers` call-pattern cloning, three sets hold two
+// members each, though none contains itself.
+test "MyIter lambda sets: map keep_if chain consumed at once" {
+    try expectUserIterCases(&.{
+        .{
+            .name = "next-based",
+            .source = my_iter_with_next ++ user_iter_chain_main,
+            .dbg = "27",
+            .none = user_iter_fused,
+            .wrappers = .{ .multi_member_sets = 3, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
+        },
+        .{
+            .name = "direct",
+            .source = my_iter_direct ++ user_iter_chain_main,
+            .dbg = "27",
+            .none = user_iter_fused,
+            .wrappers = .{ .multi_member_sets = 3, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
+        },
+    });
+}
+
+const user_iter_two_sites_main =
+    \\main : I64
+    \\main = {
+    \\    offset = 10.I64
+    \\    add_offset = |x| x + offset
+    \\    scale = 3.I64
+    \\    times_scale = |x| x * scale
+    \\    first = MyIter.from_list([1.I64, 2, 3]).map(add_offset).fold(0, |acc, x| acc + x)
+    \\    second = MyIter.from_list([4.I64, 5]).map(times_scale).fold(0, |acc, x| acc + x)
+    \\    total = first + second
+    \\    dbg total
+    \\    total
+    \\}
+;
+
+// (b) One adapter used at two call sites with different closures. Its
+// target is `user_iter_fused` for every case at both modes: neither site's
+// closure set holds the other site's closure. At `.none` the one `map`
+// function serves both sites, so its transform's lambda set is
+// `{add_offset, times_scale}`.
+test "MyIter lambda sets: one adapter at two call sites" {
+    try expectUserIterCases(&.{
+        .{
+            .name = "next-based",
+            .source = my_iter_with_next ++ user_iter_two_sites_main,
+            .dbg = "63",
+            .none = user_iter_fused,
+            .wrappers = user_iter_fused,
+        },
+        .{
+            .name = "direct",
+            .source = my_iter_direct ++ user_iter_two_sites_main,
+            .dbg = "63",
+            .none = user_iter_fused,
+            .wrappers = user_iter_fused,
+        },
+    });
+}
+
+const user_iter_callback_main =
+    \\apply : MyIter(I64), (MyIter(I64) -> MyIter(I64)) -> MyIter(I64)
+    \\apply = |iterator, adapt| adapt(iterator)
+    \\
+    \\main : I64
+    \\main = {
+    \\    offset = 10.I64
+    \\    add_offset = |x| x + offset
+    \\    total = apply(MyIter.from_list([1.I64, 2, 3]), |inner| inner.map(add_offset)).fold(0, |acc, x| acc + x)
+    \\    dbg total
+    \\    total
+    \\}
+;
+
+// (c) A callback typed `MyIter(I64) -> MyIter(I64)` that maps its argument.
+// The callback's argument and result are two occurrences of one Monotype in
+// one function type. Its target is `user_iter_fused` for every case at both
+// modes: the result's step set is not the argument's, so nothing contains
+// itself and nothing is boxed. With direct adapters at `.none`, the one
+// tie between the two occurrences is the callback lambda's signature:
+// Monotype lifts a nested lambda with an exact signature graph
+// (`SignatureRelation.exact_graph`), and Lambda Solved expands that graph in
+// one whole-root context, where its argument and result are one var. The map
+// step that captures the argument then lands in the argument's own step set
+// (with the list step), which contains itself and is boxed. After `.wrappers` cloning
+// nothing is boxed, but one solved set of two members still contains
+// itself.
+test "MyIter lambda sets: callback from iterator to iterator" {
+    try expectUserIterCases(&.{
+        .{
+            .name = "next-based",
+            .source = my_iter_with_next ++ user_iter_callback_main,
+            .dbg = "36",
+            .none = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 1, .box_box_count = 3 },
+            .wrappers = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 1, .box_box_count = 0 },
+        },
+        .{
+            .name = "direct",
+            .source = my_iter_direct ++ user_iter_callback_main,
+            .dbg = "36",
+            .none = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 1, .box_box_count = 3 },
+            .wrappers = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 1, .box_box_count = 0 },
+        },
+    });
+}
+
+// Two chains held in the fields of one record, each consumed by its own
+// code. The fields are two occurrences of one Monotype in one record type,
+// and nothing relates their values, so their step sets stay apart: neither
+// holds the other chain's step closure. Its target is `user_iter_fused` at
+// both modes; after `.wrappers` call-pattern cloning two sets hold two
+// members each, though none contains itself.
+test "MyIter lambda sets: two chains in one record" {
+    try expectUserIterCases(&.{.{
+        .name = "record fields",
+        .source = my_iter_direct ++
+            \\main : I64
+            \\main = {
+            \\    offset = 10.I64
+            \\    add_offset = |x| x + offset
+            \\    pair = { a: MyIter.from_list([1.I64, 2]).map(add_offset), b: MyIter.from_list([3.I64, 4]).keep_if(|x| x > 3) }
+            \\    var $sum = pair.a.fold(0, |acc, x| acc + x)
+            \\    var $rest = pair.b
+            \\    while Bool.True {
+            \\        match ($rest.step)() {
+            \\            Done => break
+            \\            Skip({ rest }) => {
+            \\                $rest = rest
+            \\            }
+            \\            One({ item, rest }) => {
+            \\                $sum = $sum + item
+            \\                $rest = rest
+            \\            }
+            \\        }
+            \\    }
+            \\    total = $sum
+            \\    dbg total
+            \\    total
+            \\}
+        ,
+        .dbg = "27",
+        .none = user_iter_fused,
+        .wrappers = .{ .multi_member_sets = 2, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
+    }});
+}
+
+// Solving is order-independent: visiting each binding group's bodies in the
+// opposite order solves and specializes every program above to the same
+// lambda-set classes as the pipeline's order. Generalization needs only that
+// callee groups finish first.
+test "MyIter lambda sets: body order does not change the solved classes" {
+    const allocator = std.testing.allocator;
+    const sources = [_][]const u8{
+        my_iter_with_next ++ user_iter_chain_main,
+        my_iter_direct ++ user_iter_chain_main,
+        my_iter_with_next ++ user_iter_two_sites_main,
+        my_iter_direct ++ user_iter_two_sites_main,
+        my_iter_with_next ++ user_iter_callback_main,
+        my_iter_direct ++ user_iter_callback_main,
+    };
+    for (sources) |source| {
+        inline for (.{ lir.CheckedPipeline.InlineMode.none, lir.CheckedPipeline.InlineMode.wrappers }) |mode| {
+            var by_groups: std.ArrayList(u32) = .empty;
+            defer by_groups.deinit(allocator);
+            var by_reversed: std.ArrayList(u32) = .empty;
+            defer by_reversed.deinit(allocator);
+            _ = try lambdaSolvedSetCensusInOrder(source, mode, .binding_groups, &by_groups, null);
+            _ = try lambdaSolvedSetCensusInOrder(source, mode, .binding_groups_reversed, &by_reversed, null);
+            try std.testing.expectEqualSlices(u32, by_groups.items, by_reversed.items);
+        }
+    }
+}
+
+// (d) A chain that grows by one `map` per loop iteration has no bound on its
+// depth, so its step set genuinely contains itself and is boxed; it must
+// compile and compute the right total. Today's representation is also its
+// target.
+test "MyIter lambda sets: chain grown in a loop" {
+    try expectUserIterCases(&.{.{
+        .name = "growing",
+        .source = my_iter_with_next ++
+            \\main : I64
+            \\main = {
+            \\    offset = 1.I64
+            \\    add_offset = |x| x + offset
+            \\    var $chain = MyIter.from_list([1.I64, 2, 3])
+            \\    var $round = 0.I64
+            \\    while $round < 3 {
+            \\        $chain = $chain.map(add_offset)
+            \\        $round = $round + 1
+            \\    }
+            \\    total = $chain.fold(0, |acc, x| acc + x)
+            \\    dbg total
+            \\    total
+            \\}
+        ,
+        .dbg = "15",
+        .none = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 1, .box_box_count = 3 },
+        .wrappers = .{ .multi_member_sets = 1, .max_members = 4, .self_containing_sets = 1, .box_box_count = 6 },
+    }});
+}
+
+// The opaque form of the next-based chain. Layout represents an opaque
+// record exactly as its backing, so this program solves and lowers like the
+// nominal form.
+test "MyIter lambda sets: opaque chain" {
+    try expectUserIterCases(&.{.{
+        .name = "opaque next-based",
+        .source = my_iter_opaque_with_next ++ user_iter_chain_main,
+        .dbg = "27",
+        .none = user_iter_fused,
+        .wrappers = .{ .multi_member_sets = 3, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
+    }});
+}
+
+// Lambda-set generalization (design.md "Lambda Set Generalization" and
+// "Lambda Specialize"). Each program is solved and specialized at inline mode
+// `.none`, its census is compared, and it is run.
+
+const PolymorphismExpectation = struct {
+    multi_member_sets: usize,
+    /// Lifted functions Lambda Specialize added.
+    cloned_fns: usize,
+    /// Distinct instances summed over every generalized group, the
+    /// program's lambdas and helpers included.
+    instances: usize,
+};
+
+fn expectPolymorphism(source: []const u8, expected_dbg: []const u8, expected: PolymorphismExpectation) TestError!void {
+    var specialized: postcheck.LambdaSolved.Specialize.Census = .{};
+    const census = try lambdaSolvedSetCensusInOrder(source, .none, .binding_groups, null, &specialized);
+    _ = try lowerAndRunUserIter(source, .none, expected_dbg);
+    const observed: PolymorphismExpectation = .{
+        .multi_member_sets = census.multi_member_sets,
+        .cloned_fns = specialized.cloned_fns,
+        .instances = specialized.instances,
+    };
+    if (std.meta.eql(observed, expected)) return;
+    std.debug.print("polymorphism: observed {any}\n", .{observed});
+    return error.TestUnexpectedResult;
+}
+
+const poly_functions =
+    \\inc : I64 -> I64
+    \\inc = |x| x + 1
+    \\
+    \\double : I64 -> I64
+    \\double = |x| x * 2
+    \\
+    \\apply : (I64 -> I64), I64 -> I64
+    \\apply = |f, v| f(v)
+    \\
+    \\
+;
+
+// A closure that captures a local of its enclosing function is solved in
+// one binding group with that function, so the captured local's type is
+// never quantified on its own: both of `helper`'s callbacks meet in its one
+// parameter set.
+test "lambda set generalization: a capturing closure is not generalized apart from its parent" {
+    try expectPolymorphism(
+        \\main : I64
+        \\main = {
+        \\    k = 3.I64
+        \\    helper = |g| g(k)
+        \\    total = helper(|v| v + 1) + helper(|v| v * 2)
+        \\    dbg total
+        \\    total
+        \\}
+    , "10", .{ .multi_member_sets = 1, .cloned_fns = 0, .instances = 2 });
+}
+
+// A local helper that captures nothing is its own binding group, so each
+// call site instantiates it with its own callback.
+test "lambda set generalization: a local helper applied at two sites with different closures" {
+    try expectPolymorphism(
+        \\main : I64
+        \\main = {
+        \\    helper = |g, v| g(v)
+        \\    total = helper(|v| v + 1, 1) + helper(|v| v * 2, 5)
+        \\    dbg total
+        \\    total
+        \\}
+    , "12", .{ .multi_member_sets = 0, .cloned_fns = 1, .instances = 4 });
+}
+
+// A closure returned from a generalized function is instantiated at each
+// remote use; two uses at equal instantiations share the function itself.
+test "lambda set generalization: an escaping closure instantiated remotely" {
+    try expectPolymorphism(
+        \\make_adder : I64 -> (I64 -> I64)
+        \\make_adder = |n| |x| x + n
+        \\
+        \\main : I64
+        \\main = {
+        \\    a = make_adder(1)
+        \\    b = make_adder(2)
+        \\    total = a(10) + b(20)
+        \\    dbg total
+        \\    total
+        \\}
+    , "33", .{ .multi_member_sets = 0, .cloned_fns = 0, .instances = 1 });
+}
+
+// Two mutually recursive functions are one binding group with one scheme:
+// each instance copies both.
+test "lambda set generalization: mutual recursion shares one instantiation" {
+    try expectPolymorphism(poly_functions ++
+        \\ping : (I64 -> I64), I64 -> I64
+        \\ping = |f, n| if n == 0 { f(n) } else { pong(f, n - 1) }
+        \\
+        \\pong : (I64 -> I64), I64 -> I64
+        \\pong = |f, n| if n == 0 { f(n) } else { ping(f, n - 1) }
+        \\
+        \\main : I64
+        \\main = {
+        \\    total = ping(inc, 4) + pong(double, 3)
+        \\    dbg total
+        \\    total
+        \\}
+    , "1", .{ .multi_member_sets = 0, .cloned_fns = 2, .instances = 4 });
+}
+
+// A function value inside a `Box` is erased in every instance of a
+// generalized function that boxes it.
+test "lambda set generalization: a Box boundary inside a generalized function" {
+    try expectPolymorphism(poly_functions ++
+        \\boxed : (I64 -> I64) -> Box((I64 -> I64))
+        \\boxed = |f| Box.box(f)
+        \\
+        \\main : I64
+        \\main = {
+        \\    first = Box.unbox(boxed(inc))
+        \\    second = Box.unbox(boxed(double))
+        \\    total = first(1) + second(2)
+        \\    dbg total
+        \\    total
+        \\}
+    , "6", .{ .multi_member_sets = 0, .cloned_fns = 3, .instances = 8 });
+}
+
+// Instantiations equal as types are one instance: three calls at two
+// distinct callbacks make one copy of `apply`.
+test "lambda set generalization: equal instantiations share one copy" {
+    try expectPolymorphism(poly_functions ++
+        \\main : I64
+        \\main = {
+        \\    total = apply(inc, 1) + apply(double, 2) + apply(double, 3)
+        \\    dbg total
+        \\    total
+        \\}
+    , "12", .{ .multi_member_sets = 0, .cloned_fns = 1, .instances = 4 });
 }
 
 /// The number of length tests range proving hoisted to loop entries: each

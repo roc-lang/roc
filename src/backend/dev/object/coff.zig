@@ -13,6 +13,7 @@ const FunctionRelocationKind = @import("../Relocation.zig").FunctionRelocationKi
 const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
 const object = @import("mod.zig");
 const DebugReloc = object.DebugReloc;
+const UnitImage = @import("../UnitImage.zig");
 
 /// COFF file format constants
 const COFF = struct {
@@ -873,6 +874,209 @@ pub const CoffWriter = struct {
                 COFF.IMAGE_SCN_ALIGN_1BYTES |
                 relocs.flags,
         };
+    }
+
+    /// The object `write` encodes, in the form a unit image is built from:
+    /// exactly what `UnitImage` reads back from the encoded bytes
+    /// (`UnitImage.Object`), with `keep_debug` deciding whether the debug
+    /// sections are kept as `UnitImage.BuildOptions` does. The text stays
+    /// borrowed from the writer; the read-only data, the unwind tables and
+    /// the debug sections are laid out in `arena` with the addends `write`
+    /// stores in their fields.
+    pub fn imageObject(self: *Self, arena: Allocator, keep_debug: bool) (Allocator.Error || UnitImage.BuildError)!UnitImage.Object {
+        const functions = try splitNestedFunctions(arena, self.functions.items);
+        const has_rdata = self.rdata.len > 0 or blk: {
+            for (self.symbols.items) |symbol| {
+                if (symbol.section == .rdata) break :blk true;
+            }
+            break :blk false;
+        };
+        const need_unwind = functions.len > 0;
+        const has_debug = self.debug.info.len > 0;
+        const has_bss = self.zero_fill_size > 0;
+        const arm64 = self.arch == .aarch64;
+
+        // Sections in `write`'s order; each `null` index is a section the
+        // object does not declare.
+        var sections: std.ArrayList(UnitImage.Section) = .empty;
+        const debug_class = struct {
+            fn of(keep: bool, class: UnitImage.SectionClass) UnitImage.SectionClass {
+                return if (keep) class else .skip;
+            }
+        }.of;
+        const text_index: u32 = 0;
+        try sections.append(arena, .{ .class = .text, .bytes = self.text, .size = self.text.len, .addralign = 16 });
+        var rdata_index: ?u32 = null;
+        if (has_rdata) {
+            const rdata = try arena.dupe(u8, self.rdata);
+            for (self.rdata_relocs.items) |rel| std.mem.writeInt(i64, rdata[rel.offset..][0..8], rel.addend, .little);
+            rdata_index = @intCast(sections.items.len);
+            try sections.append(arena, .{ .class = .rodata, .bytes = rdata, .size = rdata.len, .addralign = 16 });
+        }
+        var pdata_index: ?u32 = null;
+        var xdata_index: ?u32 = null;
+        var xdata_offsets: []u32 = &.{};
+        if (need_unwind) {
+            var xdata: std.ArrayList(u8) = .empty;
+            xdata_offsets = try arena.alloc(u32, functions.len);
+            for (functions, xdata_offsets) |func, *offset| {
+                offset.* = @intCast(xdata.items.len);
+                try self.appendFunctionXdata(&xdata, func);
+            }
+            const pdata = try arena.alloc(u8, functions.len * self.pdataEntrySize());
+            for (functions, xdata_offsets, 0..) |func, xdata_offset, func_idx| {
+                const entry = pdata[func_idx * self.pdataEntrySize() ..];
+                switch (self.arch) {
+                    .x86_64 => {
+                        std.mem.writeInt(u32, entry[0..4], func.start_offset, .little);
+                        std.mem.writeInt(u32, entry[4..8], func.end_offset, .little);
+                        std.mem.writeInt(u32, entry[8..12], xdata_offset, .little);
+                    },
+                    .aarch64 => {
+                        std.mem.writeInt(u32, entry[0..4], func.start_offset, .little);
+                        std.mem.writeInt(u32, entry[4..8], xdata_offset, .little);
+                    },
+                }
+            }
+            pdata_index = @intCast(sections.items.len);
+            try sections.append(arena, .{ .class = .pdata, .bytes = pdata, .size = pdata.len, .addralign = 4 });
+            xdata_index = @intCast(sections.items.len);
+            try sections.append(arena, .{ .class = .xdata, .bytes = xdata.items, .size = xdata.items.len, .addralign = 4 });
+        }
+        var debug_abbrev_index: ?u32 = null;
+        var debug_line_index: ?u32 = null;
+        var debug_info_index: ?u32 = null;
+        if (has_debug) {
+            const debug_line = try arena.dupe(u8, self.debug.line);
+            writeDebugAddends(debug_line, self.debug.line_relocs);
+            const debug_info = try arena.dupe(u8, self.debug.info);
+            writeDebugAddends(debug_info, self.debug.info_relocs);
+            const keep = keep_debug;
+            debug_abbrev_index = @intCast(sections.items.len);
+            try sections.append(arena, .{ .class = debug_class(keep, .debug_abbrev), .bytes = if (keep) self.debug.abbrev else &.{}, .size = self.debug.abbrev.len, .addralign = 1 });
+            debug_line_index = @intCast(sections.items.len);
+            try sections.append(arena, .{ .class = debug_class(keep, .debug_line), .bytes = if (keep) debug_line else &.{}, .size = debug_line.len, .addralign = 1 });
+            debug_info_index = @intCast(sections.items.len);
+            try sections.append(arena, .{ .class = debug_class(keep, .debug_info), .bytes = if (keep) debug_info else &.{}, .size = debug_info.len, .addralign = 1 });
+        }
+        var bss_index: ?u32 = null;
+        if (has_bss) {
+            bss_index = @intCast(sections.items.len);
+            try sections.append(arena, .{ .class = .bss, .bytes = &.{}, .size = self.zero_fill_size, .addralign = 16 });
+        }
+
+        // The writer's symbols, then the section symbols `write` appends,
+        // each read as the symbol table records it.
+        const text_section_sym_idx: u32 = @intCast(self.symbols.items.len);
+        const xdata_section_sym_idx: u32 = text_section_sym_idx + 1;
+        const debug_abbrev_section_sym_idx: u32 = text_section_sym_idx + 1 + @as(u32, if (need_unwind) 1 else 0);
+        const debug_line_section_sym_idx: u32 = debug_abbrev_section_sym_idx + 1;
+        const symbol_count = text_section_sym_idx + 1 + @as(u32, if (need_unwind) 1 else 0) + @as(u32, if (has_debug) 2 else 0);
+        const symbols = try arena.alloc(UnitImage.ObjectSymbol, symbol_count);
+        for (symbols, 0..) |*symbol, idx| {
+            const sym: Symbol = if (idx < text_section_sym_idx) self.symbols.items[idx] else if (idx == text_section_sym_idx)
+                .{ .name = ".text", .section = .text, .offset = 0, .is_global = false, .is_function = false }
+            else if (need_unwind and idx == xdata_section_sym_idx)
+                .{ .name = ".xdata", .section = .rdata, .offset = 0, .is_global = false, .is_function = false }
+            else if (idx == debug_abbrev_section_sym_idx)
+                .{ .name = ".debug_abbrev", .section = .rdata, .offset = 0, .is_global = false, .is_function = false }
+            else
+                .{ .name = ".debug_line", .section = .rdata, .offset = 0, .is_global = false, .is_function = false };
+            const section: ?u32 = if (idx == text_section_sym_idx)
+                text_index
+            else if (need_unwind and idx == xdata_section_sym_idx)
+                xdata_index
+            else if (has_debug and idx == debug_abbrev_section_sym_idx)
+                debug_abbrev_index
+            else if (has_debug and idx == debug_line_section_sym_idx)
+                debug_line_index
+            else switch (sym.section) {
+                .text => text_index,
+                .data, .undef => null,
+                .rdata => rdata_index,
+                .bss => bss_index,
+            };
+            if (sym.is_global) {
+                if (section == null) {
+                    // A nonzero value is a common symbol.
+                    if (sym.offset != 0) return error.UnsupportedSymbol;
+                    symbol.* = .{ .name = sym.name, .value = 0, .size = 0, .section = null, .bind = .global, .kind = .notype, .hidden = false, .skip = false };
+                    continue;
+                }
+            } else if (section == null) {
+                symbol.* = .{ .name = sym.name, .value = 0, .size = 0, .section = null, .bind = .local, .kind = .notype, .hidden = false, .skip = true };
+                continue;
+            }
+            if (sym.offset > sections.items[section.?].size) return error.InvalidObject;
+            symbol.* = .{
+                .name = sym.name,
+                .value = sym.offset,
+                .size = 0,
+                .section = section,
+                .bind = if (sym.is_global) .global else .local,
+                .kind = if (sym.is_function or sections.items[section.?].class == .text) .func else .object,
+                .hidden = false,
+                .skip = false,
+            };
+        }
+        try UnitImage.sizeByPosition(arena, symbols, sections.items);
+
+        var relocs: std.ArrayList(UnitImage.Reloc) = .empty;
+        for (self.text_relocs.items) |rel| try appendImageReloc(arena, &relocs, arm64, sections.items, symbols, text_index, rel.offset, rel.symbol_idx, rel.reloc_type);
+        if (rdata_index) |index| for (self.rdata_relocs.items) |rel| {
+            try appendImageReloc(arena, &relocs, arm64, sections.items, symbols, index, rel.offset, rel.symbol_idx, self.arch.absolutePointerRelocType());
+        };
+        if (pdata_index) |index| for (0..functions.len) |func_idx| {
+            const entry: u32 = @as(u32, @intCast(func_idx)) * self.pdataEntrySize();
+            const addr32nb = self.addr32NbRelocType();
+            switch (self.arch) {
+                .x86_64 => {
+                    try appendImageReloc(arena, &relocs, arm64, sections.items, symbols, index, entry + 0, text_section_sym_idx, addr32nb);
+                    try appendImageReloc(arena, &relocs, arm64, sections.items, symbols, index, entry + 4, text_section_sym_idx, addr32nb);
+                    try appendImageReloc(arena, &relocs, arm64, sections.items, symbols, index, entry + 8, xdata_section_sym_idx, addr32nb);
+                },
+                .aarch64 => {
+                    try appendImageReloc(arena, &relocs, arm64, sections.items, symbols, index, entry + 0, text_section_sym_idx, addr32nb);
+                    try appendImageReloc(arena, &relocs, arm64, sections.items, symbols, index, entry + 4, xdata_section_sym_idx, addr32nb);
+                },
+            }
+        };
+        if (has_debug and keep_debug) for ([_]struct { []const DebugReloc, u32 }{ .{ self.debug.line_relocs, debug_line_index.? }, .{ self.debug.info_relocs, debug_info_index.? } }) |group| {
+            for (group[0]) |rel| {
+                const symbol_idx = switch (rel.target) {
+                    .text => text_section_sym_idx,
+                    .debug_line => debug_line_section_sym_idx,
+                    .debug_abbrev => debug_abbrev_section_sym_idx,
+                };
+                try appendImageReloc(arena, &relocs, arm64, sections.items, symbols, group[1], rel.section_offset, symbol_idx, self.debugRelocType(rel.width));
+            }
+        };
+        return .{ .sections = sections.items, .symbols = symbols, .relocs = relocs.items, .text_section = text_index, .static_data_section = rdata_index, .x86_64 = !arm64 };
+    }
+
+    /// Store each relocation's addend into the field it relocates, as
+    /// `appendDebugSection` does in the encoded object.
+    fn writeDebugAddends(bytes: []u8, relocs: []const DebugReloc) void {
+        for (relocs) |rel| {
+            const field = bytes[rel.section_offset..];
+            switch (rel.width) {
+                .four => std.mem.writeInt(u32, field[0..4], @intCast(rel.addend), .little),
+                .eight => std.mem.writeInt(u64, field[0..8], rel.addend, .little),
+            }
+        }
+    }
+
+    /// A relocation of `section` as `UnitImage` decodes it from its type
+    /// and the field's contents.
+    fn appendImageReloc(arena: Allocator, relocs: *std.ArrayList(UnitImage.Reloc), arm64: bool, sections: []const UnitImage.Section, symbols: []const UnitImage.ObjectSymbol, section: u32, offset: u32, symbol_idx: u32, reloc_type: u16) (Allocator.Error || UnitImage.BuildError)!void {
+        const target = symbols[symbol_idx];
+        if (target.skip) return error.InvalidObject;
+        const decoded = try UnitImage.decodeCoffReloc(arm64, reloc_type, sections[section].bytes, offset, sections[section].size);
+        if (decoded.kind == .abs32 and decoded.section_relative) {
+            const target_section = target.section orelse return error.UnsupportedRelocation;
+            if (sections[target_section].class.isAllocated()) return error.UnsupportedRelocation;
+        }
+        try relocs.append(arena, .{ .section = section, .offset = offset, .kind = decoded.kind, .symbol = symbol_idx, .addend = decoded.addend });
     }
 
     /// Write the COFF object file to a buffer

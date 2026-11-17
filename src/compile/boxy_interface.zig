@@ -164,7 +164,7 @@ pub const Digests = struct {
     /// names, so it runs on any thread while nothing adds to the link.
     fn prepare(self: *Digests, artifact: *const Artifact) Allocator.Error!Prepared {
         var interface = Sha256.init(.{});
-        interface.update("roc.boxy.interface.v1");
+        interface.update("roc.boxy.interface.v2");
         interface.update(&self.nameOf(artifact.key.bytes));
         try self.hashPublicSurface(&interface, artifact);
         var object_input = Sha256.init(.{});
@@ -227,9 +227,9 @@ pub const Digests = struct {
             .checking => hasher.update(&artifact.moduleEnvConst().checking_dependency.digest),
             .templates => for (artifact.exported_procedure_templates.templates.items()) |exported| self.hashTemplateRef(hasher, artifact, exported.template),
             .bindings => self.hashBindings(hasher, artifact),
-            .methods => self.hashMethods(hasher, artifact),
+            .methods => try self.hashMethods(hasher, artifact),
             .defaults => hasher.update(std.mem.asBytes(&@as(u32, @intCast(try artifact.bodies().defaultExprCount(self.gpa))))),
-            .nominals => hashNominals(hasher, artifact),
+            .nominals => try self.hashNominals(hasher, artifact),
             .consts => try self.hashConsts(hasher, artifact),
             .values => try self.hashStoredValues(hasher, artifact, .read_by_importers),
             .imports => for (artifact.direct_import_module_keys.items()) |key| {
@@ -322,9 +322,9 @@ pub const Digests = struct {
             self.hashTemplateRef(hasher, artifact, exported.template);
         }
         self.hashBindings(hasher, artifact);
-        self.hashMethods(hasher, artifact);
+        try self.hashMethods(hasher, artifact);
         hasher.update(std.mem.asBytes(&@as(u32, @intCast(try artifact.bodies().defaultExprCount(self.gpa)))));
-        hashNominals(hasher, artifact);
+        try self.hashNominals(hasher, artifact);
         try self.hashConsts(hasher, artifact);
         try self.hashStoredValues(hasher, artifact, .read_by_importers);
     }
@@ -342,44 +342,138 @@ pub const Digests = struct {
         }
     }
 
-    fn hashMethods(self: *Digests, hasher: *Sha256, artifact: *const Artifact) void {
-        for (artifact.method_registry.entries.items()) |entry| {
-            const target = entry.target orelse {
-                hashTag(hasher, "rejected");
-                continue;
-            };
-            hashTag(hasher, @tagName(std.meta.activeTag(target.kind)));
-            switch (target.kind) {
-                .procedure => |procedure| self.hashTemplateRef(hasher, artifact, procedure.template),
-                .callable_binding => |binding| hashBytes(hasher, std.mem.asBytes(&@backingInt(binding.template))),
-                .local_proc, .structural => {},
-            }
-        }
-    }
-
-    fn hashNominals(hasher: *Sha256, artifact: *const Artifact) void {
+    /// `artifact`'s registered methods, each by its owner (a builtin, or a
+    /// nominal type by its name and its position among the module's
+    /// declarations sharing that name, as a lowering names it), its method
+    /// name, and its target, in an order none of their checked ids decides.
+    fn hashMethods(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
+        const entries = artifact.method_registry.entries.items();
+        if (entries.len == 0) return;
+        const names = &artifact.canonical_names;
         const checked_types = artifact.typesView();
-        for (checked_types.nominal_declarations) |declaration| {
-            hashBytes(hasher, artifact.canonical_names.typeNameText(checked_types.nominalDeclarationName(declaration)));
+        const declarations = checked_types.nominal_declarations;
+        // Each declaration's place among the declarations of its name,
+        // then the declarations by key for the owners' lookups.
+        const by_name = try self.gpa.alloc(u32, declarations.len);
+        defer self.gpa.free(by_name);
+        for (by_name, 0..) |*slot, index| slot.* = @intCast(index);
+        std.mem.sort(u32, by_name, checked_types, struct {
+            fn lessThan(types_view: CheckedArtifact.CheckedTypeStoreView, a: u32, b: u32) bool {
+                const name_a = @backingInt(types_view.nominalDeclarationName(types_view.nominal_declarations[a]));
+                const name_b = @backingInt(types_view.nominalDeclarationName(types_view.nominal_declarations[b]));
+                return name_a < name_b or (name_a == name_b and a < b);
+            }
+        }.lessThan);
+        const Owner = struct { key: canonical.NominalTypeKey, name: canonical.TypeNameId, ordinal: u32 };
+        const owners = try self.gpa.alloc(Owner, declarations.len);
+        defer self.gpa.free(owners);
+        for (by_name, 0..) |index, at| {
+            const name = checked_types.nominalDeclarationName(declarations[index]);
+            const same = at != 0 and checked_types.nominalDeclarationName(declarations[by_name[at - 1]]) == name;
+            owners[at] = .{ .key = declarations[index].nominal, .name = name, .ordinal = if (same) owners[at - 1].ordinal + 1 else 0 };
+        }
+        const keyOrder = struct {
+            fn lessThan(_: void, a: Owner, b: Owner) bool {
+                return keyLess(a.key, b.key);
+            }
+            fn keyLess(a: canonical.NominalTypeKey, b: canonical.NominalTypeKey) bool {
+                const module_a = @backingInt(a.module);
+                const module_b = @backingInt(b.module);
+                return module_a < module_b or (module_a == module_b and a.source_decl < b.source_decl);
+            }
+            fn order(key: canonical.NominalTypeKey, owner: Owner) std.math.Order {
+                if (keyLess(key, owner.key)) return .lt;
+                if (keyLess(owner.key, key)) return .gt;
+                return .eq;
+            }
+        };
+        std.mem.sort(Owner, owners, {}, keyOrder.lessThan);
+        const digests = try self.gpa.alloc([32]u8, entries.len);
+        defer self.gpa.free(digests);
+        for (entries, digests) |entry, *digest| {
+            var entry_hasher = Sha256.init(.{});
+            switch (entry.key.owner) {
+                .builtin => |builtin| hashTag(&entry_hasher, @tagName(builtin)),
+                .nominal => |key| {
+                    const found = std.sort.binarySearch(Owner, owners, key, keyOrder.order) orelse
+                        base.invariant("a registered method's owner is no nominal declaration of its module", .{});
+                    hashBytes(&entry_hasher, names.typeNameText(owners[found].name));
+                    entry_hasher.update(std.mem.asBytes(&owners[found].ordinal));
+                },
+            }
+            hashBytes(&entry_hasher, names.methodNameText(entry.key.method));
+            if (entry.target) |target| {
+                hashTag(&entry_hasher, @tagName(std.meta.activeTag(target.kind)));
+                switch (target.kind) {
+                    .procedure => |procedure| self.hashTemplateRef(&entry_hasher, artifact, procedure.template),
+                    .callable_binding => |binding| hashBytes(&entry_hasher, std.mem.asBytes(&@backingInt(binding.template))),
+                    .local_proc, .structural => {},
+                }
+            } else hashTag(&entry_hasher, "rejected");
+            digest.* = entry_hasher.finalResult();
+        }
+        std.mem.sort([32]u8, digests, {}, struct {
+            fn lessThan(_: void, a: [32]u8, b: [32]u8) bool {
+                return std.mem.order(u8, &a, &b) == .lt;
+            }
+        }.lessThan);
+        for (digests) |digest| hasher.update(&digest);
+    }
+
+    /// The names a lowering gives `artifact`'s nominal declarations: each
+    /// is its name and its position among the declarations sharing it
+    /// (`types.Converter.declName`), so this hashes each name with the
+    /// number of declarations of it, in name order. Where a declaration of
+    /// another name lies changes no name.
+    fn hashNominals(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
+        const checked_types = artifact.typesView();
+        const names = try self.gpa.alloc(canonical.TypeNameId, checked_types.nominal_declarations.len);
+        defer self.gpa.free(names);
+        for (names, checked_types.nominal_declarations) |*name, declaration| name.* = checked_types.nominalDeclarationName(declaration);
+        std.mem.sort(canonical.TypeNameId, names, &artifact.canonical_names, struct {
+            fn lessThan(store: *const canonical.CanonicalNameStore, a: canonical.TypeNameId, b: canonical.TypeNameId) bool {
+                return std.mem.order(u8, store.typeNameText(a), store.typeNameText(b)) == .lt;
+            }
+        }.lessThan);
+        var at: usize = 0;
+        while (at < names.len) {
+            var count: u32 = 1;
+            while (at + count < names.len and names[at + count] == names[at]) count += 1;
+            hashBytes(hasher, artifact.canonical_names.typeNameText(names[at]));
+            hasher.update(std.mem.asBytes(&count));
+            at += count;
         }
     }
 
+    /// `artifact`'s exposed constants, the only ones another unit reads: an
+    /// importer's reference resolves to an exported constant
+    /// (`importedConstTemplateForDef`), and a private constant is read only
+    /// by its own module's code, whose object holds its value. A function
+    /// value compile-time evaluation stored for an exposed constant is read
+    /// whatever its template says.
     fn hashConsts(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
-        const exported_consts = artifact.exported_const_templates.templates.items();
-        for (exported_consts) |exported| try self.hashConstTemplate(hasher, artifact, exported.template);
-        for (artifact.const_templates.templates.items()) |template| switch (template.owner) {
-            .top_level_binding => try self.hashConstTemplate(hasher, artifact, template),
-            .hoisted_root => {},
-        };
+        for (artifact.exported_const_templates.templates.items()) |exported| {
+            try self.hashConstTemplate(hasher, artifact, exported.template);
+            const root_id = switch (exported.template.owner) {
+                .top_level_binding => |top_level| artifact.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse continue,
+                .hoisted_root => continue,
+            };
+            const root = artifact.compile_time_roots.root(root_id);
+            if (root.boxy_value != null) try self.hashRootValue(hasher, artifact, root);
+        }
     }
 
-    /// The name of `ref`'s worker, and the hidden inputs a call to it
-    /// passes when `artifact` declares it. An imported template's are part of
-    /// its own module's interface.
+    /// The name of `ref`'s worker (its module's link name and the
+    /// template's name, `ImportedModuleView.templateName`, never its
+    /// position), and the hidden inputs a call to it passes when `artifact`
+    /// declares it. An imported template's are part of its own module's
+    /// interface.
     fn hashTemplateRef(self: *Digests, hasher: *Sha256, artifact: *const Artifact, ref: canonical.ProcedureTemplateRef) void {
         hasher.update(&self.nameOf(ref.artifact.bytes));
-        hasher.update(std.mem.asBytes(&@as(u32, @backingInt(ref.template))));
-        if (!std.mem.eql(u8, &ref.artifact.bytes, &artifact.key.bytes)) return;
+        const own = std.mem.eql(u8, &ref.artifact.bytes, &artifact.key.bytes);
+        const owner = if (own) artifact else self.artifactOf(ref.artifact.bytes);
+        hashTemplateName(hasher, CheckedArtifact.importedView(owner).templateName(ref.template));
+        if (!own) return;
         const templates = &artifact.checked_procedure_templates;
         const template = templates.templates.items()[@backingInt(ref.template)];
         hasher.update(std.mem.asBytes(&template.scheme_vars.len));
@@ -411,8 +505,10 @@ pub const Digests = struct {
     }
 
     /// `read_by_importers` names the roots an importer restores whatever
-    /// their constant template says: callable bindings, and function values
-    /// a `.boxy` program stored (design.md "Stored Function Values").
+    /// their constant template says: callable bindings, whose stored
+    /// function values a method bound to one or an exposed binding restores
+    /// (design.md "Stored Function Values"). An exposed constant's stored
+    /// function value is in `hashConsts`.
     const RootScope = enum { every_root, read_by_importers };
 
     /// The values of `artifact`'s compile-time roots in `scope`. A module's
@@ -421,7 +517,7 @@ pub const Digests = struct {
         for (artifact.compile_time_roots.roots.items()) |root| {
             switch (scope) {
                 .every_root => {},
-                .read_by_importers => if (root.kind != .callable_binding and root.boxy_value == null) continue,
+                .read_by_importers => if (root.kind != .callable_binding) continue,
             }
             try self.hashRootValue(hasher, artifact, root);
         }
@@ -455,6 +551,17 @@ const ValueContext = struct {
         return self.artifact.key.bytes;
     }
 };
+
+fn hashTemplateName(hasher: *Sha256, name: CheckedArtifact.TemplateName) void {
+    hashTag(hasher, @tagName(std.meta.activeTag(name)));
+    switch (name) {
+        .definition, .constant => |named| {
+            hashBytes(hasher, named.text);
+            hasher.update(std.mem.asBytes(&named.shadow));
+        },
+        .position => |index| hasher.update(std.mem.asBytes(&index)),
+    }
+}
 
 fn hashTag(hasher: *Sha256, tag: []const u8) void {
     hasher.update(tag);

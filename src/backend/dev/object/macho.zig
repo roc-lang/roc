@@ -13,6 +13,7 @@ const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
 const roc_target = @import("roc_target");
 const object = @import("mod.zig");
 const DebugReloc = object.DebugReloc;
+const UnitImage = @import("../UnitImage.zig");
 
 /// Mach-O constants
 const MachO = struct {
@@ -732,6 +733,153 @@ pub const MachOWriter = struct {
         // Write string table
         output.appendSliceAssumeCapacity(self.strtab.items);
         std.debug.assert(output.items.len == object_size);
+    }
+
+    /// The object `write` encodes, in the form a unit image is built from:
+    /// exactly what `UnitImage` reads back from the encoded bytes
+    /// (`UnitImage.Object`), with `keep_debug` deciding whether the debug
+    /// sections are kept as `UnitImage.BuildOptions` does. The text stays
+    /// borrowed from the writer; the read-only data and debug sections are
+    /// copied into `arena` with the addends `write` stores in their fields.
+    pub fn imageObject(self: *const Self, arena: Allocator, keep_debug: bool) (Allocator.Error || UnitImage.BuildError)!UnitImage.Object {
+        const rodata = try arena.dupe(u8, self.rodata);
+        for (self.rodata_relocs.items) |rel| {
+            const value = if (rel.is_extern) rel.addend else self.localRelocationValue(rel.symbol_idx, rel.addend);
+            std.mem.writeInt(i64, rodata[rel.offset..][0..8], value, .little);
+        }
+        const debug_line = try arena.dupe(u8, self.debug.line);
+        applyDebugRelocations(debug_line, self.debug.line_relocs);
+        const debug_info = try arena.dupe(u8, self.debug.info);
+        applyDebugRelocations(debug_info, self.debug.info_relocs);
+        const debug_class = struct {
+            fn of(keep: bool, class: UnitImage.SectionClass) UnitImage.SectionClass {
+                return if (keep) class else .skip;
+            }
+        }.of;
+        const sections = try arena.alloc(UnitImage.Section, 6);
+        sections[0] = .{ .class = .text, .bytes = self.text, .size = self.text.len, .addralign = 16 };
+        sections[1] = .{ .class = .data, .bytes = rodata, .size = rodata.len, .addralign = 16 };
+        sections[2] = .{ .class = debug_class(keep_debug, .debug_line), .bytes = debug_line, .size = debug_line.len, .addralign = 1 };
+        sections[3] = .{ .class = debug_class(keep_debug, .debug_abbrev), .bytes = self.debug.abbrev, .size = self.debug.abbrev.len, .addralign = 1 };
+        sections[4] = .{ .class = debug_class(keep_debug, .debug_info), .bytes = debug_info, .size = debug_info.len, .addralign = 1 };
+        sections[5] = .{ .class = .bss, .bytes = &.{}, .size = self.zero_fill_size, .addralign = 16 };
+        // Section start addresses in the object's one address space, which
+        // a local relocation's field holds an address in.
+        const debug_addr_base: u64 = self.text.len + self.rodata.len;
+        const section_addrs = [_]u64{
+            0,
+            self.text.len,
+            debug_addr_base,
+            debug_addr_base + self.debug.line.len,
+            debug_addr_base + self.debug.line.len + self.debug.abbrev.len,
+            debug_addr_base + self.debug.line.len + self.debug.abbrev.len + self.debug.info.len,
+        };
+
+        // The symbols in symbol-table order (locals, external definitions,
+        // undefined), then one section symbol per section.
+        const num_syms = self.symbols.items.len;
+        const symbol_order = try arena.alloc(u32, num_syms);
+        const symbol_index_remap = try arena.alloc(u32, num_syms);
+        {
+            var order: std.ArrayList(u32) = .initBuffer(symbol_order);
+            for ([_]SymbolTableClass{ .local, .external_definition, .undefined }) |class| {
+                for (self.symbols.items, 0..) |symbol, original_idx| {
+                    if (symbolTableClass(symbol) != class) continue;
+                    symbol_index_remap[original_idx] = @intCast(order.items.len);
+                    order.appendAssumeCapacity(@intCast(original_idx));
+                }
+            }
+        }
+        const symbols = try arena.alloc(UnitImage.ObjectSymbol, num_syms + sections.len);
+        for (symbol_order, symbols[0..num_syms]) |original_idx, *symbol| {
+            const sym = self.symbols.items[original_idx];
+            if (sym.section == 0) {
+                symbol.* = .{ .name = sym.name, .value = 0, .size = 0, .section = null, .bind = .global, .kind = .notype, .hidden = false, .skip = false };
+                continue;
+            }
+            const section_index: u32 = sym.section - 1;
+            symbol.* = .{
+                .name = sym.name,
+                .value = sym.offset,
+                .size = 0,
+                .section = section_index,
+                .bind = if (sym.is_external) .global else .local,
+                .kind = if (sections[section_index].class == .text) .func else .object,
+                .hidden = false,
+                .skip = false,
+            };
+        }
+        for (symbols[num_syms..], 0..) |*symbol, index| {
+            symbol.* = .{ .name = "", .value = 0, .size = 0, .section = @as(u32, @intCast(index)), .bind = .local, .kind = .section, .hidden = false, .skip = false };
+        }
+        try UnitImage.sizeByPosition(arena, symbols[0..num_syms], sections);
+
+        var relocs: std.ArrayList(UnitImage.Reloc) = .empty;
+        const x86_64 = self.arch == .x86_64;
+        for (self.text_relocs.items) |rel| {
+            const x86_pcrel = x86_64 and (rel.reloc_type == MachO.X86_64_RELOC_SIGNED or rel.reloc_type == MachO.X86_64_RELOC_BRANCH);
+            const kind: UnitImage.RelocKind = if (rel.reloc_type == MachO.ARM64_RELOC_UNSIGNED)
+                (if (rel.pcrel) return error.UnsupportedRelocation else switch (rel.length) {
+                    3 => .abs64,
+                    2 => .abs32,
+                    else => return error.UnsupportedRelocation,
+                })
+            else if (x86_pcrel)
+                (if (rel.pcrel) .pc32 else return error.UnsupportedRelocation)
+            else if (x86_64)
+                return error.UnsupportedRelocation
+            else if (rel.reloc_type == MachO.ARM64_RELOC_BRANCH26)
+                .branch26
+            else if (rel.reloc_type == MachO.ARM64_RELOC_PAGE21)
+                .page21
+            else if (rel.reloc_type == MachO.ARM64_RELOC_PAGEOFF12)
+                .pageoff12
+            else
+                return error.UnsupportedRelocation;
+            const field = self.text[rel.offset..];
+            if (rel.is_extern) {
+                try relocs.append(arena, .{
+                    .section = 0,
+                    .offset = rel.offset,
+                    .kind = kind,
+                    .symbol = symbol_index_remap[rel.symbol_idx],
+                    .addend = switch (kind) {
+                        .abs64 => @bitCast(std.mem.readInt(u64, field[0..8], .little)),
+                        .abs32 => std.mem.readInt(u32, field[0..4], .little),
+                        .pc32 => @as(i64, std.mem.readInt(i32, field[0..4], .little)) - 4,
+                        // Without an addend entry these fields carry no addend.
+                        .abs32s, .branch26, .page21, .pageoff12, .rva32, .got_load_page21, .got_load_pageoff12 => 0,
+                    },
+                });
+            } else {
+                if (kind != .abs64 and kind != .abs32 and !x86_pcrel) return error.UnsupportedRelocation;
+                const section = self.relocationSymbolNumber(rel.symbol_idx, false, symbol_index_remap);
+                const address: i64 = if (kind == .abs64) @bitCast(std.mem.readInt(u64, field[0..8], .little)) else if (kind == .abs32) std.mem.readInt(u32, field[0..4], .little) else @as(i64, std.mem.readInt(i32, field[0..4], .little)) + @as(i64, rel.offset) + 4;
+                try relocs.append(arena, .{ .section = 0, .offset = rel.offset, .kind = kind, .symbol = @intCast(num_syms + section - 1), .addend = address - @as(i64, @intCast(section_addrs[section - 1])) - (if (x86_pcrel) @as(i64, 4) else 0) });
+            }
+        }
+        for (self.rodata_relocs.items) |rel| {
+            if (rel.is_extern) {
+                try relocs.append(arena, .{ .section = 1, .offset = rel.offset, .kind = .abs64, .symbol = symbol_index_remap[rel.symbol_idx], .addend = rel.addend });
+            } else {
+                const section = self.relocationSymbolNumber(rel.symbol_idx, false, symbol_index_remap);
+                const address = self.localRelocationValue(rel.symbol_idx, rel.addend);
+                try relocs.append(arena, .{ .section = 1, .offset = rel.offset, .kind = .abs64, .symbol = @intCast(num_syms + section - 1), .addend = address - @as(i64, @intCast(section_addrs[section - 1])) });
+            }
+        }
+        if (keep_debug) for ([_]struct { []const DebugReloc, u32 }{ .{ self.debug.line_relocs, 2 }, .{ self.debug.info_relocs, 4 } }) |group| {
+            for (group[0]) |rel| {
+                if (rel.target != .text) continue;
+                const kind: UnitImage.RelocKind = switch (rel.width) {
+                    .four => .abs32,
+                    .eight => .abs64,
+                };
+                const section_bytes = sections[group[1]].bytes[rel.section_offset..];
+                const address: i64 = if (kind == .abs64) @bitCast(std.mem.readInt(u64, section_bytes[0..8], .little)) else std.mem.readInt(u32, section_bytes[0..4], .little);
+                try relocs.append(arena, .{ .section = group[1], .offset = rel.section_offset, .kind = kind, .symbol = @intCast(num_syms + text_section_ordinal - 1), .addend = address });
+            }
+        };
+        return .{ .sections = sections, .symbols = symbols, .relocs = relocs.items, .text_section = 0, .static_data_section = 1, .x86_64 = x86_64 };
     }
 
     const SymbolTableClass = enum {

@@ -75,7 +75,7 @@ pub fn compute(gpa: Allocator, root: *const Artifact, modules: Modules) Allocato
         const module = templates[i].module;
         const start = i;
         while (i < templates.len and templates[i].module == module) : (i += 1) {
-            reach.identities[i] = lir.CheckedPipeline.boxyTemplateWorkerIdentity(modules.link_names[module], templates[i].template);
+            reach.identities[i] = lir.CheckedPipeline.boxyTemplateWorkerIdentity(modules.link_names[module], check.CheckedArtifact.importedView(modules.artifacts[module]).templateName(templates[i].template));
         }
         try reach.modules.put(gpa, modules.artifacts[module].key.bytes, .{ .start = @intCast(start), .len = @intCast(i - start) });
     }
