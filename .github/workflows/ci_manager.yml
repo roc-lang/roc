@@ -187,12 +187,12 @@ jobs:
       # Not a MiniCI job; covers ci/tidy.zig itself.
       - name: Run tidy unit tests
         if: ${{ !cancelled() }}
-        run: zig build run-test-zig-tidy-unit
+        run: zig build run-test-zig-tidy-unit -Dci-memory-ceilings=true
 
       # Not a MiniCI job; covers ci/restamp_zig_cache.zig itself.
       - name: Run Zig cache re-stamping unit tests
         if: ${{ !cancelled() }}
-        run: zig build run-test-zig-restamp-zig-cache
+        run: zig build run-test-zig-restamp-zig-cache -Dci-memory-ceilings=true
 
       # Uses real generated compiler options and an empty dependency bundle;
       # no Roc CLI compilation or published LLVM bundle is needed.
@@ -283,7 +283,7 @@ jobs:
 
       # Keeps the fuzz and Tracy build configurations compiling.
       - name: Check the fuzz and Tracy configurations
-        run: zig build -Dno-bin -Dfuzz -Dtracy=./tracy
+        run: zig build -Dno-bin -Dfuzz -Dtracy=./tracy -Dci-memory-ceilings=true
 
   # One build job per OS, so each OS's shards need only that OS's build and a
   # slow or queued runner on one OS never delays another OS's tests. The three
@@ -355,7 +355,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build build-test-eval-runner
+          command: zig build build-test-eval-runner -Dci-memory-ceilings=true
           retry_count: 3
 
       # The remaining compilation happens here, where network flakes surface
@@ -370,7 +370,7 @@ jobs:
       - name: Build MiniCI binaries
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build build-ci -Dembed-builtin-unit=true
+          command: zig build build-ci -Dembed-builtin-unit=true ${{ runner.os != 'macOS' && '-Dci-memory-ceilings=true' || '' }}
           retry_count: 3
 
       # zstd on all cores, instead of upload-artifact's single-threaded zip
@@ -767,7 +767,7 @@ jobs:
       - name: build release roc
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build build-release
+          command: zig build build-release -Dci-memory-ceilings=true
           retry_count: 3
 
       # The fx platform ships `crt1.o` and `libc.a` for each target but builds
@@ -775,7 +775,7 @@ jobs:
       - name: build the fx platform host
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build update-test-fixtures -Dplatform=fx
+          command: zig build update-test-fixtures -Dplatform=fx -Dci-memory-ceilings=true
           retry_count: 3
 
       - name: Test native instruction-cache publication
@@ -823,7 +823,7 @@ jobs:
       - name: build release roc
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build build-release
+          command: zig build build-release -Dci-memory-ceilings=true
           retry_count: 3
 
       - name: cross-compile hello world

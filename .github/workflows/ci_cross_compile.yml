@@ -56,19 +56,19 @@ jobs:
       - name: Build roc compiler
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build
+          command: zig build ${{ runner.os != 'macOS' && '-Dci-memory-ceilings=true' || '' }}
           retry_count: 3
 
       - name: Run fx platform cross-compilation tests
         run: |
           echo "Cross-compiling fx tests from ${{ matrix.host }} to ${{ matrix.target }}"
-          zig build run-test-cli -- --suite platforms --filter test/fx/ --cross-target=${{ matrix.target }}
+          zig build run-test-cli ${{ runner.os != 'macOS' && '-Dci-memory-ceilings=true' || '' }} -- --suite platforms --filter test/fx/ --cross-target=${{ matrix.target }}
 
       # `roc build` below reads the int platform's hosts from the checkout.
       - name: Publish int platform hosts into the checkout
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build update-test-fixtures -Dplatform=int
+          command: zig build update-test-fixtures -Dplatform=int ${{ runner.os != 'macOS' && '-Dci-memory-ceilings=true' || '' }}
           retry_count: 3
 
       - name: Cross-compile int platform test app (Unix)

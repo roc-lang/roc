@@ -23,7 +23,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-zig build "$@"
+# Linux CI runners run out of memory when large compiles overlap, so declare
+# the compile memory ceilings there (see `ci-memory-ceilings` in build.zig).
+# MiniCI passes the option to its own builds on Linux.
+memory_ceilings=()
+if [[ "$(uname -s)" == Linux ]]; then
+    memory_ceilings=(-Dci-memory-ceilings=true)
+fi
+
+zig build "${memory_ceilings[@]}" "$@"
 if [[ "$build_only" -eq 1 ]]; then
     printf 'Skipping MiniCI in this Nix leg; the regular Zig target matrix covers it for: %s\n' "$*"
     exit 0

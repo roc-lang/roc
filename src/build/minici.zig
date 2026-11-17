@@ -1744,6 +1744,18 @@ fn skipCommand(
 /// as every non-Debug compiler does (design.md "Embedded Units").
 const minici_build_args = [_][]const u8{"-Dembed-builtin-unit=true"};
 
+/// The `zig build` option that declares peak-memory ceilings on the largest
+/// compile steps (build.zig's `compile_max_rss`). MiniCI passes it on the
+/// hosts whose CI runners exhaust memory when those compiles overlap, Linux
+/// and Windows, and so do the CI files' own `zig build` commands there.
+/// It changes only how many compiles the build runner overlaps, never what
+/// they produce, so commands with and without it share every cached output.
+const memory_ceilings_arg = "-Dci-memory-ceilings=true";
+const declares_memory_ceilings = switch (builtin.os.tag) {
+    .linux, .windows => true,
+    else => false,
+};
+
 fn buildCommand(
     allocator: std.mem.Allocator,
     zig_exe: []const u8,
@@ -1767,6 +1779,7 @@ fn buildCommand(
     for (minici_build_args) |arg| {
         try argv.append(allocator, arg);
     }
+    if (declares_memory_ceilings) try argv.append(allocator, memory_ceilings_arg);
     for (build_args) |arg| {
         try argv.append(allocator, arg);
     }
@@ -2402,14 +2415,35 @@ fn workflowLaneValue(rest: []const u8) ?[]const u8 {
     return value[0..end];
 }
 
+/// The length of the shell command at the start of `rest`: up to the first
+/// `&`, `|` or `;` outside a `${{ ... }}` GitHub Actions expression, whose
+/// `&&` and `||` are expression operators that GitHub replaces before the
+/// shell runs.
+fn workflowCommandEnd(rest: []const u8) usize {
+    var i: usize = 0;
+    while (i < rest.len) : (i += 1) {
+        if (std.mem.startsWith(u8, rest[i..], "${{")) {
+            const close = std.mem.find(u8, rest[i..], "}}") orelse return rest.len;
+            i += close + 1;
+            continue;
+        }
+        switch (rest[i]) {
+            '&', '|', ';' => return i,
+            else => {},
+        }
+    }
+    return rest.len;
+}
+
 /// The MiniCI job a `zig build` command line runs exactly as MiniCI does, or
 /// null. `command` is the text after `zig build`. A command that passes its
 /// steps arguments (`--`) or build options (`-D...`) runs a configuration
-/// MiniCI does not.
+/// MiniCI does not, except for `memory_ceilings_arg`, which changes no output.
 fn handRunJob(command: []const u8) ?[]const u8 {
     var tokens = std.mem.tokenizeAny(u8, command, " \t");
     var job: ?[]const u8 = null;
     while (tokens.next()) |token| {
+        if (std.mem.eql(u8, token, memory_ceilings_arg)) continue;
         if (std.mem.eql(u8, token, "--") or std.mem.startsWith(u8, token, "-D")) return null;
         if (jobIndexByName(token) != null) job = token;
     }
@@ -2495,7 +2529,7 @@ fn workflowProblems(allocator: std.mem.Allocator, text: []const u8, runs: Workfl
         rest = line;
         while (std.mem.find(u8, rest, workflow_zig_build)) |start| {
             rest = rest[start + workflow_zig_build.len ..];
-            const command_end = std.mem.findAny(u8, rest, "&|;") orelse rest.len;
+            const command_end = workflowCommandEnd(rest);
             if (handRunJob(rest[0..command_end])) |job| {
                 try problems.append(allocator, try std.fmt.allocPrint(
                     allocator,
@@ -3039,6 +3073,24 @@ test "workflowProblems requires build-ci to pass MiniCI's build options" {
     text.shrinkRetainingCapacity(shard_lines);
     try text.appendSlice(std.testing.allocator, "  command: zig build build-ci\n");
     try expectWorkflowProblems(text.items, 1);
+}
+
+test "workflowProblems sees the memory-ceilings option as MiniCI's own configuration" {
+    const nightly: WorkflowRuns = .{ .lane = .secondary };
+    const lane = "run: zig build minici -- --minici-lane secondary\n";
+    // Expressions whose `&&` and `||` are not shell operators, with the
+    // `--` after them still read as part of the command.
+    try expectWorkflowProblemsFor(lane ++
+        \\command: zig build build-ci -Dembed-builtin-unit=true ${{ runner.os != 'macOS' && '-Dci-memory-ceilings=true' || '' }}
+        \\run: zig build run-check-snapshots ${{ runner.os != 'macOS' && '-Dci-memory-ceilings=true' || '' }} -- --debug
+        \\run: zig build run-test-zig -Dci-memory-ceilings=true -Dfuzz
+    , nightly, 0);
+    // The option changes no output, so a MiniCI job run with it alone is
+    // still the job MiniCI runs, whether passed directly or by an expression.
+    try expectWorkflowProblemsFor(lane ++ "run: zig build run-test-cli -Dci-memory-ceilings=true\n", nightly, 1);
+    try expectWorkflowProblemsFor(lane ++ "run: zig build run-test-cli ${{ runner.os != 'macOS' && '-Dci-memory-ceilings=true' || '' }}\n", nightly, 1);
+    // It does not stand in for the options `build-ci` must pass.
+    try expectWorkflowProblemsFor(lane ++ "command: zig build build-ci -Dci-memory-ceilings=true\n", nightly, 1);
 }
 
 test "workflowProblems accepts a nightly file that runs its lane once" {

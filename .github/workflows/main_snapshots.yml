@@ -40,7 +40,7 @@ jobs:
             zig-deps-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Check snapshot files
-        run: zig build run-check-snapshots
+        run: zig build run-check-snapshots -Dci-memory-ceilings=true
 
       - name: Check snapshot tool expectations
-        run: zig build run-test-zig-snapshot-tool
+        run: zig build run-test-zig-snapshot-tool -Dci-memory-ceilings=true

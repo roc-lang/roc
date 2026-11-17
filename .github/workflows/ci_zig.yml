@@ -84,7 +84,7 @@ jobs:
           print(f"{target} fuzz input base64: {base64.b64encode(data).decode()}")
           PY
 
-            zig build "run-repro-${target}" -- "$ROC_FUZZ_INPUT"
+            zig build "run-repro-${target}" -Dci-memory-ceilings=true -- "$ROC_FUZZ_INPUT"
           done
 
   # Full LLVM-backend end-to-end coverage lives here, on every OS: eval parity
@@ -144,7 +144,7 @@ jobs:
         if: runner.os != 'Windows'
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build run-test-eval -- --llvm
+          command: zig build run-test-eval ${{ runner.os != 'macOS' && '-Dci-memory-ceilings=true' || '' }} -- --llvm
           retry_count: 3
 
       # Windows has no fork(), so the runner spawns a fresh worker process per
@@ -159,14 +159,14 @@ jobs:
         if: runner.os == 'Windows'
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build run-test-eval -- --llvm --timeout 120000
+          command: zig build run-test-eval -Dci-memory-ceilings=true -- --llvm --timeout 120000
           retry_count: 3
 
       - name: Run CLI tests (LLVM size/speed backends)
-        run: zig build run-test-cli -- --llvm-only
+        run: zig build run-test-cli ${{ runner.os != 'macOS' && '-Dci-memory-ceilings=true' || '' }} -- --llvm-only
 
       - name: Run CLI platform tests under --specialize=no (LLVM size/speed backends)
-        run: zig build run-test-cli -- --suite platforms --llvm-only --specialize=no
+        run: zig build run-test-cli ${{ runner.os != 'macOS' && '-Dci-memory-ceilings=true' || '' }} -- --suite platforms --llvm-only --specialize=no
 
       # run-test-dylib and run-test-archive are MiniCI phases, so PR CI runs
       # them on these same three OSes; they are not repeated here.
@@ -243,7 +243,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build build-test-eval-runner
+          command: zig build build-test-eval-runner -Dci-memory-ceilings=true
           retry_count: 3
 
       - name: Run MiniCI
@@ -339,7 +339,7 @@ jobs:
       - name: build roc + repro executables
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build ${{ matrix.release_jobs_flag }} -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}
+          command: zig build ${{ matrix.release_jobs_flag }} -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }} ${{ runner.os != 'macOS' && '-Dci-memory-ceilings=true' || '' }}
           retry_count: 3
 
       - name: Setup MSVC (Windows)
@@ -360,15 +360,15 @@ jobs:
           zig-out\bin\roc.exe check ./CONTRIBUTING/profiling/bench_repeated_check.roc
 
       - name: zig snapshot tests
-        run: zig build run-check-snapshots ${{ matrix.target_flag }} -- --debug
+        run: zig build run-check-snapshots ${{ matrix.target_flag }} ${{ runner.os != 'macOS' && '-Dci-memory-ceilings=true' || '' }} -- --debug
 
       # 1) in debug mode
       - name: build and execute tests, build repro executables
-        run: zig build ${{ matrix.zig_test_timeout_flag }} run-test-zig -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}
+        run: zig build ${{ matrix.zig_test_timeout_flag }} run-test-zig -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }} ${{ runner.os != 'macOS' && '-Dci-memory-ceilings=true' || '' }}
 
       # 2) in release mode
       - name: Build and execute tests, build repro executables. All in release mode.
-        run: zig build ${{ matrix.release_jobs_flag }} ${{ matrix.zig_test_timeout_flag }} run-test-zig -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}
+        run: zig build ${{ matrix.release_jobs_flag }} ${{ matrix.zig_test_timeout_flag }} run-test-zig -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }} ${{ runner.os != 'macOS' && '-Dci-memory-ceilings=true' || '' }}
 
       - name: Check for snapshot changes
         run: |
@@ -422,7 +422,7 @@ jobs:
 
       - name: Eval Code Coverage
         if: matrix.os == 'ubuntu-24.04-arm'
-        run: zig build run-coverage-eval
+        run: zig build run-coverage-eval -Dci-memory-ceilings=true
 
   zig-valgrind:
     needs: check-once
@@ -471,7 +471,7 @@ jobs:
           # Keep large ReleaseFast Zig compiler processes from overlapping and
           # exhausting the hosted runner's memory. This lane builds several
           # artifacts that individually peak at multiple GiB under valgrind.
-          command: git clean -fdx -e .zig-cache && zig build -j1 -Dvalgrind=true -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
+          command: git clean -fdx -e .zig-cache && zig build -j1 -Dvalgrind=true -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456 -Dci-memory-ceilings=true
           retry_count: 3
 
       - name: install valgrind
@@ -536,7 +536,7 @@ jobs:
       - name: cross compile with llvm
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build -Dtarget=${{ matrix.target }}
+          command: zig build -Dtarget=${{ matrix.target }} -Dci-memory-ceilings=true
           retry_count: 3
 
   # Test cross-compilation with Roc's cross-compilation system (musl + glibc)

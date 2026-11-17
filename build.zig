@@ -2159,6 +2159,11 @@ pub fn build(b: *std.Build) void {
     // build of the compiler's modules and a run of it (about a minute) on
     // the path to `roc` after every edit to the compiler.
     const embed_builtin_unit = b.option(bool, "embed-builtin-unit", "Embed the Builtin module's Boxy unit in roc (default: on unless Debug)");
+    // CI passes this on its Linux and Windows runners, where overlapping large
+    // compiles otherwise exhaust memory. macOS runners absorb that overlap
+    // with memory compression and swap, so CI leaves it off there rather than
+    // serialize their builds.
+    const ci_memory_ceilings = b.option(bool, "ci-memory-ceilings", "Declare peak-memory ceilings on the largest compile steps, so the build runner never overlaps more of them than fit in memory (default: off)") orelse false;
     const dev_diagnostics = b.option(bool, "dev-diagnostics", "Honor the developer-diagnostic environment variables (ROC_LIR_DUMP, ROC_SPEC_CENSUS, ...) in a non-Debug compiler; Debug compilers always honor them") orelse false;
     const llvm_keep_ir = b.option([]const u8, "llvm-keep-ir", "Write statement LLVM IR to this build-time path") orelse "";
     const llvm_keep_bitcode = b.option([]const u8, "llvm-keep-bitcode", "Write merged LLVM bitcode to this build-time path") orelse "";
@@ -5471,7 +5476,7 @@ pub fn build(b: *std.Build) void {
     assertGranularTestStepsAreIsolated(b);
     // Last, for the same reason: it reads every compile step's final
     // configuration.
-    declareCompileMaxRss(b);
+    if (ci_memory_ceilings) declareCompileMaxRss(b);
 }
 
 /// A compile step whose peak memory is large enough that several of them
@@ -5486,51 +5491,52 @@ const CompileMaxRss = struct {
 /// Declared memory upper bounds for the largest compile steps, so the build
 /// runner starts one only when its bound fits in what is left of the `--maxrss`
 /// budget (which defaults to total system memory) and never overlaps enough of
-/// them to run out of memory.
+/// them to run out of memory. Declared only under `-Dci-memory-ceilings=true`.
 ///
-/// Each value is the largest peak RSS observed for that step (the trailing
-/// comment, in GiB) plus 25%, rounded up to the next half GiB. Peaks were read
-/// from builds of `build-ci -Dembed-builtin-unit=true` on aarch64-macos and
-/// from builds of the same steps for `-Dtarget=x86_64-windows-gnu
-/// -Dcpu=baseline+sha+ssse3`, the target the Windows CI runner compiles for.
-/// Peaks vary a lot from run to run and between those targets, and they come
-/// out lowest when many compiles share the machine (macOS compresses memory
-/// under pressure, which lowers RSS), so the numbers include builds run with
-/// these declarations in effect. Re-measure by temporarily declaring a tiny
-/// `max_rss` on every compile step: the build runner then reports each step's
-/// exact peak as "memory usage peaked at ..., exceeding the declared upper
-/// bound".
+/// Each value is the step's peak RSS (the trailing comment, in GiB) plus 12%,
+/// rounded up to the next half GiB. A step whose peak exceeds its bound fails,
+/// so the padding absorbs run-to-run variation. Each peak is the largest seen
+/// in cold builds of `build-ci -Dembed-builtin-unit=true` on Linux (aarch64,
+/// in a container, `-j3`, two runs), on aarch64-macos, and for
+/// `-Dtarget=x86_64-windows-gnu -Dcpu=baseline+sha+ssse3`, the target the
+/// Windows CI runner compiles for. Linux sets the peak for every step above
+/// 5 GiB, by up to 50% over macOS (whose memory compression lowers RSS); the
+/// smaller steps peak higher on the other two. Re-measure by temporarily
+/// declaring a tiny `max_rss` on every listed step: the build runner then
+/// reports each step's exact peak as "memory usage peaked at ..., exceeding
+/// the declared upper bound". `--summary all` also prints each step's MaxRSS,
+/// but only in whole decimal gigabytes.
 const compile_max_rss = [_]CompileMaxRss{
-    .{ .kind = .exe, .name = "snapshot", .optimize = .debug, .gib = 13.5 }, // peak 10.4
-    .{ .kind = .exe, .name = "roc", .optimize = .debug, .gib = 13 }, // peak 10.2
-    .{ .kind = .@"test", .name = "eval", .optimize = .debug, .gib = 11 }, // peak 8.6
-    .{ .kind = .@"test", .name = "builtin_doc_test", .optimize = .debug, .gib = 10.5 }, // peak 8.2
-    .{ .kind = .exe, .name = "echo_native", .optimize = .debug, .gib = 10.5 }, // peak 8.4
-    .{ .kind = .exe, .name = "parallel_lsp_integration_runner", .optimize = .debug, .gib = 10.5 }, // peak 8.4
-    .{ .kind = .@"test", .name = "cli_test", .optimize = .debug, .gib = 10.5 }, // peak 8.4
-    .{ .kind = .@"test", .name = "glue", .optimize = .debug, .gib = 10 }, // peak 7.9
-    .{ .kind = .exe, .name = "strategy-differential-runner", .optimize = .debug, .gib = 9.5 }, // peak 7.5
-    .{ .kind = .exe, .name = "builtin_compiler", .optimize = .debug, .gib = 9.5 }, // peak 7.5
-    .{ .kind = .@"test", .name = "lir_inline_test", .optimize = .debug, .gib = 9.5 }, // peak 7.3
-    .{ .kind = .@"test", .name = "snapshot_tool_test", .optimize = .debug, .gib = 9.5 }, // peak 7.5
-    .{ .kind = .@"test", .name = "compile", .optimize = .debug, .gib = 9.5 }, // peak 7.5
-    .{ .kind = .@"test", .name = "lsp", .optimize = .debug, .gib = 9.5 }, // peak 7.6
-    .{ .kind = .exe, .name = "eval-host-effects-runner", .optimize = .debug, .gib = 9.5 }, // peak 7.5
-    .{ .kind = .exe, .name = "eval-test-runner", .optimize = .debug, .gib = 8.5 }, // peak 6.5
-    .{ .kind = .@"test", .name = "rc_conformance_test", .optimize = .debug, .gib = 8 }, // peak 6.4
-    .{ .kind = .exe, .name = "builtin_unit", .optimize = .debug, .gib = 7 }, // peak 5.6
-    .{ .kind = .exe, .name = "echo", .optimize = .small, .gib = 7 }, // peak 5.6
-    .{ .kind = .@"test", .name = "check", .optimize = .debug, .gib = 6 }, // peak 4.7
-    .{ .kind = .@"test", .name = "backend", .optimize = .debug, .gib = 6 }, // peak 4.7
-    .{ .kind = .@"test", .name = "lir", .optimize = .debug, .gib = 6 }, // peak 4.7
-    .{ .kind = .exe, .name = "playground", .optimize = .small, .gib = 6 }, // peak 4.7
-    .{ .kind = .exe, .name = "repl", .optimize = .small, .gib = 6 }, // peak 4.5
-    .{ .kind = .@"test", .name = "postcheck", .optimize = .debug, .gib = 6 }, // peak 4.7
-    .{ .kind = .@"test", .name = "can", .optimize = .debug, .gib = 2.5 }, // peak 1.9
-    .{ .kind = .@"test", .name = "trmc_lir_test", .optimize = .debug, .gib = 2.5 }, // peak 1.9
-    .{ .kind = .@"test", .name = "docs", .optimize = .debug, .gib = 2.5 }, // peak 1.9
-    .{ .kind = .@"test", .name = "backend_llvm", .optimize = .debug, .gib = 2.5 }, // peak 1.9
-    .{ .kind = .@"test", .name = "lsp_unit", .optimize = .debug, .gib = 1.5 }, // peak 1
+    .{ .kind = .exe, .name = "roc", .optimize = .debug, .gib = 17.5 }, // peak 15.21
+    .{ .kind = .@"test", .name = "compile", .optimize = .debug, .gib = 15.5 }, // peak 13.50
+    .{ .kind = .exe, .name = "snapshot", .optimize = .debug, .gib = 15 }, // peak 13.09
+    .{ .kind = .@"test", .name = "snapshot_tool_test", .optimize = .debug, .gib = 14.5 }, // peak 12.65
+    .{ .kind = .exe, .name = "parallel_lsp_integration_runner", .optimize = .debug, .gib = 14.5 }, // peak 12.50
+    .{ .kind = .@"test", .name = "glue", .optimize = .debug, .gib = 14.5 }, // peak 12.50
+    .{ .kind = .@"test", .name = "cli_test", .optimize = .debug, .gib = 14 }, // peak 12.45
+    .{ .kind = .@"test", .name = "lsp", .optimize = .debug, .gib = 14 }, // peak 12.34
+    .{ .kind = .exe, .name = "echo_native", .optimize = .debug, .gib = 14 }, // peak 12.22
+    .{ .kind = .exe, .name = "strategy-differential-runner", .optimize = .debug, .gib = 11.5 }, // peak 10.24
+    .{ .kind = .exe, .name = "eval-test-runner", .optimize = .debug, .gib = 11.5 }, // peak 10.22
+    .{ .kind = .@"test", .name = "eval", .optimize = .debug, .gib = 11 }, // peak 9.65
+    .{ .kind = .exe, .name = "builtin_compiler", .optimize = .debug, .gib = 10.5 }, // peak 9.31
+    .{ .kind = .@"test", .name = "lir_inline_test", .optimize = .debug, .gib = 10.5 }, // peak 9.02
+    .{ .kind = .@"test", .name = "builtin_doc_test", .optimize = .debug, .gib = 10 }, // peak 8.55
+    .{ .kind = .@"test", .name = "rc_conformance_test", .optimize = .debug, .gib = 10 }, // peak 8.52
+    .{ .kind = .exe, .name = "eval-host-effects-runner", .optimize = .debug, .gib = 9.5 }, // peak 8.43
+    .{ .kind = .exe, .name = "builtin_unit", .optimize = .debug, .gib = 7.5 }, // peak 6.52
+    .{ .kind = .exe, .name = "echo", .optimize = .small, .gib = 7 }, // peak 5.95
+    .{ .kind = .exe, .name = "playground", .optimize = .small, .gib = 6.5 }, // peak 5.54
+    .{ .kind = .exe, .name = "repl", .optimize = .small, .gib = 6.5 }, // peak 5.52
+    .{ .kind = .@"test", .name = "check", .optimize = .debug, .gib = 6 }, // peak 5.25
+    .{ .kind = .@"test", .name = "lir", .optimize = .debug, .gib = 6 }, // peak 5.04
+    .{ .kind = .@"test", .name = "backend", .optimize = .debug, .gib = 5.5 }, // peak 4.70
+    .{ .kind = .@"test", .name = "postcheck", .optimize = .debug, .gib = 5.5 }, // peak 4.70
+    .{ .kind = .@"test", .name = "can", .optimize = .debug, .gib = 2.5 }, // peak 1.90
+    .{ .kind = .@"test", .name = "trmc_lir_test", .optimize = .debug, .gib = 2.5 }, // peak 1.90
+    .{ .kind = .@"test", .name = "docs", .optimize = .debug, .gib = 2.5 }, // peak 1.90
+    .{ .kind = .@"test", .name = "backend_llvm", .optimize = .debug, .gib = 2.5 }, // peak 1.90
+    .{ .kind = .@"test", .name = "lsp_unit", .optimize = .debug, .gib = 1.5 }, // peak 1.00
 };
 
 /// Sets `max_rss` on every compile step listed in `compile_max_rss`.
@@ -5542,7 +5548,8 @@ const compile_max_rss = [_]CompileMaxRss{
 /// A bound larger than this machine's total memory is lowered to the total, so
 /// that the build runner (whose default budget is total memory) runs the step
 /// with no other declared step alongside rather than refusing to build at all
-/// on a smaller machine such as a 7 GB macOS CI runner.
+/// on a machine with less memory than the bound, such as a 16 GB CI runner
+/// building `roc`.
 fn declareCompileMaxRss(b: *std.Build) void {
     const total_memory = std.process.totalSystemMemory() catch std.math.maxInt(u64);
     var visited: std.AutoHashMapUnmanaged(*Step, void) = .empty;
