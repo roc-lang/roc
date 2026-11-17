@@ -560,6 +560,9 @@ pub const Builder = struct {
     view: *const types.ModuleView,
     env: types.Env,
     store: *LirStore,
+    /// Where the worker's body starts in the store: everything the builder
+    /// appends from here on is the body's one chunk (`finishProc`).
+    body_mark: LirStore.BodyMark,
     frame_locals: std.ArrayList(LocalId) = .empty,
     binders: collections.DenseMapUnmanaged(BinderId, LocalId) = .empty,
     /// Where this worker's scope inputs are (`Tables.InputLayout`), once its
@@ -764,6 +767,7 @@ pub const Builder = struct {
             .view = program.module(worker.module),
             .env = env,
             .store = &program.result.store,
+            .body_mark = program.result.store.bodyMark(),
             .tail_calls = lir_core.TailCallBuilder.init(program.allocator, worker.proc),
             .recipes = Tables.Recipes.init(program.allocator),
         };
@@ -2323,6 +2327,7 @@ pub const Builder = struct {
         // parameters known it loops even when the procedure has a region.
         if (has_dynamic_frame and self.tail_calls.loop_params.len == 0) self.tail_calls.self_calls = .replace_frame;
         proc.tail_calls = .of(try self.tail_calls.finish(self.store));
+        try self.store.recordBodyChunk(worker.proc, self.body_mark);
     }
 
     /// Crash with a checked runtime error; the value of type `ty` it stands

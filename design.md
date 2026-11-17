@@ -24737,8 +24737,15 @@ regression fails loudly instead of shipping.
 TRMC, forwarding-join inlining, tag-case fusion and known-tag jump threading,
 join scalarization, loop append promotion, range proving, and box reuse
 preserve their pipeline order and existing procedure eligibility. Within one phase, procedure bodies own disjoint
-writable statement rows. Rewriting reads a frozen phase input and produces a
-sparse patch of those rows, new body-owned data, and one procedure's metadata.
+writable rows: the rows of their body chunks ("Statement Storage"). A rewrite
+prepares exactly those rows without reading the body. Its private copy of a
+column holds the chunks' rows of that column in chunk order, so a row's
+position is its offset in the chunk holding it plus the lengths of the chunks
+before that one; a statement the rewrite appended lies past every chunk. The
+first write to a column copies that column's chunk rows from the frozen
+coordinator, and reads before it go to the coordinator. Rewriting reads a
+frozen phase input and produces a sparse patch of those rows, new body-owned
+data, and one procedure's metadata.
 The coordinator reserves pointer layouts and helper summaries before dispatch;
 workers cannot intern layouts or derive helper summaries from other workers'
 partially rewritten bodies.
@@ -24775,7 +24782,8 @@ one ordered run ("Ordered Runs") whose items rewrite and whose own commit does
 nothing; every segment finishes its callbacks before committing in procedure
 order, so neither input visibility nor output identity depends on worker count
 or completion order. Each commit
-relocates appended references in both patched rows and procedure metadata.
+relocates appended references in both patched rows and procedure metadata,
+and the rows its suffix occupies become the procedure's next body chunk.
 Fusion workers keep a procedure's full fixed point in one task. The coordinator
 inventories the old join-ID domain once; each task allocates fresh identities
 above that boundary and returns its exact allocation count. Ordered commit
@@ -24907,7 +24915,29 @@ A row holds no statement id, no span a procedure rewrite prepares for
 mutation, and no other row id, which the store checks at compile time; a
 procedure rewrite therefore never takes a private copy of a row, and a body
 shard relocates the rows it adds exactly as it relocates its spans. The LIR
-image serializes each row column alongside the statements.
+image serializes each row column alongside the statements, and the body chunk
+column too.
+
+A procedure's body occupies a few runs of rows, its body chunks
+(`LIR.BodyChunk`): each is one range in every column a procedure rewrite can
+write, which are the statements, switch branches, string-match arms, and
+join points. `LirProcSpec.body_chunks` names the procedure's chunks in the
+store's chunk column, in the order they were appended. Lowering appends each
+body as one chunk. Boxy lowering builds one body at a time straight into the
+store, and records the rows appended between a builder's start and its
+procedure's finish (`LirStore.bodyMark`, `recordBodyChunk`); the specializing
+lowerer does the same for a body it lowers on the coordinator, and a body it
+lowers on a worker is a body shard, whose append is its chunk. Single-use
+inlining records the rows of each body it inlines as the caller's next chunk,
+and each committed procedure rewrite appends the chunk its suffix occupies.
+A chunk can hold rows its body no longer reaches, such as the statements a
+rewrite replaced. No row lies in two procedures' chunks.
+Each time a procedure rewrite prepares a procedure, Debug builds check that
+every statement, span, and join point the body and its metadata reach lies in
+its chunks, each span within one chunk, and a phase checks that no two of its
+procedures share a chunk row. Once the last procedure-local rewrite has
+committed, the pipeline releases the chunks (`releaseBodyChunks`): the stages
+after it append and replace rows without recording any.
 
 Statement compaction (`ReachableProcs`, which runs before ARC and again after
 ARC and the tail-drive pass) drops every statement no reachable procedure
@@ -26802,7 +26832,14 @@ accepts neither and only follows the explicit decisions.
 Exact ownership and certifier path snapshots use persistent sparse proc-local
 state. A control-flow fork shares the unchanged state root, and a transition
 stores only bounded-depth paths to changed `OwnedEntry` values, liveness words,
-or certifier `State` entries.
+or certifier `State` entries. A procedure whose domain is small keeps that state
+by value instead: a liveness, dead-unit or resource row over at most 128 bits
+is held inline in two words, and an ownership set over at most 128 resources
+holds its present resources in an inline mask, with only the nonzero residual
+masks of dismantlable aggregates in its persistent tree. A fork then copies
+words, and a transition neither allocates nor follows a pointer. The two forms
+give every operation the same answer, so which one a procedure uses never
+changes a decision.
 Fresh one-owner states update their paths in place until the first fork; meets
 share equal subtrees and allocate only changed subtrees. Procedure width is
 therefore paid once by the producer-owned domains and summaries, not once per
@@ -29408,6 +29445,20 @@ the list of instruction sets lives only in `isa.zig`. Code that runs generated
 code in-process asks `isa.host`, never `RocTarget.detectNative`, which maps an
 architecture without a code generator to one that has one.
 
+An explicit reference-count statement on a stack value computes the value's
+address directly into the helper's first argument register and loads an
+incref's count directly into the second; neither passes through a frame slot.
+
+The x86-64 encoder picks each instruction's encoding from the operand values it
+is handed, all of which are final when it is emitted: a memory operand takes a
+one-byte displacement when the displacement fits a signed byte, a group-1
+arithmetic or compare instruction takes the sign-extended imm8 form when its
+immediate fits one, and an immediate load is the zero-extending 32-bit move,
+the sign-extending one or `movabs`, whichever is shortest. An instruction whose
+bytes are patched after emission keeps a fixed-form encoder: `call`, `jmp` and
+`jcc` with rel32, the RIP-relative `lea`, and the seven-byte `REX.W C7`
+immediate load whose field a relocatable expect site's relocation names.
+
 ## Dev Backend Register Lifetimes
 
 `LirCodeGen` is the sole authority for LIR local locations. Every assigned
@@ -29460,13 +29511,21 @@ ownership decisions.
 
 The planner forms basic blocks once. Within each block it records disjoint
 read-before-write intervals, propagating only live-in requirements backward across
-block edges to a fixed point. Scratch columns are procedure-local and indexed by
+block edges to a fixed point. A procedure that is one block no edge enters has
+nothing to propagate, so its in-block intervals are its whole solution and it
+builds no block graph or loop forest. A multi-block procedure's block graph,
+loop forest and loop coverage live in an arena the plan keeps from procedure to
+procedure. Scratch columns are procedure-local and indexed by
 compact identities. There are no locals-wide rows per statement and no eagerly
 materialized pairwise interference graph. Slots are grouped by their required
 size and alignment and reused only after checking all remaining lifetime
 intervals, including holes and back edges. Single intervals are stored inline,
 without a heap allocation per local or slot. A queue retires occupied intervals
-so straight-line dead-temporary chains do not scan every earlier local.
+so straight-line dead-temporary chains do not scan every earlier local. When
+every value's lifetime is one interval, a slot returns from that queue only
+after its last reservation ends, so the most recently freed slot is the one
+the general check would choose, and the planner takes it without recording
+reservations.
 
 `ptr_alloca` backing cells have explicit procedure lifetime and are reserved
 separately from reusable local slots and instruction-selection scratch. Ordinary

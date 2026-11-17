@@ -100,7 +100,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      (`layouts_on_cycle`), combined with the v78 change.
 /// v80: a lowering module is named by a failure identity, combined with the
 ///      v77-v79 changes.
-pub const FORMAT_VERSION: u32 = 80;
+/// v81: procedure specs name their body chunks, and the store carries the
+///      chunk column, combined with the v78-v80 changes.
+pub const FORMAT_VERSION: u32 = 81;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -208,6 +210,7 @@ pub const LirStoreImage = extern struct {
     erased_call_arg_plans: ArrayRef,
     stmt_rows: [LirStore.stmt_row_column_count]ArrayRef,
     proc_specs: ArrayRef,
+    body_chunks: ArrayRef,
     strings: StringLiteralStoreImage,
     next_synthetic_symbol: u64,
     source_file_bytes: ArrayRef,
@@ -242,6 +245,7 @@ pub const LirStoreImage = extern struct {
             .erased_call_arg_plans = try encoder.ref(store.erased_call_arg_plans.unsafeRawItemsForView()),
             .stmt_rows = try stmtRowRefs(encoder, store),
             .proc_specs = try encoder.ref(store.proc_specs.unsafeRawItemsForView()),
+            .body_chunks = try encoder.ref(store.body_chunks.unsafeRawItemsForView()),
             .strings = try StringLiteralStoreImage.fromStore(encoder, &store.strings, &store.string_builder),
             .next_synthetic_symbol = store.next_synthetic_symbol,
             .source_file_bytes = try encoder.ref(store.source_file_bytes.unsafeRawItemsForView()),
@@ -293,6 +297,7 @@ pub const LirStoreImage = extern struct {
             .erased_call_arg_plans = try guardedListFromRef(LIR.ErasedCallArgsPlan, "LirStore.erased_call_arg_plans", base_ptr, image_size, self.erased_call_arg_plans),
             .stmt_rows = try self.stmtRowsView(base_ptr, image_size),
             .proc_specs = try guardedListFromRef(LIR.LirProcSpec, "LirStore.proc_specs", base_ptr, image_size, self.proc_specs),
+            .body_chunks = try guardedListFromRef(LIR.BodyChunk, "LirStore.body_chunks", base_ptr, image_size, self.body_chunks),
             .strings = try self.strings.view(base_ptr, image_size),
             .string_builder = try self.strings.viewBuilder(base_ptr, image_size),
             .allocator = allocator,
@@ -523,7 +528,7 @@ comptime {
     // `recursive_digests` serve only commits,
     // which a view never makes; and its `commit_scratch` and
     // `scratch_field_offsets` are scratch that views start empty.
-    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 40);
+    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 41);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 22);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
@@ -913,6 +918,7 @@ const serialized_guarded_fields = [_][]const u8{
     "u32s",
     "erased_call_arg_plans",
     "proc_specs",
+    "body_chunks",
     "source_file_bytes",
     "source_file_ends",
     "source_file_qualified_bytes",
@@ -940,6 +946,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
     var roots: [2]LIR.CFStmtId = undefined;
     var procs: [2]LIR.LirProcSpecId = undefined;
     for (&roots, &procs) |*root, *proc| {
+        const mark = store.bodyMark();
         root.* = try store.addCFStmt(.{ .ret = .{ .value = original } }, .test_fixture);
         proc.* = try store.addProcSpec(.{
             .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
@@ -948,6 +955,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
             .body = .some(root.*),
             .ret_layout = pointer_layout,
         }, .none);
+        try store.recordBodyChunk(proc.*, mark);
     }
     const prefix = store.captureBodyPrefix();
     var first = try store.cloneForProcRewrite(gpa, procs[0]);
