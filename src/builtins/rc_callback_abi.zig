@@ -34,6 +34,9 @@ pub const Param = enum {
     count,
     /// The published host ABI's ops slot, which generated helpers ignore.
     ops_ptr,
+    /// The queue of the teardown the helper runs inside, or null when it
+    /// runs inside none (`utils.DropQueue`).
+    drop_queue,
 };
 
 /// Parameters of a generated `incref` helper.
@@ -41,6 +44,9 @@ pub const incref_params: []const Param = &.{ .value_ptr, .count };
 
 /// Parameters of a generated `decref` or `free` helper.
 pub const drop_params: []const Param = &.{.value_ptr};
+
+/// Parameters of a generated `decref_queued` helper.
+pub const queued_drop_params: []const Param = &.{ .value_ptr, .drop_queue };
 
 /// Parameters of a generated `host_drop` adapter.
 pub const host_drop_params: []const Param = &.{ .value_ptr, .ops_ptr };
@@ -54,6 +60,9 @@ pub const RcDecrefFn = *const fn (?[*]u8) callconv(.c) void;
 /// ABI of a compiled `free` helper.
 pub const RcFreeFn = *const fn (?[*]u8) callconv(.c) void;
 
+/// ABI of a compiled `decref_queued` helper.
+pub const RcQueuedDropFn = *const fn (?[*]u8, ?*utils.DropQueue) callconv(.c) void;
+
 /// ABI of a compiled `host_drop` adapter, which is the published
 /// `Payload.on_drop` ABI. `erased_callable.OnDropFn` is this type.
 pub const HostDropFn = *const fn (?[*]u8, *RocOps) callconv(.c) void;
@@ -62,7 +71,7 @@ pub const HostDropFn = *const fn (?[*]u8, *RocOps) callconv(.c) void;
 /// stack buffer for `abiParams` without hand-maintaining the bound.
 pub const max_params = blk: {
     var widest: usize = 0;
-    for ([_][]const Param{ incref_params, drop_params, host_drop_params }) |params| {
+    for ([_][]const Param{ incref_params, drop_params, queued_drop_params, host_drop_params }) |params| {
         if (params.len > widest) widest = params.len;
     }
     break :blk widest;
@@ -74,6 +83,7 @@ fn paramType(comptime param: Param) type {
         .value_ptr => ?[*]u8,
         .count => isize,
         .ops_ptr => *RocOps,
+        .drop_queue => ?*utils.DropQueue,
     };
 }
 
@@ -103,6 +113,7 @@ comptime {
     assertMatches(RcIncrefFn, incref_params);
     assertMatches(RcDecrefFn, drop_params);
     assertMatches(RcFreeFn, drop_params);
+    assertMatches(RcQueuedDropFn, queued_drop_params);
     assertMatches(HostDropFn, host_drop_params);
 }
 

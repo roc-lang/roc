@@ -2384,6 +2384,8 @@ pub const Coordinator = struct {
     program_finalization_ns: u64 = 0,
     /// Whether per-module compile-time lowering collects fine-grained timings.
     detailed_lowering_timing: bool = false,
+    /// Whether checked-artifact publication times each of its steps.
+    detailed_publication_timing: bool = false,
 
     /// Build statistics
     cache_hits: u32,
@@ -8299,6 +8301,7 @@ pub const Coordinator = struct {
             .{ .explicit = task.deferred_imports },
             task.missing_public_types,
             task.typing_context,
+            self.detailed_publication_timing,
         );
         defer typecheck_output.deinit();
         // On error the coordinator still owns the input environment. Transfer
@@ -10384,7 +10387,7 @@ fn writeAliasByNameRequirementFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.
     });
 }
 
-test "requires signature naming a for-clause alias resolves to the app declaration and publishes once" {
+test "requires signature naming a for-clause alias infers the app type and publishes once" {
     const allocator = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -10420,7 +10423,7 @@ test "requires signature naming a for-clause alias resolves to the app declarati
     try std.testing.expect(!coord.hasUserErrors());
 
     // The requirement signature uses the for-clause alias `Model` by name.
-    // Instantiation resolves those occurrences to the app's own declaration,
+    // Inference resolves those occurrences to the app's annotated type,
     // so the app's recorded solution references app-owned types only and the
     // platform root defers its publication like any other app build.
     const app_artifact = coord.appRootCheckedArtifact();
@@ -10444,6 +10447,112 @@ test "requires signature naming a for-clause alias resolves to the app declarati
     const relations = platform_artifact.platform_requirement_relations.relations.items();
     try std.testing.expectEqual(@as(usize, 1), relations.len);
     try std.testing.expect(platform_artifact.checked_types.payload(relations[0].requested_source_ty_payload) != .pending);
+}
+
+test "issue 13138 platform aliases infer nested stores and ignore app type names across cached pairings" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Engine.roc", .data =
+        \\Engine := {}.{
+        \\    Program(st) : { initial : st, read : st -> I64 }
+        \\}
+    });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data =
+        \\platform ""
+        \\    requires {
+        \\        [Store : st] for main : Engine.Program(st),
+        \\        update : Store -> Store,
+        \\    }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_entry": entry }
+        \\
+        \\import Engine
+        \\
+        \\Handle : Box(Store)
+        \\hold : Store -> Handle
+        \\hold = |store| Box.box(store)
+        \\release : Handle -> Store
+        \\release = |handle| Box.unbox(handle)
+        \\answer = (main.read)(release(hold(update(main.initial))))
+        \\entry : {} -> I64
+        \\entry = |_| answer
+    });
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+
+    // No alias, an unrelated same-named alias, and an independently named
+    // nominal type must all solve the same platform-local binder from values.
+    const apps = [_][]const u8{
+        \\app [main, update] { pf: platform "./platform.roc" }
+        \\main = { initial: ({ count: 42.I64 }, ("nested", {})), read: |store| store.0.count }
+        \\update = |store| store
+        ,
+        \\app [main, update, Store] { pf: platform "./platform.roc" }
+        \\Store : Str
+        \\main = { initial: ({ count: 42.I64 }, ("nested", {})), read: |store| store.0.count }
+        \\update = |store| store
+        ,
+        \\app [main, update] { pf: platform "./platform.roc" }
+        \\AppState := { count : I64 }
+        \\make : {} -> AppState
+        \\make = |_| { count: 42 }
+        \\read : AppState -> I64
+        \\read = |state| state.count
+        \\main = { initial: make({}), read }
+        \\update : AppState -> AppState
+        \\update = |state| state
+        ,
+    };
+    for (apps) |source| {
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = source });
+        const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+        defer allocator.free(app);
+        var uncached = try compileAppFacts(allocator, null, app);
+        defer uncached.deinit(allocator);
+        if (uncached.has_errors) std.debug.print("{s}\n", .{uncached.reports});
+        try std.testing.expect(!uncached.has_errors);
+        var cold = try compileAppRootIdentityWithConstants(allocator, cache, app, .executable_artifacts, &.{.{ .name = "answer", .value = 42 }});
+        defer cold.deinit(allocator);
+        var warm = try compileAppRootIdentityWithConstants(allocator, cache, app, .executable_artifacts, &.{.{ .name = "answer", .value = 42 }});
+        defer warm.deinit(allocator);
+        try std.testing.expectEqualSlices(u8, cold.app_root_bytes, warm.app_root_bytes);
+        try std.testing.expectEqualSlices(u8, cold.executable_root_bytes, warm.executable_root_bytes);
+        try std.testing.expect(warm.platform_root_publish_count == 0);
+    }
+}
+
+test "issue 13138 inferred platform alias rejects inconsistent sibling requirements" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data =
+        \\platform ""
+        \\    requires {
+        \\        [Store : st] for initial : st,
+        \\        update : Store -> Store,
+        \\    }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_entry": entry }
+        \\entry : {} -> Box(Store)
+        \\entry = |_| Box.box(update(initial))
+    });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data =
+        \\app [initial, update] { pf: platform "./platform.roc" }
+        \\initial = 42.I64
+        \\update : Str -> Str
+        \\update = |value| value
+    });
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+    var result = try compileAppFacts(allocator, null, app);
+    defer result.deinit(allocator);
+    try std.testing.expect(result.has_errors);
+    if (std.mem.find(u8, result.reports, "Type Mismatch") == null) std.debug.print("{s}\n", .{result.reports});
+    try std.testing.expect(std.mem.find(u8, result.reports, "Type Mismatch") != null);
 }
 
 fn writeHostedDistinctnessFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {

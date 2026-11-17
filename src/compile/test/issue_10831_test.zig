@@ -53,7 +53,6 @@ test "issue 10831: repeated annotated calls reuse one specialization" {
         \\    Ok({})
         \\}
     , .{
-        .proc_debug_names = true,
         .specialization_workers = 4,
         .prepared_inspect = expectSingleSourceRefreshSpecialization,
     });

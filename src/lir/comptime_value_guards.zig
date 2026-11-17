@@ -237,7 +237,7 @@ test "shared compile-time guard owner metadata allocation failure cleanup" {
 fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
-    _ = try program.appendLoweringModule(.{});
+    _ = try program.appendLoweringModule(.{}, @splat(0));
     const record_layout = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const struct_idx = program.layouts.getLayout(record_layout).getStruct().idx;
     const failure_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
@@ -320,7 +320,7 @@ test "completed compile-time value guards allocation failure cleanup" {
 fn testCompletedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
-    _ = try program.appendLoweringModule(.{});
+    _ = try program.appendLoweringModule(.{}, @splat(0));
     const record_layout = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const struct_idx = program.layouts.getLayout(record_layout).getStruct().idx;
     const failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);

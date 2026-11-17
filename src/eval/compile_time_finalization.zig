@@ -991,7 +991,6 @@ fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.Solved
         .reads_branch_expectations = false,
         // Specialization records procedure names for every consumer of the
         // program; a runtime consumer's diagnostics read them.
-        .proc_debug_names = true,
         .site_code_keys = true,
         .owned_proc_signatures = true,
         .post_check_executor = options.post_check_executor,
@@ -2069,7 +2068,6 @@ fn boxyCompileTimeTarget(options: Options) lir.CheckedPipeline.TargetConfig {
         .inline_expects = .run,
         .reads_branch_expectations = false,
         .erased_capture_prefix = if (compilerHostMustUseInterpreterForCtfe()) 0 else builtins.erased_callable.hot_reload_capture_prefix_size,
-        .proc_debug_names = true,
         .post_check_executor = options.post_check_executor,
         .timing = if (options.timing) |timing| &timing.lowering else null,
     };
@@ -2083,7 +2081,6 @@ fn boxyLinkedCompileTimeTarget(source: BoxyObjectSource, options: Options) lir.C
     target.boxy_compile_time = true;
     target.boxy_unit = .{ .imports = source.interfaces, .root = false, .names = source.names };
     target.checked_module_state = .checking_finalization;
-    target.proc_debug_names = true;
     target.post_check_executor = options.post_check_executor;
     target.timing = if (options.timing) |timing| &timing.lowering else null;
     return target;
@@ -5481,8 +5478,9 @@ const FailedAt = struct {
 
 /// Where an interpreter's evaluation failed.
 fn interpreterFailedAt(lir_result: *const lir.Program.Result, interpreter: *const Interpreter, slots: *const StaticSlotEnvironment) FailedAt {
+    const meaning = if (interpreter.getFailedCrashStmt()) |stmt| lir_result.store.failureMeaning(stmt) else null;
     return slots.withProducerOrigin(.{
-        .meaning = if (interpreter.getFailedCrashStmt()) |stmt| lir_result.store.failureMeaning(stmt) else null,
+        .meaning = if (meaning) |known| lir_result.meaningByCheckedKey(known) else null,
         .region = interpreter.getFailedCheckedRegion(),
         .loc = interpreter.getFailedSourceLoc(),
     });
@@ -6656,6 +6654,9 @@ const DevProgram = struct {
     image_selection: BoxyLinkedImages.Selection,
     /// The program's LIR, whose source file table locations index.
     lir_store: *const lir.LirStore,
+    /// The program's lowering, whose module table reads the modules failure
+    /// meanings name (`lir.Program.Result.meaningByCheckedKey`).
+    lir_result: *const lir.Program.Result,
 
     fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, options: Options) FinalizeError!DevProgram {
         const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
@@ -6823,6 +6824,7 @@ const DevProgram = struct {
             .linked_images = options.boxy_linked_images,
             .image_selection = image_selection,
             .lir_store = &lowered.lir_result.store,
+            .lir_result = &lowered.lir_result,
         };
     }
 
@@ -6882,7 +6884,7 @@ const DevProgram = struct {
         const known = point orelse return .{};
         var failed_at = FailedAt{};
         if (known.calls.len != 0) {
-            failed_at.meaning = self.failureMeaningAt(known.calls[0]);
+            if (self.failureMeaningAt(known.calls[0])) |meaning| failed_at.meaning = self.lir_result.meaningByCheckedKey(meaning);
         }
         const statement = for (known.calls) |address| {
             // A return address follows its call instruction.

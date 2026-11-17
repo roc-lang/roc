@@ -28,10 +28,13 @@ pub const numeric_conversions = @import("numeric_conversions.zig");
 pub const rc_callback_abi = @import("rc_callback_abi.zig");
 pub const simd = @import("simd.zig");
 pub const str = @import("str.zig");
+/// UTF-8 validation kernels and the CPU features that select them.
+pub const utf8 = @import("utf8.zig");
 pub const utils = @import("utils.zig");
 
 test "builtins tests" {
     std.testing.refAllDecls(@import("atomic_rc_test.zig"));
+    std.testing.refAllDecls(@import("drop_queue_test.zig"));
     std.testing.refAllDecls(@import("builtin_registry.zig"));
     std.testing.refAllDecls(@import("crypto.zig"));
     std.testing.refAllDecls(@import("blake3_iterative.zig"));
@@ -58,5 +61,6 @@ test "builtins tests" {
     std.testing.refAllDecls(@import("sha256.zig"));
     std.testing.refAllDecls(@import("simd.zig"));
     std.testing.refAllDecls(@import("str.zig"));
+    std.testing.refAllDecls(@import("utf8.zig"));
     std.testing.refAllDecls(@import("utils.zig"));
 }

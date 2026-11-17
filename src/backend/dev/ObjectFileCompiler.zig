@@ -837,7 +837,8 @@ fn compileWithCodeGen(
                     .uses_frame_pointer = frame.uses_frame_pointer,
                 }) catch return CompilationError.OutOfMemory;
                 dwarf_procs.append(allocator, .{
-                    .name = symbol_name,
+                    .name = if (excerpt.name.len != 0) excerpt.name else symbol_name,
+                    .linkage_name = if (excerpt.name.len != 0) symbol_name else null,
                     .code_start = start,
                     .code_size = excerpt.code.len,
                     .loc = excerpt.loc,
@@ -1726,7 +1727,8 @@ fn composeWithCodeGen(
                 .uses_frame_pointer = frame.uses_frame_pointer,
             }) catch return CompilationError.OutOfMemory;
             dwarf_procs.append(allocator, .{
-                .name = symbol_name,
+                .name = if (excerpt.name.len != 0) excerpt.name else symbol_name,
+                .linkage_name = if (excerpt.name.len != 0) symbol_name else null,
                 .code_start = start,
                 .code_size = excerpt.code.len,
                 .loc = excerpt.loc,
@@ -1960,6 +1962,52 @@ test "ObjectFileCompiler native emission skips static initializers and captures 
     try std.testing.expectEqual(@as(u64, targets.len), snapshot.native_emission.procedures_emitted);
     try std.testing.expectEqual(@as(u64, 0), snapshot.native_emission.procedures_reused);
     try std.testing.expectEqual(@as(u64, 0), snapshot.rc_helper_instructions_ns);
+}
+
+test "issue 12943: a procedure's source name survives unit pieces and composition" {
+    const allocator = std.testing.allocator;
+    var named_symbol: [lir.ProcIdentity.symbol_name_len]u8 = undefined;
+    const encoded = encoded: {
+        var store = LirStore.init(allocator);
+        defer store.deinit();
+        var layouts = try layout.Store.init(allocator, @import("base").target.TargetUsize.native);
+        defer layouts.deinit();
+        const result_local = try store.addLocal(.{ .layout_idx = .i64 });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result_local } }, .test_fixture);
+        const body = try store.addCFStmt(.{ .assign_literal = .{
+            .target = result_local,
+            .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } },
+            .next = ret,
+        } }, .test_fixture);
+        const named = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = lir.LIR.ProcIdentity.forTest(1),
+            .args = lir.LIR.LocalSpan.empty(),
+            .body = .some(body),
+            .ret_layout = .i64,
+        }, .none);
+        try store.setProcDebugName(named, "App.answer");
+        _ = store.getProcSpec(named).identity.writeSymbolName(&named_symbol);
+
+        var compiler = ObjectFileCompiler.init(allocator);
+        var pieces = try compiler.compileToPieces(&store, &layouts, &.{}, &.{}, store.getProcSpecs(), .x64linux);
+        defer pieces.deinit();
+        // The name has to outlive the LIR it came from: the pieces are what
+        // a later build reads back from the cache.
+        break :encoded try UnitPieces.encode(allocator, &pieces);
+    };
+    defer allocator.free(encoded);
+
+    var pieces = try UnitPieces.decode(allocator, encoded);
+    defer pieces.deinit();
+    var compiler = ObjectFileCompiler.init(allocator);
+    var composed = try compiler.composeObject(&.{&pieces}, .x64linux, .{ .roots = null });
+    defer composed.deinit();
+
+    // The subprogram entry: source name, then the symbol as linkage name.
+    var entry_buffer: [16 + lir.ProcIdentity.symbol_name_len]u8 = undefined;
+    const entry = try std.fmt.bufPrint(&entry_buffer, "App.answer\x00{s}\x00", .{named_symbol});
+    try std.testing.expect(std.mem.find(u8, composed.object_bytes, entry) != null);
 }
 
 test "ObjectFileCompiler runtime static-root excerpts own only reachable canonical data" {

@@ -964,7 +964,10 @@ pub const BuildEnv = struct {
         coord.boxy_program_observer = self.boxy_program_observer;
         coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
         coord.boxy_object_lowering = self.boxy_object_lowering;
-        if (self.detailed_monotype_diagnostics) coord.ctfe_timing.lowering.enableDetail();
+        if (self.detailed_monotype_diagnostics) {
+            coord.ctfe_timing.lowering.enableDetail();
+            coord.detailed_publication_timing = true;
+        }
         self.coordinator = coord;
     }
 
@@ -3840,7 +3843,6 @@ pub const BuildEnv = struct {
                 try collectDbgRegionsInExpr(allocator, env, regions, binop.rhs);
             },
             .e_unary_minus => |unary| try collectDbgRegionsInExpr(allocator, env, regions, unary.expr),
-            .e_unary_not => |unary| try collectDbgRegionsInExpr(allocator, env, regions, unary.expr),
             .e_field_access => |field| try collectDbgRegionsInExpr(allocator, env, regions, field.receiver),
             inline .e_method_call, .e_dispatch_call => |call| {
                 try collectDbgRegionsInExpr(allocator, env, regions, call.receiver);

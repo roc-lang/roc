@@ -107,7 +107,6 @@ test "issue 11418: shared LIR generation leaves runtime-only procedures to the r
         .inline_expects = .omit,
         // Keep the named procedures observable instead of inlining their bodies.
         .inline_mode = .none,
-        .proc_debug_names = true,
         .work_metrics = &metrics,
     };
     coord.runtime_lowering = .{ .target = target };

@@ -123,6 +123,10 @@ fn hostDropInRcStatement() noreturn {
     base.invariant("Dev/codegen invariant violated: RC statement used a host-shaped drop adapter", .{});
 }
 
+fn queuedDropInRcStatement() noreturn {
+    base.invariant("Dev/codegen invariant violated: RC statement used a queued drop helper", .{});
+}
+
 /// Identity of one compiled RC helper: the canonical layout plan plus the
 /// count-update atomicity the helper's own updates use. Atomic and
 /// single-thread helpers are compiled separately, so a helper's body never
@@ -136,10 +140,10 @@ const RcHelperVariant = struct {
     atomicity: RcAtomicity,
 
     /// Pack the variant into a stable integer for the helper caches.
-    /// `RcHelperKey.encode` occupies bits 0..33, so the atomicity bit is
+    /// `RcHelperKey.encode` occupies its low `encoded_bits` bits, so the atomicity bit is
     /// placed above it.
     fn encode(self: RcHelperVariant) u64 {
-        return (@as(u64, @backingInt(self.atomicity)) << 34) | self.key.encode();
+        return (@as(u64, @backingInt(self.atomicity)) << RcHelperKey.encoded_bits) | self.key.encode();
     }
 };
 
@@ -153,8 +157,8 @@ pub fn staticDataRcHelperKey(key: RcHelperKey) u64 {
 /// compiled objects share them.
 pub fn compiledRcHelperSymbolName(allocator: std.mem.Allocator, layout_store: *const layout.Store, cache_key: u64) std.mem.Allocator.Error![]u8 {
     const variant = RcHelperVariant{
-        .key = RcHelperKey.decode(cache_key & 0x3_ffff_ffff),
-        .atomicity = @fromBackingInt(@intCast(@as(u1, @intCast((cache_key >> 34) & 1)))),
+        .key = RcHelperKey.decode(cache_key),
+        .atomicity = @fromBackingInt(@intCast(@as(u1, @intCast((cache_key >> RcHelperKey.encoded_bits) & 1)))),
     };
     return layout.rc_helper.symbolName(allocator, layout_store, variant.key, switch (variant.atomicity) {
         .atomic => .atomic,
@@ -611,10 +615,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Region starts of procedures spliced from object-cache entries, by
         /// identity; a second pack holding the same procedure splices nothing.
         spliced_proc_starts: std.AutoHashMap(lir.ProcIdentity, usize),
-        /// The source location each procedure placed from an excerpt set
-        /// carries (`CodeExcerpt.Excerpt.loc`), in this program's
-        /// source-file domain, by identity.
-        assembled_proc_locs: std.AutoHashMapUnmanaged(lir.ProcIdentity, base.SourceLoc) = .empty,
+        /// The source location and source name each procedure placed from
+        /// an excerpt set carries (`CodeExcerpt.Excerpt.loc` and `.name`),
+        /// by identity. The location is in this program's source-file
+        /// domain and the name is owned here.
+        assembled_proc_sources: std.AutoHashMapUnmanaged(lir.ProcIdentity, AssembledProcSource) = .empty,
 
         /// Each declared join point's pending jumps, chained through
         /// `join_jump_records` in emission order.
@@ -724,6 +729,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Set during deferred-prologue proc compilation, used by moveToReturnRegisterWithLayout
         /// and generateEarlyReturn.
         ret_ptr_slot: ?i32 = null,
+        /// While a `decref_queued` helper's body is generated: the frame slot
+        /// holding the drop queue it received, which it passes to each
+        /// `decref_queued` child and each queued teardown. Null in every
+        /// other body, which passes a null queue.
+        rc_queue_slot: ?i32 = null,
 
         /// The current AArch64 proc reads incoming stack arguments. Its prologue
         /// must initialize `caller_stack_arg_base_reg` to the callee-entry SP.
@@ -1349,7 +1359,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.spliced_helper_offsets.deinit();
             }
             self.spliced_proc_starts.deinit();
-            self.assembled_proc_locs.deinit(self.allocator);
+            self.freeAssembledProcNames();
+            self.assembled_proc_sources.deinit(self.allocator);
             self.pending_message_addrs.deinit(self.allocator);
             self.message_pool_runs.deinit(self.allocator);
             self.message_pool_index.deinit(self.allocator);
@@ -1441,7 +1452,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             "compiled_rc_helpers",          "compiled_rc_helper_log",    "shifted_rc_helpers",         "unwind_functions",
             "rc_helper_worklist",           "rc_helper_scheduled",       "pending_rc_addrs",           "pending_rc_calls",
             "compiling_rc_helpers",         "pending_calls",             "pending_proc_addrs",         "code_regions",
-            "code_refs",                    "spliced_helper_offsets",    "spliced_proc_starts",        "assembled_proc_locs",
+            "code_refs",                    "spliced_helper_offsets",    "spliced_proc_starts",        "assembled_proc_sources",
             "join_point_jumps",             "join_jump_records",         "join_point_params",          "spare_proc_scope",
             "in_proc_scope",                "internal_call_patches",     "internal_addr_patches",      "early_return_patches",
             "tail_exit_patches",            "stmt_states",               "cf_patches",                 "interchangeable_layouts",
@@ -1450,10 +1461,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             "carry_slot",                   "pending_cell_slot",         "early_return_result_slot",   "early_return_ret_layout",
             "current_proc_name",            "current_proc_frame_locals", "current_stmt_id",            "pending_overflow_result_target",
             "precomputed_overflow_results", "ret_ptr_slot",              "uses_caller_stack_arg_base", "message_pool",
-            "message_pool_index",           "message_pool_runs",         "pending_message_addrs",      "message_pool_placed_len",
-            "image_finished",               "fragment_mode",             "fragment_source_mode",       "fragment_context",
-            "assembled_symbolic_refs",      "owned_symbol_names",        "scratch_arg_locs",           "scratch_arg_infos",
-            "scratch_pass_by_ptr",          "scratch_param_num_regs",
+            "rc_queue_slot",                "message_pool_index",        "message_pool_runs",          "pending_message_addrs",
+            "message_pool_placed_len",      "image_finished",            "fragment_mode",              "fragment_source_mode",
+            "fragment_context",             "assembled_symbolic_refs",   "owned_symbol_names",         "scratch_arg_locs",
+            "scratch_arg_infos",            "scratch_pass_by_ptr",       "scratch_param_num_regs",
         };
 
         comptime {
@@ -1488,7 +1499,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.spliced_helper_offsets.clearRetainingCapacity();
             }
             self.spliced_proc_starts.clearRetainingCapacity();
-            self.assembled_proc_locs.clearRetainingCapacity();
+            self.freeAssembledProcNames();
+            self.assembled_proc_sources.clearRetainingCapacity();
             self.stack_alloca_slots.clearRetainingCapacity();
             self.vector_local_by_reg = .initFill(null);
             self.vector_local_mask = 0;
@@ -1513,6 +1525,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.current_proc_frame_locals = LIR.LocalSpan.empty();
             self.current_stmt_id = null;
             self.ret_ptr_slot = null;
+            self.rc_queue_slot = null;
             self.uses_caller_stack_arg_base = false;
         }
 
@@ -12411,6 +12424,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (helper.key.op) {
                 .incref => try self.codegen.emitLoadImm(self.getArgumentRegister(1), count),
                 .decref, .free => {},
+                .decref_queued => queuedDropInRcStatement(),
                 .host_drop => hostDropInRcStatement(),
             }
             try self.emitPendingRcCall(helper);
@@ -12462,6 +12476,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (helper.key.op) {
                 .incref => try self.emitLoad(.w64, self.getArgumentRegister(1), frame_ptr, count_slot.?),
                 .decref, .free => {},
+                .decref_queued => {
+                    const arg1 = self.getArgumentRegister(1);
+                    if (self.rc_queue_slot) |queue_slot| {
+                        try self.emitLoad(.w64, arg1, frame_ptr, queue_slot);
+                    } else {
+                        try self.codegen.emitLoadImm(arg1, 0);
+                    }
+                },
                 .host_drop => hostDropInRcStatement(),
             }
             try self.emitPendingRcCall(helper);
@@ -12765,6 +12787,81 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, builtin_fn);
         }
 
+        fn queuedDropMode(atomicity: RcAtomicity) builtins.utils.DropMode {
+            return switch (atomicity) {
+                .atomic => .decref_atomic,
+                .single_thread => .decref_single_thread,
+            };
+        }
+
+        /// The queue argument of a queued teardown: the queue this helper
+        /// received, or null in a helper that received none.
+        fn addRcQueueArg(self: *Self, builder: *Builder) Allocator.Error!void {
+            if (self.rc_queue_slot) |queue_slot| {
+                try builder.addMemArg(frame_ptr, queue_slot);
+            } else {
+                try builder.addImmArg(0);
+            }
+        }
+
+        /// Drop a list on a cycle of its type through the queued teardown
+        /// builtin (`builtins.utils.DropQueue`).
+        fn emitBuiltinInternalRcHelperQueuedListDrop(
+            self: *Self,
+            list_plan: layout.RcQueuedListPlan,
+            atomicity: RcAtomicity,
+            mode: builtins.utils.DropMode,
+            ptr_slot: i32,
+        ) Allocator.Error!void {
+            const callback_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(callback_reg);
+            const child = RcHelperVariant{ .key = list_plan.child, .atomicity = atomicity };
+            try self.emitPendingRcAddr(child, callback_reg);
+            try self.scheduleRcHelper(child);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
+            // The builtin takes the list by address, which is the helper's
+            // value pointer.
+            try builder.addMemArg(frame_ptr, ptr_slot);
+            try builder.addImmArg(list_plan.elem_alignment);
+            try builder.addImmArg(@intCast(list_plan.elem_width));
+            try builder.addRegArg(callback_reg);
+            try self.addRcQueueArg(&builder);
+            try builder.addImmArg(@backingInt(mode));
+            try self.callBuiltin(&builder, .list_drop_queued);
+        }
+
+        /// Drop a box on a cycle of its type through the queued teardown
+        /// builtin (`builtins.utils.DropQueue`).
+        fn emitBuiltinInternalRcHelperQueuedBoxDrop(
+            self: *Self,
+            box_plan: layout.RcQueuedBoxPlan,
+            atomicity: RcAtomicity,
+            mode: builtins.utils.DropMode,
+            ptr_slot: i32,
+        ) Allocator.Error!void {
+            const value_ptr_reg, const payload_reg, const callback_reg = try self.allocTempGenerals(3);
+            defer self.codegen.freeGeneral(callback_reg);
+            defer self.codegen.freeGeneral(payload_reg);
+            defer self.codegen.freeGeneral(value_ptr_reg);
+
+            try self.emitLoad(.w64, value_ptr_reg, frame_ptr, ptr_slot);
+            try self.emitLoad(.w64, payload_reg, value_ptr_reg, 0);
+            const child = RcHelperVariant{ .key = box_plan.child, .atomicity = atomicity };
+            try self.emitPendingRcAddr(child, callback_reg);
+            try self.scheduleRcHelper(child);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
+            try builder.addRegArg(payload_reg);
+            try builder.addImmArg(box_plan.elem_alignment);
+            try builder.addRegArg(callback_reg);
+            try self.addRcQueueArg(&builder);
+            try builder.addImmArg(@backingInt(mode));
+            try self.callBuiltin(&builder, .box_drop_queued);
+        }
+
         fn emitBuiltinInternalRcHelperErasedCallableDrop(
             self: *Self,
             builtin_fn: BuiltinFn,
@@ -12839,6 +12936,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     helper.atomicity,
                     ptr_slot,
                 ),
+                .list_decref_queued => |list_plan| try self.emitBuiltinInternalRcHelperQueuedListDrop(list_plan, helper.atomicity, queuedDropMode(helper.atomicity), ptr_slot),
+                .list_free_queued => |list_plan| try self.emitBuiltinInternalRcHelperQueuedListDrop(list_plan, helper.atomicity, .free, ptr_slot),
+                .box_decref_queued => |box_plan| try self.emitBuiltinInternalRcHelperQueuedBoxDrop(box_plan, helper.atomicity, queuedDropMode(helper.atomicity), ptr_slot),
+                .box_free_queued => |box_plan| try self.emitBuiltinInternalRcHelperQueuedBoxDrop(box_plan, helper.atomicity, .free, ptr_slot),
                 // An erased callable's single-thread incref is exactly a data-pointer
                 // incref of its single allocation, so its native entry point is the
                 // data-ptr adapter; the object symbol still names the registry member.
@@ -13032,7 +13133,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 // A `host_drop` adapter's second argument is the published
                 // on-drop ABI's ops slot, which the generated body ignores.
-                .decref, .free, .host_drop => null,
+                .decref, .free, .host_drop, .decref_queued => null,
+            };
+            const saved_rc_queue_slot = self.rc_queue_slot;
+            defer self.rc_queue_slot = saved_rc_queue_slot;
+            self.rc_queue_slot = switch (payload.key.op) {
+                .decref_queued => blk: {
+                    const slot = self.codegen.allocStackSlot(8);
+                    try self.codegen.emitStoreStack(.w64, slot, self.getArgumentRegister(1));
+                    break :blk slot;
+                },
+                .incref, .decref, .free, .host_drop => null,
             };
 
             const ptr_reg = try self.allocTempGeneral();
@@ -18752,8 +18863,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.generation_mode = .shim_execution;
             defer self.generation_mode = mode;
             _ = try self.compileSingleRcHelper(.{
-                .key = RcHelperKey.decode(key & 0x3_ffff_ffff),
-                .atomicity = @fromBackingInt(@intCast(@as(u1, @intCast((key >> 34) & 1)))),
+                .key = RcHelperKey.decode(key),
+                .atomicity = @fromBackingInt(@intCast(@as(u1, @intCast((key >> RcHelperKey.encoded_bits) & 1)))),
             });
             try self.finishFragment();
         }
@@ -23418,18 +23529,32 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (!gop.found_existing) gop.value_ptr.* = entry;
         }
 
-        /// Remember the source location a procedure placed from an excerpt
-        /// set carries; the first placement of an identity wins, as for its
-        /// code.
-        pub fn registerAssembledProcLoc(self: *Self, identity: lir.ProcIdentity, loc: base.SourceLoc) Allocator.Error!void {
-            const gop = try self.assembled_proc_locs.getOrPut(self.allocator, identity);
-            if (!gop.found_existing) gop.value_ptr.* = loc;
+        /// Where a procedure placed from an excerpt set came from in the
+        /// source: its location and its source name, empty when it has none.
+        pub const AssembledProcSource = struct {
+            loc: base.SourceLoc,
+            name: []const u8,
+        };
+
+        /// Remember the source location and name a procedure placed from an
+        /// excerpt set carries; the first placement of an identity wins, as
+        /// for its code. The name is copied.
+        pub fn registerAssembledProcSource(self: *Self, identity: lir.ProcIdentity, loc: base.SourceLoc, name: []const u8) Allocator.Error!void {
+            const gop = try self.assembled_proc_sources.getOrPut(self.allocator, identity);
+            if (gop.found_existing) return;
+            gop.value_ptr.* = .{ .loc = loc, .name = "" };
+            gop.value_ptr.name = try self.allocator.dupe(u8, name);
         }
 
-        /// The source location a procedure placed from an excerpt set
-        /// carries, when one was placed.
-        pub fn assembledProcLoc(self: *const Self, identity: lir.ProcIdentity) ?base.SourceLoc {
-            return self.assembled_proc_locs.get(identity);
+        /// The source location and name a procedure placed from an excerpt
+        /// set carries, when one was placed.
+        pub fn assembledProcSource(self: *const Self, identity: lir.ProcIdentity) ?AssembledProcSource {
+            return self.assembled_proc_sources.get(identity);
+        }
+
+        fn freeAssembledProcNames(self: *Self) void {
+            var sources = self.assembled_proc_sources.valueIterator();
+            while (sources.next()) |source| self.allocator.free(source.name);
         }
 
         /// The queue owns helper names through the generator's symbol table;

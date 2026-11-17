@@ -863,20 +863,33 @@ const PartsSink = struct {
 /// operations.
 const Output = struct {
     str: RocStr = RocStr.empty(),
+    /// Whether `str` is storage the output built itself, so bytes can be
+    /// written into it. A string taken whole from an override may be
+    /// shared, static, or a slice of another string's bytes.
+    built: bool = true,
 
     fn append(self: *Output, bytes: []const u8, ops: *RocOps) void {
         if (bytes.len == 0) return;
         const len = self.str.len();
         const capacity = self.str.getCapacity();
-        if (len + bytes.len > capacity) {
-            self.str = builtins.str.reserve(self.str, @max(bytes.len, capacity), .InPlace, ops);
+        if (len + bytes.len > capacity or !self.built) {
+            self.str = builtins.str.reserve(self.str, @max(bytes.len, capacity), if (self.built) .InPlace else .Immutable, ops);
+            self.built = true;
         }
         @memcpy(self.str.asU8ptrMut()[len .. len + bytes.len], bytes);
         self.str.setLen(len + bytes.len);
     }
 
-    /// Append a string the output takes ownership of.
+    /// Append a string the output takes ownership of. Into an empty output
+    /// the string itself becomes the text, so a value whose inspection is
+    /// its override's result alone allocates only what the override does.
     fn appendOwned(self: *Output, owned: RocStr, ops: *RocOps) void {
+        if (self.str.len() == 0) {
+            self.str.decref(ops);
+            self.str = owned;
+            self.built = false;
+            return;
+        }
         self.append(owned.asSlice(), ops);
         owned.decref(ops);
     }

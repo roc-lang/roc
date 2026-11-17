@@ -32,7 +32,11 @@ encode_value = |value| {
     go(value, 0)
 }
 
+# There is no initial value to choose this model's fields and numeric type.
+modify : Model -> Model
+modify = |m| { ..m, count: 1 }
+
 main = {
-    modify: |m| { ..m, count: 1 },
+    modify,
     encode: |m| encode_value(m),
 }

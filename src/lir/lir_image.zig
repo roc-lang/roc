@@ -94,9 +94,15 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      every erased call.
 /// v77: procedure shapes record every erased call, combined with the v73-v76
 ///      changes.
-/// v78: procedure specs name their body chunks, and the store carries the
-///      chunk column.
-pub const FORMAT_VERSION: u32 = 78;
+/// v78: procedure specs carry the outcome table of a published
+///      outcome-restitution variant (`rc_outcomes`).
+/// v79: the layout store records which layouts lie on a recursive cycle
+///      (`layouts_on_cycle`), combined with the v78 change.
+/// v80: a lowering module is named by a failure identity, combined with the
+///      v77-v79 changes.
+/// v81: procedure specs name their body chunks, and the store carries the
+///      chunk column, combined with the v78-v80 changes.
+pub const FORMAT_VERSION: u32 = 81;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -212,7 +218,7 @@ pub const LirStoreImage = extern struct {
     source_file_qualified_bytes: ArrayRef,
     source_file_qualified_ends: ArrayRef,
     source_file_identities: ArrayRef,
-    lowering_module_keys: ArrayRef,
+    lowering_module_identities: ArrayRef,
     cf_stmt_sources: ArrayRef,
     stmt_sources: ArrayRef,
     cf_stmt_inline_scopes: ArrayRef,
@@ -247,7 +253,7 @@ pub const LirStoreImage = extern struct {
             .source_file_qualified_bytes = try encoder.ref(store.source_file_qualified_bytes.unsafeRawItemsForView()),
             .source_file_qualified_ends = try encoder.ref(store.source_file_qualified_ends.unsafeRawItemsForView()),
             .source_file_identities = try encoder.ref(store.source_file_identities.unsafeRawItemsForView()),
-            .lowering_module_keys = try encoder.ref(store.lowering_module_keys.unsafeRawItemsForView()),
+            .lowering_module_identities = try encoder.ref(store.lowering_module_identities.unsafeRawItemsForView()),
             .cf_stmt_sources = try encoder.ref(store.cf_stmt_sources.unsafeRawItemsForView()),
             .stmt_sources = try encoder.ref(store.stmt_sources.unsafeRawItemsForView()),
             .cf_stmt_inline_scopes = try encoder.ref(store.cf_stmt_inline_scopes.unsafeRawItemsForView()),
@@ -301,7 +307,7 @@ pub const LirStoreImage = extern struct {
             .source_file_qualified_bytes = try guardedListFromRef(u8, "LirStore.source_file_qualified_bytes", base_ptr, image_size, self.source_file_qualified_bytes),
             .source_file_qualified_ends = try guardedListFromRef(u32, "LirStore.source_file_qualified_ends", base_ptr, image_size, self.source_file_qualified_ends),
             .source_file_identities = try guardedListFromRef([32]u8, "LirStore.source_file_identities", base_ptr, image_size, self.source_file_identities),
-            .lowering_module_keys = try guardedListFromRef([32]u8, "LirStore.lowering_module_keys", base_ptr, image_size, self.lowering_module_keys),
+            .lowering_module_identities = try guardedListFromRef([32]u8, "LirStore.lowering_module_identities", base_ptr, image_size, self.lowering_module_identities),
             .cf_stmt_sources = try guardedListFromRef(LirStore.StmtSourceId, "LirStore.cf_stmt_sources", base_ptr, image_size, self.cf_stmt_sources),
             .stmt_sources = try guardedListFromRef(LirStore.StmtSource, "LirStore.stmt_sources", base_ptr, image_size, self.stmt_sources),
             .cf_stmt_inline_scopes = try guardedListFromRef(LIR.InlineScopeId, "LirStore.cf_stmt_inline_scopes", base_ptr, image_size, self.cf_stmt_inline_scopes),
@@ -359,6 +365,7 @@ pub const StringLiteralStoreImage = extern struct {
 pub const LayoutStoreImage = extern struct {
     layouts: ArrayRef,
     resolved_list_layouts: ArrayRef,
+    layouts_on_cycle: ArrayRef,
     tuple_elems: ArrayRef,
     struct_fields: StructFieldsImage,
     struct_field_offsets: ArrayRef,
@@ -371,6 +378,7 @@ pub const LayoutStoreImage = extern struct {
         return .{
             .layouts = try encoder.ref(store.layouts.items()),
             .resolved_list_layouts = try encoder.ref(store.resolved_list_layouts.items()),
+            .layouts_on_cycle = try encoder.ref(store.layouts_on_cycle.items()),
             .tuple_elems = try encoder.ref(store.tuple_elems.items()),
             .struct_fields = try StructFieldsImage.fromStore(encoder, &store.struct_fields),
             .struct_field_offsets = try encoder.ref(store.struct_field_offsets.items()),
@@ -390,6 +398,7 @@ pub const LayoutStoreImage = extern struct {
     ) ViewError!layout_mod.Store {
         const layouts = try safeListFromRef(layout_mod.Layout, base_ptr, image_size, self.layouts);
         const resolved_list_layouts = try safeListFromRef(layout_mod.Idx, base_ptr, image_size, self.resolved_list_layouts);
+        const layouts_on_cycle = try safeListFromRef(bool, base_ptr, image_size, self.layouts_on_cycle);
         const tuple_elems = try safeListFromRef(layout_mod.Idx, base_ptr, image_size, self.tuple_elems);
         const struct_field_offsets = try safeListFromRef(layout_mod.WidthValues(u32), base_ptr, image_size, self.struct_field_offsets);
         const struct_field_original_order = try safeListFromRef(u32, base_ptr, image_size, self.struct_field_original_order);
@@ -404,6 +413,7 @@ pub const LayoutStoreImage = extern struct {
             .allocator = allocator,
             .layouts = layouts,
             .resolved_list_layouts = resolved_list_layouts,
+            .layouts_on_cycle = layouts_on_cycle,
             .tuple_elems = tuple_elems,
             .struct_fields = struct_fields,
             .struct_field_offsets = struct_field_offsets,
@@ -519,7 +529,7 @@ comptime {
     // which a view never makes; and its `commit_scratch` and
     // `scratch_field_offsets` are scratch that views start empty.
     std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 41);
-    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 21);
+    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 22);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
     // The header is authored field by field in image storage and is part of a
@@ -914,7 +924,7 @@ const serialized_guarded_fields = [_][]const u8{
     "source_file_qualified_bytes",
     "source_file_qualified_ends",
     "source_file_identities",
-    "lowering_module_keys",
+    "lowering_module_identities",
     "cf_stmt_sources",
     "stmt_sources",
     "cf_stmt_inline_scopes",
@@ -1112,12 +1122,13 @@ test "LIR image copies and round-trips every populated store field" {
     store.strings = .{ .buffer = .fromOwnedSlice(try h.distinct(u8, source_allocator, 24, 0x90)) };
 
     // A layout Store with every serialized list populated distinctively. Only
-    // the nine array-backed fields are serialized; the interning caches are not
+    // the ten array-backed fields are serialized; the interning caches are not
     // read by `fromStore`, so they are left undefined here.
     var layouts = layout_mod.Store{
         .allocator = gpa,
         .layouts = try h.safeList(layout_mod.Layout, source_allocator, 3, 0x40),
         .resolved_list_layouts = try h.safeList(layout_mod.Idx, source_allocator, 4, 0x50),
+        .layouts_on_cycle = try h.safeList(bool, source_allocator, 4, 0x58),
         .tuple_elems = try h.safeList(layout_mod.Idx, source_allocator, 5, 0x60),
         .struct_fields = try h.multiList(layout_mod.StructField, source_allocator, 6, 0x70),
         .struct_field_offsets = try h.safeList(layout_mod.WidthValues(u32), source_allocator, 6, 0x74),
@@ -1183,6 +1194,10 @@ test "LIR image copies and round-trips every populated store field" {
     try h.expectBytesEq(
         std.mem.sliceAsBytes(layouts.resolved_list_layouts.items()),
         std.mem.sliceAsBytes(view.layouts.resolved_list_layouts.items()),
+    );
+    try h.expectBytesEq(
+        std.mem.sliceAsBytes(layouts.layouts_on_cycle.items()),
+        std.mem.sliceAsBytes(view.layouts.layouts_on_cycle.items()),
     );
     try h.expectBytesEq(
         std.mem.sliceAsBytes(layouts.tuple_elems.items()),

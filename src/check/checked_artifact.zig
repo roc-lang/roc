@@ -716,6 +716,124 @@ pub const PublishInputs = struct {
     evaluation_phase: enum { immediate, post_frontend } = .immediate,
     problem_store: ?*problem.Store = null,
     validation: can.Can.Validation = .checking,
+    /// Receives the duration of each publication step when detailed timing
+    /// is on (`roc check --timings`).
+    timing: ?*PublicationTiming = null,
+};
+
+/// The duration of each step of checked-artifact publication, summed over
+/// the modules published.
+pub const PublicationTiming = struct {
+    steps_ns: [step_count]u64 = @splat(0),
+
+    pub const step_count = @typeInfo(Step).@"enum".field_names.len;
+
+    /// A step of publication, in the order publication runs them.
+    pub const Step = enum {
+        /// The typed module graph publication reads (`TypedCIR.Modules`).
+        typed_modules,
+        /// Module identity, names, context identity, artifact key, exports,
+        /// and provides.
+        identity,
+        /// The module's body analyses and demand index (`BodyAnalyses`).
+        body_analyses,
+        /// The omitted defaults' names and the sealed types' content keys
+        /// (`SealedTypeKeys`).
+        sealed_type_keys,
+        /// The checked type store and its source-type index
+        /// (`CheckedTypeStore.fromModule`).
+        checked_types,
+        /// Requires metadata, platform type inputs, and the platform-app
+        /// relation's tables and type substitutions.
+        platform_relation,
+        /// Pairing types and default expressions.
+        pairing_defaults,
+        /// The procedure templates, including promoted local procedures.
+        procedure_templates,
+        /// The static dispatch plans (`StaticDispatchPlanTable.fromModule`).
+        dispatch_plans,
+        /// Hosted procedures and bindings, and platform-required bindings.
+        hosted_platform_bindings,
+        /// The compile-time roots (`CompileTimeRootTable.fromModule`).
+        compile_time_roots,
+        /// Const bodies and entry wrappers for the compile-time roots.
+        entry_wrappers,
+        /// The top-level value table.
+        top_level_values,
+        /// Hoisted constants and selected hoisted callables.
+        hoisted_values,
+        /// The resolved value references (`ResolvedValueRefTable`).
+        resolved_value_refs,
+        /// Callable-eval forwarding and retired expressions.
+        callable_forwarding,
+        /// The method registry and finishing the source types.
+        method_registry,
+        /// The ordinary body diagnostics.
+        ordinary_diagnostics,
+        /// Sealing the procedure templates' references.
+        template_refs,
+        /// Resolving the total static dispatch plans.
+        total_dispatch,
+        /// Specializing resolved dispatch plans' callables across artifacts.
+        dispatch_callables,
+        /// Literal conversion and literal argument roots.
+        literal_roots,
+        /// Classifying the templates' dispatch plan references and the
+        /// template demand pass.
+        template_demand,
+        /// The templates' sealed slots.
+        sealed_slots,
+        /// Provided exports and root requests.
+        root_requests,
+        /// Nested procedure sites.
+        nested_proc_sites,
+        /// Const-eval template sealing and exhaustiveness sites.
+        exhaustiveness,
+        /// Evaluation diagnostics, exported procedure templates, bindings,
+        /// and const templates, platform requirement solutions, and
+        /// interface capabilities.
+        exports,
+        /// The public API dependencies.
+        public_api,
+        /// Releasing the source-type index and collecting lowering
+        /// visibility.
+        lowering_visibility,
+        /// Assembling the artifact, and compile-time evaluation when
+        /// publication evaluates immediately.
+        finish,
+    };
+
+    pub fn add(self: *PublicationTiming, other: PublicationTiming) void {
+        for (&self.steps_ns, other.steps_ns) |*sum, ns| sum.* += ns;
+    }
+};
+
+/// Attributes the time between consecutive `lap` calls to publication
+/// steps. Reads no clock when `timing` is null.
+pub const PublicationClock = struct {
+    const freestanding = builtin.os.tag == .freestanding;
+
+    timing: ?*PublicationTiming,
+    io: std.Io,
+    last: if (freestanding) void else std.Io.Timestamp,
+
+    pub fn start(io: std.Io, timing: ?*PublicationTiming) PublicationClock {
+        if (comptime freestanding) return .{ .timing = timing, .io = io, .last = {} };
+        return .{
+            .timing = timing,
+            .io = io,
+            .last = if (timing == null) .{ .nanoseconds = 0 } else std.Io.Timestamp.now(io, .awake),
+        };
+    }
+
+    /// Add the time since the previous lap to `step`.
+    pub fn lap(self: *PublicationClock, step: PublicationTiming.Step) void {
+        if (comptime freestanding) return;
+        const timing = self.timing orelse return;
+        const now = std.Io.Timestamp.now(self.io, .awake);
+        timing.steps_ns[@backingInt(step)] += @intCast(@max(0, self.last.durationTo(now).nanoseconds));
+        self.last = now;
+    }
 };
 
 /// Which of a module's checker-selected compile-time roots its artifact
@@ -4920,7 +5038,35 @@ pub const CheckedTypeStore = struct {
     /// Materialize the public read-form payload for `id`. Slice fields alias the
     /// store's pools or the module's sealed solver store; no allocation.
     pub fn payload(self: *const CheckedTypeStore, id: CheckedTypeId) CheckedTypePayload {
-        return self.view().payload(id);
+        if (!type_ids.isSynthesized(id)) return self.sealedSourceView().payload(type_ids.asVar(id));
+        return reconstructTypeData(CheckedTypePayload, self, &self.payloads.items()[self.synthesizedIndex(id)]);
+    }
+
+    /// The view of the sealed solver store that source ids name.
+    fn sealedSourceView(self: *const CheckedTypeStore) sealed_type_view.SealedTypeView {
+        const env = self.sealed_env orelse checkedArtifactInvariant("a checked source type was read from a store without its sealed solver store", .{});
+        return self.sealedView(env);
+    }
+
+    /// The kind of `id`'s checked type: the tag `payload` returns, read
+    /// without decoding the payload.
+    pub fn payloadTag(self: *const CheckedTypeStore, id: CheckedTypeId) std.meta.Tag(CheckedTypePayload) {
+        if (!type_ids.isSynthesized(id)) return self.sealedSourceView().payloadTag(type_ids.asVar(id));
+        return switch (self.payloads.items()[self.synthesizedIndex(id)]) {
+            .pending => .pending,
+            .err => .err,
+            .flex => .flex,
+            .rigid => .rigid,
+            .alias => .alias,
+            .record => .record,
+            .tuple => .tuple,
+            .nominal => .nominal,
+            .function => .function,
+            .empty_record => .empty_record,
+            .tag_union => .tag_union,
+            .empty_tag_union => .empty_tag_union,
+            .field_kind => .field_kind,
+        };
     }
 
     /// The entry a synthesized id names.
@@ -7784,10 +7930,9 @@ fn embedReachableImportedNominalDecls(
     first_payload: usize,
 ) Allocator.Error!void {
     for (source_vars) |var_| {
-        switch (store.payload(type_ids.fromVar(var_))) {
-            .nominal => |nominal| try embedImportedNominalDeclFor(allocator, store, names, imports, nominal.toBuild()),
-            .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => {},
-        }
+        const ty = type_ids.fromVar(var_);
+        if (store.payloadTag(ty) != .nominal) continue;
+        try embedImportedNominalDeclFor(allocator, store, names, imports, store.payload(ty).nominal.toBuild());
     }
     var i = first_payload;
     while (i < store.payloads.items().len) : (i += 1) {
@@ -12425,7 +12570,6 @@ fn categorizeValueRef(
         .e_lambda,
         .e_binop,
         .e_unary_minus,
-        .e_unary_not,
         .e_field_access,
         .e_method_call,
         .e_dispatch_call,
@@ -13657,6 +13801,10 @@ fn publishLocalMethodDispatchScopes(
 /// `SchemeUseRecord`s, whose fresh vars are resolved against the
 /// settled type store.
 const EvidencePass = struct {
+    const BuiltinNominalKey = struct {
+        origin_module: base.ModuleIdentity.Idx,
+        source_decl: u32,
+    };
     const PairRootKey = struct {
         pairs_start: u32,
         pairs_len: u32,
@@ -13820,6 +13968,9 @@ const EvidencePass = struct {
     /// Solver variables of the scheme whose params are being appended, in
     /// slot order, so each param resolves to its slot.
     scheme_var_scratch: std.ArrayListUnmanaged(Var) = .empty,
+    /// The class representative of each generated-codec renaming's source
+    /// variable, parallel to the module's `generated_codec_renamings`.
+    renaming_source_roots: []Var = &.{},
     /// Traversal scratch for `schemeExtendsLabeledTagRow`.
     labeled_row_visited: collections.DenseMapUnmanaged(Var, void) = .empty,
     labeled_row_pending: std.ArrayList(Var) = .empty,
@@ -13831,6 +13982,9 @@ const EvidencePass = struct {
     enumerated_path_arena: base.SingleThreadArena,
     /// Scratch backing for the chain currently being resolved against.
     chain_scratch: std.ArrayList(ChainLevel),
+    /// The builtin each builtin-origin nominal declaration categorizes as
+    /// (`categorizeBuiltinNominal`), by origin and declaration.
+    builtin_nominals: std.AutoHashMapUnmanaged(BuiltinNominalKey, ?CheckedBuiltinNominal) = .empty,
     /// Per-plan / per-iterator-plan visited flags: a plan reachable from two
     /// templates (const body + entry wrapper) resolves once, and the final
     /// sweep resolves whatever no template reached (chain-free).
@@ -13975,15 +14129,22 @@ const EvidencePass = struct {
         self.scheme_vars_pool.deinit(self.allocator);
         self.site_substitutions.deinit(self.allocator);
         self.scheme_var_scratch.deinit(self.allocator);
+        self.allocator.free(self.renaming_source_roots);
         self.labeled_row_visited.deinit(self.allocator);
         self.labeled_row_pending.deinit(self.allocator);
         self.enum_scratch.deinit(self.allocator);
         self.enumerated_path_arena.deinit();
         self.chain_scratch.deinit(self.allocator);
+        self.builtin_nominals.deinit(self.allocator);
     }
 
     fn run(self: *EvidencePass) Allocator.Error!void {
         self.method_lookup_views = try methodLookupViews(self.allocator, self.import_views);
+        const renamings = self.module.moduleEnvConst().generated_codec_renamings.items();
+        self.renaming_source_roots = try self.allocator.alloc(Var, renamings.len);
+        for (renamings, self.renaming_source_roots) |renaming, *source_root| {
+            source_root.* = self.types.resolveVar(@fromBackingInt(@intCast(renaming.source_var))).var_;
+        }
         self.plan_resolved = try self.allocator.alloc(bool, self.plan_table.plans.items().len);
         @memset(self.plan_resolved, false);
         self.iterator_plan_resolved = try self.allocator.alloc(bool, self.plan_table.iterator_for_plans.items().len);
@@ -14218,6 +14379,8 @@ const EvidencePass = struct {
         self.retireUnreachedForwardedCodecCalls();
         if (builtin.mode == .debug) try self.debugVerifyGeneratedCodecContracts();
 
+        self.recordForwardedRequirements();
+
         std.mem.sort(static_dispatch.SiteEvidenceEntry, self.site_evidence.items, {}, siteEvidenceLessThan);
 
         self.plan_table.evidence_nodes = .fromOwnedSlice(try self.evidence_nodes.toOwnedSlice(self.allocator));
@@ -14228,6 +14391,45 @@ const EvidencePass = struct {
         try @import("codec_identity.zig").intern(self.allocator, self.checked_types.store.view(), self.plan_table);
         try @import("codec_identity.zig").digestContents(self.allocator, self.import_views.current_owner, &self.checked_types.store, self.names, self.plan_table);
         if (builtin.mode == .debug) try self.debugVerifyGeneratedCodecRoleAgreement();
+    }
+
+    /// Record, for each captured codec requirement a scheme's body hands on
+    /// from an edge at its own scope, the first such edge
+    /// (`EvidenceParamRecord.forwarded`): a use of a procedure or a dispatch
+    /// edge whose evidence fills a parameter of the scheme it instantiates
+    /// with the requirement. A Boxy caller building the requirement's codec
+    /// enters that edge to reach the instance of the procedure whose body
+    /// declares the codec's local procedures (design.md "Sealed Result
+    /// Rows"). Every edge handing one requirement on instantiates its callee
+    /// at the types the requirement's relation names, with the requirement's
+    /// other dictionaries taken from the same scope, so any of them gives the
+    /// same instance.
+    fn recordForwardedRequirements(self: *EvidencePass) void {
+        const pool = self.templates.evidence_params_pool.items();
+        for (self.site_evidence.items) |site| {
+            recordForwardedFrom(pool, self.evidence_refs.items[site.start..][0..site.len], .{ .use = @fromBackingInt(site.key) });
+        }
+        // A node bound to an alias records the evidence of the alias's
+        // scope, whose parameters its chain hands on to the target's.
+        for (self.evidence_nodes.items, 0..) |node, raw| switch (node.nested) {
+            .resolved, .through_alias => |span| recordForwardedFrom(pool, self.evidence_refs.items[span.start..][0..span.len], .{ .node = @fromBackingInt(@as(u32, @intCast(raw))) }),
+            .from_callable => {},
+        };
+    }
+
+    fn recordForwardedFrom(pool: []static_dispatch.EvidenceParamRecord, entries: []const static_dispatch.CheckedEvidence, edge: static_dispatch.RequirementEdge) void {
+        for (entries, 0..) |entry, index| switch (entry.resolution) {
+            .constraint => |constraint| {
+                // Depth zero is the innermost scope around the edge, the
+                // scope whose parameter `scheme_param` names.
+                if (constraint.index.depth != 0) continue;
+                const owner = constraint.scheme_param orelse continue;
+                const param = &pool[owner];
+                if (param.source != .scheme_requirement or param.forwarded.edge != .none) continue;
+                param.forwarded = .{ .edge = edge, .callee_param = @intCast(index) };
+            },
+            .direct, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
+        };
     }
 
     /// A generated body records one checked edge per source occurrence.
@@ -14358,15 +14560,19 @@ const EvidencePass = struct {
         return .{ .start = start, .len = @intCast(identity_vars.len) };
     }
 
-    /// The copy `renamings` makes of `var_`'s type, or `var_` itself when it
-    /// renames none.
+    /// The copy `renamings`, a range of the module's generated-codec
+    /// renamings, makes of `var_`'s type, or `var_` itself when it renames
+    /// none.
     fn renamedVar(self: *EvidencePass, renamings: []const ModuleEnv.GeneratedCodecRenaming, var_: Var) Var {
         if (renamings.len == 0) return var_;
+        const all_renamings = self.module.moduleEnvConst().generated_codec_renamings.items();
+        const offset = @intFromPtr(renamings.ptr) - @intFromPtr(all_renamings.ptr);
+        std.debug.assert(offset % @sizeOf(ModuleEnv.GeneratedCodecRenaming) == 0);
+        const start = offset / @sizeOf(ModuleEnv.GeneratedCodecRenaming);
+        std.debug.assert(start + renamings.len <= all_renamings.len);
         const root = self.types.resolveVar(var_).var_;
-        for (renamings) |renaming| {
-            if (self.types.resolveVar(@fromBackingInt(@intCast(renaming.source_var))).var_ == root) {
-                return @fromBackingInt(@intCast(renaming.copy_var));
-            }
+        for (renamings, self.renaming_source_roots[start..][0..renamings.len]) |renaming, source_root| {
+            if (source_root == root) return @fromBackingInt(@intCast(renaming.copy_var));
         }
         return var_;
     }
@@ -15836,6 +16042,19 @@ const EvidencePass = struct {
     /// The method owner of a settled source var, walking alias content
     /// transparently (the source-var analog of monotype lowering's
     /// dispatch-head read of published type identity).
+    /// The builtin `nominal` names (`categorizeBuiltinNominal`). The answer
+    /// depends only on the nominal's origin and declaration and the pass's
+    /// imports, so each declaration is categorized once.
+    fn builtinNominalOf(self: *EvidencePass, nominal: types.NominalType) Allocator.Error!?CheckedBuiltinNominal {
+        if (!nominal.originIsBuiltin()) return null;
+        const entry = try self.builtin_nominals.getOrPut(self.allocator, .{
+            .origin_module = nominal.origin_module,
+            .source_decl = nominal.statement(),
+        });
+        if (!entry.found_existing) entry.value_ptr.* = categorizeBuiltinNominal(self.module, self.import_views, nominal);
+        return entry.value_ptr.*;
+    }
+
     fn methodOwnerForSourceContent(self: *EvidencePass, var_: Var) Allocator.Error!?static_dispatch.MethodOwner {
         var current = var_;
         var remaining: u64 = self.types.len();
@@ -15851,7 +16070,7 @@ const EvidencePass = struct {
                 },
                 .structure => |flat_type| switch (flat_type) {
                     .nominal_type => |nominal| {
-                        if (categorizeBuiltinNominal(self.module, self.import_views, nominal)) |builtin_nominal| {
+                        if (try self.builtinNominalOf(nominal)) |builtin_nominal| {
                             if (builtin_nominal == .try_) {
                                 const module_identity_id = try self.names.internModuleIdentity(self.module.moduleEnvConst().moduleIdentityHash(nominal.origin_module));
                                 return .{ .nominal = .{
@@ -18066,6 +18285,13 @@ pub const NestedProcSite = struct {
     /// (or a procedure nested in it) selects requires, ordered by binder id.
     runtime_captures: artifact_serialize.Span = .{},
     kind: NestedProcKind,
+    /// The site is a local procedure (a block-local function binding that
+    /// is not an alias) every use of which is the function of a call: every
+    /// lookup of its binder is a call's function, no site's runtime captures
+    /// name its binder, and no method registry entry targets it. `.boxy`
+    /// calls its worker directly and never builds its function value
+    /// (design.md "Function Values").
+    direct_calls_only: bool = false,
     checked_expr: collections.OptionalId(CIR.Expr.Idx),
     checked_pattern: collections.OptionalId(CIR.Pattern.Idx),
 };
@@ -18102,6 +18328,7 @@ pub const NestedProcSiteTable = struct {
         entry_wrappers: *const EntryWrapperTable,
         templates: *CheckedProcedureTemplateTable,
         resolved_value_refs: *const ResolvedValueRefTable,
+        method_registry: *const static_dispatch.MethodRegistry,
     ) Allocator.Error!NestedProcSiteTable {
         var scope_by_checked_expr = try nestedProcScopeMap(allocator, templates.dispatch_scopes.items());
         defer scope_by_checked_expr.deinit();
@@ -18158,6 +18385,7 @@ pub const NestedProcSiteTable = struct {
 
         const runtime_captures = try builder.publishRuntimeCaptures(sites);
         errdefer allocator.free(runtime_captures);
+        try builder.publishDirectCalls(sites, runtime_captures, method_registry);
 
         return .{
             .sites = .fromOwnedSlice(sites),
@@ -18926,6 +19154,17 @@ const NestedProcSiteBuilder = struct {
     open_sites: std.ArrayList(canonical.NestedProcSiteId) = .empty,
     /// Every local procedure a site's own body selects.
     selected_procs: std.ArrayList(SelectedLocalProc) = .empty,
+    /// The local lookups that are the function of a call, until the walk
+    /// reaches them.
+    callee_lookups: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty,
+    /// Each local procedure some lookup names, by its expression.
+    local_proc_uses: std.AutoHashMapUnmanaged(CIR.Expr.Idx, LocalProcUse) = .empty,
+
+    const LocalProcUse = struct {
+        binder: CIR.Pattern.Idx,
+        /// Some lookup of the procedure is not the function of a call.
+        value_use: bool,
+    };
 
     const SelectedLocalProc = struct {
         site: u32,
@@ -18971,6 +19210,8 @@ const NestedProcSiteBuilder = struct {
         self.binder_sites.deinit(self.allocator);
         self.open_sites.deinit(self.allocator);
         self.selected_procs.deinit(self.allocator);
+        self.callee_lookups.deinit(self.allocator);
+        self.local_proc_uses.deinit(self.allocator);
         self.work.deinit(self.allocator);
     }
 
@@ -19182,6 +19423,7 @@ const NestedProcSiteBuilder = struct {
                 try self.pushExpr(if_.final_else, owner);
             },
             .call => |call| {
+                if (bodies.exprData(call.func) == .lookup_local) try self.callee_lookups.put(self.allocator, call.func, {});
                 try self.pushExpr(call.func, owner);
                 for (call.args) |arg| try self.pushExpr(arg, owner);
             },
@@ -19433,8 +19675,10 @@ const NestedProcSiteBuilder = struct {
     }
 
     fn selectLookupTarget(self: *NestedProcSiteBuilder, expr_id: CIR.Expr.Idx) Allocator.Error!void {
+        const callee = self.callee_lookups.remove(expr_id);
         const refs = self.resolved_value_refs orelse return;
         const id = refs.lookupIdByExpr(expr_id) orelse return;
+        try self.recordLocalProcUse(refs.records.items()[@backingInt(id)].ref, callee);
         switch (refs.callableTarget(id).ref) {
             .local_proc => |local| try self.selectLocalProc(local.expr),
             .local_param,
@@ -19453,6 +19697,68 @@ const NestedProcSiteBuilder = struct {
             .platform_required_proc,
             .promoted_top_level_proc,
             => {},
+        }
+    }
+
+    /// Record a lookup resolved to `ref`: a use of the local procedure it
+    /// names, as the function of a call when `callee`.
+    fn recordLocalProcUse(self: *NestedProcSiteBuilder, ref: ResolvedValueRef, callee: bool) Allocator.Error!void {
+        const local = switch (ref) {
+            .local_proc => |local| local,
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_checked_error,
+            .platform_required_const,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => return,
+        };
+        // An alias forwards a callable its own lookup names, which is a use
+        // of that callable recorded where the alias's right-hand side is.
+        if (local.is_alias) return;
+        const entry = try self.local_proc_uses.getOrPut(self.allocator, local.expr);
+        if (!entry.found_existing) entry.value_ptr.* = .{ .binder = local.binder, .value_use = false };
+        if (!callee) entry.value_ptr.value_use = true;
+    }
+
+    /// Mark each site that is a local procedure only direct calls reach
+    /// (`NestedProcSite.direct_calls_only`): one whose lookups are all the
+    /// function of a call, whose binder no site's runtime captures name,
+    /// since a capture holds its function value, and which no method
+    /// registry entry targets, since a dispatch or a dictionary holds a
+    /// method's function value.
+    fn publishDirectCalls(
+        self: *NestedProcSiteBuilder,
+        sites: []NestedProcSite,
+        runtime_captures: []const CheckedCapture,
+        method_registry: *const static_dispatch.MethodRegistry,
+    ) Allocator.Error!void {
+        if (self.local_proc_uses.count() == 0) return;
+        for (method_registry.entries.items()) |entry| {
+            const target = entry.target orelse continue;
+            switch (target.kind) {
+                .local_proc => |local| if (self.local_proc_uses.getPtr(local.expr)) |use| {
+                    use.value_use = true;
+                },
+                .procedure, .structural, .callable_binding => {},
+            }
+        }
+        var captured = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){};
+        defer captured.deinit(self.allocator);
+        for (runtime_captures) |capture| try captured.put(self.allocator, capture.pattern, {});
+        for (sites) |*site| {
+            const expr = site.checked_expr.get() orelse continue;
+            const use = self.local_proc_uses.get(expr) orelse continue;
+            site.direct_calls_only = !use.value_use and !captured.contains(use.binder);
         }
     }
 
@@ -21081,10 +21387,37 @@ const ResolvedDispatchCallableSpecializer = struct {
     instantiated_pairs: std.AutoHashMapUnmanaged(ResolvedDispatchCallablePair, CheckedTypeId) = .empty,
     evidence_closure: []DirectEvidenceClosure,
     identity_index: EnclosingIdentityIndex,
+    /// Projects imported targets' callables; reset for each projection.
+    projector: ?CheckedTypeStoreImportProjector = null,
 
     fn deinit(self: *ResolvedDispatchCallableSpecializer) void {
+        if (self.projector) |*projector| projector.deinit();
         self.identity_index.deinit();
         self.instantiated_pairs.deinit(self.allocator);
+    }
+
+    /// The resolved target's callable in this store: its own callable when
+    /// this module owns the target, else its projection.
+    fn projectTargetCallable(self: *ResolvedDispatchCallableSpecializer, target: static_dispatch.MethodTarget) Allocator.Error!CheckedTypeId {
+        const target_key = switch (target.kind) {
+            .local_proc => return target.callable_ty,
+            .callable_binding => |binding| binding.module,
+            .structural => checkedArtifactInvariant("structural method registry result was published as a direct callable target", .{}),
+            .procedure => |procedure| procedure.template.artifact,
+        };
+        if (target_key.eql(self.artifact_key.digest())) return target.callable_ty;
+
+        // Snapshot-style compiles pass the builtin module only as a DIRECT
+        // import; total resolution makes builtin-owned direct targets ubiquitous,
+        // so search both view sets.
+        const imported = dependencyViewByKey(target_key, self.direct_imports, self.available_artifacts, &.{}) orelse
+            checkedArtifactInvariant("resolved dispatch target artifact was not available during checked publication", .{});
+        if (self.projector) |*projector| {
+            projector.reset(imported.*);
+        } else {
+            self.projector = CheckedTypeStoreImportProjector.init(self.allocator, self.store, self.names, imported.*);
+        }
+        return try self.projector.?.project(target.callable_ty);
     }
 
     fn finalizePlan(
@@ -21125,16 +21458,7 @@ const ResolvedDispatchCallableSpecializer = struct {
         node_id: static_dispatch.EvidenceNodeId,
         plan_callable: CheckedTypeId,
     ) Allocator.Error!CheckedTypeId {
-        const target = self.plans.evidenceNode(node_id).target;
-        const target_callable = try projectResolvedDispatchTargetCallable(
-            self.allocator,
-            self.names,
-            self.store,
-            self.artifact_key,
-            self.direct_imports,
-            self.available_artifacts,
-            target,
-        );
+        const target_callable = try self.projectTargetCallable(self.plans.evidenceNode(node_id).target);
         return try instantiateResolvedDispatchTargetCallableMemoized(
             self.allocator,
             self.names,
@@ -22984,33 +23308,6 @@ fn instantiateResolvedDispatchTargetCallableMemoized(
     return instantiated;
 }
 
-fn projectResolvedDispatchTargetCallable(
-    allocator: Allocator,
-    names: *canonical.CanonicalNameStore,
-    store: *CheckedTypeStore,
-    artifact_key: CheckedModuleArtifactKey,
-    direct_imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
-    target: static_dispatch.MethodTarget,
-) Allocator.Error!CheckedTypeId {
-    const target_key = switch (target.kind) {
-        .local_proc => return target.callable_ty,
-        .callable_binding => |binding| binding.module,
-        .structural => checkedArtifactInvariant("structural method registry result was published as a direct callable target", .{}),
-        .procedure => |procedure| procedure.template.artifact,
-    };
-    if (target_key.eql(artifact_key.digest())) return target.callable_ty;
-
-    // Snapshot-style compiles pass the builtin module only as a DIRECT
-    // import; total resolution makes builtin-owned direct targets ubiquitous,
-    // so search both view sets.
-    const imported = dependencyViewByKey(target_key, direct_imports, available_artifacts, &.{}) orelse
-        checkedArtifactInvariant("resolved dispatch target artifact was not available during checked publication", .{});
-    var projector = CheckedTypeStoreImportProjector.init(allocator, store, names, imported.*);
-    defer projector.deinit();
-    return try projector.project(target.callable_ty);
-}
-
 fn instantiateResolvedDispatchTargetCallable(
     allocator: Allocator,
     names: *const canonical.CanonicalNameStore,
@@ -24602,9 +24899,8 @@ pub const ModuleInterfaceCapabilities = struct {
         defer source_capabilities.deinit(allocator);
 
         for (nominal_types.items) |nominal_ty| {
-            const payload = checked_types.payload(nominal_ty);
-            if (payload != .nominal) continue;
-            const nominal = payload.nominal;
+            if (checked_types.payloadTag(nominal_ty) != .nominal) continue;
+            const nominal = checked_types.payload(nominal_ty).nominal;
             if (nominal.builtin != null) continue;
             if (nominal.origin_module != current_module) continue;
             const nominal_key = checkedNominalTypeKey(nominal);
@@ -25457,7 +25753,7 @@ pub fn valueFormValueExpr(bodies: CheckedBodies, expr: CIR.Expr.Idx) CIR.Expr.Id
 fn valueFormCandidate(bodies: CheckedBodies, id: CIR.Expr.Idx) ?checked_bodies_mod.ExprData {
     switch (bodies.env.store.getExpr(id)) {
         .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_block => {},
-        .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
+        .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
     }
     if (bodies.exprIsRetired(id)) return null;
     return bodies.exprData(id);
@@ -34596,6 +34892,15 @@ const CheckedTypeStoreImportProjector = struct {
         self.active.deinit();
     }
 
+    /// Start projecting from `imported` as a fresh projector would, keeping
+    /// this one's map storage.
+    fn reset(self: *CheckedTypeStoreImportProjector, imported: ImportedModuleView) void {
+        std.debug.assert(!self.preserve_source_instance);
+        self.imported = imported;
+        self.projected.clearRetainingCapacity();
+        self.active.clearRetainingCapacity();
+    }
+
     /// A type whose payload is still being projected: its ops occupy
     /// `ops[ops_start..]` and their results `results[results_start..]`.
     const Frame = struct {
@@ -35280,7 +35585,6 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
                     .e_lambda,
                     .e_binop,
                     .e_unary_minus,
-                    .e_unary_not,
                     .e_interpolation,
                     .e_structural_eq,
                     .e_structural_hash,
@@ -35427,7 +35731,6 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .expr_record_update,
             .expr_bin_op,
             .expr_unary_minus,
-            .expr_unary_not,
             .expr_suffix_single_question,
             .expr_if_then_else,
             .expr_match,
@@ -36015,6 +36318,7 @@ pub fn publishFromTypedModule(
         base.invariant("a checked artifact was published from a module whose type store checking never sealed", .{});
     }
     const idents = module.identStoreConst();
+    var clock = PublicationClock.start(inputs.io, inputs.timing);
 
     var canonical_names = canonical.CanonicalNameStore.init(allocator);
     errdefer canonical_names.deinit();
@@ -36068,6 +36372,7 @@ pub fn publishFromTypedModule(
     errdefer allocator.free(provides);
 
     const owner_artifact = artifact_key.digest();
+    clock.lap(.identity);
 
     const promoted_local_procedures = module_env.promoted_local_procedures.items();
     const requirement_solutions = module_env.platform_requirement_solutions.items();
@@ -36077,6 +36382,7 @@ pub fn publishFromTypedModule(
     var analyses_owned = true;
     errdefer if (analyses_owned) analyses.destroy();
     const module_index = try analyses.demandIndex();
+    clock.lap(.body_analyses);
 
     // Omitted defaults name their fields and origin modules through the
     // module's names.
@@ -36088,10 +36394,12 @@ pub fn publishFromTypedModule(
     const sealed_keys = try sealed_type_keys.SealedTypeKeys.create(allocator, inputs.io, module_env);
     var sealed_keys_owned = true;
     errdefer if (sealed_keys_owned) sealed_keys.destroy();
+    clock.lap(.sealed_type_keys);
     var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key.digest(), inputs.imports, inputs.available_artifacts, module_index, selected_hoisted_roots, promoted_local_procedures, sealed_keys);
     defer checked_type_publication.deinitIndex(allocator);
     errdefer checked_type_publication.store.deinit(allocator);
     const checked_types = &checked_type_publication.store;
+    clock.lap(.checked_types);
     const requires = try publishRequiresMetadata(allocator, module, &canonical_names, &checked_type_publication);
     errdefer allocator.free(requires);
     var platform_type_inputs = try PlatformTypeInputs.fromModule(allocator, module, &canonical_names, &checked_type_publication, &platform_required_declarations);
@@ -36124,6 +36432,7 @@ pub fn publishFromTypedModule(
         defer relation_type_substitutions.deinit(allocator);
         try relation_type_substitutions.applyToPublication(allocator, &checked_type_publication);
     }
+    clock.lap(.platform_relation);
     var pairing_types = try publicationPairingTypes(allocator, &checked_type_publication);
     errdefer pairing_types.deinit(allocator);
     const default_exprs = try publicationDefaultExprs(allocator, module, &canonical_names, &checked_type_publication);
@@ -36132,6 +36441,7 @@ pub fn publishFromTypedModule(
         .module = owner_artifact,
         .pairing_types = if (pairing_types.images.items().len != 0) &pairing_types else null,
     };
+    clock.lap(.pairing_defaults);
 
     const value_binding_defs = module_env.store.sliceDefs(module_env.value_binding_defs);
 
@@ -36159,6 +36469,7 @@ pub fn publishFromTypedModule(
         promoted_local_procedures,
     );
     const template_lookup = checked_procedure_templates.asLookup(module_idx);
+    clock.lap(.procedure_templates);
 
     var plan_build_data = static_dispatch.PlanTableBuildData{};
     errdefer plan_build_data.deinit(allocator);
@@ -36171,6 +36482,7 @@ pub fn publishFromTypedModule(
         &plan_build_data,
     );
     errdefer static_dispatch_plans.deinit(allocator);
+    clock.lap(.dispatch_plans);
 
     var hosted_procs = try HostedProcTable.fromModule(
         allocator,
@@ -36194,6 +36506,7 @@ pub fn publishFromTypedModule(
         inputs.platform_app_relation,
     );
     errdefer platform_required_bindings.deinit(allocator);
+    clock.lap(.hosted_platform_bindings);
 
     // Value form reads the dispatch plans: a numeral with a `from_numeral`
     // plan is not in value form. A literal with a conversion root always has
@@ -36212,6 +36525,7 @@ pub fn publishFromTypedModule(
         publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, value_form_tables),
     );
     errdefer compile_time_roots.deinit(allocator);
+    clock.lap(.compile_time_roots);
 
     var checked_const_bodies = try CheckedConstBodyTable.fromRoots(allocator, &compile_time_roots);
     errdefer checked_const_bodies.deinit(allocator);
@@ -36227,6 +36541,7 @@ pub fn publishFromTypedModule(
         &entry_wrappers,
         compile_time_roots.roots.items(),
     );
+    clock.lap(.entry_wrappers);
 
     var checked_const_store = ConstStore.init(allocator);
     errdefer checked_const_store.deinit();
@@ -36255,6 +36570,7 @@ pub fn publishFromTypedModule(
         &checked_type_publication,
     );
     errdefer top_level_values.deinit(allocator);
+    clock.lap(.top_level_values);
 
     var hoisted_constants = try HoistedConstTable.fromRoots(
         allocator,
@@ -36277,6 +36593,7 @@ pub fn publishFromTypedModule(
         checked_procedure_templates.promoted.items(),
     );
     defer selected_hoisted_callables.deinit(allocator);
+    clock.lap(.hoisted_values);
 
     var resolved_value_refs = try ResolvedValueRefTable.fromModule(
         allocator,
@@ -36296,6 +36613,7 @@ pub fn publishFromTypedModule(
         module_index,
     );
     errdefer resolved_value_refs.deinit(allocator);
+    clock.lap(.resolved_value_refs);
     var resolved_tables = body_tables;
     resolved_tables.refs = &resolved_value_refs;
     publishCallableEvalForwarding(
@@ -36339,6 +36657,7 @@ pub fn publishFromTypedModule(
         .relation_modules = inputs.relation_artifacts,
     };
     defer method_binding_targets.deinit();
+    clock.lap(.callable_forwarding);
     var method_registry = try static_dispatch.MethodRegistry.fromModule(
         allocator,
         module,
@@ -36351,6 +36670,7 @@ pub fn publishFromTypedModule(
     );
     errdefer method_registry.deinit(allocator);
     checked_type_publication.finishSourceTypes();
+    clock.lap(.method_registry);
 
     resolved_tables.plans = &static_dispatch_plans;
     var ordinary_diagnostics = try body_analyses.diagnosticErrors(
@@ -36359,6 +36679,7 @@ pub fn publishFromTypedModule(
         .ordinary,
     );
     defer ordinary_diagnostics.deinit(allocator);
+    clock.lap(.ordinary_diagnostics);
 
     var template_iterator_refs = TemplateIteratorRefs{};
     errdefer template_iterator_refs.deinit(allocator);
@@ -36378,6 +36699,7 @@ pub fn publishFromTypedModule(
         &template_iterator_refs,
         &plan_build_data,
     );
+    clock.lap(.template_refs);
 
     const platform_requirement_root_evidence = try allocator.alloc(
         artifact_serialize.Span,
@@ -36415,6 +36737,7 @@ pub fn publishFromTypedModule(
         platform_requirement_root_substs,
         template_root_evidence,
     );
+    clock.lap(.total_dispatch);
 
     // Resolutions now carry every direct target (evidence nodes); project the
     // targets' callables across artifacts by content identity and specialize
@@ -36432,6 +36755,7 @@ pub fn publishFromTypedModule(
         &template_iterator_refs,
     );
     resolved_tables.roots = &compile_time_roots;
+    clock.lap(.dispatch_callables);
     try publishLiteralConversionRoots(
         allocator,
         module,
@@ -36464,6 +36788,7 @@ pub fn publishFromTypedModule(
         requirement_solutions,
         platform_requirement_root_substs,
     );
+    clock.lap(.literal_roots);
     try classifyTemplateDispatchPlanRefs(
         allocator,
         &static_dispatch_plans,
@@ -36492,10 +36817,12 @@ pub fn publishFromTypedModule(
         defer demand_pass.deinit();
         try demand_pass.publish();
     }
+    clock.lap(.template_demand);
     try publishSealedSlots(allocator, checked_types.view(), &checked_procedure_templates);
     try publishClosedRowNodes(allocator, checked_types.view(), &checked_procedure_templates);
     template_iterator_refs.deinit(allocator);
     plan_build_data.deinit(allocator);
+    clock.lap(.sealed_slots);
 
     var provided_exports = try ProvidedExportTable.fromModule(
         allocator,
@@ -36532,6 +36859,7 @@ pub fn publishFromTypedModule(
         inputs.validation,
     );
     errdefer root_requests.deinit(allocator);
+    clock.lap(.root_requests);
 
     var nested_proc_sites = try NestedProcSiteTable.fromTemplates(
         allocator,
@@ -36544,8 +36872,10 @@ pub fn publishFromTypedModule(
         &entry_wrappers,
         &checked_procedure_templates,
         &resolved_value_refs,
+        &method_registry,
     );
     errdefer nested_proc_sites.deinit(allocator);
+    clock.lap(.nested_proc_sites);
 
     sealConstEvalTemplatesForRoots(
         &const_templates,
@@ -36580,6 +36910,7 @@ pub fn publishFromTypedModule(
         &exhaustiveness_reachability,
     );
     errdefer exhaustiveness_sites.deinit(allocator);
+    clock.lap(.exhaustiveness);
 
     var evaluation_diagnostics = if (module_env.module_kind == .platform and inputs.problem_store != null)
         try EvaluationDiagnostics.fromStore(allocator, inputs.problem_store.?)
@@ -36655,6 +36986,7 @@ pub fn publishFromTypedModule(
         &canonical_names,
     );
     errdefer interface_capabilities.deinit(allocator);
+    clock.lap(.exports);
 
     var public_api_dependencies = try collectPublicApiDependencies(
         allocator,
@@ -36679,6 +37011,7 @@ pub fn publishFromTypedModule(
         &exported_const_templates,
     );
     errdefer public_api_dependencies.deinit(allocator);
+    clock.lap(.public_api);
 
     // All source-to-checked metadata has been consumed. Release its scratch
     // before compile-time evaluation can allocate specialization/backend data.
@@ -36707,6 +37040,7 @@ pub fn publishFromTypedModule(
         &exported_const_templates,
     );
     errdefer lowering_visibility.deinit(allocator);
+    clock.lap(.lowering_visibility);
 
     var artifact = CheckedModuleArtifact{
         .key = artifact_key,
@@ -36780,6 +37114,7 @@ pub fn publishFromTypedModule(
         try artifact.verifyComplete();
     }
     analyses_owned = false;
+    clock.lap(.finish);
     return artifact;
 }
 
@@ -38536,8 +38871,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x55, 0x49, 0x1E, 0xF8, 0x0B, 0x18, 0x47, 0x04, 0xA3, 0x29, 0x26, 0x05, 0x20, 0xE9, 0xDF, 0xAF,
-        0xF5, 0x31, 0xB1, 0x9B, 0x8A, 0x51, 0x94, 0x68, 0x4B, 0xF6, 0x49, 0x89, 0x32, 0x3C, 0x37, 0x3F,
+        0x12, 0xC9, 0x2F, 0x46, 0xE3, 0x49, 0x2B, 0x53, 0x58, 0x57, 0x91, 0x0E, 0xFA, 0x93, 0xFD, 0xEA,
+        0xF7, 0xAC, 0xE5, 0x21, 0x31, 0x76, 0xD3, 0x53, 0x62, 0x1C, 0x3A, 0x8A, 0x8C, 0x32, 0x9D, 0xFA,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

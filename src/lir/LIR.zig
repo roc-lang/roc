@@ -121,6 +121,34 @@ pub const ProcIdentity = extern struct {
         }
     };
 
+    /// Identity of the ownership variant of this procedure that a demand
+    /// selects (design.md "Mode Specialization"): its parameter modes
+    /// (`borrowed_params`, bit i set for a borrowed position i), its return
+    /// mode (`ret_mode`, 0 borrowed and 1 owned), the positions it seeds
+    /// born-unique, and then each of its outcome rows, through
+    /// `OwnershipVariantBuilder.outcome`.
+    pub fn ownershipVariant(self: ProcIdentity, borrowed_params: u16, ret_mode: u8, unique_params: u16) OwnershipVariantBuilder {
+        var key = self.deriving("arc-variant");
+        key.update(std.mem.asBytes(&std.mem.nativeToLittle(u16, borrowed_params)));
+        key.update(&[_]u8{ret_mode});
+        key.update(std.mem.asBytes(&std.mem.nativeToLittle(u16, unique_params)));
+        return .{ .key = key };
+    }
+
+    pub const OwnershipVariantBuilder = struct {
+        key: DerivedBuilder,
+
+        /// Add one outcome row, in discriminant order.
+        pub fn outcome(self: *OwnershipVariantBuilder, discriminant: u32, restituted_params: u16) void {
+            self.key.update(std.mem.asBytes(&std.mem.nativeToLittle(u32, discriminant)));
+            self.key.update(std.mem.asBytes(&std.mem.nativeToLittle(u16, restituted_params)));
+        }
+
+        pub fn finish(self: *OwnershipVariantBuilder) ProcIdentity {
+            return self.key.finish();
+        }
+    };
+
     /// Identity of a procedure that exists only within one program and is
     /// never an object-cache entry. `raw` is the program-local symbol.
     pub fn programLocal(role: []const u8, raw: u64) ProcIdentity {
@@ -1034,7 +1062,9 @@ pub const ProcAbi = enum {
 
 /// The unit a procedure is emitted with (design.md "Mode Specialization",
 /// emission units). A direct call demands an ownership variant of its callee
-/// only when the two procedures share a unit; a call across units adapts to
+/// only when the two procedures share a unit, except the outcome-restitution
+/// variant a callee's object publishes (`LirProcSpec.rc_outcomes`), which a
+/// call from any unit may demand; otherwise a call across units adapts to
 /// the callee's solved base signature as a call to an object-cache procedure
 /// does. The specialized lowering puts every procedure in `program`; `.boxy`
 /// gives a module's own workers that module's unit and every worker that is
@@ -1838,7 +1868,10 @@ pub const ComptimeValueRef = struct {
 
 /// What it means for generated code to fail at one statement, beyond
 /// crashing there. Every identity but a literal producer's stays meaningful in
-/// every compilation of the program (`LirStore.failureMeaning`).
+/// every compilation of the program (`LirStore.failureMeaning`): a module is
+/// named by the identity its lowering gives it
+/// (`LirStore.lowering_module_identities`), which a program's table reads back
+/// as a checked key (`Program.Result.meaningByCheckedKey`).
 pub const FailureMeaning = union(enum) {
     /// Code checking rejected and already reported.
     checked_error,
@@ -2003,6 +2036,13 @@ pub const LirProcSpec = struct {
     /// A procedure this object defines for other objects of the link: its
     /// symbol has global binding and it is a root of reachability and ARC.
     exported: bool = false,
+    /// Set by `.boxy` lowering on a worker another module's object may call:
+    /// an exported worker of a module unit, or a program's worker of the
+    /// kinds a module unit exports. A call from any emission unit may demand
+    /// its outcome-restitution variant (design.md "Outcome-Conditioned
+    /// Argument Restitution", published outcome variants), and an exported
+    /// one's object always emits and exports that variant.
+    outcome_publisher: bool = false,
     /// Exact self-tail sites produced by LIR construction, consumed by TRMC/TCE.
     tail_calls: OptionalTailCalls = .none,
     /// Set by the tail-drive pass on an erased-callable procedure with an
@@ -2048,6 +2088,15 @@ pub const LirProcSpec = struct {
     rc_ret_unique: bool = false,
     rc_ret_unique_fields: u64 = 0,
     rc_ret_conditions: U32Span = U32Span.empty(),
+    /// The outcome table of the outcome-restitution variant this procedure's
+    /// object publishes (design.md "Outcome-Conditioned Argument
+    /// Restitution", emission units), as one discriminant word and one
+    /// restituted-parameter mask word per row, sorted by discriminant; empty
+    /// when it publishes none. ARC sets it on a published exported worker,
+    /// whose object always emits that variant, and a body-less `external`
+    /// proc gets it back from the export record, so a call in any unit may
+    /// demand the variant (`ProcIdentity.ownershipVariant` names it).
+    rc_outcomes: U32Span = U32Span.empty(),
 
     comptime {
         std.debug.assert(@sizeOf(LirProcSpec) == 224);

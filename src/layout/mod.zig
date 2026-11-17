@@ -110,6 +110,10 @@ pub const RcStructPlan = @import("rc_helper.zig").StructPlan;
 pub const RcTagUnionPlan = @import("rc_helper.zig").TagUnionPlan;
 pub const RcListPlan = @import("rc_helper.zig").ListPlan;
 pub const RcBoxPlan = @import("rc_helper.zig").BoxPlan;
+/// RC plan for the queued teardown of a list on a cycle of its type.
+pub const RcQueuedListPlan = @import("rc_helper.zig").QueuedListPlan;
+/// RC plan for the queued teardown of a box on a cycle of its type.
+pub const RcQueuedBoxPlan = @import("rc_helper.zig").QueuedBoxPlan;
 pub const RcFieldPlan = @import("rc_helper.zig").FieldPlan;
 pub const RcIncrefFn = @import("rc_helper.zig").RcIncrefFn;
 pub const RcDecrefFn = @import("rc_helper.zig").RcDecrefFn;

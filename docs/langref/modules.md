@@ -497,9 +497,14 @@ requires {
 }
 ```
 
-Here, the application defines a type named `Model`, and the platform refers to it as the type
-variable `model`. That way, each application can choose its own `Model` type, and the platform
-code works with all of them without knowing what's inside.
+Here, `model` names the application's chosen type within this requirement, and `Model`
+names the same type throughout the platform module. Roc infers that type from the
+application's `main` value, so the application doesn't need to declare or expose a
+type named `Model`. The platform code works without knowing what's inside that type.
+
+Every use of the platform's `Model`, including uses in other requirements, refers
+to that same type. An application can name its own types however it likes; an
+application type also named `Model` has no special connection to the platform's alias.
 
 ### exposes
 

@@ -1240,7 +1240,7 @@ inspect_override_instances: InspectOverrideInstance.SafeList,
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
 pub const ForClauseAlias = struct {
-    /// The alias name (e.g., "Model") - to be looked up in the app
+    /// The platform-local alias name (e.g., "Model").
     alias_name: Ident.Idx,
     /// The rigid variable name (e.g., "model") - the rigid in the required type
     rigid_name: Ident.Idx,

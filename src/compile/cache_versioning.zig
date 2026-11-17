@@ -70,11 +70,14 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// not pin to the stored function's request, hoisted source-pattern root
 /// wrappers whose requirement paths lie below their return, the bodies of
 /// those roots resolved against no evidence chain, and top-level constants'
-/// right-hand sides resolved against their wrapper's own requirements, and
-/// procedure templates' closed row nodes. It rejects every earlier format,
-/// including the independent version 19 through 47 formats. Platform-pairing
-/// entries share it.
-const checked_envelope_version: u32 = 48;
+/// right-hand sides resolved against their wrapper's own requirements,
+/// evidence parameters recording the edge that hands a captured codec
+/// requirement on, an alias-bound dispatch edge's among them, private codec
+/// instances whose copies of a template's variables the ambiguity rule does
+/// not judge, and procedure templates' closed row nodes. It rejects every
+/// earlier format, including the independent version 19 through 49 formats.
+/// Platform-pairing entries share it.
+const checked_envelope_version: u32 = 50;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment.
@@ -173,8 +176,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xAE, 0xBE, 0xD4, 0x73, 0x2A, 0x6C, 0xBB, 0xC0, 0x75, 0x75, 0xFC, 0x9F, 0xB9, 0x3B, 0x95, 0x68,
-        0x61, 0x10, 0xDF, 0x31, 0xDE, 0xBA, 0x07, 0x70, 0x9E, 0x6E, 0x79, 0x54, 0xFB, 0xD3, 0x46, 0x82,
+        0x3C, 0x4E, 0x24, 0x24, 0xA7, 0x38, 0x6A, 0xD6, 0x0F, 0x93, 0xD6, 0x56, 0xFF, 0xD4, 0xE8, 0x65,
+        0x7F, 0xBF, 0x64, 0xBA, 0xB4, 0x30, 0xB9, 0xD1, 0x32, 0xB6, 0x69, 0xC2, 0xC9, 0xA3, 0xED, 0x8C,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }
