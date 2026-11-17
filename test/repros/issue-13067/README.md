@@ -45,8 +45,9 @@ zig build -j2 run-test-zig-module-check \
   --test-filter 'issue 10886' --test-filter 'issue 13067'
 ```
 
-That combined run has two expected failing reproductions for 10886;
-13067 and the two existing 10886 controls pass.
+The initial combined reproduction run had two failing reproductions for
+10886; 13067 and the two existing 10886 controls passed. After implementing
+the 10886 fix, the full checker module passes, including all of these tests.
 
 ## Current mechanism and find-fix conclusion
 
