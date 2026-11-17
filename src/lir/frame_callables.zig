@@ -1125,9 +1125,9 @@ const SiteSolver = struct {
     }
 };
 
-/// Decide whether `pack` qualifies, and if so its site.
+/// Decide whether `pack`, whose uses qualify (`usesQualify`, which last
+/// filled the solver's group), qualifies, and if so its site.
 fn solveSite(solver: *SiteSolver, arena: Allocator, pack: CFStmtId) Allocator.Error!?FrameSite {
-    if (!(try solver.usesQualify(pack))) return null;
     const store = solver.store;
     const packing = Packing.of(store, pack) orelse frameInvariant("a frame candidate that is not a packing");
     const graph = solver.graph;
@@ -1487,10 +1487,17 @@ pub fn markFrames(allocator: Allocator, store: *LirStore, layouts: *const layout
         }
         if (facts.packs.len == 0) continue;
 
-        try graph.build(allocator, store, body, scratch.stmts.items);
         solver.facts = &facts;
+        // The flow graph and liveness serve only packings whose uses
+        // qualify; a procedure with none needs neither.
+        var graph_built = false;
         var sites = std.ArrayList(FrameSite).empty;
         for (facts.packs) |pack| {
+            if (!(try solver.usesQualify(pack))) continue;
+            if (!graph_built) {
+                try graph.build(allocator, store, body, scratch.stmts.items);
+                graph_built = true;
+            }
             if (try solveSite(&solver, arena, pack)) |site| try sites.append(arena, site);
         }
         if (sites.items.len == 0) continue;
