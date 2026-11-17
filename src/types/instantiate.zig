@@ -1472,14 +1472,11 @@ pub const Instantiator = struct {
         content: Content,
         flags: types_mod.DescriptorFlags,
     ) std.mem.Allocator.Error!void {
-        try self.store.dangerousSetVarDesc(
-            fresh_var,
-            .{
-                .content = content,
-                .rank = self.current_rank,
-                .flags = flags,
-            },
-        );
+        try self.store.fillFreshPlaceholder(fresh_var, .{
+            .content = content,
+            .rank = self.current_rank,
+            .flags = flags,
+        });
     }
 
     /// Fill `common`'s placeholder and publish it as this frame's result.
