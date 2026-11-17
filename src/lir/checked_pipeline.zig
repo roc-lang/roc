@@ -2339,6 +2339,9 @@ fn finishLoweredOutput(
     if (target.reuse_boxes) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .box_reuse, pass_timing);
     }
+    // No procedure-local rewrite runs after this, and the steps below append
+    // and replace rows without recording body chunks.
+    lowered.lir_result.store.releaseBodyChunks();
     var return_slot_scope = PassStepScope.begin(target.timing, .return_slot);
     try ReturnSlot.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     return_slot_scope.end();
