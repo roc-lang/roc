@@ -400,6 +400,10 @@ bound_vars_index: collections.DenseMap(Pattern.Idx, void),
 /// `scratch_bound_vars` so it survives across the body canonicalization without
 /// being disturbed by the block's own capture/free-var bookkeeping.
 scratch_defining_bound_vars: base.Scratch(Pattern.Idx),
+/// Active initializer binders, indexed by canonical identity. Positions let a
+/// lambda suspend its enclosing context without copying or clearing entries.
+/// Capacity follows simultaneously active binders, not the module's node ids.
+defining_bound_positions: std.AutoHashMapUnmanaged(Pattern.Idx, u32) = .empty,
 /// Scratch recording, for the declaration pattern currently being canonicalized,
 /// the existing `var` patterns it reassigns (e.g. the `index` in `(word, index) =
 /// ...` when `index` is an existing mutable binder). These reuse a prior binder
@@ -426,12 +430,9 @@ scratch_global_value_defs: std.ArrayList(CIR.Def.Idx),
 closure_counter: u32 = 0,
 /// Current loop depth for validating break statements
 loop_depth: u32 = 0,
-/// The exact set of pattern indices bound by the current declaration's pattern,
-/// stored as a span into `scratch_defining_bound_vars`. A reference whose resolved
-/// pattern is a member of this set is a self-referential definition (e.g. `a = a`
-/// or `(a, b) = (a, b)`), which would loop forever at runtime for non-functions.
-/// This is null when we're inside a lambda or other context where inner definitions
-/// are independent of outer ones.
+/// The active eager initialization context in `scratch_defining_bound_vars`.
+/// Nested initializers extend it; ordinary scopes preserve it. A lambda
+/// suspends it until its body is finished, without discarding the outer entries.
 defining_bound_vars: ?DataSpan = null,
 /// The associated-block type alias declaration whose annotation is currently
 /// being canonicalized. A type lookup made by that annotation must not resolve
@@ -562,6 +563,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .scratch_bound_vars = .scratch,
     .bound_vars_index = .scratch,
     .scratch_defining_bound_vars = .frame_partitioned,
+    .defining_bound_positions = .lexical,
     .scratch_reassign_targets = .scratch,
     .scratch_local_function_patterns = .frame_partitioned,
     .scratch_block_local_defs = .frame_partitioned,
@@ -998,6 +1000,7 @@ pub fn deinit(
     self.scratch_bound_vars.deinit();
     self.bound_vars_index.deinit();
     self.scratch_defining_bound_vars.deinit();
+    self.defining_bound_positions.deinit(gpa);
     self.scratch_reassign_targets.deinit();
     self.scratch_local_function_patterns.deinit();
     self.pattern_binders.deinit(gpa);
@@ -6030,8 +6033,8 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
 }
 
 /// Begin self-reference tracking for a declaration whose pattern is `pattern_idx`.
-/// Collects the pattern's FRESHLY-bound binders onto `scratch_defining_bound_vars`
-/// and returns the span identifying them. The caller stores this in
+/// Adds the pattern's FRESHLY-bound binders to the eager initialization context
+/// and returns its extended span. The caller stores this in
 /// `defining_bound_vars` and passes the previous value to `endDefiningBoundVars`
 /// once the declaration body is canonicalized.
 ///
@@ -6042,6 +6045,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
 /// therefore not self-referential, so it is excluded from the set.
 fn beginDefiningBoundVars(self: *Self, pattern_idx: Pattern.Idx, reassign_targets_start: u32) Allocator.Error!DataSpan {
     const start = self.scratch_defining_bound_vars.top();
+    errdefer self.scratch_defining_bound_vars.clearFrom(start);
     try self.collectBoundVarsInto(&self.scratch_defining_bound_vars, pattern_idx, false);
 
     const reassign_targets = self.scratch_reassign_targets.sliceFromStart(reassign_targets_start);
@@ -6060,36 +6064,46 @@ fn beginDefiningBoundVars(self: *Self, pattern_idx: Pattern.Idx, reassign_target
         self.scratch_defining_bound_vars.clearFrom(start + @as(u32, @intCast(write)));
     }
 
-    return self.scratch_defining_bound_vars.spanFrom(start);
+    const added = self.scratch_defining_bound_vars.sliceFromStart(start);
+    try self.defining_bound_positions.ensureUnusedCapacity(self.env.gpa, @intCast(added.len));
+    for (added, 0..) |bound, index| {
+        const entry = self.defining_bound_positions.getOrPutAssumeCapacity(bound);
+        // A malformed duplicate binder may occur twice in the same pattern.
+        // Its first position still owns the entry for this initializer.
+        if (!entry.found_existing) entry.value_ptr.* = start + @as(u32, @intCast(index));
+    }
+    return self.scratch_defining_bound_vars.spanFrom(if (self.defining_bound_vars) |outer| outer.start else start);
 }
 
-/// Restore `defining_bound_vars` to `saved`, popping the current declaration's
-/// bound-var set off `scratch_defining_bound_vars`. Pairs with
-/// `beginDefiningBoundVars`; declarations restore strictly LIFO, so the current
-/// set is always the topmost frame.
+/// Restore the saved eager context, retiring only this initializer's additions.
+/// A block/branch saves the same span and therefore releases nothing. A lambda
+/// restores the suspended outer context after its own initializers have ended.
 fn endDefiningBoundVars(self: *Self, saved: ?DataSpan) void {
     if (self.defining_bound_vars) |cur| {
         if (cur.start + cur.len != self.scratch_defining_bound_vars.top()) {
             base.invariant("canonicalization invariant violated: closing the defining bound-var set at {d}..{d} but the innermost set ends at {d}", .{ cur.start, cur.start + cur.len, self.scratch_defining_bound_vars.top() });
         }
-        if (saved) |outer| {
-            if (outer.start + outer.len > cur.start) {
+        const restore_top = if (saved) |outer| blk: {
+            if (outer.start > cur.start or outer.start + outer.len > cur.start + cur.len) {
                 base.invariant("canonicalization invariant violated: closing the defining bound-var set at {d}..{d} would release the enclosing set at {d}..{d}", .{ cur.start, cur.start + cur.len, outer.start, outer.start + outer.len });
             }
+            break :blk if (outer.start == cur.start) outer.start + outer.len else cur.start;
+        } else cur.start;
+        for (self.scratch_defining_bound_vars.sliceFromStart(restore_top)) |bound| {
+            if (self.defining_bound_positions.get(bound)) |position| {
+                if (position >= restore_top) _ = self.defining_bound_positions.remove(bound);
+            }
         }
-        self.scratch_defining_bound_vars.clearFrom(cur.start);
+        self.scratch_defining_bound_vars.clearFrom(restore_top);
     }
     self.defining_bound_vars = saved;
 }
 
-/// Whether `pattern_idx` is bound by the declaration currently being defined,
-/// i.e. a reference to it is a self-referential definition.
+/// Whether the binding is unfinished in this eager initialization context.
 fn isDefiningBoundVar(self: *Self, pattern_idx: Pattern.Idx) bool {
     const span = self.defining_bound_vars orelse return false;
-    for (self.scratch_defining_bound_vars.sliceFromSpan(span)) |bound| {
-        if (bound == pattern_idx) return true;
-    }
-    return false;
+    const position = self.defining_bound_positions.get(pattern_idx) orelse return false;
+    return position >= span.start and position - span.start < span.len;
 }
 
 fn collectReassignBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Error!void {
@@ -9675,7 +9689,6 @@ fn beginBlockState(
     decl_scope: ?AST.DeclIndex.ScopeIdx,
 ) std.mem.Allocator.Error!BlockState {
     const saved_defining_bound_vars = self.defining_bound_vars;
-    self.defining_bound_vars = null;
 
     const saved_stmt_pos = self.in_statement_position;
     self.in_statement_position = true;
@@ -11980,7 +11993,6 @@ fn runExprKernel(
                 },
                 .for_expr => |e| {
                     const saved_defining_bound_vars = self.defining_bound_vars;
-                    self.defining_bound_vars = null;
 
                     const saved_stmt_pos = self.in_statement_position;
                     self.in_statement_position = true;
@@ -12738,7 +12750,6 @@ fn runExprKernel(
                 },
                 .@"for" => |for_stmt| {
                     const saved_defining_bound_vars = self.defining_bound_vars;
-                    self.defining_bound_vars = null;
 
                     const saved_stmt_pos = self.in_statement_position;
                     self.in_statement_position = true;
@@ -14482,7 +14493,6 @@ fn runExprKernel(
 
             const body_free_vars_start = self.scratch_free_vars.top();
             const saved_defining_bound_vars = self.defining_bound_vars;
-            self.defining_bound_vars = null;
 
             if (ast_branch.guard) |guard_expr_idx| {
                 try stacks.push(.match_after_guard, frame_allocator, .{
