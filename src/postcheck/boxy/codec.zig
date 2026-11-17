@@ -228,8 +228,8 @@ fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.C
     const store = program.module(module).types();
     var vars: std.ArrayList(checked.CheckedTypeId) = .empty;
     defer vars.deinit(allocator);
-    var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
-    defer seen.deinit(allocator);
+    program.store.beginCheckedWalk();
+    defer program.store.endCheckedWalk();
     var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
     defer pending.deinit(allocator);
     // The shape's types are visited first and contribute no variables.
@@ -238,7 +238,7 @@ fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.C
     var shape_done = false;
     while (pending.pop()) |ty| {
         if (!shape_done and pending.items.len == 0 and ty == constructor_ty) shape_done = true;
-        if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
+        if (!try program.store.visitChecked(ty)) continue;
         const start = pending.items.len;
         switch (store.payload(ty)) {
             // A forwarded call's subject is a variable of the family even

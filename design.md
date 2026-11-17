@@ -389,7 +389,13 @@ Per-ID data is a parallel column on the owning store, or a
 `collections.DenseMap` when the column is dynamic or scoped. A short-lived
 scope over a larger ID domain uses a paged, reusable, epoch-based, or explicitly
 remapped dense column so that clearing and iteration remain proportional to the
-live scope. `DenseMap`'s sparse pages contain only ID-to-dense-position rows;
+live scope. A `DenseMap`'s page directory spans every page between the lowest
+and highest ID it holds, so a scope over an ID whose raw bits encode disjoint
+ranges keeps one map per range: a checked type ID names a source variable
+counting up from zero or a synthesized type counting up from the high bit, and
+Boxy's `CheckedTypeMap` keeps the two apart. A walk that visits a few IDs
+spread over a large domain reuses one retained map rather than paging in a
+fresh one each time. `DenseMap`'s sparse pages contain only ID-to-dense-position rows;
 its values occupy a compact live-entry column, so opening a sparse page never
 initializes a page of potentially large values. The size of the owning ID domain
 is not a reason to hash an ID. Direct columns avoid hashing, table growth,
