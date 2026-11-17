@@ -108,7 +108,13 @@ const llvm_payload = builtin.cpu.arch == .wasm64 or
 /// in for its target: validates `len` bytes at `bytes`, returns `valid_code`
 /// for well-formed input, and otherwise stores the error's index in `index` and
 /// returns its `Utf8ByteProblem`.
-pub const ValidateAbi = fn (bytes: [*]const u8, len: usize, index: *usize) callconv(.c) u8;
+///
+/// The caller is compiled for WebAssembly and the definition for the target's
+/// own architecture, and the two disagree on who extends an integer narrower
+/// than 32 bits: wasm marks a `u8` result `zeroext`, which the caller then
+/// trusts, while AArch64 outside Darwin leaves its upper bits unspecified. So
+/// the result is a `u32`, which no target extends.
+pub const ValidateAbi = fn (bytes: [*]const u8, len: usize, index: *usize) callconv(.c) u32;
 
 /// The symbol the LLVM builtins bitcode references for its validation
 /// function, defined by `utf8_kernel_lib.zig` compiled for the target's `Kernel`.
@@ -116,10 +122,10 @@ pub const validate_symbol = "roc_builtins_utf8_validate";
 
 /// What `ValidateAbi` returns for well-formed input; no `Utf8ByteProblem` has
 /// this value.
-pub const valid_code: u8 = 0xFF;
+pub const valid_code: u32 = 0xFF;
 
 /// `ValidateAbi` implemented by `kernel`.
-pub fn validateAbi(comptime kernel: Kernel, bytes: [*]const u8, len: usize, index: *usize) u8 {
+pub fn validateAbi(comptime kernel: Kernel, bytes: [*]const u8, len: usize, index: *usize) u32 {
     const err = validateWith(kernel, bytes[0..len]) orelse return valid_code;
     index.* = err.index;
     return @backingInt(err.problem);

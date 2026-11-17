@@ -5087,6 +5087,84 @@ test "issue 12760: boundary layout requirements survive memoization and callable
     try std.testing.expectError(error.UnresolvedByValue, TypeTable.convertTypeVariable(.{}));
 }
 
+// A dev glue plugin is LLVM code at O0, where nothing inlines the builtins'
+// call into the UTF-8 validation payload linked for this machine's CPU, so
+// the call's result crosses the ABI between the wasm-compiled builtins and the
+// natively compiled payload.
+test "Str.from_utf8 in a dev glue plugin accepts well-formed text and rejects ill-formed text" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "main.roc", .data =
+        \\platform "utf8-probe"
+        \\    requires {} { main : U64 -> U64 }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_probe": probe }
+        \\    targets: {}
+        \\
+        \\probe : U64 -> U64
+        \\probe = |n| main(n)
+    });
+    // Every input is built from the type list the plugin receives, so the
+    // validation runs in the plugin rather than at compile time. The lengths
+    // put the end of the ASCII prefix before, at and after each 16- and
+    // 32-byte block boundary.
+    try tmp.dir.writeFile(io, .{ .sub_path = "Spec.roc", .data =
+        \\app [make_glue] { pf: platform glue }
+        \\
+        \\import pf.Types
+        \\import pf.File
+        \\
+        \\check : List(U8) -> Str
+        \\check = |bytes| match Str.from_utf8(bytes) {
+        \\    Ok(_) => "ok"
+        \\    Err(_) => "err"
+        \\}
+        \\
+        \\make_glue : List(Types) -> Try(List(File), Str)
+        \\make_glue = |types_list| {
+        \\    zero = types_list.len() - types_list.len()
+        \\    var $out = ""
+        \\    for len in [0, 1, 15, 16, 17, 31, 32, 33, 64] {
+        \\        ascii = List.repeat('a', len + zero)
+        \\        multi = ascii.concat(Str.to_utf8("é漢🎉"))
+        \\        $out = "${$out}${check(ascii)} ${check(multi)} ${check(ascii.append(0xFF))}\n"
+        \\    }
+        \\    Ok([{ name: "from_utf8.txt", content: $out }])
+        \\}
+    });
+    const spec_path = try tmp.dir.realPathFileAlloc(io, "Spec.roc", gpa);
+    defer gpa.free(spec_path);
+    const platform_path = try tmp.dir.realPathFileAlloc(io, "main.roc", gpa);
+    defer gpa.free(platform_path);
+    const out_dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(out_dir);
+
+    var stderr = std.Io.Writer.Allocating.init(gpa);
+    defer stderr.deinit();
+    var stdout = std.Io.Writer.Allocating.init(gpa);
+    defer stdout.deinit();
+    rocGlue(gpa, &stderr.writer, &stdout.writer, .{
+        .glue_spec = spec_path,
+        .output_dir = out_dir,
+        .platform_path = platform_path,
+        .report_config = reporting.ReportingConfig.initMarkdown(),
+        .opt = .dev,
+        .no_cache = true,
+    }, io) catch |err| {
+        std.debug.print("{s}", .{stderr.written()});
+        return err;
+    };
+
+    const result = try tmp.dir.readFileAlloc(io, "from_utf8.txt", gpa, .limited(4096));
+    defer gpa.free(result);
+    var expected: [9 * "ok ok err\n".len]u8 = undefined;
+    for (0..9) |line| @memcpy(expected[line * "ok ok err\n".len ..][0.."ok ok err\n".len], "ok ok err\n");
+    try std.testing.expectEqualStrings(&expected, result);
+}
+
 // Lock the schema-directed marshaller against the actual checked glue platform.
 // No Zig extern record mirror participates in this boundary.
 test "glue platform marshalling schema matches checked Roc records" {

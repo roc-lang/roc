@@ -3303,6 +3303,13 @@ they reference `roc_builtins_utf8_validate`, and the LLVM backend links the
 payload built for the kernel the target machine's CPU features select (see
 "UTF-8 validation").
 
+A linked payload's symbol takes and returns only pointers and integers of at
+least 32 bits. Its caller is compiled for WebAssembly and its definition for
+another architecture, and those disagree on whether a narrower integer is
+extended: wasm marks a `u8` result `zeroext`, which the caller relies on,
+while an AArch64 definition outside Darwin returns it with unspecified upper
+bits.
+
 LLVM object emission must request function and data sections, and the final
 target linker must use section garbage collection where the target format
 supports it.
