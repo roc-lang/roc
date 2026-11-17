@@ -18806,7 +18806,16 @@ fn frontEndBreakdown(timing: anytype) [7]progress.SubTiming {
 test "typing reuse work counters display zero-duration hits without inference" {
     const timing: compile.package.TimingInfo = .{
         .type_checking_ns = 13 * std.time.ns_per_ms,
-        .checking_work = .{ .typing_hits = 2, .publications = 2, .publication_ns = 11 * std.time.ns_per_ms },
+        .checking_work = .{
+            .typing_hits = 2,
+            .publications = 2,
+            .publication_ns = 11 * std.time.ns_per_ms,
+            .publication_steps = publication_steps: {
+                var steps: check.CheckedArtifact.PublicationTiming = .{};
+                steps.steps_ns[@backingInt(check.CheckedArtifact.PublicationTiming.Step.checked_types)] = 7 * std.time.ns_per_ms;
+                break :publication_steps steps;
+            },
+        },
     };
     const breakdown = frontEndBreakdown(timing);
     try std.testing.expectEqual(@as(u64, 0), breakdown[2].ns);
@@ -18830,6 +18839,9 @@ test "typing reuse work counters display zero-duration hits without inference" {
     const output = buf.written();
     try std.testing.expect(std.mem.find(u8, output, "Type Inference") == null);
     try std.testing.expect(std.mem.find(u8, output, "Checked Publication (summed)") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Checked Publication Detail") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Checked Types") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Template Demand") == null);
     for ([_][]const u8{ "Typing-only cache hits", "Checked publications" }) |label| {
         const start = std.mem.find(u8, output, label) orelse return error.TestUnexpectedResult;
         const remainder = output[start + label.len ..];
@@ -19931,6 +19943,7 @@ fn finishFrontEndPhaseExcluding(gpa: Allocator, config: reporting.ReportingConfi
         row.* = .{ .name = name, .ns = module.ns };
     }
     reporter.recordRankedTimings("Slowest Module Check and Publication", slowest_rows[0..slowest.len]);
+    recordPublicationDetail(reporter, timing.checking_work);
     reporter.recordCounters("Frontend checking work", &.{
         .{ .name = "Fresh checks", .count = timing.checking_work.fresh_checks },
         .{ .name = "Typing-only cache hits", .count = timing.checking_work.typing_hits },
@@ -19975,6 +19988,56 @@ fn finishFrontEndPhaseExcluding(gpa: Allocator, config: reporting.ReportingConfi
     if (!std.meta.eql(counters.native_emission, backend.dev.NativeProcCompiler.Metrics{})) {
         reporter.recordCounters("Shared native artifact emission", &nativeEmissionCounters(counters.native_emission));
     }
+}
+
+/// The steps of checked-artifact publication, which only detailed timing
+/// records. Each step is summed across the worker threads that published.
+fn recordPublicationDetail(reporter: *progress.Reporter, work: compile.package.CheckingWork) void {
+    if (!reporter.always) return;
+    const PublicationTiming = check.CheckedArtifact.PublicationTiming;
+    var steps: [PublicationTiming.step_count]progress.SubTiming = undefined;
+    inline for (@typeInfo(PublicationTiming.Step).@"enum".field_names, 0..) |name, index| {
+        steps[index] = .{ .name = publicationStepLabel(@field(PublicationTiming.Step, name)), .ns = work.publication_steps.steps_ns[index] };
+    }
+    var buf: [PublicationTiming.step_count]progress.SubTiming = undefined;
+    const measured = measuredSubTimings(&buf, &steps);
+    if (measured.len != 0) reporter.recordCompletedWithBreakdown("Checked Publication Detail", work.publication_ns, .{}, measured);
+}
+
+fn publicationStepLabel(step: check.CheckedArtifact.PublicationTiming.Step) []const u8 {
+    return switch (step) {
+        .typed_modules => "Typed Module Graph",
+        .identity => "Identity + Names",
+        .body_analyses => "Body Analyses",
+        .sealed_type_keys => "Sealed Type Keys",
+        .checked_types => "Checked Types",
+        .platform_relation => "Platform Relation",
+        .pairing_defaults => "Pairing Types + Defaults",
+        .procedure_templates => "Procedure Templates",
+        .dispatch_plans => "Dispatch Plans",
+        .hosted_platform_bindings => "Hosted + Platform Bindings",
+        .compile_time_roots => "Compile-Time Roots",
+        .entry_wrappers => "Const Bodies + Entry Wrappers",
+        .top_level_values => "Top-Level Values",
+        .hoisted_values => "Hoisted Values",
+        .resolved_value_refs => "Resolved Value Refs",
+        .callable_forwarding => "Callable Forwarding",
+        .method_registry => "Method Registry",
+        .ordinary_diagnostics => "Ordinary Diagnostics",
+        .template_refs => "Template Refs",
+        .total_dispatch => "Total Dispatch Resolution",
+        .dispatch_callables => "Dispatch Callables",
+        .literal_roots => "Literal Roots",
+        .template_demand => "Template Demand",
+        .sealed_slots => "Sealed Slots",
+        .root_requests => "Root Requests",
+        .nested_proc_sites => "Nested Procedure Sites",
+        .exhaustiveness => "Exhaustiveness Sites",
+        .exports => "Exports + Interface",
+        .public_api => "Public API Dependencies",
+        .lowering_visibility => "Lowering Visibility",
+        .finish => "Artifact Assembly",
+    };
 }
 
 fn compileTimeStepLabel(step: eval.CompileTimeFinalization.Timing.Step) []const u8 {

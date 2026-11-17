@@ -2384,6 +2384,8 @@ pub const Coordinator = struct {
     program_finalization_ns: u64 = 0,
     /// Whether per-module compile-time lowering collects fine-grained timings.
     detailed_lowering_timing: bool = false,
+    /// Whether checked-artifact publication times each of its steps.
+    detailed_publication_timing: bool = false,
 
     /// Build statistics
     cache_hits: u32,
@@ -8299,6 +8301,7 @@ pub const Coordinator = struct {
             .{ .explicit = task.deferred_imports },
             task.missing_public_types,
             task.typing_context,
+            self.detailed_publication_timing,
         );
         defer typecheck_output.deinit();
         // On error the coordinator still owns the input environment. Transfer
