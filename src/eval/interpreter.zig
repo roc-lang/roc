@@ -4207,8 +4207,7 @@ pub const Interpreter = struct {
                 ret_buf.ptr,
             ) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                // This branch is compiled only where the trampoline is available.
-                error.UnsupportedArch => unreachable,
+                error.UnsupportedArch => unreachable, // this branch is compiled only where the trampoline is available
             };
         } else {
             const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
