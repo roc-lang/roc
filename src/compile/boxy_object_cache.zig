@@ -23,7 +23,7 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 23;
+pub const format_version: u32 = 24;
 
 const magic = "RBXO";
 
@@ -136,6 +136,11 @@ pub const ExportRecord = struct {
     rc_ret_unique: bool,
     may_leave_pending: bool,
     rc_ret_conditions: []const u32,
+    /// The outcome table of the outcome-restitution variant the object
+    /// publishes for the worker, as discriminant and mask word pairs
+    /// (`LIR.LirProcSpec.rc_outcomes`); empty when it publishes none. The
+    /// variant is an export of its own, with its own record.
+    rc_outcomes: []const u32 = &.{},
     /// The worker's encoded needs list, for a worker that takes a type
     /// table (`LirProgram.Result.boxy_table_needs`); empty otherwise.
     table_needs: []const u8 = &.{},
@@ -174,13 +179,16 @@ pub fn exportRecordsDigest(allocator: Allocator, records: []const ExportRecord) 
         }
     }.lessThan);
     var hasher = base.Sha256.init(.{});
-    hasher.update("roc.boxy.export_records.v2");
+    hasher.update("roc.boxy.export_records.v3");
     for (sorted) |record| {
         hasher.update(&record.identity);
         inline for (.{ record.rc_borrowed_params, record.rc_ret_lenders, record.rc_read_only_params, record.rc_ret_unique_fields }) |word| hasher.update(std.mem.asBytes(&word));
         hasher.update(&[_]u8{ @intFromBool(record.rc_ret_borrowed), @intFromBool(record.rc_ret_unique), @intFromBool(record.may_leave_pending) });
         hasher.update(std.mem.asBytes(&@as(u32, @intCast(record.rc_ret_conditions.len))));
         hasher.update(std.mem.sliceAsBytes(record.rc_ret_conditions));
+        // An importer's calls may demand the published outcome variant.
+        hasher.update(std.mem.asBytes(&@as(u32, @intCast(record.rc_outcomes.len))));
+        hasher.update(std.mem.sliceAsBytes(record.rc_outcomes));
         // An importer fills the worker's tables from its needs.
         hasher.update(std.mem.asBytes(&@as(u32, @intCast(record.table_needs.len))));
         hasher.update(record.table_needs);
@@ -300,6 +308,8 @@ pub fn encodeParts(allocator: Allocator, entry: Entry) Allocator.Error!Encoded {
         try bytes.append(allocator, @intFromBool(record.may_leave_pending));
         try appendU32(&bytes, allocator, @intCast(record.rc_ret_conditions.len));
         for (record.rc_ret_conditions) |word| try appendU32(&bytes, allocator, word);
+        try appendU32(&bytes, allocator, @intCast(record.rc_outcomes.len));
+        for (record.rc_outcomes) |word| try appendU32(&bytes, allocator, word);
         try appendU32(&bytes, allocator, @intCast(record.table_needs.len));
         try bytes.appendSlice(allocator, record.table_needs);
         try appendU32(&bytes, allocator, record.template);
@@ -358,9 +368,10 @@ pub fn functionUnitKey(ordinary: Key) Key {
     return .{ .bytes = hasher.finalResult() };
 }
 
-/// The bytes of an export record with no return conditions: its identity,
-/// four 64-bit masks, three flags, and its condition count.
-const min_export_record_size = 32 + 4 * @sizeOf(u64) + 4 + 3 * @sizeOf(u32);
+/// The bytes of an export record with no return conditions, outcome rows or
+/// needs: its identity, four 64-bit masks, four flags, and its condition
+/// count, outcome-word count, needs length and template position.
+const min_export_record_size = 32 + 4 * @sizeOf(u64) + 4 + 4 * @sizeOf(u32);
 
 /// The bytes of an expect-site or test-root record: a digest and two words.
 const table_record_size = 32 + 2 * @sizeOf(u32);
@@ -410,6 +421,7 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     var decoded_exports: usize = 0;
     errdefer for (exports[0..decoded_exports]) |record| {
         allocator.free(record.rc_ret_conditions);
+        allocator.free(record.rc_outcomes);
         allocator.free(record.table_needs);
     };
     for (exports) |*record| {
@@ -430,9 +442,15 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         const conditions = try allocator.alloc(u32, condition_count);
         errdefer allocator.free(conditions);
         for (conditions) |*word| word.* = try reader.word32();
+        const outcome_count = try reader.word32();
+        if (outcome_count > (bytes.len - reader.at) / @sizeOf(u32)) return error.InvalidEntry;
+        const outcomes = try allocator.alloc(u32, outcome_count);
+        errdefer allocator.free(outcomes);
+        for (outcomes) |*word| word.* = try reader.word32();
         const needs_len = try reader.word32();
         const needs = try allocator.dupe(u8, try reader.take(needs_len));
         record.rc_ret_conditions = conditions;
+        record.rc_outcomes = outcomes;
         record.table_needs = needs;
         record.template = try reader.word32();
         record.visible = try reader.flag();
@@ -530,6 +548,7 @@ pub fn deinitEntry(allocator: Allocator, entry: Entry) void {
 pub fn deinitEntryView(allocator: Allocator, entry: Entry) void {
     for (entry.exports) |record| {
         allocator.free(record.rc_ret_conditions);
+        allocator.free(record.rc_outcomes);
         allocator.free(record.table_needs);
     }
     allocator.free(entry.exports);
@@ -651,7 +670,7 @@ test "a Boxy object entry round-trips through its bytes" {
     const conditions = [_]u32{ 3, 9 };
     var entry: Entry = .{
         .exports = &.{
-            .{ .identity = @splat(1), .rc_borrowed_params = 5, .rc_ret_lenders = 1, .rc_read_only_params = 4, .rc_ret_unique_fields = 0, .rc_ret_borrowed = true, .rc_ret_unique = false, .may_leave_pending = true, .rc_ret_conditions = &conditions, .template = 6, .visible = true },
+            .{ .identity = @splat(1), .rc_borrowed_params = 5, .rc_ret_lenders = 1, .rc_read_only_params = 4, .rc_ret_unique_fields = 0, .rc_ret_borrowed = true, .rc_ret_unique = false, .may_leave_pending = true, .rc_ret_conditions = &conditions, .rc_outcomes = &.{ 0, 0, 1, 1 }, .template = 6, .visible = true },
             .{ .identity = @splat(2), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 2, .rc_ret_borrowed = false, .rc_ret_unique = true, .may_leave_pending = false, .rc_ret_conditions = &.{} },
         },
         .exports_digest = undefined,
@@ -732,6 +751,9 @@ test "an export records digest is a function of the records in identity order" {
     try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{ first, changed })));
     changed = second;
     changed.rc_ret_conditions = &.{1};
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{ first, changed })));
+    changed = second;
+    changed.rc_outcomes = &.{ 1, 1 };
     try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{ first, changed })));
     changed = second;
     changed.table_needs = "needs";
@@ -846,6 +868,7 @@ test "a Boxy object export digest round-trip releases every failed allocation" {
                 .rc_ret_unique = false,
                 .may_leave_pending = true,
                 .rc_ret_conditions = &.{ 3, 9 },
+                .rc_outcomes = &.{ 0, 2 },
                 .table_needs = "table needs",
             }};
             const digest = try exportRecordsDigest(allocator, records);

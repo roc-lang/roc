@@ -45,6 +45,7 @@ const Program = lower.Program;
 const StaticDescs = @import("static_descs.zig").StaticDescs;
 const Tables = @import("tables.zig");
 const WorkerId = lower.WorkerId;
+const TemplateKey = lower.TemplateKey;
 
 /// A hidden word: a descriptor, dictionary, or literal thunk the body reads,
 /// as a static word or as a recipe over the worker's inputs (`tables.zig`).
@@ -227,6 +228,11 @@ pub const Task = union(enum) {
     /// `params` and `ret` are the procedure's signature, `arg_types` the
     /// call's arguments' types and `result` its result's.
     finish_local_call: struct { closure: LocalId, words: []const Word, params: []const TypeId, ret: TypeId, arg_types: []const TypeId, result: TypeId },
+    /// Pop the arguments of a call of a local procedure only direct calls
+    /// reach and call its worker `callee` with `captures`, the arguments
+    /// (adapted from `arg_types` to `params` when `arg_types` is not empty),
+    /// and its table at `inputs` (`finishDirectLocalCall`).
+    finish_direct_local_call: struct { callee: WorkerId, captures: []const LocalId, inputs: []const Word, params: []const TypeId, arg_types: []const TypeId, ret: TypeId, result: TypeId },
     /// Push an interpolation's literal segments as the `List(Str)` of `ty`.
     segments_arg: struct { expr: ExprId, ty: TypeId },
     /// Pop an interpolation's assembler and call it with the interpolated
@@ -332,10 +338,11 @@ const AliasScope = struct {
     /// other requirements can name types only the scopes the chain never
     /// entered bind: each read composes the one it names.
     deferred_dicts: ?DeferredDictionaries = null,
-    /// The declaration context `dicts` come from, for the scope a local
-    /// procedure's own scheme is resolved in when it is built from one. No
-    /// evidence names a dictionary of such a scope (`frameDictionary`).
-    declaration: ?*const Declaration = null,
+    /// The declaration context whose callee's scope this is, for the scope a
+    /// local procedure's own scheme is resolved in when it is built from one
+    /// and for the scope an edge handing a captured requirement on is read
+    /// in: its dictionaries are the context's (`frameDictionary`).
+    declaration: ?*Declaration = null,
     saved_env: types.Env,
 };
 
@@ -398,6 +405,32 @@ const Declaration = struct {
     building: []bool,
     source: Source,
     outer: ?*Declaration,
+    /// The evidence parameter of the slot being built, whose dictionary a
+    /// local procedure reached while building it is part of.
+    reading: ?u32 = null,
+    /// The declaration contexts entered through the edges that hand the
+    /// callee's captured requirements on, by parameter (`forwardedDeclaration`).
+    forwards: std.ArrayListUnmanaged(Forward) = .empty,
+    /// Whose scope the dictionaries are: `worker`'s own, or the scope of
+    /// the first alias of the alias chain a use enters, which reaches
+    /// `worker` and has a slot for each of the alias's requirements.
+    scope: Scope = .procedure,
+
+    const Forward = struct { param: u32, declaration: *Declaration };
+
+    const Scope = union(enum) {
+        procedure,
+        alias: AliasUse,
+    };
+
+    /// A use's entry into an alias chain, as `aliasChainInstance` takes it.
+    const AliasUse = struct {
+        first: AliasStep,
+        evidence: []const static_dispatch.CheckedEvidence,
+        literals: []const Word,
+        literal_source: AliasLiterals,
+        call_fn: TypeId,
+    };
 
     const Source = union(enum) {
         /// The evidence of a call, read in `module`'s view `view`.
@@ -412,6 +445,9 @@ const Declaration = struct {
         frame: struct { position: usize, composed: [*]?Word, scope: AliasScope },
         /// All inputs of an already stored checked function are explicit.
         restored,
+        /// The instance an edge of the outer context's callee's body
+        /// instantiates, composed in full when the edge was entered.
+        forwarded,
     };
 
     const Words = struct { descs: []const Word, literals: []const Word };
@@ -1685,7 +1721,27 @@ pub const Builder = struct {
     /// The word of `callee`'s type table at the inputs `inputs`.
     pub fn tableWord(self: *Builder, callee: WorkerId, inputs: []const Word) Allocator.Error!Word {
         if (std.debug.runtime_safety and self.program.inputCount(callee) != inputs.len) invariant("a type table's inputs differ from its worker's");
+        // This worker's table at its own inputs, in order, is the table it
+        // holds, so a call of itself at its own instantiation passes that
+        // table along unchanged (design.md "Tail Return Continuations").
+        if (callee == self.worker_id and self.table_local != null and self.isOwnInputs(inputs)) {
+            return .{ .recipe = try self.recipes.intern(.{ .scope_table = 0 }) };
+        }
         return .{ .recipe = try self.recipes.intern(.{ .table = .{ .worker = callee, .inputs = inputs } }) };
+    }
+
+    /// Whether `inputs` are this worker's own table inputs, each read from
+    /// where the worker received it, in the order it received them.
+    fn isOwnInputs(self: *const Builder, inputs: []const Word) bool {
+        if (inputs.len != self.layout.inputCount()) return false;
+        for (inputs, 0..) |word, index| switch (word) {
+            .static => return false,
+            .recipe => |id| switch (self.recipes.get(self.recipes.resolve(id))) {
+                .input => |input| if (input != index) return false,
+                .inherited, .scope_table, .desc, .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => return false,
+            },
+        };
+        return true;
     }
 
     /// A direct call's arguments: `explicit`, then `callee`'s type table at
@@ -2251,7 +2307,10 @@ pub const Builder = struct {
         proc.body = .some(proc_body);
         proc.shapes = self.store.shapes;
         self.store.shapes = .{};
-        if (has_dynamic_frame) self.tail_calls.self_calls = .replace_frame;
+        // A self call that passes every dynamic parameter along unchanged
+        // reads no argument from the dynamic frame region, so with its
+        // parameters known it loops even when the procedure has a region.
+        if (has_dynamic_frame and self.tail_calls.loop_params.len == 0) self.tail_calls.self_calls = .replace_frame;
         proc.tail_calls = .of(try self.tail_calls.finish(self.store));
     }
 
@@ -2274,6 +2333,7 @@ pub const Builder = struct {
             .lambda => |lambda| lambda,
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a lambda worker's expression is not a lambda"),
         };
+        if (worker.direct) return try self.lowerDirectLambdaBody(lambda);
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
 
@@ -2363,6 +2423,58 @@ pub const Builder = struct {
         try self.run();
         if (self.reuse_arg == null) _ = try self.beginReuseArg(.none);
         try self.finishErasedProc(entry, body_start, args.items, ret_layout, capture_ptr);
+    }
+
+    /// The body of a local procedure only direct calls reach
+    /// (`Worker.direct`): an ordinary procedure whose parameters are its
+    /// captured values, then its explicit parameters, then its type table
+    /// when it has inputs.
+    fn lowerDirectLambdaBody(self: *Builder, lambda: @FieldType(bodies_mod.ExprData, "lambda")) Allocator.Error!void {
+        const worker = self.currentWorker().*;
+        self.entry_hole = try self.newHole();
+        const entry = self.entry_hole;
+        // The table comes first: the parameters' descriptors are read from it.
+        if (self.program.inputCount(self.worker_id) != 0) try self.beginTable(try self.closedLocal(.opaque_ptr));
+        var args: std.ArrayList(LocalId) = .empty;
+        defer args.deinit(self.allocator);
+        for (worker.captures, worker.capture_types) |capture, capture_ty| {
+            const param = try self.localOf(capture_ty, .param);
+            try args.append(self.allocator, param);
+            const binder = capture.pattern;
+            if (self.bodies().binder(binder).recursive_value) {
+                // A recursive value's slot, as `lowerLambdaBody` binds one.
+                try self.recursive_slots.put(self.allocator, binder, param);
+                try self.binders.put(self.allocator, binder, try self.readRecursiveSlot(param, capture_ty));
+            } else {
+                try self.binders.put(self.allocator, binder, param);
+            }
+        }
+        if (lambda.args.len != worker.params.len) invariant("a lambda's arity differs from its type");
+        const params_start = args.items.len;
+        for (worker.params) |param_ty| try args.append(self.allocator, try self.localOf(param_ty, .param));
+        const instance_start = args.items.len;
+        if (self.table_local) |table| try args.append(self.allocator, table);
+        var ret_layout: layout.Idx = undefined;
+        if (try self.closed(worker.ret)) {
+            ret_layout = try self.program.layouts.layoutOf(worker.ret);
+        } else {
+            ret_layout = try self.program.result.layouts.dynamicLayout();
+            self.result_local = try self.localOf(worker.ret, .result);
+        }
+
+        const body_start = try self.newHole();
+        self.hole = body_start;
+        for (lambda.args, worker.params, args.items[params_start..instance_start]) |pattern, param_ty, param| try self.bindIrrefutable(pattern, param, param_ty);
+        try self.tasks.append(self.allocator, .ret);
+        try self.destination_types.put(self.allocator, lambda.body, worker.ret);
+        try self.tail_exprs.put(self.allocator, lambda.body, {});
+        try self.tasks.append(self.allocator, .{ .expr = lambda.body });
+        try self.run();
+
+        self.tail_calls.loop_params = args.items;
+        self.tail_calls.instance_start = instance_start;
+        defer self.tail_calls.loop_params = &.{};
+        try self.finishProc(entry, body_start, args.items, ret_layout);
     }
 
     /// An adapter's body (`WorkerKey.adapter`): each argument adapted to the
@@ -2888,6 +3000,14 @@ pub const Builder = struct {
         const ret_layout = try self.program.layouts.layoutOf(worker.ret);
         const body_start = try self.newHole();
         self.hole = body_start;
+        // The reader may construct this value at a wider row than its
+        // checked expression. Freeze that representation, not the narrower
+        // value the initializer would build without the reader's destination.
+        if (self.bodies().rowCoercion(expr) != null) {
+            try self.coerced_destinations.put(self.allocator, expr, worker.ret);
+        } else {
+            try self.destination_types.put(self.allocator, expr, worker.ret);
+        }
         try self.tasks.append(self.allocator, .ret);
         try self.tasks.append(self.allocator, .{ .own_expr = expr });
         try self.run();
@@ -3313,6 +3433,7 @@ pub const Builder = struct {
                 }
             },
             .finish_local_call => |call| try self.finishLocalCall(call.closure, call.words, call.params, call.ret, call.arg_types, call.result),
+            .finish_direct_local_call => |call| try self.finishDirectLocalCall(call.callee, call.captures, call.inputs, call.params, call.arg_types, call.ret, call.result),
             .finish_hash => |hash| {
                 const hasher = self.popValue();
                 const value = self.popValue();
@@ -5430,6 +5551,7 @@ pub const Builder = struct {
     /// The immortal callable recipe of `closure`, adapted to its use's type.
     fn immortalRecipe(self: *Builder, closure: LocalProcClosure) Allocator.Error!Tables.RecipeId {
         if (closure.values.len != 0) invariant("an immortal function value captures a value, which methods never do");
+        if (self.program.worker(closure.callee).direct) invariant("a function value was built of a local procedure only direct calls reach");
         const scope = closure.static_scope orelse invariant("a static callable has no producer capture context");
         const arena = self.program.arena.allocator();
         const inputs = closure.inputs;
@@ -5484,9 +5606,9 @@ pub const Builder = struct {
         const per_call_worker = self.program.worker(scope.worker).*;
         const outer_count = declaring.scheme_vars.len;
         // Built from a declaration context, the procedure's types are read in
-        // its callee's scope, and its function value is a dictionary's
-        // method, an immortal composition. The evidence of its scheme names
-        // no dictionary of that scope (`frameDictionary`).
+        // its callee's scope, whose dictionaries the evidence of its scheme
+        // can name, and its function value is a dictionary's method, an
+        // immortal composition.
         const saved_env = self.env;
         const saved_foreign = self.foreign_scopes;
         const saved_scopes = self.alias_scopes.items.len;
@@ -5510,22 +5632,11 @@ pub const Builder = struct {
         }
         const vars = try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ declaring.scheme_vars, scheme.scheme_vars });
         defer self.allocator.free(vars);
-        const generic_bound = try self.allocator.alloc(TypeId, vars.len);
-        defer self.allocator.free(generic_bound);
-        for (generic_bound, 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
         const lambda_ty = self.bodies().exprType(lambda_expr);
-        const generic_fn = try self.program.converter().convert(self.module, lambda_ty, .{ .module = self.module, .vars = vars, .bound = generic_bound });
-        // The procedure's own variables take the types the use's
-        // instantiation gives them.
-        const related = try self.relateVariablesPartial(&.{.{ generic_fn, use_ty }}, vars.len);
+        const relation = try self.localSchemeRelation(scheme, lambda_expr, vars, scope.bound, use_ty);
+        const generic_fn = relation.generic_fn;
+        const related = relation.related;
         defer self.allocator.free(related);
-        // A variable the use's type does not reach, like the type of a
-        // numeral only the body's methods fix, takes the type those methods
-        // give it.
-        for (related[0..outer_count], scope.bound) |*slot, ty| {
-            if (slot.* == .none) slot.* = .some(ty);
-        }
-        try self.program.relateThroughRequirements(self.module, vars, scheme.params, related);
         scheme.per_call = false;
         const callee = try self.program.lambdaWorker(scope_worker, lambda_expr, per_call_worker.captures, per_call_worker.capture_types, generic_fn, scheme);
         const values = try arena.alloc(LocalId, if (static_captures) 0 else per_call_worker.captures.len);
@@ -5535,31 +5646,11 @@ pub const Builder = struct {
                 value.* = try self.localProcCaptureValue(capture, if (declared) |captured| captured[index] else null, scope.declaration);
             }
         }
-        const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
+        const own_types = try self.localSchemeOwnTypes(scheme, lambda_ty, related[outer_count..], subst, site);
         defer self.allocator.free(own_types);
-        const declaring_module = self.module;
-        const declaring_view = self.view;
-        for (own_types, related[outer_count..], scheme.scheme_vars, 0..) |*own_ty, ty, variable, index| {
-            own_ty.* = ty.get() orelse if (index < subst.len and (site orelse declaring_view).types().payload(subst[index]) != .err) blk: {
-                self.enterSiteView(site);
-                defer self.leaveSiteView(declaring_module, declaring_view);
-                break :blk try self.convert(subst[index]);
-            } else try self.program.converter().sealedScheme(self.module, variable);
-        }
-        try self.resolveOwnKinds(lambda_ty, scheme, own_types);
         const own_descs = try self.descWords(own_types);
-        const dicts = try arena.alloc(Word, scheme.dictionaries.len);
         const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
-        for (scheme.dictionaries, dicts) |param_index, *dict| {
-            if (evidence) |entries| {
-                if (param_index >= entries.len) invariant("a local procedure use's evidence does not cover its dictionaries");
-                self.enterSiteView(site);
-                defer self.leaveSiteView(declaring_module, declaring_view);
-                dict.* = try self.paramDictionary(entries, param_index, context);
-            } else {
-                dict.* = try self.derivedParamDictionary(param_index, context);
-            }
-        }
+        const dicts = try self.localSchemeDictionaries(scheme, context, evidence, site);
         // The procedure's own scheme's literal arguments, then the
         // declaring scope's.
         const literals = try arena.alloc(Word, scheme.literal_requirements.len);
@@ -5586,6 +5677,69 @@ pub const Builder = struct {
             .adapt = .{ .own_ty = procedure_ty, .use_ty = use_ty },
             .static_scope = if (static_captures) scope else null,
         };
+    }
+
+    /// The generic function type of lambda `lambda_expr`, whose
+    /// generalized-local scope is `scheme`, over the variables `vars` (the
+    /// declaring scope's, whose types are `outer_bound`, then the scope's
+    /// own), and what a use at function type `use_ty` relates each to. A
+    /// declaring variable the use's type does not reach, like the type of a
+    /// numeral only the body's methods fix, takes its declaring type, and
+    /// the scope's requirements relate what they determine. Caller frees
+    /// `related`.
+    fn localSchemeRelation(self: *Builder, scheme: lower.LocalScheme, lambda_expr: ExprId, vars: []const checked.CheckedTypeId, outer_bound: []const TypeId, use_ty: TypeId) Allocator.Error!struct { generic_fn: TypeId, related: []lower.Related } {
+        const generic_bound = try self.allocator.alloc(TypeId, vars.len);
+        defer self.allocator.free(generic_bound);
+        for (generic_bound, 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
+        const generic_fn = try self.program.converter().convert(self.module, self.bodies().exprType(lambda_expr), .{ .module = self.module, .vars = vars, .bound = generic_bound });
+        const related = try self.relateVariablesPartial(&.{.{ generic_fn, use_ty }}, vars.len);
+        errdefer self.allocator.free(related);
+        for (related[0..outer_bound.len], outer_bound) |*slot, ty| {
+            if (slot.* == .none) slot.* = .some(ty);
+        }
+        try self.program.relateThroughRequirements(self.module, vars, scheme.params, related);
+        return .{ .generic_fn = generic_fn, .related = related };
+    }
+
+    /// The types of a generalized-local scope's own variables at a use, from
+    /// what the use relates to them (`own_related`): where it relates
+    /// nothing, the use's checked substitution `subst` (read in `site`'s
+    /// view, when there is one), or the variable sealed. Caller frees.
+    fn localSchemeOwnTypes(self: *Builder, scheme: lower.LocalScheme, lambda_ty: checked.CheckedTypeId, own_related: []const lower.Related, subst: []const checked.CheckedTypeId, site: ?*const types.ModuleView) Allocator.Error![]TypeId {
+        const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
+        errdefer self.allocator.free(own_types);
+        const declaring_module = self.module;
+        const declaring_view = self.view;
+        for (own_types, own_related, scheme.scheme_vars, 0..) |*own_ty, ty, variable, index| {
+            own_ty.* = ty.get() orelse if (index < subst.len and (site orelse declaring_view).types().payload(subst[index]) != .err) blk: {
+                self.enterSiteView(site);
+                defer self.leaveSiteView(declaring_module, declaring_view);
+                break :blk try self.convert(subst[index]);
+            } else try self.program.converter().sealedScheme(self.module, variable);
+        }
+        try self.resolveOwnKinds(lambda_ty, scheme, own_types);
+        return own_types;
+    }
+
+    /// The dictionaries of a generalized-local scope at a use whose
+    /// requirements `context` reads at the use's types: from the use's
+    /// `evidence` (read in `site`'s view, when there is one), or, when
+    /// checking recorded none, resolved from those types.
+    fn localSchemeDictionaries(self: *Builder, scheme: lower.LocalScheme, context: ParamContext, evidence: ?[]const static_dispatch.CheckedEvidence, site: ?*const types.ModuleView) Allocator.Error![]Word {
+        const dicts = try self.program.arena.allocator().alloc(Word, scheme.dictionaries.len);
+        const declaring_module = self.module;
+        const declaring_view = self.view;
+        for (scheme.dictionaries, dicts) |param_index, *dict| {
+            if (evidence) |entries| {
+                if (param_index >= entries.len) invariant("a local procedure use's evidence does not cover its dictionaries");
+                self.enterSiteView(site);
+                defer self.leaveSiteView(declaring_module, declaring_view);
+                dict.* = try self.paramDictionary(entries, param_index, context);
+            } else {
+                dict.* = try self.derivedParamDictionary(param_index, context);
+            }
+        }
+        return dicts;
     }
 
     /// The function value of the local procedure a dispatch edge `node`
@@ -5649,29 +5803,350 @@ pub const Builder = struct {
     /// local procedure named in this body is then this body's own, even
     /// while it builds the dictionaries of a call of its own procedure.
     fn localProcDeclaration(self: *Builder, lambda_expr: ExprId) Allocator.Error!?*Declaration {
-        if (self.declaration == null) return null;
-        const owner = (try self.localProcOwner(lambda_expr)) orelse return null;
+        const innermost = self.declaration orelse return null;
+        const owner = (try self.localProcOwnerTemplate(lambda_expr)) orelse return null;
         var chain = self.worker_id;
-        while (chain != owner) {
+        while (!self.isTemplateWorker(chain, owner)) {
             switch (self.program.worker(chain).key) {
                 .lambda => |key| chain = key.outer,
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => return self.declarationOf(owner),
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => return try self.ownerDeclaration(innermost, owner),
             }
         }
         return null;
     }
 
-    /// The worker of the procedure template owning the site of the local
-    /// procedure whose lambda is `lambda_expr`, when it has one.
-    fn localProcOwner(self: *Builder, lambda_expr: ExprId) Allocator.Error!?WorkerId {
+    /// The declaration context of an instance of template `owner` for the
+    /// local procedure a slot of `innermost` reaches. A caller building the
+    /// dictionaries of a call of `owner` has that instance's context. A
+    /// captured codec requirement of `owner`'s scheme can also be handed on
+    /// to a scheme whose body instantiates `owner`, and from there outward,
+    /// so its codec is built by a caller of that scheme: the instance is
+    /// then the one reached by entering, from the slot being built, each
+    /// edge that handed the requirement on (`forwardedDeclaration`).
+    fn ownerDeclaration(self: *Builder, innermost: *Declaration, owner: TemplateKey) Allocator.Error!*Declaration {
+        var next: ?*Declaration = innermost;
+        while (next) |declaration| : (next = declaration.outer) {
+            if (declaration.scope == .procedure and self.isTemplateWorker(declaration.worker, owner)) return declaration;
+        }
+        var current = innermost;
+        while (current.scope != .procedure or !self.isTemplateWorker(current.worker, owner)) current = try self.forwardedDeclaration(current);
+        return current;
+    }
+
+    /// The template owning the site of the local procedure whose lambda is
+    /// `lambda_expr`, when it has one.
+    fn localProcOwnerTemplate(self: *Builder, lambda_expr: ExprId) Allocator.Error!?TemplateKey {
         const site_index = (try self.program.nestedProcSite(self.module, lambda_expr)) orelse
             invariant("a local procedure has no nested procedure site");
         const owner = switch (self.view.view.nested_proc_sites.sites.items()[site_index].owner) {
             .template => |ref| ref,
             .default_root => return null,
         };
-        const owner_module = self.program.moduleByKey(.{ .bytes = owner.artifact.bytes }).index;
-        return self.program.worker_ids.get(.{ .template = .{ .module = owner_module, .template = owner.template } });
+        return .{ .module = self.program.moduleByKey(.{ .bytes = owner.artifact.bytes }).index, .template = owner.template };
+    }
+
+    /// Whether worker `id` is template `template`'s.
+    fn isTemplateWorker(self: *Builder, id: WorkerId, template: TemplateKey) bool {
+        return switch (self.program.worker(id).key) {
+            .template => |key| key.module == template.module and key.template == template.template,
+            .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => false,
+        };
+    }
+
+    /// The declaration context of the instance the edge handing on the
+    /// captured requirement `declaration` is building a slot for
+    /// instantiates in its callee's body, the edge checking recorded
+    /// (`EvidenceParamRecord.forwarded`). The edge is read in the callee's
+    /// scope at the context's types, whose dictionaries are the context's,
+    /// so a dictionary the edge hands on from that scope is adapted to the
+    /// interface the instance's requirement names (design.md "Sealed Result
+    /// Rows"). The instance's own slot for the requirement is the slot being
+    /// built, which it reads as the reserved recipe.
+    fn forwardedDeclaration(self: *Builder, declaration: *Declaration) Allocator.Error!*Declaration {
+        const param = declaration.reading orelse invariant("a declaration context builds no slot for the local procedure reached from it");
+        for (declaration.forwards.items) |forward| {
+            if (forward.param == param) return forward.declaration;
+        }
+        const arena = self.program.arena.allocator();
+        switch (declaration.scope) {
+            .procedure => {},
+            // The alias chain's first scope hands the requirement on through
+            // each alias's forwarded lookup to the procedure it reaches.
+            .alias => |alias| {
+                const dicts = try arena.alloc(Word, declaration.dicts.len);
+                for (dicts, 0..) |*dict, slot| dict.* = try self.declarationDictionary(declaration, slot);
+                const saved_chain_frame = self.chain_frame;
+                defer self.chain_frame = saved_chain_frame;
+                self.chain_frame = false;
+                const instance = try self.aliasChainInstance(.{
+                    .callee = declaration.worker,
+                    .first = alias.first,
+                    .bound = declaration.bound,
+                    .dicts = dicts,
+                    .literals = alias.literals,
+                    .evidence = alias.evidence,
+                    .literal_source = alias.literal_source,
+                    .chain_frame = false,
+                    .call_fn = alias.call_fn,
+                });
+                return try self.recordForwardedDeclaration(declaration, param, .{ .callee = declaration.worker, .instance = instance, .param = try self.aliasChainParam(alias.first, param) });
+            },
+        }
+        const context = self.templateParamContext(declaration.worker, declaration.bound);
+        if (param >= context.params.len) invariant("a declaration context's slot names a parameter its scheme does not have");
+        const worker = self.program.worker(declaration.worker).*;
+        const words = try self.declarationWords(declaration);
+        const saved_module = self.module;
+        const saved_view = self.view;
+        const saved_env = self.env;
+        const saved_foreign = self.foreign_scopes;
+        const saved_scopes = self.alias_scopes.items.len;
+        const saved_chain_frame = self.chain_frame;
+        defer {
+            self.module = saved_module;
+            self.view = saved_view;
+            self.env = saved_env;
+            self.foreign_scopes = saved_foreign;
+            self.alias_scopes.shrinkRetainingCapacity(saved_scopes);
+            self.chain_frame = saved_chain_frame;
+        }
+        // The instance is composed in full, whatever frame reads it.
+        self.chain_frame = false;
+        self.module = context.module;
+        self.view = self.program.module(context.module);
+        try self.view.bodies().demandIndex();
+        self.env = context.env;
+        try self.alias_scopes.append(self.allocator, .{
+            .params = worker.dictionary_params,
+            .requirements = context,
+            .dicts = &.{},
+            .literals = words.literals,
+            .literal_requirements = if (worker.literal_scopes.len == 0) &.{} else worker.literal_scopes[0],
+            .declaration = declaration,
+            .saved_env = self.env,
+        });
+        self.foreign_scopes = saved_scopes;
+        // The requirement is handed on edge by edge, through the local
+        // procedures of the body it is handed on in, each of whose scopes is
+        // entered at the edge into it, up to the procedure the last edge
+        // instantiates.
+        var params = context.params;
+        var at = param;
+        var outer_vars: []const checked.CheckedTypeId = worker.scheme_vars;
+        var outer_bound: []const TypeId = declaration.bound;
+        const reached: ForwardingTarget = while (true) {
+            if (at >= params.len) invariant("a forwarded requirement names a parameter its scope does not have");
+            const requirement = params[at];
+            if (requirement.source != .scheme_requirement) invariant("a local procedure of another body was reached from a requirement that is no captured codec requirement");
+            switch (requirement.forwarded.edge) {
+                .none => invariant("a captured codec requirement handed on to another scheme recorded no edge"),
+                .use => |expr| {
+                    const use: ExprId = @fromBackingInt(@backingInt(expr));
+                    const resolved = self.bodies().resolvedRef(use) orelse invariant("a forwarding edge's use resolves to nothing");
+                    const evidence = self.view.view.static_dispatch_plans.siteEvidence(use) orelse invariant("a forwarding edge's use has no evidence");
+                    // The use's function type, as its parent reads it; the
+                    // destinations this body's lowering records are another body's.
+                    const use_ty = if (self.bodies().rowCoercion(use)) |wide| try self.convert(wide) else try self.exprType(use);
+                    switch (self.resolvedRef(resolved).ref) {
+                        inline .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |ref| switch (try self.procedureUseCallee(ref)) {
+                            .worker => |id| break .{ .callee = id, .instance = try self.callInstanceAt(id, self.siteSubstitution(use), evidence, use_ty, .{ .use = use }), .param = requirement.forwarded.callee_param },
+                            // The requirement reaches the procedure the
+                            // alias chain forwards to through each alias's
+                            // forwarded lookup.
+                            .alias => |alias| break .{
+                                .callee = alias.target,
+                                .instance = try self.aliasUseInstance(alias, self.siteSubstitution(use), evidence, use_ty, .{ .use = use }),
+                                .param = try self.aliasChainParam(self.callableEvalAliasStep(alias.module, alias.template), requirement.forwarded.callee_param),
+                            },
+                            .callable_eval => invariant("a forwarding edge's use names a computed callable, which has no scheme to hand a requirement on to"),
+                        },
+                        .local_proc => |local| {
+                            // A local alias's chain reaches a procedure, as a
+                            // top-level alias's does.
+                            if (local.is_alias) {
+                                const first = self.localAliasStep(self.module, local.expr, local.dispatch_scope);
+                                const target = try self.aliasChainTarget(first);
+                                break .{
+                                    .callee = target,
+                                    .instance = try self.aliasStepUseInstance(first, target, self.siteSubstitution(use), evidence, use_ty, .{ .use = use }),
+                                    .param = try self.aliasChainParam(first, requirement.forwarded.callee_param),
+                                };
+                            }
+                            const entered = try self.enterForwardingLocalScope(local, use, use_ty, evidence, outer_vars, outer_bound);
+                            params = entered.params;
+                            outer_vars = entered.vars;
+                            outer_bound = entered.bound;
+                            at = requirement.forwarded.callee_param;
+                        },
+                        .platform_required_proc, .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => invariant("a forwarding edge's use names no procedure"),
+                    }
+                },
+                .node => |node_id| {
+                    const table = self.view.view.static_dispatch_plans;
+                    const node = table.evidenceNode(node_id);
+                    const callee = try self.methodTargetWorker(node.target);
+                    switch (node.instantiation) {
+                        // The edge instantiated the scope of the alias the
+                        // method is bound to, whose chain reaches the target.
+                        .alias => break .{
+                            .callee = callee,
+                            .instance = try self.aliasTargetInstance(node, callee, .{ .node = node_id }),
+                            .param = try self.aliasChainParam(self.aliasTargetFirstStep(node), requirement.forwarded.callee_param),
+                        },
+                        .monomorphic, .callable, .derived_from_callable => {},
+                    }
+                    const nested = switch (node.nested) {
+                        .resolved => table.nestedEvidence(node),
+                        .from_callable, .through_alias => invariant("a forwarding dispatch edge's evidence is not resolved at the edge"),
+                    };
+                    const subst = table.site_substitutions.items()[node.subst.start..][0..node.subst.len];
+                    break .{ .callee = callee, .instance = try self.callInstanceAt(callee, subst, nested, try self.instantiationCallable(node.instantiation), .{ .node = node_id }), .param = requirement.forwarded.callee_param };
+                },
+            }
+        };
+        return try self.recordForwardedDeclaration(declaration, param, reached);
+    }
+
+    /// The declaration context of `reached`'s instance, entered from slot
+    /// `param` of `declaration`, recorded there for later reads.
+    fn recordForwardedDeclaration(self: *Builder, declaration: *Declaration, param: u32, reached: ForwardingTarget) Allocator.Error!*Declaration {
+        const arena = self.program.arena.allocator();
+        const callee = reached.callee;
+        const instance = reached.instance;
+        defer self.allocator.free(instance.hidden);
+        const target = self.program.worker(callee).*;
+        const count = target.dictionary_params.len;
+        if (std.mem.findScalar(u32, target.dictionary_params, reached.param) == null) invariant("a forwarding edge fills a parameter that is no dictionary of its callee");
+        const dicts = try arena.alloc(?Word, count);
+        for (dicts, instance.hidden[instance.bound.len..][0..count]) |*slot, word| slot.* = word;
+        const building = try arena.alloc(bool, count);
+        @memset(building, false);
+        const forwarded = try arena.create(Declaration);
+        forwarded.* = .{
+            .worker = callee,
+            .bound = instance.bound,
+            .words = .{
+                .descs = try arena.dupe(Word, instance.hidden[0..instance.bound.len]),
+                .literals = try arena.dupe(Word, instance.hidden[instance.bound.len + count ..]),
+            },
+            .dicts = dicts,
+            .building = building,
+            .source = .forwarded,
+            .outer = declaration,
+            .reading = reached.param,
+        };
+        try declaration.forwards.append(arena, .{ .param = param, .declaration = forwarded });
+        return forwarded;
+    }
+
+    /// The procedure the edges handing a captured requirement on reach, its
+    /// instance there, and its parameter the requirement fills.
+    const ForwardingTarget = struct { callee: WorkerId, instance: CallInstance, param: u32 };
+
+    /// Enter the scope of generalized local procedure `local` at its use
+    /// `use` (of function type `use_ty`, with `evidence` for the scope's
+    /// requirements) by a body whose variables `outer_vars` take
+    /// `outer_bound`: a frame holding the scope's dictionaries at its
+    /// requirements, read at the types the use gives the scope's variables.
+    /// Returns the scope's requirements, by parameter, and its variables
+    /// and their types after the body's.
+    fn enterForwardingLocalScope(self: *Builder, local: checked.LocalProcedureBinding, use: ExprId, use_ty: TypeId, evidence: []const static_dispatch.CheckedEvidence, outer_vars: []const checked.CheckedTypeId, outer_bound: []const TypeId) Allocator.Error!struct { params: []const static_dispatch.EvidenceParamRecord, vars: []const checked.CheckedTypeId, bound: []const TypeId } {
+        const arena = self.program.arena.allocator();
+        const lambda_expr = switch (self.bodies().exprData(local.expr)) {
+            .lambda => local.expr,
+            .closure => |closure| closure.lambda,
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+        };
+        const scope_id = (try self.program.localScope(self.module, lambda_expr)) orelse
+            invariant("a local procedure that hands a captured requirement on has no scope of its own");
+        const scheme = try self.localScheme(scope_id);
+        const vars = try std.mem.concat(arena, checked.CheckedTypeId, &.{ outer_vars, scheme.scheme_vars });
+        const relation = try self.localSchemeRelation(scheme, lambda_expr, vars, outer_bound, use_ty);
+        defer self.allocator.free(relation.related);
+        const own_types = try self.localSchemeOwnTypes(scheme, self.bodies().exprType(lambda_expr), relation.related[outer_bound.len..], self.siteSubstitution(use), null);
+        defer self.allocator.free(own_types);
+        const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
+        const dicts = try self.localSchemeDictionaries(scheme, context, evidence, null);
+        const literals = try arena.alloc(Word, scheme.literal_requirements.len);
+        try self.fillLiteralArgs(null, .{ .use = use }, literals);
+        try self.alias_scopes.append(self.allocator, .{
+            .params = scheme.dictionaries,
+            .requirements = context,
+            .dicts = dicts,
+            .literals = literals,
+            .literal_requirements = scheme.literal_requirements,
+            .saved_env = self.env,
+        });
+        self.env = context.env;
+        return .{ .params = context.params, .vars = vars, .bound = try std.mem.concat(arena, TypeId, &.{ outer_bound, own_types }) };
+    }
+
+    /// The parameter of the procedure an alias chain reaches that the chain
+    /// fills with parameter `param` of the scope of its first alias, `first`:
+    /// each alias's forwarded lookup is an edge whose evidence fills the next
+    /// scheme's parameter with the alias's own, evidence naming the alias's
+    /// scope at depth zero.
+    fn aliasChainParam(self: *Builder, first: AliasStep, param: u32) Allocator.Error!u32 {
+        var alias_step = first;
+        var at = param;
+        while (true) {
+            if (at >= alias_step.params.len) invariant("an alias chain hands on a parameter its alias's scope does not have");
+            const evidence = self.program.module(alias_step.module).view.static_dispatch_plans.siteEvidence(alias_step.lookup) orelse
+                invariant("an alias's forwarded lookup has no evidence");
+            var filled: ?u32 = null;
+            for (evidence, 0..) |entry, index| switch (entry.resolution) {
+                .constraint => |constraint| if (constraint.index.depth == 0 and constraint.index.index == at) {
+                    if (filled != null) invariant("an alias's forwarded lookup fills two parameters with one requirement");
+                    filled = @intCast(index);
+                },
+                .direct, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
+            };
+            at = filled orelse invariant("an alias's forwarded lookup does not hand its captured requirement on");
+            alias_step = (try self.nextAliasStep(alias_step)) orelse return at;
+        }
+    }
+
+    /// The procedure the alias chain whose first step is `first` reaches.
+    fn aliasChainTarget(self: *Builder, first: AliasStep) Allocator.Error!WorkerId {
+        var alias_step = first;
+        while (try self.nextAliasStep(alias_step)) |next| alias_step = next;
+        const view = self.program.module(alias_step.module);
+        const ref_id = view.view.resolved_value_refs.lookupIdByExpr(alias_step.lookup) orelse
+            invariant("a forwarded procedure alias lookup has no resolved reference");
+        return switch (view.view.resolved_value_refs.records.items()[@backingInt(ref_id)].ref) {
+            inline .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |ref| switch (try self.procedureUseCallee(ref)) {
+                .worker => |id| id,
+                .alias, .callable_eval => invariant("an alias chain's last lookup names no procedure template"),
+            },
+            .platform_required_proc, .local_proc, .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => invariant("an alias chain's last lookup names no procedure template"),
+        };
+    }
+
+    /// The alias the forwarded lookup of alias step `alias_step` names, or null
+    /// when it names the procedure the chain reaches.
+    fn nextAliasStep(self: *Builder, alias_step: AliasStep) Allocator.Error!?AliasStep {
+        const view = self.program.module(alias_step.module);
+        const ref_id = view.view.resolved_value_refs.lookupIdByExpr(alias_step.lookup) orelse
+            invariant("a forwarded procedure alias lookup has no resolved reference");
+        return switch (view.view.resolved_value_refs.records.items()[@backingInt(ref_id)].ref) {
+            .local_proc => |local| if (local.is_alias)
+                self.localAliasStep(alias_step.module, local.expr, local.dispatch_scope)
+            else
+                invariant("an alias chain reaches a local procedure, which a forwarding alias never does"),
+            inline .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |ref| blk: {
+                const resolved = self.program.procedureBinding(ref.binding);
+                break :blk switch (resolved.body) {
+                    .callable_eval_template => |template_id| if (self.program.module(resolved.module).view.callable_eval_templates.templates[@backingInt(template_id)].forwarded_lookup != .none)
+                        self.callableEvalAliasStep(resolved.module, template_id)
+                    else
+                        invariant("an alias chain reaches a computed callable, which a forwarding alias never does"),
+                    .direct_template => null,
+                    .checked_error => invariant("an alias chain reaches a rejected binding"),
+                };
+            },
+            .platform_required_proc => null,
+            .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => invariant("a procedure alias forwards only to a procedure, as checking requires"),
+        };
     }
 
     /// The worker of local procedure `lambda_expr` (of closure expression
@@ -5718,7 +6193,7 @@ pub const Builder = struct {
                     // The chain's procedure declares it but never lowered
                     // its declaration here: the chain is a stored closure
                     // of that procedure, whose body ran at compile time.
-                    .template => if (try self.localProcOwner(lambda_expr) == scope_worker)
+                    .template => if (if (try self.localProcOwnerTemplate(lambda_expr)) |owner| self.isTemplateWorker(scope_worker, owner) else false)
                         break try self.declaredLambdaWorker(scope_worker, lambda_expr, closure_expr.ty, captures)
                     else
                         invariant("a local procedure's function value is built outside its declaring body with no declaration context"),
@@ -5896,6 +6371,7 @@ pub const Builder = struct {
         }
         if (local.is_alias) invariant("an alias is used only after its declaration binds it");
         const closure = try self.localProcClosure(local);
+        if (self.program.worker(closure.callee).direct) invariant("a function value was built of a local procedure only direct calls reach");
         // A procedure whose calls pass its table captures none.
         const inputs = closure.inputs;
         // A value built from entry locals only is built once, in the entry
@@ -5981,9 +6457,12 @@ pub const Builder = struct {
     /// A call of a generalized local procedure: its function value, called
     /// with an argument record of the call's instantiation of the
     /// procedure's own scheme (descriptors, then dictionaries) followed by
-    /// the explicit arguments.
+    /// the explicit arguments. A procedure only direct calls reach has no
+    /// function value: its worker is called with the values it captures,
+    /// the explicit arguments, and its table at that instantiation.
     pub fn lowerGeneralizedLocalCall(self: *Builder, expr_id: ExprId, call: @FieldType(bodies_mod.ExprData, "call"), local: checked.LocalProcedureBinding, scheme: lower.LocalScheme) Allocator.Error!void {
-        const closure = try self.localProcValue(local);
+        const direct = try self.program.directCallsOnly(self.module, local.expr);
+        const closure: ?LocalId = if (direct) null else try self.localProcValue(local);
         const evidence = self.view.view.static_dispatch_plans.siteEvidence(call.func) orelse &.{};
         // The procedure's own variables take the types the call's
         // instantiation of its type gives them; the enclosing scope's stay as
@@ -6049,8 +6528,20 @@ pub const Builder = struct {
         const target = self.program.worker(declared.callee).*;
         if (target.own_descs != own_types.len or target.own_dicts != scheme.dictionaries.len or target.own_literals != scheme.literal_requirements.len) invariant("a local procedure call's own words differ from its worker's");
         const table_inputs = try self.lambdaInputs(declared.callee, declared.scope_table, words);
+        if (direct) {
+            try self.push(.{ .finish_direct_local_call = .{
+                .callee = declared.callee,
+                .captures = declared.values,
+                .inputs = try self.program.arena.allocator().dupe(Word, table_inputs),
+                .params = try self.program.arena.allocator().dupe(TypeId, params),
+                .arg_types = arg_types,
+                .ret = ret,
+                .result = try self.exprType(expr_id),
+            } });
+            return try self.pushExprsReversed(call.args);
+        }
         try self.push(.{ .finish_local_call = .{
-            .closure = closure,
+            .closure = closure.?,
             .words = try self.program.arena.allocator().dupe(Word, &.{try self.tableWord(declared.callee, table_inputs)}),
             .params = try self.program.arena.allocator().dupe(TypeId, params),
             .ret = ret,
@@ -6080,6 +6571,73 @@ pub const Builder = struct {
         try self.emitDyn(record, .{ .record = .{ .desc = desc, .fields = try self.store.addLocalSpan(fields) } });
         const target = try self.callErased(closure, record, ret);
         try self.pushValue(try self.adaptValue(target, ret, result_ty));
+    }
+
+    /// A call of a local procedure only direct calls reach whose scheme is
+    /// not its own (`NestedProcSite.direct_calls_only`): its worker called
+    /// with the values it captures, the call's arguments at the call's
+    /// function type, and its table, whose inputs are the declaring worker's
+    /// table, as its function value would have captured them.
+    fn lowerDirectLocalCall(self: *Builder, expr_id: ExprId, call: @FieldType(bodies_mod.ExprData, "call"), local: checked.LocalProcedureBinding) Allocator.Error!void {
+        const closure = try self.localProcClosure(local);
+        const function = switch (self.program.store.get(try self.valueType(call.func))) {
+            .function => |function| function,
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a called value's type is not a function type"),
+        };
+        const params = try self.program.arena.allocator().dupe(TypeId, self.program.store.span(function.args));
+        if (params.len != call.args.len) invariant("a local procedure call's arity differs from its type");
+        try self.push(.{ .finish_direct_local_call = .{
+            .callee = closure.callee,
+            .captures = closure.values,
+            .inputs = closure.inputs,
+            .params = params,
+            .arg_types = &.{},
+            .ret = function.ret,
+            .result = try self.exprType(expr_id),
+        } });
+        try self.pushExprsReversed(call.args);
+    }
+
+    /// Pop the arguments of a call of a local procedure only direct calls
+    /// reach and call its worker `callee`: the values it captures, then the
+    /// arguments, adapted from `arg_types` to the procedure's `params` when
+    /// the call gives them (design.md "Field Kinds"), then its table at
+    /// `inputs`. A call from the procedure's own body at its own inputs
+    /// passes the table the body received, so a self tail call loops.
+    pub fn finishDirectLocalCall(self: *Builder, callee: WorkerId, captures: []const LocalId, inputs: []const Word, params: []const TypeId, arg_types: []const TypeId, ret: TypeId, result_ty: TypeId) Allocator.Error!void {
+        const args = try self.popValues(@intCast(params.len));
+        defer self.allocator.free(args);
+        if (arg_types.len != 0) {
+            for (args, arg_types, params) |*arg, arg_ty, param_ty| arg.* = try self.adaptValue(arg.*, arg_ty, param_ty);
+        }
+        const table: ?LocalId = if (self.isOwnTable(callee, inputs)) self.table_local else try self.tableLocal(callee, inputs);
+        const all = try self.allocator.alloc(LocalId, captures.len + args.len + @intFromBool(table != null));
+        defer self.allocator.free(all);
+        @memcpy(all[0..captures.len], captures);
+        @memcpy(all[captures.len..][0..args.len], args);
+        if (table) |local| all[all.len - 1] = local;
+        const target = try self.localOf(ret, .frame);
+        try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(callee).proc, .args = try self.store.addLocalSpan(all), .next = undefined } });
+        try self.pushValue(try self.adaptValue(target, ret, result_ty));
+    }
+
+    /// Whether the table of worker `callee` at `inputs` is this worker's own
+    /// table: `callee` is this worker, and each input is the same input of
+    /// this worker's table.
+    fn isOwnTable(self: *Builder, callee: WorkerId, inputs: []const Word) bool {
+        if (callee != self.worker_id or self.table_local == null) return false;
+        if (inputs.len != self.program.inputCount(callee)) return false;
+        for (inputs, 0..) |word, index| {
+            const named = switch (word) {
+                .recipe => |named| named,
+                .static => return false,
+            };
+            switch (self.recipes.get(self.recipes.resolve(named))) {
+                .input => |input| if (input != index) return false,
+                .inherited, .scope_table, .desc, .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => return false,
+            }
+        }
+        return true;
     }
 
     /// A procedure used as a function value at function type `use_ty`: an
@@ -6628,6 +7186,7 @@ pub const Builder = struct {
                     const scheme = try self.localScheme(scope_id);
                     if (!scheme.isEmpty()) return try self.lowerGeneralizedLocalCall(expr_id, call, local, scheme);
                 }
+                if (try self.program.directCallsOnly(self.module, local.expr)) return try self.lowerDirectLocalCall(expr_id, call, local);
                 return try self.lowerValueCall(expr_id, call);
             },
             .local_param, .local_value, .pattern_binder, .local_mutable_version, .platform_required_const, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_checked_error => return try self.lowerValueCall(expr_id, call),
@@ -6787,7 +7346,13 @@ pub const Builder = struct {
         const saved_declaration = self.declaration;
         self.declaration = declaration;
         defer self.declaration = saved_declaration;
-        const param_index = self.program.worker(declaration.worker).dictionary_params[slot];
+        const param_index: u32 = switch (declaration.scope) {
+            .procedure => self.program.worker(declaration.worker).dictionary_params[slot],
+            .alias => @intCast(slot),
+        };
+        const saved_reading = declaration.reading;
+        declaration.reading = param_index;
+        defer declaration.reading = saved_reading;
         const dictionary = switch (declaration.source) {
             .call => |call| blk: {
                 if (param_index >= call.evidence.len) invariant("a call's evidence does not cover its target's dictionaries");
@@ -6811,6 +7376,7 @@ pub const Builder = struct {
             },
             .frame => |frame| try self.frameDictionary(frame.position, param_index),
             .restored => invariant("a restored declaration context's dictionary is neither restored nor being composed"),
+            .forwarded => invariant("a forwarded declaration context's dictionary was not composed when its edge was entered"),
         };
         self.completeDeclarationSlot(declaration, slot, dictionary);
         return dictionary;
@@ -6832,7 +7398,7 @@ pub const Builder = struct {
         if (declaration.words) |words| return words;
         const frame = switch (declaration.source) {
             .frame => |frame| frame,
-            .call, .restored => invariant("a call's declaration context has no descriptors or literal arguments"),
+            .call, .restored, .forwarded => invariant("a call's declaration context has no descriptors or literal arguments"),
         };
         const arena = self.program.arena.allocator();
         const descs = try arena.alloc(Word, declaration.bound.len);
@@ -6843,16 +7409,6 @@ pub const Builder = struct {
         return declaration.words.?;
     }
 
-    /// The innermost declaration context of the call instances being built
-    /// whose callee is `worker`.
-    fn declarationOf(self: *const Builder, worker: WorkerId) ?*Declaration {
-        var next = self.declaration;
-        while (next) |declaration| : (next = declaration.outer) {
-            if (declaration.worker == worker) return declaration;
-        }
-        return null;
-    }
-
     /// The declaration context of the literal chain frame whose
     /// dictionaries are `composed`, when one is being built.
     fn frameDeclaration(self: *const Builder, composed: []?Word) ?*Declaration {
@@ -6860,7 +7416,7 @@ pub const Builder = struct {
         while (next) |declaration| : (next = declaration.outer) {
             switch (declaration.source) {
                 .frame => |frame| if (frame.composed == composed.ptr) return declaration,
-                .call, .restored => {},
+                .call, .restored, .forwarded => {},
             }
         }
         return null;
@@ -7351,11 +7907,7 @@ pub const Builder = struct {
         const alias_module = self.program.moduleByKey(alias.module).index;
         const chain_frame = self.chain_frame;
         self.chain_frame = false;
-        const first: AliasStep = switch (alias.binding) {
-            .top_level => |pattern| self.callableEvalAliasStep(alias_module, self.program.callable_eval_by_pattern.get(.{ .module = alias_module, .pattern = pattern }) orelse
-                invariant("a method's alias binding has no callable-eval template")),
-            .local => |local| self.localAliasStep(alias_module, local.lookup, local.dispatch_scope),
-        };
+        const first = self.aliasTargetFirstStep(node);
         // The edge's instantiation of the first alias's scope, in this body.
         const node_subst = table.site_substitutions.items()[node.subst.start..][0..node.subst.len];
         if (node_subst.len != first.vars.len) invariant("an alias edge's substitution differs from its alias's scope");
@@ -7371,17 +7923,30 @@ pub const Builder = struct {
             try self.fillLiteralArgs(null, edge, literals);
             break :blk .{ .edge = literals };
         } else .derived;
+        const call_fn = try self.convert(node.instantiation.alias);
         return try self.aliasChainInstance(.{
             .callee = callee,
             .first = first,
             .bound = bound,
-            .dicts = if (chain_frame) &.{} else try self.scopeDictionaries(first, bound, evidence),
+            .dicts = if (chain_frame) &.{} else try self.aliasUseDictionaries(callee, bound, .{ .first = first, .evidence = evidence, .literals = &.{}, .literal_source = literal_source, .call_fn = call_fn }),
             .literals = &.{},
             .evidence = evidence,
             .literal_source = literal_source,
             .chain_frame = chain_frame,
-            .call_fn = try self.convert(node.instantiation.alias),
+            .call_fn = call_fn,
         });
+    }
+
+    /// The first step of the alias chain of the alias the target of dispatch
+    /// edge `node` is bound to.
+    fn aliasTargetFirstStep(self: *Builder, node: static_dispatch.EvidenceNode) AliasStep {
+        const alias = node.target.alias orelse invariant("an alias-instantiated target has no alias binding");
+        const alias_module = self.program.moduleByKey(alias.module).index;
+        return switch (alias.binding) {
+            .top_level => |pattern| self.callableEvalAliasStep(alias_module, self.program.callable_eval_by_pattern.get(.{ .module = alias_module, .pattern = pattern }) orelse
+                invariant("a method's alias binding has no callable-eval template")),
+            .local => |local| self.localAliasStep(alias_module, local.lookup, local.dispatch_scope),
+        };
     }
 
     /// The instantiation of the procedure a use reaches through exact
@@ -7391,16 +7956,28 @@ pub const Builder = struct {
     /// `edge` supplies its literal arguments (`.literal` where checking
     /// recorded none).
     pub fn aliasUseInstance(self: *Builder, alias: AliasCallee, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence, call_fn: TypeId, edge: checked.LiteralEdge) Allocator.Error!CallInstance {
-        const first = self.callableEvalAliasStep(alias.module, alias.template);
+        return try self.aliasStepUseInstance(self.callableEvalAliasStep(alias.module, alias.template), alias.target, subst, evidence, call_fn, edge);
+    }
+
+    /// `aliasUseInstance` for the alias chain whose first step is `first`,
+    /// reaching procedure `target`.
+    fn aliasStepUseInstance(self: *Builder, first: AliasStep, target: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence, call_fn: TypeId, edge: checked.LiteralEdge) Allocator.Error!CallInstance {
         const bound = try self.aliasScopeBound(first, subst, call_fn);
+        const alias: Declaration.AliasUse = .{
+            .first = first,
+            .evidence = evidence,
+            .literals = try self.aliasLiteralArgs(first, edge),
+            .literal_source = if (edge == .literal) .derived else .scopes,
+            .call_fn = call_fn,
+        };
         return try self.aliasChainInstance(.{
-            .callee = alias.target,
+            .callee = target,
             .first = first,
             .bound = bound,
-            .dicts = try self.scopeDictionaries(first, bound, evidence),
-            .literals = try self.aliasLiteralArgs(first, edge),
+            .dicts = try self.aliasUseDictionaries(target, bound, alias),
+            .literals = alias.literals,
             .evidence = evidence,
-            .literal_source = if (edge == .literal) .derived else .scopes,
+            .literal_source = alias.literal_source,
             .chain_frame = false,
             .call_fn = call_fn,
         });
@@ -7660,6 +8237,41 @@ pub const Builder = struct {
 
     /// The dictionaries of the scope of alias `alias_step` whose variables
     /// take `bound`, from `evidence` (one entry per parameter).
+    /// The dictionaries of the scope of the first alias of a chain a use
+    /// enters (`alias`), whose variables take `bound`, reaching procedure
+    /// `target`: built in a declaration context of that scope, since a
+    /// captured codec requirement the chain hands on to `target` has a codec
+    /// that calls `target`'s local procedures, built from the instance the
+    /// chain reaches (`forwardedDeclaration`).
+    fn aliasUseDictionaries(self: *Builder, target: WorkerId, bound: []const TypeId, alias: Declaration.AliasUse) Allocator.Error![]const Word {
+        const params = alias.first.params;
+        if (alias.evidence.len != params.len) invariant("an alias scope's evidence differs from its requirements");
+        const words = try self.program.arena.allocator().alloc(Word, params.len);
+        if (params.len == 0) return words;
+        const dicts = try self.allocator.alloc(?Word, params.len);
+        defer self.allocator.free(dicts);
+        @memset(dicts, null);
+        const building = try self.allocator.alloc(bool, params.len);
+        defer self.allocator.free(building);
+        @memset(building, false);
+        var declaration: Declaration = .{
+            .worker = target,
+            .bound = bound,
+            .words = .{ .descs = &.{}, .literals = alias.literals },
+            .dicts = dicts,
+            .building = building,
+            .source = .{ .call = .{
+                .evidence = alias.evidence,
+                .context = .{ .module = alias.first.module, .params = params, .env = .{ .module = alias.first.module, .vars = alias.first.vars, .bound = bound } },
+                .owner = null,
+            } },
+            .outer = self.declaration,
+            .scope = .{ .alias = alias },
+        };
+        for (words, 0..) |*word, slot| word.* = try self.declarationDictionary(&declaration, slot);
+        return words;
+    }
+
     fn scopeDictionaries(self: *Builder, alias_step: AliasStep, bound: []const TypeId, evidence: []const static_dispatch.CheckedEvidence) Allocator.Error![]const Word {
         if (evidence.len != alias_step.params.len) invariant("an alias scope's evidence differs from its requirements");
         const dicts = try self.program.arena.allocator().alloc(Word, alias_step.params.len);
@@ -7930,11 +8542,10 @@ pub const Builder = struct {
     /// The callable type the requirement of evidence parameter `index` of
     /// the scopes in reach names, at the types its scope is read at: what
     /// its dictionary's method is called at. An entered scope (a scheme
-    /// alias's, an exact procedure alias's, a literal chain frame's) reads
-    /// its requirements at the types it was entered with
-    /// (`AliasScope.requirements`); the worker's own scopes read theirs at
-    /// this body's types. No evidence names a declaration context's scope
-    /// (`frameDictionary`).
+    /// alias's, an exact procedure alias's, a literal chain frame's, a
+    /// declaration context's) reads its requirements at the types it was
+    /// entered with (`AliasScope.requirements`); the worker's own scopes
+    /// read theirs at this body's types.
     pub fn scopeInterface(self: *Builder, index: static_dispatch.EvidenceChainIndex) Allocator.Error!TypeId {
         if (self.enteredScope(index.depth)) |position| {
             const requirements = self.alias_scopes.items[position].requirements;
@@ -8018,17 +8629,9 @@ pub const Builder = struct {
     fn frameDictionaryAfterReads(self: *Builder, demand: FrameParam, demands: *std.ArrayList(FrameParam)) Allocator.Error!?Word {
         const scope = self.alias_scopes.items[demand.position];
         const slot = std.mem.findScalar(u32, scope.params, demand.param) orelse invariant("evidence named a dictionary parameter its alias scope does not have");
-        // A declaration context's dictionaries are the hidden words of the
-        // procedures built from it (`localProcWorker`), and no evidence read
-        // while its frame is entered names one. Only a captured codec
-        // requirement, whose relation names a type the callee's body
-        // declares, selects the callee's local procedures from outside its
-        // body, so that evidence is nested under a generated codec
-        // contract's call, and checked-module output resolves a contract
-        // call's nested evidence with no evidence chain in scope (design.md
-        // "Sealed Result Rows"): to a target, a derivation, or an
-        // unreachable value, never to a scope's dictionary.
-        if (scope.declaration != null) invariant("evidence named a declaration context's dictionary, which a generated codec contract's evidence never does");
+        // A declaration context's frame holds the context's dictionaries,
+        // a slot still being built standing for its reserved recipe.
+        if (scope.declaration) |declaration| return try self.declarationDictionary(declaration, slot);
         const deferred = scope.deferred_dicts orelse return scope.dicts[slot];
         if (deferred.composed[slot]) |composed| return composed;
         const unread = demands.items.len;
@@ -8778,16 +9381,18 @@ pub const Builder = struct {
         return target;
     }
 
-    /// A function value: an erased callable of the lambda's worker, whose
-    /// captures hold the captured values and this worker's descriptors.
-    pub fn lowerClosure(self: *Builder, expr_id: ExprId, lambda_expr: ExprId, captures: []const checked.CheckedCapture) Allocator.Error!void {
-        // rejectCapturingMethods removes methods that transitively capture
-        // invocation-specific values before the registry records a target.
-        // Only that checked proof authorizes immutable capture edges here.
-        if (try self.program.localMethodBinding(self.module, lambda_expr)) |method| {
-            const closure = try self.localProcClosureWithCaptures(method, true);
-            return try self.pushValue(try self.materialize(.{ .recipe = try self.immortalRecipe(closure) }));
-        }
+    /// The worker of a lambda or closure expression `expr_id` (whose lambda
+    /// is `lambda_expr`, capturing `captures`) built in this body, the
+    /// values it captures here, which the expression's declaration records
+    /// (`declared_captures`), and their types (caller frees).
+    const ClosureWorker = struct {
+        callee: WorkerId,
+        values: []const LocalId,
+        capture_types: []TypeId,
+        generalized: ?lower.LocalScheme,
+    };
+
+    fn closureWorker(self: *Builder, expr_id: ExprId, lambda_expr: ExprId, captures: []const checked.CheckedCapture) Allocator.Error!ClosureWorker {
         // A generalized local procedure's type is converted with its own
         // scheme's variables in scope.
         const own: ?lower.LocalScheme = if (try self.program.localScope(self.module, lambda_expr)) |scope_id|
@@ -8805,15 +9410,54 @@ pub const Builder = struct {
         } else try self.exprType(expr_id);
         const generalized: ?lower.LocalScheme = if (own) |scheme| (if (scheme.isEmpty()) null else scheme) else null;
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
-        defer self.allocator.free(capture_types);
-        const values = try self.allocator.alloc(LocalId, captures.len);
-        defer self.allocator.free(values);
-        for (captures, capture_types, 0..) |capture, *capture_ty, index| {
+        errdefer self.allocator.free(capture_types);
+        const values = try self.program.arena.allocator().alloc(LocalId, captures.len);
+        for (captures, capture_types, values) |capture, *capture_ty, *value| {
             capture_ty.* = try self.capturedType(capture.pattern, try self.patternType(capture.pattern));
-            values[index] = self.capturedValue(capture.pattern) orelse invariant("a closure captured a binder this body never bound");
+            value.* = self.capturedValue(capture.pattern) orelse invariant("a closure captured a binder this body never bound");
         }
-        try self.declared_captures.put(self.allocator, lambda_expr, try self.program.arena.allocator().dupe(LocalId, values[0..captures.len]));
-        const callee = try self.program.lambdaWorker(self.worker_id, lambda_expr, captures, capture_types, fn_ty, generalized);
+        try self.declared_captures.put(self.allocator, lambda_expr, values);
+        return .{
+            .callee = try self.program.lambdaWorker(self.worker_id, lambda_expr, captures, capture_types, fn_ty, generalized),
+            .values = values,
+            .capture_types = capture_types,
+            .generalized = generalized,
+        };
+    }
+
+    /// The declaration of a local procedure only direct calls reach, when
+    /// `expr_id`, a declaration's value, is one (`NestedProcSite.direct_calls_only`):
+    /// it binds no value, and only creates the procedure's worker and
+    /// records the values it captures, which each call in this body passes.
+    fn declareDirectLocalProc(self: *Builder, expr_id: ExprId) Allocator.Error!bool {
+        const lambda_expr = switch (self.bodies().exprData(expr_id)) {
+            .lambda => expr_id,
+            .closure => |closure| closure.lambda,
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return false,
+        };
+        if (!try self.program.directCallsOnly(self.module, expr_id)) return false;
+        const made = try self.closureWorker(expr_id, lambda_expr, try self.program.siteCaptures(self.module, expr_id));
+        self.allocator.free(made.capture_types);
+        return true;
+    }
+
+    /// A function value: an erased callable of the lambda's worker, whose
+    /// captures hold the captured values and this worker's descriptors.
+    pub fn lowerClosure(self: *Builder, expr_id: ExprId, lambda_expr: ExprId, captures: []const checked.CheckedCapture) Allocator.Error!void {
+        // rejectCapturingMethods removes methods that transitively capture
+        // invocation-specific values before the registry records a target.
+        // Only that checked proof authorizes immutable capture edges here.
+        if (try self.program.localMethodBinding(self.module, lambda_expr)) |method| {
+            const closure = try self.localProcClosureWithCaptures(method, true);
+            return try self.pushValue(try self.materialize(.{ .recipe = try self.immortalRecipe(closure) }));
+        }
+        const made = try self.closureWorker(expr_id, lambda_expr, captures);
+        defer self.allocator.free(made.capture_types);
+        const callee = made.callee;
+        if (self.program.worker(callee).direct) invariant("a function value was built of a local procedure only direct calls reach");
+        const capture_types = made.capture_types;
+        const values = made.values;
+        const generalized = made.generalized;
         // The function value captures the lambda's table, whose inputs are
         // this worker's table, through which it reads this scope, then the
         // inputs its own scope adds. A generalized lambda that is not a
@@ -10102,6 +10746,8 @@ pub const Builder = struct {
                 // derivation) has no value, and every use of it resolves to
                 // what it requests.
                 if (self.bodies().exprData(decl.expr) == .anno_only) return;
+                // A local procedure only direct calls reach binds no value.
+                if (try self.declareDirectLocalProc(decl.expr)) return;
                 // A recursive value's binders get slots before its value is
                 // built, which the callables in the value capture, and the
                 // slots are filled once the value is bound.

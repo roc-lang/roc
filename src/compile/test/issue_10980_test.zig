@@ -50,7 +50,7 @@ test "issue 10980: handing a closure to the host emits no boxy dictionary thunks
     // wasm binary.
     try harness.runAppPathLoweredInspection(
         "test/postcheck/provided_callable_boundary/app.roc",
-        .{ .proc_debug_names = true },
+        .{},
         expectNoBoxyDictThunks,
     );
 }

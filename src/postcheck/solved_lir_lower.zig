@@ -134,8 +134,6 @@ pub const Options = struct {
     /// Compile-time evaluation must use deterministic seed zero. Runtime
     /// lowering retains the process-randomized seed operation.
     dict_seed_mode: DictSeedMode = .runtime,
-    /// Preserve source-level procedure names in LIR for runtime diagnostics.
-    proc_debug_names: bool = false,
     /// Record each platform entrypoint's host boundary digest.
     host_boundary_digests: bool = false,
     /// Build ConstStore materialization plans for requested layouts.
@@ -822,7 +820,6 @@ const Lowerer = struct {
     dict_seed_mode: DictSeedMode,
     completed_scalar_values: ?*const ComptimeScalarValues.CompletedScalarValues,
     completed_erased_members: ?*const CompletedErasedMembers,
-    proc_debug_names: bool,
     host_boundary_digests: bool,
     site_code_keys: bool,
     owned_proc_signatures: bool,
@@ -1237,7 +1234,6 @@ const Lowerer = struct {
             .dict_seed_mode = options.dict_seed_mode,
             .completed_scalar_values = options.completed_scalar_values,
             .completed_erased_members = options.completed_erased_members,
-            .proc_debug_names = options.proc_debug_names,
             .host_boundary_digests = options.host_boundary_digests,
             .site_code_keys = options.site_code_keys,
             .owned_proc_signatures = options.owned_proc_signatures,
@@ -3120,10 +3116,8 @@ const Lowerer = struct {
             .code_key = code_key,
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         }, proc_loc);
-        if (self.proc_debug_names) {
-            if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
-                try self.result.store.setProcDebugName(proc, self.solved.lifted.names.exportNameText(name));
-            }
+        if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
+            try self.result.store.setProcDebugName(proc, self.solved.lifted.names.exportNameText(name));
         }
         try self.procs_by_identity.putNoClobber(identity, fn_id);
         entry.proc = .some(proc);

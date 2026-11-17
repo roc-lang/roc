@@ -18,7 +18,7 @@ pub const panic = std.debug.no_panic;
 /// kernel needs, so they are a promise about every target that links it.
 const kernel = utf8.Kernel.forCpu(builtin.cpu);
 
-fn validate(bytes: [*]const u8, len: usize, index: *usize) callconv(.c) u8 {
+fn validate(bytes: [*]const u8, len: usize, index: *usize) callconv(.c) u32 {
     return utf8.validateAbi(kernel, bytes, len, index);
 }
 

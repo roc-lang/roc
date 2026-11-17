@@ -153,7 +153,6 @@ const LowerModuleOptions = struct {
     specialization_strategy: base.SpecializationStrategy = .lss,
     checked_module_state: lir.CheckedPipeline.CheckedModuleState = .complete,
     inline_expects: lir.CheckedPipeline.InlineExpectMode = .run,
-    proc_debug_names: bool = false,
     tag_reachability: bool = false,
     promote_loop_appends: bool = true,
     prove_ranges: bool = false,
@@ -212,7 +211,6 @@ fn lowerModuleWithOptions(
             .checked_module_state = options.checked_module_state,
             .inline_mode = inline_mode,
             .inline_expects = options.inline_expects,
-            .proc_debug_names = options.proc_debug_names,
             .promote_loop_appends = .{ .value = options.promote_loop_appends },
             .prove_ranges = options.prove_ranges,
             .tag_reachability = options.tag_reachability,
@@ -682,9 +680,8 @@ fn lowerModuleWithProcDebugNames(
     allocator: Allocator,
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
-    proc_debug_names: bool,
 ) TestError!LoweredSource {
-    return lowerModuleWithOptions(allocator, source, inline_mode, .{ .proc_debug_names = proc_debug_names });
+    return lowerModuleWithOptions(allocator, source, inline_mode, .{});
 }
 
 fn mainProcArgLayouts(
@@ -1297,7 +1294,7 @@ fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
         allocator,
         modules,
         .{ .requests = resources.checked_artifact.root_requests.requests.items() },
-        .{ .proc_debug_names = true },
+        .{},
     );
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
@@ -3863,7 +3860,7 @@ test "spec constr retains an exact virtual source frame for an inlined procedure
         \\
         \\main : U64
         \\main = Iter.fold([{ n: 1.U64 }, { n: 2 }].iter().map(read), 0, |acc, n| acc + n)
-    , .wrappers, .{ .proc_debug_names = true });
+    , .wrappers, .{});
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
@@ -3898,7 +3895,7 @@ test "interpreter captures the virtual source frame of an inlined crash" {
         \\
         \\main : U64
         \\main = Iter.fold([{ n: 1.U64 }].iter().map(read), 0, |acc, n| acc + n)
-    , .wrappers, .{ .proc_debug_names = true });
+    , .wrappers, .{});
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
@@ -4841,7 +4838,7 @@ test "LIR statements and procs carry resolved source locations" {
         \\}
     ;
 
-    var lowered_source = try lowerModuleWithProcDebugNames(allocator, source, .none, true);
+    var lowered_source = try lowerModuleWithProcDebugNames(allocator, source, .none);
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
@@ -4963,7 +4960,7 @@ test "demand-shaped builtin specializations share one procedure per demand shape
         \\}
     ;
 
-    var lowered_source = try lowerModuleWithProcDebugNames(allocator, source, .none, true);
+    var lowered_source = try lowerModuleWithProcDebugNames(allocator, source, .none);
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
@@ -4985,7 +4982,7 @@ test "referenced but uncalled function does not materialize a proc" {
         \\}
     ;
 
-    var lowered_source = try lowerModuleWithProcDebugNames(allocator, source, .none, true);
+    var lowered_source = try lowerModuleWithProcDebugNames(allocator, source, .none);
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
@@ -5310,7 +5307,7 @@ fn expectOptimizedHostEvents(
 ) TestError!void {
     const allocator = std.testing.allocator;
 
-    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .proc_debug_names = true });
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{});
     defer optimized.deinit(allocator);
 
     var run = try runLoweredWithHostEvents(allocator, &optimized.lowered);
@@ -6039,7 +6036,7 @@ test "iterator producers and delegating wrappers fuse into a scalar loop" {
     };
 
     for (cases) |c| {
-        var opt = try lowerModuleWithProcDebugNames(allocator, c.src, .wrappers, true);
+        var opt = try lowerModuleWithProcDebugNames(allocator, c.src, .wrappers);
         defer opt.deinit(allocator);
         if (!try procOrInlineScopeDebugName(allocator, &opt.lowered, "sum_it")) {
             std.debug.print("debug-name sanity probe missing for case: {s}\n", .{c.name});
@@ -6171,7 +6168,6 @@ test "issue 10429 numeric range spellings in one body have no heap or RC operati
         defer allocator.free(source);
 
         var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{
-            .proc_debug_names = true,
             .tag_reachability = true,
         });
         defer optimized.deinit(allocator);
@@ -6227,7 +6223,7 @@ test "issue 11784 range pipelines consumed by Iter.fold and Iter.sum fuse into c
     };
 
     for (cases) |case| {
-        var optimized = try lowerModuleWithOptions(allocator, case.source, .wrappers, .{ .proc_debug_names = true });
+        var optimized = try lowerModuleWithOptions(allocator, case.source, .wrappers, .{});
         defer optimized.deinit(allocator);
 
         const per_element = try perElementProcSummary(allocator, &optimized.lowered, null);
@@ -6266,7 +6262,7 @@ test "issue 11784 iterators returned through destructured parameters keep their 
     };
 
     for (cases) |case| {
-        var optimized = try lowerModuleWithOptions(allocator, case.source, .wrappers, .{ .proc_debug_names = true });
+        var optimized = try lowerModuleWithOptions(allocator, case.source, .wrappers, .{});
         defer optimized.deinit(allocator);
         expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered) catch |err| {
             std.debug.print("{s}: iterator pipeline allocated\n", .{case.name});
@@ -6303,7 +6299,6 @@ test "F32 and F64 range syntax fuses without Iter.next" {
         defer allocator.free(source);
 
         var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{
-            .proc_debug_names = true,
             .tag_reachability = true,
         });
         defer optimized.deinit(allocator);
@@ -6337,7 +6332,7 @@ test "issue 10991 dev loops do not rebuild their iterators every element" {
 
     for (cases) |case| {
         for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
-            var lowered = try lowerModuleWithOptions(allocator, case.source, inline_mode, .{ .proc_debug_names = true });
+            var lowered = try lowerModuleWithOptions(allocator, case.source, inline_mode, .{});
             defer lowered.deinit(allocator);
 
             if (case.counted_loop) {
@@ -6509,7 +6504,7 @@ test "nested iterator results retain the callee-authored representation" {
     };
 
     for (cases) |case| {
-        var optimized = try lowerModuleWithProcDebugNames(allocator, case.source, .wrappers, true);
+        var optimized = try lowerModuleWithProcDebugNames(allocator, case.source, .wrappers);
         defer optimized.deinit(allocator);
 
         if (try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next")) {
@@ -6788,7 +6783,7 @@ test "completed iterator method specs refresh their public lookup keys" {
         \\main = sum_twice(Rows.{ items: [1, 2, 3] })
     ;
 
-    var optimized = try lowerModuleWithProcDebugNames(allocator, source, .wrappers, true);
+    var optimized = try lowerModuleWithProcDebugNames(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next"));
@@ -7177,7 +7172,7 @@ fn branchJoinedRecordStateWorkerIsGeneric(shape: ProcShape) bool {
 fn expectRangeMapCollectUsesDirectListLoop(source: []const u8, expected_append_unsafe_count: usize) TestError!void {
     const allocator = std.testing.allocator;
 
-    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .proc_debug_names = true });
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{});
     defer optimized.deinit(allocator);
 
     try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .specialized));
@@ -7896,7 +7891,7 @@ test "static list iter_rev loop eliminates the public iterator boundary" {
         \\main = sum_backwards(2)
     ;
 
-    var optimized = try lowerModuleWithProcDebugNames(allocator, source, .wrappers, true);
+    var optimized = try lowerModuleWithProcDebugNames(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.List.iter_rev"));
@@ -7937,9 +7932,9 @@ test "Dict and Set iteration inherit the minted list representation" {
         \\main = sum_set(3)
     ;
 
-    var dict_optimized = try lowerModuleWithProcDebugNames(allocator, dict_source, .wrappers, true);
+    var dict_optimized = try lowerModuleWithProcDebugNames(allocator, dict_source, .wrappers);
     defer dict_optimized.deinit(allocator);
-    var set_optimized = try lowerModuleWithProcDebugNames(allocator, set_source, .wrappers, true);
+    var set_optimized = try lowerModuleWithProcDebugNames(allocator, set_source, .wrappers);
     defer set_optimized.deinit(allocator);
 
     // The `Dict.iter` / `Set.iter_rev` procedures themselves may survive as a
@@ -7997,9 +7992,9 @@ test "closed Dict and Set receivers keep minted iteration" {
         \\main = sum_set(7)
     ;
 
-    var dict_optimized = try lowerModuleWithProcDebugNames(allocator, dict_source, .wrappers, true);
+    var dict_optimized = try lowerModuleWithProcDebugNames(allocator, dict_source, .wrappers);
     defer dict_optimized.deinit(allocator);
-    var set_optimized = try lowerModuleWithProcDebugNames(allocator, set_source, .wrappers, true);
+    var set_optimized = try lowerModuleWithProcDebugNames(allocator, set_source, .wrappers);
     defer set_optimized.deinit(allocator);
 
     for ([_][]const u8{ "iter_from_step", "Builtin.Iter.next" }) |name| {
@@ -8079,9 +8074,9 @@ test "static list iter append loop eliminates public iter adapters" {
         \\main = sum_points(2)
     ;
 
-    var iter_optimized = try lowerModuleWithProcDebugNames(allocator, iter_source, .wrappers, true);
+    var iter_optimized = try lowerModuleWithProcDebugNames(allocator, iter_source, .wrappers);
     defer iter_optimized.deinit(allocator);
-    var list_optimized = try lowerModuleWithProcDebugNames(allocator, list_source, .wrappers, true);
+    var list_optimized = try lowerModuleWithProcDebugNames(allocator, list_source, .wrappers);
     defer list_optimized.deinit(allocator);
 
     try std.testing.expect(!try reachableProcDebugName(allocator, &iter_optimized.lowered, "Builtin.List.iter"));
@@ -8148,9 +8143,9 @@ test "post-check lowering modes eliminate public iter adapters" {
         \\main = sum_points(4)
     ;
 
-    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .proc_debug_names = true });
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{});
     defer optimized.deinit(allocator);
-    var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .proc_debug_names = true });
+    var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{});
     defer ordinary.deinit(allocator);
 
     try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.append"));
@@ -8551,7 +8546,6 @@ fn expectSharedIteratorOperationFuses(source: []const u8) TestError!void {
         try expectLoweredIterStateHasNoBoxesOrErasedCallables(allocator, &ordinary.lowered);
     }
     var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{
-        .proc_debug_names = true,
         .tag_reachability = true,
     });
     defer optimized.deinit(allocator);
@@ -10763,7 +10757,7 @@ test "issue 11626: a closed-row callee gets one specialization per widened calle
     try std.testing.expectEqualStrings("True", output);
 
     // `number_page` and `same_page` request the same row, so they share.
-    var lowered_source = try lowerModuleWithProcDebugNames(allocator, source, .none, true);
+    var lowered_source = try lowerModuleWithProcDebugNames(allocator, source, .none);
     defer lowered_source.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 2), countProcsNamed(&lowered_source.lowered.lir_result.store, "respond"));
 }
@@ -11947,7 +11941,7 @@ test "field takes: a view taken whole keeps a field it is read again for" {
         \\}
     ;
 
-    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .proc_debug_names = true });
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{});
     defer lowered.deinit(allocator);
 
     const counts = try mainFieldReadTakes(allocator, &lowered.lowered);
@@ -11973,7 +11967,7 @@ test "field takes: a view taken whole gives up a field after its last whole use"
         \\}
     ;
 
-    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .proc_debug_names = true });
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{});
     defer lowered.deinit(allocator);
 
     const counts = try mainFieldReadTakes(allocator, &lowered.lowered);
@@ -12005,7 +11999,7 @@ test "field takes: a borrowed read used after a second read of its field blocks 
         \\}
     ;
 
-    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .proc_debug_names = true });
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{});
     defer lowered.deinit(allocator);
 
     const counts = try mainFieldReadTakes(allocator, &lowered.lowered);
@@ -12062,7 +12056,7 @@ test "field takes: a tag union read out of a dying record dismantles through its
         \\}
     ;
 
-    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .proc_debug_names = true });
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{});
     defer lowered.deinit(allocator);
 
     const counts = try mainFieldReadTakes(allocator, &lowered.lowered);
@@ -12091,7 +12085,7 @@ test "field takes: a tag union read out of a record used whole afterwards stays 
         \\}
     ;
 
-    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .proc_debug_names = true });
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{});
     defer lowered.deinit(allocator);
 
     const counts = try mainFieldReadTakes(allocator, &lowered.lowered);
@@ -12116,7 +12110,7 @@ test "field takes: a tag union read again after its payload was consumed stays a
         \\}
     ;
 
-    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .proc_debug_names = true });
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{});
     defer lowered.deinit(allocator);
 
     const counts = try mainFieldReadTakes(allocator, &lowered.lowered);
@@ -12166,7 +12160,6 @@ test "field takes dismantle a Try whose caller match tag reachability folded" {
     ;
 
     var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
-        .proc_debug_names = true,
         .tag_reachability = true,
     });
     defer lowered.deinit(allocator);
@@ -12222,7 +12215,6 @@ test "a field take assigned into a join result cell keeps a loop list unique" {
     ;
 
     var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
-        .proc_debug_names = true,
         .tag_reachability = true,
     });
     defer lowered.deinit(allocator);
@@ -12269,7 +12261,6 @@ test "a Try bound to a name before its match keeps a fallback loop list unique" 
     ;
 
     var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
-        .proc_debug_names = true,
         .tag_reachability = true,
     });
     defer lowered.deinit(allocator);
@@ -12371,7 +12362,6 @@ test "a let-bound Try built in nested branches keeps a fallback loop list unique
     ;
 
     var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
-        .proc_debug_names = true,
         .tag_reachability = true,
     });
     defer lowered.deinit(allocator);
@@ -12463,7 +12453,6 @@ test "issue 12420 a string match in a loop keeps dying call arguments on the own
         defer allocator.free(source);
 
         var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
-            .proc_debug_names = true,
             .spec_constr_clone_inlining = lir.CheckedPipeline.dev_spec_constr_clone_inlining,
         });
         defer lowered.deinit(allocator);
@@ -12614,9 +12603,7 @@ const rebinding_record_result_source =
 // them after each call need no runtime uniqueness check.
 test "a record returned past a rebinding if keeps its fields' unique-return facts" {
     const allocator = std.testing.allocator;
-    var lowered = try lowerModuleWithOptions(allocator, rebinding_record_result_source, .wrappers, .{
-        .proc_debug_names = true,
-    });
+    var lowered = try lowerModuleWithOptions(allocator, rebinding_record_result_source, .wrappers, .{});
     defer lowered.deinit(allocator);
 
     const store = &lowered.lowered.lir_result.store;
@@ -13508,7 +13495,7 @@ test "tail calls behind an inlined loop still become jumps" {
         \\main = walk([1, 2, 3], 2000, 0)
     ;
     for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
-        var lowered_source = try lowerModuleWithOptions(allocator, source, inline_mode, .{ .proc_debug_names = true });
+        var lowered_source = try lowerModuleWithOptions(allocator, source, inline_mode, .{});
         defer lowered_source.deinit(allocator);
         const result = &lowered_source.lowered.lir_result;
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
@@ -13554,9 +13541,7 @@ test "tail-call lowering handles a source loop in both inline modes" {
         \\main = walk([1, 2, 3], 2000, 0)
     ;
     for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
-        var lowered = try lowerModuleWithOptions(allocator, source, inline_mode, .{
-            .proc_debug_names = true,
-        });
+        var lowered = try lowerModuleWithOptions(allocator, source, inline_mode, .{});
         defer lowered.deinit(allocator);
         const result = &lowered.lowered.lir_result;
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
@@ -13600,7 +13585,7 @@ test "tail-call lowering preserves a failure after a recursive call" {
         \\main = walk(3)
     ;
     for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
-        var lowered = try lowerModuleWithOptions(allocator, source, inline_mode, .{ .proc_debug_names = true });
+        var lowered = try lowerModuleWithOptions(allocator, source, inline_mode, .{});
         defer lowered.deinit(allocator);
         const result = &lowered.lowered.lir_result;
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
@@ -13807,7 +13792,6 @@ test "tail-call lowering loops a boxy self-call whose resolved ABI needs no retu
     ;
     var lowered = try lowerModuleWithOptions(allocator, source, .none, .{
         .specialization_strategy = .boxy,
-        .proc_debug_names = true,
     });
     defer lowered.deinit(allocator);
     const result = &lowered.lowered.lir_result;
@@ -14950,7 +14934,7 @@ test "sealed result rows: an annotated result row is a static worker and widenin
         \\    }
         \\}
     ;
-    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = .boxy, .proc_debug_names = true });
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = .boxy });
     defer lowered.deinit(allocator);
     const artifact = &lowered.resources.checked_artifact;
     for ([_][]const u8{ "read", "parse" }) |name| {

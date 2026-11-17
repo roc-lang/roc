@@ -28,7 +28,7 @@ test "boxy deferred packets pin native and wasm32 inline boundaries" {
             "boxed = Box.box(equal)\na = " ++ tuples.value ++ "\nb = " ++ tuples.different ++ "\n" ++
             "echo!(Str.inspect((forward(boxed, a, a), forward(boxed, a, b))))\nOk({})\n}";
         for ([_]@import("base").target.TargetUsize{ .u32, .u64 }) |width| {
-            try harness.expectLirInspectionWithOptions(source, .{ .specialization_strategy = .boxy, .proc_debug_names = true, .target_usize = width }, struct {
+            try harness.expectLirInspectionWithOptions(source, .{ .specialization_strategy = .boxy, .target_usize = width }, struct {
                 fn inspectPacket(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
                     var found = false;
                     for (store.getProcSpecs(), 0..) |proc, index| {
@@ -75,7 +75,7 @@ test "boxy declared primitives lower directly at closed and open call sites" {
             \\    echo!(Str.inspect(length(args)))
             \\    Ok({})
             \\}
-        , .{ .specialization_strategy = .boxy, .proc_debug_names = true, .target_usize = width }, struct {
+        , .{ .specialization_strategy = .boxy, .target_usize = width }, struct {
             fn inspect(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLirHarnessError!void {
                 var found: [2]bool = @splat(false);
                 for (store.getProcSpecs(), 0..) |proc, index| {
@@ -114,7 +114,7 @@ test "boxy worker reads the composite parameter and result descriptor once from 
             \\    echo!(Str.inspect(keep([1.I64, 2, 3])))
             \\    Ok({})
             \\}
-        , .{ .specialization_strategy = .boxy, .proc_debug_names = true, .target_usize = width }, struct {
+        , .{ .specialization_strategy = .boxy, .target_usize = width }, struct {
             fn inspect(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLirHarnessError!void {
                 var found = false;
                 for (store.getProcSpecs(), 0..) |proc, index| {
@@ -147,7 +147,7 @@ test "boxy unary argument blocks preserve views and omit independent packing" {
             \\    echo!(Str.inspect(pair(|x, y| { x, y }, args, args)))
             \\    Ok({})
             \\}
-        , .{ .specialization_strategy = .boxy, .proc_debug_names = true, .target_usize = width }, inspect);
+        , .{ .specialization_strategy = .boxy, .target_usize = width }, inspect);
     }
 }
 
@@ -207,7 +207,7 @@ test "boxy unary entries forward their own parameter and share exact argument la
             \\    echo!(Str.inspect(reordered(|x, _| x, |x, _| x, args, "text")))
             \\    Ok({})
             \\}
-        , .{ .specialization_strategy = .boxy, .proc_debug_names = true, .target_usize = width }, inspectEntries);
+        , .{ .specialization_strategy = .boxy, .target_usize = width }, inspectEntries);
     }
 }
 
@@ -284,7 +284,7 @@ test "boxy worker reads dynamic nominal backing descriptors from its type table"
             \\    echo!(Str.inspect(wrap(12.U32)))
             \\    Ok({})
             \\}
-        , .{ .specialization_strategy = .boxy, .proc_debug_names = true, .target_usize = width }, struct {
+        , .{ .specialization_strategy = .boxy, .target_usize = width }, struct {
             fn inspect(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLirHarnessError!void {
                 var found = false;
                 for (store.getProcSpecs(), 0..) |proc, index| {

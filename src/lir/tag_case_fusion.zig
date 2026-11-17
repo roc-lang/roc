@@ -749,12 +749,16 @@ fn cloneSharedConsumer(
     const body = store.getCFStmtImmediate(candidate.join_stmt).join.body;
     var defs = try body_clone.collectReachableDefinitionsWithAllocator(store, body, allocator);
     defer defs.deinit();
+    var outside = try OutsideReads.init(store, candidate.proc, join_params, allocator);
+    defer outside.deinit();
+    var body_reads = try body_clone.countReachableReadsWithAllocator(store, body, allocator);
+    defer body_reads.deinit();
     var cloner = try body_clone.BodyCloner(ConsumerRewriter).initWithFreshDeclaredJoinsAndAllocator(store, .{}, body, join_params, allocator);
     defer cloner.deinit();
     const frame = store.getLocalSpan(store.getProcSpecImmediate(candidate.proc).frame_locals);
     for (0..frame.len) |index| {
         const local = GuardedList.at(frame, index);
-        if (defs.get(local) == 0) try cloner.local_map.put(local, local);
+        if (defs.get(local) == 0 or outside.keepsBinder(&body_reads, local)) try cloner.local_map.put(local, local);
     }
     const cloned = try cloner.cloneStmt(body);
     var locals = std.ArrayList(LIR.LocalId).empty;
@@ -948,7 +952,8 @@ const ArmCopyPlan = struct {
     shared: std.ArrayList(LIR.CFStmtId),
     /// Binders of copied statements, which the copy defines fresh. Cloning
     /// needs lexical binders, not operand writes (`set_local` writes an
-    /// outer binder).
+    /// outer binder). A binder the copy keeps (`OutsideReads.keepsBinder`)
+    /// is not among them: the copy defines that same local.
     copied_defs: body_clone.ReadCounts,
 
     fn init(
@@ -956,6 +961,7 @@ const ArmCopyPlan = struct {
         arm: LIR.CFStmtId,
         rewrite: ArmRewrite,
         join_params: *const body_clone.JoinParamIndex,
+        outside: *const OutsideReads,
         stats: *WorkStats,
         allocator: Allocator,
     ) ResourceError!ArmCopyPlan {
@@ -974,15 +980,26 @@ const ArmCopyPlan = struct {
         errdefer shared.deinit(allocator);
         var copied_defs: body_clone.ReadCounts = .{ .counts = collections.DenseMap(LIR.LocalId, u32).init(allocator) };
         errdefer copied_defs.deinit();
+        var arm_reads: body_clone.ReadCounts = .{ .counts = collections.DenseMap(LIR.LocalId, u32).init(allocator) };
+        defer arm_reads.deinit();
         var walk = try body_clone.ReachableStmts.initWithAllocator(store, arm, allocator);
         defer walk.deinit();
         while (try walk.next()) |stmt_id| {
+            body_clone.forEachStmtRead(store, store.getCFStmt(stmt_id), &arm_reads, RegionFacts.noteRead);
+            if (arm_reads.failure) |failure| return failure;
             if (copied.contains(stmt_id)) {
                 try body_clone.markStmtDefinitionsSparse(store, &copied_defs, stmt_id);
             } else {
                 try shared.append(allocator, stmt_id);
             }
         }
+        var kept = std.ArrayList(LIR.LocalId).empty;
+        defer kept.deinit(allocator);
+        var defined = copied_defs.counts.keyIterator();
+        while (defined.next()) |local| {
+            if (outside.keepsBinder(&arm_reads, local.*)) try kept.append(allocator, local.*);
+        }
+        for (kept.items) |local| _ = copied_defs.counts.remove(local);
         return .{ .copied = copied, .shared = shared, .copied_defs = copied_defs };
     }
 
@@ -990,6 +1007,45 @@ const ArmCopyPlan = struct {
         self.shared.deinit(self.copied.allocator);
         self.copied_defs.deinit();
         self.copied.deinit();
+    }
+};
+
+/// A procedure's reads of each local and its join parameters, which decide
+/// the binders a copy of one of its regions keeps (`keepsBinder`).
+const OutsideReads = struct {
+    proc_reads: body_clone.ReadCounts,
+    params: collections.DenseMap(LIR.LocalId, void),
+
+    fn init(store: *LirStore, proc: LIR.LirProcSpecId, join_params: *body_clone.JoinParamIndex, allocator: Allocator) ResourceError!OutsideReads {
+        var proc_reads = try body_clone.countReachableReadsWithAllocator(store, rewritableProcBody(store, proc).?, allocator);
+        errdefer proc_reads.deinit();
+        var params = collections.DenseMap(LIR.LocalId, void).init(allocator);
+        errdefer params.deinit();
+        var spans = join_params.params.valueIterator();
+        while (spans.next()) |span| {
+            const locals = store.getLocalSpan(span.*);
+            for (0..locals.len) |index| try params.put(GuardedList.at(locals, index), {});
+        }
+        return .{ .proc_reads = proc_reads, .params = params };
+    }
+
+    fn deinit(self: *OutsideReads) void {
+        self.params.deinit();
+        self.proc_reads.deinit();
+    }
+
+    /// Whether a copy of a region keeps `local` rather than renaming it,
+    /// given the region's reads: a statement outside the region reads it
+    /// (the procedure reads it more often than the region does), and it is
+    /// no join parameter, which a copied jump bridges into the join it
+    /// leaves for (`BodyCloner.cloneJump`). A join the region jumps to may
+    /// read a local the region defines without taking it as a parameter, as
+    /// a `.boxy` or-pattern's shared body reads the binders each alternative
+    /// writes. The copy then defines that local itself, as the original
+    /// does, and exactly one of the two runs on any path into the join.
+    fn keepsBinder(self: *const OutsideReads, region_reads: *const body_clone.ReadCounts, local: LIR.LocalId) bool {
+        if (self.params.contains(local)) return false;
+        return self.proc_reads.get(local) != region_reads.get(local);
     }
 };
 
@@ -1154,9 +1210,11 @@ fn applyCandidate(
     var clone_scratch = body_clone.CloneScratch.init(allocator);
     defer clone_scratch.deinit();
     const rewrite: ArmRewrite = .{ .matched_value = candidate.matched_value, .union_locals = candidate.union_locals.items };
+    var outside = try OutsideReads.init(store, candidate.proc, join_params, allocator);
+    defer outside.deinit();
     for (candidate.variants.targets.items) |branch| {
         if (plans.contains(branch)) continue;
-        var plan = try ArmCopyPlan.init(store, branch, rewrite, join_params, stats, allocator);
+        var plan = try ArmCopyPlan.init(store, branch, rewrite, join_params, &outside, stats, allocator);
         errdefer plan.deinit();
         try plans.put(branch, plan);
     }
@@ -2655,6 +2713,101 @@ test "tag case fusion keeps the match's continuation join enclosing the fused ar
 
 test "tag case fusion preserves a continuation declaration shared with a producer" {
     try testContinuationJoin(true);
+}
+
+test "tag case fusion keeps an arm's binder that the continuation it jumps to reads" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+
+    const param = try store.addLocal(.{ .layout_idx = try layouts.putTagUnion(&.{ .u64, .u64 }) });
+    const disc = try store.addLocal(.{ .layout_idx = .u16 });
+    const selector = try store.addLocal(.{ .layout_idx = .u8 });
+    const binder = try store.addLocal(.{ .layout_idx = .u64 });
+    const three = try store.addLocal(.{ .layout_idx = .u64 });
+    const four = try store.addLocal(.{ .layout_idx = .u64 });
+    const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(body_clone.firstFreshJoinPoint(&store)));
+    const shared_id: LIR.JoinPointId = @fromBackingInt(@intCast(@backingInt(join_id) + 1));
+
+    // `match value { A(v) | B(v) => v }` as `.boxy` lowers it: each
+    // alternative binds the one local of `v` and jumps to the body they
+    // share, a join with no parameters whose body reads that local.
+    var arms: [2]LIR.CFStmtId = undefined;
+    for (&arms, 0..) |*arm, variant| {
+        arm.* = try store.addCFStmt(.{ .assign_ref = .{
+            .target = binder,
+            .op = .tagPayload(param, 0, @intCast(variant), @intCast(variant)),
+            .next = try store.addCFStmt(.{ .jump = .{ .target = shared_id } }, .test_fixture),
+        } }, .test_fixture);
+    }
+    const consume = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = disc,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = arms[0] }}),
+        .default_branch = arms[1],
+    } }, .test_fixture);
+    const read_disc = try store.addCFStmt(.{ .assign_ref = .{
+        .target = disc,
+        .op = .discriminant(param),
+        .next = consume,
+    } }, .test_fixture);
+    const ret_binder = try store.addCFStmt(.{ .ret = .{ .value = binder } }, .test_fixture);
+    const shared = try store.addCFStmt(.{ .join = .{
+        .id = shared_id,
+        .params = .empty(),
+        .body = ret_binder,
+        .remainder = read_disc,
+    } }, .test_fixture);
+
+    var producers: [2]LIR.CFStmtId = undefined;
+    for (&producers, [_]LIR.LocalId{ three, four }, [_]i64{ 3, 4 }, 0..) |*producer, payload, value, variant| {
+        producer.* = try store.addCFStmt(.{ .assign_literal = .{
+            .target = payload,
+            .value = .{ .i64_literal = .{ .value = value, .layout_idx = .u64 } },
+            .next = try store.addCFStmt(.{ .assign_tag = .{
+                .target = param,
+                .variant_index = @intCast(variant),
+                .discriminant = @intCast(variant),
+                .payload = payload,
+                .next = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture),
+            } }, .test_fixture),
+        } }, .test_fixture);
+    }
+    const choose = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = selector,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = producers[0] }}),
+        .default_branch = producers[1],
+    } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{param}),
+        .body = shared,
+        .remainder = choose,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = try store.addLocalSpan(&.{selector}),
+        .body = .some(body),
+        .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, binder, three, four }),
+        .ret_layout = .u64,
+    }, .none);
+
+    try run(&store, &layouts);
+
+    // Both variants' copies of their arm still write the local the shared
+    // body returns, and no union is built.
+    var binder_writes: u32 = 0;
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.get().?);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| {
+        const stmt = store.getCFStmtImmediate(stmt_id);
+        try testing.expect(stmt.* != .assign_tag);
+        if (stmt.* == .assign_ref and stmt.assign_ref.target == binder) binder_writes += 1;
+    }
+    try testing.expectEqual(@as(u32, 2), binder_writes);
+    try testing.expectEqual(ret_binder, store.getCFStmtImmediate(shared).join.body);
 }
 
 test "tag case fusion keeps the join when a producer edge is shared with another path" {

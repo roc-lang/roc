@@ -22,7 +22,7 @@ test "boxy returned constructors forward storage while a shared intermediate sta
         \\    echo!(Str.inspect(keep(args)))
         \\    Ok({})
         \\}
-    , .{ .specialization_strategy = .boxy, .proc_debug_names = true }, inspect);
+    , .{ .specialization_strategy = .boxy }, inspect);
 }
 
 fn inspect(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLirHarnessError!void {

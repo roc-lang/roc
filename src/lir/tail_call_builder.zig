@@ -22,9 +22,12 @@ published: bool = false,
 /// How a proven call to the procedure itself is published: as a self-tail
 /// site that TCE turns into a loop jump, or, like a tail call to any other
 /// procedure, as a call that returns its value directly and so replaces the
-/// frame. A `.boxy` procedure with a dynamic frame region takes the second:
-/// its next call's dynamic arguments live in that region, which a loop
-/// iteration would allocate again while they are still read.
+/// frame. A `.boxy` procedure with a dynamic frame region whose parameters
+/// are not known (`loop_params` is empty) takes the second: its next call's
+/// dynamic arguments may live in that region, which a loop iteration would
+/// write again while they are still read. With its parameters known, a self
+/// call loops only when it passes each dynamic parameter along unchanged,
+/// so it reads no argument from the region.
 self_calls: enum { loop, replace_frame } = .loop,
 /// The parameters of a `.boxy` procedure, and where its trailing parameters
 /// that fix its instantiation (its descriptors, dictionaries, and literal

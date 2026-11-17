@@ -126,9 +126,11 @@ jobs:
           echo "heavy=$heavy"
           echo "heavy=$heavy" >> "$GITHUB_OUTPUT"
 
-  # Checks that read only tracked sources run once, here, instead of on every
-  # OS: their result cannot depend on the host. They are quick, so they gate the
-  # scarce macOS and Windows runners.
+  # Checks that read only tracked sources run here instead of on every OS:
+  # their result should not depend on the host. They are quick, so they gate
+  # the scarce macOS and Windows runners. The Windows shards run them again,
+  # with every other MiniCI job, because Windows paths and tools have broken
+  # them there alone (see `Lane.all` in src/build/minici.zig).
   static-checks:
     name: static-checks
     runs-on: ubuntu-24.04
@@ -697,6 +699,8 @@ jobs:
             valgrind: false
     steps: *minici_shard_steps
 
+  # Unlike macOS, Windows runs every MiniCI job, the source and primary-host
+  # ones included, so `zig build minici` stays green on Windows machines.
   minici-windows:
     needs: [check-changes, minici-build-windows]
     if: needs.check-changes.outputs.heavy == 'true'
