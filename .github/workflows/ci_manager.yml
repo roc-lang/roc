@@ -317,15 +317,7 @@ jobs:
           use-cache: false
           use-tool-cache: 'true'
 
-      - name: Install Rust wasm target
-        run: rustup target add wasm32-unknown-unknown
-
-      # RustGlue's glue-runtime contract case compiles a `#![no_std]` host with
-      # `rustc --target <arch>-unknown-linux-musl`, and build.zig derives that
-      # target from the host arch, so install the musl target per runner arch.
-      - name: Install Rust musl target (Linux)
-        if: runner.os == 'Linux'
-        run: rustup target add ${{ runner.arch == 'ARM64' && 'aarch64-unknown-linux-musl' || 'x86_64-unknown-linux-musl' }}
+      - uses: ./.github/actions/setup-rust
 
       - name: Cache Zig dependency packages
         uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
@@ -535,15 +527,7 @@ jobs:
         shell: bash
         run: ./zig-out/bin/restamp-zig-cache
 
-      - name: Install Rust wasm target
-        run: rustup target add wasm32-unknown-unknown
-
-      # RustGlue's glue-runtime contract case compiles a `#![no_std]` host with
-      # `rustc --target <arch>-unknown-linux-musl`, and build.zig derives that
-      # target from the host arch, so install the musl target per runner arch.
-      - name: Install Rust musl target (Linux)
-        if: runner.os == 'Linux'
-        run: rustup target add ${{ runner.arch == 'ARM64' && 'aarch64-unknown-linux-musl' || 'x86_64-unknown-linux-musl' }}
+      - uses: ./.github/actions/setup-rust
 
       - name: Install Valgrind
         if: matrix.valgrind
