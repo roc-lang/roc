@@ -6,7 +6,10 @@ import pf.Host
 # Boxing a callable that has no captures must not heap-allocate: the boxed
 # value is immutable and capture-free, so it lives in static storage with the
 # static refcount, and dropping or sharing it never frees anything. A boxed
-# capturing closure still allocates once per box.
+# capturing closure allocates once per box when specialized; under
+# --specialize=no, where a boxed function is the function itself, one that is
+# only unboxed and called is built in its caller's frame (design.md "Frame
+# Callables").
 inc : U64 -> U64
 inc = |x| x + 1
 
