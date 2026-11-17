@@ -84,7 +84,7 @@ fn expectHostAbiCallablesUseErasedRepresentation(
 test "host ABI callable positions commit erased layouts without collapsing outer boxes" {
     try harness.runAppPathLirInspection(
         "test/postcheck/provided_callable_boundary/app.roc",
-        .{ .proc_debug_names = true },
+        .{},
         expectHostAbiCallablesUseErasedRepresentation,
     );
 }
@@ -157,7 +157,7 @@ fn expectContextOutcomeContainsErasedCallable(
 test "provided context may return an erased callable nested in an outcome" {
     try harness.runAppPathLirInspection(
         "test/postcheck/provided_callable_context_union/app.roc",
-        .{ .proc_debug_names = true },
+        .{},
         expectContextOutcomeContainsErasedCallable,
     );
 }
@@ -200,7 +200,7 @@ fn expectRecursiveBoxedCallableForwardsReuseThroughLet(
 test "recursive boxed callable forwards reuse through Box, let, and alias boundaries" {
     try harness.runAppPathLirInspection(
         "test/postcheck/erased_callable_return_forwarding/app.roc",
-        .{ .inline_mode = .wrappers, .proc_debug_names = true },
+        .{ .inline_mode = .wrappers },
         expectRecursiveBoxedCallableForwardsReuseThroughLet,
     );
 }
@@ -249,7 +249,6 @@ test "recursive boxed callable return reuse lowers on workers" {
         .{ .app_path = "test/postcheck/erased_callable_return_forwarding/parallel.roc" },
         .{
             .inline_mode = .wrappers,
-            .proc_debug_names = true,
         },
         &.{ .erased, .indirect_call, .match, .return_reuse },
         expectParallelRecursiveBoxedCallablesForwardReuse,
@@ -259,7 +258,7 @@ test "recursive boxed callable return reuse lowers on workers" {
 test "alternative callable producers may share one runtime-selected reuse owner" {
     try harness.runAppPathLirInspection(
         "test/postcheck/erased_callable_return_forwarding/alternatives.roc",
-        .{ .inline_mode = .wrappers, .proc_debug_names = true },
+        .{ .inline_mode = .wrappers },
         expectRecursiveBoxedCallableForwardsReuseThroughLet,
     );
 }
@@ -284,7 +283,7 @@ fn expectNoDestinationSpecializedFromState(
 test "competing eager callable producers cannot both consume one reuse owner" {
     try harness.runAppPathLirInspection(
         "test/postcheck/erased_callable_return_forwarding/competitors.roc",
-        .{ .inline_mode = .wrappers, .proc_debug_names = true },
+        .{ .inline_mode = .wrappers },
         expectNoDestinationSpecializedFromState,
     );
 }
@@ -292,7 +291,7 @@ test "competing eager callable producers cannot both consume one reuse owner" {
 test "repeatable callable producers cannot consume one reuse owner per iteration" {
     try harness.runAppPathLirInspection(
         "test/postcheck/erased_callable_return_forwarding/loop.roc",
-        .{ .inline_mode = .wrappers, .proc_debug_names = true },
+        .{ .inline_mode = .wrappers },
         expectNoDestinationSpecializedFromState,
     );
 }

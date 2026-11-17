@@ -172,7 +172,6 @@ pub fn checkedRuntimeLoweringConfig(
     opt: OptLevel,
     specialization_strategy: base.SpecializationStrategy,
     target: RocTarget,
-    proc_debug_names: bool,
 ) compile.build.RuntimeLoweringConfig {
     return .{
         .include_provided_data_exports = roots == .linked_output,
@@ -208,7 +207,6 @@ pub fn checkedRuntimeLoweringConfig(
             .thread_confined_rc = optimizeLirForOpt(opt),
             .prove_uniqueness = optimizeLirForOpt(opt),
             .immortal_string_literals = optimizeLirForOpt(opt),
-            .proc_debug_names = proc_debug_names,
         },
     };
 }
@@ -237,7 +235,7 @@ pub fn devCapturePrefix(roots: CheckedLirRoots, opt: OptLevel, target: RocTarget
 pub fn compileTimeObjectLowering(target: RocTarget) compile.coordinator.BoxyObjectLowering {
     return .{
         .target = target,
-        .config = checkedRuntimeLoweringConfig(.linked_output, .dev, .boxy, target, false).target,
+        .config = checkedRuntimeLoweringConfig(.linked_output, .dev, .boxy, target).target,
         .opt = @tagName(OptLevel.dev),
         .inline_expects = inlineExpectModeForOpt(.dev) == .run,
     };

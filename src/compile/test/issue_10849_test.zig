@@ -128,7 +128,6 @@ test "issue 10849: List.update can move a unique inner list into its updater" {
     // Repro for https://github.com/roc-lang/roc/issues/10849.
     try harness.expectLirInspectionWithOptions(nested_list_update_app, .{
         .list_in_place_map = true,
-        .proc_debug_names = true,
         .prove_ranges = true,
     }, expectUniqueUpdateMovesInnerElement);
 }
@@ -139,13 +138,12 @@ test "issue 10849: List.update keeps its ownership-moving path under either Boxy
         .{
             .specialization_strategy = .boxy,
             .list_in_place_map = true,
-            .proc_debug_names = true,
         },
         expectBoxyUpdateKeepsMovingPath,
     );
     try harness.expectLirInspectionWithOptions(
         nested_list_update_app,
-        .{ .specialization_strategy = .boxy, .proc_debug_names = true },
+        .{ .specialization_strategy = .boxy },
         expectBoxyUpdateKeepsMovingPath,
     );
 }

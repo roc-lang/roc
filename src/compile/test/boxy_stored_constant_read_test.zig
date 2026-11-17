@@ -26,7 +26,7 @@ test "boxy reads a stored constant built from parts with one static data read" {
         \\    }
         \\    Ok({})
         \\}
-    , .{ .specialization_strategy = .boxy, .proc_debug_names = true, .include_internal_static_data = true }, inspect);
+    , .{ .specialization_strategy = .boxy, .include_internal_static_data = true }, inspect);
 }
 
 /// `main!` reads the list, and nothing the list is built from: every other
