@@ -244,6 +244,7 @@ pub const BackingOpenings = struct {
     replay_pool: std.ArrayListUnmanaged(Var) = .empty,
     replay_fields: std.ArrayListUnmanaged(RecordField) = .empty,
     replay_tags: std.ArrayListUnmanaged(Tag) = .empty,
+    replay_rows: std.ArrayListUnmanaged(types_mod.Descriptor.Row) = .empty,
     /// The args of the opening in progress.
     args: std.ArrayListUnmanaged(Var) = .empty,
 
@@ -311,6 +312,7 @@ pub const BackingOpenings = struct {
         self.replay_pool.deinit(gpa);
         self.replay_fields.deinit(gpa);
         self.replay_tags.deinit(gpa);
+        self.replay_rows.deinit(gpa);
         self.args.deinit(gpa);
     }
 
@@ -448,12 +450,15 @@ pub const BackingOpenings = struct {
             const tags = try store.appendTags(self.replay_tags.items);
             std.debug.assert(@backingInt(tags.start) == start.tags);
         }
-        for (self.rows.items[recording.rows_start..][0..recording.minted], 0..) |recorded, offset| {
+        self.replay_rows.clearRetainingCapacity();
+        try self.replay_rows.ensureUnusedCapacity(gpa, recording.minted);
+        for (self.rows.items[recording.rows_start..][0..recording.minted]) |recorded| {
             var row = renamer.replayRow(recorded);
             row.word.rank = rank;
-            const minted = try store.registerEncodedRow(row);
-            std.debug.assert(@backingInt(minted) == start.vars + offset);
+            self.replay_rows.appendAssumeCapacity(row);
         }
+        try store.registerEncodedRows(self.replay_rows.items);
+        std.debug.assert(store.len() == start.vars + recording.minted);
         store.advanceGroundEpoch(recording.ground_epoch_advance);
         return renamer.varOf(recording.opened);
     }

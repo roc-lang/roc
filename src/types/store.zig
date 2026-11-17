@@ -1223,7 +1223,22 @@ pub const Store = struct {
         const next_len = @as(usize, self.descs.backing.len()) + 1;
         try self.descs.backing.ensureTotalCapacity(self.gpa, next_len);
         try self.root_metas.ensureTotalCapacity(self.gpa, next_len);
+        return self.appendNewClassRowAssumeCapacity(row, checked_var);
+    }
 
+    /// `appendClassRow` into descriptor and root metadata room reserved
+    /// earlier. A reissued descriptor's writes may still journal.
+    inline fn appendClassRowAssumeCapacity(self: *Self, row: Desc.Row, checked_var: Var) Allocator.Error!DescStore.Idx {
+        if (self.takeFreeDesc()) |desc_idx| {
+            // As in `appendClassRow`, both writes journal inside a probe.
+            try self.setDescRowUnguarded(desc_idx, row);
+            try self.setRootMeta(desc_idx, .{ .checked_var = checked_var });
+            return desc_idx;
+        }
+        return self.appendNewClassRowAssumeCapacity(row, checked_var);
+    }
+
+    inline fn appendNewClassRowAssumeCapacity(self: *Self, row: Desc.Row, checked_var: Var) DescStore.Idx {
         const desc_idx = self.descs.appendRowAssumeCapacity(row);
         const meta_idx = self.root_metas.appendAssumeCapacity(.{
             .checked_var = checked_var,
@@ -1600,11 +1615,25 @@ pub const Store = struct {
         return self.registerRow(try self.encodeDesc(desc));
     }
 
-    /// Create a new variable whose class holds `row`, a descriptor already
-    /// encoded for this store (`instantiate.BackingOpenings` replays the
+    /// Create one new variable per row of `rows`, in order, each holding its
+    /// row, a descriptor already encoded for this store, as `register` does
+    /// for each in turn (`instantiate.BackingOpenings` replays the
     /// descriptors an opening of a nominal declaration's backing minted).
-    pub fn registerEncodedRow(self: *Self, row: Desc.Row) std.mem.Allocator.Error!Var {
-        return self.registerRow(row);
+    pub fn registerEncodedRows(self: *Self, rows: []const Desc.Row) std.mem.Allocator.Error!void {
+        self.debugAssertUnsealed();
+        try self.slots.ensureUnusedCapacity(self.gpa, rows.len);
+        try self.union_ranks.ensureUnusedCapacity(self.gpa, rows.len);
+        const descs_len = @as(usize, self.descs.backing.len()) + rows.len;
+        try self.descs.backing.ensureTotalCapacity(self.gpa, descs_len);
+        try self.root_metas.ensureTotalCapacity(self.gpa, descs_len);
+        for (rows) |row| {
+            const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(self.slots.len()))));
+            const desc_idx = try self.appendClassRowAssumeCapacity(row, Self.slotIdxToVar(slot_idx));
+            const inserted_slot_idx = self.slots.appendAssumeCapacity(.{ .root = desc_idx });
+            const rank_idx = self.union_ranks.appendAssumeCapacity(0);
+            std.debug.assert(inserted_slot_idx == slot_idx);
+            std.debug.assert(@backingInt(rank_idx) == @backingInt(slot_idx));
+        }
     }
 
     /// `register` for a descriptor already encoded.
@@ -4005,7 +4034,7 @@ test "sealing releases checker-only buffers without allocating" {
         store.instantiate_scratch.reach_state = .init(gpa);
         try store.instantiate_scratch.reach_state.?.put(value, true);
         store.instantiate_scratch.marker_visited = .init(gpa);
-        inline for (.{ "rows", "pool", "fields", "tags", "pinned", "replay_pool", "replay_fields", "replay_tags", "args" }) |field| {
+        inline for (.{ "rows", "pool", "fields", "tags", "pinned", "replay_pool", "replay_fields", "replay_tags", "replay_rows", "args" }) |field| {
             try @field(store.backing_openings, field).ensureTotalCapacity(gpa, 8);
         }
         try store.backing_openings.recordings.ensureTotalCapacity(gpa, 8);
