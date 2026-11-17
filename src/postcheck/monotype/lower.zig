@@ -15,8 +15,6 @@ const LiteralDemand = @import("../literal_demand.zig");
 const AnyAll = collections.AnyAll;
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
-/// An operand's checked expression, absent for an operand without one.
-const OptionalCheckedExpr = collections.OptionalId(CIR.Expr.Idx);
 /// A root's function type while it is resolved, zero when not yet lowered.
 const OptionalTypeId = collections.OptionalId(Type.TypeId);
 const specialize = @import("specialize.zig");
@@ -16847,7 +16845,6 @@ const DraftProcCallee = union(enum(u8)) {
 const DraftCallProc = struct {
     callee: DraftProcCallee,
     args: DraftSpan(DraftExprId),
-    iterator_procedure: ?static_dispatch.IteratorProcedureId = null,
     captures: DraftSpan(DraftExprId) = DraftSpan(DraftExprId).empty(),
     is_cold: bool = false,
 };
@@ -21410,7 +21407,6 @@ const BodyDraftStore = struct {
                 .func, .lifted, .declared_root => .{ .call_proc = .{
                     .callee = ids.procCallee(call.callee),
                     .args = ids.exprSpan(call.args),
-                    .iterator_procedure = call.iterator_procedure,
                     .captures = try self.sealCallCaptureOperandSpan(program, ids, call.captures),
                     .is_cold = call.is_cold,
                     .demand_shaped = ids.callDemandShaped(call.callee),
@@ -33104,7 +33100,6 @@ const BodyContext = struct {
             const call_ctx = task.call_ctx.?;
             const callable_plan = task.callable_plan;
             const plan = callable_plan.plan;
-            const plan_args = callable_plan.operands;
             const resolution = (try self.evidenceResolution(plan)) orelse
                 Common.invariant("runtime method result had no CheckedCallResolution evidence");
             switch (resolution) {
@@ -33112,14 +33107,6 @@ const BodyContext = struct {
                     const relation_lookup = lookup;
                     const target_node = try self.methodTargetNodeFromPlan(relation_lookup, call_ctx, plan.callable_ty);
                     try self.relateDispatchTargetRequestInterface(relation_lookup, target_node, callable_node);
-                    if (try self.generatedIteratorMethodRequestNode(
-                        relation_lookup,
-                        target_node,
-                        callable_node,
-                        plan_args,
-                    )) |private_node| {
-                        callable_node = private_node;
-                    }
                     if (task.phase == .expression_lowering) {
                         callable_node = try self.lowerAndCompleteIteratorMethodResultAtNode(
                             relation_lookup,
@@ -33270,7 +33257,7 @@ const BodyContext = struct {
             .source_fn_ty = task.source_fn_ty,
             .expected_ret_node = task.expected_ret_node,
         } };
-        if (!try self.directCallRequestIsShareable(task.target, task.expected_ret_node)) {
+        if (!try self.directCallRequestIsShareable(task.expected_ret_node)) {
             frame.cursor = 1;
             return evidenceCall(self, type_task);
         }
@@ -33292,17 +33279,7 @@ const BodyContext = struct {
     fn stepDirectCallType(self: *BodyContext, frame: *EvidenceFrame, task: *DirectCallTask, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
         const call = task.call;
         if (frame.cursor == 1) {
-            var fn_node = input.?.nodeValue();
-            if (self.iteratorProcedureForResolvedTarget(call.directTarget(self.view).?)) |procedure| {
-                const public_fn_node = self.graph.requestSourceInterface(fn_node) orelse fn_node;
-                const optional_args = try self.optionalCheckedArgs(call.args);
-                defer self.allocator.free(optional_args);
-                if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, optional_args)) |private_fn_node| {
-                    try self.graph.registerRequestSourceInterface(private_fn_node, public_fn_node);
-                    try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
-                    fn_node = private_fn_node;
-                }
-            }
+            const fn_node = input.?.nodeValue();
             self.destroyCallContext(task.call_ctx.?);
             task.call_ctx = null;
             return .{ .ret = .{ .node = fn_node } };
@@ -33319,10 +33296,7 @@ const BodyContext = struct {
             .checked_ret_ty = task.checked_ret_ty,
             .checked_args = call.args,
             .expected_ret_node = task.expected_ret_node,
-            .capture_constructor_argument_evidence = try self.iteratorCallNeedsConstructorArgumentEvidence(
-                self.iteratorProcedureForResolvedTarget(call.directTarget(self.view).?),
-                call.args,
-            ),
+            .capture_constructor_argument_evidence = false,
         } });
     }
 
@@ -33660,11 +33634,6 @@ const BodyContext = struct {
         for (fn_nodes.args) |arg_node| {
             if (try self.nodeIsProvenUninhabited(arg_node)) return .{ .ret = .{ .node = fn_nodes.ret } };
         }
-        if (self.iteratorProcedureForResolvedTarget(target)) |procedure| {
-            if (procedure == .next and fn_nodes.args.len == 1 and (try self.isGeneratedIteratorEvidenceNode(fn_nodes.args[0]))) {
-                return .{ .ret = .{ .node = fn_nodes.ret } };
-            }
-        }
         if (self.resolvedTargetIsStrInspect(target)) return .{ .ret = .{ .node = fn_nodes.ret } };
         const completed = try self.completedDirectCalleeAtNode(checked_expr, target, task.source_fn_ty, fn_node);
         return .{ .ret = .{ .node = (try self.graph.functionNodes(completed.fn_node)).ret } };
@@ -33854,7 +33823,7 @@ const BodyContext = struct {
     /// request; any other call instantiates its callee on a call context.
     fn beginRelateCall(self: *BodyContext, frame: *EvidenceFrame, task: *RelateTask, checked_ret_ty: checked.CheckedTypeId, call: CheckedCall) Allocator.Error!EvidenceStep {
         if (call.directTarget(self.view)) |target| {
-            if (try self.directCallRequestIsShareable(target, null)) {
+            if (try self.directCallRequestIsShareable(null)) {
                 frame.cursor = 2;
                 return evidenceCall(self, .{ .direct_call_request = .{
                     .expr = task.expr,
@@ -33880,13 +33849,7 @@ const BodyContext = struct {
             .checked_ret_ty = checked_ret_ty,
             .checked_args = call.args,
             .expected_ret_node = null,
-            .capture_constructor_argument_evidence = if (call.directTarget(self.view)) |target|
-                try self.iteratorCallNeedsConstructorArgumentEvidence(
-                    self.iteratorProcedureForResolvedTarget(target),
-                    call.args,
-                )
-            else
-                false,
+            .capture_constructor_argument_evidence = false,
         } });
     }
 
@@ -36400,9 +36363,6 @@ const BodyContext = struct {
         pre_lowered: PreLoweredIteratorOperands,
         expected_ret_ty: ?DraftTypeCell,
         call_ctx: ?*BodyContext = null,
-        /// The generated `Iter.iter`/`Iter.next` path's procedure and
-        /// dispatcher node.
-        generated: ?struct { procedure: checked.IteratorProcedureId, dispatcher_node: NodeId } = null,
         lookup: MethodLookup = undefined,
         callee: DraftFnSlot = undefined,
         ret_node: NodeId = undefined,
@@ -36429,7 +36389,6 @@ const BodyContext = struct {
         const plan = task.plan;
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
         if (frame.cursor != 0) {
-            if (task.generated) |generated| return self.finishGeneratedIteratorDispatch(task, generated.procedure, generated.dispatcher_node, input.?.exprValue());
             task.args[task.index] = input.?.exprValue();
             task.index += 1;
             return self.nextIteratorDispatchOperand(task, plan_args);
@@ -36442,35 +36401,9 @@ const BodyContext = struct {
         task.call_ctx = try self.createCallContext();
         const call_ctx = task.call_ctx.?;
 
-        var callable_node = try call_ctx.instantiateIteratorPlanCallNodeFromCaller(plan.callable_ty, self, plan_args, task.pre_lowered, task.expected_ret_ty);
-        const initial_plan_fn = try self.graph.functionNodes(callable_node);
-        // Instantiating the caller-authored request completes any procedure
-        // operands that return iterator evidence. Only then is the producer's
-        // representation available for the generated Iter.iter/Iter.next path.
-        if (self.iteratorProcedureForMethodTarget(lookup.target)) |procedure| {
-            const dispatcher_node = initial_plan_fn.args[plan.dispatcher_arg_index];
-            if ((procedure == .identity or procedure == .next) and (try self.isGeneratedIteratorEvidenceNode(dispatcher_node))) {
-                try self.constrainCheckedInterfaceToCell(plan.dispatcher_ty, DraftTypeCell.fromGraphNode(dispatcher_node));
-                task.generated = .{ .procedure = procedure, .dispatcher_node = dispatcher_node };
-                switch (try self.iteratorOperandStep(plan_args[plan.dispatcher_arg_index], task.pre_lowered, dispatcher_node)) {
-                    .now => |iterator| return self.finishGeneratedIteratorDispatch(task, procedure, dispatcher_node, iterator),
-                    .child => |step| return step,
-                }
-            }
-        }
+        const callable_node = try call_ctx.instantiateIteratorPlanCallNodeFromCaller(plan.callable_ty, self, plan_args, task.pre_lowered, task.expected_ret_ty);
         const target_node = try self.methodTargetNodeFromPlan(lookup, call_ctx, plan.callable_ty);
         try self.relateDispatchTargetRequestInterface(lookup, target_node, callable_node);
-        if (try self.generatedIteratorPlanRequestNode(
-            lookup,
-            target_node,
-            callable_node,
-            plan_args,
-        )) |private_node| {
-            callable_node = private_node;
-        }
-        // The generated request owns the operand slots used to lower this
-        // call. Completing the callee may replace the callable result, but it
-        // must not move these request-authored operands.
         const plan_fn = try self.graph.functionNodes(callable_node);
         task.callee = try self.methodTargetCalleeAtNodeWithEvidence(
             lookup,
@@ -36540,40 +36473,9 @@ const BodyContext = struct {
             .{ .call_proc = .{
                 .callee = try self.draftProcCalleeForSlot(task.callee),
                 .args = try self.addExprSpan(task.args),
-                .iterator_procedure = self.iteratorProcedureForMethodTarget(task.lookup.target),
                 .captures = try self.methodTargetCaptureSpan(task.lookup),
             } },
         );
-        self.releaseIteratorDispatchTask(task);
-        return loweredExprStep(lowered);
-    }
-
-    fn finishGeneratedIteratorDispatch(
-        self: *BodyContext,
-        task: *IteratorDispatchTask,
-        procedure: checked.IteratorProcedureId,
-        dispatcher_node: NodeId,
-        iterator: DraftExprId,
-    ) Allocator.Error!LowerStep {
-        const lowered = switch (procedure) {
-            .identity => blk: {
-                if (task.expected_ret_ty) |expected| {
-                    try relateRequestComponent(self.graph, dispatcher_node, try expected.toGraphNode(self.graph));
-                }
-                break :blk iterator;
-            },
-            .next => blk: {
-                const step_ret_node = try self.generatedIteratorStepReturnNode(dispatcher_node);
-                if (task.expected_ret_ty) |expected| {
-                    try relateRequestComponent(self.graph, step_ret_node, try expected.toGraphNode(self.graph));
-                }
-                break :blk try self.addExprWithTypeCell(
-                    DraftTypeCell.fromGraphNode(step_ret_node),
-                    try self.lowerGeneratedIteratorNextData(iterator, dispatcher_node),
-                );
-            },
-            .custom, .single, .list_iter, .list_iter_rev, .str_iter_utf8, .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append, .with_index, .step_by, .from_iter, .range_iter, .numeric_range_iter, .numeric_to, .numeric_until, .from_step, .range_done => unreachable, // callers dispatch here only for the generated identity and next procedures
-        };
         self.releaseIteratorDispatchTask(task);
         return loweredExprStep(lowered);
     }
@@ -36702,7 +36604,6 @@ const BodyContext = struct {
         fn_nodes: FunctionNodes = undefined,
         callee_ret: NodeId = undefined,
         callee: DraftFnSlot = undefined,
-        iterator_procedure: ?checked.IteratorProcedureId = null,
         fn_ty: Type.TypeId = undefined,
         callee_expr: DraftExprId = undefined,
         /// The result cell a divergent operand's effect lowers at.
@@ -38405,14 +38306,6 @@ const BodyContext = struct {
                 if (task.direct_parametric_low_level == null and !task.direct_graph_call) {
                     const target_node = try self.methodTargetNodeFromPlan(relation_lookup, call_ctx, plan.callable_ty);
                     try self.relateDispatchTargetRequestInterface(relation_lookup, target_node, callable_node);
-                    if (try self.generatedIteratorMethodRequestNode(
-                        relation_lookup,
-                        target_node,
-                        callable_node,
-                        plan_args,
-                    )) |private_node| {
-                        callable_node = private_node;
-                    }
                 }
                 callable_node = try self.lowerAndCompleteIteratorMethodResultAtNode(
                     relation_lookup,
@@ -38853,7 +38746,6 @@ const BodyContext = struct {
         const call = try self.addExprWithTypeCell(call_ret_cell, .{ .call_proc = .{
             .callee = try self.draftProcCalleeForSlot(slot),
             .args = lowered,
-            .iterator_procedure = procedure.runtime_target.iteratorProcedure(),
             .captures = try self.methodTargetCaptureSpan(lookup),
         } });
         return loweredExprStep(try self.applyDispatchResultMode(plan.result_mode, call));
@@ -39138,8 +39030,6 @@ const BodyContext = struct {
 
     /// The call task's cursor while a divergent operand's effect lowers.
     const divergent_call_cursor: u8 = 0xff;
-    /// The generated iterator whose `next` a direct call reads.
-    const iterator_next_cursor: u8 = 0xfe;
     /// A direct call's arguments are related to its request and every lambda
     /// argument is drafted.
     const direct_args_prepared_cursor: u8 = 0xfd;
@@ -39156,13 +39046,6 @@ const BodyContext = struct {
                 .ret_ty = task.divergent_ret_cell,
                 .data = try self.exprIdAsDivergentData(input.?.exprValue()),
             }),
-            iterator_next_cursor => {
-                const iterator_node = task.fn_nodes.args[0];
-                return self.callLowerDone(task, .{
-                    .ret_ty = DraftTypeCell.fromGraphNode(task.fn_nodes.ret),
-                    .data = try self.lowerGeneratedIteratorNextData(input.?.exprValue(), iterator_node),
-                });
-            },
             0 => {
                 const expected_ret_node = task.expected_ret_node;
                 const expected_ret_ty = task.expected_ret_ty;
@@ -39180,7 +39063,6 @@ const BodyContext = struct {
 
                 if (call.directTarget(self.view)) |target| {
                     const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.sourceFnTy(self.view));
-                    task.iterator_procedure = self.iteratorProcedureForResolvedTarget(target);
                     const fn_node = try self.directCallRequestNode(
                         checked_expr,
                         target,
@@ -39248,12 +39130,6 @@ const BodyContext = struct {
                 if (input.?.maybeCallValue()) |lowered| return self.callLowerDone(task, lowered);
                 const target = call.directTarget(self.view).?;
                 const fn_nodes = task.fn_nodes;
-                if (task.iterator_procedure) |procedure| {
-                    if ((try self.generatedIteratorNextOperand(procedure, call.args, fn_nodes))) |iterator| {
-                        frame.cursor = iterator_next_cursor;
-                        return requestLowerChild(self, iterator, DraftTypeCell.fromGraphNode(fn_nodes.args[0]));
-                    }
-                }
                 const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.sourceFnTy(self.view));
                 if (self.resolvedTargetIsStrInspect(target)) {
                     frame.cursor = 2;
@@ -39283,7 +39159,6 @@ const BodyContext = struct {
                     .data = .{ .call_proc = .{
                         .callee = .{ .func = callee },
                         .args = args,
-                        .iterator_procedure = task.iterator_procedure,
                         .captures = captures,
                     } },
                 });
@@ -39297,7 +39172,6 @@ const BodyContext = struct {
                     .data = .{ .call_proc = .{
                         .callee = .{ .func = task.callee },
                         .args = lowered_args,
-                        .iterator_procedure = task.iterator_procedure,
                         .captures = captures,
                     } },
                 });
@@ -40907,41 +40781,6 @@ const BodyContext = struct {
         };
     }
 
-    fn iteratorProcedureForResolvedTarget(
-        self: *BodyContext,
-        target: checked.ResolvedValueId,
-    ) ?checked.IteratorProcedureId {
-        return switch (self.finalDirectTarget(target).record.ref) {
-            .top_level_proc,
-            .imported_proc,
-            .hosted_proc,
-            .promoted_top_level_proc,
-            => |proc| proc.iterator_procedure,
-            .platform_required_proc => |proc| proc.procedure.iterator_procedure,
-            .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => null,
-        };
-    }
-
-    fn iteratorCallNeedsConstructorArgumentEvidence(
-        self: *BodyContext,
-        procedure: ?checked.IteratorProcedureId,
-        args: []const CIR.Expr.Idx,
-    ) Allocator.Error!bool {
-        if (procedure != .custom) return false;
-        if (args.len != 3) Common.invariant("custom iterator call did not have three arguments");
-        return try self.graph.containsIteratorInterface(try self.instNode(checkedExpr(self.view, ExprSite.read(args[0])).ty));
-    }
-
-    fn iteratorProcedureForMethodTarget(
-        _: *BodyContext,
-        target: static_dispatch.MethodTarget,
-    ) ?checked.IteratorProcedureId {
-        return switch (target.kind) {
-            .procedure => |procedure| procedure.runtime_target.iteratorProcedure(),
-            .local_proc, .structural, .callable_binding => null,
-        };
-    }
-
     fn callsiteIntrinsicForMethodTarget(
         _: *BodyContext,
         target: static_dispatch.MethodTarget,
@@ -41716,297 +41555,6 @@ const BodyContext = struct {
         };
     }
 
-    fn isForcedDynamicIteratorNode(self: *BodyContext, node: NodeId) Allocator.Error!bool {
-        return switch ((try self.graph.content(node))) {
-            .named => |named| named.def.iterator_representation == .forced_dynamic,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => false,
-        };
-    }
-
-    /// Build an exact iterator procedure request entirely in the active
-    /// instantiation graph. No durable Monotype TypeId is created until the
-    /// graph has received all evidence and is sealed.
-    fn generatedIteratorFunctionNode(
-        self: *BodyContext,
-        procedure: checked.IteratorProcedureId,
-        public_fn_node: NodeId,
-        request_fn_node: NodeId,
-        checked_args: []const OptionalCheckedExpr,
-    ) Allocator.Error!?NodeId {
-        const public_fn = try self.graph.functionNodes(public_fn_node);
-        const request_fn = try self.graph.functionNodes(request_fn_node);
-        if (public_fn.args.len != request_fn.args.len) {
-            Common.invariant("iterator public/request function arity differed");
-        }
-        const expected_ret = if ((try self.isGeneratedIteratorEvidenceNode(request_fn.ret))) request_fn.ret else null;
-
-        if (expected_ret) |expected| switch (procedure) {
-            .from_step => return try self.generatedIteratorConstructorFunctionNode(expected),
-            .range_done => return try self.graphFunctionNode(request_fn.args, expected),
-            .identity, .next, .custom, .single, .list_iter, .list_iter_rev, .str_iter_utf8, .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append, .with_index, .step_by, .from_iter, .range_iter, .numeric_range_iter, .numeric_to, .numeric_until => {},
-        };
-
-        switch (procedure) {
-            .identity => {
-                if (checked_args.len != 1 or request_fn.args.len != 1) {
-                    Common.invariant("Iter.iter reached Monotype with an unexpected arity");
-                }
-                if ((try self.isGeneratedIteratorEvidenceNode(request_fn.args[0]))) {
-                    return try self.graphFunctionNode(&.{request_fn.args[0]}, request_fn.args[0]);
-                }
-            },
-            .next => {
-                if (checked_args.len != 1 or request_fn.args.len != 1) {
-                    Common.invariant("iterator next reached Monotype with an unexpected arity");
-                }
-                if ((try self.isGeneratedIteratorEvidenceNode(request_fn.args[0]))) {
-                    return try self.graphFunctionNode(
-                        &.{request_fn.args[0]},
-                        try self.generatedIteratorNextResultNode(request_fn.args[0], public_fn.ret),
-                    );
-                }
-            },
-            .custom => {
-                if (checked_args.len != 3 or request_fn.args.len != 3) {
-                    Common.invariant("custom iterator source reached Monotype with an unexpected arity");
-                }
-                if ((try self.expectedGeneratedIteratorProducerNode(expected_ret, mintedProducerKind(procedure)))) |expected| {
-                    if ((try self.isForcedDynamicIteratorNode(expected))) {
-                        return try self.graphFunctionNode(request_fn.args, expected);
-                    }
-                    const components = (try self.generatedIteratorComponentNodes(expected, 2));
-                    return try self.graphFunctionNode(&.{ components[0], request_fn.args[1], components[1] }, expected);
-                }
-                const state_is_private = try self.graph.containsGeneratedPrivate(request_fn.args[0]);
-                const advance_arg = checked_args[2].get() orelse Common.invariant("custom iterator source's advance operand was not a checked expression");
-                const advance_node = if (state_is_private)
-                    try self.iterCustomAdvanceRequestNode(ExprSite.read(advance_arg), request_fn.args[0])
-                else
-                    request_fn.args[2];
-                return try self.graphFunctionNode(
-                    &.{ request_fn.args[0], request_fn.args[1], advance_node },
-                    try self.generatedIteratorNode(
-                        mintedProducerKind(procedure),
-                        public_fn.ret,
-                        &.{ request_fn.args[0], advance_node },
-                        try self.callableArgumentEvidenceDigest(ExprSite.read(advance_arg)),
-                    ),
-                );
-            },
-            // Both list-backed conversions mint over the same component and
-            // item; only the producer kind differs, and that comes from the
-            // registry.
-            .list_iter, .list_iter_rev => {
-                if (checked_args.len != 1 or request_fn.args.len != 1) {
-                    Common.invariant("list-backed iterator conversion reached Monotype with an unexpected arity");
-                }
-                if (try self.generatedIteratorExpectedProducerFunctionNode(mintedProducerKind(procedure), request_fn.args, expected_ret)) |expected_fn| return expected_fn;
-                return try self.graphFunctionNode(
-                    request_fn.args,
-                    try self.generatedIteratorNodeWithItem(
-                        mintedProducerKind(procedure),
-                        public_fn.ret,
-                        &.{request_fn.args[0]},
-                        null,
-                        try self.graph.listElementNode(request_fn.args[0]),
-                    ),
-                );
-            },
-            .str_iter_utf8 => {
-                if (checked_args.len != 1 or request_fn.args.len != 1) {
-                    Common.invariant("Str.iter_utf8 reached Monotype with an unexpected arity");
-                }
-                if (try self.generatedIteratorExpectedProducerFunctionNode(mintedProducerKind(procedure), request_fn.args, expected_ret)) |expected_fn| return expected_fn;
-                return try self.graphFunctionNode(
-                    request_fn.args,
-                    try self.generatedIteratorNode(mintedProducerKind(procedure), public_fn.ret, &.{request_fn.args[0]}, null),
-                );
-            },
-            .single => {
-                if (checked_args.len != 1 or request_fn.args.len != 1) {
-                    Common.invariant("Iter.single reached Monotype with an unexpected arity");
-                }
-                if (try self.generatedIteratorExpectedProducerFunctionNode(mintedProducerKind(procedure), request_fn.args, expected_ret)) |expected_fn| return expected_fn;
-                return try self.graphFunctionNode(
-                    request_fn.args,
-                    try self.generatedIteratorNodeWithItem(
-                        mintedProducerKind(procedure),
-                        public_fn.ret,
-                        &.{request_fn.args[0]},
-                        null,
-                        request_fn.args[0],
-                    ),
-                );
-            },
-            .numeric_until, .numeric_to => {
-                if (try self.generatedIteratorExpectedProducerFunctionNode(mintedProducerKind(procedure), request_fn.args, expected_ret)) |expected_fn| return expected_fn;
-                return try self.graphFunctionNode(
-                    request_fn.args,
-                    try self.generatedIteratorNode(mintedProducerKind(procedure), public_fn.ret, &.{}, null),
-                );
-            },
-            .map, .keep_if, .drop_if => return try self.generatedIteratorAdapterFunctionNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
-            .take_first, .drop_first, .append, .with_index, .step_by, .from_iter => return try self.generatedIteratorAdapterFunctionNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, checked_args, expected_ret, null),
-            .concat => {
-                if (checked_args.len != 2 or request_fn.args.len != 2) {
-                    Common.invariant("Iter.concat reached Monotype with an unexpected arity");
-                }
-                if (try self.generatedIteratorExpectedProducerFunctionNode(mintedProducerKind(procedure), request_fn.args, expected_ret)) |expected_fn| return expected_fn;
-                if ((try self.isGeneratedIteratorEvidenceNode(request_fn.args[0])) or
-                    (try self.isGeneratedIteratorEvidenceNode(request_fn.args[1])))
-                {
-                    return try self.graphFunctionNode(
-                        request_fn.args,
-                        try self.generatedIteratorNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, null),
-                    );
-                }
-            },
-            .range_iter, .numeric_range_iter, .from_step, .range_done => {},
-        }
-        return null;
-    }
-
-    /// Build the transition request of `Iter.custom` or `Stream.custom` with
-    /// its checked state role bound to the seed's exact representation. The
-    /// transition's argument and successful next-state result share that
-    /// checked identity, so a fresh instantiation propagates the
-    /// representation through both positions without mutating a finished seed
-    /// Monotype or reconstructing a type path.
-    fn iterCustomAdvanceRequestNode(
-        self: *BodyContext,
-        checked_advance: ExprSite,
-        state_node: NodeId,
-    ) Allocator.Error!NodeId {
-        const checked_fn_ty = checkedExpr(self.view, checked_advance).ty;
-        const checked_fn = self.checkedFunctionType(checked_fn_ty);
-        if (checked_fn.args.len != 1) {
-            Common.invariant("custom iterator advance callable did not have exactly one state argument");
-        }
-        var checked_try_ty = checked_fn.ret;
-        const checked_try = while (true) switch (checkedPayload(self.view, checked_try_ty)) {
-            .alias => |alias| checked_try_ty = alias.backing,
-            .nominal => |nominal| break nominal,
-            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("custom iterator advance callable did not return Try"),
-        };
-        const checked_try_builtin = switch (checked_try.representation) {
-            .builtin => |builtin| builtin,
-            .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => Common.invariant("custom iterator advance callable returned a non-builtin Try"),
-        };
-        if (checked.builtinRuntimeEncoding(checked_try_builtin) != .try_nominal or checked_try.args.len != 2) {
-            Common.invariant("custom iterator advance callable did not return the builtin Try type");
-        }
-        var checked_ok = checked_try.args[0];
-        const checked_ok_items = while (true) switch (checkedPayload(self.view, checked_ok)) {
-            .alias => |alias| checked_ok = alias.backing,
-            .tuple => |items| break items,
-            .pending, .field_kind, .err, .flex, .rigid, .record, .nominal, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("custom iterator advance success value was not an item-state tuple"),
-        };
-        if (checked_ok_items.len != 2) {
-            Common.invariant("custom iterator advance success tuple did not have item and state elements");
-        }
-        const checked_next_state = checked_ok_items[1];
-
-        const previous = self.instantiation;
-        self.instantiation = try TypeInstantiationContext.initPooled(
-            self.builder,
-            self.builder.allocateInstantiationScope(),
-            self.view.key.bytes,
-        );
-        defer {
-            self.instantiation.deinit();
-            self.instantiation = previous;
-        }
-
-        try self.putScopedNode(self.scopedCheckedType(checked_fn.args[0]), state_node);
-        try self.putScopedNode(self.scopedCheckedType(checked_next_state), state_node);
-        const advance_node = try self.instNode(checked_fn_ty);
-        const advance_fn = try self.graph.functionNodes(advance_node);
-        if (advance_fn.args.len != 1 or !self.graph.sameClass(advance_fn.args[0], state_node)) {
-            Common.invariant("custom iterator advance request lost its exact state argument");
-        }
-        self.graph.registerConstructorEvidenceRequest(advance_node);
-        return advance_node;
-    }
-
-    /// The registry-declared minted kind for a producing iterator procedure.
-    fn mintedProducerKind(procedure: checked.IteratorProcedureId) Type.IteratorKind {
-        return procedure.iteratorKind() orelse
-            Common.invariant("iterator procedure minted no producer kind");
-    }
-
-    fn generatedIteratorAdapterFunctionNode(
-        self: *BodyContext,
-        kind: Type.IteratorKind,
-        public_ret: NodeId,
-        args: []const NodeId,
-        checked_args: []const OptionalCheckedExpr,
-        expected_ret: ?NodeId,
-        callable_index: ?usize,
-    ) Allocator.Error!?NodeId {
-        // The adapted iterator is always the first argument; the remaining
-        // arguments are the operation's own inputs.
-        if (checked_args.len != args.len or args.len == 0 or args.len > 2) {
-            Common.invariant("iterator adapter reached Monotype with an unexpected arity");
-        }
-        if (try self.generatedIteratorExpectedProducerFunctionNode(kind, args, expected_ret)) |expected_fn| return expected_fn;
-        if (!(try self.isGeneratedIteratorEvidenceNode(args[0]))) return null;
-        const callable_evidence = if (callable_index) |index|
-            try self.callableArgumentEvidenceDigest(ExprSite.read(checked_args[index].get() orelse Common.invariant("iterator adapter's callable operand was not a checked expression")))
-        else
-            null;
-        return try self.graphFunctionNode(
-            args,
-            try self.generatedIteratorNode(kind, public_ret, args, callable_evidence),
-        );
-    }
-
-    fn expectedGeneratedIteratorProducerNode(
-        self: *BodyContext,
-        expected_ret: ?NodeId,
-        kind: Type.IteratorKind,
-    ) Allocator.Error!?NodeId {
-        const expected = expected_ret orelse return null;
-        if (!(try self.isGeneratedIteratorEvidenceNode(expected))) return null;
-        if ((try self.isForcedDynamicIteratorNode(expected))) return expected;
-        const named = (try self.graph.content(expected)).named;
-        return if (named.def.iterator_kind == kind) expected else null;
-    }
-
-    fn generatedIteratorExpectedProducerFunctionNode(
-        self: *BodyContext,
-        kind: Type.IteratorKind,
-        args: []const NodeId,
-        expected_ret: ?NodeId,
-    ) Allocator.Error!?NodeId {
-        const expected = (try self.expectedGeneratedIteratorProducerNode(expected_ret, kind)) orelse return null;
-        if ((try self.isForcedDynamicIteratorNode(expected))) return try self.graphFunctionNode(args, expected);
-        // A source without nominal components (ranges) initializes the
-        // generated step state from its construction inputs. Its producer
-        // therefore keeps the checked request arguments while returning the
-        // exact private iterator.
-        if (kind.componentTopology()) |topology| {
-            if (topology == .source_without_components) {
-                return try self.graphFunctionNode(args, expected);
-            }
-        }
-        return try self.graphFunctionNode((try self.generatedIteratorComponentNodes(expected, args.len)), expected);
-    }
-
-    fn generatedIteratorComponentNodes(
-        self: *BodyContext,
-        iterator: NodeId,
-        expected_components: usize,
-    ) Allocator.Error![]const NodeId {
-        const named = switch ((try self.graph.content(iterator))) {
-            .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("generated iterator component nodes requested for a non-named type"),
-        };
-        if (named.args.len != expected_components + 1) {
-            Common.invariant("generated iterator producer did not contain its component count");
-        }
-        return named.args[1..];
-    }
-
     const IteratorRepresentationNames = Type.IteratorTopology;
 
     fn iteratorRepresentationNames(self: *BodyContext, owner: static_dispatch.IteratorOwner) Allocator.Error!IteratorRepresentationNames {
@@ -42037,30 +41585,6 @@ const BodyContext = struct {
             Common.invariant("iterator representation requested for a non-iterator builtin type");
     }
 
-    fn generatedIteratorConstructorFunctionNode(self: *BodyContext, iterator: NodeId) Allocator.Error!NodeId {
-        const named = (try self.graph.content(iterator)).named;
-        const backing = named.backing.get() orelse
-            Common.invariant("generated iterator constructor requested a type without backing");
-        const topology = try self.iteratorRepresentationNames(iteratorOwnerOfNamed(named.builtin_owner.get()));
-        return try self.graphFunctionNode(&.{
-            try self.graph.recordFieldNode(backing.node, topology.len_field),
-            try self.graph.recordFieldNode(backing.node, topology.step_field),
-        }, iterator);
-    }
-
-    /// The result of a generated-private `next` request: the iterator's step
-    /// row, or, when the public interface's result row includes that closed
-    /// row and more tags, a row at the interface's labels whose own tags keep
-    /// the step row's payloads. The step closure is a call through a function
-    /// value, so its row stays its own and the template body's row coercion
-    /// joins it into the result (design.md "Closed Result Rows At Template
-    /// Boundaries").
-    fn generatedIteratorNextResultNode(self: *BodyContext, iterator: NodeId, public_ret: NodeId) Allocator.Error!NodeId {
-        const step_ret = try self.generatedIteratorStepReturnNode(iterator);
-        if (!try requestRowIncludesClosedRow(self.graph, step_ret, public_ret)) return step_ret;
-        return try self.graph.closedTagRowAtWiderLabels(step_ret, public_ret);
-    }
-
     fn generatedIteratorStepReturnNode(self: *BodyContext, iterator: NodeId) Allocator.Error!NodeId {
         const named = (try self.graph.content(iterator)).named;
         const backing = named.backing.get() orelse
@@ -42068,337 +41592,6 @@ const BodyContext = struct {
         const topology = try self.iteratorRepresentationNames(iteratorOwnerOfNamed(named.builtin_owner.get()));
         const step = try self.graph.functionNodes(try self.graph.recordFieldNode(backing.node, topology.step_field));
         return step.ret;
-    }
-
-    fn generatedIteratorNode(
-        self: *BodyContext,
-        kind: Type.IteratorKind,
-        public_iterator: NodeId,
-        components: []const NodeId,
-        callable_evidence: ?names.TypeDigest,
-    ) Allocator.Error!NodeId {
-        const public_named = switch ((try self.graph.content(public_iterator))) {
-            .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("generated iterator requested a non-named public type"),
-        };
-        if (public_named.args.len == 0) {
-            Common.invariant("generated iterator requested a public type without an item argument");
-        }
-        return self.generatedIteratorNodeWithItem(
-            kind,
-            public_iterator,
-            components,
-            callable_evidence,
-            public_named.args[0],
-        );
-    }
-
-    fn generatedIteratorNodeWithItem(
-        self: *BodyContext,
-        kind: Type.IteratorKind,
-        public_iterator: NodeId,
-        components: []const NodeId,
-        callable_evidence: ?names.TypeDigest,
-        item_node: NodeId,
-    ) Allocator.Error!NodeId {
-        const public_named = switch ((try self.graph.content(public_iterator))) {
-            .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("generated iterator requested a non-named public type"),
-        };
-        const owner = public_named.builtin_owner.get() orelse
-            Common.invariant("generated iterator requested an Iter type without producer-owned builtin identity");
-        if (!static_dispatch.isIteratorOwner(owner) or public_named.args.len == 0) {
-            Common.invariant("generated iterator requested a non-public Iter source type");
-        }
-        const public_source: solve.InstIteratorPublicSource = if (public_named.generated_iterator) |generated|
-            generated.public_source
-        else blk: {
-            if (public_named.def.iterator_representation != .none or public_named.args.len != 1) {
-                Common.invariant("generated iterator source lacked its producer-owned public contract");
-            }
-            const public_backing = public_named.backing.get() orelse
-                Common.invariant("generated iterator requested a public Iter without backing");
-            if (public_backing.authority != .checked_public) {
-                Common.invariant("generated iterator public source had private backing authority");
-            }
-            break :blk .{
-                .named_type = public_named.named_type,
-                .def = public_named.def,
-                .kind = public_named.kind,
-                .builtin_owner = owner,
-                .backing = public_backing,
-                .declared_order = public_named.declared_order,
-            };
-        };
-        const mint_depth = (try self.generatedIteratorMintDepth(kind, components)) orelse
-            return try self.forcedDynamicIteratorNode(public_iterator, item_node, public_source);
-        if ((try self.graph.findGeneratedIterator(public_iterator, kind, components, callable_evidence))) |existing| {
-            return existing;
-        }
-
-        return try self.graph.addRecursiveNode(GeneratedIteratorFill{
-            .body = self,
-            .public_source = public_source,
-            .item_node = item_node,
-            .components = try self.graph.arena().dupe(NodeId, components),
-            .callable_evidence = callable_evidence,
-            .kind = kind,
-            .mint_depth = mint_depth,
-            .representation = .minted,
-        }, GeneratedIteratorFill.fill);
-    }
-
-    const max_minted_iterator_chain_depth: u8 = 16;
-
-    fn generatedIteratorMintDepth(
-        self: *BodyContext,
-        kind: Type.IteratorKind,
-        components: []const NodeId,
-    ) Allocator.Error!?u8 {
-        if (kind == .forced_dynamic) return null;
-        const topology = kind.componentTopology() orelse
-            Common.invariant("generated iterator mint requested without a producer kind");
-        switch (topology) {
-            .source_without_components, .source_with_components => return 1,
-            .adapter => {},
-        }
-
-        var component_depth: u8 = 0;
-        for (components) |component| {
-            const named = switch ((try self.graph.content(component))) {
-                .named => |named| named,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => continue,
-            };
-            switch (named.def.iterator_representation) {
-                .forced_dynamic => return null,
-                .minted => {
-                    if (named.def.iterator_depth == 0) {
-                        Common.invariant("generated iterator component had no producer-assigned depth");
-                    }
-                    component_depth = @max(component_depth, named.def.iterator_depth);
-                },
-                .none => {},
-            }
-        }
-        if (component_depth == 0) {
-            Common.invariant("generated iterator adapter had no exact iterator component");
-        }
-        if (component_depth >= max_minted_iterator_chain_depth) return null;
-        return component_depth + 1;
-    }
-
-    fn forcedDynamicIteratorNode(
-        self: *BodyContext,
-        public_iterator: NodeId,
-        item_node: NodeId,
-        public_source: solve.InstIteratorPublicSource,
-    ) Allocator.Error!NodeId {
-        if ((try self.graph.findGeneratedIterator(public_iterator, .forced_dynamic, &.{}, null))) |existing| {
-            return existing;
-        }
-        return try self.graph.addRecursiveNode(GeneratedIteratorFill{
-            .body = self,
-            .public_source = public_source,
-            .item_node = item_node,
-            .components = &.{},
-            .callable_evidence = null,
-            .kind = .forced_dynamic,
-            .mint_depth = 0,
-            .representation = .forced_dynamic,
-        }, GeneratedIteratorFill.fill);
-    }
-
-    /// Fills a generated iterator node whose backing refers to itself.
-    const GeneratedIteratorFill = struct {
-        body: *BodyContext,
-        public_source: solve.InstIteratorPublicSource,
-        item_node: NodeId,
-        components: []const NodeId,
-        callable_evidence: ?names.TypeDigest,
-        kind: Type.IteratorKind,
-        mint_depth: u8,
-        representation: Type.IteratorRepresentation,
-
-        fn fill(ctx: @This(), self_node: NodeId) Allocator.Error!InstNode {
-            const args = try ctx.body.graph.arena().alloc(NodeId, ctx.components.len + 1);
-            args[0] = ctx.item_node;
-            @memcpy(args[1..], ctx.components);
-            var def = ctx.public_source.def;
-            def.generated = null;
-            def.iterator_representation = ctx.representation;
-            def.iterator_kind = ctx.kind;
-            def.iterator_depth = ctx.mint_depth;
-            const topology = try ctx.body.iteratorRepresentationNames(iteratorOwnerOfNamed(ctx.public_source.builtin_owner));
-            def.iterator_topology = .some(topology);
-            return try ctx.body.graph.namedContent(.{
-                .named_type = ctx.public_source.named_type,
-                .def = def,
-                .kind = ctx.public_source.kind,
-                .builtin_owner = .some(ctx.public_source.builtin_owner),
-                .args = args,
-                .backing = .some(.{
-                    .node = try ctx.body.generatedIteratorBackingNode(
-                        topology,
-                        ctx.public_source.backing.node,
-                        self_node,
-                        ctx.item_node,
-                    ),
-                    .use = ctx.public_source.backing.use,
-                    .authority = .generated_private,
-                }),
-                .generated_iterator = try ctx.body.graph.generatedIterator(.{
-                    .callable_evidence = ctx.callable_evidence,
-                    .public_source = ctx.public_source,
-                }),
-                .declared_order = ctx.public_source.declared_order,
-            });
-        }
-    };
-
-    fn generatedIteratorBackingNode(
-        self: *BodyContext,
-        topology: IteratorRepresentationNames,
-        public_backing: NodeId,
-        self_node: NodeId,
-        item_node: NodeId,
-    ) Allocator.Error!NodeId {
-        const public_fields = (try self.graph.recordNodes(public_backing)).fields;
-        const fields = try self.graph.arena().alloc(InstField, public_fields.len);
-        for (public_fields, fields) |field, *out| {
-            out.* = .{
-                .name = field.name,
-                .ty = if (field.name == topology.step_field)
-                    try self.generatedIteratorStepFunctionNode(topology, field.ty, self_node, item_node)
-                else
-                    field.ty,
-                .value_ty = field.value_ty,
-                .kind = field.kind,
-                .default = field.default,
-            };
-        }
-        return try self.graph.newNode(.{ .record = .{
-            .fields = fields,
-            .ext = try self.graph.newNode(.empty_record),
-        } });
-    }
-
-    fn generatedIteratorStepFunctionNode(
-        self: *BodyContext,
-        topology: IteratorRepresentationNames,
-        public_step: NodeId,
-        self_node: NodeId,
-        item_node: NodeId,
-    ) Allocator.Error!NodeId {
-        const step = try self.graph.functionNodes(public_step);
-        return try self.graphFunctionNode(
-            step.args,
-            try self.generatedIteratorStepResultNode(topology, step.ret, self_node, item_node),
-        );
-    }
-
-    fn generatedIteratorStepResultNode(
-        self: *BodyContext,
-        topology: IteratorRepresentationNames,
-        public_result: NodeId,
-        self_node: NodeId,
-        item_node: NodeId,
-    ) Allocator.Error!NodeId {
-        const public_tags = (try self.graph.tagRowNodes(public_result)).tags;
-        const tags = try self.graph.arena().alloc(InstTag, public_tags.len);
-        for (public_tags, tags) |tag, *out| {
-            const payloads = try self.graph.arena().alloc(NodeId, tag.payloads.len);
-            for (tag.payloads, payloads) |payload, *payload_out| {
-                payload_out.* = try self.generatedIteratorStepPayloadNode(topology, tag.name, payload, self_node, item_node);
-            }
-            out.* = .{
-                .name = tag.name,
-                .checked_name = tag.checked_name,
-                .payloads = payloads,
-            };
-        }
-        return try self.graph.newNode(.{ .tag_union = .{
-            .tags = tags,
-            .ext = try self.graph.newNode(.empty_tag_union),
-        } });
-    }
-
-    fn generatedIteratorStepPayloadNode(
-        self: *BodyContext,
-        topology: IteratorRepresentationNames,
-        tag_name: names.TagNameId,
-        public_payload: NodeId,
-        self_node: NodeId,
-        item_node: NodeId,
-    ) Allocator.Error!NodeId {
-        if (tag_name != topology.one_tag and tag_name != topology.skip_tag) return public_payload;
-        const public_fields = (try self.graph.recordNodes(public_payload)).fields;
-        const fields = try self.graph.arena().alloc(InstField, public_fields.len);
-        for (public_fields, fields) |field, *out| {
-            out.* = .{
-                .name = field.name,
-                .ty = if (field.name == topology.rest_field)
-                    self_node
-                else if (field.name == topology.item_field)
-                    item_node
-                else
-                    field.ty,
-                .value_ty = field.value_ty,
-                .kind = field.kind,
-                .default = field.default,
-            };
-        }
-        return try self.graph.newNode(.{ .record = .{
-            .fields = fields,
-            .ext = try self.graph.newNode(.empty_record),
-        } });
-    }
-
-    fn callableArgumentEvidenceDigest(
-        self: *BodyContext,
-        expr_id: ExprSite,
-    ) Allocator.Error!?names.TypeDigest {
-        const expr = checkedExpr(self.view, expr_id);
-        return switch (expr.data) {
-            .closure => |closure| try self.closureArgumentEvidenceDigest(expr_id, closure),
-            .lambda => |lambda| self.lambdaArgumentEvidenceDigest(expr_id, lambda.args.len),
-            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
-        };
-    }
-
-    fn lambdaArgumentEvidenceDigest(
-        self: *BodyContext,
-        expr_id: ExprSite,
-        arg_count: usize,
-    ) names.TypeDigest {
-        var hasher = TypeDigestHasher.init();
-        hasher.update("roc.generated_iterator.callable.lambda");
-        hasher.update(self.view.key.bytes[0..]);
-        hashU32(&hasher, @backingInt(expr_id.node()));
-        hashU32(&hasher, @intCast(arg_count));
-        hashU32(&hasher, 0);
-        return .{ .bytes = hasher.finalResult() };
-    }
-
-    fn closureArgumentEvidenceDigest(
-        self: *BodyContext,
-        expr_id: ExprSite,
-        closure: anytype,
-    ) Allocator.Error!names.TypeDigest {
-        var hasher = TypeDigestHasher.init();
-        hasher.update("roc.generated_iterator.callable.closure");
-        hasher.update(self.view.key.bytes[0..]);
-        hashU32(&hasher, @backingInt(expr_id.node()));
-        hashU32(&hasher, @backingInt(closure.lambda));
-        hashU32(&hasher, @intCast(closure.captures.len));
-        for (closure.captures) |capture_idx| {
-            const capture = self.view.bodies.capture(capture_idx);
-            hashU32(&hasher, @backingInt(capture.capture_id));
-            hashU32(&hasher, capture.scope_depth);
-            const binder = capture.pattern;
-            const checked_type_key = try self.view.types.rootKey(checkedBinderType(self.view, binder));
-            hasher.update(&checked_type_key.bytes);
-        }
-        return .{ .bytes = hasher.finalResult() };
     }
 
     fn relateCheckedTypeToMono(
@@ -47181,45 +46374,6 @@ const BodyContext = struct {
         } } });
     }
 
-    /// The iterator operand of an `Iter.next` over a generated iterator,
-    /// whose `next` reads the iterator's step directly.
-    fn generatedIteratorNextOperand(
-        self: *BodyContext,
-        procedure: checked.IteratorProcedureId,
-        checked_args: []const CIR.Expr.Idx,
-        fn_nodes: FunctionNodes,
-    ) Allocator.Error!?ExprSite {
-        if (procedure != .next) return null;
-        if (checked_args.len != 1 or fn_nodes.args.len != 1) {
-            Common.invariant("iterator next reached Monotype with an unexpected arity");
-        }
-        if (!(try self.isGeneratedIteratorEvidenceNode(fn_nodes.args[0]))) return null;
-        return ExprSite.read(checked_args[0]);
-    }
-
-    fn lowerGeneratedIteratorNextData(
-        self: *BodyContext,
-        iterator: DraftExprId,
-        iterator_node: NodeId,
-    ) Allocator.Error!BodyExprData {
-        const backing = (try self.graph.namedNodes(iterator_node)).backing orelse
-            Common.invariant("generated iterator next requested a type without backing");
-        const owner = iteratorOwnerOfNamed((try self.graph.content(iterator_node)).named.builtin_owner.get());
-        const step_name = (try self.iteratorRepresentationNames(owner)).step_field;
-        const step_node = try self.graph.opaqueDefinitionFieldNode(backing.node, step_name);
-        const step = try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(step_node),
-            .{ .field_access = .{
-                .receiver = iterator,
-                .segments = try self.draft.addFieldAccessSegmentSpan(&.{.{ .field = step_name }}),
-            } },
-        );
-        return .{ .call_value = .{
-            .callee = step,
-            .args = .empty(),
-        } };
-    }
-
     /// Materialize an indirect callee only when a binding use already provides
     /// a complete callable snapshot. Structured callees such as field accesses
     /// retain their graph nodes until their call request supplies every cell.
@@ -47750,10 +46904,8 @@ const BodyContext = struct {
 
     fn directCallRequestIsShareable(
         self: *BodyContext,
-        target: checked.ResolvedValueId,
         expected_ret_node: ?NodeId,
     ) Allocator.Error!bool {
-        if (self.iteratorProcedureForResolvedTarget(target) != null) return false;
         if (expected_ret_node) |expected| {
             if (try self.graph.containsGeneratedPrivate(expected)) return false;
         }
@@ -48019,7 +47171,7 @@ const BodyContext = struct {
             request_fn_node,
             edge,
             if (recursive_reference) .recursive_reference else .instantiation,
-            if (proc.iterator_procedure == .from_step) .exact_graph else .independent_roots,
+            .independent_roots,
             .inherit,
         );
     }
@@ -57587,97 +56739,6 @@ const BodyContext = struct {
         return target_node;
     }
 
-    fn generatedIteratorMethodRequestNode(
-        self: *BodyContext,
-        lookup: MethodLookup,
-        public_target_node: NodeId,
-        request_node: NodeId,
-        operands: []const static_dispatch.StaticDispatchOperand,
-    ) Allocator.Error!?NodeId {
-        const procedure = self.iteratorProcedureForMethodTarget(lookup.target) orelse return null;
-        const checked_args = try self.checkedExprDispatchOperands(operands) orelse return null;
-        defer self.allocator.free(checked_args);
-        const optional_args = try self.optionalCheckedArgs(checked_args);
-        defer self.allocator.free(optional_args);
-        const private_node = (try self.generatedIteratorFunctionNode(
-            procedure,
-            public_target_node,
-            request_node,
-            optional_args,
-        )) orelse return null;
-        try self.graph.registerRequestSourceInterface(private_node, public_target_node);
-        try relateFunctionRequestInterface(self.graph, public_target_node, private_node);
-        return private_node;
-    }
-
-    fn generatedIteratorPlanRequestNode(
-        self: *BodyContext,
-        lookup: MethodLookup,
-        public_target_node: NodeId,
-        request_node: NodeId,
-        operands: []const static_dispatch.IteratorDispatchOperand,
-    ) Allocator.Error!?NodeId {
-        const procedure = self.iteratorProcedureForMethodTarget(lookup.target) orelse return null;
-        const checked_args = try self.checkedExprIteratorDispatchOperands(operands);
-        defer self.allocator.free(checked_args);
-        const private_node = (try self.generatedIteratorFunctionNode(
-            procedure,
-            public_target_node,
-            request_node,
-            checked_args,
-        )) orelse return null;
-        try self.graph.registerRequestSourceInterface(private_node, public_target_node);
-        try relateFunctionRequestInterface(self.graph, public_target_node, private_node);
-        return private_node;
-    }
-
-    fn checkedExprDispatchOperands(
-        self: *BodyContext,
-        operands: []const static_dispatch.StaticDispatchOperand,
-    ) Allocator.Error!?[]CIR.Expr.Idx {
-        const checked_args = try self.allocator.alloc(CIR.Expr.Idx, operands.len);
-        errdefer self.allocator.free(checked_args);
-        for (operands, checked_args) |operand, *checked_arg| {
-            checked_arg.* = switch (operand) {
-                .checked_expr => |expr| expr,
-                .generated_interpolation_segments,
-                .generated_numeral,
-                .generated_quote,
-                .literal_pattern_value,
-                .literal_pattern_conversion,
-                => {
-                    self.allocator.free(checked_args);
-                    return null;
-                },
-            };
-        }
-        return checked_args;
-    }
-
-    /// Each iterator dispatch operand's checked expression; a pre-lowered
-    /// operand has none, and its representation reaches the request through
-    /// its node instead.
-    fn checkedExprIteratorDispatchOperands(
-        self: *BodyContext,
-        operands: []const static_dispatch.IteratorDispatchOperand,
-    ) Allocator.Error![]OptionalCheckedExpr {
-        const checked_args = try self.allocator.alloc(OptionalCheckedExpr, operands.len);
-        for (operands, checked_args) |operand, *checked_arg| {
-            checked_arg.* = switch (operand) {
-                .checked_expr => |expr| .some(expr),
-                .loop_iterator_state, .interpolation_seed, .interpolation_iterator, .interpolation_value => .none,
-            };
-        }
-        return checked_args;
-    }
-
-    /// `args` as the optional operands `generatedIteratorFunctionNode` takes.
-    fn optionalCheckedArgs(self: *BodyContext, args: []const CIR.Expr.Idx) Allocator.Error![]OptionalCheckedExpr {
-        const out = try self.allocator.alloc(OptionalCheckedExpr, args.len);
-        for (args, out) |arg, *slot| slot.* = .some(arg);
-        return out;
-    }
-
     fn methodTargetMonoTypeFromArgs(
         self: *BodyContext,
         lookup: MethodLookup,
@@ -58103,7 +57164,7 @@ const BodyContext = struct {
                     request_fn_node,
                     edge,
                     .instantiation,
-                    if (procedure.runtime_target.iteratorProcedure() == .from_step) .exact_graph else .independent_roots,
+                    .independent_roots,
                     codec_contract_selection,
                 );
             },
@@ -58277,7 +57338,7 @@ const BodyContext = struct {
                     request_fn_node,
                     edge,
                     .instantiation,
-                    if (procedure.runtime_target.iteratorProcedure() == .from_step) .exact_graph else .independent_roots,
+                    .independent_roots,
                     .inherit,
                 );
             },
@@ -58375,7 +57436,6 @@ const BodyContext = struct {
                 self.dispatchTargetEvidenceSource(plan),
             )),
             .args = args,
-            .iterator_procedure = self.iteratorProcedureForMethodTarget(contextual_lookup.target),
             .captures = try self.methodTargetCaptureSpan(contextual_lookup),
         } };
     }
@@ -58395,7 +57455,6 @@ const BodyContext = struct {
                 plan,
             )),
             .args = args,
-            .iterator_procedure = self.iteratorProcedureForMethodTarget(contextual_lookup.target),
             .captures = try self.methodTargetCaptureSpan(contextual_lookup),
         } };
     }

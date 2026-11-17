@@ -18,7 +18,6 @@ const ProcPasses = @import("proc_passes.zig");
 const ReturnSlot = @import("return_slot.zig");
 const ErasedOwner = @import("erased_owner.zig");
 const StrAppend = @import("str_append.zig");
-const SingleUseInline = @import("single_use_inline.zig");
 
 /// Completed compile-time scalar roots a forked continuation lowers as literals.
 pub const CompletedScalarValues = postcheck.ComptimeScalarValues.CompletedScalarValues;
@@ -158,7 +157,7 @@ pub const dev_inline_mode: InlineMode = .procedures;
 
 /// SpecConstr's clone-inlining scope for dev builds and compile-time
 /// evaluation.
-pub const dev_spec_constr_clone_inlining: SpecConstrCloneInlining = .iterator_fusion;
+pub const dev_spec_constr_clone_inlining: SpecConstrCloneInlining = .no_calls;
 
 /// Target settings and checked module state for the checked-to-LIR pipeline.
 pub const TargetConfig = struct {
@@ -207,7 +206,7 @@ pub const TargetConfig = struct {
     /// consumers drop them and the rest keep them and skip the analysis.
     immortal_string_literals: bool = false,
     /// Direct-call inlining scope for SpecConstr's value-aware clones.
-    /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
+    /// Optimized builds use `.all_calls`; dev builds use `.no_calls`
     /// so post-check time and emitted program size stay bounded. Consulted
     /// only when `inline_mode` is not `.none`, since that is what gates
     /// SpecConstr itself.
@@ -869,7 +868,6 @@ pub const stmt_kind_count = @typeInfo(std.meta.Tag(LIR.CFStmt)).@"enum".field_na
 pub const PassStep = enum {
     /// Resolving `.boxy` erased calls' ownership sources.
     erased_owner,
-    single_use_inline,
     return_slot,
     str_append,
     tag_reachability,
@@ -1938,13 +1936,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsageWithOptions(allocator, &lifted, target.spec_constr_clone_inlining, spec_constr_options);
         spec_constr_timing_scope.end();
         break :blk usage;
-    } else blk: {
-        var spec_constr_timing_scope = PipelineStageScope.begin(target.timing, .spec_constr);
-        defer spec_constr_timing_scope.end();
-        try postcheck.MonotypeLifted.SpecConstr.runIteratorFusionWithOptions(allocator, &lifted, spec_constr_options);
-        spec_constr_timing_scope.end();
-        break :blk postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
-    };
+    } else postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
     defer procedure_usage.deinit();
     if (target.timing) |timing| timing.addSpecConstrParallel(spec_constr_metrics.?.*);
 
@@ -2284,17 +2276,10 @@ fn finishLoweredOutput(
     // statements (see src/lir/trmc.zig).
     segment.add(.trmc);
     if (target.specialization_strategy == .lss) {
-        if (target.inline_mode == .none) {
-            try segment.flush(allocator, &lowered.lir_result, pass_target, pass_timing);
-            var single_use_scope = PassStepScope.begin(target.timing, .single_use_inline);
-            try SingleUseInline.run(&lowered.lir_result);
-            single_use_scope.end();
-            try runProcedurePass(allocator, &lowered.lir_result, pass_target, .forwarding_join, pass_timing);
-        }
-        // Every inline mode produces tag-valued joins whose body matches the
-        // tag at once: the iterator-fusion clone in `.none`, and the checked
-        // wrappers substituted at their call sites in `.wrappers`, whose
-        // `Try` results the caller matches immediately.
+        // Lowering produces tag-valued joins whose body matches the tag at
+        // once: the checked wrappers substituted at their call sites in
+        // `.wrappers`, whose `Try` results the caller matches immediately,
+        // and every inlined call that returns a tag.
         if (target.fuse_tag_cases) {
             try segment.flush(allocator, &lowered.lir_result, pass_target, pass_timing);
             try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion, pass_timing);

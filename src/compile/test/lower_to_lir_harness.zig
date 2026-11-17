@@ -588,9 +588,6 @@ pub fn expectSpecConstrParallelismDeterministicLir(
             var committed: u64 = 0;
             for (metrics.committed_by_phase) |count| committed += count;
             try std.testing.expectEqual(metrics.tasks_committed, committed);
-            if (options.inline_mode == .none) {
-                try std.testing.expectEqual(metrics.tasks_committed, metrics.committed_by_phase[@backingInt(lir.CheckedPipeline.SpecConstrPhase.iterator_fusion)]);
-            }
             inline for (phases) |phase| {
                 try std.testing.expect(metrics.committed_by_phase[@backingInt(phase)] > 0);
                 try std.testing.expect(metrics.changed_by_phase[@backingInt(phase)] > 0);

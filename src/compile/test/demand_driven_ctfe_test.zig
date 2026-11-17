@@ -304,7 +304,7 @@ test "a build continues the evaluation's program with every runtime body" {
     if (is_freestanding) return error.SkipZigTest;
     const target: lir.CheckedPipeline.TargetConfig = .{
         .inline_mode = .wrappers,
-        .spec_constr_clone_inlining = .iterator_fusion,
+        .spec_constr_clone_inlining = .no_calls,
         .proc_debug_names = true,
     };
     var checked = try checkApp(std.testing.allocator, genericLabelApp("good"), &.{helper_module}, target);

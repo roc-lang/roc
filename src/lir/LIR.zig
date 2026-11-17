@@ -257,9 +257,6 @@ pub const OriginKind = union(enum(u8)) {
     loop_append_promote,
     /// `tag_case_fusion`: fused join and redirected producer edges.
     tag_case_fusion,
-    /// `forwarding_join_inline`: statement produced when inlining a forwarding
-    /// join body.
-    forwarding_join_inline,
     /// `comptime_value_guards`: failure guard wrapped around a compile-time
     /// value use.
     comptime_value_guard,
@@ -280,7 +277,7 @@ pub const OriginKind = union(enum(u8)) {
     pub fn isArcInserted(self: OriginKind) bool {
         return switch (self) {
             .arc_incref, .arc_decref, .arc_dismantle => true,
-            .source, .lowering_glue, .derived, .scaffold, .join_scalarize, .box_reuse, .return_slot, .str_append_fuse, .loop_append_promote, .tag_case_fusion, .forwarding_join_inline, .comptime_value_guard, .trmc, .range_prove => false,
+            .source, .lowering_glue, .derived, .scaffold, .join_scalarize, .box_reuse, .return_slot, .str_append_fuse, .loop_append_promote, .tag_case_fusion, .comptime_value_guard, .trmc, .range_prove => false,
         };
     }
 
@@ -304,7 +301,7 @@ pub const OriginKind = union(enum(u8)) {
         return switch (self) {
             .arc_incref, .arc_decref => |rc| .{ .tag = std.meta.activeTag(self), .reason = @backingInt(rc.reason), .subject_local = @backingInt(rc.subject_local) },
             .arc_dismantle => |glue| .{ .tag = .arc_dismantle, .subject_local = @backingInt(glue.subject_local) },
-            .source, .lowering_glue, .derived, .scaffold, .join_scalarize, .box_reuse, .return_slot, .str_append_fuse, .loop_append_promote, .tag_case_fusion, .forwarding_join_inline, .comptime_value_guard, .trmc, .range_prove => .{ .tag = std.meta.activeTag(self) },
+            .source, .lowering_glue, .derived, .scaffold, .join_scalarize, .box_reuse, .return_slot, .str_append_fuse, .loop_append_promote, .tag_case_fusion, .comptime_value_guard, .trmc, .range_prove => .{ .tag = std.meta.activeTag(self) },
         };
     }
 };
@@ -325,7 +322,7 @@ pub const StoredOriginKind = extern struct {
             .arc_incref => .{ .arc_incref = .{ .subject_local = @fromBackingInt(self.subject_local), .reason = @fromBackingInt(self.reason) } },
             .arc_decref => .{ .arc_decref = .{ .subject_local = @fromBackingInt(self.subject_local), .reason = @fromBackingInt(self.reason) } },
             .arc_dismantle => .{ .arc_dismantle = .{ .subject_local = @fromBackingInt(self.subject_local) } },
-            inline .source, .lowering_glue, .derived, .scaffold, .join_scalarize, .box_reuse, .return_slot, .str_append_fuse, .loop_append_promote, .tag_case_fusion, .forwarding_join_inline, .comptime_value_guard, .trmc, .range_prove => |tag| tag,
+            inline .source, .lowering_glue, .derived, .scaffold, .join_scalarize, .box_reuse, .return_slot, .str_append_fuse, .loop_append_promote, .tag_case_fusion, .comptime_value_guard, .trmc, .range_prove => |tag| tag,
         };
     }
 };
@@ -1896,10 +1893,6 @@ pub const LirProcSpec = struct {
     /// and emission policy; equal revisions across separate lowers prove nothing.
     native_code_revision: u64 = 0,
     args: LocalSpan,
-    /// Producer-authored provenance for a function normalized from an
-    /// iterator pipeline. Dev-only structural fusion consumes this bit; it
-    /// must never infer the scope from symbols or LIR body shape.
-    iterator_fusion_scope: bool = false,
     /// Hidden erased-callable ownership input. Every erased-callable ABI proc
     /// records its final argument here, regardless of whether its result can
     /// reuse the allocation. Its local has erased-callable layout so ARC always

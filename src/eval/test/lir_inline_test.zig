@@ -6120,9 +6120,12 @@ test "iterator producers and delegating wrappers fuse into a scalar loop" {
     }
 }
 
+/// The iterator loop allocates nothing and appends to no list. It dispatches
+/// on which branch built the iterator in `iter_switch_count` switches.
 fn expectStaticListIterAppendLoopAvoidsListAppendAllocation(
     iter_source: []const u8,
     list_source: []const u8,
+    iter_switch_count: usize,
 ) TestError!void {
     const allocator = std.testing.allocator;
     var iter_optimized = try lowerModuleWithOptions(allocator, iter_source, .wrappers, .{ .tag_reachability = true });
@@ -6141,7 +6144,7 @@ fn expectStaticListIterAppendLoopAvoidsListAppendAllocation(
     try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "list_reserve_for_append_count");
     try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "list_append_unsafe_count");
     try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "box_box_count");
-    try expectReachableProcShapeFieldNoGreaterBy(allocator, &iter_optimized.lowered, &list_optimized.lowered, "switch_count", 1);
+    try expectReachableProcShapeFieldEqual(allocator, &iter_optimized.lowered, "switch_count", iter_switch_count);
 }
 
 fn expectNoReachableErasedCallableLowering(
@@ -6365,7 +6368,10 @@ test "F32 and F64 range syntax fuses without Iter.next" {
     }
 }
 
-test "issue 10991 dev loops do not rebuild their iterators every element" {
+// Optimized loops do not rebuild their iterators every element. Mode `.none`
+// inlines nothing, so each element calls the step, which builds the next
+// iterator; that iterator is a by-value record and allocates nothing.
+test "issue 10991 optimized loops do not rebuild their iterators every element" {
     const allocator = std.testing.allocator;
     const cases = [_]struct { name: []const u8, source: []const u8, counted_loop: bool }{
         .{ .name = "range", .counted_loop = true, .source =
@@ -6385,33 +6391,26 @@ test "issue 10991 dev loops do not rebuild their iterators every element" {
     };
 
     for (cases) |case| {
-        for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
-            var lowered = try lowerModuleWithOptions(allocator, case.source, inline_mode, .{ .proc_debug_names = true });
-            defer lowered.deinit(allocator);
+        var optimized = try lowerModuleWithOptions(allocator, case.source, .wrappers, .{ .proc_debug_names = true });
+        defer optimized.deinit(allocator);
+        if (case.counted_loop) {
+            const constructions = try perElementConstructionSummary(allocator, &optimized.lowered);
+            try std.testing.expectEqual(@as(usize, 0), constructions.single_variant_tag_assign_count);
+            try std.testing.expectEqual(@as(usize, 0), try loopCarriedWrapperCount(&optimized.lowered));
+        }
+        for ([_][]const u8{ "Builtin.Iter.custom", "iter_from_step" }) |name| {
+            try std.testing.expect(!try perElementProcDebugName(allocator, &optimized.lowered, name));
+        }
 
-            if (case.counted_loop) {
-                const constructions = try perElementConstructionSummary(allocator, &lowered.lowered);
-                const carried_wrappers = try loopCarriedWrapperCount(&lowered.lowered);
-                if (constructions.single_variant_tag_assign_count != 0 or carried_wrappers != 0) {
-                    const procs = try perElementProcSummary(allocator, &lowered.lowered, null);
-                    std.debug.print("{s} {s} loop retained {any}, {d} loop-carried wrappers, across {d} per-element callees\n", .{
-                        @tagName(inline_mode),
-                        case.name,
-                        constructions,
-                        carried_wrappers,
-                        procs.count,
-                    });
-                }
-                try std.testing.expectEqual(@as(usize, 0), constructions.single_variant_tag_assign_count);
-                try std.testing.expectEqual(@as(usize, 0), carried_wrappers);
-            }
-
-            for ([_][]const u8{ "Builtin.Iter.custom", "iter_from_step" }) |name| {
-                if (try perElementProcDebugName(allocator, &lowered.lowered, name)) {
-                    std.debug.print("{s} remained on the per-element path of a {s} {s} loop\n", .{ name, @tagName(inline_mode), case.name });
-                    return error.TestUnexpectedResult;
-                }
-            }
+        var ordinary = try lowerModuleWithOptions(allocator, case.source, .none, .{ .proc_debug_names = true });
+        defer ordinary.deinit(allocator);
+        try std.testing.expect(try perElementProcDebugName(allocator, &ordinary.lowered, "iter_from_step"));
+        try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "box_box_count", 0);
+        if (case.counted_loop) {
+            const constructions = try perElementConstructionSummary(allocator, &ordinary.lowered);
+            try std.testing.expectEqual(@as(usize, 1), constructions.single_variant_tag_assign_count);
+            try std.testing.expectEqual(@as(usize, 1), try loopCarriedWrapperCount(&ordinary.lowered));
+            try std.testing.expect(try perElementProcDebugName(allocator, &ordinary.lowered, "Builtin.Iter.custom"));
         }
     }
 }
@@ -6995,7 +6994,10 @@ test "iter alloc static: same adapter with different capture layouts is zero-all
     );
 }
 
-test "iter alloc static: runtime-count map wrapping terminates at dynamic boundary" {
+// A chain grown by one `map` per loop iteration has no bound on its depth, so
+// its step set contains itself; layout's recursion analysis boxes the
+// recursive slot, and no callable is erased.
+test "iter alloc static: runtime-count map wrapping is a self-containing set behind a recursion box" {
     const allocator = std.testing.allocator;
     const source =
         \\consume : Iter(U64) -> U64
@@ -7025,18 +7027,20 @@ test "iter alloc static: runtime-count map wrapping terminates at dynamic bounda
 
     var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
     defer ordinary.deinit(allocator);
-    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "box_box_count", 0);
-    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "erased_call_count", 1);
-    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &ordinary.lowered, "packed_erased_fn_count") > 0);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "box_box_count", 2);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "erased_call_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "packed_erased_fn_count", 0);
 
     var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .tag_reachability = true });
     defer optimized.deinit(allocator);
-    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "box_box_count", 0);
-    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "erased_call_count", 1);
-    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "packed_erased_fn_count") > 0);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "box_box_count", 5);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "erased_call_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "packed_erased_fn_count", 0);
 }
 
-test "iter alloc static: recursive map wrapping terminates at dynamic boundary" {
+// The recursive form of the growing chain: a self-containing set behind a
+// recursion box, with no callable erased.
+test "iter alloc static: recursive map wrapping is a self-containing set behind a recursion box" {
     const allocator = std.testing.allocator;
     const source =
         \\consume : Iter(U64) -> U64
@@ -7063,26 +7067,20 @@ test "iter alloc static: recursive map wrapping terminates at dynamic boundary" 
 
     var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
     defer ordinary.deinit(allocator);
-    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "box_box_count", 0);
-    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "erased_call_count", 1);
-    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &ordinary.lowered, "packed_erased_fn_count") > 0);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "box_box_count", 2);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "erased_call_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "packed_erased_fn_count", 0);
 
-    // The `.wrappers` half of this case is blocked on a capture-identity bug
-    // that the termination fixes above unmasked: the recursively-wrapped
-    // iterator captures the same binder at two recursion depths, and both
-    // capture slots receive the same CaptureId, tripping the lift.zig
-    // "lifted capture set contained two slots with the same CaptureId"
-    // invariant. Disambiguating recursion-level captures in the
-    // BinderIdentity/CaptureId system is tracked as its own fix; when it
-    // lands, this test must also lower the source at `.wrappers` and make
-    // the same three assertions.
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .tag_reachability = true });
+    defer optimized.deinit(allocator);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "box_box_count", 11);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "erased_call_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "packed_erased_fn_count", 0);
 }
 
-// Both sides of the depth backstop on statically bounded chains: a 10-adapter
-// chain (depth 11) stays under the cap and lowers flat, while a 20-adapter
-// chain (depth 21) trips it and takes the explicit forced-dynamic callable
-// representation. Sources are generated so the two tests differ only in
-// adapter count.
+// Statically bounded chains of 10 and 20 adapters both lower flat: each
+// adapter instance has its own step set, so nothing is boxed or erased at any
+// depth. Sources are generated so the two tests differ only in adapter count.
 fn deepStaticChainSource(comptime map_count: usize) []const u8 {
     comptime {
         var source: []const u8 =
@@ -7099,7 +7097,7 @@ fn deepStaticChainSource(comptime map_count: usize) []const u8 {
     }
 }
 
-test "iter alloc static: deep static chain under the depth cap stays flat" {
+test "iter alloc static: a 10-adapter static chain stays flat" {
     const allocator = std.testing.allocator;
     const source = comptime deepStaticChainSource(10);
     var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
@@ -7109,14 +7107,14 @@ test "iter alloc static: deep static chain under the depth cap stays flat" {
     try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "packed_erased_fn_count", 0);
 }
 
-test "iter alloc static: static chain past the depth cap uses forced dynamic representation" {
+test "iter alloc static: a 20-adapter static chain stays flat" {
     const allocator = std.testing.allocator;
     const source = comptime deepStaticChainSource(20);
     var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
     defer ordinary.deinit(allocator);
     try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "box_box_count", 0);
-    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "erased_call_count", 1);
-    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "packed_erased_fn_count", 2);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "erased_call_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "packed_erased_fn_count", 0);
 }
 
 // The base `[list].iter().fold` must lower with no boxed iterator state and no
@@ -8063,7 +8061,7 @@ test "closed Dict and Set receivers keep minted iteration" {
     }
 }
 
-test "static list iter append loop eliminates public iter adapters" {
+test "static list iter append loop eliminates public iter adapters but not the record constructor" {
     const allocator = std.testing.allocator;
     const iter_source =
         \\Point : { x : I64, y : I64 }
@@ -8135,7 +8133,10 @@ test "static list iter append loop eliminates public iter adapters" {
 
     try std.testing.expect(!try reachableProcDebugName(allocator, &iter_optimized.lowered, "Builtin.List.iter"));
     try std.testing.expect(!try reachableProcDebugName(allocator, &iter_optimized.lowered, "Builtin.Iter.append"));
-    try std.testing.expect(!try reachableProcDebugName(allocator, &iter_optimized.lowered, "iter_from_step"));
+    // The branch-chosen iterator is built by the record constructor at
+    // runtime; it allocates nothing.
+    try std.testing.expect(try reachableProcDebugName(allocator, &iter_optimized.lowered, "iter_from_step"));
+    try expectReachableProcShapeFieldEqual(allocator, &iter_optimized.lowered, "box_box_count", 0);
     try std.testing.expect(!try reachableProcDebugName(allocator, &list_optimized.lowered, "Builtin.Iter.append"));
 }
 
@@ -8172,7 +8173,7 @@ test "static list iter append loop eliminates public iter adapters" {
 //     try std.testing.expectEqual(@as(u32, 0), lowered.lowered.post_check_stats.optimized_contexts);
 // }
 
-test "post-check lowering modes eliminate public iter adapters" {
+test "optimized lowering eliminates public iter adapters and mode none keeps them" {
     const allocator = std.testing.allocator;
     const source =
         \\sum_points : U64 -> U64
@@ -8203,7 +8204,8 @@ test "post-check lowering modes eliminate public iter adapters" {
     defer ordinary.deinit(allocator);
 
     try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.append"));
-    try std.testing.expect(!try reachableProcDebugName(allocator, &ordinary.lowered, "Builtin.Iter.append"));
+    // Mode `.none` inlines nothing, so the adapter stays a procedure.
+    try std.testing.expect(try reachableProcDebugName(allocator, &ordinary.lowered, "Builtin.Iter.append"));
 }
 
 // Ported pending iterator redesign: this test constructs state_loop/state_continue lifted IR that the current lifted AST does not define.
@@ -8373,7 +8375,7 @@ test "static record list iter append loop avoids direct-list append allocation" 
         \\}
     ;
 
-    try expectStaticListIterAppendLoopAvoidsListAppendAllocation(record_iter_source, record_list_source);
+    try expectStaticListIterAppendLoopAvoidsListAppendAllocation(record_iter_source, record_list_source, 9);
 }
 
 test "static primitive list iter append loop avoids direct-list append allocation" {
@@ -8416,7 +8418,7 @@ test "static primitive list iter append loop avoids direct-list append allocatio
         \\}
     ;
 
-    try expectStaticListIterAppendLoopAvoidsListAppendAllocation(primitive_iter_source, primitive_list_source);
+    try expectStaticListIterAppendLoopAvoidsListAppendAllocation(primitive_iter_source, primitive_list_source, 9);
 }
 
 /// One fused pipeline for an iterator operation on one public iterator type.
@@ -15165,9 +15167,7 @@ fn lambdaSolvedSetCensusInOrder(
     var lifted_owned = true;
     errdefer if (lifted_owned) lifted.deinit();
 
-    if (inline_mode == .none) {
-        try postcheck.MonotypeLifted.SpecConstr.runIteratorFusion(allocator, &lifted);
-    } else {
+    if (inline_mode != .none) {
         var procedure_usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted, .all_calls);
         procedure_usage.deinit();
     }

@@ -10187,8 +10187,9 @@ record the same continuation proof rather than relying on downstream discovery.
 
 The explicit `InlineMode` controls the optional specialization work:
 
-- `.none` runs only iterator fusion from Monotype Lifted SpecConstr and
-  produces an empty solved inline plan. The interpreter selects this.
+- `.none` runs no SpecConstr and produces an empty solved inline plan. The
+  interpreter selects this. A loop over an iterator calls its step once per
+  item; the iterator is a by-value record, so the loop allocates nothing.
 - `.wrappers` runs SpecConstr and produces wrapper and exact-single-use inline
   decisions from Lambda Solved. Size and speed modes select this. A body is
   single-use when the functions the program's roots reach, by direct calls
@@ -10206,10 +10207,9 @@ The explicit `InlineMode` controls the optional specialization work:
   depend on another procedure's source, and leaves its operation visible to
   the LIR rewrites that bound list copying (`while !$done` tests the
   `bool_not` low-level that known-tag jump threading reads). Like `.none`, it
-  runs only iterator fusion, without general SpecConstr normalization,
-  specialization, or procedure-usage collection for an empty inline plan.
-  The LIR passes that bound list copying still run.
-  Dev SpecConstr (`.iterator_fusion` clone inlining) clones no workers for call patterns or
+  runs no SpecConstr and collects no procedure usage for an empty inline
+  plan. The LIR passes that bound list copying still run.
+  Dev SpecConstr (`.no_calls` clone inlining) inlines no call and clones no workers for call patterns or
   callables (`CloneInlining.specializesCallPatterns`): which clones a function
   gets depends on every call the program makes to it, so a body rewritten to
   call one would depend on the rest of the program.
@@ -10907,61 +10907,17 @@ change a SpecConstr decision. Backings remain part of the comparison: two equal 
 distinct representations, and a value that replaces a use site of the other
 representation keeps the site's type through an explicit `typed_boundary`.
 
-`.none` mode runs only the pass's bounded, demand-directed iterator-fusion
-clone. It clones only function bodies containing a checker-stamped iterator
-producer, and within those bodies it decomposes only loop state whose type owns
-generated-private iterator topology; unrelated procedures and aggregate loops
-remain outside SpecConstr. Direct-call inlining is admitted by the checker's
-exact `IteratorProcedureId` stamp and remains admitted transitively only inside
-that producer pipeline. A callable step is admitted only after ordinary
-known-value flow reads it from a generated-private iterator backing whose exact
-topology identifies the step field. A checker-stamped `forced_dynamic` iterator
-representation is an opaque boundary to this reduced pass: partial fusion must
-not duplicate its erased-callable packing. This path does not discover general
-call patterns, reserve specialization workers, project loop exits, or run
-general solved-call inline analysis. It shares SpecConstr's
-representation-identity checks, recursion measure, and cumulative code-growth
-budget.
-
-An iterator helper's independently specialized Monotype result root can differ
-from the call-site result root even when the call proves their language-level
-relation. Inlining must not erase that evidence. SpecConstr therefore wraps an
-exposed producer result in an explicit `typed_boundary`: its child keeps the
-callee-authored type and the wrapper keeps the call-site type. Lambda Solved
-unifies the two slots exactly as the removed call did, Lambda Mono preserves the
-boundary node, and direct LIR lowering performs the ordinary typed assignment.
-SpecConstr also retains the producer's structural value beside that runtime
-expression. A field read or match can consume a known record or tag through the
-structural view without materializing it; an opaque use materializes the exact
-typed boundary. Together with the scoped pre-ARC LIR rewrites described below,
-this removes the iterator record and the immediately matched
-`One`/`Skip`/`Done` value before code generation while preserving every
-representation decision for paths that really observe the value.
+A callee whose independently specialized Monotype result type differs from
+the call-site type stays a call: inlining it would erase the relation the call
+states between the two types.
 
 Body exposure is bounded by the existing source-body admission and cumulative
 65,536-unit growth budget. The active inline stack is an explicit termination
 proof: an acyclic call needs no constructor-size measure, while recursive
 re-entry is admitted only when both frames have exact constructor sizes and the
 new size is strictly smaller. Exhausting either bound retains the ordinary call.
-The clone stamps each normalized function with `iterator_fusion_scope`; Lambda
-Solved retains the lifted function table and direct LIR lowering copies that
-provenance onto the corresponding procedure. LIR and the backends do not
-identify iterators or reconstruct this decision.
 
-For `.none` plus lambda-set specialization, pre-ARC LIR consumes that explicit
-scope with two exact structural rewrites. First, an internal Roc-ABI procedure
-is inlined only when the reachable call inventory proves one direct call, no
-root or first-class escape, and therefore no reachable code growth. Second, a
-one-use forwarding join sinks its consumer only when reachable incoming-edge
-counts prove exclusivity, the outer join is nonrecursive, and the forwarded
-layout contains no reference-counted storage; moving owning continuations needs
-explicit path-ownership data and is not admitted. Only the consumer's exclusive
-prefix moves; a suffix another reachable edge also enters stays in place, and
-the moved prefix links to it. These two passes visit only
-stamped procedures, so ordinary dev code pays neither their analysis cost nor
-their structural changes.
-
-A third rewrite, tag-case fusion, runs under lambda-set specialization in every
+Tag-case fusion runs under lambda-set specialization in every
 inline mode, at every optimization level, and in every procedure: literal tag
 edges bypass a join whose body immediately matches that tag, so the union is
 never materialized. It bounds list copying rather than shaving constant
@@ -10970,8 +10926,8 @@ the union is materialized, a value the matching arm keeps is live across the
 producer, and a list the producer appends to is copied on every loop
 iteration. The
 substituted checked wrappers of `.wrappers` mode produce exactly this shape at
-every call site (a `Try` built on each arm and matched at once by the caller),
-as does the iterator-fusion clone of `.none`. A producer edge may release
+every call site (a `Try` built on each arm and matched at once by the caller).
+A producer edge may release
 values it has finished with between building the tag and jumping; those
 releases are carried onto the redirected edge. The join's body may begin with
 straight-line definitions that do not read the union, ahead of its match: an
@@ -11072,10 +11028,9 @@ and ordinary value flow expose a known iterator constructor, SpecConstr can:
 - supply each reachable `continue` edge with the scalar leaves required by the
   loop fixed point.
 
-A clone that admits only productive direct inlines (every clone outside
-`.none`'s fusion pass) inlines a direct call only when the copied body pays for
-itself. Three kinds of call always qualify: the checker-stamped iterator
-protocol (`IteratorProcedureId`), a wrapper whose body does less work than its
+A clone that admits only productive direct inlines inlines a direct call only
+when the copied body pays for itself. Two kinds of call always qualify: a
+wrapper whose body does less work than its
 call (the definition solved inline analysis uses, shared in `wrapper_body.zig`),
 that lies on no cycle of direct calls, where inlining it would only unroll the
 recursion, and that passes none of its own calls a value it builds itself where
@@ -11264,19 +11219,6 @@ explicit. No tuple shape is guessed, no dead symbolic tuple is reconstructed at
 an exit, and no backend participates in this decision. Every selected exit must
 transfer exactly the components declared by its demand plan.
 
-Iterator classification in this pass consumes the explicit iterator
-representation field (or the checked public `Builtin.Iter` or `Builtin.Stream`
-identity). It does not identify generated iterator types solely from a nullable
-generated digest.
-The checked public identity is an interned module-and-declaration identity, not
-a comparison against type-name text. Adapter-specific rewrites consume the
-exact checker-authored `IteratorProcedureId` on the call. The procedure id
-identifies the operation; that operation's declared lowering contract supplies
-its producer/non-producer role and operand roles, while the solved result type
-supplies its explicit representation. A result type's `iterator_kind` describes
-the representation but does not by itself prove that an arbitrary expression
-constructed it.
-
 Monotype Lifted remains source-shaped when SpecConstr begins: calls and other
 strict computations can still occur inside constructor operands and branch
 arms. Evaluation order is therefore owned by the clone result, not recovered
@@ -11289,14 +11231,14 @@ SpecConstr collects call patterns from exact direct-call and callable
 identities, then performs one value-aware normalization clone of every original
 body. This complete traversal replaces the former routing scans that guessed
 which bodies contained shape demand, recursive workers, or iterator loops.
-Known loop state is handled by the loop clone's explicit fixed-point shapes;
-adapter-specific transforms match exact stamped calls. The pass does not scan
+Known loop state is handled by the loop clone's explicit fixed-point shapes.
+The pass does not scan
 whole bodies to classify branch-chosen loops, count construction-call depth,
 recognize iterator types by text, or set a guessed body category that changes
 how a later clone interprets opaque calls.
 
-Value-aware pattern discovery, unused loop-result removal, and iterator-only
-body rewriting may run as independent tasks over a frozen lifted program.
+Value-aware pattern discovery and unused loop-result removal may run as
+independent tasks over a frozen lifted program.
 Discovery returns ordered function identities and owned call patterns; only the coordinator
 admits patterns, in source-function and request order. Discovery eligibility is
 fixed at phase entry. Requests neither consume admission capacity nor change
@@ -11565,16 +11507,6 @@ leaves. This keeps iterator structure visible without discarding or commuting a
 call, loop, low-level operation, or control transfer. Any future optimization
 which does move opaque work needs an explicit earlier-stage total-and-
 speculatable proof; it must never manufacture one by scanning a procedure body.
-
-The append-tail peel is narrower than general value-aware cloning. It applies
-only when an exact `Iter.append` chain shares one base and a structural proof
-shows that the branch condition or scrutinee, guards, and appended items contain
-no call, low-level operation, loop, control transfer, collection allocation, or
-diagnostic operation. In that work-free case replaying the constructor plan
-after the shared base loop cannot move strict work. If any such work exists, the
-peel is declined and the ordinary value-aware clone retains the source branch
-and its `BindingChain` in source order. In particular, SpecConstr never removes
-a source branch and later reuses an effectful condition, scrutinee, or item.
 
 In Debug builds, placing a `BindingChain` verifies its forward/back links and
 the type of every binding, and the Monotype Lifted body verifier checks local
@@ -24468,8 +24400,7 @@ generated helpers such as structural equality and hashing, and generated
 procedures and rebuilt constants; each carries the location of the construct
 that required it. Each LIR rewrite has its own kind (`trmc`, `range_prove`,
 `join_scalarize`, `box_reuse`, `return_slot`, `str_append_fuse`,
-`loop_append_promote`, `tag_case_fusion`, `forwarding_join_inline`,
-`comptime_value_guard`) and keeps the location of the statement it rewrites.
+`loop_append_promote`, `tag_case_fusion`, `comptime_value_guard`) and keeps the location of the statement it rewrites.
 Clones inherit the original's origin with the inline scope remapped; clone
 callbacks receive that origin as a parameter.
 
@@ -26171,7 +26102,7 @@ inferred from cache hits, source locations, or the presence of code keys.
 `LirPolicy` preserves it across shared-program consumer continuations. The
 existing site-call stability rule still applies to consumers that infer base
 signatures but use site code keys. Standalone dev procedures trade call-boundary
-optimization for a stable ownership ABI; iterator fusion, tag-case fusion, TRMC, and loop
+optimization for a stable ownership ABI; tag-case fusion, TRMC, and loop
 append promotion retain their existing meaning and eligibility.
 
 ### Outcome-Conditioned Argument Restitution

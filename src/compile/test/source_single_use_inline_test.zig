@@ -31,7 +31,7 @@ fn recordProcCount(store: *const lir.LirStore, _: *const @import("layout").Store
 fn devProcCount(source: []const u8) harness.LowerToLirHarnessError!usize {
     try harness.expectLirInspectionWithOptions(source, .{
         .inline_mode = .wrappers_and_source_single_use,
-        .spec_constr_clone_inlining = .iterator_fusion,
+        .spec_constr_clone_inlining = .no_calls,
     }, recordProcCount);
     return lowered_proc_count;
 }

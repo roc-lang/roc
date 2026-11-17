@@ -115,11 +115,6 @@ pub const Fn = struct {
     /// while the lifted function still has that signature; transformations
     /// that synthesize a different ABI clear it explicitly.
     signature: collections.OptionalId(Type.TypeId) = .none,
-    /// The iterator-fusion pass normalized this function from explicit
-    /// checker-stamped iterator producers. Later structural LIR passes consume
-    /// this provenance directly instead of rediscovering iterator intent from
-    /// procedure names or body shape.
-    iterator_fusion_scope: bool = false,
     /// Digest of the SpecConstr call pattern this function was cloned for, or
     /// null for a function that is not a call-pattern clone. Clones share
     /// their source's checked template, so this is what keeps two clones of
@@ -155,10 +150,6 @@ pub const FnShapes = packed struct(u8) {
     /// A tag, record, tuple, nominal, list, closure or compile-time value
     /// construction: the only sources of a known-shaped call argument.
     constructs_value: bool = false,
-    /// A direct call to an iterator procedure.
-    iterator_call: bool = false,
-    /// A direct call to an iterator procedure that produces an iterator value.
-    iterator_producer: bool = false,
     /// A loop.
     loop: bool = false,
     /// A loop whose result is a tuple of at least two values.
@@ -167,6 +158,7 @@ pub const FnShapes = packed struct(u8) {
     self_call: bool = false,
     /// A `return` expression.
     contains_return: bool = false,
+    _: u2 = 0,
 
     pub fn merged(self: FnShapes, other: FnShapes) FnShapes {
         return @bitCast(@as(u8, @bitCast(self)) | @as(u8, @bitCast(other)));
@@ -1090,10 +1082,6 @@ pub const Program = struct {
         switch (expr.data) {
             .call_proc => |call| {
                 self.shapes.direct_call = true;
-                if (call.iterator_procedure) |procedure| {
-                    self.shapes.iterator_call = true;
-                    if (procedure.producesIteratorValue()) self.shapes.iterator_producer = true;
-                }
                 // The lifter records a call before and after it rewrites the
                 // callee to a lifted function; only the lifted form can name
                 // the owner.
@@ -1339,7 +1327,6 @@ pub const Program = struct {
         } else {
             writeIdentityBytes(hasher, "source");
         }
-        writeIdentityBytes(hasher, if (fn_.iterator_fusion_scope) "iterator-fusion" else "plain");
         return true;
     }
 
@@ -1719,7 +1706,6 @@ pub const Program = struct {
         writeIdentityBytes(&hasher, "roc.lifted.fn-layout-keyed-source.v1");
         writeFnDefDigest(&hasher, &self.names, template.fn_def, template.site_identity);
         hasher.update(&template.evidence_digest.bytes);
-        writeIdentityBytes(&hasher, if (fn_.iterator_fusion_scope) "iterator-fusion" else "plain");
         return hasher.finalResult();
     }
 

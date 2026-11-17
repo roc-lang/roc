@@ -3087,7 +3087,6 @@ const Lowerer = struct {
             .name = lirSymbol(entry.symbol),
             .identity = identity,
             .args = args_span,
-            .iterator_fusion_scope = source_fn.iterator_fusion_scope,
             .erased_reuse_arg = .of(erased_reuse_arg),
             .erased_call_args = if (spec.abi == .erased)
                 .some(try self.erasedCallArgsPlan(arg_locals[0..lifted_args.len]))

@@ -13897,7 +13897,7 @@ test "post-check optimization scope per opt level" {
     try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.none, postCheckInlineModeForOpt(.interpreter));
     try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.all_calls, specConstrCloneInliningForOpt(.speed));
     try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.all_calls, specConstrCloneInliningForOpt(.size));
-    try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.iterator_fusion, specConstrCloneInliningForOpt(.dev));
+    try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.no_calls, specConstrCloneInliningForOpt(.dev));
 }
 
 test "only optimized builds emit thread-confined count updates" {
@@ -19104,7 +19104,6 @@ fn recordLoweringDetail(reporter: *progress.Reporter, snapshot: lir.CheckedPipel
 fn passStepLabel(step: lir.CheckedPipeline.PassStep) []const u8 {
     return switch (step) {
         .erased_owner => "Erased Owner",
-        .single_use_inline => "Single-Use Inline",
         .return_slot => "Return Slot",
         .str_append => "Str Append",
         .tag_reachability => "Tag Reachability",
@@ -19180,7 +19179,7 @@ fn recordLirPassDetail(reporter: *progress.Reporter, snapshot: lir.CheckedPipeli
                 after_len += 1;
                 after_total +|= ns;
             },
-            .erased_owner, .single_use_inline, .return_slot, .str_append, .tag_reachability, .reachable_procs_before_arc => {
+            .erased_owner, .return_slot, .str_append, .tag_reachability, .reachable_procs_before_arc => {
                 before[before_len] = .{ .name = passStepLabel(step), .ns = ns };
                 before_len += 1;
             },
@@ -19508,7 +19507,6 @@ fn specConstrParallelCounters(parallel: lir.CheckedPipeline.SpecConstrParallelMe
         const name = comptime switch (phase) {
             .discovery => "Pattern discovery",
             .unused_loop_results => "Loop-result projection",
-            .iterator_fusion => "Iterator fusion",
         };
         rows[10 + 2 * index] = .{ .name = name ++ " tasks", .count = parallel.committed_by_phase[index] };
         rows[11 + 2 * index] = .{ .name = name ++ " changes", .count = parallel.changed_by_phase[index] };
@@ -19655,7 +19653,6 @@ fn lirPassParallelCounters(parallel: lir.CheckedPipeline.LirPassParallelMetrics)
         const name = comptime switch (phase) {
             .branch_expectation => "Branch expectation",
             .trmc => "TRMC",
-            .forwarding_join => "Forwarding joins",
             .tag_fusion => "Tag-case fusion",
             .prune_join_params => "Join parameter pruning",
             .scalarize => "Join scalarization",

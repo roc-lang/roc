@@ -132,11 +132,9 @@ fn expectFoldCollapsedToCallFreeIndexLoop(
     defer allocator.free(seen_stmts);
     @memset(seen_stmts, false);
 
-    // The collapsed loop's home depends on the clone scope: `.all_calls`
-    // inlines the wrapper `sum_list` and the `List.fold` its known step
-    // reaches into `main`, while `.iterator_fusion` collapses `List.fold`'s
-    // own specialization in place and leaves `sum_list` as a wrapper the
-    // inline plan then dissolves. Any procedure may hold it.
+    // `.all_calls` inlines the wrapper `sum_list` and the `List.fold` its
+    // known step reaches into `main`, so the collapsed loop may sit in any
+    // procedure.
     var collapsed_fold_procs: usize = 0;
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
@@ -164,11 +162,34 @@ const fold_app_body =
     \\}
 ;
 
-test "issue 10991: dev pipeline collapses List.fold to a call-free index loop" {
+/// `.no_calls` inlines no call, so `List.fold` pulls each element through the
+/// list iterator's step: the one procedure that reads an element by index
+/// makes one call, which builds the next iterator.
+fn expectFoldReadsElementsThroughOneStep(
+    store: *const lir.LirStore,
+    _: *const layout.Store,
+) harness.LowerToLirHarnessError!void {
+    const allocator = std.testing.allocator;
+    const seen_stmts = try allocator.alloc(bool, store.cfStmtCount());
+    defer allocator.free(seen_stmts);
+    @memset(seen_stmts, false);
+
+    var reading_procs: usize = 0;
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
+        const scan = try ProcScan.scan(store, proc_id, seen_stmts);
+        if (!scan.reads_list_elements) continue;
+        reading_procs += 1;
+        try std.testing.expectEqual(@as(usize, 1), scan.call_count);
+    }
+    try std.testing.expectEqual(@as(usize, 1), reading_procs);
+}
+
+test "issue 10991: dev pipeline folds List.fold through the list iterator's step" {
     try harness.expectLirInspectionWithOptions(
         fold_app_body,
-        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion, .proc_debug_names = true },
-        expectFoldCollapsedToCallFreeIndexLoop,
+        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .no_calls, .proc_debug_names = true },
+        expectFoldReadsElementsThroughOneStep,
     );
 }
 
@@ -219,6 +240,6 @@ test "issue 10991: loop-carried borrow of a claimed payload certifies under the 
         \\    Ok({})
         \\}
     ,
-        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion },
+        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .no_calls },
     );
 }
