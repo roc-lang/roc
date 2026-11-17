@@ -21309,8 +21309,8 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
 
     // For-clause aliases live in the platform root's module-level scope, so a
     // requirement other than the declaring one can reference an alias by name;
-    // bind each alias once for the whole requires clause and share the app's
-    // instantiated declaration across every requirement that mentions it.
+    // infer each alias once for the whole requires clause and share its app
+    // variable across every requirement that mentions it.
     var alias_bindings = std.ArrayListUnmanaged(ForClauseAliasBinding).empty;
     defer alias_bindings.deinit(self.gpa);
     try self.collectForClauseAliasBindings(input, env, &alias_bindings);
@@ -21320,7 +21320,7 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
     var alias_source_substitutions = std.AutoHashMap(copy_import.AliasSource, Var).init(self.gpa);
     defer alias_source_substitutions.deinit();
     for (alias_bindings.items) |binding| {
-        const app_type_var = binding.app_type_var.get() orelse continue;
+        const app_type_var = binding.app_type_var;
         try alias_var_substitutions.put(binding.platform_alias_var, app_type_var);
         try alias_var_substitutions.put(binding.platform_identity_var, app_type_var);
         try alias_source_substitutions.put(binding.platform_alias_source, app_type_var);
@@ -21328,14 +21328,13 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
 
     for (input.env.requires_types.items(), 0..) |required_type, requires_idx| {
         const required_ident = try self.copyPlatformIdent(input.env, required_type.ident);
-        const instantiated = (try self.instantiatePlatformRequiredType(
+        const instantiated = try self.instantiatePlatformRequiredType(
             input,
             required_type,
             env,
-            alias_bindings.items,
             &alias_var_substitutions,
             &alias_source_substitutions,
-        )) orelse continue;
+        );
         var identity_vars_owned = true;
         defer if (identity_vars_owned) self.gpa.free(instantiated.identity_vars);
 
@@ -21437,20 +21436,9 @@ fn instantiatePlatformRequiredType(
     input: PlatformRequirementInput,
     required_type: ModuleEnv.RequiredType,
     env: *Env,
-    bindings: []const ForClauseAliasBinding,
     alias_var_substitutions: *const collections.DenseMap(Var, Var),
     alias_source_substitutions: *const std.AutoHashMap(copy_import.AliasSource, Var),
-) std.mem.Allocator.Error!?InstantiatedRequirement {
-    const declared_aliases = input.env.for_clause_aliases.sliceRange(required_type.type_aliases);
-    for (declared_aliases) |alias| {
-        const binding = forClauseAliasBinding(bindings, alias.alias_stmt_idx) orelse {
-            base.invariant("platform requirement for-clause alias was not collected for the requires clause", .{});
-        };
-        // The alias's app declaration was not found; the diagnostic was
-        // emitted when the clause's bindings were collected.
-        if (binding.app_type_var == .none) return null;
-    }
-
+) std.mem.Allocator.Error!InstantiatedRequirement {
     // Enumerate the requirement type's identity variables (flex/rigid) in the
     // platform's store, in canonical slot order—the same first-encounter
     // order the platform's published requirement payload assigns them.
@@ -21461,15 +21449,6 @@ fn instantiatePlatformRequiredType(
         ModuleEnv.varFrom(required_type.type_anno),
     );
     defer self.gpa.free(platform_identity_vars);
-
-    // Aliases are module-scoped, so an entry can use an alias declared by an
-    // earlier flat entry even though it is absent from `declared_aliases`.
-    for (platform_identity_vars) |platform_var| {
-        const binding = forClauseAliasBindingForIdentity(bindings, platform_var) orelse continue;
-        // The alias's app declaration was not found; the diagnostic was
-        // emitted when the clause's bindings were collected.
-        if (binding.app_type_var == .none) return null;
-    }
 
     const copied = try self.copyVarWithSourceSubstitutions(
         ModuleEnv.varFrom(required_type.type_anno),
@@ -21494,7 +21473,7 @@ fn instantiatePlatformRequiredType(
 
     // `instantiateVar` keyed `var_map` by the copied store's resolved vars.
     // Clause-bound identities were replaced during copying and already are
-    // the exact app declaration; every other identity must have been visited
+    // shared app inference variables; every other identity must have been visited
     // and instantiated with the requirement root.
     for (platform_identity_vars, identity_vars) |platform_var, *slot_var| {
         if (alias_var_substitutions.get(platform_var)) |app_type_var| {
@@ -21515,21 +21494,17 @@ fn instantiatePlatformRequiredType(
     return .{ .expected_var = expected_var, .identity_vars = identity_vars };
 }
 
-/// An app type declaration bound to a requires clause's for-clause alias
-/// (`[Model : model]` binds `Model` to the app's own `Model` declaration).
-/// A null `app_type_var` records that the app declares no such type; the
-/// diagnostic was emitted when the binding was collected.
+/// One app inference variable for a platform's module-scoped abstract type.
+/// The app's required values determine it, not an app-side type name.
 const ForClauseAliasBinding = struct {
-    /// Exact declaration locator in the platform root. Names are consulted
-    /// only while resolving the app-side declaration at the language boundary;
-    /// copied occurrences match this declaration identity thereafter.
+    /// Exact declaration locator in the platform root.
     platform_alias_stmt_idx: CIR.Statement.Idx,
     /// Resolved platform-store roots replaced during cross-module copying.
     platform_alias_var: Var,
     platform_identity_var: Var,
     /// Declaration identity shared by every application of this alias.
     platform_alias_source: copy_import.AliasSource,
-    app_type_var: collections.OptionalId(Var),
+    app_type_var: Var,
 };
 
 comptime {
@@ -21543,22 +21518,15 @@ fn forClauseAliasBinding(bindings: []const ForClauseAliasBinding, platform_alias
     return null;
 }
 
-fn forClauseAliasBindingForIdentity(bindings: []const ForClauseAliasBinding, platform_identity_var: Var) ?ForClauseAliasBinding {
-    for (bindings) |binding| {
-        if (binding.platform_identity_var == platform_identity_var) return binding;
-    }
-    return null;
-}
-
-/// Bind every for-clause alias of the platform's requires clause to the app's
-/// own type declaration, instantiating each declaration once so all
-/// requirements that mention an alias share one binder.
+/// Allocate each binder at outermost rank so checking and instantiating
+/// individual app definitions cannot generalize it away from sibling requirements.
 fn collectForClauseAliasBindings(
     self: *Self,
     input: PlatformRequirementInput,
     env: *Env,
     bindings: *std.ArrayListUnmanaged(ForClauseAliasBinding),
 ) std.mem.Allocator.Error!void {
+    std.debug.assert(env.rank() == .outermost);
     for (input.env.requires_types.items()) |required_type| {
         const aliases = input.env.for_clause_aliases.sliceRange(required_type.type_aliases);
         for (aliases) |alias| {
@@ -21581,35 +21549,13 @@ fn collectForClauseAliasBindings(
                 },
             };
             const platform_identity_var = input.env.types.resolveVar(ModuleEnv.varFrom(alias_anno)).var_;
-            const alias_ident = try self.copyPlatformIdent(input.env, alias.alias_name);
-
-            const app_type_stmt = self.appTypeDeclByIdent(alias_ident) orelse {
-                const value_region = try self.topLevelValueRegionByIdent(alias_ident);
-                const app_region = value_region orelse self.appModuleRegion();
-                _ = try self.problems.appendProblem(.{ .platform_alias_not_found = .{
-                    .expected_alias_ident = alias_ident,
-                    .app_region = app_region,
-                    .platform_region = input.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias.alias_stmt_idx)),
-                    .ctx = if (value_region == null) .not_found else .found_but_not_type,
-                } });
-                try bindings.append(self.gpa, .{
-                    .platform_alias_stmt_idx = alias.alias_stmt_idx,
-                    .platform_alias_var = platform_alias_resolved.var_,
-                    .platform_identity_var = platform_identity_var,
-                    .platform_alias_source = platform_alias_source,
-                    .app_type_var = .none,
-                });
-                continue;
-            };
-
-            const app_type_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(app_type_stmt));
-            const app_type_var = try self.instantiateVar(ModuleEnv.varFrom(app_type_stmt), env, .{ .explicit = app_type_region }, .none);
+            const app_type_var = try self.fresh(env, self.appModuleRegion());
             try bindings.append(self.gpa, .{
                 .platform_alias_stmt_idx = alias.alias_stmt_idx,
                 .platform_alias_var = platform_alias_resolved.var_,
                 .platform_identity_var = platform_identity_var,
                 .platform_alias_source = platform_alias_source,
-                .app_type_var = .some(app_type_var),
+                .app_type_var = app_type_var,
             });
         }
     }
@@ -21617,11 +21563,6 @@ fn collectForClauseAliasBindings(
 
 fn copyPlatformIdent(self: *Self, platform_env: *const ModuleEnv, ident: Ident.Idx) std.mem.Allocator.Error!Ident.Idx {
     return try self.cir.insertIdent(Ident.for_text(platform_env.getIdent(ident)));
-}
-
-fn appTypeDeclByIdent(self: *Self, ident: Ident.Idx) ?CIR.Statement.Idx {
-    if (self.findLocalTypeDeclByNameInSpan(self.cir.type_decls, ident)) |stmt_idx| return stmt_idx;
-    return self.findLocalTypeDeclByNameInSpan(self.cir.forward_type_decls, ident);
 }
 
 fn exposedAppDefByIdent(self: *Self, ident: Ident.Idx) ?CIR.Def.Idx {
@@ -21668,90 +21609,6 @@ fn topLevelDefByIdent(self: *Self, ident: Ident.Idx) ?CIR.Def.Idx {
     for (self.cir.store.sliceDefs(self.cir.top_level_value_defs)) |def_idx| {
         const def_ident = self.getPatternIdent(self.cir.store.getDef(def_idx).pattern) orelse continue;
         if (def_ident == ident) return def_idx;
-    }
-    return null;
-}
-
-fn topLevelValueRegionByIdent(self: *Self, ident: Ident.Idx) Allocator.Error!?Region {
-    if (self.topLevelDefByIdent(ident)) |def_idx| {
-        return self.defPatternRegion(def_idx);
-    }
-    return try self.topLevelTagConstructorRegionByIdent(ident);
-}
-
-fn topLevelTagConstructorRegionByIdent(self: *Self, ident: Ident.Idx) Allocator.Error!?Region {
-    for (0..self.cir.all_statements.span.len) |stmt_offset| {
-        const stmt_idx = self.cir.store.statementAt(self.cir.all_statements, stmt_offset);
-        const stmt = self.cir.store.getStatement(stmt_idx);
-        const anno_idx = switch (stmt) {
-            .s_alias_decl => |alias| alias.anno,
-            .s_nominal_decl => |nominal| nominal.anno,
-            .s_decl,
-            .s_var,
-            .s_var_uninitialized,
-            .s_reassign,
-            .s_crash,
-            .s_dbg,
-            .s_expr,
-            .s_expect,
-            .s_for,
-            .s_while,
-            .s_infinite_loop,
-            .s_breakable_loop,
-            .s_break,
-            .s_return,
-            .s_import,
-            .s_where_alias_decl,
-            .s_type_anno,
-            .s_type_var_alias,
-            .s_runtime_error,
-            => continue,
-        };
-        if (try self.typeAnnoTagRegionByIdent(anno_idx, ident)) |region| return region;
-    }
-    return null;
-}
-
-fn typeAnnoTagRegionByIdent(self: *Self, root: CIR.TypeAnno.Idx, wanted: Ident.Idx) Allocator.Error!?Region {
-    // Search the annotation in source order: each popped node pushes its
-    // children last-first.
-    var pending: std.ArrayList(CIR.TypeAnno.Idx) = .empty;
-    defer pending.deinit(self.gpa);
-    try pending.append(self.gpa, root);
-    while (pending.pop()) |anno_idx| {
-        const start = pending.items.len;
-        switch (self.cir.store.getTypeAnno(anno_idx)) {
-            .tag_union => |tag_union| {
-                try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tag_union.tags));
-                if (tag_union.ext) |ext| try pending.append(self.gpa, ext);
-            },
-            .tag => |tag| {
-                if (tag.name == wanted) {
-                    return self.cir.store.getTypeAnnoRegion(anno_idx);
-                }
-                try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tag.args));
-            },
-            .apply => |apply| try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(apply.args)),
-            .record => |record| {
-                for (self.cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
-                    try pending.append(self.gpa, self.cir.store.getAnnoRecordField(field_idx).ty);
-                }
-                if (record.ext) |ext| try pending.append(self.gpa, ext);
-            },
-            .tuple => |tuple| try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tuple.elems)),
-            .@"fn" => |func| {
-                try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(func.args));
-                try pending.append(self.gpa, func.ret);
-            },
-            .parens => |parens| try pending.append(self.gpa, parens.anno),
-            .rigid_var,
-            .rigid_var_lookup,
-            .underscore,
-            .lookup,
-            .malformed,
-            => {},
-        }
-        std.mem.reverse(CIR.TypeAnno.Idx, pending.items[start..]);
     }
     return null;
 }

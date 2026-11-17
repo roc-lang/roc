@@ -7211,14 +7211,15 @@ platform module. Header validation inspects all declarations, while the
 provided-exports view contains only entries with non-null `local_def`. Rejected
 declarations also produce source diagnostics.
 
-A platform requirement's for-clause alias is a binder over an app-supplied
-type: the requirement's `Model` IS the app's `Model` by the for-clause's own
-definition, so identity provenance follows meaning provenance. After the
-requirement surface is checked, the checker supplies each platform alias's
-explicit `(origin module, source declaration)` key and backing identity root as
-source substitutions while copying each requirement into the app store. The
-copier resolves every declaration-owned alias occurrence and every recorded
-identity slot directly to the app's own type declaration; no copied
+A platform requirement's for-clause alias names an abstract type inside the
+platform; its actual type is inferred from the app's required values. An app
+declaration with the same name has no special meaning. The platform checks
+against one shared rigid identity. App checking substitutes one fresh,
+outermost-rank inference variable per binder, shared across all requirements,
+so definition generalization cannot give sibling requirements different types.
+Each platform alias's explicit `(origin module, source declaration)` key and
+backing identity root select that same substitution during requirement copying.
+The solved identity slots carry the inferred types into the pairing; no copied
 platform-owned alias enters the solved app graph. Nothing in the app's checked
 module needs a pairing as a type owner, so the app is checked against the
 platform's sealed requirement surface and nothing else.
