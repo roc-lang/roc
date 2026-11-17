@@ -5820,22 +5820,6 @@ const Lowerer = struct {
             .module = try self.result.const_type_names.internModuleIdentity(self.solved.lifted.names.moduleIdentityBytes(def.module)),
             .type_name = try self.result.const_type_names.internTypeName(self.solved.lifted.names.typeNameText(def.type_name)),
             .source_decl = def.source_decl,
-            .generated = def.generated,
-            .iterator_representation = def.iterator_representation,
-            .iterator_kind = def.iterator_kind,
-            .iterator_depth = def.iterator_depth,
-            .iterator_topology = .of(if (def.iterator_topology.get()) |topology| .{
-                .len_field = try self.constRecordFieldName(topology.len_field),
-                .step_field = try self.constRecordFieldName(topology.step_field),
-                .ok_tag = try self.constTagName(topology.ok_tag),
-                .err_tag = try self.constTagName(topology.err_tag),
-                .unknown_tag = try self.constTagName(topology.unknown_tag),
-                .done_tag = try self.constTagName(topology.done_tag),
-                .one_tag = try self.constTagName(topology.one_tag),
-                .skip_tag = try self.constTagName(topology.skip_tag),
-                .item_field = try self.constRecordFieldName(topology.item_field),
-                .rest_field = try self.constRecordFieldName(topology.rest_field),
-            } else null),
         };
     }
 

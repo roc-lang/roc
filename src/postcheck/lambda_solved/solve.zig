@@ -27,12 +27,12 @@
 //!   set by lambda and instantiation.
 //! - Erasure comes from explicit boundaries: hosted and platform function
 //!   signatures, layout and runtime-schema requests (including constants the
-//!   const store materializes), and forced-dynamic iterators. A `Box` is a
+//!   const store materializes). A `Box` is a
 //!   boundary by its type alone: every function a box holds is erased
 //!   (`eraseCallablesHeldByBoxes`), whether or not the program boxes a value
 //!   of that type, so a closed specialization key determines the solved types
-//!   of its procedure in every program. A binding group's hosted signatures,
-//!   boxes and forced-dynamic iterators are erased when the group finishes
+//!   of its procedure in every program. A binding group's hosted signatures
+//!   and boxes are erased when the group finishes
 //!   (`finishBindingGroup`), and every boundary is walked again once all
 //!   groups are solved. Debug builds re-walk every boundary after solving
 //!   (`verifyErasedBoundaries`) and require each callable it reaches to be
@@ -511,10 +511,6 @@ const Solver = struct {
     /// mutable lambda-set state, so one shared clone serves every use, and
     /// lazy-leaf walks skip callable-free leaves without materializing them.
     contains_callable: std.DynamicBitSetUnmanaged,
-    /// Per lifted Monotype: whether a forced-dynamic iterator named type is
-    /// reachable from it. The forced-dynamic scan materializes exactly these
-    /// leaves so the named nodes it must mark exist in the solved store.
-    contains_forced_dynamic: std.DynamicBitSetUnmanaged,
     /// Per lifted Monotype: whether a structural tag union is reachable from
     /// it. Rows join where values flow (design.md "Row Joins"), so a clone of
     /// such a type whose rows a join can change (`row_joined`) is mutable
@@ -593,9 +589,8 @@ const Solver = struct {
     /// uses can read one clone; giving each use its own would make every
     /// meeting of two uses unify the whole type again.
     shared_leaf_context: ?u32,
-    /// The first type the next finished binding group scans for boxes and
-    /// forced-dynamic iterators: every type before it was scanned when an
-    /// earlier group finished.
+    /// The first type the next finished binding group scans for boxes: every
+    /// type before it was scanned when an earlier group finished.
     group_erasure_scan_start: usize = 0,
     body_order: BodyOrder = .binding_groups,
     /// Whether finished binding groups are generalized: only when bodies
@@ -729,7 +724,6 @@ const Solver = struct {
             .unify_stack = .empty,
             .active_private_evidence_relations = .{},
             .contains_callable = masks.contains_callable,
-            .contains_forced_dynamic = masks.contains_forced_dynamic,
             .contains_tag_row = masks.contains_tag_row,
             .row_joined = row_joined,
             .shared_clones = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(allocator),
@@ -820,7 +814,6 @@ const Solver = struct {
         if (self.join_sides) |*sides| sides.deinit(self.allocator);
         self.row_joined.deinit(self.allocator);
         self.contains_tag_row.deinit(self.allocator);
-        self.contains_forced_dynamic.deinit(self.allocator);
         self.contains_callable.deinit(self.allocator);
         self.comptime_read_tys.deinit(self.allocator);
         self.active_private_evidence_relations.deinit(self.allocator);
@@ -907,8 +900,7 @@ const Solver = struct {
 
     /// Apply the erasure requirements a binding group's own types carry once
     /// its bodies are solved: the signatures of its hosted functions, every
-    /// callable a `Box` holds, and every forced-dynamic iterator's callables,
-    /// for the types created since the previous group finished (for the
+    /// callable a `Box` holds, for the types created since the previous group finished (for the
     /// first group, registration's types too).
     ///
     /// A later group can still bring new callables under one of these
@@ -926,7 +918,6 @@ const Solver = struct {
             }
         }
         try self.eraseCallablesHeldByBoxesFrom(self.group_erasure_scan_start);
-        try self.markForcedDynamicIteratorCallablesFrom(self.group_erasure_scan_start);
         self.group_erasure_scan_start = self.program.types.varCount();
     }
 
@@ -1427,8 +1418,6 @@ const Solver = struct {
             });
         }
 
-        try self.markForcedDynamicIteratorCallablesFrom(0);
-
         var unreached_leaves = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(self.allocator);
         defer unreached_leaves.deinit();
 
@@ -1582,7 +1571,6 @@ const Solver = struct {
         for (0..self.program.types.varCount()) |index| {
             const ty: Type.TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             const content = self.program.types.get(ty);
-            if (content == .named and content.named.def.iterator_representation == .forced_dynamic) try pending.append(self.allocator, ty);
             if (content == .box) try pending.append(self.allocator, ty);
         }
 
@@ -2599,30 +2587,6 @@ const Solver = struct {
         return context.solved_ret;
     }
 
-    /// Mark the callables of every forced-dynamic iterator among the types
-    /// from `start` on, materializing the leaves that can hold one.
-    fn markForcedDynamicIteratorCallablesFrom(self: *Solver, start: usize) Allocator.Error!void {
-        // Expanding a leaf appends fresh child vars, so the bound is re-read
-        // every iteration and an expanded var is revisited in place.
-        var index: usize = start;
-        while (index < self.program.types.varCount()) : (index += 1) {
-            const ty: Type.TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-            if (self.program.types.rootCompressed(ty) != ty) continue;
-            const content = self.program.types.get(ty);
-            const tag = std.meta.activeTag(content);
-            if (tag == .named) {
-                if (content.named.def.iterator_representation == .forced_dynamic) {
-                    try self.markErasedCallablesReachedByType(ty);
-                }
-            } else if (tag == .mono) {
-                if (self.contains_forced_dynamic.isSet(@backingInt(content.mono.id))) {
-                    _ = try self.expandMonoRoot(ty, content.mono);
-                    index -= 1;
-                }
-            }
-        }
-    }
-
     fn sameMonoType(self: *Solver, a: MonoType.TypeId, b: MonoType.TypeId) Allocator.Error!bool {
         if (a == b) return true;
         return try self.lifted.types.typeEql(self.allocator, self.lifted.names, a, b);
@@ -2853,11 +2817,9 @@ const Solver = struct {
         return content;
     }
 
-    /// Whether clones of this Monotype carry no callable slot and no
-    /// forced-dynamic iterator.
+    /// Whether clones of this Monotype carry no callable slot.
     fn isCallableFree(self: *const Solver, ty: MonoType.TypeId) bool {
-        const raw_id = @backingInt(ty);
-        return !self.contains_callable.isSet(raw_id) and !self.contains_forced_dynamic.isSet(raw_id);
+        return !self.contains_callable.isSet(@backingInt(ty));
     }
 
     /// Whether every clone of this Monotype solves identically: it is
@@ -2984,9 +2946,8 @@ const Solver = struct {
     /// Replace every output-reachable lazy leaf with a link to a materialized
     /// clone so program views never observe one. A leaf that survived solving
     /// was never unified: its clone's callable slots are erased under a box
-    /// and otherwise close empty, and its forced-dynamic marks depend only on
-    /// its Monotype, so every untouched leaf of one Monotype shares one
-    /// clone, callable-bearing or not.
+    /// and otherwise close empty, so every untouched leaf of one Monotype
+    /// shares one clone, callable-bearing or not.
     fn finalizeMonoLeaves(self: *Solver) Allocator.Error!void {
         var visited = collections.DenseMap(Type.TypeVarId, void).init(self.allocator);
         defer visited.deinit();
@@ -3061,15 +3022,12 @@ const Solver = struct {
     }
 
     /// Materialized clone for a leaf that survived solving, shared with every
-    /// other untouched leaf of the same Monotype and self-marking for
-    /// forced-dynamic iterator content.
+    /// other untouched leaf of the same Monotype.
     fn finalMonoClone(self: *Solver, id: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
         var cloner = TypeCloner.init(self);
         cloner.share = true;
         defer cloner.deinit();
-        const lowered = try cloner.lower(id);
-        try cloner.markForcedDynamicCallables();
-        return lowered;
+        return try cloner.lower(id);
     }
 
     fn listElem(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
@@ -3283,8 +3241,8 @@ const Solver = struct {
                 .named => |named| {
                     const right_named = right_content.named;
                     // Named types with different declarations have relations
-                    // of their own (iterator views, opaque views); only a pair
-                    // of one declaration is examined further.
+                    // of their own (opaque views); only a pair of one
+                    // declaration is examined further.
                     if (!std.meta.eql(named.def, right_named.def) or named.kind != right_named.kind or named.builtin_owner != right_named.builtin_owner) continue;
                     if (named.args.count() != right_named.args.count()) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, committable);
                     for (0..named.args.count()) |index| {
@@ -4250,7 +4208,6 @@ const Solver = struct {
         const id = leaf.id;
         if (!self.leafOriginIs(other, id) and !self.leafOriginIs(other_root, id)) return false;
         if (self.reaches_cycle.isSet(@backingInt(id)) and
-            !self.contains_forced_dynamic.isSet(@backingInt(id)) and
             leaf.ctx == Type.no_leaf_context and !self.leaf_arg_scopes.contains(leaf_root) and
             !try self.monoProvenUninhabited(id))
         {
@@ -4653,10 +4610,6 @@ const Solver = struct {
                     left_named.kind != right_named.kind or
                     left_named.builtin_owner != right_named.builtin_owner)
                 {
-                    if (try self.unifyForcedDynamicIterator(stack, finish_index, a, b, left_named, right_named)) return;
-                    if (try self.unifyIteratorOwnerStampedPublic(stack, finish_index, a, b, left_named, right_named)) return;
-                    if (try self.unifyGeneratedIteratorJoin(stack, finish_index, a, b, left_named, right_named)) return;
-                    if (try self.unifyPublicGeneratedIterator(stack, finish_index, a, b, left_named, right_named)) return;
                     if (try self.unifyNominalOpaqueViews(stack, finish_index, a, b, left_named, right_named)) return;
                     Common.invariant("named type identity failed Lambda Solved unification");
                 }
@@ -5075,50 +5028,28 @@ const Solver = struct {
                 const same_identity = public_named.kind == private_named.kind and
                     std.meta.eql(public_named.def, private_named.def) and
                     public_named.builtin_owner == private_named.builtin_owner;
-                if (!same_identity and MonoType.iteratorRelation(public_named, private_named) == .ordinary) {
+                if (!same_identity) {
                     Common.invariant("generated-private evidence relation received different named types");
                 }
-                if (same_identity) {
-                    if (public_named.args.count() != private_named.args.count()) {
-                        Common.invariant("generated-private evidence relation received named types with different arity");
-                    }
-                    for (0..public_named.args.count()) |index| {
-                        try self.pushRelate(
-                            stack,
-                            self.program.types.spanItem(public_named.args, index),
-                            self.program.types.spanItem(private_named.args, index),
-                        );
-                    }
-                    if (public_named.backing.get()) |public_backing| {
-                        const private_backing = private_named.backing.get() orelse
-                            Common.invariant("generated-private evidence relation received different named backing presence");
-                        if (public_backing.use != private_backing.use) {
-                            Common.invariant("generated-private evidence relation received different named backing uses");
-                        }
-                        try self.pushRelate(stack, public_backing.ty, private_backing.ty);
-                    } else if (private_named.backing.get() != null) {
-                        Common.invariant("generated-private evidence relation received different named backing presence");
-                    }
-                } else {
-                    if (public_named.args.count() == 0 or private_named.args.count() == 0) {
-                        Common.invariant("generated-private iterator evidence lacked a public item argument");
-                    }
+                if (public_named.args.count() != private_named.args.count()) {
+                    Common.invariant("generated-private evidence relation received named types with different arity");
+                }
+                for (0..public_named.args.count()) |index| {
                     try self.pushRelate(
                         stack,
-                        self.program.types.spanItem(public_named.args, 0),
-                        self.program.types.spanItem(private_named.args, 0),
+                        self.program.types.spanItem(public_named.args, index),
+                        self.program.types.spanItem(private_named.args, index),
                     );
-                    // A public iterator viewing a generated representation
-                    // receives its callable evidence through the backings,
-                    // exactly as the unifying relation transfers it.
-                    if (public_named.backing.get()) |public_backing| if (private_named.backing.get()) |private_backing| {
-                        if (public_backing.authority == .checked_public and private_backing.authority == .generated_private) {
-                            if (public_backing.use != private_backing.use) {
-                                Common.invariant("generated-private iterator evidence relation received different backing uses");
-                            }
-                            try self.pushRelate(stack, public_backing.ty, private_backing.ty);
-                        }
-                    };
+                }
+                if (public_named.backing.get()) |public_backing| {
+                    const private_backing = private_named.backing.get() orelse
+                        Common.invariant("generated-private evidence relation received different named backing presence");
+                    if (public_backing.use != private_backing.use) {
+                        Common.invariant("generated-private evidence relation received different named backing uses");
+                    }
+                    try self.pushRelate(stack, public_backing.ty, private_backing.ty);
+                } else if (private_named.backing.get() != null) {
+                    Common.invariant("generated-private evidence relation received different named backing presence");
                 }
             },
         }
@@ -5127,8 +5058,8 @@ const Solver = struct {
     /// Relate a public tag row to the private row representing the same
     /// values. Monotype related the two rows exactly, but a row join can grow
     /// either one afterwards (design.md "Row Joins"): a widened result joined
-    /// into an iterator's step row grows the private representation, and a
-    /// join that reached the public view before the relation grows the view.
+    /// into the private row grows the representation, and a join that reached
+    /// the public view before the relation grows the view.
     /// The private row is the representation, so it carries every tag either
     /// row holds. A tag both rows list relates its payloads; a tag only the
     /// private row lists was joined into the representation; a tag only the
@@ -5169,146 +5100,6 @@ const Solver = struct {
             try joined.append(self.allocator, self.program.types.tagItem(private_tags, position));
         }
         try self.program.types.set(private_root, .{ .tag_union = try self.addLabelOrderedTags(joined.items) });
-    }
-
-    fn unifyIteratorOwnerStampedPublic(
-        self: *Solver,
-        stack: *std.ArrayList(UnifyFrame),
-        finish_index: usize,
-        left_ty: Type.TypeVarId,
-        right_ty: Type.TypeVarId,
-        left: anytype,
-        right: anytype,
-    ) Allocator.Error!bool {
-        if (left.kind != right.kind) return false;
-        if (!sameMonoTypeDef(left.def, right.def)) return false;
-        _ = iteratorLikeOwnerFromPair(left.builtin_owner.get(), right.builtin_owner.get()) orelse return false;
-        if (left.builtin_owner == right.builtin_owner) return false;
-
-        const left_owns = isIteratorLikeOwner(left.builtin_owner.get());
-        linkAtFinish(stack, finish_index, if (left_owns) left_ty else right_ty, if (left_owns) right_ty else left_ty);
-        try self.pushSpanPairs(stack, left.args, right.args, "iterator owner-stamp argument lists failed Lambda Solved unification");
-        return true;
-    }
-
-    fn unifyForcedDynamicIterator(
-        self: *Solver,
-        stack: *std.ArrayList(UnifyFrame),
-        finish_index: usize,
-        left_ty: Type.TypeVarId,
-        right_ty: Type.TypeVarId,
-        left: anytype,
-        right: anytype,
-    ) Allocator.Error!bool {
-        if (MonoType.iteratorRelation(left, right) != .forced_dynamic) return false;
-
-        const left_dynamic = left.def.iterator_representation == .forced_dynamic;
-        if (left.args.count() == 0 or right.args.count() == 0) {
-            Common.invariant("forced-dynamic iterator reached Lambda Solved without a public item argument");
-        }
-
-        linkAtFinish(stack, finish_index, if (left_dynamic) left_ty else right_ty, if (left_dynamic) right_ty else left_ty);
-        const dynamic = if (left_dynamic) left else right;
-        const other = if (left_dynamic) right else left;
-        switch (other.def.iterator_representation) {
-            .none => try self.relateForcedDynamicPublicEvidence(stack, dynamic, other),
-            .minted => try self.unifyGeneratedIteratorBackings(stack, left, right),
-            .forced_dynamic => Common.invariant("forced-dynamic iterator relation received two dynamic representations"),
-        }
-        try self.pushUnifyPair(stack, self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
-        return true;
-    }
-
-    fn relateForcedDynamicPublicEvidence(self: *Solver, stack: *std.ArrayList(UnifyFrame), dynamic: anytype, public: anytype) Allocator.Error!void {
-        const public_backing = public.backing.get() orelse return;
-        const dynamic_backing = dynamic.backing.get() orelse
-            Common.invariant("forced-dynamic iterator relation found dynamic backing on only one side");
-        if (public_backing.use != dynamic_backing.use) {
-            Common.invariant("forced-dynamic iterator relation found different backing uses");
-        }
-        if (public_backing.authority != .checked_public or dynamic_backing.authority != .generated_private) {
-            Common.invariant("forced-dynamic iterator evidence relation received incorrect backing authority");
-        }
-        try self.pushRelate(stack, public_backing.ty, dynamic_backing.ty);
-    }
-
-    fn unifyGeneratedIteratorJoin(
-        self: *Solver,
-        stack: *std.ArrayList(UnifyFrame),
-        finish_index: usize,
-        left_ty: Type.TypeVarId,
-        right_ty: Type.TypeVarId,
-        left: anytype,
-        right: anytype,
-    ) Allocator.Error!bool {
-        if (MonoType.iteratorRelation(left, right) != .minted_join) return false;
-
-        if (left.args.count() == 0 or right.args.count() == 0) {
-            Common.invariant("generated iterator join reached Lambda Solved without a public item argument");
-        }
-        const left_owns = isIteratorLikeOwner(left.builtin_owner.get());
-        linkAtFinish(stack, finish_index, if (left_owns) left_ty else right_ty, if (left_owns) right_ty else left_ty);
-
-        if (left.backing.get()) |left_backing| {
-            const right_backing = right.backing.get() orelse
-                Common.invariant("generated iterator join found backing on only one side");
-            if (left_backing.use != right_backing.use) {
-                Common.invariant("generated iterator join found different backing uses");
-            }
-            if (left_backing.authority != right_backing.authority) {
-                Common.invariant("generated iterator join found different backing authorities");
-            }
-            try self.pushUnifyPair(stack, left_backing.ty, right_backing.ty);
-        } else if (right.backing.get() != null) {
-            Common.invariant("generated iterator join found backing on only one side");
-        }
-        try self.pushUnifyPair(stack, self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
-        return true;
-    }
-
-    fn unifyPublicGeneratedIterator(
-        self: *Solver,
-        stack: *std.ArrayList(UnifyFrame),
-        finish_index: usize,
-        left_ty: Type.TypeVarId,
-        right_ty: Type.TypeVarId,
-        left: anytype,
-        right: anytype,
-    ) Allocator.Error!bool {
-        if (MonoType.iteratorRelation(left, right) != .public_minted) return false;
-
-        if (left.args.count() == 0 or right.args.count() == 0) {
-            Common.invariant("generated iterator evidence reached Lambda Solved without a public item argument");
-        }
-
-        const left_minted = left.def.iterator_representation == .minted;
-        linkAtFinish(stack, finish_index, if (left_minted) left_ty else right_ty, if (left_minted) right_ty else left_ty);
-        const generated = if (left_minted) left else right;
-        const public = if (left_minted) right else left;
-        if (public.backing.get()) |public_backing| {
-            const generated_backing = generated.backing.get() orelse
-                Common.invariant("generated iterator evidence had no private backing");
-            if (generated_backing.authority != .generated_private) {
-                Common.invariant("generated iterator evidence backing lacked private authority");
-            }
-            try self.pushRelate(stack, public_backing.ty, generated_backing.ty);
-        }
-        try self.pushUnifyPair(stack, self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
-        return true;
-    }
-
-    fn unifyGeneratedIteratorBackings(self: *Solver, stack: *std.ArrayList(UnifyFrame), left: anytype, right: anytype) Allocator.Error!void {
-        const left_backing = left.backing.get() orelse
-            Common.invariant("generated iterator relation found backing on only one side");
-        const right_backing = right.backing.get() orelse
-            Common.invariant("generated iterator relation found backing on only one side");
-        if (left_backing.use != right_backing.use) {
-            Common.invariant("generated iterator relation found different backing uses");
-        }
-        if (left_backing.authority != .generated_private or right_backing.authority != .generated_private) {
-            Common.invariant("private iterator relation received a checked-public backing");
-        }
-        try self.pushUnifyPair(stack, left_backing.ty, right_backing.ty);
     }
 
     /// The backing `unifyRoots` relates a bare structure to when it meets
@@ -5914,7 +5705,6 @@ const LeafContextShape = struct {
 
 const ReachabilityMasks = struct {
     contains_callable: std.DynamicBitSetUnmanaged,
-    contains_forced_dynamic: std.DynamicBitSetUnmanaged,
     contains_tag_row: std.DynamicBitSetUnmanaged,
     reaches_cycle: std.DynamicBitSetUnmanaged,
     /// Per lifted Monotype: the cycle it lies on (`markCycleMembers`), or
@@ -5925,7 +5715,6 @@ const ReachabilityMasks = struct {
         allocator.free(self.cycle_components);
         self.reaches_cycle.deinit(allocator);
         self.contains_tag_row.deinit(allocator);
-        self.contains_forced_dynamic.deinit(allocator);
         self.contains_callable.deinit(allocator);
     }
 };
@@ -6031,9 +5820,8 @@ const ParentIndex = struct {
 };
 
 /// Reverse-reachability over the lifted Monotype store: from `func` and
-/// `erased` nodes (types whose clones need fresh callable slots), from
-/// forced-dynamic iterator named nodes (leaves the forced-dynamic scan must
-/// materialize), and from structural tag unions (types whose clones join
+/// `erased` nodes (types whose clones need fresh callable slots), and from
+/// structural tag unions (types whose clones join
 /// where their values flow).
 fn computeReachabilityMasks(allocator: Allocator, types: MonoType.Store.View) Allocator.Error!ReachabilityMasks {
     const count = types.types.len;
@@ -6042,21 +5830,17 @@ fn computeReachabilityMasks(allocator: Allocator, types: MonoType.Store.View) Al
 
     var flags = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
     errdefer flags.deinit(allocator);
-    var forced = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
-    errdefer forced.deinit(allocator);
     var rows = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
     errdefer rows.deinit(allocator);
     for (0..count) |index| {
         const content = types.get(@fromBackingInt(@intCast(index)));
         switch (std.meta.activeTag(content)) {
             .func, .erased => flags.set(index),
-            .named => if (content.named.def.iterator_representation == .forced_dynamic) forced.set(index),
             .tag_union => rows.set(index),
-            .primitive, .zst, .hole, .list, .box, .tuple, .record => {},
+            .primitive, .zst, .hole, .list, .box, .tuple, .record, .named => {},
         }
     }
     try index_.markAncestors(allocator, &flags);
-    try index_.markAncestors(allocator, &forced);
     try index_.markAncestors(allocator, &rows);
 
     var cycle = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
@@ -6067,7 +5851,6 @@ fn computeReachabilityMasks(allocator: Allocator, types: MonoType.Store.View) Al
     try index_.markAncestors(allocator, &cycle);
     return .{
         .contains_callable = flags,
-        .contains_forced_dynamic = forced,
         .contains_tag_row = rows,
         .reaches_cycle = cycle,
         .cycle_components = components,
@@ -6503,8 +6286,7 @@ const TypeCloner = struct {
             // shared leaf still lazy here is finalized through this clone
             // and links to it instead.
             if (self.solver.expandedSharedLeaf(ty)) |existing| return existing;
-            // A shared clone was marked when it was first cloned, so it stays
-            // out of this clone's memo and its forced-dynamic marking.
+            // A shared clone stays out of this clone's memo.
             return self.solver.shared_clones.get(ty);
         }
         return null;
@@ -6766,22 +6548,6 @@ const TypeCloner = struct {
         };
     }
 
-    /// Apply the explicit dynamic boundary only after the entire requested
-    /// Monotype clone is complete. A forced iterator can be reached while an
-    /// enclosing function or payload clone still holds reservations, so doing
-    /// this per-node would let callable identity observe an unfinished graph.
-    fn markForcedDynamicCallables(self: *TypeCloner) Allocator.Error!void {
-        var entries = self.map.iterator();
-        while (entries.next()) |entry| {
-            const content = self.solver.lifted.types.get(entry.key_ptr.*);
-            if (std.meta.activeTag(content) == .named) {
-                if (content.named.def.iterator_representation == .forced_dynamic) {
-                    try self.solver.markErasedCallablesReachedByType(entry.value_ptr.*);
-                }
-            }
-        }
-    }
-
     fn structuralBackingForNamed(
         self: *TypeCloner,
         owner_def: MonoType.TypeDef,
@@ -6806,39 +6572,7 @@ fn sameMonoTypeDef(left: MonoType.TypeDef, right: MonoType.TypeDef) bool {
     return left.module == right.module and
         left.type_name == right.type_name and
         left.source_decl == right.source_decl and
-        optionalDigestEql(left.generated, right.generated) and
-        left.iterator_representation == right.iterator_representation and
-        left.iterator_kind == right.iterator_kind and
-        left.iterator_depth == right.iterator_depth and
-        std.meta.eql(left.iterator_topology, right.iterator_topology);
-}
-
-fn iteratorLikeOwnerFromPair(
-    left: ?static_dispatch.BuiltinOwner,
-    right: ?static_dispatch.BuiltinOwner,
-) ?static_dispatch.BuiltinOwner {
-    if (left) |left_owner| {
-        if (!isIteratorLikeOwner(left_owner)) return null;
-        if (right) |right_owner| {
-            if (left_owner != right_owner) return null;
-        }
-        return left_owner;
-    }
-    if (right) |right_owner| {
-        if (!isIteratorLikeOwner(right_owner)) return null;
-        return right_owner;
-    }
-    return null;
-}
-
-fn isIteratorLikeOwner(owner: ?static_dispatch.BuiltinOwner) bool {
-    return static_dispatch.isIteratorOwner(owner orelse return false);
-}
-
-fn optionalDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool {
-    if (left == null and right == null) return true;
-    if (left == null or right == null) return false;
-    return std.mem.eql(u8, left.?.bytes[0..], right.?.bytes[0..]);
+        left.site == right.site;
 }
 
 /// The digest tests build already-materialized solved types directly, so only

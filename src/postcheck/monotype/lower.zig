@@ -243,20 +243,6 @@ const CommittedGraphTypes = struct {
         var committed = source;
         committed.module = try relocation.relocateModuleIdentity(self.source_names, source.module);
         committed.type_name = try relocation.relocateTypeName(self.source_names, source.type_name);
-        if (committed.iterator_topology.get()) |present_topology| {
-            var topology = present_topology;
-            topology.len_field = try relocation.relocateRecordFieldLabel(self.source_names, topology.len_field);
-            topology.step_field = try relocation.relocateRecordFieldLabel(self.source_names, topology.step_field);
-            topology.ok_tag = try relocation.relocateTagLabel(self.source_names, topology.ok_tag);
-            topology.err_tag = try relocation.relocateTagLabel(self.source_names, topology.err_tag);
-            topology.unknown_tag = try relocation.relocateTagLabel(self.source_names, topology.unknown_tag);
-            topology.done_tag = try relocation.relocateTagLabel(self.source_names, topology.done_tag);
-            topology.one_tag = try relocation.relocateTagLabel(self.source_names, topology.one_tag);
-            topology.skip_tag = try relocation.relocateTagLabel(self.source_names, topology.skip_tag);
-            topology.item_field = try relocation.relocateRecordFieldLabel(self.source_names, topology.item_field);
-            topology.rest_field = try relocation.relocateRecordFieldLabel(self.source_names, topology.rest_field);
-            committed.iterator_topology = .some(topology);
-        }
         return committed;
     }
 };
@@ -36163,7 +36149,7 @@ const BodyContext = struct {
                 task.initial_iterator = input.?.exprValue();
                 task.iterator_cell = self.exprTypeCell(task.initial_iterator);
                 try self.constrainCheckedInterfaceToCell(plan.iterator_ty, task.iterator_cell);
-                task.step = try self.iteratorStepShape(plan, task.iterator_cell);
+                task.step = try self.iteratorStepShape(plan);
                 try self.constrainCheckedInterfaceToCell(plan.iterator_ty, DraftTypeCell.fromGraphNode(task.step.one_rest.node));
                 try self.constrainCheckedInterfaceToCell(plan.iterator_ty, DraftTypeCell.fromGraphNode(task.step.skip_rest.node));
                 try self.constrainCheckedInterfaceToCell(plan.item_ty, DraftTypeCell.fromGraphNode(task.step.one_item.node));
@@ -41542,20 +41528,20 @@ const BodyContext = struct {
         };
     }
 
-    fn isGeneratedIteratorEvidenceNode(self: *BodyContext, node: NodeId) Allocator.Error!bool {
-        return switch ((try self.graph.content(node))) {
-            .named => |named| switch (named.def.iterator_representation) {
-                .minted, .forced_dynamic => if (named.builtin_owner.get()) |owner|
-                    static_dispatch.isIteratorOwner(owner)
-                else
-                    false,
-                .none => false,
-            },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => false,
-        };
-    }
-
-    const IteratorRepresentationNames = Type.IteratorTopology;
+    /// The checker's names for the fields and tags of the public iterator
+    /// representation, interned in this program's name store.
+    const IteratorRepresentationNames = struct {
+        len_field: names.RecordFieldNameId,
+        step_field: names.RecordFieldNameId,
+        ok_tag: names.TagNameId,
+        err_tag: names.TagNameId,
+        unknown_tag: names.TagNameId,
+        done_tag: names.TagNameId,
+        one_tag: names.TagNameId,
+        skip_tag: names.TagNameId,
+        item_field: names.RecordFieldNameId,
+        rest_field: names.RecordFieldNameId,
+    };
 
     fn iteratorRepresentationNames(self: *BodyContext, owner: static_dispatch.IteratorOwner) Allocator.Error!IteratorRepresentationNames {
         const topologies = self.view.static_dispatch_plans.iterator_topologies.items();
@@ -41575,23 +41561,6 @@ const BodyContext = struct {
             .item_field = try recordFieldName(self.nameStoreMut(), self.view, topology.item_field),
             .rest_field = try recordFieldName(self.nameStoreMut(), self.view, topology.rest_field),
         };
-    }
-
-    /// The public iterator type a generated or public iterator node belongs to.
-    fn iteratorOwnerOfNamed(builtin_owner: ?static_dispatch.BuiltinOwner) static_dispatch.IteratorOwner {
-        const owner = builtin_owner orelse
-            Common.invariant("iterator representation requested for a type without builtin identity");
-        return static_dispatch.iteratorOwner(owner) orelse
-            Common.invariant("iterator representation requested for a non-iterator builtin type");
-    }
-
-    fn generatedIteratorStepReturnNode(self: *BodyContext, iterator: NodeId) Allocator.Error!NodeId {
-        const named = (try self.graph.content(iterator)).named;
-        const backing = named.backing.get() orelse
-            Common.invariant("generated iterator next requested a type without backing");
-        const topology = try self.iteratorRepresentationNames(iteratorOwnerOfNamed(named.builtin_owner.get()));
-        const step = try self.graph.functionNodes(try self.graph.recordFieldNode(backing.node, topology.step_field));
-        return step.ret;
     }
 
     fn relateCheckedTypeToMono(
@@ -49913,23 +49882,7 @@ const BodyContext = struct {
             .module = try self.nameStoreMut().internModuleIdentity(store_view.names.moduleIdentityBytes(def.module)),
             .type_name = try self.nameStoreMut().internTypeName(store_view.names.typeNameText(def.type_name)),
             .source_decl = def.source_decl,
-            .generated = def.generated,
             .site = self.builder.isAppModuleIdentity(store_view.names.moduleIdentityBytes(def.module)),
-            .iterator_representation = def.iterator_representation,
-            .iterator_kind = def.iterator_kind,
-            .iterator_depth = def.iterator_depth,
-            .iterator_topology = .of(if (def.iterator_topology.get()) |topology| .{
-                .len_field = try self.constRecordFieldName(store_view, topology.len_field),
-                .step_field = try self.constRecordFieldName(store_view, topology.step_field),
-                .ok_tag = try self.constTagName(store_view, topology.ok_tag),
-                .err_tag = try self.constTagName(store_view, topology.err_tag),
-                .unknown_tag = try self.constTagName(store_view, topology.unknown_tag),
-                .done_tag = try self.constTagName(store_view, topology.done_tag),
-                .one_tag = try self.constTagName(store_view, topology.one_tag),
-                .skip_tag = try self.constTagName(store_view, topology.skip_tag),
-                .item_field = try self.constRecordFieldName(store_view, topology.item_field),
-                .rest_field = try self.constRecordFieldName(store_view, topology.rest_field),
-            } else null),
         };
     }
 
@@ -67504,15 +67457,10 @@ const BodyContext = struct {
     fn iteratorStepShape(
         self: *BodyContext,
         plan: static_dispatch.IteratorForPlan,
-        iterator_cell: DraftTypeCell,
     ) Allocator.Error!IterStepShape {
         const for_site = plan.forLoopSite();
         const topology = for_site.step_topology;
-        const iterator_node = try iterator_cell.toGraphNode(self.graph);
-        const step_node = if ((try self.isGeneratedIteratorEvidenceNode(iterator_node)))
-            try self.generatedIteratorStepReturnNode(iterator_node)
-        else
-            try self.lowerTypeNode(for_site.step_ty);
+        const step_node = try self.lowerTypeNode(for_site.step_ty);
         const done_tag_name = try tagName(self.nameStoreMut(), self.view, topology.done_tag);
         const one_tag_name = try tagName(self.nameStoreMut(), self.view, topology.one_tag);
         const skip_tag_name = try tagName(self.nameStoreMut(), self.view, topology.skip_tag);

@@ -10831,22 +10831,7 @@ counter. Every generated iterator passes through the same graph-owned producer
 and pre-seal finalizer, so recursive functions, loops, and ordinary calls all
 receive the same finite representation decision.
 
-#### Tier Unification And Callable Flow
-
-Monotype instantiation and Lambda Solved unification consume the representation
-tier explicitly:
-
-- a forced-dynamic iterator wins when related to a minted or ordinary public
-  iterator with the same source declaration and item type;
-- a minted iterator wins when related to its ordinary public source type;
-- distinct minted iterator identities join their item and backing information
-  without discarding callable members;
-- equal tiers use ordinary named-type equality.
-
-At a forced-dynamic relation, Lambda Solved always unifies the public item type.
-A minted peer also joins its generated-private backing into the dynamic backing;
-an ordinary public peer has no private representation authority, so its backing
-is not merged or reinterpreted.
+#### Callable Flow Across Generated Representations
 
 Lambda Solved transfers callable evidence across a public-to-generated relation
 with a separate structure-preserving walk. That walk validates corresponding
@@ -10854,42 +10839,26 @@ public and private structure while retaining both sealed Monotype roots, and it
 unifies only callable slots and still-open Lambda Solved slots. This makes a
 SpecConstr-authored callable worker visible in the exact private representation
 that contains it without using the public representation as a replacement.
-When the walk reaches a public iterator viewing a minted or forced-dynamic
-representation, it continues from the public backing into the generated
-backing, exactly as the unifying relation does, so the public view's step slot
-receives the callable evidence of the value it views.
 
 A tag row is related by label, not position. Monotype relates the two rows
 exactly, but a row join (Row Joins) can grow either one afterwards: a widened
-`next` result joined into an iterator's step row grows the private row, and a
-join that reached the public view before the relation grows the view. The
-private row is the representation, so it carries every tag either row holds
+result joined into the private row grows the representation, and a join that
+reached the public view before the relation grows the view. The private row is
+the representation, so it carries every tag either row holds
 (`Solver.relateTagRows`). A tag both rows list relates its payloads, a tag
 only the private row lists was joined into the representation, and a tag only
 the public view lists joins the private row, as unifying the two rows would.
 The result is the same whichever runs first, the relation or the join.
 
-When a complete Monotype type clone contains a forced-dynamic iterator,
-Lambda Solved marks the callable in that iterator's backing as erased. The mark
-runs only after the clone is structurally complete, so the erased callable's
-source-function digest never observes a partially built type. The erased
-callable then accumulates exact finite members through normal Lambda Solved
-unification.
-
-The erased callable also records the function type it was erased from, and that
+An erased callable records the function type it was erased from, and that
 type's arguments and result are its ABI. Function types that view the callable
-through a public interface can differ from the ABI in representation (a public
-iterator is boxed, a forced-dynamic one is not), so direct LIR lowering
-specializes every member entry at the ABI and lowers every indirect call's
-arguments to it and its result from it at explicit typed boundaries. A call
-site never takes its result layout from its own view of the callee.
-
-Minted iterator backings keep finite callable slots inline. Only
-forced-dynamic backings take this explicit erased-callable boundary. The direct
-LIR lowerer dumbly consumes the solved result: finite callables become generated
-tag-union values; erased callables become packed erased-callable values and
-indirect calls. It does not invent iterator selection or repair callable
-variant sets.
+through a public interface can differ from the ABI in representation, so direct
+LIR lowering specializes every member entry at the ABI and lowers every
+indirect call's arguments to it and its result from it at explicit typed
+boundaries. A call site never takes its result layout from its own view of the
+callee. The direct LIR lowerer dumbly consumes the solved result: finite
+callables become generated tag-union values; erased callables become packed
+erased-callable values and indirect calls.
 
 #### SpecConstr And Loop Scalarization
 
@@ -23447,13 +23416,11 @@ The producers are:
   callable parameter or result
 - checked root ABI metadata for values that will later be consumed by LirImage
   or glue, when that metadata explicitly names erased callable slots
-- a Monotype iterator type explicitly marked `forced_dynamic`, whose recursive
-  step callable crosses the dynamic representation boundary
 
 Inside Lambda Solved, the boundaries that mark every callable they reach as
 erased are hosted function signatures and platform or hosted root signatures,
 layout requests (including constants the const store materializes), runtime
-schema requests, every `Box` type, and forced-dynamic iterator types. A `Box`
+schema requests, and every `Box` type. A `Box`
 is a boundary by its type alone: every function a box holds is erased whether
 or not the program boxes, unboxes, or passes across a boundary any value of
 that type. A request whose function types all sit inside a `Box` is closed,
@@ -23464,8 +23431,8 @@ each function value reached has an erased callable slot.
 
 The boundaries a binding group's own types carry are applied when the group
 finishes, before any later group is solved: the signatures of its hosted
-functions, and every `Box` and forced-dynamic iterator among the types
-created since the previous group finished. Platform and hosted roots, layout
+functions, and every `Box` among the types created since the previous group
+finished. Platform and hosted roots, layout
 requests and runtime schema requests are requests about the whole program
 rather than properties of any binding group, so they are applied once every
 group is solved, and closing unfilled callable slots needs every group's
@@ -23478,9 +23445,7 @@ rows. Erasure only grows, so the result is exactly what a single walk after
 solving produces.
 
 Monotype lowering carries boundary requirements as typed annotations into
-Lambda Solved IR. Lambda solving also consumes the explicit iterator
-representation tier and marks a completed forced-dynamic backing callable as
-erased. It unifies all requirements through the same function
+Lambda Solved IR. Lambda solving unifies all requirements through the same function
 `args/callable/ret` graph used for finite lambda sets. If a callable slot is
 forced to `erased`, direct LIR lowering produces packed erased callable values
 and indirect erased calls.
@@ -23508,7 +23473,7 @@ that holds a callable, since an opaque type never crosses the host boundary.
 
 No ordinary source expression becomes erased because direct lowering finds
 finite dispatch inconvenient. Erasure is introduced only by explicit checked
-boundary data or the explicit Monotype forced-dynamic iterator tier.
+boundary data.
 
 This `.lss` rule is separate from `.boxy` closure representation. `.boxy` uses
 erased callables for function values by strategy, but it still does not
