@@ -1103,7 +1103,7 @@ diagnose! = |args| {
 			} else {
 				""
 			}
-		$sections = $sections.append("#### Diagnostics for `${bench.name}`\n\n${timings}${rss}${cachegrind}")
+		$sections = $sections.append("<details><summary>Diagnostics for <code>${bench.name}</code></summary>\n\n${timings}${rss}${cachegrind}</details>\n")
 		$index = $index + 1
 	}
 	Path.write_utf8!(out, $sections |> Str.join_with("\n"))?
