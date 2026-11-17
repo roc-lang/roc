@@ -36,7 +36,9 @@ pub const Row = struct {
     bit_len: u32,
 
     const Words = ArcSnapshot(u64, 0);
-    const inline_word_count = 2;
+    /// As many words as fit in a tree root, whose size follows the target's
+    /// pointer width.
+    const inline_word_count = @sizeOf(Words) / @sizeOf(u64);
     pub const inline_bits = 64 * inline_word_count;
 
     /// `inline_words` exactly when the domain fits `inline_bits`; words past
@@ -47,6 +49,7 @@ pub const Row = struct {
     };
 
     comptime {
+        std.debug.assert(inline_word_count >= 1);
         std.debug.assert(@sizeOf([inline_word_count]u64) <= @sizeOf(Words));
     }
 
