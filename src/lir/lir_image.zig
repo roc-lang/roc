@@ -98,7 +98,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      outcome-restitution variant (`rc_outcomes`).
 /// v79: the layout store records which layouts lie on a recursive cycle
 ///      (`layouts_on_cycle`), combined with the v78 change.
-pub const FORMAT_VERSION: u32 = 79;
+/// v80: a lowering module is named by a failure identity, combined with the
+///      v77-v79 changes.
+pub const FORMAT_VERSION: u32 = 80;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -213,7 +215,7 @@ pub const LirStoreImage = extern struct {
     source_file_qualified_bytes: ArrayRef,
     source_file_qualified_ends: ArrayRef,
     source_file_identities: ArrayRef,
-    lowering_module_keys: ArrayRef,
+    lowering_module_identities: ArrayRef,
     cf_stmt_sources: ArrayRef,
     stmt_sources: ArrayRef,
     cf_stmt_inline_scopes: ArrayRef,
@@ -247,7 +249,7 @@ pub const LirStoreImage = extern struct {
             .source_file_qualified_bytes = try encoder.ref(store.source_file_qualified_bytes.unsafeRawItemsForView()),
             .source_file_qualified_ends = try encoder.ref(store.source_file_qualified_ends.unsafeRawItemsForView()),
             .source_file_identities = try encoder.ref(store.source_file_identities.unsafeRawItemsForView()),
-            .lowering_module_keys = try encoder.ref(store.lowering_module_keys.unsafeRawItemsForView()),
+            .lowering_module_identities = try encoder.ref(store.lowering_module_identities.unsafeRawItemsForView()),
             .cf_stmt_sources = try encoder.ref(store.cf_stmt_sources.unsafeRawItemsForView()),
             .stmt_sources = try encoder.ref(store.stmt_sources.unsafeRawItemsForView()),
             .cf_stmt_inline_scopes = try encoder.ref(store.cf_stmt_inline_scopes.unsafeRawItemsForView()),
@@ -300,7 +302,7 @@ pub const LirStoreImage = extern struct {
             .source_file_qualified_bytes = try guardedListFromRef(u8, "LirStore.source_file_qualified_bytes", base_ptr, image_size, self.source_file_qualified_bytes),
             .source_file_qualified_ends = try guardedListFromRef(u32, "LirStore.source_file_qualified_ends", base_ptr, image_size, self.source_file_qualified_ends),
             .source_file_identities = try guardedListFromRef([32]u8, "LirStore.source_file_identities", base_ptr, image_size, self.source_file_identities),
-            .lowering_module_keys = try guardedListFromRef([32]u8, "LirStore.lowering_module_keys", base_ptr, image_size, self.lowering_module_keys),
+            .lowering_module_identities = try guardedListFromRef([32]u8, "LirStore.lowering_module_identities", base_ptr, image_size, self.lowering_module_identities),
             .cf_stmt_sources = try guardedListFromRef(LirStore.StmtSourceId, "LirStore.cf_stmt_sources", base_ptr, image_size, self.cf_stmt_sources),
             .stmt_sources = try guardedListFromRef(LirStore.StmtSource, "LirStore.stmt_sources", base_ptr, image_size, self.stmt_sources),
             .cf_stmt_inline_scopes = try guardedListFromRef(LIR.InlineScopeId, "LirStore.cf_stmt_inline_scopes", base_ptr, image_size, self.cf_stmt_inline_scopes),
@@ -916,7 +918,7 @@ const serialized_guarded_fields = [_][]const u8{
     "source_file_qualified_bytes",
     "source_file_qualified_ends",
     "source_file_identities",
-    "lowering_module_keys",
+    "lowering_module_identities",
     "cf_stmt_sources",
     "stmt_sources",
     "cf_stmt_inline_scopes",

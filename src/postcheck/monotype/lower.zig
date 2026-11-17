@@ -18295,9 +18295,14 @@ const CheckedCodecContractAnchor = struct {
     derivation: static_dispatch.GeneratedCodecDerivationId,
     call_index: u32,
     kind: CodecKind,
-    /// The forwarded evidence the contract was instantiated with. It is
-    /// determined by the contract's boundary shape, whose type each forwarded
-    /// call's subject is part of, so it adds nothing to the anchor's identity.
+    /// The forwarded evidence the contract was instantiated with. It adds
+    /// nothing to the anchor's identity: each forwarded call's subject is part
+    /// of the boundary shape type, and its format, state and error types are
+    /// parts of the constructor type, both of which the identity holds. A type
+    /// has one method of a name (a body-local type's identity includes the
+    /// enclosing variables its methods read, design.md "Body-Local Type
+    /// Context"), and structural derivations at one type are equivalent
+    /// contracts (`codec_identity`), so equal types select equal evidence.
     forwarded: *const ForwardedCodecVector = &no_forwarded_codec_calls,
 };
 

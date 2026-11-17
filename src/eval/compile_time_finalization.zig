@@ -5478,8 +5478,9 @@ const FailedAt = struct {
 
 /// Where an interpreter's evaluation failed.
 fn interpreterFailedAt(lir_result: *const lir.Program.Result, interpreter: *const Interpreter, slots: *const StaticSlotEnvironment) FailedAt {
+    const meaning = if (interpreter.getFailedCrashStmt()) |stmt| lir_result.store.failureMeaning(stmt) else null;
     return slots.withProducerOrigin(.{
-        .meaning = if (interpreter.getFailedCrashStmt()) |stmt| lir_result.store.failureMeaning(stmt) else null,
+        .meaning = if (meaning) |known| lir_result.meaningByCheckedKey(known) else null,
         .region = interpreter.getFailedCheckedRegion(),
         .loc = interpreter.getFailedSourceLoc(),
     });
@@ -6653,6 +6654,9 @@ const DevProgram = struct {
     image_selection: BoxyLinkedImages.Selection,
     /// The program's LIR, whose source file table locations index.
     lir_store: *const lir.LirStore,
+    /// The program's lowering, whose module table reads the modules failure
+    /// meanings name (`lir.Program.Result.meaningByCheckedKey`).
+    lir_result: *const lir.Program.Result,
 
     fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, options: Options) FinalizeError!DevProgram {
         const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
@@ -6820,6 +6824,7 @@ const DevProgram = struct {
             .linked_images = options.boxy_linked_images,
             .image_selection = image_selection,
             .lir_store = &lowered.lir_result.store,
+            .lir_result = &lowered.lir_result,
         };
     }
 
@@ -6879,7 +6884,7 @@ const DevProgram = struct {
         const known = point orelse return .{};
         var failed_at = FailedAt{};
         if (known.calls.len != 0) {
-            failed_at.meaning = self.failureMeaningAt(known.calls[0]);
+            if (self.failureMeaningAt(known.calls[0])) |meaning| failed_at.meaning = self.lir_result.meaningByCheckedKey(meaning);
         }
         const statement = for (known.calls) |address| {
             // A return address follows its call instruction.

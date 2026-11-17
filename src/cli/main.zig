@@ -85,6 +85,7 @@ pub const std_options_debug_threaded_io: *std.Io.Threaded = &debug_threaded_io_i
 const build_options = @import("build_options");
 const shim_symbols = @import("builtins").shim_symbols;
 const Sha256Rounds = @import("builtins").sha256.Rounds;
+const Utf8Kernel = @import("builtins").utf8.Kernel;
 const base = @import("base");
 const collections = @import("collections");
 const dev_diagnostics = base.dev_diagnostics;
@@ -668,67 +669,63 @@ const EmbeddedTargetObjects = struct {
         return objects;
     }
 
-    /// A generic Linux target uses the native builtins, and its glibc twin's
-    /// default platform and support image: the image's builtins and Boxy
-    /// runtime are the twin's, compiled for the same architecture and
-    /// operating system and calling no libc, like the native ones.
-    fn linuxAlias(comptime glibc: EmbeddedTargetObjects) EmbeddedTargetObjects {
-        var objects = glibc;
-        objects.builtins_extern = native.builtins_extern;
-        objects.builtins_extern_digest = native.builtins_extern_digest;
-        objects.boxy_runtime = native.boxy_runtime;
-        objects.boxy_runtime_digest = native.boxy_runtime_digest;
+    /// A freestanding ELF target links the objects of the musl target with
+    /// its CPU contract, which are compiled for the same architecture and
+    /// operating system and call no libc, without a default platform.
+    fn elfAlias(comptime musl: EmbeddedTargetObjects) EmbeddedTargetObjects {
+        var objects = musl;
+        objects.default_runtime = null;
+        objects.default_platform = null;
+        objects.default_platform_link_digest = null;
+        objects.default_runtime_digest = null;
+        objects.default_compiler_rt = null;
+        objects.default_compiler_rt_digest = null;
+        objects.default_compiler_rt_link_digest = null;
         return objects;
     }
 
-    /// The embedded objects for `requested`.
-    ///
-    /// A `v1` target other than wasm32v1 uses its default twin's objects. The
-    /// cross-compile target queries in `build.zig` name no CPU model, so Zig
-    /// resolves them to the architecture baseline, which for x86-64 and
-    /// AArch64 is the v1 floor. Zig's wasm baseline includes extensions past
-    /// WebAssembly 1.0, so wasm32v1 has objects of its own, built for it.
+    /// The embedded objects for `requested`, compiled for its CPU contract
+    /// (`dev_object_targets` in build.zig). A generic Linux target links its
+    /// glibc twin's objects and a freestanding ELF target its musl twin's,
+    /// each of the same CPU level. The arm32 targets have no dev backend and
+    /// carry the native objects.
     fn forTarget(requested: RocTarget) EmbeddedTargetObjects {
-        if (requested == .wasm32v1) return comptime cross(.wasm32v1, .none);
-        return switch (requested.defaultCpuTarget()) {
+        return switch (requested) {
             inline .x64musl,
+            .x64v1musl,
             .arm64musl,
+            .arm64v1musl,
             .x64glibc,
+            .x64v1glibc,
             .arm64glibc,
+            .arm64v1glibc,
             .x64freebsd,
+            .x64v1freebsd,
             .x64netbsd,
+            .x64v1netbsd,
             => |target| comptime cross(target, .runtime_and_compiler_rt),
             inline .x64mac,
+            .x64v1mac,
             .arm64mac,
             .x64win,
-            .x64mingw,
-            .arm64win,
-            .arm64mingw,
-            .x64openbsd,
-            => |target| comptime cross(target, .runtime),
-            .wasm32 => comptime cross(.wasm32, .none),
-            .x64linux => comptime linuxAlias(cross(.x64glibc, .runtime_and_compiler_rt)),
-            .arm64linux => comptime linuxAlias(cross(.arm64glibc, .runtime_and_compiler_rt)),
-            .x64elf,
-            .x64v1mac,
             .x64v1win,
+            .x64mingw,
             .x64v1mingw,
-            .x64v1freebsd,
-            .x64v1openbsd,
-            .x64v1netbsd,
-            .x64v1musl,
-            .x64v1glibc,
-            .x64v1linux,
-            .x64v1elf,
+            .arm64win,
             .arm64v1win,
+            .arm64mingw,
             .arm64v1mingw,
-            .arm64v1linux,
-            .arm64v1musl,
-            .arm64v1glibc,
-            .arm32linux,
-            .arm32musl,
-            .wasm32v1,
-            => native,
+            .x64openbsd,
+            .x64v1openbsd,
+            => |target| comptime cross(target, .runtime),
+            inline .wasm32, .wasm32v1 => |target| comptime cross(target, .none),
+            .x64linux => comptime cross(.x64glibc, .runtime_and_compiler_rt),
+            .x64v1linux => comptime cross(.x64v1glibc, .runtime_and_compiler_rt),
+            .arm64linux => comptime cross(.arm64glibc, .runtime_and_compiler_rt),
+            .arm64v1linux => comptime cross(.arm64v1glibc, .runtime_and_compiler_rt),
+            .x64elf => comptime elfAlias(cross(.x64musl, .runtime_and_compiler_rt)),
+            .x64v1elf => comptime elfAlias(cross(.x64v1musl, .runtime_and_compiler_rt)),
+            .arm32linux, .arm32musl => native,
         };
     }
 
@@ -1471,6 +1468,7 @@ fn generatePlatformHostShimFromLirData(
         .optimization = .speed,
         .target = target,
         .report_config = ctx.reportConfig(.stderr),
+        .memory_intrinsic_stores = .forCompile(.speed, std_target),
         .cpu = llvm_cpu,
         .features = llvm_features,
         .debug = debug, // Use the debug flag passed from caller
@@ -9765,6 +9763,62 @@ test "LLVM builds link the SHA-256 rounds each target's CPU features select" {
     }
 }
 
+// https://github.com/roc-lang/roc/issues/13028
+// Only a size build for a WebAssembly target with bulk memory expands memory
+// intrinsics into at most one store; speed builds, native targets and
+// `wasm32v1`, which has no bulk memory, keep LLVM's own limits.
+test "LLVM builds limit memory intrinsic expansion only for size-optimized wasm with bulk memory" {
+    const expected = [_]struct { RocTarget, builder.OptimizationLevel, builder.MemoryIntrinsicStores }{
+        .{ .wasm32, .size, .single },
+        .{ .wasm32, .speed, .target_default },
+        .{ .wasm32v1, .size, .target_default },
+        .{ .wasm32v1, .speed, .target_default },
+        .{ .x64musl, .size, .target_default },
+        .{ .x64musl, .speed, .target_default },
+        .{ .arm64mac, .size, .target_default },
+        .{ .arm32musl, .size, .target_default },
+    };
+    for (expected) |entry| {
+        const std_target = try std.zig.system.resolveTargetQuery(std.Options.debug_io, entry[0].llvmTargetQuery());
+        try std.testing.expectEqual(entry[2], builder.MemoryIntrinsicStores.forCompile(entry[1], std_target));
+    }
+}
+
+// LLVM builds link the payload of this kernel, and each target's dev objects,
+// compiled for the same query (`dev_object_targets` in build.zig), carry it.
+test "LLVM builds and dev objects use the UTF-8 validation kernel each target's CPU features select" {
+    const expected = [_]struct { RocTarget, Utf8Kernel }{
+        // x86-64-v3 includes SSSE3; the psABI v1 level stops at SSE2.
+        .{ .x64musl, .x86_ssse3 },
+        .{ .x64glibc, .x86_ssse3 },
+        .{ .x64mac, .x86_ssse3 },
+        .{ .x64win, .x86_ssse3 },
+        .{ .x64v1musl, .dfa },
+        .{ .x64v1win, .dfa },
+        // NEON is part of Armv8.0-A, so both aarch64 levels have it.
+        .{ .arm64musl, .aarch64_neon },
+        .{ .arm64mac, .aarch64_neon },
+        .{ .arm64win, .aarch64_neon },
+        .{ .arm64v1musl, .aarch64_neon },
+        .{ .arm32musl, .dfa },
+        .{ .wasm32, .wasm_simd128 },
+        .{ .wasm32v1, .dfa },
+        .{ .x64linux, .x86_ssse3 },
+        .{ .x64v1linux, .dfa },
+        .{ .x64elf, .x86_ssse3 },
+        .{ .x64v1elf, .dfa },
+        .{ .x64v1mac, .dfa },
+        .{ .x64v1mingw, .dfa },
+        .{ .x64freebsd, .x86_ssse3 },
+        .{ .x64v1freebsd, .dfa },
+        .{ .arm64v1glibc, .aarch64_neon },
+    };
+    for (expected) |entry| {
+        const std_target = try std.zig.system.resolveTargetQuery(std.Options.debug_io, entry[0].llvmTargetQuery());
+        try std.testing.expectEqual(entry[1], Utf8Kernel.forCpu(std_target.cpu));
+    }
+}
+
 fn compileLlvmAppObject(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
@@ -9867,6 +9921,7 @@ fn compileLlvmAppObject(
         .optimization = llvmOptimizationLevel(args.opt),
         .target = target,
         .report_config = ctx.reportConfig(.stderr),
+        .memory_intrinsic_stores = .forCompile(llvmOptimizationLevel(args.opt), std_target),
         .cpu = llvm_cpu,
         .features = llvm_features,
         .debug = args.debug,
@@ -9876,6 +9931,7 @@ fn compileLlvmAppObject(
             // through extern symbols, never through a RocOps parameter.
             .host_call_extern = true,
             .sha256_rounds = Sha256Rounds.forCpu(std_target.cpu),
+            .utf8_kernel = Utf8Kernel.forCpu(std_target.cpu),
             .stack_checked = stack_checks,
         },
         .pic = true,
@@ -13705,7 +13761,6 @@ fn collectExpectBindingPatterns(
                 try stack.append(allocator, binop.rhs);
             },
             .e_unary_minus => |unary| try stack.append(allocator, unary.expr),
-            .e_unary_not => |unary| try stack.append(allocator, unary.expr),
             .e_field_access => |field| try stack.append(allocator, field.receiver),
             inline .e_method_call, .e_dispatch_call => |call| {
                 try stack.append(allocator, call.receiver);

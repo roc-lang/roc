@@ -2281,11 +2281,6 @@ pub const Program = struct {
         return try self.templateScopeWorker(view.index, ref.template);
     }
 
-    pub fn templateRefScope(self: *Program, ref: checked_names.ProcedureTemplateRef) Allocator.Error!WorkerId {
-        const view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
-        return try self.templateScope(view.index, ref.template);
-    }
-
     /// The erased-callable worker of a lambda or closure expression of the
     /// worker `outer`.
     pub fn lambdaWorker(
@@ -5150,7 +5145,10 @@ fn seedSourceFiles(program: *Program) Allocator.Error!void {
             .module_identity = program.modules.linkName(view.index),
         };
         program.source_files[module_position] = @intCast(file_index);
-        program.lowering_module_ids[module_position] = try program.result.appendLoweringModule(view.key);
+        // A module unit's object outlives the compilation that built it, and
+        // its key covers each module's link name but not its checked key.
+        const failure_identity = if (program.moduleUnit() != null) program.modules.linkName(view.index) else view.key.bytes;
+        program.lowering_module_ids[module_position] = try program.result.appendLoweringModule(view.key, failure_identity);
     }
     try program.result.store.setSourceFiles(files);
 }
