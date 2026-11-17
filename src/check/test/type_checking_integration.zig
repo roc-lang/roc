@@ -77,6 +77,64 @@ test "check type - num - float" {
 
 // primitives - strs //
 
+// https://github.com/roc-lang/roc/issues/13112
+test "issue 13112: builtin Try declares its derived JSON encoder" {
+    const source =
+        \\Probe := [].{
+        \\    Outcome(ok, err) := [Ok(ok), Err(err)].{
+        \\        encoder_for : _
+        \\    }
+        \\    mine : Outcome(Str, Str)
+        \\    mine = Ok("x")
+        \\    theirs : Try(Str, Str)
+        \\    theirs = Ok("x")
+        \\}
+        \\expect Json.to_str(Probe.mine) == "{\"Ok\":\"x\"}"
+        \\expect Json.to_str(Probe.theirs) == "{\"Ok\":\"x\"}"
+    ;
+    var test_env = try TestEnv.init("Probe", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "issue 13112: builtin Try declares its derived JSON parser" {
+    const source =
+        \\parsed : Try(Try(Str, Str), _)
+        \\parsed = Json.parse("{\"Ok\":\"x\"}")
+        \\expect parsed == Ok(Ok("x"))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+// https://github.com/roc-lang/roc/issues/13110
+test "issue 13110: nominal tag value cannot inhabit a plain tag union annotation" {
+    const source =
+        \\Color := [Red, Green].{
+        \\    name : Color -> Str
+        \\    name = |color| match color {
+        \\        Red => "red"
+        \\        Green => "green"
+        \\    }
+        \\    plain : [Red, Green]
+        \\    plain = Color.Red
+        \\}
+        \\expect Color.plain.name() == "red"
+    ;
+    var test_env = try TestEnv.init("Color", source);
+    defer test_env.deinit();
+    try test_env.assertFirstTypeError("Type Mismatch");
+}
+
+test "issue 13110: builtin Try cannot return as its structural backing" {
+    const source =
+        \\plain : Try(U64, Str) -> [Ok(U64), Err(Str)]
+        \\plain = |value| value
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
 test "check type - str annotation mismatch with number" {
     const source =
         \\x : I64
