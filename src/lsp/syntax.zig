@@ -29,6 +29,7 @@ const BuildEnvHandle = @import("build_env_handle.zig").BuildEnvHandle;
 const doc_comments = @import("doc_comments.zig");
 const rename_rules = @import("rename.zig");
 const code_action = @import("code_action.zig");
+const source_symbols = @import("source_symbols.zig");
 
 const BuildEnv = compile.BuildEnv;
 const CacheManager = compile.CacheManager;
@@ -2579,6 +2580,11 @@ pub const SyntaxChecker = struct {
         // Convert LSP position to byte offset
         const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
 
+        const symbols = try build.handle.sourceSymbols(module_env, resolveSourceMethod);
+        if (symbols.at(target_offset)) |occurrence| {
+            return HighlightResult{ .regions = try symbols.ranges(occurrence.pattern, true) };
+        }
+
         // Resolve the symbol at this position. The cursor may sit on the
         // definition or on any reference to it; both resolve to the pattern
         // that owns the binding.
@@ -3043,6 +3049,10 @@ pub const SyntaxChecker = struct {
 
         const module_env = build.getModuleEnv() orelse return null;
         const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
+        const symbols = try build.handle.sourceSymbols(module_env, resolveSourceMethod);
+        if (symbols.at(target_offset)) |occurrence| {
+            return ReferencesResult{ .regions = try symbols.ranges(occurrence.pattern, include_declaration) };
+        }
         const target_pattern = cir_queries.resolveSymbolAtOffset(module_env, target_offset) orelse return null;
 
         var regions: std.ArrayList(LspRange) = .empty;
@@ -3132,6 +3142,10 @@ pub const SyntaxChecker = struct {
         /// The binding's own declaration could not be pinned to exactly its
         /// name, so rewriting it would take neighbouring source with it.
         declaration_not_isolated,
+        /// Generic or implicit dispatch has no unambiguous editable name.
+        ambiguous_method,
+        /// The edited document could not preserve the original binding graph.
+        changes_resolution,
     };
 
     /// The edits a rename produces, all within the requested document.
@@ -3194,20 +3208,13 @@ pub const SyntaxChecker = struct {
 
         const module_env = build.getModuleEnv() orelse return null;
         const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
-        const target = renameTargetAt(module_env, target_offset) orelse return null;
-        if (cir_queries.declarationNameRegion(module_env, target.pattern) == null) return null;
-
-        const regions = try self.collectSymbolRegions(module_env, target.pattern);
-        defer self.allocator.free(regions);
-
-        // Prompt on the occurrence the cursor is actually in, not on the
-        // definition, so the editor highlights what the user clicked.
-        const cursor_range = rangeContaining(regions, line, character) orelse return null;
-
-        const name = module_env.common.idents.getText(target.ident);
+        const symbols = try build.handle.sourceSymbols(module_env, resolveSourceMethod);
+        const occurrence = symbols.at(target_offset) orelse return null;
+        const binding = symbols.bindings.get(occurrence.pattern) orelse return null;
+        if (!symbols.complete(occurrence.pattern)) return null;
         return PrepareRenameResult{
-            .range = cursor_range,
-            .placeholder = try self.allocator.dupe(u8, name),
+            .range = cir_queries.regionToRange(module_env, occurrence.region) orelse return null,
+            .placeholder = try self.allocator.dupe(u8, binding.name),
         };
     }
 
@@ -3241,33 +3248,79 @@ pub const SyntaxChecker = struct {
         const target_offset = pos.positionToOffset(module_env, line, character) orelse
             return RenameOutcome{ .rejected = .not_a_local_binding };
 
-        const target = renameTargetAt(module_env, target_offset) orelse
+        const symbols = try build.handle.sourceSymbols(module_env, resolveSourceMethod);
+        const occurrence = symbols.at(target_offset) orelse
             return RenameOutcome{ .rejected = .not_a_local_binding };
-
-        // Renaming the uses while leaving the declaration behind is exactly the
-        // partial rewrite this must not produce.
-        if (cir_queries.declarationNameRegion(module_env, target.pattern) == null) {
+        const binding = symbols.bindings.get(occurrence.pattern) orelse
             return RenameOutcome{ .rejected = .declaration_not_isolated };
-        }
-
-        const old_name = module_env.common.idents.getText(target.ident);
+        if (!symbols.complete(occurrence.pattern)) return RenameOutcome{ .rejected = .ambiguous_method };
+        const old_name = binding.name;
         if (try rename_rules.checkNewName(self.allocator, old_name, new_name)) |rejection| {
             return RenameOutcome{ .rejected = .{ .bad_new_name = rejection } };
         }
 
-        switch (try checkNewNameAgainstScope(build.handle, module_env, target.pattern, new_name)) {
-            .clear => {},
-            .taken => return RenameOutcome{ .rejected = .name_already_in_scope },
-            .scope_unavailable => return RenameOutcome{ .rejected = .scope_unavailable },
+        if (binding.associated) {
+            if (!std.mem.eql(u8, old_name, new_name) and
+                !try self.validateAssociatedRename(&build, symbols, occurrence.pattern, uri, new_name))
+            {
+                return RenameOutcome{ .rejected = .changes_resolution };
+            }
+        } else {
+            switch (try checkNewNameAgainstScope(build.handle, module_env, occurrence.pattern, new_name)) {
+                .clear => {},
+                .taken => return RenameOutcome{ .rejected = .name_already_in_scope },
+                .scope_unavailable => return RenameOutcome{ .rejected = .scope_unavailable },
+            }
         }
 
-        const regions = try self.collectSymbolRegions(module_env, target.pattern);
+        const regions = try symbols.ranges(occurrence.pattern, true);
         errdefer self.allocator.free(regions);
 
         return RenameOutcome{ .edits = .{
             .regions = regions,
             .old_name = try self.allocator.dupe(u8, old_name),
         } };
+    }
+
+    /// Checking the edit uses the compiler's real associated-name resolution,
+    /// including aliases and forward references. The speculative build is never
+    /// installed as the open document or published, and never edits source files.
+    fn validateAssociatedRename(
+        self: *SyntaxChecker,
+        original: *DocumentBuild,
+        symbols: *const source_symbols.Index,
+        pattern: CIR.Pattern.Idx,
+        uri: []const u8,
+        new_name: []const u8,
+    ) QueryError!bool {
+        var edit = try symbols.edit(pattern, new_name);
+        defer edit.deinit();
+        // createBuildEnv can release the previous build; keep the original
+        // explicitly alive even if this query was answered from that snapshot.
+        original.handle.retain("rename_validation");
+        defer original.handle.release("rename_validation");
+        const candidate = try self.createBuildEnv();
+        defer candidate.release(owner_build);
+        var session = try BuildSession.init(self.allocator, self.std_io, candidate.envPtr(), uri, edit.text.items, self.workspace_root);
+        defer session.deinit();
+        if (!session.build_succeeded or !documentParsedCleanly(candidate.envPtr(), session.absolute_path)) return false;
+        const env = session.getModuleEnv() orelse return false;
+        const after = try candidate.sourceSymbols(env, resolveSourceMethod);
+        const declaration = symbols.bindings.get(pattern) orelse return false;
+        const renamed = after.at(edit.mapRegion(declaration.region).start.offset) orelse return false;
+        if (!after.complete(renamed.pattern)) return false;
+        return symbols.preservesBindings(after, &edit);
+    }
+
+    fn resolveSourceMethod(env: *ModuleEnv, expr: CIR.Expr) source_symbols.MethodTarget {
+        const method, const receiver_var = switch (expr) {
+            inline .e_method_call, .e_dispatch_call => |call| .{ call.method_name, ModuleEnv.varFrom(call.receiver) },
+            else => return .unresolved,
+        };
+        const owner = resolveMethodOwnerForLookup(env, receiver_var) orelse return .unresolved;
+        if (owner.builtin_origin or owner.origin_module != env.selfModuleIdentity()) return .external;
+        const binding = env.lookupMethodBindingForOwnerConst(owner.owner, method) orelse return .unresolved;
+        return .{ .local = env.store.getDef(binding.def_idx).pattern };
     }
 
     /// Find the pattern_idx at the given offset.
@@ -3928,54 +3981,6 @@ fn extractSymbolFromDecl(
         line_offsets,
         if (is_function) .function else .variable,
     );
-}
-
-/// The binding a rename request refers to.
-const RenameTarget = struct {
-    pattern: CIR.Pattern.Idx,
-    ident: base.Ident.Idx,
-};
-
-/// Resolve a source offset to a binding that can be renamed.
-///
-/// Only a plain `assign` pattern names a single binding whose every occurrence
-/// this server can account for. Destructuring, literal, and tag patterns bind
-/// through structure that a name-for-name rewrite cannot express, so they are
-/// refused rather than half-renamed.
-fn renameTargetAt(module_env: *ModuleEnv, offset: u32) ?RenameTarget {
-    const pattern_idx = cir_queries.resolveSymbolAtOffset(module_env, offset) orelse return null;
-    return switch (module_env.store.getSourcePattern(pattern_idx)) {
-        .assign => |assign| .{ .pattern = pattern_idx, .ident = assign.ident },
-        .var_assign => |assign| .{ .pattern = pattern_idx, .ident = assign.ident },
-        .as,
-        .applied_tag,
-        .nominal,
-        .nominal_external,
-        .record_destructure,
-        .list,
-        .tuple,
-        .num_literal,
-        .small_dec_literal,
-        .dec_literal,
-        .frac_f32_literal,
-        .frac_f64_literal,
-        .num_from_numeral_literal,
-        .str_literal,
-        .str_interpolation,
-        .underscore,
-        .runtime_error,
-        => null,
-        .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
-    };
-}
-
-/// Find the collected range that contains the given position.
-fn rangeContaining(regions: []const cir_queries.LspRange, line: u32, character: u32) ?cir_queries.LspRange {
-    for (regions) |range| {
-        if (range.start_line != line or range.end_line != line) continue;
-        if (character >= range.start_col and character <= range.end_col) return range;
-    }
-    return null;
 }
 
 /// How much of a rendered type an inlay hint shows.
