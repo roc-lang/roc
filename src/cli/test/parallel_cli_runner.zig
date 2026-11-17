@@ -775,6 +775,7 @@ const CustomCase = enum {
     issue_10022_deep_tail_recursion,
     issue_10015_url_random_test_size,
     docs_main_platform_url_package,
+    docs_broken_links_reported,
     build_issue_9435_hosted_nominal_return,
     bundle_complex_package,
     bundle_entrypoint_subdirectory,
@@ -5948,6 +5949,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "fx-open three-branch open union selects branch by arg count", .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/test_three_branches.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "exited with other error: CustomError" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build issue 9435 hosted nominal return builds without mono panic", .body = .{ .custom = .build_issue_9435_hosted_nominal_return } },
     .{ .id = 0, .suite = .subcommands, .name = "roc docs --builtins succeeds", .body = .{ .command = .{ .args = &.{ "docs", "--builtins" }, .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "Generated docs for the builtins" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13068: broken doc links are reported without a spurious compiler bug", .body = .{ .custom = .docs_broken_links_reported } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test complex_package --verbose passes all tests", .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--verbose" }, .roc_file = "test/complex_package/main.roc", .contains = &.{ .{ .stream = .stdout, .text = "tests passed" }, .{ .stream = .stdout, .text = "PASS" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle complex_package includes all transitively imported modules", .body = .{ .custom = .bundle_complex_package } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle issue 11907 includes file imports and rejects missing files", .body = .{ .custom = .bundle_file_imports } },
@@ -7238,6 +7240,7 @@ fn runCustomCase(
         .issue_10022_deep_tail_recursion => customIssue10022DeepTailRecursion(io, allocator, &env, &timer, timeout_ms),
         .issue_10015_url_random_test_size => customIssue10015UrlRandomTestSize(io, allocator, &env, &timer, timeout_ms),
         .docs_main_platform_url_package => customDocsMainPlatformUrlPackage(io, allocator, &env, &timer, timeout_ms),
+        .docs_broken_links_reported => customDocsBrokenLinksReported(io, allocator, &env, &timer, timeout_ms),
         .build_issue_9435_hosted_nominal_return => customBuildIssue9435(io, allocator, &env, &timer, timeout_ms),
         .bundle_complex_package => customBundleComplexPackage(io, allocator, &env, &timer, timeout_ms),
         .bundle_file_imports => customBundleFileImports(io, allocator, &env, &timer, timeout_ms),
@@ -7507,6 +7510,39 @@ const absolute_platform_path_repro_platform_source =
     \\main_for_host! = || main!()
     \\
 ;
+
+// https://github.com/roc-lang/roc/issues/13068
+fn customDocsBrokenLinksReported(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const path = absoluteFromProjectRoot(allocator, "test/cli/issue_13068_broken_doc_links/main.roc") catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate docs source path: {}", .{err});
+    const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before command started");
+    const result = runRawInEnv(io, allocator, env, &.{ roc_binary_path, "docs", path }, env.dirs.work_dir, null, child_timeout_ms) catch |err|
+        return customInfraFailure(allocator, timer, "roc docs spawn error: {}", .{err});
+
+    // Pin the issue's failure before the shared checks for report formatting:
+    // an already-explained user error must never be called a compiler bug.
+    for ([_][]const u8{ "unreported error", "bug in the compiler" }) |forbidden| {
+        if (std.mem.find(u8, result.stderr, forbidden) != null) {
+            return failureFromRun(allocator, timer, result, "broken doc links were incorrectly reported as a compiler bug");
+        }
+    }
+    if (checkCommandExpectation(allocator, result, .{
+        .args = &.{"docs"},
+        .exit = .{ .code = 1 },
+        .contains = &.{
+            .{ .stream = .stderr, .text = "1 doc reference(s) point at non-existent anchors" },
+            .{ .stream = .stderr, .text = "Greet.roc:3: [nonexistent] -> #Greet.nonexistent" },
+        },
+    })) |message| return failureFromRun(allocator, timer, result, message);
+    return null;
+}
 
 fn customAbsolutePlatformPathCheckBuildReject(
     io: std.Io,
