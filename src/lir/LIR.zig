@@ -2099,7 +2099,7 @@ pub const LirProcSpec = struct {
     rc_outcomes: U32Span = U32Span.empty(),
 
     comptime {
-        std.debug.assert(@sizeOf(LirProcSpec) == 224);
+        std.debug.assert(@sizeOf(LirProcSpec) == 232);
     }
 
     /// The body ARC analyzes and places reference counts in. A static
