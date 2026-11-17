@@ -147,6 +147,12 @@ const ProcUses = struct {
     }
 };
 
+/// The most sparse chunks a map keyed by store-wide ids keeps while it is
+/// reused from one procedure to the next. Procedures' ids lie in different
+/// ranges of the store, so a map that kept every chunk would come to span
+/// the whole store; one that spans more is freed instead of cleared.
+const retained_chunks = 64;
+
 /// Storage the pass reuses for every procedure body it reads.
 const Scratch = struct {
     visited: collections.DenseMapUnmanaged(CFStmtId, void) = .empty,
@@ -173,7 +179,7 @@ const Scratch = struct {
     /// Fill `stmts` with the statements control reaches from `body`, each
     /// once, as `BodyClone.ReachableStmts` visits them.
     fn walk(self: *Scratch, allocator: Allocator, store: *const LirStore, body: CFStmtId) Allocator.Error!void {
-        self.visited.clearRetainingCapacity();
+        self.visited.clearRetainingAtMost(allocator, retained_chunks);
         self.work.clearRetainingCapacity();
         self.stmts.clearRetainingCapacity();
         try self.work.append(allocator, body);
@@ -282,7 +288,7 @@ fn collectUses(
     body: CFStmtId,
 ) Allocator.Error!ProcUses {
     try scratch.walk(allocator, store, body);
-    scratch.extra.clearRetainingCapacity();
+    scratch.extra.clearRetainingAtMost(allocator, retained_chunks);
     scratch.containers.clearRetainingCapacity();
     scratch.reads.clearRetainingCapacity();
     scratch.defs.clearRetainingCapacity();
@@ -847,12 +853,12 @@ const FlowGraph = struct {
     /// `reachable`, reusing this graph's storage.
     fn build(self: *FlowGraph, allocator: Allocator, store: *const LirStore, body: CFStmtId, reachable: []const CFStmtId) Allocator.Error!void {
         self.stmts.clearRetainingCapacity();
-        self.index.clearRetainingCapacity();
+        self.index.clearRetainingAtMost(allocator, retained_chunks);
         self.succ_start.clearRetainingCapacity();
         self.succs.clearRetainingCapacity();
         self.pred_start.clearRetainingCapacity();
         self.preds.clearRetainingCapacity();
-        self.join_bodies.clearRetainingCapacity();
+        self.join_bodies.clearRetainingAtMost(allocator, retained_chunks);
         for (reachable) |stmt_id| {
             const stmt = store.getCFStmt(stmt_id);
             if (stmt == .join) try self.join_bodies.put(allocator, stmt.join.id, stmt.join.body);
@@ -998,7 +1004,7 @@ fn collectProcFacts(
     body: CFStmtId,
 ) Allocator.Error!ProcFacts {
     try scratch.walk(allocator, store, body);
-    scratch.extra.clearRetainingCapacity();
+    scratch.extra.clearRetainingAtMost(allocator, retained_chunks);
     scratch.work.clearRetainingCapacity();
     for (scratch.stmts.items) |stmt_id| {
         const packing = Packing.of(store, stmt_id) orelse continue;
