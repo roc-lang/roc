@@ -6854,7 +6854,7 @@ test "issue 13102: object merge retains an existing indirect function table" {
     try expectMergedTableRetention(true);
 }
 
-fn expectMergedTableRetention(existing_table: bool) !void {
+fn expectMergedTableRetention(existing_table: bool) (MergeError || error{ TestUnexpectedResult, TestExpectedEqual })!void {
     const allocator = std.testing.allocator;
     var app = Self.init(allocator);
     defer app.deinit();
