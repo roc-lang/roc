@@ -992,6 +992,14 @@ const Transform = struct {
         self.old_args = buffer.items;
     }
 
+    /// The locals the loop carries: the producer's (`LIR.TailCalls.params`),
+    /// or else the procedure's arguments.
+    fn loopParams(self: *const Transform) LIR.LocalSpan {
+        const proc = self.store.getProcSpecImmediate(self.proc_id);
+        if (proc.tail_calls.get()) |sites| if (sites.params.len != 0) return sites.params;
+        return proc.args;
+    }
+
     fn addLocal(self: *Transform, layout_idx: layout_mod.Idx) ResourceError!LocalId {
         const id = try self.store.addLocal(.{ .layout_idx = layout_idx });
         try self.new_locals.append(self.gpa, id);
@@ -1002,7 +1010,7 @@ const Transform = struct {
         self.store.shapes.loop = true;
         const proc = self.store.getProcSpec(self.proc_id);
         const ret_layout = proc.ret_layout;
-        try self.copyArgs(proc.args);
+        try self.copyArgs(self.loopParams());
 
         const ptr_ret = self.layouts.getPtr(ret_layout).?;
         self.hole = try self.addLocal(ptr_ret);
@@ -1031,8 +1039,7 @@ const Transform = struct {
 
     fn applyTce(self: *Transform) ResourceError!void {
         self.store.shapes.loop = true;
-        const proc = self.store.getProcSpec(self.proc_id);
-        try self.copyArgs(proc.args);
+        try self.copyArgs(self.loopParams());
         try self.initLoopMoves(null);
 
         try self.rewriteTailSites();
@@ -1251,6 +1258,9 @@ const Transform = struct {
     /// fresh argument locals; the original args become the join params.
     fn installWrapper(self: *Transform, comptime is_trmc: bool, initial: LocalId) ResourceError!void {
         if (self.loopEntry() != null) return self.installWrapperAtEntry(is_trmc, initial);
+        // Producer loop parameters are copied from the arguments at entry
+        // statements, so a loop without an entry carries the arguments.
+        std.debug.assert(self.loopParams().start == self.store.getProcSpecImmediate(self.proc_id).args.start);
         const old_body = self.store.getProcSpecImmediate(self.proc_id).body.get().?;
         const origin = trmcOrigin(self.store.stmtOrigin(old_body));
 
@@ -1323,7 +1333,7 @@ const Transform = struct {
         const loop_start = self.loopEntry() orelse proc.body.get().?;
         const origin = trmcOrigin(self.store.stmtOrigin(loop_start));
         const entry_jump = try self.store.addCFStmt(.{ .jump = .{ .target = self.join_id } }, origin);
-        try self.installJoin(proc.args, entry_jump, origin);
+        try self.installJoin(self.loopParams(), entry_jump, origin);
 
         const proc_ptr = self.store.getProcSpecPtr(self.proc_id);
         proc_ptr.frame_locals = try self.rebuildFrameLocals();
