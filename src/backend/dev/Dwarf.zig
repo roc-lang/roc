@@ -87,7 +87,7 @@ pub fn build(
     errdefer gpa.free(debug_line);
     const debug_abbrev = try buildAbbrevSection(gpa);
     errdefer gpa.free(debug_abbrev);
-    const cu_name = if (source_files.len > 0) source_files[0] else "roc";
+    const cu_name = try compileUnitName(gpa, source_files, procs);
     const debug_info = try buildInfoSection(gpa, producer, cu_name, procs, code_size, &info_relocs);
     errdefer gpa.free(debug_info);
 
@@ -98,6 +98,29 @@ pub fn build(
         .line_relocs = try line_relocs.toOwnedSlice(gpa),
         .info_relocs = try info_relocs.toOwnedSlice(gpa),
     };
+}
+
+/// The unit's primary source file: the one most of its located procedures'
+/// code comes from, the lowest index on a tie. A `--specialize=no` unit is one
+/// module, so this names that module. The source file table is program-wide,
+/// so its first entry (always `Builtin`) says nothing about the unit.
+fn compileUnitName(
+    gpa: Allocator,
+    source_files: []const []const u8,
+    procs: []const ProcEntry,
+) Allocator.Error![]const u8 {
+    // Each located procedure also counts one, so empty ones still name a file.
+    const weights = try gpa.alloc(u64, source_files.len);
+    defer gpa.free(weights);
+    @memset(weights, 0);
+    for (procs) |proc| {
+        if (proc.loc.hasLocation()) weights[proc.loc.file] += proc.code_size + 1;
+    }
+    var best: usize = 0;
+    for (weights, 0..) |weight, file| {
+        if (weight > weights[best]) best = file;
+    }
+    return if (source_files.len > 0 and weights[best] > 0) source_files[best] else "roc";
 }
 
 fn appendUleb(buf: *std.ArrayList(u8), gpa: Allocator, value: u64) Allocator.Error!void {
@@ -411,4 +434,44 @@ test "DWARF subprograms without a source location omit their declaration" {
     const die_start = sections.debug_info.len - 1 - die_len;
     try std.testing.expectEqual(@as(u8, 3), sections.debug_info[die_start]);
     try std.testing.expectEqual(@as(u8, 0), sections.debug_info[sections.debug_info.len - 1]);
+}
+
+/// The compile unit's `DW_AT_name`: the string after the unit header, the
+/// abbreviation code, the producer and the language.
+fn testCompileUnitName(debug_info: []const u8) []const u8 {
+    const producer_start = 4 + 2 + 4 + 1 + 1;
+    const producer_end = std.mem.findScalarPos(u8, debug_info, producer_start, 0).?;
+    const name_start = producer_end + 1 + 2;
+    const name_end = std.mem.findScalarPos(u8, debug_info, name_start, 0).?;
+    return debug_info[name_start..name_end];
+}
+
+test "issue 13150: a compile unit is named after the file most of its code comes from" {
+    const gpa = std.testing.allocator;
+    const files = [_][]const u8{ "Builtin", "Utils", "main" };
+    const entries = [_]LineEntry{};
+
+    const mostly_utils = [_]ProcEntry{
+        .{ .name = "generated", .code_start = 0, .code_size = 64, .loc = base.SourceLoc.none },
+        .{ .name = "fold", .code_start = 64, .code_size = 16, .loc = .{ .file = 0, .line = 9, .column = 1 } },
+        .{ .name = "helper", .code_start = 80, .code_size = 24, .loc = .{ .file = 1, .line = 3, .column = 1 } },
+        .{ .name = "parse", .code_start = 104, .code_size = 8, .loc = .{ .file = 1, .line = 7, .column = 1 } },
+    };
+    var utils_sections = try build(gpa, "roc test", &files, &entries, &mostly_utils, 112);
+    defer utils_sections.deinit(gpa);
+    try std.testing.expectEqualStrings("Utils", testCompileUnitName(utils_sections.debug_info));
+
+    const only_main = [_]ProcEntry{
+        .{ .name = "main", .code_start = 0, .code_size = 0, .loc = .{ .file = 2, .line = 1, .column = 1 } },
+    };
+    var main_sections = try build(gpa, "roc test", &files, &entries, &only_main, 0);
+    defer main_sections.deinit(gpa);
+    try std.testing.expectEqualStrings("main", testCompileUnitName(main_sections.debug_info));
+
+    const unlocated = [_]ProcEntry{
+        .{ .name = "generated", .code_start = 0, .code_size = 16, .loc = base.SourceLoc.none },
+    };
+    var unlocated_sections = try build(gpa, "roc test", &files, &entries, &unlocated, 16);
+    defer unlocated_sections.deinit(gpa);
+    try std.testing.expectEqualStrings("roc", testCompileUnitName(unlocated_sections.debug_info));
 }
