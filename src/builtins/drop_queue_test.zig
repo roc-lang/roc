@@ -27,7 +27,7 @@ const depth: usize = 100_000;
 const small_stack: usize = 256 * 1024;
 
 /// Run `drop` on a thread with a small stack, inside `env`'s host.
-fn runOnSmallStack(env: *utils.TestEnv, comptime drop: fn (*RocOps) void) !void {
+fn runOnSmallStack(env: *utils.TestEnv, comptime drop: fn (*RocOps) void) std.Thread.SpawnError!void {
     const Worker = struct {
         fn run(test_env: *utils.TestEnv) void {
             const saved_host = in_process_host.enter(test_env.getOps(), null);
