@@ -4579,6 +4579,10 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc check test/int/app.roc does not panic", .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/int/app.roc", .exit = .not_panic, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test/int/app.roc runs successfully (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/int/app.roc" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test/int/app.roc runs successfully (dev)", .backend = .dev, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/int/app.roc" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13138: inferred platform Model runs (interpreter, specialize=yes)", .backend = .interpreter, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/int/inferred_model.roc" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13138: inferred platform Model runs (dev, specialize=yes)", .backend = .dev, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/int/inferred_model.roc" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13138: inferred platform Model runs (interpreter, specialize=no)", .backend = .interpreter, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/int/inferred_model.roc" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13138: inferred platform Model runs (dev, specialize=no)", .backend = .dev, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/int/inferred_model.roc" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test/str/app.roc runs successfully (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/str platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/str/app.roc" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test/str/app.roc runs successfully (default dev)", .backend = .dev, .skip = .{ .windows = "test/str platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/str/app.roc" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test/str/app.roc runs successfully (dev)", .backend = .dev, .skip = .{ .windows = "test/str platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/str/app.roc" } } },
@@ -9853,6 +9857,7 @@ const PlatformRequiresDiagnosticCase = struct {
     dir_name: []const u8,
     app_source: []const u8,
     sibling_source: ?[]const u8 = null,
+    check_succeeds: bool = false,
     expected_stderr: []const []const u8,
 };
 
@@ -9881,7 +9886,7 @@ fn customPlatformRequiresCheckerDiagnostics(
 ) ?TestResult {
     const cases = [_]PlatformRequiresDiagnosticCase{
         .{
-            .dir_name = "missing-type",
+            .dir_name = "inferred-type",
             .app_source =
             \\app [program, main!] { pf: platform "./platform.roc" }
             \\
@@ -9893,7 +9898,8 @@ fn customPlatformRequiresCheckerDiagnostics(
             \\main! = |_| {}
             \\
             ,
-            .expected_stderr = &.{ "missing platform required type", "Model", "type alias or nominal type" },
+            .check_succeeds = true,
+            .expected_stderr = &.{},
         },
         .{
             .dir_name = "value-named-model",
@@ -9910,7 +9916,8 @@ fn customPlatformRequiresCheckerDiagnostics(
             \\main! = |_| {}
             \\
             ,
-            .expected_stderr = &.{ "missing platform required type", "Model", "value named", "requirement needs a type" },
+            .check_succeeds = true,
+            .expected_stderr = &.{},
         },
         .{
             .dir_name = "sibling-only-type",
@@ -9931,7 +9938,8 @@ fn customPlatformRequiresCheckerDiagnostics(
             \\Model := { count : U64 }
             \\
             ,
-            .expected_stderr = &.{ "missing platform required type", "Model", "type alias or nominal type" },
+            .check_succeeds = true,
+            .expected_stderr = &.{},
         },
         .{
             .dir_name = "missing-required-def",
@@ -10034,9 +10042,12 @@ fn runPlatformRequiresDiagnosticCase(
         return timeoutFailure(allocator, timer, .run, "case timeout exhausted before roc check started");
     const check_result = runRocInCaseEnv(io, allocator, env, case_dir, &.{ "check", "--no-cache" }, app_path, check_timeout_ms) catch |err|
         return customInfraFailure(allocator, timer, "roc check spawn error for {s}: {}", .{ case.dir_name, err });
-    if (checkExitExpectation(allocator, check_result, .failure)) |message| {
+    if (checkExitExpectation(allocator, check_result, if (case.check_succeeds) .success else .failure)) |message| {
         return failureFromRun(allocator, timer, check_result, message);
     }
+    // Successful checking needs no host link. These fixtures have placeholder
+    // host archives; only rejected apps can run far enough to compare diagnostics.
+    if (case.check_succeeds) return null;
 
     const run_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
         return timeoutFailure(allocator, timer, .run, "case timeout exhausted before roc run started");

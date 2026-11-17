@@ -117,7 +117,6 @@ pub const Problem = union(enum) {
     host_boundary_optional_field: HostBoundaryOptionalField,
     platform_def_not_found: PlatformDefNotFound,
     platform_hosted_section: PlatformHostedSection,
-    platform_alias_not_found: PlatformAliasNotFound,
     comptime_crash: ComptimeCrash,
     comptime_invalid_numeral: ComptimeInvalidNumeral,
     comptime_invalid_quote: ComptimeInvalidQuote,
@@ -151,14 +150,6 @@ pub const Problem = union(enum) {
 };
 
 // platform errors //
-
-/// Error for when a platform expects an alias to be defined, but it's not there
-pub const PlatformAliasNotFound = struct {
-    expected_alias_ident: Ident.Idx,
-    app_region: base.Region,
-    platform_region: base.Region,
-    ctx: enum { not_found, found_but_not_type },
-};
 
 /// The platform's hosted section disagrees with the hosted functions its
 /// exposed type modules declare, or maps a function to an invalid linker symbol.
