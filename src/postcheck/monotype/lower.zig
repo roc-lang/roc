@@ -35,7 +35,6 @@ const GraphTypeFinals = solve.GraphTypeFinals;
 const InterfaceConstraints = solve.InterfaceConstraints;
 const EntryRoot = solve.EntryRoot;
 const FunctionNodes = solve.FunctionNodes;
-const ArgumentClassSnapshot = solve.InstGraph.ArgumentClassSnapshot;
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
@@ -1231,7 +1230,6 @@ pub const BodyDiagnostics = struct {
     spec_job_shards_lowered: u64 = 0,
     spec_job_shards_committed: u64 = 0,
     caller_owned_template_bodies_lowered: u64 = 0,
-    eager_iterator_template_bodies_lowered: u64 = 0,
     deferred_template_reuses: u64 = 0,
     deferred_template_bodies_lowered: u64 = 0,
     lowered_template_bodies_discarded: u64 = 0,
@@ -8275,7 +8273,7 @@ const Builder = struct {
                     edge,
                     false,
                 );
-                const callee_fn_node = try ctx.draftFnSlotTypeNode(selected, root_node);
+                const callee_fn_node = try ctx.draftFnSlotTypeNode(selected);
                 try relateFunctionRequestInterface(graph, root_node, callee_fn_node);
                 break :dispatch .{ selected, try graph.functionNodes(root_node) };
             };
@@ -10762,7 +10760,6 @@ const Builder = struct {
             .evidence = body_ctx.evidence.vector,
             .subst = body_ctx.evidence.subst,
             .request_fn_node = root_node,
-            .initial_request_arg_classes = try graph.snapshotFunctionArgumentClasses(root_node),
             .codec_contract = draft_codec_contract,
             .fn_id = reservation.fn_id,
             .reserved_fn_ty = fn_template.mono_fn_ty,
@@ -10909,15 +10906,7 @@ const Builder = struct {
                     request_edge == .recursive_reference and
                     substitutionsShareClasses(source_ctx.graph, active_root.subst, edge.subst);
                 if (exact_interface or partial_recursive_allowed) {
-                    if (active_recursive_edge) {
-                        try source_ctx.graph.unifyRecursiveFunctionInterface(
-                            active_root.request_fn_node,
-                            active_root.initial_request_arg_classes,
-                            request_fn_node,
-                        );
-                    } else {
-                        try source_ctx.graph.unify(active_root.request_fn_node, request_fn_node);
-                    }
+                    try source_ctx.graph.unify(active_root.request_fn_node, request_fn_node);
                     if (std.debug.runtime_safety and !(try source_ctx.graph.sameFunctionInterface(active_root.request_fn_node, request_fn_node))) {
                         Common.invariant("recursive root request did not join its complete function interface");
                     }
@@ -11078,17 +11067,7 @@ const Builder = struct {
                 },
                 .root, .draft_fn => {},
             }
-            const active_recursive_edge = spec.state == .lowering and
-                source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id);
-            if (active_recursive_edge) {
-                try source_ctx.graph.unifyRecursiveFunctionInterface(
-                    draftTemplateSpecLookupRequestNode(spec),
-                    spec.initial_request_arg_classes,
-                    request_fn_node,
-                );
-            } else {
-                try source_ctx.graph.unify(draftTemplateSpecLookupRequestNode(spec), request_fn_node);
-            }
+            try source_ctx.graph.unify(draftTemplateSpecLookupRequestNode(spec), request_fn_node);
             if (std.debug.runtime_safety and !(try source_ctx.graph.sameFunctionInterface(draftTemplateSpecLookupRequestNode(spec), request_fn_node))) {
                 Common.invariant("recursive draft template request did not join its complete function interface");
             }
@@ -11176,7 +11155,6 @@ const Builder = struct {
             .source_fn_key = source_fn_key,
             .symbol = symbol,
             .request_fn_node = request_fn_node,
-            .initial_request_arg_classes = try source_ctx.graph.snapshotFunctionArgumentClasses(request_fn_node),
             .evidence = evidence,
             .subst = edge.subst,
             .runtime_demand_guard_frames = try source_ctx.runtimeDemandGuardFrameAddresses(),
@@ -11343,150 +11321,6 @@ const Builder = struct {
         source_ctx.draft.template_specs.items[spec_index].demand_end =
             @intCast(source_ctx.draft.runtime_value_demands.items.len);
         return .{ .local = .{ .draft = fn_id } };
-    }
-
-    /// Lower one already-registered context-free specialization into the
-    /// caller's graph and body store when its iterator representation is needed
-    /// before the ordinary deferred coordinator boundary.
-    fn lowerDraftTemplateSpecBody(
-        self: *Builder,
-        source_ctx: *BodyContext,
-        spec_index: usize,
-        view: ModuleView,
-        template: checked.CheckedProcedureTemplate,
-    ) Allocator.Error!NodeId {
-        if (spec_index >= source_ctx.draft.template_specs.items.len) {
-            Common.invariant("draft template body index was outside the specialization table");
-        }
-        const spec = source_ctx.draft.template_specs.items[spec_index];
-        if (spec.state != .lowering) {
-            Common.invariant("draft template body lowering began outside the lowering state");
-        }
-        if (spec.local_context_dependent) {
-            Common.invariant("context-free draft template lowering received lexical state");
-        }
-        if (template.target == .hosted) {
-            Common.invariant("hosted template entered Roc draft body lowering");
-        }
-
-        const fn_id = spec.fn_id;
-        const top_level_def = try source_ctx.draft.reserveDef(.{ .draft_fn = fn_id });
-        source_ctx.draft.template_specs.items[spec_index].def_id = .some(top_level_def);
-
-        const owner_scope = try source_ctx.draft.enterOwner(.{ .draft_fn = fn_id });
-        defer owner_scope.leave();
-        try self.registerDraftProcDebugNameForTemplate(
-            source_ctx.draft,
-            spec.symbol,
-            view,
-            spec.template_ref,
-        );
-
-        var body_ctx = try BodyContext.init(
-            self.allocator,
-            self,
-            view,
-            spec.template_ref,
-            source_ctx.graph,
-            source_ctx.draft,
-        );
-        body_ctx.evidence = rootEvidenceWithSubstitution(
-            spec.template_ref,
-            templateSchemaIn(view, &template),
-            .{ .vector = spec.evidence, .subst = spec.subst },
-        );
-        try body_ctx.seedSubstitution(body_ctx.evidence.schema.?, spec.subst);
-        body_ctx.runtime_demand_guard_frames = source_ctx.runtime_demand_guard_frames;
-        body_ctx.frozen_sealed_emission = source_ctx.frozen_sealed_emission;
-        body_ctx.frozen_type_finals = source_ctx.frozen_type_finals;
-        body_ctx.frozen_codec_calls = source_ctx.frozen_codec_calls;
-        body_ctx.frozen_field_defaults = source_ctx.frozen_field_defaults;
-        defer body_ctx.deinit();
-        if (spec.lexical) |captured| try body_ctx.restoreCodecLexicalContext(captured);
-
-        const root_node = try body_ctx.instNode(template.checked_fn_root);
-        if (source_ctx.draft.fns.items[@backingInt(fn_id)].signature_relation == .independent_roots) {
-            const public_request = source_ctx.graph.requestSourceInterface(spec.request_fn_node) orelse
-                spec.request_fn_node;
-            try constrainDeferredTemplateTypeArguments(source_ctx.graph, root_node, public_request);
-            try relateConstructionFunctionRequestInterface(source_ctx.graph, root_node, spec.request_fn_node);
-        } else if (try source_ctx.graph.containsGeneratedPrivate(spec.request_fn_node)) {
-            if (source_ctx.graph.requestSourceInterface(spec.request_fn_node)) |source_fn_node| {
-                try relateFunctionRequestInterface(source_ctx.graph, root_node, source_fn_node);
-            }
-            try relateFunctionRequestInterface(source_ctx.graph, root_node, spec.request_fn_node);
-        } else {
-            try source_ctx.graph.unify(root_node, spec.request_fn_node);
-        }
-        if (source_ctx.draft.fns.items[@backingInt(fn_id)].signature_relation != .independent_roots) {
-            try relateFunctionRequestInterface(source_ctx.graph, root_node, spec.request_fn_node);
-        }
-        if (spec.codec_contract) |contract| {
-            try body_ctx.instantiateCodecContractAtCall(
-                contract.anchor,
-                contract.constructor_node,
-                contract.shape_node,
-            );
-        }
-        try body_ctx.instantiateTemplateDispatchRelations(template, null);
-        try body_ctx.applyCheckedTemplateInterfaceRelations(template, root_node);
-        body_ctx.owner_context_fn_key = spec.source_fn_key;
-        body_ctx.owner_fn_node = root_node;
-        body_ctx.current_fn_key = spec.source_fn_key;
-
-        // A generated-private request is the exact runtime interface owned by
-        // this specialization. The checked root remains the public interface
-        // used to instantiate dispatch relations, but lowering the body
-        // against it would discard the producer-supplied private backing from
-        // parameters and returns.
-        const body_fn_node = if (try source_ctx.graph.containsGeneratedPrivate(spec.request_fn_node))
-            spec.request_fn_node
-        else
-            root_node;
-        try source_ctx.draft.lowerInDraftWithDemand(self.allocator, spec.demand);
-        const lowered = lowered: {
-            defer _ = source_ctx.draft.demand_overrides.pop();
-            break :lowered try body_ctx.lowerTemplateBodyAtNode(spec.template_ref, template, body_fn_node);
-        };
-        const completed_fn_node = try body_ctx.completedFunctionNodeForLoweredRet(
-            body_fn_node,
-            lowered.ret,
-            try body_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
-        );
-        const completed_fn_ret = (try source_ctx.graph.functionNodes(completed_fn_node)).ret;
-        const completed_ret_cell = DraftTypeCell.fromGraphNode(completed_fn_ret);
-
-        var completed_template = source_ctx.draft.fns.items[@backingInt(fn_id)].source;
-        completed_template.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_fn_node);
-        source_ctx.draft.setDef(top_level_def, .{
-            .symbol = spec.symbol,
-            .fn_def = completed_template,
-            .fn_id = .{ .draft = fn_id },
-            .args = lowered.args,
-            .body = .{ .roc = lowered.body },
-            .ret = completed_ret_cell,
-        });
-        source_ctx.draft.fns.items[@backingInt(fn_id)].source = completed_template;
-        source_ctx.draft.template_specs.items[spec_index].request_fn_node = completed_fn_node;
-        const lookup_prefix = try source_ctx.draft.template_spec_lookup.internPrefix(
-            DraftTemplateFamilyAddress.init(
-                spec.template_ref,
-                spec.source_fn_key,
-            ),
-            completed_template.evidence_digest.bytes,
-        );
-        try updateTemplateSpecInterfaceLookups(
-            source_ctx.draft,
-            self.allocator,
-            source_ctx.graph,
-            lookup_prefix,
-            completed_fn_node,
-            @intCast(spec_index),
-        );
-        source_ctx.draft.template_specs.items[spec_index].state = .lowered;
-        source_ctx.draft.template_specs.items[spec_index].demand_end =
-            @intCast(source_ctx.draft.runtime_value_demands.items.len);
-        return completed_fn_node;
     }
 
     fn markTemplateReady(self: *Builder, fn_id: Ast.FnId, fn_ty: Type.TypeId) Allocator.Error!void {
@@ -13813,15 +13647,7 @@ const Builder = struct {
             const active_recursive_edge = spec.state == .lowering and
                 source_ctx.draft.ownerDescendsFromDraftFn(request_owner, spec.fn_id);
             if (active_recursive_edge) {
-                // A recursive edge into a function with no arguments carries
-                // its recursive value flow through the result alone.
-                const request = try source_ctx.graph.functionNodes(request_fn_node);
-                if (request.args.len == 0) source_ctx.graph.markRecursiveValueSlot(request.ret);
-                try source_ctx.graph.unifyRecursiveFunctionInterface(
-                    spec.request_fn_node,
-                    spec.initial_request_arg_classes,
-                    request_fn_node,
-                );
+                try source_ctx.graph.unify(spec.request_fn_node, request_fn_node);
                 if (std.debug.runtime_safety and !(try source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node))) {
                     Common.invariant("recursive draft nested request did not join its complete function interface");
                 }
@@ -13874,7 +13700,6 @@ const Builder = struct {
             .source_fn_ty = source_fn_ty,
             .source_fn_key = source_fn_key,
             .request_fn_node = request_fn_node,
-            .initial_request_arg_classes = try source_ctx.graph.snapshotFunctionArgumentClasses(request_fn_node),
             .request_fn_ty = .none,
             .evidence = requested_evidence,
             .runtime_demand_guard_frames = try source_ctx.runtimeDemandGuardFrameAddresses(),
@@ -15703,8 +15528,6 @@ const Builder = struct {
         }
         const finalization_guard = FinalBodyOutputGuard.begin(self);
         try self.prepareDraftDeferredExprs(body_draft, graph);
-        try graph.finalizeGeneratedIteratorRepresentations();
-        try graph.finalizeGeneratedIteratorIdentities();
         try graph.freezeRelations();
         var impossibility_evaluator = FrozenRuntimeImpossibilityProofEvaluator.init(self.allocator, .{ .graph = graph }, body_draft);
         defer impossibility_evaluator.deinit();
@@ -17498,7 +17321,6 @@ const ActiveTemplateRoot = struct {
     evidence: []const SpecEvidence,
     subst: SpecSubstitution,
     request_fn_node: NodeId,
-    initial_request_arg_classes: []const ArgumentClassSnapshot,
     codec_contract: ?DraftCodecContractContext,
     fn_id: Ast.FnId,
     /// Immutable reservation signature supplied by the job. Workers never
@@ -17765,7 +17587,6 @@ const DraftTemplateSpec = struct {
     /// Other completed specs keep their existing representation-sensitive
     /// matching rules.
     lookup_request_fn_node: solve.MaybeNodeId = .none,
-    initial_request_arg_classes: []const ArgumentClassSnapshot,
     evidence: []const SpecEvidence,
     /// The substitution the request applied to the template's scheme.
     subst: SpecSubstitution,
@@ -17800,7 +17621,7 @@ const DraftTemplateSpec = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftTemplateSpec) == 752);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftTemplateSpec) == 736);
 }
 
 /// Coordinator intent retained after the request graph is destroyed.
@@ -18890,7 +18711,6 @@ const DraftNestedSpec = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     request_fn_node: NodeId,
-    initial_request_arg_classes: []const ArgumentClassSnapshot,
     request_fn_ty: OptionalTypeId,
     evidence: EvidenceChain,
     runtime_demand_guard_frames: []const RuntimeDemandGuardFrameAddress,
@@ -18916,7 +18736,7 @@ const DraftNestedSpec = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftNestedSpec) == 504);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftNestedSpec) == 488);
 }
 
 /// Coordinator intent for one fully graph-sealed nested specialization.
@@ -18940,8 +18760,7 @@ fn assertCoordinatorIntentGraphFree(comptime T: type) void {
             @FieldType(T, field_name) == solve.MaybeNodeId or
             @FieldType(T, field_name) == InstGraph or
             @FieldType(T, field_name) == GraphTypeFinals or
-            @FieldType(T, field_name) == Type.Store.TypeRelocation or
-            @FieldType(T, field_name) == ArgumentClassSnapshot)
+            @FieldType(T, field_name) == Type.Store.TypeRelocation)
         {
             @compileError(@typeName(T) ++ "." ++ field_name ++ " retains graph-qualified state");
         }
@@ -18951,8 +18770,7 @@ fn assertCoordinatorIntentGraphFree(comptime T: type) void {
                 child == solve.MaybeNodeId or
                 child == InstGraph or
                 child == GraphTypeFinals or
-                child == Type.Store.TypeRelocation or
-                child == ArgumentClassSnapshot)
+                child == Type.Store.TypeRelocation)
             {
                 @compileError(@typeName(T) ++ "." ++ field_name ++ " retains graph-qualified storage");
             }
@@ -32329,7 +32147,7 @@ const BodyContext = struct {
             .value => {},
             .draft => return .{ .ret = .{ .evidence = .none } },
         }
-        const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, task.request_fn_node);
+        const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id });
         return loweredExprStep(try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(fn_node),
             .{ .fn_def = if (task.closure != null) .{
@@ -33082,7 +32900,7 @@ const BodyContext = struct {
     /// selected callable plan).
     fn stepDispatchResult(self: *BodyContext, frame: *EvidenceFrame, task: *DispatchResultTask, input: ?EvidenceResult, from_plan: bool) Allocator.Error!EvidenceStep {
         if (frame.cursor == 1) {
-            var callable_node = input.?.nodeValue();
+            const callable_node = input.?.nodeValue();
             const call_ctx = task.call_ctx.?;
             const callable_plan = task.callable_plan;
             const plan = callable_plan.plan;
@@ -33093,14 +32911,6 @@ const BodyContext = struct {
                     const relation_lookup = lookup;
                     const target_node = try self.methodTargetNodeFromPlan(relation_lookup, call_ctx, plan.callable_ty);
                     try self.relateDispatchTargetRequestInterface(relation_lookup, target_node, callable_node);
-                    if (task.phase == .expression_lowering) {
-                        callable_node = try self.lowerAndCompleteIteratorMethodResultAtNode(
-                            relation_lookup,
-                            callable_node,
-                            plan,
-                            self.dispatchUsesDirectGraphCallee(plan),
-                        );
-                    }
                 },
                 .structural => {},
             }
@@ -34766,7 +34576,7 @@ const BodyContext = struct {
         // emitted. Ask the scrutinee producer for exact value evidence now so
         // a nested iterator payload is not projected from the checked-public
         // tag or record shape and permanently loses the callee's witness.
-        task.scrutinee_node = try self.matchScrutineeTypeNode(match.cond);
+        task.scrutinee_node = try self.lowerExprTypeNode(match.cond);
         task.branches = try self.allocator.alloc(DraftBranch, branchCount(self.view, match.branches));
         for (0..match.branches.count()) |branch_index| {
             const branch = matchBranchAt(self.view, match.branches, branch_index);
@@ -36396,7 +36206,7 @@ const BodyContext = struct {
             callable_node,
             self.iteratorTargetEvidenceSource(plan),
         );
-        const completed_callable_node = try self.draftFnSlotTypeNode(task.callee, callable_node);
+        const completed_callable_node = try self.draftFnSlotTypeNode(task.callee);
         if (task.expected_ret_ty) |expected| {
             if (!self.graph.sameClass(plan_fn.ret, try expected.toGraphNode(self.graph))) {
                 Common.invariant("checked iterator dispatch plan return type differed from iterator-for expected type");
@@ -38277,7 +38087,7 @@ const BodyContext = struct {
         const call_ctx = try self.createCallContext();
         task.call_ctx = call_ctx;
 
-        var callable_node = try call_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
+        const callable_node = try call_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
             callable_plan,
             self,
             checked_ret_ty,
@@ -38293,12 +38103,6 @@ const BodyContext = struct {
                     const target_node = try self.methodTargetNodeFromPlan(relation_lookup, call_ctx, plan.callable_ty);
                     try self.relateDispatchTargetRequestInterface(relation_lookup, target_node, callable_node);
                 }
-                callable_node = try self.lowerAndCompleteIteratorMethodResultAtNode(
-                    relation_lookup,
-                    callable_node,
-                    plan,
-                    task.direct_graph_call,
-                );
             },
             .structural => {},
         }
@@ -38712,7 +38516,7 @@ const BodyContext = struct {
             }
             break :blk created;
         };
-        const completed_callable_node = try self.draftFnSlotTypeNode(slot, callable_node);
+        const completed_callable_node = try self.draftFnSlotTypeNode(slot);
         const completed_function = try self.graph.functionNodes(completed_callable_node);
         if (completed_function.args.len != operands.len) {
             Common.invariant("completed closed direct procedure call changed its argument arity");
@@ -40103,7 +39907,7 @@ const BodyContext = struct {
                         record.recursive_reference,
                         .inherit,
                     );
-                    const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
+                    const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id });
                     return loweredExprStep(try self.addExprWithTypeCell(
                         DraftTypeCell.fromGraphNode(fn_node),
                         .{ .fn_def = .{ .fn_id = fn_id, .captures = try self.localProcFnDefCaptureSpan(
@@ -46405,8 +46209,7 @@ const BodyContext = struct {
         checked_arg: ExprSite,
     ) Allocator.Error!bool {
         const argument_node = try self.instNode(checkedExpr(self.view, checked_arg).ty);
-        if (try self.graph.containsGeneratedPrivate(argument_node)) return true;
-        return try self.graph.containsIteratorInterface(argument_node);
+        return try self.graph.containsGeneratedPrivate(argument_node);
     }
 
     fn directCallTargetIsLocalProc(self: *const BodyContext, target: checked.ResolvedValueId) bool {
@@ -46903,7 +46706,7 @@ const BodyContext = struct {
         );
         const completed = CompletedDirectCallee{
             .callee = callee,
-            .fn_node = try self.draftFnSlotTypeNode(callee, fn_node),
+            .fn_node = try self.draftFnSlotTypeNode(callee),
         };
         if (self.instantiation.direct_call_requests.getPtr(checked_expr)) |request| {
             if (request.fn_node == fn_node) request.completed = completed;
@@ -47925,7 +47728,7 @@ const BodyContext = struct {
                     record.recursive_reference,
                     .inherit,
                 );
-                const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
+                const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id });
                 break :blk try self.addExprWithTypeCell(
                     DraftTypeCell.fromGraphNode(fn_node),
                     .{ .fn_def = .{ .fn_id = fn_id, .captures = try self.localProcFnDefCaptureSpan(
@@ -48239,7 +48042,7 @@ const BodyContext = struct {
                     record.recursive_reference,
                     .inherit,
                 );
-                const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, expected_node);
+                const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id });
                 return try self.addExprWithTypeCell(
                     DraftTypeCell.fromGraphNode(fn_node),
                     .{ .fn_def = .{
@@ -48367,7 +48170,7 @@ const BodyContext = struct {
             recursive_reference,
         );
         const fn_id = try self.requireLocalDraftSlot(slot);
-        const fn_node = try self.draftFnSlotTypeNode(slot, request_fn_node);
+        const fn_node = try self.draftFnSlotTypeNode(slot);
         return try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(fn_node),
             .{ .fn_def = .{ .fn_id = fn_id } },
@@ -48397,26 +48200,15 @@ const BodyContext = struct {
     fn draftFnSlotTypeNode(
         self: *BodyContext,
         slot: DraftFnSlot,
-        imported_fallback: NodeId,
     ) Allocator.Error!NodeId {
         return switch (slot) {
             .callable_binding => |binding| binding.fn_node,
             .local => |local| switch (local) {
                 .draft => |draft_fn| try self.completedDraftCalleeWitness(
                     draft_fn,
-                    try self.completeDeferredIteratorResult(draft_fn),
+                    try self.draft.fns.items[@backingInt(draft_fn)].source.mono_fn_ty.toGraphNode(self.graph),
                 ),
-                .final => |final_fn| blk: {
-                    const completed_node = try self.programFnSourceTypeNode(final_fn);
-                    const request_fn = try self.graph.functionNodes(imported_fallback);
-                    if (!try self.graph.containsIteratorInterface(request_fn.ret)) {
-                        break :blk completed_node;
-                    }
-                    break :blk try self.adoptCompletedIteratorResult(
-                        imported_fallback,
-                        completed_node,
-                    );
-                },
+                .final => |final_fn| try self.programFnSourceTypeNode(final_fn),
             },
         };
     }
@@ -48436,150 +48228,6 @@ const BodyContext = struct {
         const spec_index = self.draft.template_spec_by_fn.get(draft_fn) orelse return callee_node;
         if (self.draft.template_specs.items[spec_index].state != .lowered) return callee_node;
         return try self.graph.privateResultWitness(callee_node);
-    }
-
-    /// Relate a callee-authored iterator representation to the checked public
-    /// request that selected it. The completed type is immutable producer
-    /// output; the caller only records that explicit witness in its own graph.
-    fn adoptCompletedIteratorResult(
-        self: *BodyContext,
-        request_node: NodeId,
-        completed_node: NodeId,
-    ) Allocator.Error!NodeId {
-        const completed_fn = try self.graph.functionNodes(completed_node);
-        if (!try self.graph.containsGeneratedPrivate(completed_fn.ret)) return completed_node;
-
-        const request_fn = try self.graph.functionNodes(request_node);
-        if (!try self.graph.containsIteratorInterface(request_fn.ret)) {
-            Common.invariant("callee completed an iterator representation for a non-iterator request");
-        }
-        const source_interface = self.graph.requestSourceInterface(request_node) orelse request_node;
-        // The completed node can be the memoized import shared by every call
-        // site of this specialization, and distinct call sites legitimately
-        // carry distinct public request interfaces. The registered interface
-        // is therefore only a representative (the first caller's) for the
-        // open-interface shape digest and template type-argument constraints;
-        // each caller's own validation is the directed relation recorded
-        // below, so later callers skip registration instead of tripping the
-        // one-source conflict invariant.
-        if (self.graph.requestSourceInterface(completed_node) == null) {
-            try self.graph.registerRequestSourceInterface(completed_node, source_interface);
-        }
-        try relateFunctionRequestInterface(self.graph, source_interface, completed_node);
-        return completed_node;
-    }
-
-    /// A public iterator result can carry a producer-authored private witness
-    /// that only the callee body discovers. Lower that context-free callee into
-    /// the same worker-owned graph and draft before the caller consumes the
-    /// result. Other results keep the ordinary end-of-graph deferred path.
-    fn completeDeferredIteratorResult(
-        self: *BodyContext,
-        draft_fn: DraftFnId,
-    ) Allocator.Error!NodeId {
-        const current_node = try self.draft.fns.items[@backingInt(draft_fn)].source.mono_fn_ty.toGraphNode(self.graph);
-        // Only a deferred template specialization completes eagerly; every
-        // other function keeps its current node without scanning its type.
-        const spec_index = self.draft.template_spec_by_fn.get(draft_fn) orelse return current_node;
-        const spec = self.draft.template_specs.items[spec_index];
-        if (spec.state != .deferred) return current_node;
-
-        const current_fn = try self.graph.functionNodes(current_node);
-        const has_iterator_result = try self.graph.containsIteratorInterface(current_fn.ret);
-        const has_private_result = try self.graph.containsGeneratedPrivate(current_fn.ret);
-        if (!has_iterator_result or has_private_result) {
-            return current_node;
-        }
-        // Representation-bearing inputs still belong to the caller's live
-        // graph. Recursive adapters can change those inputs at each edge, so
-        // their explicit forced-dynamic join must finish before the request is
-        // converted to an immutable specialization key.
-        for (current_fn.args) |arg| {
-            if (try self.graph.containsGeneratedPrivate(arg)) return current_node;
-        }
-        // A same-family request inside the active root is an explicit
-        // recursive edge. Its live graph must join the recursive argument and
-        // result representations (and select forced-dynamic when required)
-        // before any immutable specialization can be produced.
-        if (self.builder.active_template_root) |active_root| {
-            const family = DraftTemplateFamilyAddress.init(
-                spec.template_ref,
-                spec.source_fn_key,
-            );
-            if (active_root.graph == self.graph and
-                active_root.family.sameRecursiveCallable(family) and
-                (try specEvidenceVectorEql(self.allocator, active_root.evidence, spec.evidence)) and
-                draftCodecContractSpecializationEql(
-                    active_root.codec_contract,
-                    spec.codec_contract,
-                ))
-            {
-                return current_node;
-            }
-        }
-        if (!try self.graph.typeIsResolved(spec.request_fn_node)) return current_node;
-
-        const request_fn_ty = try self.activeTypeFromNode(spec.request_fn_node);
-        const view = self.builder.moduleForDigest(names.procTemplateModuleDigest(spec.template_ref));
-        const template = view.templates.get(spec.template_ref.template);
-        // A hosted declaration has no Roc body that can author a private
-        // iterator representation. Its public request remains the exact ABI.
-        if (template.target == .hosted) return current_node;
-
-        // Lower into the caller's worker-owned draft. The function keeps its
-        // own ownership range, so ordered commit can retain or discard it
-        // independently of the caller and map recursive references in one pass.
-        self.draft.template_specs.items[spec_index].state = .lowering;
-        self.builder.countBodyDiagnostic("eager_iterator_template_bodies_lowered");
-        const completed_node = try self.builder.lowerDraftTemplateSpecBody(
-            self,
-            spec_index,
-            view,
-            template,
-        );
-        self.draft.template_specs.items[spec_index].eager_resolution = .some(.{
-            .request_fn_node = spec.request_fn_node,
-            .fn_ty = request_fn_ty,
-        });
-        self.draft.template_specs.items[spec_index].lookup_request_fn_node = .of(spec.request_fn_node);
-
-        const completed_ty = try self.activeTypeFromNode(completed_node);
-        // Adoption is keyed on the produced result representation, the same
-        // predicate `adoptCompletedIteratorResult` applies: a completion whose
-        // private evidence sits only in an argument must not replace the
-        // caller's public request or register lookups for it.
-        const eager_completed_fn = try self.graph.functionNodes(completed_node);
-        if (!try self.graph.containsGeneratedPrivate(eager_completed_fn.ret)) return current_node;
-
-        const raw_spec: u32 = @intCast(spec_index);
-        _ = try self.adoptCompletedIteratorResult(current_node, completed_node);
-        self.draft.fns.items[@backingInt(draft_fn)].source.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_node);
-        self.draft.template_specs.items[spec_index].request_fn_node = completed_node;
-        const completed_spec = self.draft.template_specs.items[spec_index];
-        const completed_source = self.draft.fns.items[@backingInt(draft_fn)].source;
-        const lookup_prefix = try self.draft.template_spec_lookup.internPrefix(
-            DraftTemplateFamilyAddress.init(
-                completed_spec.template_ref,
-                completed_spec.source_fn_key,
-            ),
-            completed_source.evidence_digest.bytes,
-        );
-        try updateTemplateSpecInterfaceLookups(
-            self.draft,
-            self.allocator,
-            self.graph,
-            lookup_prefix,
-            completed_node,
-            @intCast(spec_index),
-        );
-        try registerTemplateSpecLookup(self.draft, .{
-            .digest = .{
-                .prefix = lookup_prefix,
-                .kind = .closed,
-                .digest = self.builder.specializationTypeDigestIn(self.typeStore(), self.nameStore(), completed_ty).bytes,
-            },
-        }, raw_spec);
-        return completed_node;
     }
 
     fn constUseMonoType(self: *BodyContext, const_use: checked.ConstUseTemplate) Allocator.Error!Type.TypeId {
@@ -52656,17 +52304,6 @@ const BodyContext = struct {
         }
     }
 
-    fn ensureNestedCallablesAtNodes(
-        self: *BodyContext,
-        expr_ids: []const CIR.Expr.Idx,
-        request_fn_nodes: []const NodeId,
-    ) Allocator.Error!void {
-        if (expr_ids.len != request_fn_nodes.len) Common.invariant("nested callable argument count differed from graph function arity");
-        for (expr_ids, request_fn_nodes) |expr_id, request_fn_node| {
-            if (self.isNestedCallableExpr(ExprSite.read(expr_id))) try self.ensureNestedCallableAtNode(ExprSite.read(expr_id), request_fn_node);
-        }
-    }
-
     fn ensureLambdaAtNode(
         self: *BodyContext,
         expr_id: ExprSite,
@@ -53891,10 +53528,7 @@ const BodyContext = struct {
         );
         return switch (runtime_target) {
             .low_level => function.ret,
-            .procedure => if (try self.typeStore().containsIteratorInterface(function.ret))
-                null
-            else
-                function.ret,
+            .procedure => function.ret,
             .intrinsic, .graph_participating => unreachable, // intrinsic and graph-participating targets returned null above
         };
     }
@@ -57329,49 +56963,6 @@ const BodyContext = struct {
             },
             .structural => Common.invariant("direct checked call targeted a structural derivation"),
         };
-    }
-
-    /// Lower or reuse an ordinary procedure specialization so its callee-authored
-    /// iterator result is available before the caller chooses
-    /// representation-sensitive lowering. This is an expression-lowering step,
-    /// not a read-only graph query: it may create a draft specialization.
-    fn lowerAndCompleteIteratorMethodResultAtNode(
-        self: *BodyContext,
-        lookup: MethodLookup,
-        request_fn_node: NodeId,
-        plan: static_dispatch.StaticDispatchCallPlan,
-        direct: bool,
-    ) Allocator.Error!NodeId {
-        // The target kind is an O(1) tag compare and rejects every builtin
-        // iterator method (the registry classifies iterator owners as
-        // `.graph_participating`), so it runs before the structural
-        // containment walks below.
-        switch (lookup.target.kind) {
-            .procedure => |procedure| switch (procedure.runtime_target) {
-                .procedure => {},
-                .intrinsic, .low_level, .graph_participating => return request_fn_node,
-            },
-            .local_proc, .callable_binding => {},
-            .structural => return request_fn_node,
-        }
-        const request_fn = try self.graph.functionNodes(request_fn_node);
-        if (!try self.graph.containsIteratorInterface(request_fn.ret) or
-            try self.graph.containsGeneratedPrivate(request_fn.ret))
-        {
-            return request_fn_node;
-        }
-        // Materialized only past the guards above: most dispatches return
-        // without consuming evidence, and materialization arena-allocates one
-        // vector per target.
-        const slot = if (direct)
-            try self.methodTargetCalleeDirectAtNode(lookup, request_fn_node, plan)
-        else
-            try self.methodTargetCalleeAtNodeWithEvidence(
-                lookup,
-                request_fn_node,
-                self.dispatchTargetEvidenceSource(plan),
-            );
-        return try self.draftFnSlotTypeNode(slot, request_fn_node);
     }
 
     fn resolvedDispatchCallData(
@@ -65393,32 +64984,6 @@ const BodyContext = struct {
         return try self.addComptimeSite(site_kind, expr.source_region, checked_site);
     }
 
-    fn matchScrutineeTypeNode(
-        self: *BodyContext,
-        checked_expr: ExprSite,
-    ) Allocator.Error!NodeId {
-        const expr = checkedExpr(self.view, checked_expr);
-        const public_node = try self.instNode(expr.ty);
-        if (!try self.graph.containsIteratorInterface(public_node)) {
-            return try self.lowerExprTypeNode(checked_expr);
-        }
-        // The scrutinee's branches are lowered against this node, so a
-        // deferred iterator result is completed here on purpose: the match
-        // must read the representation the producer actually returns.
-        return switch (expr.data) {
-            .call,
-            .dispatch_call,
-            .field_access,
-            .tuple_access,
-            .interpolation,
-            .type_dispatch_call,
-            .method_eq,
-            => (try self.exprCallResultEvidenceNode(checked_expr, null)) orelse
-                try self.lowerExprTypeNode(checked_expr),
-            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => try self.lowerExprTypeNode(checked_expr),
-        };
-    }
-
     fn runtimeDemandGuardFrameAddress(
         self: *BodyContext,
         pattern_id: CIR.Pattern.Idx,
@@ -65844,12 +65409,7 @@ const BodyContext = struct {
                     expected_node,
                 );
                 const fn_nodes = try self.graph.functionNodes(fn_node);
-                if (try self.graph.containsGeneratedPrivate(fn_nodes.ret)) break :blk fn_nodes.ret;
-                if (!try self.graph.containsIteratorInterface(fn_nodes.ret)) break :blk fn_nodes.ret;
-
-                try self.ensureNestedCallablesAtNodes(call.args, fn_nodes.args);
-                const completed = try self.completedDirectCalleeAtNode(checked_value, target, source_fn_ty, fn_node);
-                break :blk (try self.graph.functionNodes(completed.fn_node)).ret;
+                break :blk fn_nodes.ret;
             },
             .dispatch_call => |plan_node| try self.dispatchResultTypeNodeInPhase(
                 expr.ty,
@@ -67317,7 +66877,7 @@ const BodyContext = struct {
         defer self.allocator.free(values);
         for (carries, 0..) |carry, i| {
             const current = self.binders.get(carry.binder) orelse Common.invariant("loop-carried mutable binder was absent");
-            values[i] = try self.loopCarryCurrentExpr(carry, current, .recursive_feedback);
+            values[i] = try self.loopCarryCurrentExpr(carry, current);
         }
         return try self.continueWith(result_cell, values);
     }
@@ -67333,7 +66893,7 @@ const BodyContext = struct {
         values[0] = rest_expr;
         for (carries, 0..) |carry, i| {
             const current = self.binders.get(carry.binder) orelse Common.invariant("loop-carried mutable binder was absent");
-            values[i + 1] = try self.loopCarryCurrentExpr(carry, current, .recursive_feedback);
+            values[i + 1] = try self.loopCarryCurrentExpr(carry, current);
         }
         return try self.continueWith(result_cell, values);
     }
@@ -67342,39 +66902,25 @@ const BodyContext = struct {
         if (carries.len == 0) Common.invariant("empty loop state requested");
         if (carries.len == 1) {
             const current = self.binders.get(carries[0].binder) orelse Common.invariant("loop-carried mutable binder was absent");
-            return try self.loopCarryCurrentExpr(carries[0], current, .exit_state);
+            return try self.loopCarryCurrentExpr(carries[0], current);
         }
 
         const items = try self.allocator.alloc(DraftExprId, carries.len);
         defer self.allocator.free(items);
         for (carries, 0..) |carry, i| {
             const current = self.binders.get(carry.binder) orelse Common.invariant("loop-carried mutable binder was absent");
-            items[i] = try self.loopCarryCurrentExpr(carry, current, .exit_state);
+            items[i] = try self.loopCarryCurrentExpr(carry, current);
         }
         return try self.addExprWithTypeCell(result_cell, .{ .tuple = try self.addExprSpan(items) });
     }
-
-    const LoopCarryFeedback = enum {
-        recursive_feedback,
-        exit_state,
-    };
 
     fn loopCarryCurrentExpr(
         self: *BodyContext,
         carry: LoopCarry,
         current: DraftLocalId,
-        feedback: LoopCarryFeedback,
     ) Allocator.Error!DraftExprId {
         const carry_node = try carry.ty.toGraphNode(self.graph);
         const current_node = try self.localTypeCell(current).toGraphNode(self.graph);
-        if (feedback == .recursive_feedback) {
-            // A continue edge is producer-authored recursive value flow even
-            // when an earlier assignment already joined the current value to
-            // the loop parameter. Record the edge itself; representation
-            // finalization will force only slots that actually joined distinct
-            // minted iterator identities.
-            self.graph.markRecursiveValueSlot(carry_node);
-        }
         if (!self.graph.sameClass(carry_node, current_node)) {
             try selectRequestRepresentation(self.graph, carry_node, current_node);
         }

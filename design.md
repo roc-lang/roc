@@ -10379,28 +10379,10 @@ Adapters, custom sources (`Iter.custom` for pure unfolds, `Stream.custom` for
 sources whose advance and end-of-input discovery are effectful), and consumers
 remain ordinary Roc functions. There is
 no public chain type, iterator trait, extra public step tag, or source-visible
-compiler representation. Internal representation data is attached only after
-checking, when Monotype creates concrete iterator call results.
-
-`Iter` and `Stream` share one representation protocol. The only difference
-the compiler observes between them is the step field's spelling (`step` versus
-`step!`), which the checker outputs as one `IteratorRepresentationTopology`
-per `IteratorOwner`. Every other part of the protocol (minted chains, the
-forced-dynamic fixed point, callable flow, and SpecConstr fusion) is keyed by
-operation and reads the owner from the solved type's builtin identity.
-
-The checker stamps compiler-owned iterator procedures with an
-`IteratorProcedureId` that names an operation, not a public type: `Iter.map`,
-`Stream.map`, and `Stream.map!` all carry `.map`, and `Iter.stream` and
-`Stream.from_iter` both carry `.from_iter`. Each operation declares its Builtin
-definitions for both owners in `IteratorProcedureId.builtinNames`, stating
-explicitly when a type does not provide it, and the stamp table is generated
-from that declaration alone. Every `Stream` source and adapter builds its value
-through the stamped `stream_from_step` constructor, the counterpart of
-`iter_from_step`, so Monotype attaches the minted representation at the same
-point for both types. A LIR test derives its required rows from the operations
-both owners provide and holds each owner's pipeline to the same fused,
-allocation-free lowering.
+compiler representation, and no stage after checking treats an iterator
+differently from any other nominal record holding a function: an `Iter` or
+`Stream` value is its public record, and lambda-set specialization alone
+decides how each chain's step closure is represented (below).
 
 Range syntax produces a reusable `Range(num)`, not an `Iter(num)`. The
 exclusive and inclusive operators dispatch to `num.range_exclusive_to` and
@@ -10412,8 +10394,7 @@ propagates that hint into the resulting iterator. `Range.iter` and the numeric
 `range_iter` implementations are iterator producers that mint no
 representation of their own: the result is exactly the `Iter.custom` chain the
 numeric implementation builds, so a range iterator and each of its successors
-share one representation, while SpecConstr still admits both producers for
-iterator fusion.
+share one representation.
 
 Reverse iteration is an explicit numeric capability. `Range.iter_rev`
 reconstructs the opposite direction through `num.range_exclusive_from` or
@@ -10425,411 +10406,31 @@ representation and participate by implementing the explicit range methods;
 range behavior comes only from those explicit methods, and arithmetic method
 names are not consulted.
 
-#### Explicit Iterator Representation Tiers
+#### Iterator Representation
 
-A Monotype named type definition records an explicit iterator representation
-decision:
+An iterator value is its public nominal record: a `len_if_known` and a step
+closure, laid out as the record's backing like any other nominal. Each adapter
+is an ordinary function that builds a new record whose step closure captures
+the iterator it adapts. Lambda Solved generalizes each adapter, so every chain
+in a program instantiates the adapters at its own lambda sets; Lambda
+Specialize then gives each distinct instance its own functions. A chain built
+once, however deep, has one finite lambda set per adapter instance, and nothing
+is boxed or erased.
 
-```zig
-const IteratorRepresentation = enum(u8) {
-    none,
-    minted,
-    forced_dynamic,
-};
+The `rest` field of a step result has the iterator's own type, so one chain
+instance's step set is a recursive lambda set. A chain whose depth has no
+static bound, such as one grown by one adapter per loop iteration or by a
+recursive function, unifies its step set with the captured iterator's, so the
+set contains itself; layout's recursion analysis boxes the recursive slot, as
+for any recursive value. No stage chooses an erased representation for it.
 
-const IteratorKind = enum(u8) {
-    none,
-    custom,
-    list,
-    list_rev,
-    str,
-    single,
-    numeric_until,
-    numeric_to,
-    map,
-    keep_if,
-    drop_if,
-    take_first,
-    drop_first,
-    concat,
-    append,
-    with_index,
-    step_by,
-    from_iter,
-    forced_dynamic,
-};
-
-const TypeDef = struct {
-    // declaration identity fields
-    generated: ?TypeDigest = null,
-    iterator_representation: IteratorRepresentation = .none,
-    iterator_kind: IteratorKind = .none,
-    iterator_depth: u8 = 0,
-};
-```
-
-`IteratorKind` is one checked-boundary identity owned by the static-dispatch
-registry and reused directly by Monotype and ConstStore. Crossing the constant
-storage boundary never reinterprets the ordinal of a separately maintained
-enum.
-
-The fields have these meanings:
-
-- `none` is the ordinary public nominal. It carries no internal chain identity.
-- `minted` is a statically bounded internal chain representation.
-  `generated` is its chain/callable-evidence digest and `iterator_depth` is
-  the producer-computed chain depth. `iterator_kind` records the exact source
-  or adapter that produced it.
-- `forced_dynamic` is the explicit fixed-point representation selected at the
-  mint-depth boundary. It retains the public declaration identity while the
-  representation field keeps it distinct from the ordinary public nominal.
-
-These fields participate in named-type equality, cross-store equality, and type
-digests. Every type-store translation copies them. A later stage never derives a
-tier, producer kind, or mint depth from lowered type shape.
-The minted-join relation compares this complete producer identity, not just the
-generated digest: different producer kinds or depths still require a
-representation join when they carry equal generated digests.
-
-For a minted iterator, Monotype rewrites the public recursive `rest` type in the
-step result to the minted self type and records concrete adapter components as
-additional nominal arguments. Each adapter layer therefore embeds its concrete
-predecessor by value. A bounded chain is a finite tower of distinct nominal
-identities rather than one public nominal with a recursive self edge.
-
-The representation producer is `generatedIteratorNode` in
-`src/postcheck/monotype/lower.zig`, together with
-`InstGraph.finalizeGeneratedIteratorRepresentations` in
-`src/postcheck/monotype/solve.zig`. Construction records the exact public
-source, producer kind, component nodes, callable evidence, and private backing
-in the active instantiation graph. Finalization consumes that complete graph
-before any durable Monotype type is sealed. A graph-owned exact construction
-index keys generated iterators by declaration, producer kind, callable evidence,
-and ordered item/component classes. Union updates only keys that reference its
-losing class; content replacement updates provenance keys. Equal keys retain
-all permanent candidates without adding an implicit type relation. Monotone
-provenance counts let iterator finalization and private-evidence containment
-return immediately when their graphs have never received the relevant evidence.
-Containment diagnostics distinguish these guard returns from actual queries.
-Together construction and finalization compute:
-
-- `List.iter` as a first-class source representation rather than a public
-  recursive `Iter` boundary;
-- source depth 1;
-- adapter depth as one plus the maximum minted depth reachable by value through
-  its components;
-- a hard minted depth limit of 16.
-
-A public `Iter` expected type constrains the checked result type; it does not
-veto producer-owned representation evidence. A source or adapter whose inputs
-prove a bounded chain mints its concrete result and relates that result to the
-public type during checking. This keeps constant and non-constant chains on the
-same representation path.
-
-A `minted` child contributes its recorded depth. A `forced_dynamic` child
-contributes the cap, so every adapter above it remains dynamic. Ordinary named
-arguments, records, tuples, tag payloads, lists, and boxes propagate the maximum
-depth of values they contain. Function types do not contribute stored chain
-depth, and named backings are not traversed.
-
-If the next chain would exceed the limit, Monotype interns one
-`forced_dynamic` iterator type per item-type digest. Its public-shaped backing
-is recursively rewritten to its own type, giving recursive construction a
-finite type fixed point. An exact memoized walk over the finite instantiation
-graph computes the maximum stored iterator depth; a value cycle selects the
-explicit forced-dynamic fixed point. Graph size alone never changes the
-representation decision.
-
-Recursive specialization contributes an explicit second proof of the dynamic
-tier. Each in-progress specialization snapshots every permanent member of each
-ordered argument's union class. The snapshot retains the first and last
-permanent node of the class-member list at entry. Unions only concatenate
-lists, so links inside the saved segment never change: stopping at its saved
-last node preserves exact historical membership without copying the class or
-adding history maintenance to union operations. When a recursive edge reaches
-that specialization, a request argument introduced after the snapshot is
-recorded as a representation-growing recursive slot before the two function
-interfaces are related. If that slot subsequently joins distinct minted iterator identities,
-the graph records that the resulting iterator class must use the forced-dynamic
-fixed point. Recursion through any alias already present in the initial class is
-not representation growth and remains eligible for the minted tier. This makes
-the distinction producer-authored: finalization consumes the recorded recursive
-edge and minted join instead of inferring recursion from a finished type shape,
-union-find root selection, or call-stack depth.
-
-A loop `continue` edge is likewise explicit producer-authored recursive value
-flow, so every loop-carried slot on that edge is recorded even if an earlier
-assignment already joined it to the loop parameter. Recording the slot does not
-by itself force dynamic representation; only its later join of distinct minted
-identities does.
-
-An imported finished Monotype can participate in such a minted join, but it has
-no live graph provenance because its producer has already sealed its identity.
-When exactly one side of the join is a graph-owned iterator, union preserves
-that side as the class authority. Representation finalization then consumes its
-explicit public source and producer topology. It must not depend on operand
-order or keep the imported root and thereby discard the only data capable of
-authoring a forced-dynamic representation.
-
-The recursive edge itself is producer-authored by checking. A lookup that
-targets a member of a binding group still on the check stack records dedicated
-`recursive_reference` provenance, independently of the scheme-use record that
-owns the edge's substitution and evidence. An unannotated recursive reference
-has a shared scheme use, while an annotated recursive reference instantiates
-its pre-declared scheme and records that substitution against the def's own
-scheme (see "Predeclared scheme uses are recorded against the binding's own
-scheme" below). A non-recursive
-lookup never gains recursive provenance merely because its referenced pattern
-has not generalized yet.
-
-Only a checked recursive reference whose recorded substitution names the same
-live classes as the active specialization's substitution may join an
-in-progress specialization whose interface its fresh cells have not yet joined.
-Thus an annotated identity recursion joins its active specialization, while a
-recursive call with a different substitution that checking accepts (one at a
-closed type; Polymorphic Recursion rejects the rest) remains a fresh
-specialization. Every draft function and globally reserved root records
-the owner that created it, forming an explicit active ownership tree, and the
-reference names the in-progress specialization of the same procedure, with the
-same evidence, on that chain. The procedure is named by its declaration (a
-template, or a nested site with its owner and context function digest), not by
-the checked root the reference reads: inside a generalized procedure, a
-recursive reference reads the declaration at its monomorphic in-body type while
-the request that began the active specialization read an instantiation. A
-nested specialization's draft function records the specialization it lowers, so
-the reference finds it by walking its own ownership chain. Every other request—a non-recursive scheme
-instantiation, a dispatch plan, a generated codec's component call, or a
-compiler-generated component edge—is a fresh instantiation; it identifies with
-an existing specialization only through an exact interface and otherwise
-becomes its own request, even when it descends from a specialization of the same
-procedure with equal evidence. Neither ownership descent, shared graph cells,
-argument-class overlap, nor capture identity classifies a request as recursion.
-Exact interfaces may still deduplicate normally, but only a checked recursive
-reference with the active substitution invokes recursive-interface unification
-against a not-yet-joined interface and records recursive representation growth.
-
-Finalization rebuilds a selected forced-dynamic class with exactly one public
-item argument and an exact self-recursive backing before identity sealing.
-It does not restamp a minted backing whose component arguments still encode the
-growing chain. Once representation finalization, identity sealing, and graph
-freezing finish, the durable Monotype is immutable and no consumer may reopen,
-widen, or reinterpret it.
-
-Iterator-for lowering obtains the step result shape from the exact generated
-iterator node when one is present. The checked step type supplies the public
-interface and topology only; it cannot replace or merge the producer-owned
-private `rest` representation. This keeps the loop's initial state and every
-back-edge state in the same explicit representation family.
-
-Nested call and dispatch operands carry producer evidence through the active
-instantiation graph until that graph's single final seal. Relation production
-passes the exact result node to the consuming call request; it does not seal an
-intermediate `TypeId`, re-import that snapshot, or fall back to the checked
-public cell after discarding private representation evidence.
-
-When a dispatch expression produces generated-private evidence for a live
-checked-public result cell, Monotype selects that representation through the
-dedicated `selectGeneratedPrivateRepresentation` capability before lowering
-the dispatch. The capability exists only during relation production, requires
-an explicitly directed public-to-private edge, and rejects every class that
-contains an imported finished Monotype. Ordinary graph unification rejects the
-same edge, and rejects binding an unresolved checked variable to a private
-class; the one unresolved cell it does bind is an undetermined record field's
-runtime slot, which holds no representation (Field Kinds). This preserves
-producer selection for branch results without making public/private
-merging—or reopening a durable Monotype—available as a general unification
-behavior. If the requested public interface is already a finished
-Monotype, the producer relates its distinct private result to that immutable
-interface without merging either class, and the enclosing procedure or
-compile-time wrapper carries the private result cell as its exact output
-witness. ConstStore preserves that witness beside the stored value, and restore
-relates the checked public interface to it without ordinary unification.
-
-A value-producing `if` or `match` likewise owns one explicit result selection
-for all of its inhabited branches. Selection starts with the exact specialized
-request, including its type bindings and method evidence. A finished request is
-an immutable interface, not a reason to instantiate the generic checked result
-again: branch constructors and nested callables must consume its constraints
-before selecting methods. The declared interface and selected representation
-are separate cells only when producer evidence requires a distinct representation;
-ordinary branch results reuse the request without another type instantiation or
-ownership scan. An exact generated-private request already supplied by the caller
-remains authoritative. Otherwise, before emitting any
-branch body, Monotype asks every branch's checked producer for its exact result
-evidence and joins all generated-private evidence into the shared live result
-selection. Public-only evidence does not settle the selection. Match patterns
-first project their exact binder cells from the shared scrutinee, so a branch
-producer reached through a pattern lookup participates in the same pre-emission
-pass. Every branch is then emitted once against the settled request. Distinct
-minted iterator producers therefore use the ordinary graph representation join,
-which keeps a compatible static representation and reaches the defined
-forced-dynamic fixed point only when the producer topology requires it. Source
-order cannot make one already-emitted branch authoritative, and lowering never
-needs to revise emitted branch code. A producer that selects a distinct private
-representation relates its public interface to the request without merging or
-mutating a finished request. After all branches have been lowered, the selected
-result is validated against the declared interface and carried to sealing.
-Representation selection never reconstructs branch evidence from finished
-output IR or reopens a durable Monotype.
-
-A branch can also yield a public value under a private selection. The selection
-capability rejects every class that contains a finished Monotype at any depth,
-so a public value whose type reaches one, or any public value once the
-selection itself reaches one, cannot merge into the selection. A `for` loop's
-iterable request reaches one, for example, so a `match` used as that iterable
-joins a pattern binder no producer made with a produced iterator this way. The
-selection stays private. The public branch relates to it through the same
-opaque interface relation that validates a private producer against a finished
-public request, and carries the selected cell like every other branch. The two
-types name one runtime value: every tier's backing has the public record's
-shape (Host Symbol ABI), and Lambda Solved joins a public iterator into a
-generated one by relating their backings, so the public value's step joins the
-selected representation's callable slot (Tier Unification And Callable Flow).
-Branch order does not matter: the public branch neither blocks nor weakens the
-selection whether it is lowered before or after the producers, and a nested
-join hands its own selection to the join around it. The selection never falls
-back to the public nominal because one branch is public, since that would
-discard the producer topology of every other branch.
-
-A lambda's early returns join its result the same way. Each returned value
-lowers against the lambda's request, and the final expression can select an
-output witness distinct from that request, which becomes the lambda's result. A
-return therefore names its lambda's result rather than a type cell of its own:
-`Return.target` is sealed from the one output cell the lambda settles when its
-body has lowered, so every return of a lambda and the lambda's result type are
-the same type by construction. Lambda Solved relates each returned value to
-that result, which joins a returned public value, or a returned producer's
-distinct representation, with the selected output exactly as it joins
-control-flow branches.
-
-A callee's completed result representation is immutable producer output even
-while the callee is still a live specialization in the caller's draft graph:
-every request with the same identity must seal to the same type. A caller
-therefore consumes a witness of a completed callee's function type: each class
-carrying generated-private evidence is copied into fresh graph nodes, and every
-other class is shared. Joining a call's result with the caller's other
-producers selects the caller's representation without rewriting the callee's.
-A callee still being lowered is shared instead, because its recursive edges
-must join its own live representation.
-
-Branches that provably terminate do not participate in result selection. If
-every branch terminates, the control-flow expression produces no runtime value:
-its checked result variable remains unconstrained, no result relation is
-created, and the expression carries the enclosing continuation's declared cell.
-An unobservable continuation type is not representation evidence.
-
-Structural constructors preserve that distinction recursively. If a record
-field, tag payload, tuple item, list item, or nominal backing is a finished
-generated-private witness, the constructor emits an exact container witness
-that references the child directly and relates matching structure through the
-producer-aware value relation. It never merges the child into the corresponding
-public slot or asks a later consumer to recover the child's runtime
-representation from the public container shape.
-
-A lambda is such a constructor for its result: a function type carries its
-result's representation, so a lambda that returns a produced iterator has a
-function type that holds generated-private evidence, at whatever depth of
-records, tags, tuples, lists, or further functions its result puts it. A generic
-procedure specialized at that function binds a parameter whose checked type is
-a bare type variable: `Box.box` and `Box.unbox`, the iterator a `for` loop
-walks a list of functions with, an identity a record of functions passes
-through. The parameter's fresh interface proof starts from that variable, so
-the opaque interface relation gives the variable the witness's public
-interface. It adopts each structural layer it meets (list, box, tuple, record,
-tag union, and function alike) with a fresh checked variable in every child
-slot, keeps descending wherever the child carries generated-private evidence,
-and unifies every other child, until a generated iterator supplies its public
-nominal. A function is one of those layers, not a boundary: its arguments and
-result relate like a tuple's items, the private function type stays the
-parameter's representation, and no public function type replaces it. A boxed
-function is an erased callable whose ABI is the function type it was erased
-from (Tier Unification And Callable Flow), so a call of the unboxed function
-lowers its result from that ABI at an explicit typed boundary, whichever view
-of the function the call site holds.
-
-The relation names its two sides public and private, and those roles belong to
-each pair it visits, not to the roots it started from. A public iterator whose
-item type is itself a produced iterator, or a record or function holding one,
-contains generated-private evidence through that item alone. An adapter's step
-matches the inner iterator's step result against a pattern typed at that public
-view, so both rows hold evidence, and within them the scrutinee's `rest` is the
-representation while the pattern's `rest` is its public view. At every pair the
-side whose root is a generated-private nominal is the representation, and two
-such roots are one representation and unify. A pair entered with the
-representation on the public side is therefore related with the roles
-exchanged, at any depth.
-
-`Iter.custom` marks its exact transition-function request with the capability
-to propagate constructor-carried representation evidence. That capability is
-consumed directly while lowering the transition and inherited by its nested
-body contexts; ordinary call and control-flow lowering do not infer it from a
-function's graph shape. The seed call and the marked transition may therefore
-carry a private threaded-state component through tuples, records, tags, lists,
-and nominal backings without making constructor inspection global to unrelated
-calls. If a control-flow prepass cannot see a private result before emission,
-the first exact private branch upgrades the selection and all already-emitted
-inhabited branches are retagged with that validated selection before the
-control-flow expression is finalized.
-
-Call specialization and control-flow result selection consume that same exact
-constructor witness where the producer granted the capability. They propagate
-producer evidence by the constructor's explicit field, payload, item, or
-backing positions; equal checked type identities elsewhere do not participate.
-In particular,
-`Iter.custom` binds the transition callable's input state and successful
-next-state result to the seed's exact witness. An iterator stored in custom
-state therefore keeps one representation through the initial seed, each
-transition result, and the next call, without crossing the public recursive
-`Iter` boundary between steps.
-
-Each generated-private request also retains its exact checked-source function
-node. That source node can itself contain upstream private arguments, so a
-callee relates its fresh checked root to the source through opaque interface
-relations; it never fully unifies the two function graphs. Expected private
-results remain request-owned nodes while their checked result cells stay fresh
-public interfaces. This keeps an adapter's input and output identities distinct
-even when the source signature uses one public `Iter` type variable for both.
-
-An opaque interface relation replays the checker's per-use lift (Anonymous
-Structure Is Copied Per Use) just as ordinary instantiation does through the
-named type's backing. A template whose checked root holds an anonymous record
-or tag union, such as an unannotated method built from `Ok(...)` and
-`Err(...)` literals, can meet a request whose same position holds the nominal
-the use lifted it into. When that nominal carries generated-private evidence,
-the public structure relates to the nominal's structural backing through the
-opaque relation, so every generated-private node stays distinct from its
-public counterpart, and the public class then takes the request's nominal.
-A checked type variable carries no public structure of its own, so one related
-to a generated-private named representation other than an iterator (such as a
-codec method's unannotated `FieldNames` parameter, constrained only by the
-methods it calls) denotes that representation itself, as a checked variable
-related to an imported generated iterator does. The same holds for an interface
-parameter standing for such a variable's substitution cell, as when that
-parameter passes through an unannotated generic helper. Body lowering relates
-an expression's checked type to a known Monotype that carries generated-private
-evidence through this same opaque relation, just as it relates a checked
-interface to a type cell carrying such evidence; any other known Monotype
-unifies. Joining the variable never
-collapses two different representations. The checker gives the variable one
-type, and a codec representation's generated backing is built only from its
-named type's arguments and never changes afterwards, so every representation
-one variable meets is the same type. A generated iterator's variable takes the
-iterator's public interface instead, because representation selection may
-still join a live iterator's representation or force it dynamic.
-
-Match lowering likewise relates each checked pattern interface to the exact
-scrutinee node without merging a generated-private root into that public
-interface. Once all pattern relations have settled, record-field/tag-payload
-traversal walks the checked pattern and rebinds its pre-registered locals to the
-exact child graph cells before the guard or branch body is lowered. Later pattern
-materialization consumes those same cells. Branch code therefore specializes
-from producer-owned representation evidence rather than from the checked
-pattern's public approximation.
-
-The cap is a type-universe bound, not a call-depth or specialization-request
-counter. Every generated iterator passes through the same graph-owned producer
-and pre-seal finalizer, so recursive functions, loops, and ordinary calls all
-receive the same finite representation decision.
+In mode `.none` no call is inlined, so a loop over an iterator calls the
+current step once per item, and the step builds the next iterator record; the
+record is a by-value struct, so the loop allocates nothing. Optimizing modes
+fuse a chain through the ordinary value-driven SpecConstr machinery: known
+constructors, inline frames, loop scalarization and the wrapper rule (a call
+through an argument's field, such as `Iter.next`'s `(iterator.step)()`, is a
+wrapper body).
 
 #### Callable Flow Across Generated Representations
 

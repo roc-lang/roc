@@ -441,33 +441,6 @@ test "Monotype draft local identity stays graph-native" {
     try expectNotContains(identity, "activeTypeFromCell");
 }
 
-test "Monotype iterator result completion stays out of relation replay and retains public request lookups" {
-    const lower_source = @embedFile("monotype/lower.zig");
-    const dispatch_result = sourceSliceBetween(
-        lower_source,
-        "fn stepDispatchResult(",
-        "fn stepCallResult(",
-    );
-    try expectContains(dispatch_result, "if (task.phase == .expression_lowering)");
-    try expectContains(dispatch_result, "lowerAndCompleteIteratorMethodResultAtNode(");
-
-    const completion = sourceSliceBetween(
-        lower_source,
-        "fn completeDeferredIteratorResult(",
-        "fn constUseMonoType(",
-    );
-    try expectContains(completion, "try updateTemplateSpecInterfaceLookups(");
-    try expectContains(completion, "completed_source.evidence_digest.bytes");
-    try expectNotContains(completion, "unregisterTemplateSpec");
-
-    const template_spec = sourceSliceBetween(
-        lower_source,
-        "const DraftTemplateSpec = struct",
-        "const DraftConstUseProvenance",
-    );
-    try expectContains(template_spec, "lookup_request_fn_node: solve.MaybeNodeId");
-}
-
 test "Monotype direct uninhabited calls lower argument through graph cell" {
     const lower_source = @embedFile("monotype/lower.zig");
     const direct_call = sourceSliceBetween(
@@ -774,8 +747,6 @@ test "Monotype open specialization lookup covers the complete function interface
         try expectContains(lookup_source, "source_ctx.runtimeDemandGuardFrameAddresses()");
         try expectContains(lookup_source, "if (!selection.add(raw_spec, exact_interface))");
         try expectContains(lookup_source, "if (selection.selected()) |raw_spec|");
-        try expectContains(lookup_source, "try source_ctx.graph.unifyRecursiveFunctionInterface(");
-        try expectContains(lookup_source, "spec.initial_request_arg_classes");
         try expectNotContains(lookup_source, "functionInterfaceAnchor");
     }
     try expectContains(template_source, "template_spec_lookup.openPairs(lookup_prefix)");

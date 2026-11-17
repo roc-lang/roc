@@ -11,8 +11,6 @@ const expectSolvedLirWorkerMetadataParallelismDeterministicLir =
 const expectSolvedLirCapturingBodyParallelismDeterministicLir =
     harness.expectSolvedLirCapturingBodyParallelismDeterministicLir;
 const expectSpecializationParallelismDeterministicLir = harness.expectSpecializationParallelismDeterministicLir;
-const expectEagerIteratorSpecializationParallelismDeterministicLir =
-    harness.expectEagerIteratorSpecializationParallelismDeterministicLir;
 const expectProcedureRootParallelismDeterministicLir = harness.expectProcedureRootParallelismDeterministicLir;
 
 test "solved-LIR parallel metrics reset and report exact batch accounting" {
@@ -251,39 +249,6 @@ test "Solved-LIR boxed closures prepare erased procedures and capture layouts fo
         \\    d = Box.unbox(make_d(4))
         \\    total = a(0) + b(0) + c(0) + d(0)
         \\    if total == 10 { Ok({}) } else { Err(Exit(1)) }
-        \\}
-    );
-}
-
-test "iterator-producing callees complete in worker-owned specialization drafts" {
-    try expectEagerIteratorSpecializationParallelismDeterministicLir(
-        \\make_iter : List(U64) -> [Ready(Iter(U64))]
-        \\make_iter = |items| Ready(items.iter().map(|item| item + 1))
-        \\
-        \\consume_a = |items| match make_iter(items) {
-        \\    Ready(iter) => {
-        \\        var $sum = 0.U64
-        \\        for x in iter {
-        \\            $sum = $sum + x
-        \\        }
-        \\        $sum
-        \\    }
-        \\}
-        \\
-        \\consume_b = |items| match make_iter(items) {
-        \\    Ready(iter) => {
-        \\        var $sum = 0.U64
-        \\        for x in iter {
-        \\            $sum = $sum + x
-        \\        }
-        \\        $sum
-        \\    }
-        \\}
-        \\
-        \\main! : List(Str) => Try({}, [Exit(I8), ..])
-        \\main! = |_args| {
-        \\    total = consume_a([1, 2, 3]) + consume_b([1, 2, 3])
-        \\    if total == 18 { Ok({}) } else { Err(Exit(1)) }
         \\}
     );
 }

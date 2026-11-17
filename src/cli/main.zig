@@ -19436,7 +19436,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [42]
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Interface summary hits", .count = diagnostics.specialization.interface_summary_hits },
@@ -19451,7 +19451,6 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]p
         .{ .name = "Dispatch expressions", .count = body.dispatch_expressions },
         .{ .name = "Deferred template requests", .count = body.deferred_template_requests },
         .{ .name = "Caller-owned template bodies lowered", .count = body.caller_owned_template_bodies_lowered },
-        .{ .name = "Eager iterator template bodies lowered", .count = body.eager_iterator_template_bodies_lowered },
         .{ .name = "Deferred template reuses", .count = body.deferred_template_reuses },
         .{ .name = "Deferred template bodies lowered", .count = body.deferred_template_bodies_lowered },
         .{ .name = "Lowered template bodies discarded", .count = body.lowered_template_bodies_discarded },
@@ -19829,7 +19828,6 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.graph.nominal_backing_tombstone_deletions = 203;
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
-    diagnostics.body.eager_iterator_template_bodies_lowered = 304;
     diagnostics.body.deferred_template_reuses = 305;
     diagnostics.body.nested_closures_prepared = 302;
 
@@ -19857,12 +19855,10 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 303), body[3].count);
     try std.testing.expectEqualStrings("Checked node cache hits", body[5].name);
     try std.testing.expectEqual(@as(u64, 301), body[5].count);
-    try std.testing.expectEqualStrings("Eager iterator template bodies lowered", body[12].name);
-    try std.testing.expectEqual(@as(u64, 304), body[12].count);
-    try std.testing.expectEqualStrings("Deferred template reuses", body[13].name);
-    try std.testing.expectEqual(@as(u64, 305), body[13].count);
-    try std.testing.expectEqualStrings("Nested closures prepared", body[22].name);
-    try std.testing.expectEqual(@as(u64, 302), body[22].count);
+    try std.testing.expectEqualStrings("Deferred template reuses", body[12].name);
+    try std.testing.expectEqual(@as(u64, 305), body[12].count);
+    try std.testing.expectEqualStrings("Nested closures prepared", body[21].name);
+    try std.testing.expectEqual(@as(u64, 302), body[21].count);
 
     const parallel = monotypeParallelCounters(.{
         .worker_work_ns = 401,
