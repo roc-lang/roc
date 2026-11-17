@@ -675,19 +675,42 @@ pub fn solveParams(
     var scratch: Scratch = .{};
     defer scratch.deinit(allocator);
 
+    // The candidates: every procedure with a function-valued parameter,
+    // and every erased-callable procedure a candidate packs a record built
+    // from a function value with, whose capture fields that record's
+    // escape reads. No other procedure's capture fields are ever read.
+    const queued = try allocator.alloc(bool, proc_count);
+    defer allocator.free(queued);
+    @memset(queued, false);
+    var pending = std.ArrayList(u32).empty;
+    defer pending.deinit(allocator);
     for (0..proc_count) |index| {
-        const proc_id: ProcId = @fromBackingInt(@intCast(index));
-        const spec = store.getProcSpecImmediate(proc_id);
-        const body = spec.body.get() orelse continue;
+        const spec = store.getProcSpecImmediate(@fromBackingInt(@intCast(index)));
+        if (spec.body == .none or candidatePositions(store, layouts, spec) == 0) continue;
+        queued[index] = true;
+        try pending.append(allocator, @intCast(index));
+    }
+    while (pending.pop()) |index| {
+        const spec = store.getProcSpecImmediate(@fromBackingInt(index));
+        const body = spec.body.get() orelse frameInvariant("a queued candidate with no body");
         const mask = candidatePositions(store, layouts, spec);
-        if (mask == 0 and spec.erased_capture_arg.get() == null) continue;
         masks[index] = mask;
         candidate_masks[index] = mask;
-        try candidates.append(allocator, @intCast(index));
+        try candidates.append(allocator, index);
         const uses = try collectUses(allocator, arena_state.allocator(), &scratch, store, layouts, spec, body);
         try proc_uses.append(allocator, uses);
         // Every field a body never reads into a function value it keeps.
         if (uses.fields != null) field_masks[index] = ~@as(u64, 0);
+        for (uses.record_defs.locals) |record| {
+            for (uses.of(record)) |stmt_id| {
+                const packing = Packing.of(store, stmt_id) orelse continue;
+                if (packing.capture != record) continue;
+                const lambda = @backingInt(packingProc(store, stmt_id));
+                if (queued[lambda] or store.getProcSpecImmediate(@fromBackingInt(lambda)).body == .none) continue;
+                queued[lambda] = true;
+                try pending.append(allocator, lambda);
+            }
+        }
     }
 
     var solver: ParamSolver = .{
