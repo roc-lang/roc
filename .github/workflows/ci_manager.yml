@@ -126,9 +126,11 @@ jobs:
           echo "heavy=$heavy"
           echo "heavy=$heavy" >> "$GITHUB_OUTPUT"
 
-  # Checks that read only tracked sources run once, here, instead of on every
-  # OS: their result cannot depend on the host. They are quick, so they gate the
-  # scarce macOS and Windows runners.
+  # Checks that read only tracked sources run here instead of on every OS:
+  # their result should not depend on the host. They are quick, so they gate
+  # the scarce macOS and Windows runners. The Windows shards run them again,
+  # with every other MiniCI job, because Windows paths and tools have broken
+  # them there alone (see `Lane.all` in src/build/minici.zig).
   static-checks:
     name: static-checks
     runs-on: ubuntu-24.04
@@ -299,6 +301,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
+      - name: Enlarge pagefile (Windows)
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/enlarge-windows-pagefile
+
       # `use-tool-cache` installs Zig at $RUNNER_TOOL_CACHE/zig/<version>/<arch>,
       # the same path in this build job and in every shard of its OS. Without
       # it Zig lands in a random per-job directory, and Run steps that invoke
@@ -366,7 +372,7 @@ jobs:
       - name: Build MiniCI binaries
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build build-ci
+          command: zig build build-ci -Dembed-builtin-unit=true
           retry_count: 3
 
       # zstd on all cores, instead of upload-artifact's single-threaded zip
@@ -491,6 +497,10 @@ jobs:
     steps: &minici_shard_steps
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
+      - name: Enlarge pagefile (Windows)
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/enlarge-windows-pagefile
 
       # Same deterministic Zig path as the build job (see `use-tool-cache` in
       # `minici-build-linux`), so the restored cache hits.
@@ -689,6 +699,8 @@ jobs:
             valgrind: false
     steps: *minici_shard_steps
 
+  # Unlike macOS, Windows runs every MiniCI job, the source and primary-host
+  # ones included, so `zig build minici` stays green on Windows machines.
   minici-windows:
     needs: [check-changes, minici-build-windows]
     if: needs.check-changes.outputs.heavy == 'true'

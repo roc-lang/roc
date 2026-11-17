@@ -27,7 +27,6 @@ test "issue 11449: equal JSON helper requests share Monotype bodies" {
     for ([_]usize{ 1, 2, 4 }) |workers| {
         try harness.expectLowersToLirWithOptions(two_record_json_parses, .{
             .specialization_workers = workers,
-            .proc_debug_names = true,
             .prepared_inspect = expectSharedJsonHelpers,
         });
     }

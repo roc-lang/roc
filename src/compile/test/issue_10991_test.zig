@@ -167,7 +167,7 @@ const fold_app_body =
 test "issue 10991: dev pipeline collapses List.fold to a call-free index loop" {
     try harness.expectLirInspectionWithOptions(
         fold_app_body,
-        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion, .proc_debug_names = true },
+        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion },
         expectFoldCollapsedToCallFreeIndexLoop,
     );
 }
@@ -175,7 +175,7 @@ test "issue 10991: dev pipeline collapses List.fold to a call-free index loop" {
 test "issue 10991: optimized pipeline also collapses List.fold to a call-free index loop" {
     try harness.expectLirInspectionWithOptions(
         fold_app_body,
-        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .all_calls, .proc_debug_names = true },
+        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .all_calls },
         expectFoldCollapsedToCallFreeIndexLoop,
     );
 }

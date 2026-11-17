@@ -427,7 +427,9 @@ pub const Constants = struct {
     ///      uncommitted tag tail.
     /// 199: combines the 198 entry with the 194 entry above.
     /// 200: combines the two independent 199 entries.
-    pub const CACHE_VERSION = 200;
+    /// 201: unary `!` canonicalizes to a call to `Bool.not`, combined with the
+    ///      200 entry.
+    pub const CACHE_VERSION = 201;
 };
 
 /// Configuration for the Roc cache system.

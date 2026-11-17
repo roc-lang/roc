@@ -1104,6 +1104,12 @@ pub const TailCalls = struct {
     /// The statement the loop begins at, when it is not the body's first:
     /// the statements before it run once per call.
     entry: collections.OptionalId(CFStmtId) = .none,
+    /// The locals the loop carries, one per argument of a self call, when
+    /// they are not the procedure's own arguments: a `.boxy` procedure
+    /// carries a dynamic parameter that its self calls change in a frame
+    /// local its entry copies the parameter into (design.md "Tail Return
+    /// Continuations"). Empty when the loop carries the arguments.
+    params: LocalSpan = .empty(),
 };
 
 /// An optional `TailCalls` at its own size.
@@ -1848,7 +1854,10 @@ pub const ComptimeValueRef = struct {
 
 /// What it means for generated code to fail at one statement, beyond
 /// crashing there. Every identity but a literal producer's stays meaningful in
-/// every compilation of the program (`LirStore.failureMeaning`).
+/// every compilation of the program (`LirStore.failureMeaning`): a module is
+/// named by the identity its lowering gives it
+/// (`LirStore.lowering_module_identities`), which a program's table reads back
+/// as a checked key (`Program.Result.meaningByCheckedKey`).
 pub const FailureMeaning = union(enum) {
     /// Code checking rejected and already reported.
     checked_error,
@@ -2088,7 +2097,7 @@ pub const LirProcSpec = struct {
     capture_reuse_fn_params: u64 = 0,
 
     comptime {
-        std.debug.assert(@sizeOf(LirProcSpec) == 240);
+        std.debug.assert(@sizeOf(LirProcSpec) == 248);
     }
 
     /// The body ARC analyzes and places reference counts in. A static

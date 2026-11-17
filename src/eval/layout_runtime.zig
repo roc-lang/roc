@@ -65,6 +65,7 @@ pub fn nestedDropOp(op: RcOp) RcOp {
         .incref => .incref,
         .decref, .free => .decref,
         .host_drop => hostDropInRcStatement(),
+        .decref_queued => base.invariant("{s}", .{"LIR/interpreter invariant violated: RC statement carried a queued drop helper"}),
     };
 }
 /// Reads a `RocStr` from a value's bytes.
@@ -417,10 +418,14 @@ pub const LayoutRuntime = struct {
     pub fn performRcHelperIfNeeded(self: *const LayoutRuntime, hooks: anytype, helper: layout_mod.RcHelper, val: Value, count: u32, atomicity: RcAtomicity) void {
         const plan = hooks.rcPlanFor(helper);
         if (plan == .noop) return;
-        self.performRcPlan(hooks, plan, val, count, atomicity);
+        self.performRcPlan(hooks, plan, val, count, atomicity, null);
     }
 
-    pub fn performRcPlan(self: *const LayoutRuntime, hooks: anytype, rc_plan: layout_mod.RcHelperPlan, val: Value, count: u32, atomicity: RcAtomicity) void {
+    /// Performs `rc_plan` on `val`. `queue` is the queue of the teardown
+    /// this call is a step of, or null when it is a step of none; it reaches
+    /// each `decref_queued` child and each queued teardown the plan names
+    /// (see `builtins.utils.DropQueue`).
+    pub fn performRcPlan(self: *const LayoutRuntime, hooks: anytype, rc_plan: layout_mod.RcHelperPlan, val: Value, count: u32, atomicity: RcAtomicity, queue: ?*builtins.utils.DropQueue) void {
         builtins.stack_guard.check();
         const utils = builtins.utils;
         switch (rc_plan) {
@@ -459,7 +464,7 @@ pub const LayoutRuntime = struct {
                 if (box_plan.child) |child_key| {
                     if (self.readBoxedDataPointer(val)) |data_ptr| {
                         const child_val = Value{ .ptr = data_ptr };
-                        self.performRcPlan(hooks, hooks.rcPlanFor(child_key), child_val, count, atomicity);
+                        self.performRcChild(hooks, child_key, child_val, count, atomicity, queue);
                     }
                 }
                 utils.freeDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, self.roc_ops);
@@ -474,10 +479,36 @@ pub const LayoutRuntime = struct {
                             return;
                         };
                         const child_val = Value{ .ptr = data_ptr };
-                        self.performRcPlan(hooks, hooks.rcPlanFor(child_key), child_val, count, atomicity);
+                        self.performRcChild(hooks, child_key, child_val, count, atomicity, queue);
                     }
                 }
                 utils.freeDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, self.roc_ops);
+            },
+            inline .list_decref_queued, .list_free_queued => |list_plan, plan_tag| {
+                const visit: QueuedVisit(@TypeOf(hooks)) = .{ .runtime = self, .hooks = hooks, .plan = hooks.rcPlanFor(list_plan.child), .count = count, .atomicity = atomicity };
+                valueToRocList(val).dropQueued(
+                    @intCast(list_plan.elem_alignment),
+                    list_plan.elem_width,
+                    @intCast(@backingInt(list_plan.child.layout_idx)),
+                    queue,
+                    if (plan_tag == .list_free_queued) .free else dropMode(atomicity),
+                    visit,
+                    QueuedVisit(@TypeOf(hooks)).drop,
+                    self.roc_ops,
+                );
+            },
+            inline .box_decref_queued, .box_free_queued => |box_plan, plan_tag| {
+                const visit: QueuedVisit(@TypeOf(hooks)) = .{ .runtime = self, .hooks = hooks, .plan = hooks.rcPlanFor(box_plan.child), .count = count, .atomicity = atomicity };
+                utils.boxDropQueued(
+                    val.read(?[*]u8),
+                    @intCast(box_plan.elem_alignment),
+                    @intCast(@backingInt(box_plan.child.layout_idx)),
+                    queue,
+                    if (plan_tag == .box_free_queued) .free else dropMode(atomicity),
+                    visit,
+                    QueuedVisit(@TypeOf(hooks)).drop,
+                    self.roc_ops,
+                );
             },
             .erased_callable_incref => {
                 const alloc_ptr = val.read(?[*]u8);
@@ -512,7 +543,7 @@ pub const LayoutRuntime = struct {
                 while (i < field_count) : (i += 1) {
                     const field_plan = hooks.rcStructFieldPlan(struct_plan, i) orelse continue;
                     const field_val = Value{ .ptr = val.ptr + field_plan.offset };
-                    self.performRcPlan(hooks, hooks.rcPlanFor(field_plan.child), field_val, count, atomicity);
+                    self.performRcChild(hooks, field_plan.child, field_val, count, atomicity, queue);
                 }
             },
             .tag_union => |tag_plan| {
@@ -534,14 +565,43 @@ pub const LayoutRuntime = struct {
                 if (disc < variant_count) {
                     if (hooks.rcTagVariantPlan(tag_plan, disc)) |child_key| {
                         // Payload is always at offset 0 in the tag union.
-                        self.performRcPlan(hooks, hooks.rcPlanFor(child_key), val, count, atomicity);
+                        self.performRcChild(hooks, child_key, val, count, atomicity, queue);
                     }
                 }
             },
             .closure => |child_key| {
-                self.performRcPlan(hooks, hooks.rcPlanFor(child_key), val, count, atomicity);
+                self.performRcChild(hooks, child_key, val, count, atomicity, queue);
             },
         }
+    }
+
+    /// Performs a child helper's plan. Only a `decref_queued` child takes
+    /// the queue; every other child is a teardown of its own.
+    fn performRcChild(self: *const LayoutRuntime, hooks: anytype, child: layout_mod.RcHelperKey, val: Value, count: u32, atomicity: RcAtomicity, queue: ?*builtins.utils.DropQueue) void {
+        self.performRcPlan(hooks, hooks.rcPlanFor(child), val, count, atomicity, if (child.op == .decref_queued) queue else null);
+    }
+
+    fn dropMode(atomicity: RcAtomicity) builtins.utils.DropMode {
+        return switch (atomicity) {
+            .atomic => .decref_atomic,
+            .single_thread => .decref_single_thread,
+        };
+    }
+
+    /// What a queued teardown runs on each element or payload it visits: the
+    /// child's plan, given the queue the teardown owns.
+    fn QueuedVisit(comptime Hooks: type) type {
+        return struct {
+            runtime: *const LayoutRuntime,
+            hooks: Hooks,
+            plan: layout_mod.RcHelperPlan,
+            count: u32,
+            atomicity: RcAtomicity,
+
+            fn drop(visit: @This(), value: [*]u8, queue: *builtins.utils.DropQueue) void {
+                visit.runtime.performRcPlan(visit.hooks, visit.plan, .{ .ptr = value }, visit.count, visit.atomicity, queue);
+            }
+        };
     }
 
     pub fn decrefListElements(
@@ -561,7 +621,7 @@ pub const LayoutRuntime = struct {
             while (i < elem_count) : (i += 1) {
                 const element_ptr = source + i * list_plan.elem_width;
                 const element_val = Value{ .ptr = element_ptr };
-                self.performRcPlan(hooks, child_plan, element_val, count, atomicity);
+                self.performRcPlan(hooks, child_plan, element_val, count, atomicity, null);
             }
         }
     }

@@ -784,8 +784,10 @@ fn glueLlvmCompileOptions(opt: GlueOpt) llvm_compile.CompileOptions {
         .debug = opt == .dev,
         .target_ptr_width_bits = targetPtrWidthBits(base.target.TargetUsize.native),
         // The target machine names no CPU features, so LLVM assumes only its
-        // default CPU for the triple, which has no SHA-256 instructions.
+        // default CPU for the triple, which has no SHA-256 instructions. The
+        // UTF-8 kernel is the one that baseline CPU supports.
         .sha256_rounds = .portable,
+        .utf8_kernel = builtins.utf8.Kernel.forCpu(std.Target.Cpu.baseline(builtin.cpu.arch, builtin.os)),
     };
 }
 
@@ -2433,10 +2435,7 @@ const TypeTable = struct {
     ///
     /// Each root's checked type is requested from one compiler lowering of the
     /// artifact that owns it, and that lowering's layout store is the only
-    /// authority for every layout fact glue emits. A root's own layout is the
-    /// type's intrinsic layout, so a root whose layout is a box over a
-    /// by-value repr (an opaque record holding a callable) becomes a box over
-    /// a payload entry before any walk starts. From each root the walk then
+    /// authority for every layout fact glue emits. From each root the walk
     /// descends the entry graph in lockstep with the committed layout: struct
     /// fields by original index, tag payloads by discriminant, list elements
     /// and box payloads by child layout. A slot the compiler boxed while the
@@ -2459,12 +2458,6 @@ const TypeTable = struct {
             const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable; // the loop above lowered every root's artifact
             const layout_idx = lowering.root_layouts.get(root.checked_type) orelse
                 glueInvariant("compiler emitted no layout for requested glue root checked type {d}", .{@backingInt(root.checked_type)});
-            try self.boxRootInPlace(lowering.abi_layouts.layouts(), entry_idx, layout_idx);
-        }
-
-        for (self.roots.keys(), self.roots.values()) |entry_idx, root| {
-            const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable; // the first loop lowered every root's artifact
-            const layout_idx = lowering.root_layouts.get(root.checked_type) orelse unreachable; // the previous loop checked every root's layout exists
             try self.attachEntryLayout(lowering.abi_layouts.layouts(), entry_idx, layout_idx);
         }
 
@@ -2759,28 +2752,6 @@ const TypeTable = struct {
 
     fn layoutIsBox(layout_val: layout.Layout) bool {
         return layout_val.tag == .box or layout_val.tag == .box_of_zst;
-    }
-
-    /// A root whose own committed layout is a box over a by-value repr is a
-    /// type the compiler stores behind a compiler-owned box everywhere (an
-    /// opaque nominal record that holds a callable, whose box doubles as the
-    /// recursive-slot storage for closures that capture the record). The host
-    /// sees the box, so the entry becomes the box and its repr moves to a new
-    /// payload entry. Runs before any edge walk so every slot of the type
-    /// already finds the box repr.
-    fn boxRootInPlace(
-        self: *TypeTable,
-        store: *const layout.Store,
-        entry_idx: u64,
-        layout_idx: layout.Idx,
-    ) Allocator.Error!void {
-        if (self.entries.items[@intCast(entry_idx)].abi != null) return;
-        if (!layoutIsBox(store.getLayout(layout_idx))) return;
-        const repr = self.entries.items[@intCast(entry_idx)].repr;
-        if (repr == .box) return;
-        const payload_idx: u64 = @intCast(self.entries.items.len);
-        try self.entries.append(self.gpa, .{ .repr = repr });
-        self.entries.items[@intCast(entry_idx)].repr = .{ .box = .{ .inner_id = payload_idx } };
     }
 
     /// The entry a parent slot references for a committed child layout. When
@@ -5114,6 +5085,84 @@ test "issue 12760: boundary layout requirements survive memoization and callable
     try std.testing.expect((try TypeTable.convertTypeVariable(.{ .row_default = .empty_tag_union })) == .unit);
     try std.testing.expect((try TypeTable.convertTypeVariable(.{ .numeric_default_phase = .mono_specialization })) == .dec);
     try std.testing.expectError(error.UnresolvedByValue, TypeTable.convertTypeVariable(.{}));
+}
+
+// A dev glue plugin is LLVM code at O0, where nothing inlines the builtins'
+// call into the UTF-8 validation payload linked for this machine's CPU, so
+// the call's result crosses the ABI between the wasm-compiled builtins and the
+// natively compiled payload.
+test "Str.from_utf8 in a dev glue plugin accepts well-formed text and rejects ill-formed text" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "main.roc", .data =
+        \\platform "utf8-probe"
+        \\    requires {} { main : U64 -> U64 }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_probe": probe }
+        \\    targets: {}
+        \\
+        \\probe : U64 -> U64
+        \\probe = |n| main(n)
+    });
+    // Every input is built from the type list the plugin receives, so the
+    // validation runs in the plugin rather than at compile time. The lengths
+    // put the end of the ASCII prefix before, at and after each 16- and
+    // 32-byte block boundary.
+    try tmp.dir.writeFile(io, .{ .sub_path = "Spec.roc", .data =
+        \\app [make_glue] { pf: platform glue }
+        \\
+        \\import pf.Types
+        \\import pf.File
+        \\
+        \\check : List(U8) -> Str
+        \\check = |bytes| match Str.from_utf8(bytes) {
+        \\    Ok(_) => "ok"
+        \\    Err(_) => "err"
+        \\}
+        \\
+        \\make_glue : List(Types) -> Try(List(File), Str)
+        \\make_glue = |types_list| {
+        \\    zero = types_list.len() - types_list.len()
+        \\    var $out = ""
+        \\    for len in [0, 1, 15, 16, 17, 31, 32, 33, 64] {
+        \\        ascii = List.repeat('a', len + zero)
+        \\        multi = ascii.concat(Str.to_utf8("é漢🎉"))
+        \\        $out = "${$out}${check(ascii)} ${check(multi)} ${check(ascii.append(0xFF))}\n"
+        \\    }
+        \\    Ok([{ name: "from_utf8.txt", content: $out }])
+        \\}
+    });
+    const spec_path = try tmp.dir.realPathFileAlloc(io, "Spec.roc", gpa);
+    defer gpa.free(spec_path);
+    const platform_path = try tmp.dir.realPathFileAlloc(io, "main.roc", gpa);
+    defer gpa.free(platform_path);
+    const out_dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(out_dir);
+
+    var stderr = std.Io.Writer.Allocating.init(gpa);
+    defer stderr.deinit();
+    var stdout = std.Io.Writer.Allocating.init(gpa);
+    defer stdout.deinit();
+    rocGlue(gpa, &stderr.writer, &stdout.writer, .{
+        .glue_spec = spec_path,
+        .output_dir = out_dir,
+        .platform_path = platform_path,
+        .report_config = reporting.ReportingConfig.initMarkdown(),
+        .opt = .dev,
+        .no_cache = true,
+    }, io) catch |err| {
+        std.debug.print("{s}", .{stderr.written()});
+        return err;
+    };
+
+    const result = try tmp.dir.readFileAlloc(io, "from_utf8.txt", gpa, .limited(4096));
+    defer gpa.free(result);
+    var expected: [9 * "ok ok err\n".len]u8 = undefined;
+    for (0..9) |line| @memcpy(expected[line * "ok ok err\n".len ..][0.."ok ok err\n".len], "ok ok err\n");
+    try std.testing.expectEqualStrings(&expected, result);
 }
 
 // Lock the schema-directed marshaller against the actual checked glue platform.

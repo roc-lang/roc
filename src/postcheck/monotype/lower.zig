@@ -292,9 +292,6 @@ pub const InlineExpectMode = enum {
 
 /// Configuration for lowering checked modules into Monotype IR.
 pub const Options = struct {
-    /// Preserve source-level procedure names for consumers that present runtime
-    /// diagnostics from lowered code.
-    proc_debug_names: bool = false,
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
     /// Optional deterministic workload diagnostics. The checked pipeline
@@ -5705,7 +5702,6 @@ const SpecJobWorkerInputs = struct {
     source_file_ids: *const SourceFileIds,
     lowering_module_ids: *const LoweringModuleIds,
     snapshot: *const WorkerInputs.Snapshot,
-    proc_debug_names: bool,
     interface_summaries: *const SharedSummaries,
     interface_summary_end: usize,
     collect_counters: bool,
@@ -6248,7 +6244,6 @@ const Builder = struct {
     program: *Ast.Program,
     current_loc: base.SourceLoc,
     current_region: base.Region,
-    proc_debug_names: bool,
     /// Frame stacks of finished `BodyContext.runLower` calls, kept with their
     /// capacity for the next run. Each run takes its own stack, so a nested
     /// run never moves the frame an outer step is still working on, and a
@@ -6557,7 +6552,6 @@ const Builder = struct {
             .program = program,
             .current_loc = program.current_loc,
             .current_region = program.current_region,
-            .proc_debug_names = options.proc_debug_names,
             .counters = counters,
             .diagnostics = options.diagnostics,
             .active_spec_job_diagnostics = null,
@@ -6717,7 +6711,6 @@ const Builder = struct {
         const builder = try worker.allocator.create(Builder);
         errdefer worker.allocator.destroy(builder);
         builder.* = Builder.init(worker.allocator, inputs.modules, worker.input_program.?, .{
-            .proc_debug_names = inputs.proc_debug_names,
             .specialization_counters = if (inputs.collect_counters) &worker.counters else null,
             .diagnostics = if (inputs.collect_diagnostics) &worker.diagnostics else null,
             .inline_expects = inputs.inline_expects,
@@ -7745,7 +7738,6 @@ const Builder = struct {
             .source_file_ids = self.sourceFileIds(),
             .lowering_module_ids = self.loweringModuleIds(),
             .snapshot = &snapshot,
-            .proc_debug_names = self.proc_debug_names,
             .interface_summaries = &self.shared_summaries.?,
             .interface_summary_end = self.shared_summaries.?.count,
             .replay_interface_summaries = self.replay_interface_summaries,
@@ -7957,7 +7949,6 @@ const Builder = struct {
             .source_file_ids = self.sourceFileIds(),
             .lowering_module_ids = self.loweringModuleIds(),
             .snapshot = &snapshot,
-            .proc_debug_names = self.proc_debug_names,
             .interface_summaries = &self.shared_summaries.?,
             .interface_summary_end = self.shared_summaries.?.count,
             .collect_counters = self.counters != null,
@@ -10162,7 +10153,6 @@ const Builder = struct {
                             .source_file_ids = self.sourceFileIds(),
                             .lowering_module_ids = self.loweringModuleIds(),
                             .snapshot = &context.snapshot,
-                            .proc_debug_names = self.proc_debug_names,
                             .interface_summaries = &self.shared_summaries.?,
                             .interface_summary_end = self.shared_summaries.?.count,
                             .collect_counters = self.counters != null,
@@ -11685,7 +11675,6 @@ const Builder = struct {
         view: ModuleView,
         template: names.ProcTemplate,
     ) Allocator.Error!void {
-        if (!self.proc_debug_names) return;
         const proc_base = view.names.procBase(template.proc_base);
         const export_name = proc_base.export_name.get() orelse return;
         const name = try self.program.names.internExportName(view.names.exportNameText(export_name));
@@ -11699,7 +11688,6 @@ const Builder = struct {
         view: ModuleView,
         template: names.ProcTemplate,
     ) Allocator.Error!void {
-        if (!self.proc_debug_names) return;
         const proc_base = view.names.procBase(template.proc_base);
         const export_name = proc_base.export_name.get() orelse return;
         const name = try self.activeNameStore().internExportName(view.names.exportNameText(export_name));
@@ -13873,6 +13861,33 @@ const Builder = struct {
                     Common.invariant("checked recursive nested reference matched more than one in-progress specialization on its ownership chain");
                 }
             } else Common.invariant("draft function ownership ancestry contained a cycle");
+        }
+        // A generalized function's recursive reference is checked at the
+        // function's own type, while the use that requested the body in
+        // progress was checked at an instance of it, so the two carry
+        // different source keys and the reference's family has no
+        // specialization of its own. It still names the in-progress
+        // specialization of its site on its ownership chain.
+        if (!family_exists and recursive_reference) {
+            for (source_ctx.draft.nested_specs.items, 0..) |*spec, raw_spec_usize| {
+                if (spec.state != .lowering) continue;
+                if (spec.request_fn_ty != .none) continue;
+                if (signature_relation == .exact_graph and
+                    source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation != .exact_graph)
+                {
+                    continue;
+                }
+                if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, source_fn_key), family)) continue;
+                if (!try evidenceChainEql(self.allocator, spec.evidence, requested_evidence)) continue;
+                if (!substitutionsShareClasses(source_ctx.graph, spec.evidence.subst, requested_evidence.subst)) continue;
+                if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
+                if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
+                if (!source_ctx.draft.ownerDescendsFromDraftFn(request_owner, spec.fn_id)) continue;
+                const raw_spec: u32 = @intCast(raw_spec_usize);
+                if (!selection.add(raw_spec, false)) {
+                    Common.invariant("checked recursive nested reference matched more than one in-progress specialization of its site on its ownership chain");
+                }
+            }
         }
         if (selection.selected()) |raw_spec| {
             self.count("nested_hits");
@@ -18280,9 +18295,14 @@ const CheckedCodecContractAnchor = struct {
     derivation: static_dispatch.GeneratedCodecDerivationId,
     call_index: u32,
     kind: CodecKind,
-    /// The forwarded evidence the contract was instantiated with. It is
-    /// determined by the contract's boundary shape, whose type each forwarded
-    /// call's subject is part of, so it adds nothing to the anchor's identity.
+    /// The forwarded evidence the contract was instantiated with. It adds
+    /// nothing to the anchor's identity: each forwarded call's subject is part
+    /// of the boundary shape type, and its format, state and error types are
+    /// parts of the constructor type, both of which the identity holds. A type
+    /// has one method of a name (a body-local type's identity includes the
+    /// enclosing variables its methods read, design.md "Body-Local Type
+    /// Context"), and structural derivations at one type are equivalent
+    /// contracts (`codec_identity`), so equal types select equal evidence.
     forwarded: *const ForwardedCodecVector = &no_forwarded_codec_calls,
 };
 
@@ -34345,7 +34365,7 @@ const BodyContext = struct {
         /// A deferred intrinsic emitted once the body's graph is sealed,
         /// with the arguments its call site lowered, if any.
         deferred_body: ?struct { pre_lowered_args: ?DraftSpan(DraftExprId) } = null,
-        stage: enum { start, deferred_prepared, deferred_args, args } = .start,
+        stage: enum { start, codec_subject, deferred_prepared, deferred_args, args } = .start,
         /// The checked arguments. Owned.
         args: []CIR.Expr.Idx = &.{},
         arg_tys: [checked.IntrinsicId.max_callsite_arity]Type.TypeId = undefined,
@@ -40196,7 +40216,30 @@ const BodyContext = struct {
                     // `FieldName(shape)` row.
                     if (unresolved) return loweredExprStep(try self.deferCallsiteIntrinsic(task, null));
                 }
+                // A `FieldNames` operation reads the generated representation
+                // of its subject, and the subject expression is what carries
+                // it: a `match`, or a call through a function value, has no
+                // evidence to hand the request beforehand. While the request
+                // still holds the subject's public named type, the subject
+                // is lowered at the request's own cell first, which gives
+                // that cell the representation, and the operation's argument
+                // types are read afterwards.
+                if (intrinsicReadsFieldNames(task.intrinsic) and
+                    try self.graph.containsCodecQuery(callable.args[0], .public_codec_interface))
+                {
+                    task.stage = .codec_subject;
+                    return requestLowerChild(self, ExprSite.read(task.args[0]), DraftTypeCell.fromGraphNode(callable.args[0]));
+                }
                 try self.beginCallsiteIntrinsicBody(task);
+                return try self.nextCallsiteIntrinsicArg(task);
+            },
+            .codec_subject => {
+                const subject = input.?.exprValue();
+                const callable = try self.graph.functionNodes(task.callable_node);
+                try relateRequestComponent(self.graph, callable.args[0], try self.exprTypeCell(subject).toGraphNode(self.graph));
+                try self.beginCallsiteIntrinsicBody(task);
+                task.lowered_args[0] = subject;
+                task.index = 1;
                 return try self.nextCallsiteIntrinsicArg(task);
             },
             .deferred_prepared => {
@@ -40211,6 +40254,15 @@ const BodyContext = struct {
                 return try self.nextCallsiteIntrinsicArg(task);
             },
         }
+    }
+
+    /// Whether a call-site intrinsic's first argument is a `FieldNames` value
+    /// it reads.
+    fn intrinsicReadsFieldNames(intrinsic: checked.IntrinsicId) bool {
+        return switch (intrinsic) {
+            .field_names_rename_fields, .field_names_shortest_name, .field_names_longest_name, .field_names_iter, .field_names_for_size => true,
+            .str_inspect, .structural_eq, .parse_tag_union, .field_name => false,
+        };
     }
 
     /// Reserve a call-site intrinsic's expression, emitted once its body's
@@ -41114,25 +41166,20 @@ const BodyContext = struct {
 
         const fields_value = lowered_args[0];
         const rename_value = lowered_args[1];
-        if (self.generatedFieldNamesBackingValueFieldNames(arg_tys[0])) |backing_fields| {
-            const stable_backing_fields = try GuardedList.dupe(self.allocator, Type.Field, backing_fields);
-            defer self.allocator.free(stable_backing_fields);
-            const fields_local = try self.addLocal(self.builder.symbols.fresh(), ret_ty);
-            const rename_local = try self.addLocal(self.builder.symbols.fresh(), arg_tys[1]);
-            var body = try self.lowerGeneratedFieldNamesRenameFieldNames(
-                stable_backing_fields,
-                ret_ty,
-                fields_local,
-                rename_local,
-                arg_tys[1],
-            );
-            body = try self.wrapLet(rename_local, arg_tys[1], rename_value, body, ret_ty);
-            return try self.wrapLet(fields_local, ret_ty, fields_value, body, ret_ty);
-        }
-
+        const backing_fields = self.generatedFieldNamesBackingValueFieldNames(arg_tys[0]) orelse
+            Common.invariant("FieldNames.rename_fields argument was not the generated field-names representation");
+        const stable_backing_fields = try GuardedList.dupe(self.allocator, Type.Field, backing_fields);
+        defer self.allocator.free(stable_backing_fields);
         const fields_local = try self.addLocal(self.builder.symbols.fresh(), ret_ty);
-        var body = try self.localExpr(fields_local, ret_ty);
-        body = try self.wrapWildcardLet(arg_tys[1], rename_value, body, ret_ty);
+        const rename_local = try self.addLocal(self.builder.symbols.fresh(), arg_tys[1]);
+        var body = try self.lowerGeneratedFieldNamesRenameFieldNames(
+            stable_backing_fields,
+            ret_ty,
+            fields_local,
+            rename_local,
+            arg_tys[1],
+        );
+        body = try self.wrapLet(rename_local, arg_tys[1], rename_value, body, ret_ty);
         return try self.wrapLet(fields_local, ret_ty, fields_value, body, ret_ty);
     }
 
@@ -41309,36 +41356,18 @@ const BodyContext = struct {
         if (args.len != 1 or arg_tys.len != 1) Common.invariant("FieldNames name bound reached Monotype with an unexpected arity");
         if (!self.typeHasBuiltinOwner(ret_ty, .u64)) Common.invariant("FieldNames name bound result was not U64");
 
-        const shape_ty = self.fieldsShapeType(arg_tys[0]);
-        const fields = try GuardedList.dupe(self.allocator, Type.Field, self.recordFieldsForShape(shape_ty));
-        defer self.allocator.free(fields);
         const fields_value = lowered_args[0];
-        if (self.generatedFieldNamesBackingInfo(arg_tys[0])) |info| {
-            const fields_local = try self.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
-            const body = try self.lowerGeneratedFieldNamesNameBound(
-                info,
-                arg_tys[0],
-                fields_local,
-                ret_ty,
-                bound,
-            );
-            return try self.wrapLet(fields_local, arg_tys[0], fields_value, body, ret_ty);
-        }
-
-        var value: u64 = 0;
-        if (fields.len > 0) {
-            value = @intCast(self.nameStore().recordFieldLabelText(fields[0].name).len);
-            for (fields[1..]) |field| {
-                const len: u64 = @intCast(self.nameStore().recordFieldLabelText(field.name).len);
-                value = switch (bound) {
-                    .shortest => @min(value, len),
-                    .longest => @max(value, len),
-                };
-            }
-        }
-
-        const bound_expr = try self.intLiteralExpr(value, ret_ty);
-        return try self.wrapWildcardLet(arg_tys[0], fields_value, bound_expr, ret_ty);
+        const info = self.generatedFieldNamesBackingInfo(arg_tys[0]) orelse
+            Common.invariant("FieldNames name bound argument was not the generated field-names representation");
+        const fields_local = try self.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
+        const body = try self.lowerGeneratedFieldNamesNameBound(
+            info,
+            arg_tys[0],
+            fields_local,
+            ret_ty,
+            bound,
+        );
+        return try self.wrapLet(fields_local, arg_tys[0], fields_value, body, ret_ty);
     }
 
     fn lowerGeneratedFieldNamesNameBound(
@@ -41671,52 +41700,26 @@ const BodyContext = struct {
             break :blk try self.addLocal(self.builder.symbols.fresh(), arg_tys[1]);
         } else null;
 
-        var iter_expr = if (self.generatedFieldNamesBackingFieldNames(arg_tys[0], field_handle_ty, fields.len)) |backing_fields| blk: {
-            break :blk try self.lowerFieldNamesValueIter(
-                backing_fields,
-                arg_tys[0],
-                fields_local,
-                field_handle_ty,
-                ret_ty,
-                backing_ty,
-                len_field.ty,
-                step_fn_ty,
-                step_shape.ret,
-                size_local,
-                arg_tys,
-                checked_source_ty,
-                checked_expr_id,
-            );
-        } else if (mode == .all) blk: {
-            break :blk try self.lowerFieldNamesIterForLen(
-                fields,
-                null,
-                .static,
-                field_handle_ty,
-                ret_ty,
-                backing_ty,
-                len_field.ty,
-                step_fn_ty,
-                step_shape.ret,
-                null,
-                checked_source_ty,
-                checked_expr_id,
-            );
-        } else blk: {
-            break :blk try self.lowerFieldNamesForSizeIter(
-                fields,
-                field_handle_ty,
-                ret_ty,
-                backing_ty,
-                len_field.ty,
-                step_fn_ty,
-                step_shape.ret,
-                size_local.?,
-                arg_tys[1],
-                checked_source_ty,
-                checked_expr_id,
-            );
-        };
+        // Every FieldNames value is the generated representation (design.md
+        // "Explicit Iterator Representation Tiers"), which holds the renamed
+        // field names.
+        const backing_fields = self.generatedFieldNamesBackingFieldNames(arg_tys[0], field_handle_ty, fields.len) orelse
+            Common.invariant("FieldNames iterator argument was not the generated field-names representation");
+        var iter_expr = try self.lowerFieldNamesValueIter(
+            backing_fields,
+            arg_tys[0],
+            fields_local,
+            field_handle_ty,
+            ret_ty,
+            backing_ty,
+            len_field.ty,
+            step_fn_ty,
+            step_shape.ret,
+            size_local,
+            arg_tys,
+            checked_source_ty,
+            checked_expr_id,
+        );
         if (mode == .for_size) {
             const size_value = lowered_args[1];
             iter_expr = try self.wrapLet(size_local.?, arg_tys[1], size_value, iter_expr, ret_ty);
@@ -42591,7 +42594,7 @@ const BodyContext = struct {
         const body = try self.lowerFieldNamesIterForLen(
             item_fields,
             null,
-            .{ .value = .{ .items_ty = info.items_field.ty, .items_local = items_local } },
+            .{ .items_ty = info.items_field.ty, .items_local = items_local },
             field_handle_ty,
             iter_ty,
             iter_backing_ty,
@@ -42614,13 +42617,9 @@ const BodyContext = struct {
         } } });
     }
 
-    /// Where a FieldNames iterator reads each field's handle.
-    const FieldNamesItemSource = union(enum) {
-        /// The record's static field handles.
-        static,
-        /// The items of a generated FieldNames value, read from a local.
-        value: struct { items_ty: Type.TypeId, items_local: DraftLocalId },
-    };
+    /// The items of a generated FieldNames value, read from a local: where a
+    /// FieldNames iterator reads each field's handle.
+    const FieldNamesItems = struct { items_ty: Type.TypeId, items_local: DraftLocalId };
 
     /// The requested size a FieldNames step filters its field by.
     const FieldNamesSizeFilter = struct { local: DraftLocalId, ty: Type.TypeId };
@@ -42633,7 +42632,7 @@ const BodyContext = struct {
         self: *BodyContext,
         fields: []const Type.Field,
         target_len: ?usize,
-        item_source: FieldNamesItemSource,
+        items: FieldNamesItems,
         field_handle_ty: Type.TypeId,
         iter_ty: Type.TypeId,
         backing_ty: Type.TypeId,
@@ -42665,14 +42664,11 @@ const BodyContext = struct {
         var rest_expr = try self.lowerGeneratedIterRecord(iter_ty, backing_ty, done_level.len, done_step);
 
         while (levels.pop()) |level| {
-            const item_expr = switch (item_source) {
-                .static => try self.lowerRecordFieldHandle(field_handle_ty, fields[level.index], level.index),
-                .value => |items| try self.addFieldAccessExpr(
-                    try self.localExpr(items.items_local, items.items_ty),
-                    fields[level.index].name,
-                    field_handle_ty,
-                ),
-            };
+            const item_expr = try self.addFieldAccessExpr(
+                try self.localExpr(items.items_local, items.items_ty),
+                fields[level.index].name,
+                field_handle_ty,
+            );
             const step_expr = if (size_filter) |filter|
                 try self.lowerFieldNamesSizeFilteredStep(
                     checked_source_ty,
@@ -42698,71 +42694,6 @@ const BodyContext = struct {
             rest_expr = try self.lowerGeneratedIterRecord(iter_ty, backing_ty, level.len, step_expr);
         }
         return rest_expr;
-    }
-
-    fn lowerFieldNamesForSizeIter(
-        self: *BodyContext,
-        fields: []const Type.Field,
-        field_handle_ty: Type.TypeId,
-        iter_ty: Type.TypeId,
-        backing_ty: Type.TypeId,
-        len_ty: Type.TypeId,
-        step_fn_ty: Type.TypeId,
-        step_ret_ty: Type.TypeId,
-        size_local: DraftLocalId,
-        size_ty: Type.TypeId,
-        checked_source_ty: checked.CheckedTypeId,
-        source_expr_id: ExprSite,
-    ) Allocator.Error!DraftExprId {
-        var body = try self.lowerFieldNamesIterForLen(
-            fields,
-            null,
-            .static,
-            field_handle_ty,
-            iter_ty,
-            backing_ty,
-            len_ty,
-            step_fn_ty,
-            step_ret_ty,
-            null,
-            checked_source_ty,
-            source_expr_id,
-        );
-
-        var seen = std.ArrayList(usize).empty;
-        defer seen.deinit(self.allocator);
-        for (fields) |field| {
-            const len = self.nameStore().recordFieldLabelText(field.name).len;
-            var already_seen = false;
-            for (seen.items) |seen_len| {
-                if (seen_len == len) {
-                    already_seen = true;
-                    break;
-                }
-            }
-            if (already_seen) continue;
-            try seen.append(self.allocator, len);
-
-            const bucket = try self.lowerFieldNamesIterForLen(
-                fields,
-                len,
-                .static,
-                field_handle_ty,
-                iter_ty,
-                backing_ty,
-                len_ty,
-                step_fn_ty,
-                step_ret_ty,
-                null,
-                checked_source_ty,
-                source_expr_id,
-            );
-            const size_expr = try self.localExpr(size_local, size_ty);
-            const len_expr = try self.intLiteralExpr(@intCast(len), size_ty);
-            const cond = try self.lowLevelExpr(.num_is_eq, &.{ size_expr, len_expr }, try self.primitiveType(.bool));
-            body = try self.ifExpr(cond, bucket, body, iter_ty);
-        }
-        return body;
     }
 
     fn nextFieldIndexForLen(
@@ -43090,22 +43021,6 @@ const BodyContext = struct {
             .args = try self.addTypedLocalSpan(&.{}),
             .body = body,
         } } });
-    }
-
-    fn lowerRecordFieldHandle(
-        self: *BodyContext,
-        field_handle_ty: Type.TypeId,
-        record_field: Type.Field,
-        index: usize,
-    ) Allocator.Error!DraftExprId {
-        const str_ty = try self.primitiveType(.str);
-        const field_text = self.nameStore().recordFieldLabelText(record_field.name);
-        return try self.lowerRecordFieldHandleWithName(
-            field_handle_ty,
-            try self.stringExpr(field_text, str_ty),
-            try self.intLiteralExpr(@intCast(field_text.len), try self.primitiveType(.u64)),
-            index,
-        );
     }
 
     fn lowerRecordFieldHandleWithName(
@@ -48268,8 +48183,10 @@ const BodyContext = struct {
             const entry = switch (runtimeCaptureKind(view, capture.pattern)) {
                 .scheme_alias, .destructured_alias, .promoted_proc, .local_method => continue,
                 .hoisted_constant => declarationContextEntry(context.entries, capture.pattern) orelse continue,
-                .frame_value => declarationContextEntry(context.entries, capture.pattern) orelse
-                    Common.invariant("local procedure runtime capture was not bound in its declaration context"),
+                .frame_value => declarationContextEntry(context.entries, capture.pattern) orelse {
+                    if (self.restoredConstFnOmitsCapture(view, capture.pattern)) continue;
+                    Common.invariant("local procedure runtime capture was not bound in its declaration context");
+                },
             };
             const local: DraftLocalId = @fromBackingInt(@intCast(entry.local));
             const raw = @backingInt(local);
@@ -48280,6 +48197,33 @@ const BodyContext = struct {
         }
         self.sortCaptureBindings(bindings.items);
         return try bindings.toOwnedSlice(self.allocator);
+    }
+
+    /// Whether `binder`, a binder of `view`, is a runtime capture the stored
+    /// function this body restores holds no value for. A stored function's
+    /// captures are the lifted capture slots of the specialization that was
+    /// evaluated: the enclosing-frame binders its body reads once the arms and
+    /// bodies its types leave unreachable are gone. Its checked site lists
+    /// every binder the source body names, so the two differ by exactly the
+    /// binders that specialization never reads. The restored body is the
+    /// same specialization, so no procedure it builds reads them either, and
+    /// each one has neither a frame local nor a capture slot.
+    fn restoredConstFnOmitsCapture(self: *BodyContext, view: ModuleView, binder: BinderId) bool {
+        const restored = self.restored_const_fn orelse return false;
+        const fn_def = restored.fn_value.fn_def;
+        const nested = switch (fn_def) {
+            .nested => |nested| nested,
+            .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => return false,
+        };
+        const fn_view = self.builder.moduleForConstFnDef(fn_def);
+        if (!moduleBytesEqual(fn_view.key.bytes, view.key.bytes)) return false;
+        for (restored.fn_value.captures) |capture| {
+            if (capture.id.isCanonical() and capture.id.binder() == binder) return false;
+        }
+        for (fn_view.nested_proc_sites.runtimeCaptures(checkedNestedSite(fn_view, nested))) |capture| {
+            if (capture.pattern == binder) return true;
+        }
+        return false;
     }
 
     /// How Monotype reads a binder listed in a site's
@@ -49460,8 +49404,14 @@ const BodyContext = struct {
         if (!try self.graph.containsGeneratedPrivate(completed_fn.ret)) return completed_node;
 
         const request_fn = try self.graph.functionNodes(request_node);
-        if (!try self.graph.containsIteratorInterface(request_fn.ret)) {
-            Common.invariant("callee completed an iterator representation for a non-iterator request");
+        // A codec representation's public named type in the request's result
+        // takes the representation once the callee's body relates the two,
+        // so by now the request's result may already hold it.
+        if (!try self.graph.containsIteratorInterface(request_fn.ret) and
+            !try self.graph.containsCodecQuery(request_fn.ret, .public_codec_interface) and
+            !try self.graph.containsGeneratedPrivate(request_fn.ret))
+        {
+            Common.invariant("callee completed a generated representation for a request with no producer-authored result");
         }
         const source_interface = self.graph.requestSourceInterface(request_node) orelse request_node;
         // The completed node can be the memoized import shared by every call
@@ -49495,17 +49445,25 @@ const BodyContext = struct {
         if (spec.state != .deferred) return current_node;
 
         const current_fn = try self.graph.functionNodes(current_node);
-        const has_iterator_result = try self.graph.containsIteratorInterface(current_fn.ret);
-        const has_private_result = try self.graph.containsGeneratedPrivate(current_fn.ret);
-        if (!has_iterator_result or has_private_result) {
+        // A codec representation's public named type in the result is a
+        // position only the callee's body relates to the representation it
+        // produces (the result of `FieldNames.rename_fields`, say), exactly
+        // as a public iterator result is.
+        const has_producer_result = try self.graph.containsIteratorInterface(current_fn.ret) or
+            try self.graph.containsCodecQuery(current_fn.ret, .public_codec_interface);
+        const has_private_result = try self.graph.containsGeneratedPrivate(current_fn.ret) and
+            !try self.graph.containsCodecQuery(current_fn.ret, .public_codec_interface);
+        if (!has_producer_result or has_private_result) {
             return current_node;
         }
-        // Representation-bearing inputs still belong to the caller's live
-        // graph. Recursive adapters can change those inputs at each edge, so
-        // their explicit forced-dynamic join must finish before the request is
-        // converted to an immutable specialization key.
+        // Iterator representations among the inputs still belong to the
+        // caller's live graph. Recursive adapters can change those inputs at
+        // each edge, so their explicit forced-dynamic join must finish before
+        // the request is converted to an immutable specialization key. A
+        // codec representation never changes, so it does not hold the
+        // request back.
         for (current_fn.args) |arg| {
-            if (try self.graph.containsGeneratedPrivate(arg)) return current_node;
+            if (try self.graph.containsCodecQuery(arg, .iterator_evidence)) return current_node;
         }
         // A same-family request inside the active root is an explicit
         // recursive edge. Its live graph must join the recursive argument and
@@ -53579,8 +53537,10 @@ const BodyContext = struct {
             const local = switch (runtimeCaptureKind(self.view, binder)) {
                 .scheme_alias, .destructured_alias, .promoted_proc, .local_method => continue,
                 .hoisted_constant => self.binders.get(binder) orelse continue,
-                .frame_value => self.binders.get(binder) orelse
-                    Common.invariant("closure capture was not bound where the closure is built"),
+                .frame_value => self.binders.get(binder) orelse {
+                    if (self.restoredConstFnOmitsCapture(self.view, binder)) continue;
+                    Common.invariant("closure capture was not bound where the closure is built");
+                },
             };
             try self.markActiveConstBinderUsed(binder);
             const cell = self.localTypeCell(local);
@@ -53640,8 +53600,10 @@ const BodyContext = struct {
             const local = switch (runtimeCaptureKind(self.view, capture.pattern)) {
                 .scheme_alias, .destructured_alias, .promoted_proc, .local_method => continue,
                 .hoisted_constant => self.binders.get(capture.pattern) orelse continue,
-                .frame_value => self.binders.get(capture.pattern) orelse
-                    Common.invariant("nested procedure runtime capture was not bound where the procedure is built"),
+                .frame_value => self.binders.get(capture.pattern) orelse {
+                    if (self.restoredConstFnOmitsCapture(self.view, capture.pattern)) continue;
+                    Common.invariant("nested procedure runtime capture was not bound where the procedure is built");
+                },
             };
             try self.markActiveConstBinderUsed(capture.pattern);
             const cell = self.localTypeCell(local);
@@ -55136,7 +55098,36 @@ const BodyContext = struct {
                 .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
             }
         }
+        if (scope == .root and schema.scheme_vars.len != 0) {
+            if (try self.restoredOwnerFnType(owner)) |owner_fn_ty| {
+                if (ctx == null) {
+                    ctx = try BodyContext.init(self.allocator, self.builder, view, owner, self.graph, self.draft);
+                    try ctx.?.seedSubstitution(schema, subst);
+                }
+                try ctx.?.constrainTypeToMono(view.templates.get(owner.template).checked_fn_root, owner_fn_ty);
+            }
+        }
         return .{ .scope = .{ .owner = owner, .lexical = scope }, .schema = schema, .subst = subst, .vector = vector, .parent = parent };
+    }
+
+    /// The function type of the specialization of `owner` that built the
+    /// stored function this body restores, when `owner` is the template that
+    /// built it. A variable of that template can reach neither the stored
+    /// function's type, nor its captures, nor a retained method contract, and
+    /// the restored body's types that name it are that specialization's all
+    /// the same, so the template's root evidence frame is related to this
+    /// type. A default-root function's body belongs to its declaring module
+    /// and names no variable of the template that recorded it.
+    fn restoredOwnerFnType(self: *BodyContext, owner: names.ProcTemplate) Allocator.Error!?Type.TypeId {
+        const restored = self.restored_const_fn orelse return null;
+        const nested = switch (restored.fn_value.fn_def) {
+            .nested => |nested| nested,
+            .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => return null,
+        };
+        if (nested.default_root != null) return null;
+        if (!names.procedureTemplateRefEql(nested.owner, owner)) return null;
+        const owner_fn_ty = restored.fn_value.owner_fn_ty orelse return null;
+        return try self.lowerConstCaptureType(restored.store_view, owner_fn_ty);
     }
 
     /// A stored evidence vector being restored; `pending` holds the entry
@@ -58472,8 +58463,13 @@ const BodyContext = struct {
             .structural => return request_fn_node,
         }
         const request_fn = try self.graph.functionNodes(request_fn_node);
-        if (!try self.graph.containsIteratorInterface(request_fn.ret) or
-            try self.graph.containsGeneratedPrivate(request_fn.ret))
+        // A codec representation's public named type in the result is
+        // callee-authored exactly as a public iterator result is
+        // (`completeDeferredIteratorResult`).
+        const has_public_codec_result = try self.graph.containsCodecQuery(request_fn.ret, .public_codec_interface);
+        if (!has_public_codec_result and
+            (!try self.graph.containsIteratorInterface(request_fn.ret) or
+                try self.graph.containsGeneratedPrivate(request_fn.ret)))
         {
             return request_fn_node;
         }
@@ -66963,8 +66959,14 @@ const BodyContext = struct {
                     expected_node,
                 );
                 const fn_nodes = try self.graph.functionNodes(fn_node);
-                if (try self.graph.containsGeneratedPrivate(fn_nodes.ret)) break :blk fn_nodes.ret;
-                if (!try self.graph.containsIteratorInterface(fn_nodes.ret)) break :blk fn_nodes.ret;
+                // A codec representation's public named type in the result is
+                // callee-authored exactly as a public iterator result is
+                // (`completeDeferredIteratorResult`), so the branch's evidence
+                // is the completed callee's result.
+                if (!try self.graph.containsCodecQuery(fn_nodes.ret, .public_codec_interface)) {
+                    if (try self.graph.containsGeneratedPrivate(fn_nodes.ret)) break :blk fn_nodes.ret;
+                    if (!try self.graph.containsIteratorInterface(fn_nodes.ret)) break :blk fn_nodes.ret;
+                }
 
                 try self.ensureNestedCallablesAtNodes(call.args, fn_nodes.args);
                 const completed = try self.completedDirectCalleeAtNode(checked_value, target, source_fn_ty, fn_node);
@@ -73801,7 +73803,7 @@ test "request component relation follows root authority before nested private ev
         .named_type = inner_named_type,
         .def = inner_def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .some(.{
             .node = try graph.newNode(.empty_record),
@@ -73813,7 +73815,7 @@ test "request component relation follows root authority before nested private ev
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().dupe(NodeId, &.{private_arg}),
         .backing = .some(.{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only }),
     }));
@@ -73821,7 +73823,7 @@ test "request component relation follows root authority before nested private ev
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().dupe(NodeId, &.{private_arg}),
         .backing = .some(.{
             .node = try graph.newNode(.empty_record),
@@ -73860,7 +73862,7 @@ test "request component relation descends through matching private-bearing conta
         .named_type = inner_named_type,
         .def = inner_def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .some(.{
             .node = try graph.newNode(.empty_record),
@@ -73872,7 +73874,7 @@ test "request component relation descends through matching private-bearing conta
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().dupe(NodeId, &.{shared_private_arg}),
         .backing = .some(.{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only }),
     }));
@@ -73880,7 +73882,7 @@ test "request component relation descends through matching private-bearing conta
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().dupe(NodeId, &.{shared_private_arg}),
         .backing = .some(.{
             .node = try graph.newNode(.empty_record),
@@ -73925,7 +73927,7 @@ test "checked-to-mono relation preserves generated-private evidence inside a com
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .some(.{ .node = checked_backing, .use = .runtime_layout_only }),
     }));
@@ -73933,7 +73935,7 @@ test "checked-to-mono relation preserves generated-private evidence inside a com
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .some(.{
             .node = mono_backing,

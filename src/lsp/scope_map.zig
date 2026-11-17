@@ -181,7 +181,6 @@ pub const ScopeMap = struct {
                 .e_call,
                 .e_binop,
                 .e_unary_minus,
-                .e_unary_not,
                 .e_list,
                 .e_tuple,
                 .e_record,

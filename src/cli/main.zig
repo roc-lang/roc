@@ -85,6 +85,7 @@ pub const std_options_debug_threaded_io: *std.Io.Threaded = &debug_threaded_io_i
 const build_options = @import("build_options");
 const shim_symbols = @import("builtins").shim_symbols;
 const Sha256Rounds = @import("builtins").sha256.Rounds;
+const Utf8Kernel = @import("builtins").utf8.Kernel;
 const base = @import("base");
 const collections = @import("collections");
 const dev_diagnostics = base.dev_diagnostics;
@@ -668,67 +669,63 @@ const EmbeddedTargetObjects = struct {
         return objects;
     }
 
-    /// A generic Linux target uses the native builtins, and its glibc twin's
-    /// default platform and support image: the image's builtins and Boxy
-    /// runtime are the twin's, compiled for the same architecture and
-    /// operating system and calling no libc, like the native ones.
-    fn linuxAlias(comptime glibc: EmbeddedTargetObjects) EmbeddedTargetObjects {
-        var objects = glibc;
-        objects.builtins_extern = native.builtins_extern;
-        objects.builtins_extern_digest = native.builtins_extern_digest;
-        objects.boxy_runtime = native.boxy_runtime;
-        objects.boxy_runtime_digest = native.boxy_runtime_digest;
+    /// A freestanding ELF target links the objects of the musl target with
+    /// its CPU contract, which are compiled for the same architecture and
+    /// operating system and call no libc, without a default platform.
+    fn elfAlias(comptime musl: EmbeddedTargetObjects) EmbeddedTargetObjects {
+        var objects = musl;
+        objects.default_runtime = null;
+        objects.default_platform = null;
+        objects.default_platform_link_digest = null;
+        objects.default_runtime_digest = null;
+        objects.default_compiler_rt = null;
+        objects.default_compiler_rt_digest = null;
+        objects.default_compiler_rt_link_digest = null;
         return objects;
     }
 
-    /// The embedded objects for `requested`.
-    ///
-    /// A `v1` target other than wasm32v1 uses its default twin's objects. The
-    /// cross-compile target queries in `build.zig` name no CPU model, so Zig
-    /// resolves them to the architecture baseline, which for x86-64 and
-    /// AArch64 is the v1 floor. Zig's wasm baseline includes extensions past
-    /// WebAssembly 1.0, so wasm32v1 has objects of its own, built for it.
+    /// The embedded objects for `requested`, compiled for its CPU contract
+    /// (`dev_object_targets` in build.zig). A generic Linux target links its
+    /// glibc twin's objects and a freestanding ELF target its musl twin's,
+    /// each of the same CPU level. The arm32 targets have no dev backend and
+    /// carry the native objects.
     fn forTarget(requested: RocTarget) EmbeddedTargetObjects {
-        if (requested == .wasm32v1) return comptime cross(.wasm32v1, .none);
-        return switch (requested.defaultCpuTarget()) {
+        return switch (requested) {
             inline .x64musl,
+            .x64v1musl,
             .arm64musl,
+            .arm64v1musl,
             .x64glibc,
+            .x64v1glibc,
             .arm64glibc,
+            .arm64v1glibc,
             .x64freebsd,
+            .x64v1freebsd,
             .x64netbsd,
+            .x64v1netbsd,
             => |target| comptime cross(target, .runtime_and_compiler_rt),
             inline .x64mac,
+            .x64v1mac,
             .arm64mac,
             .x64win,
-            .x64mingw,
-            .arm64win,
-            .arm64mingw,
-            .x64openbsd,
-            => |target| comptime cross(target, .runtime),
-            .wasm32 => comptime cross(.wasm32, .none),
-            .x64linux => comptime linuxAlias(cross(.x64glibc, .runtime_and_compiler_rt)),
-            .arm64linux => comptime linuxAlias(cross(.arm64glibc, .runtime_and_compiler_rt)),
-            .x64elf,
-            .x64v1mac,
             .x64v1win,
+            .x64mingw,
             .x64v1mingw,
-            .x64v1freebsd,
-            .x64v1openbsd,
-            .x64v1netbsd,
-            .x64v1musl,
-            .x64v1glibc,
-            .x64v1linux,
-            .x64v1elf,
+            .arm64win,
             .arm64v1win,
+            .arm64mingw,
             .arm64v1mingw,
-            .arm64v1linux,
-            .arm64v1musl,
-            .arm64v1glibc,
-            .arm32linux,
-            .arm32musl,
-            .wasm32v1,
-            => native,
+            .x64openbsd,
+            .x64v1openbsd,
+            => |target| comptime cross(target, .runtime),
+            inline .wasm32, .wasm32v1 => |target| comptime cross(target, .none),
+            .x64linux => comptime cross(.x64glibc, .runtime_and_compiler_rt),
+            .x64v1linux => comptime cross(.x64v1glibc, .runtime_and_compiler_rt),
+            .arm64linux => comptime cross(.arm64glibc, .runtime_and_compiler_rt),
+            .arm64v1linux => comptime cross(.arm64v1glibc, .runtime_and_compiler_rt),
+            .x64elf => comptime elfAlias(cross(.x64musl, .runtime_and_compiler_rt)),
+            .x64v1elf => comptime elfAlias(cross(.x64v1musl, .runtime_and_compiler_rt)),
+            .arm32linux, .arm32musl => native,
         };
     }
 
@@ -1471,6 +1468,7 @@ fn generatePlatformHostShimFromLirData(
         .optimization = .speed,
         .target = target,
         .report_config = ctx.reportConfig(.stderr),
+        .memory_intrinsic_stores = .forCompile(.speed, std_target),
         .cpu = llvm_cpu,
         .features = llvm_features,
         .debug = debug, // Use the debug flag passed from caller
@@ -6562,7 +6560,6 @@ fn lowerDiscoveredLir(
         opt,
         specialization_strategy,
         RocTarget.detectNative(),
-        false,
     );
     // The checked host identity covers each entrypoint's host boundary digest.
     runtime_lowering.target.host_boundary_digests = true;
@@ -6608,7 +6605,6 @@ fn lowerDiscoveredLir(
         opt,
         specialization_strategy,
         RocTarget.detectNative(),
-        false,
         true,
         build_env.postCheckExecutor(),
         &spec_timing,
@@ -6774,7 +6770,7 @@ fn lowerRunUnits(
     reporter: *progress.Reporter,
     hot_reload: bool,
 ) CliMainError!RunUnits {
-    var runtime_lowering = checkedRuntimeLoweringConfig(.{ .platform_entrypoints = .{ .dev_run_image = .{ .target = target, .hot_reload = hot_reload } } }, .dev, .boxy, target, false);
+    var runtime_lowering = checkedRuntimeLoweringConfig(.{ .platform_entrypoints = .{ .dev_run_image = .{ .target = target, .hot_reload = hot_reload } } }, .dev, .boxy, target);
     // The checked host identity covers each entrypoint's host boundary digest.
     runtime_lowering.target.host_boundary_digests = true;
     runtime_lowering.target.boxy_unit = tables.rootUnit();
@@ -6925,7 +6921,6 @@ fn lowerRunRoot(
         .dev,
         .boxy,
         target,
-        false,
         true,
         build_env.postCheckExecutor(),
         &spec_timing,
@@ -9768,6 +9763,62 @@ test "LLVM builds link the SHA-256 rounds each target's CPU features select" {
     }
 }
 
+// https://github.com/roc-lang/roc/issues/13028
+// Only a size build for a WebAssembly target with bulk memory expands memory
+// intrinsics into at most one store; speed builds, native targets and
+// `wasm32v1`, which has no bulk memory, keep LLVM's own limits.
+test "LLVM builds limit memory intrinsic expansion only for size-optimized wasm with bulk memory" {
+    const expected = [_]struct { RocTarget, builder.OptimizationLevel, builder.MemoryIntrinsicStores }{
+        .{ .wasm32, .size, .single },
+        .{ .wasm32, .speed, .target_default },
+        .{ .wasm32v1, .size, .target_default },
+        .{ .wasm32v1, .speed, .target_default },
+        .{ .x64musl, .size, .target_default },
+        .{ .x64musl, .speed, .target_default },
+        .{ .arm64mac, .size, .target_default },
+        .{ .arm32musl, .size, .target_default },
+    };
+    for (expected) |entry| {
+        const std_target = try std.zig.system.resolveTargetQuery(std.Options.debug_io, entry[0].llvmTargetQuery());
+        try std.testing.expectEqual(entry[2], builder.MemoryIntrinsicStores.forCompile(entry[1], std_target));
+    }
+}
+
+// LLVM builds link the payload of this kernel, and each target's dev objects,
+// compiled for the same query (`dev_object_targets` in build.zig), carry it.
+test "LLVM builds and dev objects use the UTF-8 validation kernel each target's CPU features select" {
+    const expected = [_]struct { RocTarget, Utf8Kernel }{
+        // x86-64-v3 includes SSSE3; the psABI v1 level stops at SSE2.
+        .{ .x64musl, .x86_ssse3 },
+        .{ .x64glibc, .x86_ssse3 },
+        .{ .x64mac, .x86_ssse3 },
+        .{ .x64win, .x86_ssse3 },
+        .{ .x64v1musl, .dfa },
+        .{ .x64v1win, .dfa },
+        // NEON is part of Armv8.0-A, so both aarch64 levels have it.
+        .{ .arm64musl, .aarch64_neon },
+        .{ .arm64mac, .aarch64_neon },
+        .{ .arm64win, .aarch64_neon },
+        .{ .arm64v1musl, .aarch64_neon },
+        .{ .arm32musl, .dfa },
+        .{ .wasm32, .wasm_simd128 },
+        .{ .wasm32v1, .dfa },
+        .{ .x64linux, .x86_ssse3 },
+        .{ .x64v1linux, .dfa },
+        .{ .x64elf, .x86_ssse3 },
+        .{ .x64v1elf, .dfa },
+        .{ .x64v1mac, .dfa },
+        .{ .x64v1mingw, .dfa },
+        .{ .x64freebsd, .x86_ssse3 },
+        .{ .x64v1freebsd, .dfa },
+        .{ .arm64v1glibc, .aarch64_neon },
+    };
+    for (expected) |entry| {
+        const std_target = try std.zig.system.resolveTargetQuery(std.Options.debug_io, entry[0].llvmTargetQuery());
+        try std.testing.expectEqual(entry[1], Utf8Kernel.forCpu(std_target.cpu));
+    }
+}
+
 fn compileLlvmAppObject(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
@@ -9870,6 +9921,7 @@ fn compileLlvmAppObject(
         .optimization = llvmOptimizationLevel(args.opt),
         .target = target,
         .report_config = ctx.reportConfig(.stderr),
+        .memory_intrinsic_stores = .forCompile(llvmOptimizationLevel(args.opt), std_target),
         .cpu = llvm_cpu,
         .features = llvm_features,
         .debug = args.debug,
@@ -9879,6 +9931,7 @@ fn compileLlvmAppObject(
             // through extern symbols, never through a RocOps parameter.
             .host_call_extern = true,
             .sha256_rounds = Sha256Rounds.forCpu(std_target.cpu),
+            .utf8_kernel = Utf8Kernel.forCpu(std_target.cpu),
             .stack_checked = stack_checks,
         },
         .pic = true,
@@ -10981,7 +11034,7 @@ const BoxyUnitTask = struct {
     }
 
     fn build(self: *BoxyUnitTask) CliMainError!compile.boxy_unit.Built {
-        var config = checkedRuntimeLoweringConfig(.linked_output, self.policy.opt, .boxy, self.target, self.policy.synthetic_default_platform);
+        var config = checkedRuntimeLoweringConfig(.linked_output, self.policy.opt, .boxy, self.target);
         config.target.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = &self.digests.names, .expect_sites = self.policy.test_units };
         config.target.timing = self.timing;
         config.target.post_check_executor = self.executor;
@@ -11033,7 +11086,6 @@ fn lowerBuildCommandToLir(
     relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
     roots: CheckedLirRoots,
     target: RocTarget,
-    proc_debug_names: bool,
     boxy_unit: ?postcheck.Boxy.Lower.ModuleUnit,
 ) eval.CompileTimeFinalization.RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
     const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt);
@@ -11050,7 +11102,6 @@ fn lowerBuildCommandToLir(
         args.opt,
         specialization_strategy,
         target,
-        proc_debug_names,
         false,
         build_env.postCheckExecutor(),
         &spec_timing,
@@ -11164,7 +11215,6 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         args.opt,
         currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt),
         target,
-        args.synthetic_default_platform,
     ));
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
@@ -11176,7 +11226,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
-    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, null);
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, null);
     defer lowered.deinit();
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
@@ -11781,7 +11831,7 @@ fn buildWasmUnits(
         return .{ .library = library, .root_image = root_image, .app_export_symbols = app_export_symbols };
     }
     var lowering_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
-    var lowered = try lowerCheckedSourceToLir(ctx.gpa, ctx.gpa, root_artifact, imported_artifacts, relation_artifacts, .linked_output, args.opt, .boxy, target, args.synthetic_default_platform, false, build_env.postCheckExecutor(), &lowering_timing, null, .{ .imports = &interfaces, .root = true, .names = &digests.names });
+    var lowered = try lowerCheckedSourceToLir(ctx.gpa, ctx.gpa, root_artifact, imported_artifacts, relation_artifacts, .linked_output, args.opt, .boxy, target, false, build_env.postCheckExecutor(), &lowering_timing, null, .{ .imports = &interfaces, .root = true, .names = &digests.names });
     defer lowered.deinit();
     const lowering_snapshot = lowering_timing.snapshot();
     reporter.endWithBreakdown(&.{.{ .name = "Lowering", .ns = postCheckLoweringTotalNs(lowering_snapshot) }});
@@ -12243,7 +12293,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         args.opt,
         runtime_strategy,
         target,
-        args.synthetic_default_platform,
     );
     // A `.boxy` dev build of a native target lowers one object per module
     // and files each in the per-module Boxy object cache (design.md
@@ -12340,7 +12389,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         try linkNativeBuild(ctx, &reporter, args, target, link_type, final_output_path, platform_dir, resolved_targets_config, build_scratch_dir, &link_objects, obj_path, &.{}, link_facts);
         return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
     };
-    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, boxy_root_unit);
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, boxy_root_unit);
     defer lowered.deinit();
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
@@ -12687,7 +12736,6 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         args.opt,
         currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt),
         target,
-        false,
     ));
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
@@ -12706,7 +12754,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(lir.LirImage.Header);
 
-    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .{ .platform_entrypoints = .lir_image }, target, false, null);
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .{ .platform_entrypoints = .lir_image }, target, null);
     defer lowered.deinit();
 
     reporter.begin("LIR Image Generation");
@@ -13713,7 +13761,6 @@ fn collectExpectBindingPatterns(
                 try stack.append(allocator, binop.rhs);
             },
             .e_unary_minus => |unary| try stack.append(allocator, unary.expr),
-            .e_unary_not => |unary| try stack.append(allocator, unary.expr),
             .e_field_access => |field| try stack.append(allocator, field.receiver),
             inline .e_method_call, .e_dispatch_call => |call| {
                 try stack.append(allocator, call.receiver);
@@ -13911,7 +13958,7 @@ test "only optimized builds emit thread-confined count updates" {
         .{ .opt = .dev, .confined = false },
         .{ .opt = .interpreter, .confined = false },
     }) |case| {
-        const config = checkedRuntimeLoweringConfig(.linked_output, case.opt, .lss, RocTarget.detectNative(), false);
+        const config = checkedRuntimeLoweringConfig(.linked_output, case.opt, .lss, RocTarget.detectNative());
         try std.testing.expectEqual(case.confined, config.target.thread_confined_rc);
     }
 }
@@ -13924,7 +13971,7 @@ test "only optimized builds prove uniqueness and drop string literal reference c
         .{ .opt = .interpreter, .proves = false },
     }) |case| {
         for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
-            const config = checkedRuntimeLoweringConfig(.linked_output, case.opt, strategy, RocTarget.detectNative(), false);
+            const config = checkedRuntimeLoweringConfig(.linked_output, case.opt, strategy, RocTarget.detectNative());
             try std.testing.expectEqual(case.proves, config.target.prove_uniqueness);
             try std.testing.expectEqual(case.proves, lir.CheckedPipeline.LirPolicy.fromTarget(config.target).prove_uniqueness);
             try std.testing.expectEqual(case.proves, config.target.immortal_string_literals);
@@ -13951,8 +13998,8 @@ fn optimizedDbgWarningsForBuild(
 
 test "native test generic procedures use the ordinary native dev representation and ownership policy" {
     const native = RocTarget.detectNative();
-    const tests = checkedRuntimeLoweringConfig(.{ .test_plan = .{ .requests = &.{}, .metadata = &.{} } }, .dev, .lss, native, false);
-    const build = checkedRuntimeLoweringConfig(.linked_output, .dev, .lss, native, false);
+    const tests = checkedRuntimeLoweringConfig(.{ .test_plan = .{ .requests = &.{}, .metadata = &.{} } }, .dev, .lss, native);
+    const build = checkedRuntimeLoweringConfig(.linked_output, .dev, .lss, native);
     try std.testing.expectEqualDeep(lir.CheckedPipeline.LirPolicy.fromTarget(build.target), lir.CheckedPipeline.LirPolicy.fromTarget(tests.target));
     try std.testing.expectEqualDeep(lir.CheckedPipeline.SolvedPolicy.fromTarget(build.target), lir.CheckedPipeline.SolvedPolicy.fromTarget(tests.target));
     try std.testing.expectEqual(build.target.erased_capture_prefix, tests.target.erased_capture_prefix);
@@ -13971,7 +14018,6 @@ fn lowerCheckedSourceToLir(
     opt: cli_args.OptLevel,
     specialization_strategy: base.SpecializationStrategy,
     target: RocTarget,
-    proc_debug_names: bool,
     host_boundary_digests: bool,
     post_check_executor: ?base.post_check_task_executor.Executor,
     timing: ?*lir.CheckedPipeline.Timing,
@@ -13988,7 +14034,7 @@ fn lowerCheckedSourceToLir(
         .test_plan => {},
     };
 
-    var config = checkedRuntimeLoweringConfig(roots, opt, specialization_strategy, target, proc_debug_names);
+    var config = checkedRuntimeLoweringConfig(roots, opt, specialization_strategy, target);
     config.target.host_boundary_digests = host_boundary_digests;
     config.target.post_check_executor = post_check_executor;
     config.target.timing = timing;
@@ -15832,7 +15878,7 @@ fn unitTestRootImage(
         .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
         .imports = imported_artifacts,
     };
-    var config = checkedRuntimeLoweringConfig(.linked_output, .dev, .boxy, target, false).target;
+    var config = checkedRuntimeLoweringConfig(.linked_output, .dev, .boxy, target).target;
     config.boxy_unit = .{ .imports = &program.tables.interfaces, .root = true, .names = &program.tables.digests.names, .expect_sites = true };
     config.post_check_executor = build_env.postCheckExecutor();
     config.timing = &spec_timing;
@@ -17276,7 +17322,6 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
         args.opt,
         specialization_strategy,
         RocTarget.detectNative(),
-        false,
     );
     runtime_config.explicit_roots = runtime_roots;
     runtime_config.compile_time_discovery_roots = .{
@@ -18816,7 +18861,16 @@ fn frontEndBreakdown(timing: anytype) [7]progress.SubTiming {
 test "typing reuse work counters display zero-duration hits without inference" {
     const timing: compile.package.TimingInfo = .{
         .type_checking_ns = 13 * std.time.ns_per_ms,
-        .checking_work = .{ .typing_hits = 2, .publications = 2, .publication_ns = 11 * std.time.ns_per_ms },
+        .checking_work = .{
+            .typing_hits = 2,
+            .publications = 2,
+            .publication_ns = 11 * std.time.ns_per_ms,
+            .publication_steps = publication_steps: {
+                var steps: check.CheckedArtifact.PublicationTiming = .{};
+                steps.steps_ns[@backingInt(check.CheckedArtifact.PublicationTiming.Step.checked_types)] = 7 * std.time.ns_per_ms;
+                break :publication_steps steps;
+            },
+        },
     };
     const breakdown = frontEndBreakdown(timing);
     try std.testing.expectEqual(@as(u64, 0), breakdown[2].ns);
@@ -18840,6 +18894,9 @@ test "typing reuse work counters display zero-duration hits without inference" {
     const output = buf.written();
     try std.testing.expect(std.mem.find(u8, output, "Type Inference") == null);
     try std.testing.expect(std.mem.find(u8, output, "Checked Publication (summed)") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Checked Publication Detail") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Checked Types") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Template Demand") == null);
     for ([_][]const u8{ "Typing-only cache hits", "Checked publications" }) |label| {
         const start = std.mem.find(u8, output, label) orelse return error.TestUnexpectedResult;
         const remainder = output[start + label.len ..];
@@ -19942,6 +19999,7 @@ fn finishFrontEndPhaseExcluding(gpa: Allocator, config: reporting.ReportingConfi
         row.* = .{ .name = name, .ns = module.ns };
     }
     reporter.recordRankedTimings("Slowest Module Check and Publication", slowest_rows[0..slowest.len]);
+    recordPublicationDetail(reporter, timing.checking_work);
     reporter.recordCounters("Frontend checking work", &.{
         .{ .name = "Fresh checks", .count = timing.checking_work.fresh_checks },
         .{ .name = "Typing-only cache hits", .count = timing.checking_work.typing_hits },
@@ -19986,6 +20044,56 @@ fn finishFrontEndPhaseExcluding(gpa: Allocator, config: reporting.ReportingConfi
     if (!std.meta.eql(counters.native_emission, backend.dev.NativeProcCompiler.Metrics{})) {
         reporter.recordCounters("Shared native artifact emission", &nativeEmissionCounters(counters.native_emission));
     }
+}
+
+/// The steps of checked-artifact publication, which only detailed timing
+/// records. Each step is summed across the worker threads that published.
+fn recordPublicationDetail(reporter: *progress.Reporter, work: compile.package.CheckingWork) void {
+    if (!reporter.always) return;
+    const PublicationTiming = check.CheckedArtifact.PublicationTiming;
+    var steps: [PublicationTiming.step_count]progress.SubTiming = undefined;
+    inline for (@typeInfo(PublicationTiming.Step).@"enum".field_names, 0..) |name, index| {
+        steps[index] = .{ .name = publicationStepLabel(@field(PublicationTiming.Step, name)), .ns = work.publication_steps.steps_ns[index] };
+    }
+    var buf: [PublicationTiming.step_count]progress.SubTiming = undefined;
+    const measured = measuredSubTimings(&buf, &steps);
+    if (measured.len != 0) reporter.recordCompletedWithBreakdown("Checked Publication Detail", work.publication_ns, .{}, measured);
+}
+
+fn publicationStepLabel(step: check.CheckedArtifact.PublicationTiming.Step) []const u8 {
+    return switch (step) {
+        .typed_modules => "Typed Module Graph",
+        .identity => "Identity + Names",
+        .body_analyses => "Body Analyses",
+        .sealed_type_keys => "Sealed Type Keys",
+        .checked_types => "Checked Types",
+        .platform_relation => "Platform Relation",
+        .pairing_defaults => "Pairing Types + Defaults",
+        .procedure_templates => "Procedure Templates",
+        .dispatch_plans => "Dispatch Plans",
+        .hosted_platform_bindings => "Hosted + Platform Bindings",
+        .compile_time_roots => "Compile-Time Roots",
+        .entry_wrappers => "Const Bodies + Entry Wrappers",
+        .top_level_values => "Top-Level Values",
+        .hoisted_values => "Hoisted Values",
+        .resolved_value_refs => "Resolved Value Refs",
+        .callable_forwarding => "Callable Forwarding",
+        .method_registry => "Method Registry",
+        .ordinary_diagnostics => "Ordinary Diagnostics",
+        .template_refs => "Template Refs",
+        .total_dispatch => "Total Dispatch Resolution",
+        .dispatch_callables => "Dispatch Callables",
+        .literal_roots => "Literal Roots",
+        .template_demand => "Template Demand",
+        .sealed_slots => "Sealed Slots",
+        .root_requests => "Root Requests",
+        .nested_proc_sites => "Nested Procedure Sites",
+        .exhaustiveness => "Exhaustiveness Sites",
+        .exports => "Exports + Interface",
+        .public_api => "Public API Dependencies",
+        .lowering_visibility => "Lowering Visibility",
+        .finish => "Artifact Assembly",
+    };
 }
 
 fn compileTimeStepLabel(step: eval.CompileTimeFinalization.Timing.Step) []const u8 {
@@ -22593,7 +22701,7 @@ test "bidi controls in diagnostic summary paths remain visible" {
 
 test "dev ARC specialization is independent of source inlining" {
     for ([_]cli_args.OptLevel{ .dev, .interpreter, .speed, .size }) |opt| {
-        const config = checkedRuntimeLoweringConfig(.linked_output, opt, .lss, .x64glibc, false);
+        const config = checkedRuntimeLoweringConfig(.linked_output, opt, .lss, .x64glibc);
         const expected = opt == .speed or opt == .size;
         try std.testing.expectEqual(expected, config.target.specialize_arc_modes);
         try std.testing.expectEqual(expected, lir.CheckedPipeline.LirPolicy.fromTarget(config.target).specialize_arc_modes);

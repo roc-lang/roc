@@ -137,6 +137,12 @@ ZIG_EXTERN_C void ZigLLVMInitializeAllTargets();
 
 ZIG_EXTERN_C void ZigLLVMParseCommandLineOptions(size_t argc, const char *const *argv);
 
+/// Set the most stores LLVM's code generator expands an llvm.memcpy,
+/// llvm.memmove or llvm.memset into, for both size and speed; 0 restores the
+/// target's own limits. The setting is process-wide and read during code
+/// generation, so a compile sets it before it emits.
+ZIG_EXTERN_C void ZigLLVMSetMemoryIntrinsicStoreLimit(unsigned limit);
+
 ZIG_EXTERN_C bool ZigLLDLinkCOFF(int argc, const char **argv, bool can_exit_early, bool disable_output, const char **diagnostics, size_t *diagnostics_len);
 ZIG_EXTERN_C bool ZigLLDLinkELF(int argc, const char **argv, bool can_exit_early, bool disable_output, const char **diagnostics, size_t *diagnostics_len);
 ZIG_EXTERN_C bool ZigLLDLinkMachO(int argc, const char **argv, bool can_exit_early, bool disable_output, const char **diagnostics, size_t *diagnostics_len);

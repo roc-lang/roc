@@ -134,8 +134,6 @@ pub const Options = struct {
     /// Compile-time evaluation must use deterministic seed zero. Runtime
     /// lowering retains the process-randomized seed operation.
     dict_seed_mode: DictSeedMode = .runtime,
-    /// Preserve source-level procedure names in LIR for runtime diagnostics.
-    proc_debug_names: bool = false,
     /// Record each platform entrypoint's host boundary digest.
     host_boundary_digests: bool = false,
     /// Build ConstStore materialization plans for requested layouts.
@@ -822,7 +820,6 @@ const Lowerer = struct {
     dict_seed_mode: DictSeedMode,
     completed_scalar_values: ?*const ComptimeScalarValues.CompletedScalarValues,
     completed_erased_members: ?*const CompletedErasedMembers,
-    proc_debug_names: bool,
     host_boundary_digests: bool,
     site_code_keys: bool,
     owned_proc_signatures: bool,
@@ -913,6 +910,9 @@ const Lowerer = struct {
     /// last.
     value_consumers: std.ArrayList(ValueConsumer),
     current_ret_ty: ?Type.TypeId = null,
+    /// Where a `return` in the inlined body being lowered delivers its value,
+    /// when that body holds one.
+    inline_return: ?InlineReturn = null,
     current_proc_locals: ?*ProcLocalSet = null,
     lane_scratch: LaneScratch,
     current_fn: ?Type.FnId = null,
@@ -1123,6 +1123,9 @@ const Lowerer = struct {
         join_id: LIR.JoinPointId,
         params: LIR.LocalSpan,
         param_tys: []const Type.TypeId,
+        /// The join's remainder is being lowered. Its parameters are in scope
+        /// only in its body, so no argument of a jump lowered now reads them.
+        in_remainder: bool = false,
     };
 
     /// The join that receives a value-position join's result in `target`.
@@ -1139,6 +1142,18 @@ const Lowerer = struct {
     const ValueJoin = struct {
         id: LIR.JoinPointId,
         declared: bool,
+    };
+
+    /// The destination of a `return` inside an inlined call's body: the
+    /// call's result local and the value join its continuation sits behind.
+    const InlineReturn = struct {
+        target: LIR.LocalId,
+        ty: Type.TypeId,
+        join_id: LIR.JoinPointId,
+        /// Whether the call's result was the enclosing procedure's return
+        /// target when the call was entered.
+        forwards_return: bool,
+        repeatable_depth: usize,
     };
 
     fn init(
@@ -1219,7 +1234,6 @@ const Lowerer = struct {
             .dict_seed_mode = options.dict_seed_mode,
             .completed_scalar_values = options.completed_scalar_values,
             .completed_erased_members = options.completed_erased_members,
-            .proc_debug_names = options.proc_debug_names,
             .host_boundary_digests = options.host_boundary_digests,
             .site_code_keys = options.site_code_keys,
             .owned_proc_signatures = options.owned_proc_signatures,
@@ -1883,6 +1897,7 @@ const Lowerer = struct {
         worker.join_stack = workspace.join_stack;
         worker.value_consumers = workspace.value_consumers;
         worker.current_ret_ty = null;
+        worker.inline_return = null;
         worker.current_proc_locals = null;
         worker.current_fn = null;
         worker.current_proc = null;
@@ -3101,10 +3116,8 @@ const Lowerer = struct {
             .code_key = code_key,
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         }, proc_loc);
-        if (self.proc_debug_names) {
-            if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
-                try self.result.store.setProcDebugName(proc, self.solved.lifted.names.exportNameText(name));
-            }
+        if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
+            try self.result.store.setProcDebugName(proc, self.solved.lifted.names.exportNameText(name));
         }
         try self.procs_by_identity.putNoClobber(identity, fn_id);
         entry.proc = .some(proc);
@@ -3642,7 +3655,7 @@ const Lowerer = struct {
                         return Common.invariant("function callable slot was unresolved before direct Lambda Mono");
                     },
                     .link => Common.invariant("direct Lambda Mono type lowering saw an unresolved Lambda Solved link"),
-                    .unbound, .forall => Common.invariant("direct Lambda Mono type lowering saw an unresolved Lambda Solved type"),
+                    .unbound => Common.invariant("direct Lambda Mono type lowering saw an unresolved Lambda Solved type"),
                     .mono => Common.invariant("direct Lambda Mono type lowering saw an unfinalized lazy Monotype leaf"),
                     .primitive => |primitive| return try self.finishTypeVar(task, .{ .primitive = primitive }),
                     .zst => return try self.finishTypeVar(task, .zst),
@@ -3677,7 +3690,7 @@ const Lowerer = struct {
                         .members = members,
                     } },
                     .lambda_set => .{ .callable = members },
-                    .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .zst, .hole, .mono => unreachable, // TypeVarCursor.callable is set only for func, erased, and lambda_set contents
+                    .link, .unbound, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .zst, .hole, .mono => unreachable, // TypeVarCursor.callable is set only for func, erased, and lambda_set contents
                 });
             },
             TypeVarCursor.children => try self.acceptTypeChild(frame, task, input.?.ty),
@@ -3739,7 +3752,7 @@ const Lowerer = struct {
                 frame.index += 1;
             },
             .tag_union => try task.tys.append(self.allocator, lowered),
-            .link, .unbound, .forall, .primitive, .func, .lambda_set, .erased, .zst, .hole, .mono => unreachable, // TypeVarCursor.children is set only for list, box, tuple, record, tag_union, and named contents
+            .link, .unbound, .primitive, .func, .lambda_set, .erased, .zst, .hole, .mono => unreachable, // TypeVarCursor.children is set only for list, box, tuple, record, tag_union, and named contents
         }
     }
 
@@ -3833,7 +3846,7 @@ const Lowerer = struct {
                 frame.cursor = TypeVarCursor.named_declared_order;
                 return .{ .call = .{ .declared_order = .{ .span = named.declared_order } } };
             },
-            .link, .unbound, .forall, .primitive, .func, .lambda_set, .erased, .zst, .hole, .mono => unreachable, // cursor start returns for every content without children
+            .link, .unbound, .primitive, .func, .lambda_set, .erased, .zst, .hole, .mono => unreachable, // cursor start returns for every content without children
         }
     }
 
@@ -6370,6 +6383,17 @@ const Lowerer = struct {
         /// arguments, as a capture record would be, and bound to the
         /// callee's capture locals instead of being packed into one.
         capture_values: []Lifted.ExprId = &.{},
+        /// The capture record `capture_arg` holds, when the call builds it
+        /// itself, next to the call statement. Every operand of such a
+        /// record is a plain local read (`operandIsPlainLocalRead`), so
+        /// building it after the arguments reads the same values, and the
+        /// record is not live across an argument's branching.
+        capture_record: ?struct {
+            captures: CaptureSpanId,
+            /// Borrowed from the lifted program.
+            operands: []const Lifted.CaptureOperand,
+            ty: Type.TypeId,
+        } = null,
         /// The capture value types, then the argument types.
         arg_tys: []Type.TypeId = &.{},
         lowered: ?LoweredExprLocals = null,
@@ -6394,6 +6418,11 @@ const Lowerer = struct {
         /// The bindings the callee's arguments and captures shadowed, once
         /// installed.
         saved: ?[]collections.OptionalId(LIR.LocalId) = null,
+        /// The join a body holding a `return` delivers the result through.
+        done: ?ValueJoin = null,
+        consumer_pushed: bool = false,
+        /// The return destination this call's body replaced.
+        saved_inline_return: ?InlineReturn = null,
     };
 
     const CallableCallTask = struct {
@@ -6649,13 +6678,20 @@ const Lowerer = struct {
     fn valueJoinFor(self: *Lowerer, next: LIR.CFStmtId, target: LIR.LocalId) ValueJoin {
         const stmt = self.result.store.getCFStmtImmediate(next);
         if (stmt.* == .jump) {
-            var index = self.value_consumers.items.len;
-            while (index > 0) {
-                index -= 1;
-                const consumer = self.value_consumers.items[index];
-                if (consumer.join_id == stmt.jump.target and consumer.target == target) {
-                    return .{ .id = consumer.join_id, .declared = true };
+            // Each consumer's join is minted after every consumer below it was
+            // pushed, so the stack ascends by join id.
+            const wanted = @backingInt(stmt.jump.target);
+            const consumers = self.value_consumers.items;
+            var low: usize = 0;
+            var high: usize = consumers.len;
+            while (low < high) {
+                const mid = low + (high - low) / 2;
+                const found = @backingInt(consumers[mid].join_id);
+                if (found == wanted) {
+                    if (consumers[mid].target != target) break;
+                    return .{ .id = consumers[mid].join_id, .declared = true };
                 }
+                if (found < wanted) low = mid + 1 else high = mid;
             }
         }
         return .{ .id = self.freshJoinPointId(), .declared = false };
@@ -6685,8 +6721,17 @@ const Lowerer = struct {
     /// pushed; a join an enclosing form declared is already on the stack.
     fn enterValueJoin(self: *Lowerer, done: ValueJoin, target: LIR.LocalId) Common.LowerError!bool {
         if (done.declared) return false;
-        try self.value_consumers.append(self.allocator, .{ .join_id = done.id, .target = target });
+        try self.pushValueConsumer(.{ .join_id = done.id, .target = target });
         return true;
+    }
+
+    fn pushValueConsumer(self: *Lowerer, consumer: ValueConsumer) Common.LowerError!void {
+        if (self.value_consumers.getLastOrNull()) |top| {
+            if (@backingInt(top.join_id) >= @backingInt(consumer.join_id)) {
+                Common.invariant("a value consumer's join was minted before the consumer below it");
+            }
+        }
+        try self.value_consumers.append(self.allocator, consumer);
     }
 
     /// Remove a value form's join from the consumer stack. Idempotent.
@@ -8277,6 +8322,23 @@ const Lowerer = struct {
         task.capture_ty = self.fn_entries.items[@backingInt(task.target_fn)].spec.capture_ty.get() orelse
             Common.invariant("capturing direct call target had no capture record type");
         task.capture_local = try self.addTemp(task.capture_ty);
+        var plain_captures = true;
+        for (task.capture_operands) |operand| {
+            if (!self.operandIsPlainLocalRead(operand.value)) plain_captures = false;
+        }
+        if (plain_captures) {
+            return .{ .tail = .{ .known_call = .{
+                .where = task.where,
+                .target = task.target,
+                .result_ty = task.result_ty,
+                .callee = task.target_fn,
+                .args = args,
+                .capture_arg = task.capture_local,
+                .is_cold = task.is_cold,
+                .next = task.next,
+                .capture_record = .{ .captures = task.captures, .operands = task.capture_operands, .ty = task.capture_ty },
+            } } };
+        }
         frame.cursor = 1;
         return .{ .call = .{ .known_call = .{
             .where = task.where,
@@ -8319,6 +8381,10 @@ const Lowerer = struct {
     }
 
     fn stepKnownCall(self: *Lowerer, frame: *LowerFrame, task: *KnownCallTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        // The capture record is built; the arguments are lowered ahead of it.
+        if (frame.cursor == 2) {
+            return .{ .tail = try self.operandChain(task.where, task.lowered.?, task.arg_tys, null, input.?) };
+        }
         if (frame.cursor == 1) {
             const lowered = task.lowered.?;
             const start = task.substituted_start.?;
@@ -8433,13 +8499,21 @@ const Lowerer = struct {
             }),
             .next = after_call,
         } }, where.source());
+        if (task.capture_record) |record| {
+            const capture_local = task.capture_arg orelse Common.invariant("a call that builds its capture record had no capture argument");
+            frame.cursor = 2;
+            return .{ .call = try self.captureRecordTask(where, capture_local, record.captures, record.operands, record.ty, current) };
+        }
         return .{ .tail = try self.operandChain(where, lowered, task.arg_tys, null, current) };
     }
 
     fn stepInlineCall(self: *Lowerer, frame: *LowerFrame, task: *InlineCallTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
         if (frame.cursor == 1) {
             self.restoreInlineCallArgs(task);
-            return .{ .ret = input.? };
+            const done = task.done orelse return .{ .ret = input.? };
+            self.inline_return = task.saved_inline_return;
+            self.leaveValueJoin(&task.consumer_pushed);
+            return .{ .ret = try self.declareValueJoin(task.where, done, task.target, task.next, input.?) };
         }
         const spec = self.fn_specs.items[@backingInt(task.callee)];
         if (spec.abi != .finite) Common.invariant("attempted to inline a non-finite function spec");
@@ -8471,7 +8545,26 @@ const Lowerer = struct {
         callee_parent.outer = try self.addKnownCallInlineScope(task.where, source_fn, task.body_expr);
         callee_parent.owner = spec.source;
         frame.cursor = 1;
-        return .{ .call = exprTask(callee_parent, task.target, task.body_expr, null, task.next) };
+        if (!self.inline_plan.bodyReturns(spec.source)) {
+            return .{ .call = exprTask(callee_parent, task.target, task.body_expr, null, task.next) };
+        }
+
+        // Every `return` in the body, and the body's own result, arrive at
+        // one join in front of the call's continuation.
+        const ret_ty = self.fn_entries.items[@backingInt(task.callee)].ret;
+        self.noteErasedOwnerAmbiguous(task.target);
+        const done = self.valueJoinFor(task.next, task.target);
+        task.done = done;
+        task.consumer_pushed = try self.enterValueJoin(done, task.target);
+        task.saved_inline_return = self.inline_return;
+        self.inline_return = .{
+            .target = task.target,
+            .ty = ret_ty,
+            .join_id = done.id,
+            .forwards_return = self.current_return_target == task.target,
+            .repeatable_depth = self.return_forwarding_repeatable_depth,
+        };
+        return .{ .call = try self.valueBranchTask(callee_parent, task.target, task.body_expr, ret_ty, true, done.id, task.next) };
     }
 
     /// Put back the bindings an inlined call's arguments and captures
@@ -9360,6 +9453,19 @@ const Lowerer = struct {
     }
 
     fn returnStep(self: *Lowerer, where: LowerSite, ret: Mono.Return) Common.LowerError!LowerStep {
+        if (self.inline_return) |destination| {
+            const saved_return_target = self.current_return_target;
+            self.current_return_target = if (destination.forwards_return and
+                self.return_forwarding_repeatable_depth == destination.repeatable_depth)
+                destination.target
+            else
+                null;
+            const delivered = try self.valueJoinBranchTask(where, destination.target, ret.value, destination.ty, try self.joinJump(where, destination.join_id));
+            return .{ .tail = .{ .scoped = .{
+                .saved_return_target = saved_return_target,
+                .child = delivered.expr,
+            } } };
+        }
         const ret_ty = self.current_ret_ty orelse Common.invariant("return expression reached LIR lowering outside a function");
         const ret_local = try self.addTemp(ret_ty);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, where.source());
@@ -9569,7 +9675,7 @@ const Lowerer = struct {
                     const consumer = self.valueJoinFor(task.next, task.target);
                     task.consumer = consumer;
                     if (!consumer.declared) {
-                        try self.value_consumers.append(self.allocator, .{ .join_id = consumer.id, .target = task.target });
+                        try self.pushValueConsumer(.{ .join_id = consumer.id, .target = task.target });
                         task.consumer_pushed = true;
                     }
                 }
@@ -9578,6 +9684,9 @@ const Lowerer = struct {
             1 => {
                 task.body_stmt = input.?;
                 frame.cursor = 2;
+                const entered = &self.join_stack.items[self.join_stack.items.len - 1];
+                if (entered.join_id != task.lir_join_id) Common.invariant("a join point's remainder began with another join innermost");
+                entered.in_remainder = true;
                 return .{ .call = try self.joinPointArrivalTask(task, task.join_point.remainder) };
             },
             else => {
@@ -9637,6 +9746,19 @@ const Lowerer = struct {
         const args = self.solved.lifted.exprSpan(jump.args);
         if (self.result.store.getLocalSpan(join_point.params).len != args.len) {
             Common.invariant("jump argument count differed from join-point parameter count during direct LIR lowering");
+        }
+
+        // A jump from the remainder that supplies one tag union builds it in
+        // the parameter itself, the definition form a value join's branches
+        // use, so tag-case fusion sees the edge as a producer of the join.
+        if (args.len == 1 and join_point.in_remainder and jump.loop_params.len == 0) {
+            const param = GuardedList.at(self.result.store.getLocalSpan(join_point.params), 0);
+            const param_layout = self.result.layouts.getLayout(self.result.store.getLocal(param).layout_idx);
+            const arg = GuardedList.at(args, 0);
+            if (param_layout.tag == .tag_union and try self.joinArgNeedsWriteAtType(param, join_point.param_tys[0], arg)) {
+                const direct_jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_point.join_id } }, where.glue());
+                return .{ .tail = exprTask(where, param, arg, join_point.param_tys[0], direct_jump) };
+            }
         }
 
         const locals = try self.lowerExprsToJoinTempsAtTypes(join_point.params, join_point.param_tys, args);
@@ -14170,14 +14292,6 @@ const Lowerer = struct {
             if (content == .box) return true;
             if (content != .named) return false;
             const backing = content.named.backing.get() orelse return false;
-            if (content.named.kind == .@"opaque" and
-                content.named.builtin_owner.get() != .iter and content.named.builtin_owner.get() != .stream and
-                backing.authority != .generated_private and
-                self.solved.types.rootContent(backing.ty) == .record and
-                try self.solvedTypeContainsCallable(backing.ty))
-            {
-                return true;
-            }
             current = backing.ty;
         }
     }
@@ -14202,14 +14316,6 @@ const Lowerer = struct {
             if (content == .box) return true;
             if (content != .named) return false;
             const backing = content.named.backing.get() orelse return false;
-            if (content.named.kind == .@"opaque" and
-                content.named.builtin_owner.get() != .iter and content.named.builtin_owner.get() != .stream and
-                backing.authority != .generated_private and
-                self.types.get(backing.ty) == .record and
-                try self.typeContainsCallable(backing.ty))
-            {
-                return true;
-            }
             current = backing.ty;
         }
     }
@@ -14644,84 +14750,8 @@ const Lowerer = struct {
         return owner == .fields or owner == .parse_tag_union_spec;
     }
 
-    fn typeContainsCallable(self: *Lowerer, ty: Type.TypeId) Common.LowerError!bool {
-        var visited = collections.DenseMap(Type.TypeId, void).init(self.allocator);
-        defer visited.deinit();
-        var pending: std.ArrayList(Type.TypeId) = .empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, ty);
-        while (pending.pop()) |current| {
-            if (visited.contains(current)) continue;
-            try visited.put(current, {});
-            // Children are pushed last-first so the first child is visited
-            // next.
-            const children_start = pending.items.len;
-            switch (self.types.get(current)) {
-                .callable, .erased_fn => return true,
-                .primitive, .zst, .hole, .erased_capture_ptr => {},
-                .list, .box => |elem| try pending.append(self.allocator, elem),
-                .tuple => |items| try self.appendTypeSpan(&pending, items),
-                .record => |fields| {
-                    const field_span = self.types.fieldSpan(fields);
-                    for (0..field_span.len) |index| try pending.append(self.allocator, GuardedList.at(field_span, index).ty);
-                },
-                .capture_record => |fields| {
-                    const field_span = self.types.captureFieldSpan(fields);
-                    for (0..field_span.len) |index| try pending.append(self.allocator, GuardedList.at(field_span, index).ty);
-                },
-                .tag_union => |tags| {
-                    const tag_span = self.types.tagSpan(tags);
-                    for (0..tag_span.len) |index| try self.appendTypeSpan(&pending, GuardedList.at(tag_span, index).payloads);
-                },
-                .named => |named| if (named.backing.get()) |backing| try pending.append(self.allocator, backing.ty),
-            }
-            std.mem.reverse(Type.TypeId, pending.items[children_start..]);
-        }
-        return false;
-    }
-
     fn appendTypeSpan(self: *Lowerer, out: *std.ArrayList(Type.TypeId), span: Type.Span) Common.LowerError!void {
         const values = self.types.span(span);
-        for (0..values.len) |index| try out.append(self.allocator, GuardedList.at(values, index));
-    }
-
-    fn solvedTypeContainsCallable(self: *Lowerer, ty: SolvedType.TypeVarId) Common.LowerError!bool {
-        var visited = collections.DenseMap(SolvedType.TypeVarId, void).init(self.allocator);
-        defer visited.deinit();
-        var pending: std.ArrayList(SolvedType.TypeVarId) = .empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, ty);
-        while (pending.pop()) |next| {
-            const root = self.solved.types.root(next);
-            if (visited.contains(root)) continue;
-            try visited.put(root, {});
-            // Children are pushed last-first so the first child is visited
-            // next.
-            const children_start = pending.items.len;
-            switch (self.solved.types.get(root)) {
-                .func, .lambda_set, .erased => return true,
-                .mono => Common.invariant("callable scan saw an unfinalized lazy Monotype leaf"),
-                .link, .unbound, .forall => Common.invariant("callable scan saw unresolved Lambda Solved type"),
-                .primitive, .zst, .hole => {},
-                .list, .box => |elem| try pending.append(self.allocator, elem),
-                .tuple => |items| try self.appendSolvedTypeSpan(&pending, items),
-                .record => |fields| {
-                    const field_span = self.solved_types.fieldSpan(fields);
-                    for (0..field_span.len) |index| try pending.append(self.allocator, GuardedList.at(field_span, index).ty);
-                },
-                .tag_union => |tags| {
-                    const tag_span = self.solved_types.tagSpan(tags);
-                    for (0..tag_span.len) |index| try self.appendSolvedTypeSpan(&pending, GuardedList.at(tag_span, index).payloads);
-                },
-                .named => |named| if (named.backing.get()) |backing| try pending.append(self.allocator, backing.ty),
-            }
-            std.mem.reverse(SolvedType.TypeVarId, pending.items[children_start..]);
-        }
-        return false;
-    }
-
-    fn appendSolvedTypeSpan(self: *Lowerer, out: *std.ArrayList(SolvedType.TypeVarId), span: SolvedType.Span) Common.LowerError!void {
-        const values = self.solved_types.span(span);
         for (0..values.len) |index| try out.append(self.allocator, GuardedList.at(values, index));
     }
 
@@ -14848,8 +14878,6 @@ const Lowerer = struct {
             kind: union(enum) {
                 /// A node reserved for `ty`, filled from its content.
                 node: struct { ty: Type.TypeId, node: layout.GraphNodeId },
-                /// A node boxing an opaque callable-bearing record backing.
-                opaque_box: struct { node: layout.GraphNodeId, backing: Type.TypeId },
                 /// A declared-order nominal node filled from its fields.
                 declared_order: struct { node: layout.GraphNodeId, declared_order: Type.Span, backing: Type.TypeId },
                 /// A named type taking its backing's input.
@@ -14878,7 +14906,7 @@ const Lowerer = struct {
                         };
                         allocator.free(refs.payloads);
                     },
-                    .node, .opaque_box, .declared_order, .named_backing, .payload_tuple => {},
+                    .node, .declared_order, .named_backing, .payload_tuple => {},
                 }
             }
         };
@@ -14925,19 +14953,6 @@ const Lowerer = struct {
 
             switch (lowerer.types.get(ty)) {
                 .named => |named| if (named.backing.get()) |backing| {
-                    if (named.kind == .@"opaque" and
-                        named.builtin_owner.get() != .iter and named.builtin_owner.get() != .stream and
-                        // Generated-private backing is the checked producer's
-                        // explicit runtime representation, not source opacity.
-                        backing.authority != .generated_private and
-                        lowerer.types.get(backing.ty) == .record and
-                        try lowerer.typeContainsCallable(backing.ty))
-                    {
-                        const node = try self.graph.reserveNode(allocator);
-                        try self.local_nodes.put(ty, node);
-                        return .{ .push = .{ .kind = .{ .opaque_box = .{ .node = node, .backing = backing.ty } } } };
-                    }
-
                     // An unnamed field explicitly opts a nominal or opaque record
                     // into declared-order layout. Without that marker the named
                     // type reuses its structural backing layout directly.
@@ -14972,11 +14987,6 @@ const Lowerer = struct {
         fn resumeBuild(self: *LayoutGraphBuilder, frame: *BuildFrame, result: ?BuildResult) Common.LowerError!BuildStep {
             const allocator = self.lowerer.allocator;
             switch (frame.kind) {
-                .opaque_box => |box| {
-                    const finished = result orelse return .{ .child = box.backing };
-                    self.graph.setNode(box.node, .{ .box = finished.input });
-                    return .{ .done = .{ .input = layout.localGraphInput(box.node) } };
-                },
                 .declared_order => |declared| {
                     const finished = result orelse return .{ .push = try self.declaredOrderFieldsFrame(declared.declared_order, declared.backing) };
                     self.graph.setNode(declared.node, .{ .struct_ = self.graph.declaredOrder(finished.fields) });

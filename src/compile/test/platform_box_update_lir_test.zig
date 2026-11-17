@@ -10,7 +10,7 @@ const harness = @import("lower_to_lir_harness.zig");
 test "LIR pass workers deterministically reuse boxed payloads" {
     try harness.expectLirPassParallelismDeterministicLir(
         .{ .app_path = "test/postcheck/lir_pass_box_reuse/app.roc" },
-        .{ .inline_mode = .wrappers, .consume_dead_boxes = true, .proc_debug_names = true },
+        .{ .inline_mode = .wrappers, .consume_dead_boxes = true },
         &.{.box_reuse},
     );
 }
@@ -37,7 +37,7 @@ const Counts = struct {
 test "platform boxed model without inlining transfers checked mutation field ownership" {
     try harness.runAppPathLirInspection(
         "test/box-model-uniqueness/app.roc",
-        .{ .inline_mode = .none, .consume_dead_boxes = true, .proc_debug_names = true },
+        .{ .inline_mode = .none, .consume_dead_boxes = true },
         expectNoInlineOwnership,
     );
 }
@@ -45,7 +45,7 @@ test "platform boxed model without inlining transfers checked mutation field own
 test "platform boxed model with wrapper inlining consumes each dead Box" {
     try harness.runAppPathLirInspection(
         "test/box-model-uniqueness/app.roc",
-        .{ .inline_mode = .wrappers, .consume_dead_boxes = true, .proc_debug_names = true },
+        .{ .inline_mode = .wrappers, .consume_dead_boxes = true },
         expectWrapperInlineOwnership,
     );
 }
@@ -168,8 +168,10 @@ fn expectWrapperInlineOwnership(store: *const lir.LirStore, layouts: *const layo
     try std.testing.expectEqual(@as(usize, 0), total.owned_unbox);
     try std.testing.expectEqual(@as(usize, 6), total.borrowed_unbox);
     try std.testing.expectEqual(@as(usize, 6), total.box_release);
-    try std.testing.expectEqual(@as(usize, 5), total.list_set);
-    try std.testing.expectEqual(@as(usize, 2), total.list_replace);
+    // `List.update`'s copy path ends in `list_set`, so the app's update is
+    // counted here; `List.replace` holds the one replace.
+    try std.testing.expectEqual(@as(usize, 6), total.list_set);
+    try std.testing.expectEqual(@as(usize, 1), total.list_replace);
     // Both platform appends call the shared `List.append`, which holds one
     // append; `List.repeat` holds the other.
     try std.testing.expectEqual(@as(usize, 2), total.list_append);
