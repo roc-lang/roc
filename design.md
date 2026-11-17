@@ -1282,11 +1282,6 @@ Negative effect answers are not durable until the relevant slot has finalized;
 static dispatch can still turn an apparently pure call site into an effectful
 call before checked output is produced.
 
-An in-flight recursive call's declared effect still governs execution and
-compile-time eligibility. Suppressing that annotation as a circular seed for
-body-effect inference does not make the call pure. These are two consumers of
-one effect classification, not independent effect analyses.
-
 ### Effect Slots
 
 Roc effect propagation is a directed dataflow problem over function bodies and
@@ -1337,6 +1332,17 @@ slots can still change. Recursive groups are solved by directed propagation:
 strongly connected groups can be condensed, marked effectful if any member is
 effectful, and then propagated to callers. Ordinary caller-to-callee edges must
 remain one-way.
+
+A call of a member of the recursive group still being checked answers two
+questions separately. What it adds to the enclosing body's fixpoint follows
+the rule above: a declared effect kind on the in-flight scheme seeds nothing,
+and an inferred unbound kind is a directed edge. What the call itself does is
+read from the callee's function type: a callee already declared effectful
+makes the call an effectful call, so the call is no compile-time root and its
+checked callable is effectful, whatever the fixpoint concludes about the body.
+A callee whose kind is still unbound leaves the call's checked callable
+depending on it, and the post-solve walk over a selected root's dependencies
+rejects a root that reaches a call whose callable settled effectful.
 
 Every static-dispatch call that is not resolved when the expression frame
 finishes is represented by explicit checked state. The active effect slot owns

@@ -17183,6 +17183,12 @@ fn hoistedRootExprStep(
             break :blk true;
         },
         .e_call => |call| blk: {
+            // A call whose callee was still unresolved when the call was
+            // checked settles with the rest of the module; the root waits on
+            // that answer (design.md "Effect Slots").
+            if (call.constraint_fn_var) |fn_var| {
+                if (try self.varIsEffectfulFunction(fn_var)) break :blk false;
+            }
             if (!try self.hoistedRootCalleeAllowsStoredConst(call.func, context, stability)) break :blk false;
             try pending.append(gpa, .{ .expr = call.func });
             break :blk try self.pushHoistedKeptExprs(pending, call.args);
@@ -20828,22 +20834,31 @@ fn defInOnStackGroup(self: *const Self, def_idx: CIR.Def.Idx) bool {
     return self.activeGroupFrameIndex(group_index) != null;
 }
 
-/// A call's execution effect and its contribution to recursive body inference
-/// are distinct: a declared effectful call cannot be hoisted, but its annotation
-/// must not circularly seed the recursive group's inferred effects.
-const CallEffects = struct {
-    execution: FunctionEffectState,
+/// What a call of an in-flight member of the recursive group being checked
+/// contributes, read from the member's function type as it stands.
+const InFlightRecursiveCallEffect = struct {
+    /// What the call adds to the effect fixpoint of the body it is in. A
+    /// declared pure/effectful tag on an in-flight recursive scheme must not
+    /// seed that fixpoint. An inferred unbound slot, however, is a real
+    /// directed edge between SCC members and must survive until the boundary
+    /// resolves the group.
     body: FunctionEffectState,
+    /// Whether the callee is already an effectful function. Evaluating the
+    /// call then performs an effect whatever the fixpoint concludes about the
+    /// enclosing body, so the call is no compile-time root and its checked
+    /// callable is effectful.
+    callee_effectful: bool,
 };
 
-/// Unfinished inferred slots remain directed dependencies until the group
-/// settles. Terminal annotations need no solver query.
-fn inFlightRecursiveCallEffects(self: *const Self, func_var: Var) CallEffects {
-    const execution: FunctionEffectState = switch (self.types.resolveThroughAliases(func_var).desc.content) {
+/// A callee that is not a function has already failed the call-shape
+/// relation, which owns that diagnostic; it is not a callable, so it
+/// contributes no effect.
+fn inFlightRecursiveCallEffect(self: *const Self, func_var: Var) InFlightRecursiveCallEffect {
+    return switch (self.types.resolveThroughAliases(func_var).desc.content) {
         .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .structure => |flat| switch (flat) {
-            .fn_unbound => .unresolved,
-            .fn_effectful => .effectful,
+            .fn_unbound => .{ .body = .unresolved, .callee_effectful = false },
+            .fn_effectful => .{ .body = .pure, .callee_effectful = true },
             .fn_pure,
             .record,
             .tuple,
@@ -20851,11 +20866,10 @@ fn inFlightRecursiveCallEffects(self: *const Self, func_var: Var) CallEffects {
             .empty_record,
             .tag_union,
             .empty_tag_union,
-            => .pure,
+            => .{ .body = .pure, .callee_effectful = false },
         },
-        .flex, .rigid, .field_presence, .err => .pure,
+        .flex, .rigid, .field_presence, .err => .{ .body = .pure, .callee_effectful = false },
     };
-    return .{ .execution = execution, .body = if (execution == .effectful) .pure else execution };
 }
 
 /// Whether a call's callee is a recursive reference to a def that has not
@@ -35634,22 +35648,23 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
     // Argument unification above is the point at which an effect-polymorphic
     // callback can become pure or effectful. Resolve the directed formula
     // now, never from the pre-unification function tag.
-    const recursive = self.callTargetIsInFlightRecursiveRef(call.func);
-    const effects = if (recursive)
-        self.inFlightRecursiveCallEffects(func_var)
-    else blk: {
-        const effect = try self.functionEffectState(func_var);
-        break :blk CallEffects{ .execution = effect, .body = effect };
-    };
-    const call_effect_state = effects.execution;
-    if (call_effect_state == .effectful) self.markCurrentHoistObservableEffect();
-    switch (effects.body) {
-        .effectful => task.does_fx = true,
-        .unresolved => if (state.callee_scheme != null and !recursive)
+    const in_flight_recursive = self.callTargetIsInFlightRecursiveRef(call.func);
+    var callee_effectful = false;
+    const call_effect_state: FunctionEffectState = if (in_flight_recursive) in_flight: {
+        const effect = self.inFlightRecursiveCallEffect(func_var);
+        callee_effectful = effect.callee_effectful;
+        break :in_flight effect.body;
+    } else try self.functionEffectState(func_var);
+    switch (call_effect_state) {
+        .effectful => {
+            callee_effectful = true;
+            task.does_fx = true;
+        },
+        .unresolved => if (state.callee_scheme != null and !in_flight_recursive)
             try self.recordFreshCalleeEffectDependencies(func_var)
         else
             try self.recordCurrentFunctionEffectDependency(func_var),
-        .pure => {},
+        .pure => if (callee_effectful) self.markCurrentHoistObservableEffect(),
     }
 
     const published_constraint_args: []Var = @ptrCast(call_arg_expr_idxs);
@@ -35661,8 +35676,10 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
         else
             Var.SafeList.Range.empty(),
     };
-    const published_constraint_flat: FlatType = switch (call_effect_state) {
-        .effectful => .{ .fn_effectful = published_constraint_func },
+    const published_constraint_flat: FlatType = if (callee_effectful)
+        .{ .fn_effectful = published_constraint_func }
+    else switch (call_effect_state) {
+        .effectful => unreachable, // an effectful state sets callee_effectful above
         .pure => .{ .fn_pure = published_constraint_func },
         .unresolved => .{ .fn_unbound = published_constraint_func },
     };
