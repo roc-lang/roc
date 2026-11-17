@@ -54,6 +54,8 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
         /// with large IDs costs a few slots rather than a slot for every
         /// chunk between ID zero and the highest touched ID.
         chunk_base: usize = 0,
+        /// The number of chunks the chunk-pointer array holds.
+        allocated_chunks: usize = 0,
         /// Live keys, parallel to `values`. Keys are stored as given rather
         /// than as computed positions, which keeps a 32-bit ID at 4 bytes.
         active_keys: std.ArrayList(K) = .empty,
@@ -189,6 +191,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             for (self.sparse_chunks.items) |chunk| {
                 const copied: ?*SparseChunk = if (chunk) |source| blk: {
                     const fresh = try self.allocator.create(SparseChunk);
+                    copy.allocated_chunks += 1;
                     fresh.* = source.*;
                     break :blk fresh;
                 } else null;
@@ -354,6 +357,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
                 const chunk = try self.allocator.create(SparseChunk);
                 chunk.* = @splat(empty_position);
                 self.sparse_chunks.items[slot_index] = chunk;
+                self.allocated_chunks += 1;
             }
 
             return &self.sparse_chunks.items[slot_index].?[index & chunk_mask];
@@ -390,10 +394,29 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             self.sparseSlotPtr(index).?.* = empty_position;
         }
 
+        /// Free every chunk, emptying the chunk-pointer array. A chunk holding
+        /// a live key is found through that key, so a map whose keys spread
+        /// over a wide range costs its live keys rather than the array's
+        /// span; only chunks whose keys were all removed are found by walking
+        /// the array.
         fn freeChunks(self: *Self) void {
-            for (self.sparse_chunks.items) |maybe_chunk| {
-                if (maybe_chunk) |chunk| self.allocator.destroy(chunk);
+            var remaining = self.allocated_chunks;
+            for (self.active_keys.items) |key| {
+                if (remaining == 0) break;
+                const slot = &self.sparse_chunks.items[(keyIndex(key) >> chunk_shift) - self.chunk_base];
+                const chunk = slot.* orelse continue;
+                self.allocator.destroy(chunk);
+                slot.* = null;
+                remaining -= 1;
             }
+            if (remaining != 0) {
+                for (self.sparse_chunks.items) |*slot| {
+                    const chunk = slot.* orelse continue;
+                    self.allocator.destroy(chunk);
+                    slot.* = null;
+                }
+            }
+            self.allocated_chunks = 0;
         }
     };
 }

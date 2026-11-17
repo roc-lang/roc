@@ -189,8 +189,14 @@ encode = |encoder| {
 apples_expected : Try(U64, [])
 apples_expected = Ok(53)
 
-# `[Pears("green", "pear"), Pears("green", "pear")]` and `Pears("green", "pear")`.
+# `[Pears("green", "pear"), Pears("green", "pear")]` (48 bytes) and
+# `Pears("green", "pear")` (22 bytes).
 pears_expected : Try(U64, [])
-pears_expected = Ok(89)
+pears_expected = Ok(92)
 
 expect encode(make_promoted(Apples.sample())) == apples_expected
+expect encode(make_promoted(Pears.sample())) == pears_expected
+expect encode(make_direct(Apples.sample())) == apples_expected
+expect encode(make_direct(Pears.sample())) == pears_expected
+expect encode(make_lambda(Apples.sample())) == apples_expected
+expect encode(make_lambda(Pears.sample())) == pears_expected

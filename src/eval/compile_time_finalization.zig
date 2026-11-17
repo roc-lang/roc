@@ -991,7 +991,6 @@ fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.Solved
         .reads_branch_expectations = false,
         // Specialization records procedure names for every consumer of the
         // program; a runtime consumer's diagnostics read them.
-        .proc_debug_names = true,
         .site_code_keys = true,
         .owned_proc_signatures = true,
         .post_check_executor = options.post_check_executor,
@@ -2069,7 +2068,6 @@ fn boxyCompileTimeTarget(options: Options) lir.CheckedPipeline.TargetConfig {
         .inline_expects = .run,
         .reads_branch_expectations = false,
         .erased_capture_prefix = if (compilerHostMustUseInterpreterForCtfe()) 0 else builtins.erased_callable.hot_reload_capture_prefix_size,
-        .proc_debug_names = true,
         .post_check_executor = options.post_check_executor,
         .timing = if (options.timing) |timing| &timing.lowering else null,
     };
@@ -2083,7 +2081,6 @@ fn boxyLinkedCompileTimeTarget(source: BoxyObjectSource, options: Options) lir.C
     target.boxy_compile_time = true;
     target.boxy_unit = .{ .imports = source.interfaces, .root = false, .names = source.names };
     target.checked_module_state = .checking_finalization;
-    target.proc_debug_names = true;
     target.post_check_executor = options.post_check_executor;
     target.timing = if (options.timing) |timing| &timing.lowering else null;
     return target;

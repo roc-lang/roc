@@ -193,7 +193,6 @@ pub const LirLoweringOptions = struct {
     /// the way a linked output does.
     include_internal_static_data: bool = false,
     list_in_place_map: bool = false,
-    proc_debug_names: bool = false,
     /// Include backend symbol identities, which the compact LIR printer omits.
     dump_proc_identities: bool = false,
     prove_ranges: bool = false,
@@ -536,7 +535,6 @@ pub fn expectSpecConstrParallelismDeterministicLir(
     opts.specialization_workers = 1;
     opts.post_check_executor_override = null;
     opts.reverse_post_check_completions = false;
-    opts.proc_debug_names = true;
     opts.dump_proc_identities = true;
     opts.spec_constr_parallel_metrics_out = &serial;
     opts.timing_out = &timing;
@@ -628,7 +626,6 @@ pub fn expectArcParallelismDeterministicLir(
     var opts = options;
     opts.specialization_workers = 1;
     opts.reverse_post_check_completions = false;
-    opts.proc_debug_names = true;
     opts.dump_proc_identities = true;
     opts.arc_parallel_metrics_out = &serial_metrics;
     switch (fixture) {
@@ -854,7 +851,6 @@ pub fn expectSolvedLirWorkerMetadataParallelismDeterministicLir() LowerToLirHarn
         .specialization_workers = 1,
         .prepared_direct_call_root_fixture = true,
         .inline_mode = .wrappers,
-        .proc_debug_names = true,
     }, null);
 
     for ([_]usize{ 2, 4 }) |specialization_workers| {
@@ -867,7 +863,6 @@ pub fn expectSolvedLirWorkerMetadataParallelismDeterministicLir() LowerToLirHarn
                 .specialization_workers = specialization_workers,
                 .prepared_direct_call_root_fixture = true,
                 .inline_mode = .wrappers,
-                .proc_debug_names = true,
                 .reverse_post_check_completions = reverse_post_check_completions,
                 .solved_lir_parallel_metrics_out = &metrics,
             }, null);
@@ -1050,9 +1045,8 @@ pub fn expectInterfaceSummaryReplayFaithfulLir(app_body: []const u8) LowerToLirH
     defer gpa.free(buf_b);
     var writer_a = std.Io.Writer.fixed(buf_a);
     var writer_b = std.Io.Writer.fixed(buf_b);
-    try runToLir(app_body, &writer_a, .{ .proc_debug_names = true, .dump_proc_identities = true }, null);
+    try runToLir(app_body, &writer_a, .{ .dump_proc_identities = true }, null);
     try runToLir(app_body, &writer_b, .{
-        .proc_debug_names = true,
         .dump_proc_identities = true,
         .replay_interface_summaries = false,
     }, null);
@@ -1210,7 +1204,6 @@ fn loweringTarget(opts: LirLoweringOptions) lir.CheckedPipeline.TargetConfig {
         .prove_uniqueness = true,
         .consume_dead_boxes = opts.consume_dead_boxes,
         .list_in_place_map = opts.list_in_place_map,
-        .proc_debug_names = opts.proc_debug_names,
         .prove_ranges = opts.prove_ranges,
         .work_metrics = opts.work_metrics_out,
         .replay_interface_summaries = .{ .value = opts.replay_interface_summaries },

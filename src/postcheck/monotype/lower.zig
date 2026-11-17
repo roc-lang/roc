@@ -292,9 +292,6 @@ pub const InlineExpectMode = enum {
 
 /// Configuration for lowering checked modules into Monotype IR.
 pub const Options = struct {
-    /// Preserve source-level procedure names for consumers that present runtime
-    /// diagnostics from lowered code.
-    proc_debug_names: bool = false,
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
     /// Optional deterministic workload diagnostics. The checked pipeline
@@ -5705,7 +5702,6 @@ const SpecJobWorkerInputs = struct {
     source_file_ids: *const SourceFileIds,
     lowering_module_ids: *const LoweringModuleIds,
     snapshot: *const WorkerInputs.Snapshot,
-    proc_debug_names: bool,
     interface_summaries: *const SharedSummaries,
     interface_summary_end: usize,
     collect_counters: bool,
@@ -6248,7 +6244,6 @@ const Builder = struct {
     program: *Ast.Program,
     current_loc: base.SourceLoc,
     current_region: base.Region,
-    proc_debug_names: bool,
     /// Frame stacks of finished `BodyContext.runLower` calls, kept with their
     /// capacity for the next run. Each run takes its own stack, so a nested
     /// run never moves the frame an outer step is still working on, and a
@@ -6557,7 +6552,6 @@ const Builder = struct {
             .program = program,
             .current_loc = program.current_loc,
             .current_region = program.current_region,
-            .proc_debug_names = options.proc_debug_names,
             .counters = counters,
             .diagnostics = options.diagnostics,
             .active_spec_job_diagnostics = null,
@@ -6717,7 +6711,6 @@ const Builder = struct {
         const builder = try worker.allocator.create(Builder);
         errdefer worker.allocator.destroy(builder);
         builder.* = Builder.init(worker.allocator, inputs.modules, worker.input_program.?, .{
-            .proc_debug_names = inputs.proc_debug_names,
             .specialization_counters = if (inputs.collect_counters) &worker.counters else null,
             .diagnostics = if (inputs.collect_diagnostics) &worker.diagnostics else null,
             .inline_expects = inputs.inline_expects,
@@ -7745,7 +7738,6 @@ const Builder = struct {
             .source_file_ids = self.sourceFileIds(),
             .lowering_module_ids = self.loweringModuleIds(),
             .snapshot = &snapshot,
-            .proc_debug_names = self.proc_debug_names,
             .interface_summaries = &self.shared_summaries.?,
             .interface_summary_end = self.shared_summaries.?.count,
             .replay_interface_summaries = self.replay_interface_summaries,
@@ -7957,7 +7949,6 @@ const Builder = struct {
             .source_file_ids = self.sourceFileIds(),
             .lowering_module_ids = self.loweringModuleIds(),
             .snapshot = &snapshot,
-            .proc_debug_names = self.proc_debug_names,
             .interface_summaries = &self.shared_summaries.?,
             .interface_summary_end = self.shared_summaries.?.count,
             .collect_counters = self.counters != null,
@@ -10162,7 +10153,6 @@ const Builder = struct {
                             .source_file_ids = self.sourceFileIds(),
                             .lowering_module_ids = self.loweringModuleIds(),
                             .snapshot = &context.snapshot,
-                            .proc_debug_names = self.proc_debug_names,
                             .interface_summaries = &self.shared_summaries.?,
                             .interface_summary_end = self.shared_summaries.?.count,
                             .collect_counters = self.counters != null,
@@ -11685,7 +11675,6 @@ const Builder = struct {
         view: ModuleView,
         template: names.ProcTemplate,
     ) Allocator.Error!void {
-        if (!self.proc_debug_names) return;
         const proc_base = view.names.procBase(template.proc_base);
         const export_name = proc_base.export_name.get() orelse return;
         const name = try self.program.names.internExportName(view.names.exportNameText(export_name));
@@ -11699,7 +11688,6 @@ const Builder = struct {
         view: ModuleView,
         template: names.ProcTemplate,
     ) Allocator.Error!void {
-        if (!self.proc_debug_names) return;
         const proc_base = view.names.procBase(template.proc_base);
         const export_name = proc_base.export_name.get() orelse return;
         const name = try self.activeNameStore().internExportName(view.names.exportNameText(export_name));
@@ -48347,8 +48335,10 @@ const BodyContext = struct {
             const entry = switch (runtimeCaptureKind(view, capture.pattern)) {
                 .scheme_alias, .destructured_alias, .promoted_proc, .local_method => continue,
                 .hoisted_constant => declarationContextEntry(context.entries, capture.pattern) orelse continue,
-                .frame_value => declarationContextEntry(context.entries, capture.pattern) orelse
-                    Common.invariant("local procedure runtime capture was not bound in its declaration context"),
+                .frame_value => declarationContextEntry(context.entries, capture.pattern) orelse {
+                    if (self.restoredConstFnOmitsCapture(view, capture.pattern)) continue;
+                    Common.invariant("local procedure runtime capture was not bound in its declaration context");
+                },
             };
             const local: DraftLocalId = @fromBackingInt(@intCast(entry.local));
             const raw = @backingInt(local);
@@ -48359,6 +48349,33 @@ const BodyContext = struct {
         }
         self.sortCaptureBindings(bindings.items);
         return try bindings.toOwnedSlice(self.allocator);
+    }
+
+    /// Whether `binder`, a binder of `view`, is a runtime capture the stored
+    /// function this body restores holds no value for. A stored function's
+    /// captures are the lifted capture slots of the specialization that was
+    /// evaluated: the enclosing-frame binders its body reads once the arms and
+    /// bodies its types leave unreachable are gone. Its checked site lists
+    /// every binder the source body names, so the two differ by exactly the
+    /// binders that specialization never reads. The restored body is the
+    /// same specialization, so no procedure it builds reads them either, and
+    /// each one has neither a frame local nor a capture slot.
+    fn restoredConstFnOmitsCapture(self: *BodyContext, view: ModuleView, binder: BinderId) bool {
+        const restored = self.restored_const_fn orelse return false;
+        const fn_def = restored.fn_value.fn_def;
+        const nested = switch (fn_def) {
+            .nested => |nested| nested,
+            .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => return false,
+        };
+        const fn_view = self.builder.moduleForConstFnDef(fn_def);
+        if (!moduleBytesEqual(fn_view.key.bytes, view.key.bytes)) return false;
+        for (restored.fn_value.captures) |capture| {
+            if (capture.id.isCanonical() and capture.id.binder() == binder) return false;
+        }
+        for (fn_view.nested_proc_sites.runtimeCaptures(checkedNestedSite(fn_view, nested))) |capture| {
+            if (capture.pattern == binder) return true;
+        }
+        return false;
     }
 
     /// How Monotype reads a binder listed in a site's
@@ -53672,8 +53689,10 @@ const BodyContext = struct {
             const local = switch (runtimeCaptureKind(self.view, binder)) {
                 .scheme_alias, .destructured_alias, .promoted_proc, .local_method => continue,
                 .hoisted_constant => self.binders.get(binder) orelse continue,
-                .frame_value => self.binders.get(binder) orelse
-                    Common.invariant("closure capture was not bound where the closure is built"),
+                .frame_value => self.binders.get(binder) orelse {
+                    if (self.restoredConstFnOmitsCapture(self.view, binder)) continue;
+                    Common.invariant("closure capture was not bound where the closure is built");
+                },
             };
             try self.markActiveConstBinderUsed(binder);
             const cell = self.localTypeCell(local);
@@ -53733,8 +53752,10 @@ const BodyContext = struct {
             const local = switch (runtimeCaptureKind(self.view, capture.pattern)) {
                 .scheme_alias, .destructured_alias, .promoted_proc, .local_method => continue,
                 .hoisted_constant => self.binders.get(capture.pattern) orelse continue,
-                .frame_value => self.binders.get(capture.pattern) orelse
-                    Common.invariant("nested procedure runtime capture was not bound where the procedure is built"),
+                .frame_value => self.binders.get(capture.pattern) orelse {
+                    if (self.restoredConstFnOmitsCapture(self.view, capture.pattern)) continue;
+                    Common.invariant("nested procedure runtime capture was not bound where the procedure is built");
+                },
             };
             try self.markActiveConstBinderUsed(capture.pattern);
             const cell = self.localTypeCell(local);
@@ -55282,7 +55303,36 @@ const BodyContext = struct {
                 .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
             }
         }
+        if (scope == .root and schema.scheme_vars.len != 0) {
+            if (try self.restoredOwnerFnType(owner)) |owner_fn_ty| {
+                if (ctx == null) {
+                    ctx = try BodyContext.init(self.allocator, self.builder, view, owner, self.graph, self.draft);
+                    try ctx.?.seedSubstitution(schema, subst);
+                }
+                try ctx.?.constrainTypeToMono(view.templates.get(owner.template).checked_fn_root, owner_fn_ty);
+            }
+        }
         return .{ .scope = .{ .owner = owner, .lexical = scope }, .schema = schema, .subst = subst, .vector = vector, .parent = parent };
+    }
+
+    /// The function type of the specialization of `owner` that built the
+    /// stored function this body restores, when `owner` is the template that
+    /// built it. A variable of that template can reach neither the stored
+    /// function's type, nor its captures, nor a retained method contract, and
+    /// the restored body's types that name it are that specialization's all
+    /// the same, so the template's root evidence frame is related to this
+    /// type. A default-root function's body belongs to its declaring module
+    /// and names no variable of the template that recorded it.
+    fn restoredOwnerFnType(self: *BodyContext, owner: names.ProcTemplate) Allocator.Error!?Type.TypeId {
+        const restored = self.restored_const_fn orelse return null;
+        const nested = switch (restored.fn_value.fn_def) {
+            .nested => |nested| nested,
+            .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => return null,
+        };
+        if (nested.default_root != null) return null;
+        if (!names.procedureTemplateRefEql(nested.owner, owner)) return null;
+        const owner_fn_ty = restored.fn_value.owner_fn_ty orelse return null;
+        return try self.lowerConstCaptureType(restored.store_view, owner_fn_ty);
     }
 
     /// A stored evidence vector being restored; `pending` holds the entry

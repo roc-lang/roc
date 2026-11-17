@@ -83,7 +83,6 @@ const NominalTypeResolutionFailed = problem_mod.NominalTypeResolutionFailed;
 const AliasNamesNoNominalType = problem_mod.AliasNamesNoNominalType;
 
 // Platform errors
-const PlatformAliasNotFound = problem_mod.PlatformAliasNotFound;
 const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
 const PlatformHostedSection = problem_mod.PlatformHostedSection;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
@@ -1146,9 +1145,6 @@ pub const ReportBuilder = struct {
             },
             .host_boundary_optional_field => |data| {
                 return self.buildHostBoundaryOptionalFieldReport(data);
-            },
-            .platform_alias_not_found => |data| {
-                return self.buildPlatformAliasNotFound(data);
             },
             .platform_hosted_section => |data| {
                 return self.buildPlatformHostedSection(data);
@@ -5474,46 +5470,6 @@ pub const ReportBuilder = struct {
         try report.document.addAnnotated(type_str, .code_block);
         try report.document.addLineBreak();
         try report.document.addReflowingText("Add an annotation or use this value in a way that fixes its concrete type.");
-
-        return report;
-    }
-
-    fn buildPlatformAliasNotFound(self: *Self, data: PlatformAliasNotFound) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Missing Platform Required Type", "", .runtime_error);
-        errdefer report.deinit();
-        try D.renderSliceInto(&.{
-            D.bytes("The platform expects your"),
-            D.bytes("app").withAnnotation(.inline_code),
-            D.bytes("module to define a type named"),
-            D.ident(data.expected_alias_ident).withAnnotation(.type_variable),
-            D.bytes(",").withNoPrecedingSpace(),
-            D.bytes("but I couldn't find one."),
-        }, self, &report, &report.headline);
-
-        try self.addSourceHighlightRegion(&report, data.app_region);
-        try report.document.addLineBreak();
-        try self.addPlatformRequirementSourceHighlight(&report, data.platform_region);
-        try report.document.addLineBreak();
-
-        switch (data.ctx) {
-            .not_found => {
-                try D.renderSlice(&.{
-                    D.bytes("Hint:").withAnnotation(.emphasized),
-                    D.bytes("Add a type alias or nominal type named"),
-                    D.ident(data.expected_alias_ident).withAnnotation(.type_variable),
-                    D.bytes("to your app module."),
-                }, self, &report);
-            },
-            .found_but_not_type => {
-                try D.renderSlice(&.{
-                    D.bytes("Hint:").withAnnotation(.emphasized),
-                    D.bytes("You have a value named"),
-                    D.ident(data.expected_alias_ident).withAnnotation(.type_variable),
-                    D.bytes(",").withNoPrecedingSpace(),
-                    D.bytes("but this platform requirement needs a type declaration with that name."),
-                }, self, &report);
-            },
-        }
 
         return report;
     }

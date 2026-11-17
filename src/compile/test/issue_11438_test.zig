@@ -33,5 +33,5 @@ test "issue 11438: equal closed requests reuse one specialization across alias a
         \\    echo!((first(args.len()) + second(args.len())).to_str())
         \\    Ok({})
         \\}
-    , .{ .proc_debug_names = true, .prepared_inspect = expectSingleSourceRefreshSpecialization });
+    , .{ .prepared_inspect = expectSingleSourceRefreshSpecialization });
 }

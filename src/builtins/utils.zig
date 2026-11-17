@@ -8,6 +8,7 @@
 //! for low-level operations and host interface functions.
 const std = @import("std");
 const builtin = @import("builtin");
+const stack_guard = @import("stack_guard.zig");
 
 pub const RocOps = @import("host_abi.zig").RocOps;
 
@@ -685,6 +686,124 @@ pub fn releaseDataPtr(bytes_or_null: ?[*]u8, atomicity: RcAtomicity, roc_ops: *R
 
     const rc_ptr: *isize = @ptrFromInt(unmasked_ptr - @sizeOf(usize));
     return release_ptr_to_refcount(rc_ptr, atomicity, roc_ops, .decref_data_ptr);
+}
+
+/// How a queued teardown takes its allocation: by releasing one reference
+/// with the given count-update atomicity, or as an allocation the caller
+/// already owns exclusively.
+pub const DropMode = enum(u32) {
+    decref_atomic,
+    decref_single_thread,
+    free,
+};
+
+/// The dying allocations a teardown in progress has yet to visit.
+///
+/// Tearing down a value of a recursive type meets more dying allocations of
+/// the kind it is already tearing down: a list's elements hold lists, a box's
+/// payload holds boxes. Visiting each one where it is met would nest one
+/// native frame per level of the value, so a value the program built in a
+/// loop could overflow the stack when dropped. A teardown instead owns a
+/// queue. A dying allocation met while that teardown runs is pushed onto the
+/// queue, and the teardown visits it after the allocation it is on, in a
+/// loop, so native stack use does not grow with the depth of the value.
+///
+/// A queued allocation is exclusively owned and its count is zero, so its
+/// refcount word is free: it holds the link to the next queued allocation.
+/// Queuing therefore allocates nothing.
+///
+/// A queue takes allocations of one teardown only (`Teardown`). When a
+/// teardown meets a dying allocation of a different one, that allocation
+/// starts its own teardown, nested in the first and linked to it through
+/// `outer`; the nested teardown finds the first one's queue through that
+/// link when it meets the first kind again. Nesting is therefore bounded by
+/// the number of distinct teardowns a type has, never by the size of a value.
+pub const DropQueue = extern struct {
+    /// The queue of the teardown this one runs inside, if any.
+    outer: ?*DropQueue,
+    /// Data pointer of the most recently queued allocation.
+    head: ?[*]u8,
+    teardown: Teardown,
+
+    /// Everything that decides how an allocation is torn down. Allocations
+    /// with equal teardowns are interchangeable to the loop that visits
+    /// them, which is what lets them share a queue.
+    pub const Teardown = extern struct {
+        /// What releases each element or the payload: the address of a
+        /// compiled helper, or any other value its owner compares by.
+        child: usize,
+        /// Width of one list element; zero for a box.
+        element_width: usize,
+        alignment: u32,
+        kind: Kind,
+
+        pub const Kind = enum(u8) { list, box };
+
+        fn same(a: Teardown, b: Teardown) bool {
+            return a.child == b.child and a.element_width == b.element_width and a.alignment == b.alignment and a.kind == b.kind;
+        }
+    };
+
+    /// The queue, among `innermost` and the teardowns it runs inside, that
+    /// takes allocations torn down as `teardown`.
+    pub fn enclosing(innermost: ?*DropQueue, teardown: Teardown) ?*DropQueue {
+        var candidate = innermost;
+        while (candidate) |queue| : (candidate = queue.outer) {
+            if (queue.teardown.same(teardown)) return queue;
+        }
+        return null;
+    }
+
+    /// Queue a dying allocation the caller owns exclusively.
+    pub fn push(self: *DropQueue, data: [*]u8) void {
+        const words: [*]usize = alignedPtrCast([*]usize, data, @src());
+        (words - 1)[0] = @intFromPtr(self.head);
+        self.head = data;
+    }
+
+    /// Take the most recently queued allocation, if any.
+    pub fn pop(self: *DropQueue) ?[*]u8 {
+        const data = self.head orelse return null;
+        const words: [*]usize = alignedPtrCast([*]usize, data, @src());
+        self.head = @ptrFromInt((words - 1)[0]);
+        return data;
+    }
+};
+
+/// Drops a box whose payload holds more boxes of its own teardown, without
+/// nesting a native frame per box (see `DropQueue`).
+///
+/// `child` identifies what `dropPayload` does, for `DropQueue.Teardown`.
+/// `dropPayload` releases what the payload holds and passes the queue it is
+/// given to every queued teardown it reaches.
+pub fn boxDropQueued(
+    payload_ptr: ?[*]u8,
+    alignment: u32,
+    child: usize,
+    outer: ?*DropQueue,
+    mode: DropMode,
+    context: anytype,
+    comptime dropPayload: fn (@TypeOf(context), [*]u8, *DropQueue) void,
+    roc_ops: *RocOps,
+) void {
+    stack_guard.check();
+    switch (mode) {
+        .decref_atomic => if (!releaseDataPtr(payload_ptr, .atomic, roc_ops)) return,
+        .decref_single_thread => if (!releaseDataPtr(payload_ptr, .single_thread, roc_ops)) return,
+        .free => {},
+    }
+    const data: [*]u8 = @ptrFromInt(@intFromPtr(payload_ptr) & ~DATA_PTR_TAG_MASK);
+    if (@intFromPtr(data) == 0) return;
+    const teardown: DropQueue.Teardown = .{ .child = child, .element_width = 0, .alignment = alignment, .kind = .box };
+    if (DropQueue.enclosing(outer, teardown)) |queue| return queue.push(data);
+
+    var queue: DropQueue = .{ .outer = outer, .head = null, .teardown = teardown };
+    var dying = data;
+    while (true) {
+        dropPayload(context, dying, &queue);
+        freeDataPtrC(dying, alignment, true, roc_ops);
+        dying = queue.pop() orelse break;
+    }
 }
 
 inline fn decref_ptr_to_refcount(

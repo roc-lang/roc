@@ -342,6 +342,10 @@ rc_helper_funcs: std.AutoHashMap(u64, u32),
 rc_helper_table_indices: std.AutoHashMap(u64, u32),
 /// Atomic helpers explicitly named by static-data relocations.
 static_data_rc_helpers: []const RcHelperKey = &.{},
+/// While a `decref_queued` helper's body is emitted: the local holding the
+/// drop queue it received, which it passes to each `decref_queued` child and
+/// each queued teardown. Null in every other body, which passes a null queue.
+rc_queue_local: ?u32 = null,
 /// Map from proc spec id → wasm table index (for proc_ref literals).
 proc_table_indices: collections.DenseMap(u32, u32),
 /// Map from LIR string backing id → wasm data offset for the backing bytes.
@@ -2426,6 +2430,9 @@ fn emitRawDirectRcPlan(
             );
             return true;
         },
+        // A queued teardown calls a builtin with a helper callback, which
+        // only a compiled helper's body emits.
+        .list_decref_queued, .list_free_queued, .box_decref_queued, .box_free_queued => return false,
         .struct_, .tag_union, .closure => return false,
     }
 }
@@ -2455,6 +2462,10 @@ fn emitExplicitRcHelperCallForValuePtr(
         .decref, .free => {},
         .host_drop => wasmInvariantFmt(
             "WASM/codegen invariant violated: RC statement used a host-shaped drop adapter",
+            .{},
+        ),
+        .decref_queued => wasmInvariantFmt(
+            "WASM/codegen invariant violated: RC statement used a queued drop helper",
             .{},
         ),
     }
@@ -2900,8 +2911,8 @@ fn emitBuiltinInternalStrRc(self: *Self, comptime kind: RcOpKind, str_ptr_local:
 /// on_drop slots belong to no RC statement and are always requested as
 /// `.atomic`.
 fn rcHelperCacheKey(helper_key: RcHelperKey, atomicity: RcAtomicity) u64 {
-    // RcHelperKey.encode() occupies bits 0..33 (layout index + op).
-    return helper_key.encode() | (@as(u64, @backingInt(atomicity)) << 34);
+    // RcHelperKey.encode() occupies the low `encoded_bits` bits (layout index + op).
+    return helper_key.encode() | (@as(u64, @backingInt(atomicity)) << RcHelperKey.encoded_bits);
 }
 
 fn staticDataRequiresRcHelper(self: *const Self, helper_key: RcHelperKey, atomicity: RcAtomicity) bool {
@@ -2933,12 +2944,55 @@ fn emitRawRcHelperCallByKey(
             try self.emitLocalGet(count_local.?);
         },
         .decref, .free => {},
+        .decref_queued => try self.emitRcQueueArg(),
         .host_drop => wasmInvariantFmt(
             "WASM/codegen invariant violated: RC statement used a host-shaped drop adapter",
             .{},
         ),
     }
     try self.emitCall(helper_func_idx);
+}
+
+/// Push the queue a helper passes to a `decref_queued` child or a queued
+/// teardown: the one it received, or null in a helper that received none.
+fn emitRcQueueArg(self: *Self) Allocator.Error!void {
+    if (self.rc_queue_local) |queue_local| {
+        try self.emitLocalGet(queue_local);
+    } else {
+        try self.emitI32Const(0);
+    }
+}
+
+fn queuedDropMode(atomicity: RcAtomicity) builtins.utils.DropMode {
+    return switch (atomicity) {
+        .atomic => .decref_atomic,
+        .single_thread => .decref_single_thread,
+    };
+}
+
+/// Drop a list on a cycle of its type through the queued teardown builtin
+/// (`builtins.utils.DropQueue`). The builtin takes the list by address, which
+/// is the helper's value pointer, and reaches the element helper through its
+/// table slot.
+fn emitQueuedListDrop(self: *Self, list_plan: layout.RcQueuedListPlan, value_ptr_local: u32, mode: builtins.utils.DropMode) Allocator.Error!void {
+    try self.emitLocalGet(value_ptr_local);
+    try self.emitI32Const(@intCast(list_plan.elem_alignment));
+    try self.emitI32Const(@intCast(list_plan.elem_width));
+    try self.emitFunctionTableIndexConst(try self.rcHelperTableIndex(list_plan.child));
+    try self.emitRcQueueArg();
+    try self.emitI32Const(@intCast(@backingInt(mode)));
+    try self.emitBuiltinCall(.list_drop_queued);
+}
+
+/// Drop a box on a cycle of its type through the queued teardown builtin
+/// (`builtins.utils.DropQueue`).
+fn emitQueuedBoxDrop(self: *Self, box_plan: layout.RcQueuedBoxPlan, value_ptr_local: u32, mode: builtins.utils.DropMode) Allocator.Error!void {
+    try self.emitLoadAt(value_ptr_local, .i32, 0);
+    try self.emitI32Const(@intCast(box_plan.elem_alignment));
+    try self.emitFunctionTableIndexConst(try self.rcHelperTableIndex(box_plan.child));
+    try self.emitRcQueueArg();
+    try self.emitI32Const(@intCast(@backingInt(mode)));
+    try self.emitBuiltinCall(.box_drop_queued);
 }
 
 /// Look up a previously-reserved RC helper's global function index.
@@ -3065,6 +3119,10 @@ fn generateBuiltinInternalRcHelperBody(
             }
             try self.emitDataPtrFree(box_ptr_local, box_plan.elem_alignment, box_plan.child != null);
         },
+        .list_decref_queued => |list_plan| try self.emitQueuedListDrop(list_plan, value_ptr_local, queuedDropMode(atomicity)),
+        .list_free_queued => |list_plan| try self.emitQueuedListDrop(list_plan, value_ptr_local, .free),
+        .box_decref_queued => |box_plan| try self.emitQueuedBoxDrop(box_plan, value_ptr_local, queuedDropMode(atomicity)),
+        .box_free_queued => |box_plan| try self.emitQueuedBoxDrop(box_plan, value_ptr_local, .free),
         .erased_callable_incref => {
             const payload_ptr_local = try self.emitLoadAtToNewLocal(value_ptr_local, .i32, 0);
             try self.emitDataPtrIncrefByLocal(payload_ptr_local, count_local.?);
@@ -3153,6 +3211,7 @@ fn rcPlanNeedsCompiledHelper(helper_plan: RcHelperPlan) bool {
     return switch (helper_plan) {
         .list_incref, .list_decref, .list_free => |list_plan| list_plan.child != null,
         .box_decref, .box_free => |box_plan| box_plan.child != null,
+        .list_decref_queued, .list_free_queued, .box_decref_queued, .box_free_queued => true,
         .struct_, .tag_union, .closure => true,
         .noop, .str_incref, .str_decref, .str_free, .box_incref, .erased_callable_incref, .erased_callable_decref, .erased_callable_free => false,
     };
@@ -3194,6 +3253,9 @@ fn appendRcHelperChildKeys(self: *const Self, helper_plan: RcHelperPlan, out: *s
             }
         },
         .closure => |child_key| try out.append(oa, child_key),
+        // A queued teardown names its child by table slot, which reserves
+        // the child itself (`rcHelperTableIndex`).
+        .list_decref_queued, .list_free_queued, .box_decref_queued, .box_free_queued => {},
         .noop, .str_incref, .str_decref, .str_free, .box_incref, .erased_callable_incref, .erased_callable_decref, .erased_callable_free => {},
     }
 }
@@ -3205,7 +3267,7 @@ fn rcHelperParamTypes(op: layout.RcOp, buf: *[builtins.rc_callback_abi.max_param
     for (roles, 0..) |role, i| {
         buf[i] = switch (role) {
             // wasm32 pointers and the pointer-sized count are both i32.
-            .value_ptr, .count, .ops_ptr => .i32,
+            .value_ptr, .count, .ops_ptr, .drop_queue => .i32,
         };
     }
     return buf[0..roles.len];
@@ -3347,12 +3409,18 @@ fn emitRcHelperBody(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity
     const value_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     const count_local = switch (helper_key.op) {
         .incref => self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory,
-        .decref, .free, .host_drop => null,
+        .decref, .free, .host_drop, .decref_queued => null,
     };
     if (helper_key.op == .host_drop) {
         // The published on-drop ABI's ops slot, which generated adapters ignore.
         _ = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     }
+    const outer_rc_queue_local = self.rc_queue_local;
+    defer self.rc_queue_local = outer_rc_queue_local;
+    self.rc_queue_local = if (helper_key.op == .decref_queued)
+        self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory
+    else
+        null;
     self.fp_local = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory;
 
     try self.emitVoidBlock();
@@ -6574,8 +6642,8 @@ const DecodedRcHelper = struct { key: RcHelperKey, atomicity: RcAtomicity };
 
 fn decodeRcHelperCacheKey(cache_key: u64) DecodedRcHelper {
     return .{
-        .key = RcHelperKey.decode(cache_key & 0x3_ffff_ffff),
-        .atomicity = @fromBackingInt(@as(u1, @intCast((cache_key >> 34) & 1))),
+        .key = RcHelperKey.decode(cache_key),
+        .atomicity = @fromBackingInt(@as(u1, @intCast((cache_key >> RcHelperKey.encoded_bits) & 1))),
     };
 }
 
@@ -9368,7 +9436,7 @@ fn generateDynRc(self: *Self, value: ProcLocalId, op: layout.RcOp, count: u32) A
             try self.emitBytesAddress(value);
             try self.emitBoxyRuntimeCall(.decref);
         },
-        .free, .host_drop => wasmInvariantFmt("WASM/codegen invariant violated: {s} of dynamic local {d}", .{ @tagName(op), @backingInt(value) }),
+        .free, .host_drop, .decref_queued => wasmInvariantFmt("WASM/codegen invariant violated: {s} of dynamic local {d}", .{ @tagName(op), @backingInt(value) }),
     }
 }
 

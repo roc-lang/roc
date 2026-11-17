@@ -24,7 +24,7 @@ test "LIR pass workers deterministically fuse branch-return Try consumers" {
         \\    echo!(Str.inspect(consume(count) + consume(count + 1)))
         \\    Ok({})
         \\}
-    }, .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion, .proc_debug_names = true, .dump_proc_identities = true }, &.{.tag_fusion});
+    }, .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion, .dump_proc_identities = true }, &.{.tag_fusion});
 }
 
 test "LIR pass workers deterministically forward generated iterator joins in none mode" {
@@ -37,5 +37,5 @@ test "LIR pass workers deterministically forward generated iterator joins in non
         \\    echo!(Str.inspect(total))
         \\    Ok({})
         \\}
-    }, .{ .inline_mode = .none, .proc_debug_names = true, .dump_proc_identities = true }, &.{.forwarding_join});
+    }, .{ .inline_mode = .none, .dump_proc_identities = true }, &.{.forwarding_join});
 }

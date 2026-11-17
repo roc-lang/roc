@@ -85,6 +85,18 @@ pub const InsertOptions = struct {
     /// queued variant. Each wave costs three coordinator synchronizations, so
     /// production keeps it wide; wave-structure tests narrow it.
     emission_wave_size: usize = default_emission_wave_size,
+    /// Receives, in procedure order, each exported worker's published
+    /// outcome-restitution variant (`publishOutcomeVariants`), appended with
+    /// the store's allocator.
+    published_variants_out: ?*std.ArrayList(PublishedOutcomeVariant) = null,
+};
+
+/// An exported worker and the outcome-restitution variant ARC published for
+/// it, which is itself exported (design.md "Outcome-Conditioned Argument
+/// Restitution", published outcome variants).
+pub const PublishedOutcomeVariant = struct {
+    worker: LIR.LirProcSpecId,
+    variant: LIR.LirProcSpecId,
 };
 
 /// Exact work and worker callbacks for signature-dependent uniqueness solving.
@@ -748,6 +760,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         variants.sigs.deinit(store.allocator);
         variants.queue.deinit(store.allocator);
     }
+    try publishOutcomeVariants(store, &solution, &variants, base_proc_count, options.published_variants_out);
     var base_index: usize = 0;
     var variant_index: usize = 0;
     // The wave width is a storage bound independent of worker count. Identity
@@ -834,6 +847,35 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         }, options.roots);
     }
     return .{ .deferred_erased_calls = deferred_erased_calls };
+}
+
+/// Queue the outcome-restitution variant of every exported procedure that
+/// publishes one (`Solution.publishesOutcomeVariant`), whether or not a call
+/// here demands it, export it, and record its outcome table on the
+/// procedure for the export interface (design.md "Outcome-Conditioned
+/// Argument Restitution"). The variant's demand is exactly the base
+/// signature with the complete capability, which is what a call from
+/// another unit demands of it. Each one is appended to `published_out`.
+fn publishOutcomeVariants(store: *LirStore, solution: *const arc_solve.Solution, variants: *VariantTable, base_proc_count: usize, published_out: ?*std.ArrayList(PublishedOutcomeVariant)) ResourceError!void {
+    var words = std.ArrayList(u32).empty;
+    defer words.deinit(store.allocator);
+    for (0..base_proc_count) |proc_index| {
+        const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
+        const spec = store.getProcSpecImmediate(proc);
+        if (!spec.exported or spec.external) continue;
+        if (!solution.publishesOutcomeVariant(store, proc)) continue;
+        var demanded = solution.sigOf(proc);
+        demanded.outcomes = solution.availableOutcomeSpanOf(proc);
+        const variant = try variants.intern(store, .{ .source = proc, .demanded = demanded });
+        words.clearRetainingCapacity();
+        for (solution.sigTable().outcomesOf(demanded)) |outcome| {
+            try words.appendSlice(store.allocator, &.{ outcome.discriminant, outcome.restituted_params });
+        }
+        const outcomes = try store.addU32Span(words.items);
+        store.getProcSpecPtr(variant).exported = true;
+        store.getProcSpecPtr(proc).rc_outcomes = outcomes;
+        if (published_out) |published| try published.append(store.allocator, .{ .worker = proc, .variant = variant });
+    }
 }
 
 /// Plan every owner of a wave, reserve the variants their plans request in
@@ -1574,15 +1616,8 @@ const QueuedVariant = struct {
 /// plus the demanded parameter modes, return mode, unique-parameter mask,
 /// and outcome rows, which are exactly what selects the variant.
 fn variantIdentity(sig_table: arc_sig.SigTable, source: LIR.ProcIdentity, demanded: arc_sig.RcSig) LIR.ProcIdentity {
-    var key = source.deriving("arc-variant");
-    key.update(std.mem.asBytes(&std.mem.nativeToLittle(u16, demanded.borrowed_params)));
-    const ret_mode: [1]u8 = .{@backingInt(demanded.ret_mode)};
-    key.update(&ret_mode);
-    key.update(std.mem.asBytes(&std.mem.nativeToLittle(u16, demanded.unique_params)));
-    for (sig_table.outcomesOf(demanded)) |outcome| {
-        key.update(std.mem.asBytes(&std.mem.nativeToLittle(u32, outcome.discriminant)));
-        key.update(std.mem.asBytes(&std.mem.nativeToLittle(u16, outcome.restituted_params)));
-    }
+    var key = source.ownershipVariant(demanded.borrowed_params, @backingInt(demanded.ret_mode), demanded.unique_params);
+    for (sig_table.outcomesOf(demanded)) |outcome| key.outcome(outcome.discriminant, outcome.restituted_params);
     return key.finish();
 }
 
@@ -1611,9 +1646,15 @@ const VariantTable = struct {
         if (entry.found_existing) return entry.value_ptr.*;
         const callee = request.source;
         const source_spec = store.getProcSpec(callee);
-        if (source_spec.external) arcInvariant("ARC demanded a variant of an object-cache procedure, whose signature is fixed");
         if (source_spec.is_static_initializer) arcInvariant("ARC demanded a variant of a static initializer, which nothing calls");
         const identity = variantIdentity(self.sig_table, source_spec.identity, request.demanded);
+        if (source_spec.external) {
+            const variant = try self.addPublishedVariant(store, callee, source_spec, identity, request.demanded);
+            entry.value_ptr.* = variant;
+            try self.sigs.append(store.allocator, request.demanded);
+            try self.queue.append(store.allocator, .{ .variant = variant, .source = callee, .sig = request.demanded });
+            return variant;
+        }
         const variant = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
             .identity = identity,
@@ -1642,6 +1683,51 @@ const VariantTable = struct {
         entry.value_ptr.* = variant;
         try self.sigs.append(store.allocator, request.demanded);
         try self.queue.append(store.allocator, .{ .variant = variant, .source = callee, .sig = request.demanded });
+        return variant;
+    }
+
+    /// The body-less procedure of the outcome-restitution variant another
+    /// object publishes for external procedure `callee`: the only variant
+    /// of an external procedure a call can demand, with the base signature
+    /// and the complete published outcome table, defined by that object
+    /// under the identity its demand names and reached exactly as `callee`.
+    fn addPublishedVariant(self: *VariantTable, store: *LirStore, callee: LIR.LirProcSpecId, source_spec: LIR.LirProcSpec, identity: LIR.ProcIdentity, demanded: arc_sig.RcSig) ResourceError!LIR.LirProcSpecId {
+        if (builtin.mode == .debug) {
+            const published = self.sig_table.get(callee);
+            if (demanded.borrowed_params != published.borrowed_params or demanded.ret_mode != published.ret_mode or
+                demanded.unique_params != 0 or demanded.outcomes.isEmpty())
+            {
+                arcInvariant("ARC demanded a variant of an external procedure other than its published outcome variant");
+            }
+            const words = store.getU32Span(source_spec.rc_outcomes);
+            const outcomes = self.sig_table.outcomesOf(demanded);
+            if (GuardedList.borrowLen(words) != 2 * outcomes.len) arcInvariant("ARC demanded an outcome table an external procedure did not publish");
+            for (outcomes, 0..) |outcome, row| {
+                if (GuardedList.at(words, 2 * row) != outcome.discriminant or GuardedList.at(words, 2 * row + 1) != outcome.restituted_params) {
+                    arcInvariant("ARC demanded an outcome table an external procedure did not publish");
+                }
+            }
+        }
+        const variant = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = identity,
+            .args = source_spec.args,
+            .erased_reuse_arg = source_spec.erased_reuse_arg,
+            .erased_call_args = source_spec.erased_call_args,
+            .ret_layout = source_spec.ret_layout,
+            .erased_capture_arg = source_spec.erased_capture_arg,
+            .dyn_result = source_spec.dyn_result,
+            .abi = source_spec.abi,
+            .emission_unit = source_spec.emission_unit,
+            .external = true,
+            .linked = true,
+            .may_leave_pending = source_spec.may_leave_pending,
+            .rc_read_only_params = source_spec.rc_read_only_params,
+            .rc_ret_unique = source_spec.rc_ret_unique,
+            .rc_ret_unique_fields = source_spec.rc_ret_unique_fields,
+            .rc_ret_conditions = source_spec.rc_ret_conditions,
+        }, store.procLoc(callee));
+        try store.copyProcDebugInfo(variant, callee);
         return variant;
     }
 };
@@ -3264,7 +3350,22 @@ const Inserter = struct {
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     try step.transfer_positions.append(u32, self.solve_allocator, &self.arc_plans.positions, self.transfer_position_scratch.items);
                     const singles = [_]LIR.LocalId{assign.target};
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.fields, assign.next);
+                    self.death_scratch.clearRetainingCapacity();
+                    // A container stored whole while it is read again
+                    // afterwards is retained after the store; the fields
+                    // nothing reads afterwards are then released from it, so
+                    // the aggregate holds their only unit.
+                    const fields = self.store.getLocalSpan(assign.fields);
+                    for (0..GuardedList.borrowLen(fields)) |position| {
+                        if (position > std.math.maxInt(u8)) break;
+                        if (std.mem.findScalar(u32, self.transfer_position_scratch.items, @intCast(position)) != null) continue;
+                        const local = GuardedList.at(fields, position);
+                        if (try self.wholeMoveResidual(&segment.owned, segment.cursor, position, fields, local)) |release| {
+                            try self.death_scratch.append(self.lane_allocator, release);
+                        }
+                    }
+                    try self.postStmtDeaths(&segment.owned, &singles, assign.fields, assign.next, self.death_scratch);
+                    try self.copyDeathScratchToStep(step);
                 },
                 .assign_tag => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -6663,8 +6764,10 @@ const Inserter = struct {
         self.moved_residual_scratch.clearRetainingCapacity();
         var demanded = callee_sig;
         const locals = self.store.getLocalSpan(span);
-        // A call across emission units adapts to the callee's base signature
-        // (design.md "Mode Specialization", emission units).
+        // A call across emission units adapts to the callee's base signature,
+        // except for an outcome variant the callee's object publishes, which
+        // `outcomeSpanForCall` offers it (design.md "Mode Specialization",
+        // emission units).
         const same_unit = if (callee) |direct| arc_solve.sharesEmissionUnit(self.store, self.current_source_proc, direct) else false;
         if (tail_call != null and self.current_sig.ret_mode == .owned and demanded.ret_mode == .borrowed) {
             // A recursive tail edge must use the caller's return ABI. Asking
@@ -6897,12 +7000,13 @@ const Inserter = struct {
                 // A dying argument moving into an owned position that is
                 // statically unique with no borrow live at the call demands
                 // a variant whose parameter is seeded born-unique, so
-                // checked ops it reaches in the body go check-free.
+                // checked ops it reaches in the body go check-free. A call
+                // across emission units seeds no uniqueness.
                 const seed_can_reach_check = if (position < arc_sig.tracked_param_count) blk: {
                     const direct = callee orelse break :blk false;
                     break :blk self.procParamCanUseUniqueSeed(direct, position);
                 } else false;
-                if (unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
+                if (unique_demand and same_unit and seed_can_reach_check and self.isLocalUniqueHere(local) and
                     !self.groupSharesOtherOperand(locals, position, local))
                 {
                     demanded.unique_params |= arc_sig.paramBit(position).?;
@@ -8009,6 +8113,7 @@ const Inserter = struct {
             .incref => .incref,
             .decref, .free => .decref,
             .host_drop => arcInvariant("ARC RC statement carried a host-shaped drop adapter"),
+            .decref_queued => arcInvariant("ARC RC statement carried a queued drop helper"),
         };
     }
 
@@ -15688,23 +15793,43 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
     try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
 }
 
-test "RC emission units: a call demands an outcome-restitution variant only within its callee's unit" {
+test "RC emission units: a call demands an outcome-restitution variant within its callee's unit or when its callee's object publishes it" {
     // A checked mutation whose failure outcome leaves its list argument
     // untouched, called by a caller that reads the list again on failure, with
     // the two procedures placed in emission units (design.md "Mode
-    // Specialization", emission units) and no optional mode specialization,
-    // as a dev build lowers them. A caller in the callee's unit demands the
-    // outcome variant and hands the list over without a retain; a caller in
-    // another module's unit, or any caller of an isolated callee, as a `.boxy`
-    // app's call of a Builtin `List` worker is, adapts to the callee's base
-    // signature and retains the list across the call, so the mutation sees it
-    // shared.
-    const Case = struct { caller: LIR.EmissionUnit, callee: LIR.EmissionUnit, outcome_variant: bool };
+    // Specialization", emission units). A caller in the callee's unit demands
+    // the outcome variant and hands the list over without a retain. A caller
+    // in another module's unit, or any caller of an isolated callee, adapts to
+    // the callee's base signature and retains the list across the call, so
+    // the mutation sees it shared, unless the callee publishes its outcome
+    // variant (design.md "Outcome-Conditioned Argument Restitution"): a call
+    // from any unit may demand exactly that variant and no other, even with
+    // optional mode specialization on and a unique dying argument a
+    // same-unit call would seed. An exported worker's object always emits
+    // and exports the variant, whether or not a call demands it; a program's
+    // publishing worker that is not exported gets it only on demand.
+    const Case = struct {
+        caller: LIR.EmissionUnit,
+        callee: LIR.EmissionUnit,
+        exported: bool = false,
+        /// A program's worker of a kind a module unit exports.
+        publisher: bool = false,
+        reads_on_failure: bool = true,
+        specialize: bool = false,
+        variants: usize,
+        retains: bool,
+    };
     const cases = [_]Case{
-        .{ .caller = LIR.EmissionUnit.module(0), .callee = LIR.EmissionUnit.module(0), .outcome_variant = true },
-        .{ .caller = LIR.EmissionUnit.module(1), .callee = LIR.EmissionUnit.module(0), .outcome_variant = false },
-        .{ .caller = LIR.EmissionUnit.module(0), .callee = .isolated, .outcome_variant = false },
-        .{ .caller = .program, .callee = .program, .outcome_variant = true },
+        .{ .caller = LIR.EmissionUnit.module(0), .callee = LIR.EmissionUnit.module(0), .variants = 1, .retains = false },
+        .{ .caller = LIR.EmissionUnit.module(1), .callee = LIR.EmissionUnit.module(0), .variants = 0, .retains = true },
+        .{ .caller = LIR.EmissionUnit.module(0), .callee = .isolated, .variants = 0, .retains = true },
+        .{ .caller = .program, .callee = .program, .variants = 1, .retains = false },
+        .{ .caller = LIR.EmissionUnit.module(1), .callee = LIR.EmissionUnit.module(0), .exported = true, .variants = 1, .retains = false },
+        .{ .caller = .isolated, .callee = LIR.EmissionUnit.module(0), .exported = true, .variants = 1, .retains = false },
+        .{ .caller = LIR.EmissionUnit.module(1), .callee = LIR.EmissionUnit.module(0), .exported = true, .specialize = true, .variants = 1, .retains = false },
+        .{ .caller = LIR.EmissionUnit.module(1), .callee = LIR.EmissionUnit.module(0), .exported = true, .reads_on_failure = false, .variants = 1, .retains = false },
+        .{ .caller = LIR.EmissionUnit.module(1), .callee = LIR.EmissionUnit.module(0), .publisher = true, .variants = 1, .retains = false },
+        .{ .caller = LIR.EmissionUnit.module(1), .callee = LIR.EmissionUnit.module(0), .publisher = true, .reads_on_failure = false, .variants = 0, .retains = false },
     };
     for (cases) |case| {
         var f = try ArcTest.init(testing.allocator);
@@ -15714,58 +15839,252 @@ test "RC emission units: a call demands an outcome-restitution variant only with
             try f.layouts.ensureZstLayout(),
             f.list_i64,
         });
-        const param = try f.local(f.list_i64);
-        const choose_success = try f.local(.i64);
-        const changed = try f.local(f.list_i64);
-        const callee_result = try f.local(try_list);
-        const success_ret = try f.ret(callee_result);
-        const success_tag = try f.assignTag(callee_result, 1, changed, success_ret);
-        const mutate = try f.store.addCFStmt(.{ .assign_low_level = .{
-            .target = changed,
-            .op = .list_reverse,
-            .rc_effect = try f.store.addRcEffect(LIR.LowLevel.RcEffect.runtimeUniqueness(1)),
-            .args = try f.span(&.{param}),
-            .next = success_tag,
-        } }, .test_fixture);
-        const failure_ret = try f.ret(callee_result);
-        const failure_tag = try f.assignTag(callee_result, 0, null, failure_ret);
-        const callee_body = try f.switchStmt(choose_success, mutate, failure_tag, null);
-        const callee = try f.addProc(&.{ param, choose_success }, callee_body, try_list);
-
-        const item = try f.local(.i64);
+        const callee = try addFailureRestitutingCallee(&f, try_list);
         const input = try f.local(f.list_i64);
-        const caller_choose = try f.local(.i64);
-        const call_result = try f.local(try_list);
-        const discriminant = try f.local(.u8);
-        const success_value = try f.local(.i64);
-        const failure_value = try f.local(.i64);
-        const caller_success_ret = try f.ret(success_value);
-        const success_body = try f.assignI64(success_value, 1, caller_success_ret);
-        const caller_failure_ret = try f.ret(failure_value);
-        const failure_done = try f.assignI64(failure_value, 0, caller_failure_ret);
-        const failure_body = try f.expectStmt(input, failure_done);
-        const refine = try f.switchStmt(discriminant, success_body, failure_body, null);
-        const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
-        const call = try f.store.addCFStmt(.{ .assign_call = .{
-            .target = call_result,
-            .proc = callee,
-            .args = try f.span(&.{ input, caller_choose }),
-            .next = read_discriminant,
-        } }, .test_fixture);
-        const choose = try f.assignI64(caller_choose, 1, call);
-        const make_input = try f.assignList(input, &.{item}, choose);
-        const caller_body = try f.assignI64(item, 7, make_input);
-        const caller = try f.addProc(&.{}, caller_body, .i64);
+        _ = try addFailureReadingCaller(&f, .{ .callee = callee, .result_layout = try_list, .input = input, .reads_on_failure = case.reads_on_failure, .unit = case.caller });
         f.store.getProcSpecPtr(callee).emission_unit = case.callee;
-        f.store.getProcSpecPtr(caller).emission_unit = case.caller;
+        f.store.getProcSpecPtr(callee).exported = case.exported;
+        f.store.getProcSpecPtr(callee).outcome_publisher = case.exported or case.publisher;
+
+        const base_proc_count = f.store.procSpecCount();
+        _ = try insert(&f.store, &f.layouts, .{ .specialize = case.specialize });
+
+        try testing.expectEqual(base_proc_count + case.variants, f.store.procSpecCount());
+        try testing.expectEqual(@as(usize, @intFromBool(case.retains)), f.countRc(input, .incref));
+        const published = f.store.getProcSpec(callee).rc_outcomes;
+        if (case.exported) {
+            // The variant is exported, and the worker's interface carries
+            // its outcome table: failure (0) returns the list, success (1)
+            // returns nothing.
+            try testing.expect(f.store.getProcSpec(@fromBackingInt(@intCast(base_proc_count))).exported);
+            try expectU32Span(&f.store, published, &.{ 0, 1, 1, 0 });
+        } else {
+            try testing.expectEqual(@as(u32, 0), published.len);
+        }
+    }
+}
+
+test "RC emission units: a call of an external procedure demands the outcome variant its object publishes" {
+    // The caller's unit imports the callee: a body-less external procedure
+    // whose export interface publishes an outcome variant. A call that proves
+    // the failure refinement targets a body-less linked procedure under the
+    // identity that demand names, which the callee's object exports, and
+    // hands the list over without a retain. A callee that publishes nothing
+    // is called at its base signature.
+    for ([_]bool{ true, false }) |publishes| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+
+        const try_list = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+            try f.layouts.ensureZstLayout(),
+            f.list_i64,
+        });
+        const param = try f.local(f.list_i64);
+        const choose = try f.local(.i64);
+        const rows = [_]u32{ 0, 1, 1, 0 };
+        const callee = try f.store.addProcSpec(.{
+            .name = f.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(21),
+            .args = try f.span(&.{ param, choose }),
+            .body = .none,
+            .ret_layout = try_list,
+            .emission_unit = LIR.EmissionUnit.module(0),
+            .external = true,
+            .linked = true,
+            .rc_outcomes = try f.store.addU32Span(if (publishes) &rows else &.{}),
+        }, .none);
+        const input = try f.local(f.list_i64);
+        _ = try addFailureReadingCaller(&f, .{ .callee = callee, .result_layout = try_list, .input = input, .reads_on_failure = true, .unit = LIR.EmissionUnit.module(1) });
 
         const base_proc_count = f.store.procSpecCount();
         _ = try insert(&f.store, &f.layouts, .{ .specialize = false });
 
-        const variants: usize = if (case.outcome_variant) 1 else 0;
-        try testing.expectEqual(base_proc_count + variants, f.store.procSpecCount());
-        try testing.expectEqual(@as(usize, if (case.outcome_variant) 0 else 1), f.countRc(input, .incref));
+        try testing.expectEqual(base_proc_count + @intFromBool(publishes), f.store.procSpecCount());
+        try testing.expectEqual(@as(usize, @intFromBool(!publishes)), f.countRc(input, .incref));
+        if (publishes) {
+            const variant = f.store.getProcSpec(@fromBackingInt(@intCast(base_proc_count)));
+            var expected = LIR.ProcIdentity.forTest(21).ownershipVariant(0, @backingInt(arc_sig.Mode.owned), 0);
+            expected.outcome(0, 1);
+            expected.outcome(1, 0);
+            try testing.expectEqual(expected.finish(), variant.identity);
+            try testing.expect(variant.external and variant.linked and variant.body == .none);
+        }
     }
+}
+
+test "RC published outcome variant: a failure join reached after a retained sublist hands back the entry list" {
+    // `|bytes| match bytes { [0, .. as rest] => Ok(rest), _ => Err("failed") }`
+    // as a module exports it: the failure join is reached both before the
+    // list is read and after the sublist the success path wraps, so the
+    // variant retains the list for that sublist, releases the sublist on the
+    // mismatch, and hands the list back from the shared failure join. The
+    // worker's object emits the variant whether or not anything calls it.
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const try_list = try f.layouts.putTagUnion(&[_]layout_mod.Idx{ .str, f.list_i64 });
+    const range_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = .i64 },
+        .{ .index = 1, .layout = .i64 },
+    });
+    const bytes = try f.local(f.list_i64);
+    const result = try f.local(try_list);
+    const len = try f.local(.i64);
+    const one = try f.local(.i64);
+    const has_first = try f.local(.i64);
+    const zero = try f.local(.i64);
+    const first = try f.local(.i64);
+    const rest_len = try f.local(.i64);
+    const range = try f.local(range_layout);
+    const rest = try f.local(f.list_i64);
+    const message = try f.local(.str);
+    const success_join = f.freshJoinPointId();
+    const failure_join = f.freshJoinPointId();
+
+    const success_ret = try f.ret(result);
+    const success_jump = try f.store.addCFStmt(.{ .jump = .{ .target = success_join } }, .test_fixture);
+    const ok_tag = try f.assignTag(result, 1, rest, success_jump);
+    const mismatch_jump = try f.store.addCFStmt(.{ .jump = .{ .target = failure_join } }, .test_fixture);
+    const match_first = try f.switchStmt(first, ok_tag, mismatch_jump, null);
+    const sublist = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = rest,
+        .op = .list_sublist,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_sublist.rcEffect()),
+        .args = try f.span(&.{ bytes, range }),
+        .next = match_first,
+    } }, .test_fixture);
+    const make_range = try f.assignStruct(range, &.{ one, rest_len }, sublist);
+    const read_rest_len = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = rest_len,
+        .op = .num_int_sub_wrap,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.num_int_sub_wrap.rcEffect()),
+        .args = try f.span(&.{ len, one }),
+        .next = make_range,
+    } }, .test_fixture);
+    const read_first = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = first,
+        .op = .list_get_unsafe,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_get_unsafe.rcEffect()),
+        .args = try f.span(&.{ bytes, zero }),
+        .next = read_rest_len,
+    } }, .test_fixture);
+    const non_empty = try f.assignI64(zero, 0, read_first);
+    const empty_jump = try f.store.addCFStmt(.{ .jump = .{ .target = failure_join } }, .test_fixture);
+    const check_len = try f.switchStmt(has_first, non_empty, empty_jump, null);
+    const read_has_first = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = has_first,
+        .op = .num_is_gte,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.num_is_gte.rcEffect()),
+        .args = try f.span(&.{ len, one }),
+        .next = check_len,
+    } }, .test_fixture);
+    const failure_remainder = try f.assignI64(one, 1, read_has_first);
+    const failure_jump = try f.store.addCFStmt(.{ .jump = .{ .target = success_join } }, .test_fixture);
+    const err_tag = try f.assignTag(result, 0, message, failure_jump);
+    const failure_body = try f.assignStr(message, "failed", err_tag);
+    const failure = try f.store.addCFStmt(.{ .join = .{
+        .id = failure_join,
+        .params = try f.span(&.{}),
+        .body = failure_body,
+        .remainder = failure_remainder,
+    } }, .test_fixture);
+    const read_len = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = len,
+        .op = .list_len,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_len.rcEffect()),
+        .args = try f.span(&.{bytes}),
+        .next = failure,
+    } }, .test_fixture);
+    const body = try f.store.addCFStmt(.{ .join = .{
+        .id = success_join,
+        .params = try f.span(&.{result}),
+        .body = success_ret,
+        .remainder = read_len,
+    } }, .test_fixture);
+    const worker = try f.addProc(&.{bytes}, body, try_list);
+    f.store.getProcSpecPtr(worker).emission_unit = LIR.EmissionUnit.module(0);
+    f.store.getProcSpecPtr(worker).exported = true;
+    f.store.getProcSpecPtr(worker).outcome_publisher = true;
+
+    const base_proc_count = f.store.procSpecCount();
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = false });
+
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    // The success outcome borrows the list for its sublist, so it hands the
+    // list back too.
+    try expectU32Span(&f.store, f.store.getProcSpec(worker).rc_outcomes, &.{ 0, 1, 1, 1 });
+}
+
+/// A checked mutation of its list parameter: discriminant 1 carries the
+/// mutated list, and discriminant 0, which returns nothing, leaves the list
+/// untouched.
+fn addFailureRestitutingCallee(f: *ArcTest, try_list: layout_mod.Idx) Allocator.Error!LIR.LirProcSpecId {
+    const param = try f.local(f.list_i64);
+    const choose_success = try f.local(.i64);
+    const changed = try f.local(f.list_i64);
+    const callee_result = try f.local(try_list);
+    const success_ret = try f.ret(callee_result);
+    const success_tag = try f.assignTag(callee_result, 1, changed, success_ret);
+    const mutate = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = changed,
+        .op = .list_reverse,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.RcEffect.runtimeUniqueness(1)),
+        .args = try f.span(&.{param}),
+        .next = success_tag,
+    } }, .test_fixture);
+    const failure_ret = try f.ret(callee_result);
+    const failure_tag = try f.assignTag(callee_result, 0, null, failure_ret);
+    const callee_body = try f.switchStmt(choose_success, mutate, failure_tag, null);
+    return try f.addProc(&.{ param, choose_success }, callee_body, try_list);
+}
+
+const FailureReadingCaller = struct {
+    callee: LIR.LirProcSpecId,
+    result_layout: layout_mod.Idx,
+    /// The fresh list the caller passes.
+    input: LIR.LocalId,
+    /// Whether the failure arm reads the list again.
+    reads_on_failure: bool,
+    unit: LIR.EmissionUnit,
+};
+
+/// A caller that passes a fresh list to `spec.callee`, switches on the
+/// result's discriminant, and on failure (0) reads the list again when
+/// `spec.reads_on_failure`.
+fn addFailureReadingCaller(f: *ArcTest, spec: FailureReadingCaller) Allocator.Error!LIR.LirProcSpecId {
+    const item = try f.local(.i64);
+    const caller_choose = try f.local(.i64);
+    const call_result = try f.local(spec.result_layout);
+    const discriminant = try f.local(.u8);
+    const success_value = try f.local(.i64);
+    const failure_value = try f.local(.i64);
+    const caller_success_ret = try f.ret(success_value);
+    const success_body = try f.assignI64(success_value, 1, caller_success_ret);
+    const caller_failure_ret = try f.ret(failure_value);
+    const failure_done = try f.assignI64(failure_value, 0, caller_failure_ret);
+    const failure_body = if (spec.reads_on_failure) try f.expectStmt(spec.input, failure_done) else failure_done;
+    const refine = try f.switchStmt(discriminant, success_body, failure_body, null);
+    const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = call_result,
+        .proc = spec.callee,
+        .args = try f.span(&.{ spec.input, caller_choose }),
+        .next = read_discriminant,
+    } }, .test_fixture);
+    const choose = try f.assignI64(caller_choose, 1, call);
+    const make_input = try f.assignList(spec.input, &.{item}, choose);
+    const caller_body = try f.assignI64(item, 7, make_input);
+    const caller = try f.addProc(&.{}, caller_body, .i64);
+    f.store.getProcSpecPtr(caller).emission_unit = spec.unit;
+    return caller;
+}
+
+/// Expect `span` of `store` to hold exactly `expected`.
+fn expectU32Span(store: *const LirStore, span: LIR.U32Span, expected: []const u32) error{TestExpectedEqual}!void {
+    const words = store.getU32Span(span);
+    var found: [16]u32 = undefined;
+    const len = @min(GuardedList.borrowLen(words), found.len);
+    for (found[0..len], 0..) |*word, index| word.* = GuardedList.at(words, index);
+    try testing.expectEqualSlices(u32, expected, found[0..len]);
 }
 
 /// A callee that hands its `List(Str)` argument back in variant

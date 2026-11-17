@@ -49,9 +49,6 @@ pub const Input = struct {
     roots: Common.RootRequests,
     target_usize: base.target.TargetUsize,
     inline_expects: enum { run, omit } = .run,
-    /// Name each procedure in the LIR store by the kind of worker it is,
-    /// for dumps and tests that read the program.
-    proc_debug_names: bool = false,
     /// Allow `List.map` to reuse a unique input list's allocation (see
     /// `SolvedLirLower.Options.list_in_place_map`).
     list_in_place_map: bool = false,
@@ -181,6 +178,11 @@ pub const ExportInterface = struct {
     rc_ret_unique_fields: u64 = 0,
     rc_ret_conditions: []const u32 = &.{},
     may_leave_pending: bool = false,
+    /// The outcome table of the outcome-restitution variant the worker's
+    /// object outputs (`LIR.LirProcSpec.rc_outcomes`); empty when it
+    /// outputs none. That variant has an interface of its own, under the
+    /// identity its demand names (`LIR.ProcIdentity.ownershipVariant`).
+    rc_outcomes: []const u32 = &.{},
     /// For a worker that takes a type table: its encoded needs list
     /// (`StoredFn.encodeNeeds`), which an importer fills its tables from.
     table_needs: []const u8 = &.{},
@@ -243,6 +245,7 @@ pub const ExportInterfaces = struct {
         while (entries.next()) |entry| {
             var owned = entry.value_ptr.*;
             owned.rc_ret_conditions = try self.arena.allocator().dupe(u32, owned.rc_ret_conditions);
+            owned.rc_outcomes = try self.arena.allocator().dupe(u32, owned.rc_outcomes);
             owned.table_needs = try self.arena.allocator().dupe(u8, owned.table_needs);
             try self.map.put(self.allocator, entry.key_ptr.*, owned);
         }
@@ -254,6 +257,7 @@ pub const ExportInterfaces = struct {
         defer self.mutex.unlock(self.io);
         var owned = interface;
         owned.rc_ret_conditions = try self.arena.allocator().dupe(u32, interface.rc_ret_conditions);
+        owned.rc_outcomes = try self.arena.allocator().dupe(u32, interface.rc_outcomes);
         owned.table_needs = try self.arena.allocator().dupe(u8, interface.table_needs);
         try self.map.put(self.allocator, identity, owned);
     }
@@ -268,6 +272,9 @@ pub const ExportInterfaces = struct {
         defer self.mutex.unlock(self.io);
         const conditions = try self.arena.allocator().alloc(u32, collections.GuardedList.borrowLen(words));
         for (conditions, 0..) |*word, index| word.* = collections.GuardedList.at(words, index);
+        const outcome_words = store.getU32Span(spec.rc_outcomes);
+        const outcomes = try self.arena.allocator().alloc(u32, collections.GuardedList.borrowLen(outcome_words));
+        for (outcomes, 0..) |*word, index| word.* = collections.GuardedList.at(outcome_words, index);
         const interface: ExportInterface = .{
             .rc_borrowed_params = spec.rc_borrowed_params,
             .rc_ret_borrowed = spec.rc_ret_borrowed,
@@ -277,6 +284,7 @@ pub const ExportInterfaces = struct {
             .rc_ret_unique_fields = spec.rc_ret_unique_fields,
             .rc_ret_conditions = conditions,
             .may_leave_pending = spec.may_leave_pending,
+            .rc_outcomes = outcomes,
             .table_needs = try self.arena.allocator().dupe(u8, table_needs),
             .template = boxy_export.template,
             .visible = boxy_export.visible,
@@ -308,6 +316,7 @@ test "export interface snapshot owns the complete calling contract" {
         .rc_ret_unique_fields = 4,
         .rc_ret_conditions = &.{ 7, 8, 9 },
         .may_leave_pending = true,
+        .rc_outcomes = &.{ 0, 0, 1, 2 },
         .table_needs = "producer needs",
         .template = 4,
         .visible = true,
@@ -315,7 +324,7 @@ test "export interface snapshot owns the complete calling contract" {
     try producer.put(identity, expected);
     try consumer.copyFrom(&producer);
     producer.clear();
-    try producer.put(identity, .{ .rc_ret_conditions = &.{ 10, 11, 12 }, .table_needs = "replaced needs" });
+    try producer.put(identity, .{ .rc_ret_conditions = &.{ 10, 11, 12 }, .rc_outcomes = &.{ 3, 4 }, .table_needs = "replaced needs" });
     try std.testing.expectEqualDeep(expected, consumer.get(identity).?);
     try consumer.copyFrom(&consumer);
     try std.testing.expectEqualDeep(expected, consumer.get(identity).?);
@@ -384,8 +393,8 @@ pub const WorkerKey = union(enum) {
     static_data: u32,
     /// The initializer of the static data a value-form expression of
     /// `module` that its body keeps reads (`CompileTimeRootTable.inline_literals`):
-    /// it builds the expression's value, for static data materialization.
-    inline_literal: struct { module: ModuleIndex, expr: ExprId },
+    /// it builds the expression's value at the reader's committed type.
+    inline_literal: struct { module: ModuleIndex, expr: ExprId, ty: TypeId },
     /// The method of a dictionary whose checked evidence resolves its slot
     /// to a crash: a dispatch checking rejected, or one no value can reach
     /// (design.md "Static Dispatch In Monotype"). Calling it crashes.
@@ -609,6 +618,12 @@ pub const Worker = struct {
     captures: []const checked.CheckedCapture = &.{},
     /// For a lambda worker: the stored type of each captured value.
     capture_types: []const TypeId = &.{},
+    /// For a lambda worker of a local procedure only direct calls reach
+    /// (`NestedProcSite.direct_calls_only`): an ordinary procedure taking
+    /// its captured values, then its explicit parameters, then its type
+    /// table, never packed as a function value (design.md "Function
+    /// Values").
+    direct: bool = false,
     /// The dictionaries in scope, by generalized scope, innermost first:
     /// each scope's runtime evidence-parameter indices. A template has its
     /// own scope; a lambda shares its outer worker's scopes; a generalized
@@ -1118,6 +1133,15 @@ pub const Program = struct {
         return self.local_procs.contains(.{ .module = module_index, .expr = expr });
     }
 
+    /// Whether the lambda or closure expression `expr` of `module_index` is
+    /// a local procedure only direct calls reach, as checking recorded at
+    /// its nested procedure site (`NestedProcSite.direct_calls_only`).
+    pub fn directCallsOnly(self: *Program, module_index: ModuleIndex, expr: ExprId) Allocator.Error!bool {
+        const site_index = (try self.nestedProcSite(module_index, expr)) orelse
+            invariant("a lambda or closure has no nested procedure site");
+        return self.module(module_index).view.nested_proc_sites.sites.items()[site_index].direct_calls_only;
+    }
+
     pub fn omittedDefault(self: *Program, key: OmittedField) Allocator.Error!?checked.CheckedFieldDefault {
         try self.indexBodyMetadata(key.module);
         return self.omitted_defaults.get(key);
@@ -1516,6 +1540,18 @@ pub const Program = struct {
         proc.rc_ret_conditions = self.result.store.addU32Span(interface.rc_ret_conditions) catch |err| switch (err) {
             error.OutOfMemory => invariant("out of memory binding an imported worker's interface"),
         };
+        proc.rc_outcomes = self.result.store.addU32Span(interface.rc_outcomes) catch |err| switch (err) {
+            error.OutOfMemory => invariant("out of memory binding an imported worker's interface"),
+        };
+        if (@import("builtin").mode == .debug and interface.rc_outcomes.len != 0) {
+            // A call here may demand the worker's published outcome variant,
+            // which its object exports under the identity that demand names.
+            var variant = proc.identity.ownershipVariant(@intCast(interface.rc_borrowed_params), @intFromBool(!interface.rc_ret_borrowed), 0);
+            var row: usize = 0;
+            while (row < interface.rc_outcomes.len) : (row += 2) variant.outcome(interface.rc_outcomes[row], @intCast(interface.rc_outcomes[row + 1]));
+            const published = unit.imports.get(variant.finish()) orelse invariant("an imported worker publishes an outcome variant its object does not export");
+            if (!published.visible) invariant("a call may demand an outcome variant its module's export digest leaves out (`recordExports`)");
+        }
     }
 
     /// The procedure of an imported worker: body-less, defined by its
@@ -1716,6 +1752,17 @@ pub const Program = struct {
         return .{ .file = self.source_files[@backingInt(index)], .line = line + 1, .column = column + 1 };
     }
 
+    /// The source location a procedure template's worker reports: where the
+    /// template's body begins. A wrapper the compiler provides has none.
+    fn templateLoc(self: *const Program, module_index: ModuleIndex, template: checked.CheckedProcedureTemplate) base.SourceLoc {
+        const region = switch (template.body) {
+            .checked_body => |expr| self.module(module_index).bodies().env.store.getNodeRegion(@fromBackingInt(@backingInt(expr))),
+            .unimplemented => |unimplemented| unimplemented.region,
+            .intrinsic_wrapper, .entry_wrapper => return base.SourceLoc.none,
+        };
+        return self.sourceLoc(module_index, region);
+    }
+
     /// The worker for a procedure template, requested if new.
     /// The worker of a procedure template, queued for lowering.
     pub fn templateWorker(self: *Program, module_index: ModuleIndex, template_id: checked_names.CheckedProcedureTemplateId) Allocator.Error!WorkerId {
@@ -1836,7 +1883,7 @@ pub const Program = struct {
             .emission_unit = LIR.EmissionUnit.module(@backingInt(module_index)),
             .args = .empty(),
             .ret_layout = .zst,
-        }, base.SourceLoc.none);
+        }, self.templateLoc(module_index, template));
         try self.workers.append(self.allocator, .{
             .key = key,
             .proc = proc,
@@ -1906,7 +1953,7 @@ pub const Program = struct {
             .emission_unit = LIR.EmissionUnit.module(@backingInt(module_index)),
             .args = .empty(),
             .ret_layout = .zst,
-        }, base.SourceLoc.none);
+        }, self.templateLoc(module_index, template));
         var int_worker = generic;
         int_worker.key = key;
         int_worker.proc = proc;
@@ -2277,15 +2324,20 @@ pub const Program = struct {
         };
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const identity = try self.workerIdentity(key);
+        // A local procedure only direct calls reach is an ordinary
+        // procedure; every other lambda is an erased worker.
+        const direct = try self.directCallsOnly(outer_worker.module, lambda_expr);
+        if (direct and key.lambda.captured_scheme) invariant("a local procedure only direct calls reach has a stored function value");
+        const abi: LIR.ProcAbi = if (direct) .roc else .erased_record;
         // A lambda of an imported worker is that worker's object's.
         const imported = outer_worker.imported;
-        const proc = if (imported) try self.addImportedProc(identity, outer_worker.module, .erased_record) else try self.result.store.addProcSpec(.{
+        const proc = if (imported) try self.addImportedProc(identity, outer_worker.module, abi) else try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
             .identity = identity,
             .emission_unit = LIR.EmissionUnit.module(@backingInt(outer_worker.module)),
             .args = .empty(),
             .ret_layout = .zst,
-            .abi = .erased_record,
+            .abi = abi,
         }, base.SourceLoc.none);
         try self.workers.append(self.allocator, .{
             .key = key,
@@ -2299,6 +2351,7 @@ pub const Program = struct {
             .ret = signature.ret,
             .captures = try self.arena.allocator().dupe(checked.CheckedCapture, captures),
             .capture_types = stored_capture_types,
+            .direct = direct,
             .dict_scopes = if (scope) |scheme| try std.mem.concat(self.arena.allocator(), []const u32, &.{ &.{scheme.dictionaries}, outer_worker.dict_scopes }) else outer_worker.dict_scopes,
             .dict_scope_params = if (scope) |scheme| try std.mem.concat(self.arena.allocator(), []const static_dispatch.EvidenceParamRecord, &.{ &.{scheme.params}, outer_worker.dict_scope_params }) else outer_worker.dict_scope_params,
             .own_descs = if (own) |scheme| (if (scheme.per_call) @intCast(scheme.scheme_vars.len) else 0) else 0,
@@ -3565,7 +3618,7 @@ pub const Program = struct {
     /// data materialization freezes what it builds, so a read allocates
     /// nothing and the value's reference count is the static one.
     pub fn inlineLiteralSlot(self: *Program, module_index: ModuleIndex, expr: ExprId, ty: TypeId) Allocator.Error!LIR.StaticDataId {
-        const key: WorkerKey = .{ .inline_literal = .{ .module = module_index, .expr = expr } };
+        const key: WorkerKey = .{ .inline_literal = .{ .module = module_index, .expr = expr, .ty = ty } };
         if (self.worker_ids.get(key)) |existing| return self.inline_literal_slots.get(existing).?;
         if (!self.store.isClosed(ty)) invariant("a value-form expression a body keeps has an open type");
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
@@ -4765,6 +4818,16 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     }
 
     if (input.timing) |timing| step_started = timing.lap(step_started, .requests);
+    // A program's worker of a kind a module unit exports publishes its
+    // outcome variant as that unit's export does, so a call from another
+    // module may demand it here exactly as it may of the module's object
+    // (design.md "Outcome-Conditioned Argument Restitution").
+    if (program.moduleUnit() == null) {
+        for (program.workers.items) |worker| {
+            if (!Program.exportableKind(worker.key)) continue;
+            program.result.store.getProcSpecPtr(worker.proc).outcome_publisher = true;
+        }
+    }
     if (program.moduleUnit() != null and !input.compile_time) {
         for (program.workers.items) |worker| {
             if (worker.imported or !program.result.store.getProcSpec(worker.proc).exported) continue;
@@ -4781,30 +4844,28 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     if (input.timing) |timing| step_started = timing.lap(step_started, .export_needs);
     if (base.dev_diagnostics.isSet(.perf_map)) try recordPerfNames(program);
 
-    if (input.proc_debug_names) {
-        for (program.workers.items) |worker| {
-            // A template's worker carries its procedure's source name.
-            const name: []const u8 = switch (worker.key) {
-                .codec => |piece| switch (program.codec.pieces.items[piece].kind) {
-                    inline .constructor, .runtime, .encode_helper, .parse_helper, .record_body, .tuple_body, .list_body, .dict_body, .tag_body, .value_thunk, .key_thunk, .tag_spec, .field_names_step => |kind| "boxy.codec." ++ @tagName(kind),
-                },
-                .template => |key| blk: {
-                    const view = program.module(key.module);
-                    const template = view.view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
-                    const names = view.nameStore();
-                    const export_name = names.procBase(template.proc_base).export_name.get() orelse break :blk switch (key.binding) {
-                        .generic => "boxy.template",
-                        .list_int => |item| try std.fmt.allocPrint(program.arena.allocator(), "boxy.template{s}", .{item.nameSuffix()}),
-                    };
-                    break :blk switch (key.binding) {
-                        .generic => names.exportNameText(export_name),
-                        .list_int => |item| try std.fmt.allocPrint(program.arena.allocator(), "{s}{s}", .{ names.exportNameText(export_name), item.nameSuffix() }),
-                    };
-                },
-                inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => |_, kind| "boxy." ++ @tagName(kind),
-            };
-            try program.result.store.setProcDebugName(worker.proc, name);
-        }
+    for (program.workers.items) |worker| {
+        // A template's worker carries its procedure's source name.
+        const name: []const u8 = switch (worker.key) {
+            .codec => |piece| switch (program.codec.pieces.items[piece].kind) {
+                inline .constructor, .runtime, .encode_helper, .parse_helper, .record_body, .tuple_body, .list_body, .dict_body, .tag_body, .value_thunk, .key_thunk, .tag_spec, .field_names_step => |kind| "boxy.codec." ++ @tagName(kind),
+            },
+            .template => |key| blk: {
+                const view = program.module(key.module);
+                const template = view.view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
+                const names = view.nameStore();
+                const export_name = names.procBase(template.proc_base).export_name.get() orelse break :blk switch (key.binding) {
+                    .generic => "boxy.template",
+                    .list_int => |item| try std.fmt.allocPrint(program.arena.allocator(), "boxy.template{s}", .{item.nameSuffix()}),
+                };
+                break :blk switch (key.binding) {
+                    .generic => names.exportNameText(export_name),
+                    .list_int => |item| try std.fmt.allocPrint(program.arena.allocator(), "{s}{s}", .{ names.exportNameText(export_name), item.nameSuffix() }),
+                };
+            },
+            inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => |_, kind| "boxy." ++ @tagName(kind),
+        };
+        try program.result.store.setProcDebugName(worker.proc, name);
     }
     program.result.finishExpectSites();
     var runtime_schemas = try @import("runtime_schemas.zig").collect(program, schema_roots.items);
@@ -4873,7 +4934,9 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
     try program.drain();
     for (program.workers.items) |worker| {
         if (worker.imported or !Program.exportableKind(worker.key)) continue;
-        program.result.store.getProcSpecPtr(worker.proc).exported = true;
+        const spec = program.result.store.getProcSpecPtr(worker.proc);
+        spec.exported = true;
+        spec.outcome_publisher = true;
         try program.result.exported_procs.append(program.allocator, worker.proc);
     }
     try recordExports(program);
@@ -4905,7 +4968,9 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
 /// entry with no table) is named by another unit only by identity, and
 /// nothing reads a record of it. Only visible records are in the module's
 /// export digest, so an edit to anything else leaves its importers' keys
-/// alone.
+/// alone. The outcome-restitution variant ARC later publishes for a worker
+/// gets a record as visible as the worker's (`finishLoweredOutput`), since
+/// an importer demands it only through a call of the worker.
 fn recordExports(program: *Program) Allocator.Error!void {
     const allocator = program.allocator;
     const visible = try allocator.alloc(bool, program.workers.items.len);

@@ -91,7 +91,6 @@ pub const AliasNamesNoNominalType = types.AliasNamesNoNominalType;
 pub const InvalidNominalDeclRecursion = types.InvalidNominalDeclRecursion;
 
 // Platform errors
-pub const PlatformAliasNotFound = types.PlatformAliasNotFound;
 pub const PlatformDefNotFound = types.PlatformDefNotFound;
 pub const PlatformHostedSection = types.PlatformHostedSection;
 pub const HostedUnboxedFunction = types.HostedUnboxedFunction;

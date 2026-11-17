@@ -112,7 +112,7 @@ test "closed specialization identity: two aliases and the bare type share one sp
         \\    echo!((by_count(n) + by_tally(n) + by_raw(n)).to_str())
         \\    Ok({})
         \\}
-    , .{ .proc_debug_names = true, .prepared_inspect = expectRefreshSpecializations(1) });
+    , .{ .prepared_inspect = expectRefreshSpecializations(1) });
 }
 
 test "closed specialization identity: a different closed type keeps its own specialization" {
@@ -132,7 +132,7 @@ test "closed specialization identity: a different closed type keeps its own spec
         \\    echo!("${(first(n) + second(n)).to_str()} ${third(n.to_f64()).to_str()}")
         \\    Ok({})
         \\}
-    , .{ .proc_debug_names = true, .prepared_inspect = expectRefreshSpecializations(2) });
+    , .{ .prepared_inspect = expectRefreshSpecializations(2) });
 }
 
 test "closed specialization identity: alias-equal requests reuse one specialization under four workers" {
@@ -150,7 +150,6 @@ test "closed specialization identity: alias-equal requests reuse one specializat
         \\    Ok({})
         \\}
     , .{
-        .proc_debug_names = true,
         .specialization_workers = 4,
         .prepared_inspect = expectRefreshSpecializations(1),
     });

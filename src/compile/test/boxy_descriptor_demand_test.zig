@@ -61,7 +61,7 @@ const token_decl =
 
 fn expectFor(comptime body: []const u8, inspect: harness.LirInspectFn) harness.LowerToLirHarnessError!void {
     for ([_]@import("base").target.TargetUsize{ .u32, .u64 }) |width| {
-        try harness.expectLirInspectionWithOptions(token_decl ++ body, .{ .specialization_strategy = .boxy, .proc_debug_names = true, .target_usize = width }, inspect);
+        try harness.expectLirInspectionWithOptions(token_decl ++ body, .{ .specialization_strategy = .boxy, .target_usize = width }, inspect);
     }
 }
 
