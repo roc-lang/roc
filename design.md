@@ -10248,14 +10248,28 @@ along unchanged: a polymorphic recursive call at other types needs the
 descriptors its body composes at entry composed again, which a loop jump never
 does. The call passes them unchanged when its callee's type table is the
 procedure's own table at its own inputs, in order, which lowering recognizes
-on the table's recipe and passes as the table the procedure holds. So is one
-that does not pass each dynamic parameter along unchanged: a
+on the table's recipe and passes as the table the procedure holds. A
 dynamic parameter is the address of storage its caller owns, which a loop jump
-cannot rebind, while a frame-replacing call moves its dynamic arguments. A
-self call that passes every dynamic parameter along unchanged reads no
-argument from the procedure's dynamic frame region, so it loops even when
-the procedure has one: the region is allocated once, in the entry chain, and
-each frame local's slot is written again only by its own definition. Only a
+cannot rebind, while a frame-replacing call moves its dynamic arguments, which
+the dev backend and the LLVM backend do into a fresh carry allocation. So a
+dynamic parameter that a self tail call changes is carried in the frame
+instead: when a proven self-tail call passes the procedure's own table and
+gives each dynamic parameter it changes an independent value, a frame local
+of its own that is no parameter, lowering makes the body's local for each
+such parameter a frame local, takes a fresh parameter in its place, and
+copies that parameter into it in the entry chain once the region exists
+(`TailCallBuilder.changedDynamicParams`). The loop carries those frame locals
+(`TailCalls.params`), and each jump writes the call's values into them, so the
+call loops and allocates nothing. Every independent value is a frame local
+other than the ones it writes, so the jump's writes overlap no bytes they read
+and form no cycle among dynamic locals. A self call that changes a dynamic
+parameter to anything else (a view into a value, or another parameter) is
+lowered as a tail call to any other procedure and replaces the frame. A self
+call that passes every dynamic parameter along unchanged reads no argument
+from the procedure's dynamic frame region, so it loops even when the
+procedure has one: the region is allocated once, in the entry chain, and
+each frame local's slot is written again only by its own definition or, for
+a carried parameter, by a loop jump. Only a
 `.boxy` procedure whose parameters lowering does not record (a generated
 worker other than a template's) replaces its frame on every self call when
 it has a region, since nothing tells it its arguments are not in it. A
@@ -18156,6 +18170,16 @@ strategy).
   dictionaries, reading each lookup's edge in that alias's scope. A dispatch
   edge bound to an alias holds the target's arguments composed through the
   chain (`aliasChainSubstitution`), resolved in the scope holding the edge.
+  Only the module declaring the alias records that composition. A dispatch
+  edge of another module bound to it reads the chain the way a use does,
+  each lookup's edge in that alias's scope, so a lookup at a closed type
+  reads the alias module's root (`U64.range_iter = range_iter_standard`
+  reached through `Range.iter`'s dictionary converts no literal at run
+  time), when the first alias's scope takes no literal argument; when it
+  takes some, which no edge of the dispatching module supplies, the
+  target's arguments derive from its instantiation (below). A module's
+  object exports the entry wrappers of the roots its alias lookups read, so
+  another unit can read them (`recordExports`).
 - The root's value type is the conversion's `Ok` payload type at the closed
   type: the literal's type for a numeral or a quote, the assembler's function
   type for an interpolation. A root whose value holds a function

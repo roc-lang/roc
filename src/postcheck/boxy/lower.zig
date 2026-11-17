@@ -4948,6 +4948,17 @@ fn recordExports(program: *Program) Allocator.Error!void {
             }
         }
 
+        /// The wrappers of the `literal_argument` roots of `module_index`
+        /// that the edge of procedure alias lookup `lookup` reads: an
+        /// importer dispatching through the alias reads them through the
+        /// alias's scope (`Builder.aliasTargetInstance`).
+        fn literalRoots(self: @This(), module_index: ModuleIndex, lookup: ExprId) Allocator.Error!void {
+            for (self.program.module(module_index).view.checked_procedure_templates.literalEdgeArgs(.{ .use = lookup })) |source| switch (source) {
+                .root => |root| if (self.program.wrapper_by_root.get(.{ .module = module_index, .root = root })) |wrapper| try self.template(module_index, wrapper),
+                .forwarded, .unbound => {},
+            };
+        }
+
         /// The template a procedure binding of `module_index` calls,
         /// following procedure aliases to the binding they forward to.
         fn binding(self: @This(), module_index: ModuleIndex, body: checked.ProcedureBindingBody) Allocator.Error!void {
@@ -4992,8 +5003,15 @@ fn recordExports(program: *Program) Allocator.Error!void {
         const module_index = view.index;
         for (view.view.exported_procedure_templates.templates) |exported| try visit.template(module_index, exported.template);
         for (view.view.exported_procedure_bindings.bindings) |exported| try visit.binding(module_index, exported.body);
+        for (view.view.callable_eval_templates.templates) |callable| {
+            if (callable.forwarded_lookup.get()) |lookup| try visit.literalRoots(module_index, lookup);
+        }
         for (view.view.method_registry.entries.items()) |entry| {
             const target = entry.target orelse continue;
+            if (target.alias) |alias| switch (alias.binding) {
+                .local => |local| try visit.literalRoots(module_index, local.lookup),
+                .top_level => {},
+            };
             switch (target.kind) {
                 .procedure => |procedure| try visit.template(module_index, procedure.template),
                 .local_proc, .structural, .callable_binding => {},
