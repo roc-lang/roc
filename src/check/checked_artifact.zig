@@ -14218,6 +14218,8 @@ const EvidencePass = struct {
         self.retireUnreachedForwardedCodecCalls();
         if (builtin.mode == .debug) try self.debugVerifyGeneratedCodecContracts();
 
+        self.recordForwardedRequirements();
+
         std.mem.sort(static_dispatch.SiteEvidenceEntry, self.site_evidence.items, {}, siteEvidenceLessThan);
 
         self.plan_table.evidence_nodes = .fromOwnedSlice(try self.evidence_nodes.toOwnedSlice(self.allocator));
@@ -14228,6 +14230,45 @@ const EvidencePass = struct {
         try @import("codec_identity.zig").intern(self.allocator, self.checked_types.store.view(), self.plan_table);
         try @import("codec_identity.zig").digestContents(self.allocator, self.import_views.current_owner, &self.checked_types.store, self.names, self.plan_table);
         if (builtin.mode == .debug) try self.debugVerifyGeneratedCodecRoleAgreement();
+    }
+
+    /// Record, for each captured codec requirement a scheme's body hands on
+    /// from an edge at its own scope, the first such edge
+    /// (`EvidenceParamRecord.forwarded`): a use of a procedure or a dispatch
+    /// edge whose evidence fills a parameter of the scheme it instantiates
+    /// with the requirement. A Boxy caller building the requirement's codec
+    /// enters that edge to reach the instance of the procedure whose body
+    /// declares the codec's local procedures (design.md "Sealed Result
+    /// Rows"). Every edge handing one requirement on instantiates its callee
+    /// at the types the requirement's relation names, with the requirement's
+    /// other dictionaries taken from the same scope, so any of them gives the
+    /// same instance.
+    fn recordForwardedRequirements(self: *EvidencePass) void {
+        const pool = self.templates.evidence_params_pool.items();
+        for (self.site_evidence.items) |site| {
+            recordForwardedFrom(pool, self.evidence_refs.items[site.start..][0..site.len], .{ .use = @fromBackingInt(site.key) });
+        }
+        // A node bound to an alias records the evidence of the alias's
+        // scope, whose parameters its chain hands on to the target's.
+        for (self.evidence_nodes.items, 0..) |node, raw| switch (node.nested) {
+            .resolved, .through_alias => |span| recordForwardedFrom(pool, self.evidence_refs.items[span.start..][0..span.len], .{ .node = @fromBackingInt(@as(u32, @intCast(raw))) }),
+            .from_callable => {},
+        };
+    }
+
+    fn recordForwardedFrom(pool: []static_dispatch.EvidenceParamRecord, entries: []const static_dispatch.CheckedEvidence, edge: static_dispatch.RequirementEdge) void {
+        for (entries, 0..) |entry, index| switch (entry.resolution) {
+            .constraint => |constraint| {
+                // Depth zero is the innermost scope around the edge, the
+                // scope whose parameter `scheme_param` names.
+                if (constraint.index.depth != 0) continue;
+                const owner = constraint.scheme_param orelse continue;
+                const param = &pool[owner];
+                if (param.source != .scheme_requirement or param.forwarded.edge != .none) continue;
+                param.forwarded = .{ .edge = edge, .callee_param = @intCast(index) };
+            },
+            .direct, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
+        };
     }
 
     /// A generated body records one checked edge per source occurrence.
@@ -38536,8 +38577,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x55, 0x49, 0x1E, 0xF8, 0x0B, 0x18, 0x47, 0x04, 0xA3, 0x29, 0x26, 0x05, 0x20, 0xE9, 0xDF, 0xAF,
-        0xF5, 0x31, 0xB1, 0x9B, 0x8A, 0x51, 0x94, 0x68, 0x4B, 0xF6, 0x49, 0x89, 0x32, 0x3C, 0x37, 0x3F,
+        0x89, 0x2B, 0xEA, 0xAB, 0xB7, 0x83, 0xE2, 0x75, 0xFA, 0xBA, 0x09, 0x40, 0x70, 0x35, 0x39, 0x4C,
+        0xB6, 0xDB, 0xB7, 0x23, 0xE4, 0xFB, 0xBD, 0x1A, 0x6F, 0xF4, 0xD5, 0xC5, 0xCA, 0x45, 0x8A, 0x09,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

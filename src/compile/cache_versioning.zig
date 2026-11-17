@@ -70,11 +70,14 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// not pin to the stored function's request, hoisted source-pattern root
 /// wrappers whose requirement paths lie below their return, the bodies of
 /// those roots resolved against no evidence chain, and top-level constants'
-/// right-hand sides resolved against their wrapper's own requirements, and
-/// procedure templates' closed row nodes. It rejects every earlier format,
-/// including the independent version 19 through 47 formats. Platform-pairing
-/// entries share it.
-const checked_envelope_version: u32 = 48;
+/// right-hand sides resolved against their wrapper's own requirements,
+/// evidence parameters recording the edge that hands a captured codec
+/// requirement on, an alias-bound dispatch edge's among them, private codec
+/// instances whose copies of a template's variables the ambiguity rule does
+/// not judge, and procedure templates' closed row nodes. It rejects every
+/// earlier format, including the independent version 19 through 49 formats.
+/// Platform-pairing entries share it.
+const checked_envelope_version: u32 = 50;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment.

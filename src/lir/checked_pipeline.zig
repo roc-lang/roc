@@ -2298,22 +2298,21 @@ fn finishLoweredOutput(
     // calls and changes allocation sites, and ARC panics on pre-existing RC
     // statements (see src/lir/trmc.zig).
     segment.add(.trmc);
-    if (target.specialization_strategy == .lss) {
-        if (target.inline_mode == .none) {
-            try segment.flush(allocator, &lowered.lir_result, pass_target, pass_timing);
-            var single_use_scope = PassStepScope.begin(target.timing, .single_use_inline);
-            try SingleUseInline.run(&lowered.lir_result);
-            single_use_scope.end();
-            try runProcedurePass(allocator, &lowered.lir_result, pass_target, .forwarding_join, pass_timing);
-        }
-        // Every inline mode produces tag-valued joins whose body matches the
-        // tag at once: the iterator-fusion clone in `.none`, and the checked
-        // wrappers substituted at their call sites in `.wrappers`, whose
-        // `Try` results the caller matches immediately.
-        if (target.fuse_tag_cases) {
-            try segment.flush(allocator, &lowered.lir_result, pass_target, pass_timing);
-            try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion, pass_timing);
-        }
+    if (target.specialization_strategy == .lss and target.inline_mode == .none) {
+        try segment.flush(allocator, &lowered.lir_result, pass_target, pass_timing);
+        var single_use_scope = PassStepScope.begin(target.timing, .single_use_inline);
+        try SingleUseInline.run(&lowered.lir_result);
+        single_use_scope.end();
+        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .forwarding_join, pass_timing);
+    }
+    // Every strategy and inline mode produces tag-valued joins whose body
+    // matches the tag at once: the iterator-fusion clone in `.none`, the
+    // checked wrappers substituted at their call sites in `.wrappers`, whose
+    // `Try` results the caller matches immediately, and a flag loop's merge
+    // join under either strategy, whose header switches on the flag.
+    if (target.fuse_tag_cases) {
+        try segment.flush(allocator, &lowered.lir_result, pass_target, pass_timing);
+        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion, pass_timing);
     }
     // Every mode: a join parameter nothing reads still keeps its written
     // value alive past any consuming call on the entry path. Scalarization
@@ -2411,6 +2410,9 @@ fn finishLoweredOutput(
             try arc_roots.append(allocator, proc);
         };
     }
+    const store_allocator = lowered.lir_result.store.allocator;
+    var published_variants = std.ArrayList(Arc.PublishedOutcomeVariant).empty;
+    defer published_variants.deinit(store_allocator);
     const arc_result = try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = arc_roots.items,
         .specialize = target.specialize_arc_modes,
@@ -2420,7 +2422,23 @@ fn finishLoweredOutput(
         .post_check_executor = if (target.post_check_executor) |*executor| executor else null,
         .metrics_out = arc_metrics,
         .timing = if (arc_detail) |*detail| detail else null,
+        .published_variants_out = &published_variants,
     });
+    // The only procedures ARC exports are the outcome-restitution variants
+    // it publishes (design.md "Outcome-Conditioned Argument Restitution").
+    // A variant's export record is importer-visible exactly when its
+    // worker's is: an importer demands the variant only through a call of
+    // the worker, which it makes only of a visible worker.
+    if (published_variants.items.len != 0) {
+        const result = &lowered.lir_result;
+        try result.boxy_exports.ensureUnusedCapacity(result.store.allocator, @intCast(published_variants.items.len));
+        for (published_variants.items) |published| {
+            try result.exported_procs.append(result.store.allocator, published.variant);
+            const worker_export = result.boxy_exports.get(result.store.getProcSpec(published.worker).identity) orelse
+                checkedPipelineInvariant("an exported worker publishing an outcome variant has no export record of its unit");
+            result.boxy_exports.putAssumeCapacity(result.store.getProcSpec(published.variant).identity, .{ .visible = worker_export.visible });
+        }
+    }
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
     if (arc_detail) |*detail| target.timing.?.addArc(detail);
     arc_timing_scope.end();
