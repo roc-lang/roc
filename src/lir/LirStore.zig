@@ -1230,6 +1230,12 @@ pub fn setProcDebugName(self: *Self, id: LirProcSpecId, name: []const u8) Alloca
     self.setProcDebugNameIndex(id, try self.insertString(name));
 }
 
+/// Record the source location of a proc added before its body was known.
+pub fn setProcLoc(self: *Self, id: LirProcSpecId, loc: base.SourceLoc) void {
+    self.assertBodyMetadataImmutable();
+    self.proc_locs.set(@backingInt(id), loc);
+}
+
 /// Copy proc source metadata from one proc to another, for compiler-generated variants.
 pub fn copyProcDebugInfo(self: *Self, dst: LirProcSpecId, src: LirProcSpecId) Allocator.Error!void {
     self.proc_locs.set(@backingInt(dst), self.proc_locs.get(@backingInt(src)));
