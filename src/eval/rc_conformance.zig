@@ -75,7 +75,7 @@ pub const Allocation = struct {
     /// Static data and other constant-count allocations cannot be observed:
     /// incref and decref both leave them alone.
     pub fn isObservable(self: Allocation) bool {
-        return !builtins.utils.rcConstant(self.count);
+        return !builtins.utils.rcConstant(self.count) and self.count != builtins.utils.REFCOUNT_FRAME;
     }
 };
 

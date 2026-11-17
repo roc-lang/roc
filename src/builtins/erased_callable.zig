@@ -223,9 +223,34 @@ pub fn hotReloadAdjustedCapturePtr(capture_ptr: ?[*]u8) ?[*]u8 {
     return ptr + hot_reload_capture_prefix_size;
 }
 
+/// Whether `data_ptr` is a callable built in a procedure's frame
+/// (`utils.REFCOUNT_FRAME`): its retains, releases and frees do nothing, and
+/// the procedure that built it releases its capture. `atomicity` is that of
+/// the count update the caller is about to make: a heap callable's count may
+/// be updated by other threads under `.atomic`, so its word is then read
+/// atomically.
+pub fn isFrame(data_ptr: ?[*]u8, atomicity: utils.RcAtomicity) bool {
+    const ptr = data_ptr orelse return false;
+    const rc_ptr: *const isize = @ptrCast(@alignCast(ptr - @sizeOf(usize)));
+    return utils.loadRefcount(rc_ptr, atomicity) == utils.REFCOUNT_FRAME;
+}
+
+/// Mark the frame storage of a callable whose frame has ended. A debug
+/// build's retain, release or call of it then fails as a use after free.
+pub fn retireFrame(data_ptr: [*]u8) void {
+    const rc_ptr: *isize = @ptrCast(@alignCast(data_ptr - @sizeOf(usize)));
+    rc_ptr.* = utils.POISON_VALUE;
+}
+
 /// Increment the outer boxed-erased-callable allocation refcount.
 pub fn incref(data_ptr: ?[*]u8, amount: isize, roc_ops: *RocOps) callconv(.c) void {
-    utils.increfDataPtrC(data_ptr, amount, roc_ops);
+    increfWithAtomicity(data_ptr, amount, .atomic, roc_ops);
+}
+
+/// Increment the outer refcount using the given count-update atomicity.
+pub fn increfWithAtomicity(data_ptr: ?[*]u8, amount: isize, atomicity: utils.RcAtomicity, roc_ops: *RocOps) void {
+    if (isFrame(data_ptr, atomicity)) return;
+    utils.increfDataPtr(data_ptr, amount, atomicity, roc_ops);
 }
 
 /// Decrement the outer refcount, running `on_drop` if this was the final ref.
@@ -236,11 +261,15 @@ pub fn decref(data_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
 /// Decrement the outer refcount using the given count-update atomicity,
 /// running `on_drop` if this was the final ref.
 pub fn decrefWithAtomicity(data_ptr: ?[*]u8, atomicity: utils.RcAtomicity, roc_ops: *RocOps) void {
+    if (isFrame(data_ptr, atomicity)) return;
     if (utils.releaseDataPtr(data_ptr, atomicity, roc_ops)) free(data_ptr, roc_ops);
 }
 
 /// Run final-drop logic and free the boxed-erased-callable allocation.
 pub fn free(data_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
+    // A heap callable's caller owns its only reference, so no other thread
+    // updates the count.
+    if (isFrame(data_ptr, .single_thread)) return;
     if (data_ptr) |ptr| {
         const payload = payloadPtr(ptr);
         if (payload.on_drop) |on_drop| {
@@ -248,6 +277,28 @@ pub fn free(data_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
         }
     }
     utils.freeDataPtrC(data_ptr, payload_alignment, allocation_has_refcounted_children, roc_ops);
+}
+
+test "a frame callable's retains, releases and frees do nothing" {
+    var test_env = utils.TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+    RepackTestState.reset();
+    var storage: [2 * payload_alignment + 16]u8 align(payload_alignment) = undefined;
+    const data_ptr: [*]u8 = &storage;
+    const callable = data_ptr + payload_alignment;
+    @as(*isize, @ptrCast(@alignCast(callable - @sizeOf(usize)))).* = utils.REFCOUNT_FRAME;
+    payloadPtr(callable).* = .{ .callable_fn_ptr = &RepackTestState.callable, .on_drop = &RepackTestState.oldDrop, .capture_size = 0 };
+    try std.testing.expect(isFrame(callable, .atomic));
+    incref(callable, 3, ops);
+    increfWithAtomicity(callable, 1, .single_thread, ops);
+    decref(callable, ops);
+    decrefWithAtomicity(callable, .single_thread, ops);
+    free(callable, ops);
+    try std.testing.expect(isFrame(callable, .atomic));
+    try std.testing.expect(!utils.isUnique(callable, ops));
+    try std.testing.expectEqual(@as(usize, 0), RepackTestState.old_drop_count);
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 }
 
 const RepackTestState = struct {

@@ -270,6 +270,21 @@ pub const Dec = fn (?[*]u8) callconv(.c) void;
 /// - It's safe since normal refcounts should never reach 0 while still being referenced
 pub const REFCOUNT_STATIC_DATA: isize = 0;
 
+/// The refcount word of an erased callable built in a procedure's frame
+/// (design.md "Frame Callables"). The callable's erased-callable retain,
+/// release, and free do nothing when they read it, and it is never unique,
+/// so nothing repacks the frame's storage. It differs from
+/// `REFCOUNT_STATIC_DATA` so a debug build can tell the two apart, and it is
+/// negative, so the generic data-pointer operations, which a frame callable
+/// never reaches, reject it in a debug build.
+pub const REFCOUNT_FRAME: isize = std.math.minInt(isize);
+
+/// `REFCOUNT_FRAME` for a target whose words are `target_word_size` bytes.
+pub fn targetRefcountFrame(target_word_size: u32) i64 {
+    std.debug.assert(target_word_size == 4 or target_word_size == 8);
+    return if (target_word_size == 4) std.math.minInt(i32) else std.math.minInt(i64);
+}
+
 /// Low bits of a refcounted data pointer that may carry tag bits (for example a
 /// recursive tag union's tag id). They are cleared before locating the refcount.
 pub const DATA_PTR_TAG_MASK: usize = targetDataPtrTagMask(@sizeOf(usize));
@@ -300,7 +315,7 @@ pub fn targetWordOffset(comptime native_offset: usize, target_word_size: u32) u3
 /// Any subsequent attempt to incref/decref this memory will trigger a panic.
 /// This value is only used in debug builds and has zero overhead in release.
 /// Uses a recognizable pattern that works on both 32-bit and 64-bit platforms.
-const POISON_VALUE: isize = @bitCast(if (@sizeOf(usize) == 8)
+pub const POISON_VALUE: isize = @bitCast(if (@sizeOf(usize) == 8)
     @as(usize, 0xDEADBEEFDEADBEEF)
 else
     @as(usize, 0xDEADBEEF));
@@ -595,7 +610,7 @@ inline fn free_ptr_to_refcount(
 /// Reads a count for an update that follows. A count other threads may update
 /// is read atomically; the value only selects the static-data and debug paths,
 /// so it needs no ordering against those updates.
-inline fn loadRefcount(refcount_ptr: *const isize, atomicity: RcAtomicity) isize {
+pub inline fn loadRefcount(refcount_ptr: *const isize, atomicity: RcAtomicity) isize {
     return switch (atomicity) {
         .single_thread => refcount_ptr.*,
         .atomic => @atomicLoad(isize, refcount_ptr, .monotonic),
