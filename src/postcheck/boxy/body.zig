@@ -1078,6 +1078,15 @@ pub const Builder = struct {
         };
     }
 
+    /// Locate the worker's procedure at the expression its body lowers, as
+    /// the specialized lowering locates a procedure at its body. Debug info
+    /// scopes the body's statements to this location's file; glue workers,
+    /// with no source body, stay unlocated.
+    fn locateProc(self: *Builder, body: ExprId) void {
+        const loc = self.program.sourceLoc(self.module, self.bodies().expr(body).source_region);
+        self.store.setProcLoc(self.currentWorker().proc, loc);
+    }
+
     /// The source location of the current region, resolved once for a run
     /// of statements lowered from one region rather than once per statement.
     fn regionLoc(self: *Builder) base.SourceLoc {
@@ -2015,6 +2024,7 @@ pub const Builder = struct {
                 switch (self.bodies().exprData(root_expr)) {
                     .lambda => |lambda| {
                         if (lambda.args.len != params.len) invariant("a template's lambda arity differs from its signature");
+                        self.locateProc(lambda.body);
                         for (lambda.args, params, worker.params) |pattern, param, param_ty| try self.bindIrrefutable(pattern, param, param_ty);
                         try self.tasks.append(self.allocator, .ret);
                         // The body's value is built at the function's result
@@ -2048,6 +2058,7 @@ pub const Builder = struct {
                     },
                     .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .run_low_level => {
                         if (params.len != 0) invariant("a non-lambda template body has parameters");
+                        self.locateProc(root_expr);
                         try self.tasks.append(self.allocator, .ret);
                         try self.tasks.append(self.allocator, .{ .own_expr = root_expr });
                     },
@@ -2333,6 +2344,7 @@ pub const Builder = struct {
             .lambda => |lambda| lambda,
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a lambda worker's expression is not a lambda"),
         };
+        self.locateProc(lambda.body);
         if (worker.direct) return try self.lowerDirectLambdaBody(lambda);
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
@@ -2968,6 +2980,7 @@ pub const Builder = struct {
     /// own type's variables, whose descriptors are its parameters.
     pub fn lowerDefaultBody(self: *Builder, expr: ExprId) Allocator.Error!void {
         const worker = self.currentWorker().*;
+        self.locateProc(expr);
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
         const has_table = self.program.inputCount(self.worker_id) != 0;
@@ -2995,6 +3008,7 @@ pub const Builder = struct {
     /// the expression's own value, built from its literals.
     pub fn lowerInlineLiteralInitializer(self: *Builder, expr: ExprId) Allocator.Error!void {
         const worker = self.currentWorker().*;
+        self.locateProc(expr);
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
         const ret_layout = try self.program.layouts.layoutOf(worker.ret);
