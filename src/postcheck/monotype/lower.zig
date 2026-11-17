@@ -292,9 +292,6 @@ pub const InlineExpectMode = enum {
 
 /// Configuration for lowering checked modules into Monotype IR.
 pub const Options = struct {
-    /// Preserve source-level procedure names for consumers that present runtime
-    /// diagnostics from lowered code.
-    proc_debug_names: bool = false,
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
     /// Optional deterministic workload diagnostics. The checked pipeline
@@ -5705,7 +5702,6 @@ const SpecJobWorkerInputs = struct {
     source_file_ids: *const SourceFileIds,
     lowering_module_ids: *const LoweringModuleIds,
     snapshot: *const WorkerInputs.Snapshot,
-    proc_debug_names: bool,
     interface_summaries: *const SharedSummaries,
     interface_summary_end: usize,
     collect_counters: bool,
@@ -6248,7 +6244,6 @@ const Builder = struct {
     program: *Ast.Program,
     current_loc: base.SourceLoc,
     current_region: base.Region,
-    proc_debug_names: bool,
     /// Frame stacks of finished `BodyContext.runLower` calls, kept with their
     /// capacity for the next run. Each run takes its own stack, so a nested
     /// run never moves the frame an outer step is still working on, and a
@@ -6557,7 +6552,6 @@ const Builder = struct {
             .program = program,
             .current_loc = program.current_loc,
             .current_region = program.current_region,
-            .proc_debug_names = options.proc_debug_names,
             .counters = counters,
             .diagnostics = options.diagnostics,
             .active_spec_job_diagnostics = null,
@@ -6717,7 +6711,6 @@ const Builder = struct {
         const builder = try worker.allocator.create(Builder);
         errdefer worker.allocator.destroy(builder);
         builder.* = Builder.init(worker.allocator, inputs.modules, worker.input_program.?, .{
-            .proc_debug_names = inputs.proc_debug_names,
             .specialization_counters = if (inputs.collect_counters) &worker.counters else null,
             .diagnostics = if (inputs.collect_diagnostics) &worker.diagnostics else null,
             .inline_expects = inputs.inline_expects,
@@ -7745,7 +7738,6 @@ const Builder = struct {
             .source_file_ids = self.sourceFileIds(),
             .lowering_module_ids = self.loweringModuleIds(),
             .snapshot = &snapshot,
-            .proc_debug_names = self.proc_debug_names,
             .interface_summaries = &self.shared_summaries.?,
             .interface_summary_end = self.shared_summaries.?.count,
             .replay_interface_summaries = self.replay_interface_summaries,
@@ -7957,7 +7949,6 @@ const Builder = struct {
             .source_file_ids = self.sourceFileIds(),
             .lowering_module_ids = self.loweringModuleIds(),
             .snapshot = &snapshot,
-            .proc_debug_names = self.proc_debug_names,
             .interface_summaries = &self.shared_summaries.?,
             .interface_summary_end = self.shared_summaries.?.count,
             .collect_counters = self.counters != null,
@@ -10162,7 +10153,6 @@ const Builder = struct {
                             .source_file_ids = self.sourceFileIds(),
                             .lowering_module_ids = self.loweringModuleIds(),
                             .snapshot = &context.snapshot,
-                            .proc_debug_names = self.proc_debug_names,
                             .interface_summaries = &self.shared_summaries.?,
                             .interface_summary_end = self.shared_summaries.?.count,
                             .collect_counters = self.counters != null,
@@ -11685,7 +11675,6 @@ const Builder = struct {
         view: ModuleView,
         template: names.ProcTemplate,
     ) Allocator.Error!void {
-        if (!self.proc_debug_names) return;
         const proc_base = view.names.procBase(template.proc_base);
         const export_name = proc_base.export_name.get() orelse return;
         const name = try self.program.names.internExportName(view.names.exportNameText(export_name));
@@ -11699,7 +11688,6 @@ const Builder = struct {
         view: ModuleView,
         template: names.ProcTemplate,
     ) Allocator.Error!void {
-        if (!self.proc_debug_names) return;
         const proc_base = view.names.procBase(template.proc_base);
         const export_name = proc_base.export_name.get() orelse return;
         const name = try self.activeNameStore().internExportName(view.names.exportNameText(export_name));

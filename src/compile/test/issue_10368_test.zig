@@ -119,7 +119,7 @@ test "issue 10368: shared List.map input is retained before reuse preparation" {
     // Repro for https://github.com/roc-lang/roc/issues/10368.
     try harness.runAppPathLirInspection(
         "test/fx/issue_10368_list_map_reuse.roc",
-        .{ .list_in_place_map = true, .inline_mode = .wrappers, .proc_debug_names = true },
+        .{ .list_in_place_map = true, .inline_mode = .wrappers },
         inspect,
     );
 }

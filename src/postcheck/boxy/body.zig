@@ -3032,6 +3032,14 @@ pub const Builder = struct {
         const ret_layout = try self.program.layouts.layoutOf(worker.ret);
         const body_start = try self.newHole();
         self.hole = body_start;
+        // The reader may construct this value at a wider row than its
+        // checked expression. Freeze that representation, not the narrower
+        // value the initializer would build without the reader's destination.
+        if (self.bodies().rowCoercion(expr) != null) {
+            try self.coerced_destinations.put(self.allocator, expr, worker.ret);
+        } else {
+            try self.destination_types.put(self.allocator, expr, worker.ret);
+        }
         try self.tasks.append(self.allocator, .ret);
         try self.tasks.append(self.allocator, .{ .own_expr = expr });
         try self.run();

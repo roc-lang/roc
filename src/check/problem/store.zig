@@ -234,7 +234,6 @@ pub const Store = struct {
                     .host_boundary_optional_field,
                     .platform_def_not_found,
                     .platform_hosted_section,
-                    .platform_alias_not_found,
                     .comptime_crash,
                     .comptime_invalid_numeral,
                     .comptime_invalid_quote,

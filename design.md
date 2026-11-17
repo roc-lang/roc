@@ -769,6 +769,11 @@ the order a walk from that value finds them. `lir.Program`
 `content_data_symbol_prefix`) and `ProcIdentity.symbol_name_prefix` are the
 only places these forms are spelled.
 
+Debug information shows a procedure by its source name and states its
+`roc__p{hash}` symbol as the linkage name ("Procedure Source Names"), so
+tools that read debug info show Roc names while the symbol stays the one
+cached code links under.
+
 A symbol's scope says whether its name means the same thing in every program,
 which decides whether code referring to it can be cached and linked into
 another program. Code generation declares the scope of every symbol it refers
@@ -811,6 +816,28 @@ layout index. An inline scope names the procedure it inlined by identity
 scope LIR inlining made, and a digest of the lifted function's checked source
 for a scope SpecConstr made. The LLVM backend names inlined debug subprograms
 and source frames from it.
+
+### Procedure Source Names
+
+A procedure's source name is provenance: it says what the programmer called
+the function the procedure was lowered from, and it is independent of the
+procedure's `ProcIdentity` and of its symbol. Lowering records it for every
+procedure that has one, beside the procedure's source location
+(`LirStore.setProcDebugName`, `LirStore.procLoc`), in every build: recording
+it is not an option a consumer turns on, so no consumer can be handed LIR
+without names. A procedure the compiler generates has no source name, and a
+Boxy worker that is not a template's is named for what it is (`boxy.adapter`,
+`boxy.codec.runtime`).
+
+Both native backends put the name in debug information as the subprogram's
+name, with the procedure's symbol as its linkage name; a procedure with no
+source name is shown by its symbol alone. The LLVM backend reads the name from
+the LIR store. The dev backend lifts a procedure's code into an excerpt that
+outlives the LIR it came from, so the excerpt carries the name beside the
+procedure's location (`CodeExcerpt.Excerpt.name`), through unit pieces and
+their cache encoding and through composition, to the DWARF subprogram entry
+(`Dwarf.ProcEntry`). The first placement of an identity supplies the name and
+location its code reports, as it supplies the code.
 
 ### Named Type Identity
 
@@ -2405,8 +2432,10 @@ any other image data.
 - `.boxy` lowering reads a listed expression whose committed layout is not
   an immediate from the slot of its initializer worker
   (`WorkerKey.inline_literal`, `Program.inlineLiteralSlot`), one per
-  expression per program; the initializer lowers the expression's own value
-  (`Builder.inlineLiteralRead`).
+  expression and committed reader type per program. The initializer builds
+  the value at that type, including its widened rows; freezing a narrower
+  layout and reading it as the wider one would corrupt its discriminant and
+  payload. Each read still allocates nothing (`Builder.inlineLiteralRead`).
 - Monotype builds a listed number, string, tag with no payload, or empty
   record in place, through any nominal wrapping or block with no statements,
   exactly as it restores a stored constant of that shape, so branch folding
@@ -3302,6 +3331,13 @@ Both LLVM payload families link their UTF-8 validation kernel the same way:
 they reference `roc_builtins_utf8_validate`, and the LLVM backend links the
 payload built for the kernel the target machine's CPU features select (see
 "UTF-8 validation").
+
+A linked payload's symbol takes and returns only pointers and integers of at
+least 32 bits. Its caller is compiled for WebAssembly and its definition for
+another architecture, and those disagree on whether a narrower integer is
+extended: wasm marks a `u8` result `zeroext`, which the caller relies on,
+while an AArch64 definition outside Darwin returns it with unspecified upper
+bits.
 
 LLVM object emission must request function and data sections, and the final
 target linker must use section garbage collection where the target format
@@ -7340,14 +7376,15 @@ platform module. Header validation inspects all declarations, while the
 provided-exports view contains only entries with non-null `local_def`. Rejected
 declarations also produce source diagnostics.
 
-A platform requirement's for-clause alias is a binder over an app-supplied
-type: the requirement's `Model` IS the app's `Model` by the for-clause's own
-definition, so identity provenance follows meaning provenance. After the
-requirement surface is checked, the checker supplies each platform alias's
-explicit `(origin module, source declaration)` key and backing identity root as
-source substitutions while copying each requirement into the app store. The
-copier resolves every declaration-owned alias occurrence and every recorded
-identity slot directly to the app's own type declaration; no copied
+A platform requirement's for-clause alias names an abstract type inside the
+platform; its actual type is inferred from the app's required values. An app
+declaration with the same name has no special meaning. The platform checks
+against one shared rigid identity. App checking substitutes one fresh,
+outermost-rank inference variable per binder, shared across all requirements,
+so definition generalization cannot give sibling requirements different types.
+Each platform alias's explicit `(origin module, source declaration)` key and
+backing identity root select that same substitution during requirement copying.
+The solved identity slots carry the inferred types into the pairing; no copied
 platform-owned alias enters the solved app graph. Nothing in the app's checked
 module needs a pairing as a type owner, so the app is checked against the
 platform's sealed requirement surface and nothing else.
@@ -11275,9 +11312,15 @@ itself; the fused arm releases that variant's payload instead, or nothing when
 the variant owns nothing. A fused arm copies exactly the statements its
 variant rewrite changes, together with what copying them forces: their
 predecessors, readers of locals they define, and jumps to joins they declare,
-where a jump reads its target's parameters. Copied definitions are renamed.
-Every other arm statement is shared with the original arm, which partial
-fusion retains for opaque producers; copying unchanged statements would
+where a jump reads its target's parameters. Copied definitions are renamed,
+and a copied jump bridges a renamed parameter of the join it leaves for. A
+join the arm jumps to may also read a local the arm defines without taking it
+as a parameter (a `.boxy` or-pattern's shared body reads the binders each
+alternative writes), so a copied definition of a local that a statement
+outside the arm reads, other than a join parameter, keeps its local: the copy
+defines it as the original arm does, and exactly one of the two runs on any
+path into the join. Every other arm statement is shared with the original
+arm, which partial fusion retains for opaque producers; copying unchanged statements would
 duplicate every later candidate they contain, growing a procedure
 exponentially in its number of sequential matches. Join scalarization then removes
 aggregate fixed points when every initializer, field read, and tag payload
@@ -11297,7 +11340,8 @@ the number of fusions.
 Hoisting a tag consumer's enclosing continuation joins requires exclusive
 structural entry from that consumer. If an outside statement also enters a
 wrapper, fusion first clones the consumer subtree with fresh join identities
-and local binders, preserving its external inputs and enclosing jump targets.
+and local binders, preserving its external inputs, enclosing jump targets, and
+every binder a statement outside the subtree reads.
 The original shared continuation keeps its original remainder. Fusion then
 plans against the private clone; it must never copy a shared declaration's
 identity into a second reachable statement or redirect another entry through
@@ -28363,6 +28407,57 @@ builtins module tests and, under ThreadSanitizer, in
 `zig build run-test-builtins-tsan`, which checks the orderings against the
 memory model rather than against the host CPU.
 
+### Queued Teardown
+
+Dropping a value uses native stack bounded by the value's type, never by the
+value. A program can build a value of a recursive type in a loop, to any depth
+its memory allows, so a teardown that nested one native frame per level would
+overflow the stack on a value the program had no trouble building.
+
+Every cycle of a type passes through a heap allocation: a list or a box. The
+layout store records which layouts lie on a cycle of the layout graph
+(`Store.layoutOnCycle`), marked when a graph commit finishes the layouts it
+reserved. The RC plan of a list or box on a cycle is a queued teardown
+(`list_decref_queued`, `list_free_queued`, `box_decref_queued`,
+`box_free_queued`), and every other plan is unchanged, so a type that is not
+recursive gets exactly the helpers it would get without this rule.
+
+A queued teardown owns a queue (`builtins.utils.DropQueue`). When it releases
+the last reference to its allocation it visits that allocation's items or
+payload, and a dying allocation of the same teardown met during the visit is
+pushed onto the queue instead of being visited where it is met. The teardown
+then pops and visits queued allocations in a loop until the queue is empty. A
+queued allocation is exclusively owned with a count of zero, so its refcount
+word holds the link to the next queued allocation, and queuing allocates
+nothing. A queued list also records its item count in its header, as a list
+with seamless slices does, because it is visited without the list value that
+named it.
+
+The queue reaches the allocations below a teardown through the helpers
+between them. A drop of a child whose layout lies on a cycle goes to that
+layout's `decref_queued` helper, which takes the queue as a second parameter
+and passes it to each `decref_queued` child and each queued teardown its plan
+names. A helper that received no queue passes null, and a queued teardown
+given null starts a queue of its own. `decref_queued` is a calling convention
+over the layout's `decref` plan, as `host_drop` is: only plans name it, never
+an RC statement.
+
+A queue takes allocations of one teardown, identified by everything that
+decides how an allocation is torn down: list or box, alignment, item width,
+and the helper that releases each item (`DropQueue.Teardown`). A teardown that
+meets a dying allocation of a different teardown starts that one nested
+inside itself, linked to it through `DropQueue.outer`, and the nested teardown
+finds the outer queue through that link when it meets the outer kind again.
+Nesting is therefore at most the number of distinct teardowns a type has.
+
+Every producer of teardown code follows the same plans: the interpreter
+(`LayoutRuntime.performRcPlan`), and the dev, LLVM and wasm backends, whose
+helpers call `roc_builtins_list_drop_queued` and
+`roc_builtins_box_drop_queued`. An erased callable's captures are released
+through its `on_drop` slot, a host-shaped callback chosen where the closure is
+created, which carries no queue; a chain of erased callables that each
+capture the next is torn down one native frame per callable.
+
 ### Uniqueness Inference
 
 Ops with `may_runtime_uniqueness_check_args` branch at runtime: when the
@@ -32751,6 +32846,13 @@ restored and built, import images selected and loaded, and slow-root
 progress threads. Its root counts separate the roots an evaluator ran from
 the roots the checked-value writer completed ("Value-Form Roots").
 
+Checked-artifact publication reports its steps (`PublicationTiming.Step`:
+the typed module graph, identity and names, body analyses, sealed type keys,
+checked types, the platform relation, each table it builds in the order it
+builds them, the dispatch resolution and template demand passes, exports,
+public API dependencies, lowering visibility, and artifact assembly), each
+summed over the modules published, beneath "Checked Publication Detail".
+
 Boxy lowering reports setup, unit worker seeding, root workers, worker
 bodies, type table filling, layout and static data requests, export needs,
 names and runtime schemas, and static descriptors, and counts the workers it
@@ -32833,9 +32935,9 @@ fact-graph walks spent looking for one; loop-invariant candidates admitted,
 verified and dead; regions and statements walked; slack walks and the roots
 they visited; and sum refreshes with the size of their closures, the passes
 and relaxations they ran, and how many stopped at the pass cap. Setting the
-variable also makes the lowering record procedure debug names, which it
-otherwise records only for the diagnostics that print them; a
-compiler-generated procedure has no source name and prints as `<unnamed>`.
+name is the one lowering records for every procedure ("Procedure Source
+Names"); a compiler-generated procedure has no source name and prints as
+`<unnamed>`.
 The counts measure what a procedure cost the prover and change nothing it
 proves. They are counted in every compiler, and the pipeline's `WorkMetrics`
 sums them over the lowered procedures for tests that pin how much work a

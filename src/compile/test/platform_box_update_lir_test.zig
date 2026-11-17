@@ -10,7 +10,7 @@ const harness = @import("lower_to_lir_harness.zig");
 test "LIR pass workers deterministically reuse boxed payloads" {
     try harness.expectLirPassParallelismDeterministicLir(
         .{ .app_path = "test/postcheck/lir_pass_box_reuse/app.roc" },
-        .{ .inline_mode = .wrappers, .consume_dead_boxes = true, .proc_debug_names = true },
+        .{ .inline_mode = .wrappers, .consume_dead_boxes = true },
         &.{.box_reuse},
     );
 }
@@ -37,7 +37,7 @@ const Counts = struct {
 test "platform boxed model without inlining transfers checked mutation field ownership" {
     try harness.runAppPathLirInspection(
         "test/box-model-uniqueness/app.roc",
-        .{ .inline_mode = .none, .consume_dead_boxes = true, .proc_debug_names = true },
+        .{ .inline_mode = .none, .consume_dead_boxes = true },
         expectNoInlineOwnership,
     );
 }
@@ -45,7 +45,7 @@ test "platform boxed model without inlining transfers checked mutation field own
 test "platform boxed model with wrapper inlining consumes each dead Box" {
     try harness.runAppPathLirInspection(
         "test/box-model-uniqueness/app.roc",
-        .{ .inline_mode = .wrappers, .consume_dead_boxes = true, .proc_debug_names = true },
+        .{ .inline_mode = .wrappers, .consume_dead_boxes = true },
         expectWrapperInlineOwnership,
     );
 }

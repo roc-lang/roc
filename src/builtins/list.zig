@@ -6,6 +6,7 @@ const std = @import("std");
 
 const builtin = @import("builtin");
 const utils = @import("utils.zig");
+const stack_guard = @import("stack_guard.zig");
 const UpdateMode = utils.UpdateMode;
 const TestEnv = utils.TestEnv;
 const RocOps = @import("host_abi.zig").RocOps;
@@ -282,6 +283,55 @@ pub const RocList = extern struct {
     /// its last reference was released.
     pub fn freeAllocation(self: RocList, alignment: u32, elements_refcounted: bool, roc_ops: *RocOps) void {
         utils.freeDataPtrC(self.getAllocationDataPtr(roc_ops), alignment, elements_refcounted, roc_ops);
+    }
+
+    /// Drops a list whose elements hold more lists of its own teardown,
+    /// without nesting a native frame per list (see `utils.DropQueue`).
+    ///
+    /// `child` identifies what `dropElement` does, for
+    /// `DropQueue.Teardown`. `dropElement` releases what one element holds
+    /// and passes the queue it is given to every queued teardown it reaches.
+    pub fn dropQueued(
+        self: RocList,
+        alignment: u32,
+        element_width: usize,
+        child: usize,
+        outer: ?*utils.DropQueue,
+        mode: utils.DropMode,
+        context: anytype,
+        comptime dropElement: fn (@TypeOf(context), [*]u8, *utils.DropQueue) void,
+        roc_ops: *RocOps,
+    ) void {
+        stack_guard.check();
+        switch (mode) {
+            .decref_atomic => if (!self.releaseAllocation(.atomic, roc_ops)) return,
+            .decref_single_thread => if (!self.releaseAllocation(.single_thread, roc_ops)) return,
+            .free => {},
+        }
+        const data = self.getAllocationDataPtr(roc_ops) orelse return;
+        // A queued allocation is visited without the list value that named
+        // it, so its header carries its element count, as it does for a
+        // seamless slice.
+        allocationElementCountPtr(data).* = self.getAllocationElementCount(true, roc_ops);
+        const teardown: utils.DropQueue.Teardown = .{ .child = child, .element_width = element_width, .alignment = alignment, .kind = .list };
+        if (utils.DropQueue.enclosing(outer, teardown)) |queue| return queue.push(data);
+
+        var queue: utils.DropQueue = .{ .outer = outer, .head = null, .teardown = teardown };
+        var dying = data;
+        while (true) {
+            const count = allocationElementCountPtr(dying).*;
+            var i: usize = 0;
+            while (i < count) : (i += 1) dropElement(context, dying + i * element_width, &queue);
+            utils.freeDataPtrC(dying, alignment, true, roc_ops);
+            dying = queue.pop() orelse break;
+        }
+    }
+
+    /// The header word holding the element count of an allocation whose
+    /// elements are refcounted.
+    fn allocationElementCountPtr(data: [*]u8) *usize {
+        const words: [*]usize = utils.alignedPtrCast([*]usize, data, @src());
+        return &(words - 2)[0];
     }
 
     /// Always uses atomic count updates: this entry serves primitive-internal

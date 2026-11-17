@@ -140,3 +140,13 @@ Roc *programs* target is a separate setting with its own floor.
 ## Windows Notes
 
 Due to a [Zig bug](https://github.com/ziglang/zig/issues/17652) related to extracting dependencies from tarball files containing symlinks (which is not allowed by default on Windows), you might encounter permission denial issues. The workaround is to enable the `Developer Mode` option on Windows, which could be found under `Settings > System > Advanced`. If that does not work, please review the aforementioned bug for any additional clues.
+
+`zig build minici` on Windows needs the tools the Windows CI job has:
+
+- `bash` on `PATH`, for example by running it from Git Bash.
+- `objdump` on `PATH`, for `run-check-match-extension-codegen`.
+- The x64 and ARM64 MSVC build tools and the Windows SDK, for `run-check-glue-abi` and the linking tests.
+- Rust with the `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`), for `run-check-glue-abi` and the glue cases of `run-test-cli`.
+- Node.js on `PATH`, for `run-test-repl-wasm`.
+
+Run it from a desktop session rather than over OpenSSH: there Windows refuses to follow symlinks that a non-administrator created, which breaks the rustup proxies, Zig's versioned shared-library links and roc's LSP symlink tests.
