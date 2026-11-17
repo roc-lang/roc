@@ -625,10 +625,6 @@ const Lifter = struct {
             // A served body already passed this normalization. Its scope is
             // part of source identity even though no body remains to rewrite.
             .root_identity = def.root_identity,
-            .signature = .of(if (def.fn_id.get()) |source_fn_id| switch (self.source.fnSignatureRelation(source_fn_id)) {
-                .independent_roots => null,
-                .exact_graph => source.?.mono_fn_ty,
-            } else null),
             .args = def.args,
             .captures = .empty(),
             .body = body,
@@ -648,10 +644,6 @@ const Lifter = struct {
         self.output.setFn(fn_id, .{
             .symbol = def.symbol,
             .source = source,
-            .signature = .of(switch (self.source.fnSignatureRelation(def.fn_id)) {
-                .independent_roots => null,
-                .exact_graph => source.mono_fn_ty,
-            }),
             .args = def.args,
             .captures = capture_span,
             .body = .{ .roc = def.body },
@@ -1122,10 +1114,6 @@ const Lifter = struct {
         self.output.setFn(fn_id, .{
             .symbol = self.symbols.fresh(),
             .source = source,
-            .signature = .of(switch (self.source.fnSignatureRelation(lambda.fn_id)) {
-                .independent_roots => null,
-                .exact_graph => source.mono_fn_ty,
-            }),
             .args = lambda.args,
             .captures = capture_span,
             .body = .{ .roc = lambda.body },

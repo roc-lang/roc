@@ -141,7 +141,7 @@ pub const NamedBacking = struct {
 pub const OptionalNamedBacking = collections.OptionalStruct(NamedBacking, "ty");
 
 comptime {
-    std.debug.assert(@sizeOf(NamedContent) == 152);
+    std.debug.assert(@sizeOf(NamedContent) == 76);
     std.debug.assert(@sizeOf(Field) == 20);
 }
 

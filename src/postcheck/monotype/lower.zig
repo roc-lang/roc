@@ -5223,7 +5223,6 @@ const PendingSpecJob = struct {
     fn_ty: Type.TypeId,
     evidence: []const SpecEvidence,
     subst: ?SealedSubstitution,
-    signature_relation: Ast.SignatureRelation,
     codec_contract: ?SealedCodecContractContext,
     /// Why the body is lowered. The coordinator restates it when it hands the
     /// job to a lane, since an upgrade may arrive while the job is queued.
@@ -5235,7 +5234,6 @@ const PendingSpecJob = struct {
 const PendingTemplateBody = struct {
     reservation: TemplateReservation,
     fn_template: Ast.FnTemplate,
-    signature_relation: Ast.SignatureRelation,
     root_node: NodeId,
     lowered: LoweredTemplateBody,
 };
@@ -5245,7 +5243,6 @@ const PendingTemplateBody = struct {
 const SealedPendingTemplateBody = struct {
     reservation: TemplateReservation,
     fn_template: Ast.FnTemplate,
-    signature_relation: Ast.SignatureRelation,
     root_ty: Type.TypeId,
     lowered: SealedLoweredTemplateBody,
 };
@@ -8660,7 +8657,6 @@ const Builder = struct {
             fn_ty,
             evidence,
             null,
-            .independent_roots,
             .count,
             null,
             null,
@@ -9025,7 +9021,6 @@ const Builder = struct {
         /// The request's substitution, or null for a root whose template is
         /// instantiated at its own scheme.
         subst: ?SealedSubstitution,
-        signature_relation: Ast.SignatureRelation,
         request_accounting: TemplateRequestAccounting,
         precomputed_request_digest: ?names.TypeDigest,
         retained_topology: ?EvidenceChain,
@@ -9091,11 +9086,9 @@ const Builder = struct {
                 .ready,
                 .lowering,
                 => {
-                    self.promoteFnSignatureRelation(hit.fn_id, signature_relation);
                     return existing.def;
                 },
                 .reserved => {
-                    self.promoteFnSignatureRelation(hit.fn_id, signature_relation);
                     // Another request for a parked root body needs that
                     // body, whether or not anything demands the root.
                     if (!self.parking_root_job) try self.unparkRootJob(hit.fn_id);
@@ -9124,7 +9117,6 @@ const Builder = struct {
                                 job.evidence,
                                 job.subst,
                                 null,
-                                job.signature_relation,
                                 job.codec_contract,
                             );
                             return existing.def;
@@ -9190,7 +9182,6 @@ const Builder = struct {
             const symbol = self.symbols.freshCoordinator();
             try self.registerProcDebugNameForTemplate(symbol, view, template_ref);
             const fn_id = try self.program.addFn(fn_template);
-            self.promoteFnSignatureRelation(fn_id, signature_relation);
             // The definition fills once its body lowers; a recursive request
             // that reuses this entry meanwhile reads the requested template,
             // which is the same specialization by construction.
@@ -9249,7 +9240,6 @@ const Builder = struct {
                     .fn_ty = lower_fn_ty,
                     .evidence = spec_evidence,
                     .subst = subst,
-                    .signature_relation = signature_relation,
                     .codec_contract = codec_contract,
                     .demand = demand,
                 };
@@ -9297,7 +9287,6 @@ const Builder = struct {
             spec_evidence,
             subst,
             retained_topology,
-            signature_relation,
             codec_contract,
         );
         return reservation.def;
@@ -9463,7 +9452,6 @@ const Builder = struct {
         spec_evidence: []const SpecEvidence,
         subst: ?SealedSubstitution,
         retained_topology: ?EvidenceChain,
-        signature_relation: Ast.SignatureRelation,
         codec_contract: ?SealedCodecContractContext,
     ) Allocator.Error!void {
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
@@ -9556,7 +9544,6 @@ const Builder = struct {
             spec_evidence,
             subst,
             retained_topology,
-            signature_relation,
             codec_contract,
         );
         const draft_end = draft.end(self);
@@ -10365,7 +10352,6 @@ const Builder = struct {
                 job.evidence,
                 job.subst,
                 null,
-                job.signature_relation,
                 job.codec_contract,
             );
             self.acceptSpecDispatch(job.dispatch_index);
@@ -10541,7 +10527,6 @@ const Builder = struct {
             job.evidence,
             job.subst,
             null,
-            job.signature_relation,
             job.codec_contract,
         );
         const final_end = final_guard.end(self);
@@ -10700,7 +10685,6 @@ const Builder = struct {
         spec_evidence: []const SpecEvidence,
         subst: ?SealedSubstitution,
         retained_topology: ?EvidenceChain,
-        signature_relation: Ast.SignatureRelation,
         codec_contract: ?SealedCodecContractContext,
     ) Allocator.Error!PendingTemplateBody {
         var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
@@ -10763,7 +10747,6 @@ const Builder = struct {
             .codec_contract = draft_codec_contract,
             .fn_id = reservation.fn_id,
             .reserved_fn_ty = fn_template.mono_fn_ty,
-            .signature_relation = signature_relation,
         };
         const root_owner = try body_draft.enterOwner(.{ .reserved_fn = reservation.fn_id });
         defer root_owner.leave();
@@ -10782,23 +10765,18 @@ const Builder = struct {
         body_ctx.current_fn_key = source_fn_key;
         const lowered = try body_ctx.lowerTemplateBodyAtNode(template_ref, template, root_node);
         try body_draft.addScopeRoot(lowered.body);
-        const final_signature_relation = self.active_template_root.?.signature_relation;
         const completed_root = blk: {
             var relations_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
             defer relations_timing_scope.end();
-            break :blk switch (final_signature_relation) {
-                .exact_graph => root_node,
-                .independent_roots => try body_ctx.completedFunctionNodeForLoweredRet(
-                    root_node,
-                    lowered.ret,
-                    try body_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
-                ),
-            };
+            break :blk try body_ctx.completedFunctionNodeForLoweredRet(
+                root_node,
+                lowered.ret,
+                try body_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
+            );
         };
         return .{
             .reservation = reservation,
             .fn_template = fn_template,
-            .signature_relation = final_signature_relation,
             .root_node = completed_root,
             .lowered = lowered,
         };
@@ -10819,12 +10797,7 @@ const Builder = struct {
         // would be distinct identities—acceptable because only the recorded
         // template is consulted.)
         var def_template = pending.fn_template;
-        def_template.mono_fn_ty = switch (pending.signature_relation) {
-            // An exact signature keeps the producer-authored request type. The
-            // independently solved body may seal to an equal, distinct TypeId.
-            .exact_graph => pending.fn_template.mono_fn_ty,
-            .independent_roots => final_fn_ty,
-        };
+        def_template.mono_fn_ty = final_fn_ty;
         if (self.specDemand(pending.reservation.fn_id) == .discovery) def_template = discoveryTemplate(def_template);
         self.program.setFnSource(pending.reservation.fn_id, def_template);
         const sealed_fn_data = functionShape(&self.program.types, final_fn_ty, "checked procedure template root type was not a function");
@@ -10847,7 +10820,6 @@ const Builder = struct {
         raw_request_fn_node: NodeId,
         partial_edge: EdgeEvidence,
         request_edge: DraftRequestEdge,
-        signature_relation: Ast.SignatureRelation,
         codec_contract_selection: CodecContractSelection,
     ) Allocator.Error!DraftFnSlot {
         self.count("template_requests");
@@ -10910,7 +10882,6 @@ const Builder = struct {
                     if (std.debug.runtime_safety and !(try source_ctx.graph.sameFunctionInterface(active_root.request_fn_node, request_fn_node))) {
                         Common.invariant("recursive root request did not join its complete function interface");
                     }
-                    self.promoteFnSignatureRelation(active_root.fn_id, signature_relation);
                     self.count("template_hits");
                     source_ctx.draft.reuseOwnBody();
                     return .{ .local = .{ .final = active_root.fn_id } };
@@ -11071,9 +11042,6 @@ const Builder = struct {
             if (std.debug.runtime_safety and !(try source_ctx.graph.sameFunctionInterface(draftTemplateSpecLookupRequestNode(spec), request_fn_node))) {
                 Common.invariant("recursive draft template request did not join its complete function interface");
             }
-            if (signature_relation == .exact_graph) {
-                source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation = .exact_graph;
-            }
             if (spec.state != .deferred and !runtimeDemandGuardFrameSetsEql(
                 spec.runtime_demand_guard_frames,
                 try source_ctx.runtimeDemandGuardFrameAddresses(),
@@ -11124,7 +11092,6 @@ const Builder = struct {
                 .const_evidence_frames = try source_ctx.draft.addConstFnEvidenceFrames(stored_evidence.frames),
                 .const_evidence_frame_head = .of(stored_evidence.head),
             },
-            .signature_relation = signature_relation,
         });
         self.count("template_misses");
         if (local_context_dependent and template.target == .hosted) {
@@ -11216,7 +11183,6 @@ const Builder = struct {
             request_fn_node,
         );
         if (!local_context_dependent and
-            signature_relation == .independent_roots and
             template.target != .hosted)
         {
             const public_request = source_ctx.graph.requestSourceInterface(request_fn_node) orelse request_fn_node;
@@ -11230,12 +11196,6 @@ const Builder = struct {
             } else {
                 try source_ctx.graph.unify(root_node, request_fn_node);
             }
-        }
-        if (!local_context_dependent and
-            signature_relation != .independent_roots and
-            template.target != .hosted)
-        {
-            try relateFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
         }
         if (codec_contract) |contract| {
             try body_ctx.instantiateCodecContractAtCall(
@@ -13277,7 +13237,6 @@ const Builder = struct {
             fn_template.mono_fn_ty,
             evidence,
             null,
-            .independent_roots,
             .count,
             null,
             null,
@@ -13291,24 +13250,6 @@ const Builder = struct {
     fn defFnId(self: *Builder, def: Ast.DefId) Ast.FnId {
         return self.program.getDef(def).fn_id.get() orelse
             Common.invariant("Monotype procedure template definition had no function id");
-    }
-
-    fn promoteFnSignatureRelation(
-        self: *Builder,
-        fn_id: Ast.FnId,
-        requested: Ast.SignatureRelation,
-    ) void {
-        if (requested != .exact_graph) return;
-        if (self.active_template_root) |*active_root| {
-            if (active_root.fn_id == fn_id and self.hasPrivateTypeDestination()) {
-                active_root.signature_relation = .exact_graph;
-                return;
-            }
-        }
-        var fn_ = self.program.getFn(fn_id);
-        if (fn_.signature_relation == .exact_graph) return;
-        fn_.signature_relation = .exact_graph;
-        self.program.setFn(fn_id, fn_);
     }
 
     fn nestedFnForExpr(
@@ -13397,7 +13338,6 @@ const Builder = struct {
         requested_evidence: EvidenceChain,
         owned_scope: ?checked.DispatchScopeId,
         recursive_reference: bool,
-        signature_relation: Ast.SignatureRelation,
         codec_contract_selection: CodecContractSelection,
     ) Allocator.Error!DraftFnTarget {
         var draft = switch (try self.beginDraftNested(
@@ -13412,7 +13352,6 @@ const Builder = struct {
             requested_evidence,
             owned_scope,
             recursive_reference,
-            signature_relation,
             codec_contract_selection,
         )) {
             .hit => |target| return target,
@@ -13443,7 +13382,6 @@ const Builder = struct {
         unresolved_evidence: EvidenceChain,
         owned_scope: ?checked.DispatchScopeId,
         recursive_reference: bool,
-        signature_relation: Ast.SignatureRelation,
         codec_contract_selection: CodecContractSelection,
     ) Allocator.Error!DraftNestedBegin {
         self.count("nested_requests");
@@ -13501,11 +13439,6 @@ const Builder = struct {
                 while (candidates.next()) |raw_spec| {
                     self.countBodyDiagnostic("nested_lookup_probes");
                     const spec = &source_ctx.draft.nested_specs.items[raw_spec];
-                    if (signature_relation == .exact_graph and
-                        source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation != .exact_graph)
-                    {
-                        continue;
-                    }
                     if (!try evidenceChainEql(self.allocator, spec.evidence, requested_evidence)) continue;
                     if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                     if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
@@ -13533,11 +13466,6 @@ const Builder = struct {
                         if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                         if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
                         if (!nestedSpecReusableAt(source_ctx.draft, spec, request_owner)) continue;
-                        if (signature_relation == .exact_graph and
-                            source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation != .exact_graph)
-                        {
-                            continue;
-                        }
                         const spec_shape = spec.open_request_shape orelse continue;
                         if (!std.mem.eql(u8, spec_shape, open_request_shape.?.bytes)) continue;
                         selection.addExact(raw_spec);
@@ -13571,11 +13499,6 @@ const Builder = struct {
                             if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                             if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
                             if (!nestedSpecReusableAt(source_ctx.draft, spec, request_owner)) continue;
-                            if (signature_relation == .exact_graph and
-                                source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation != .exact_graph)
-                            {
-                                continue;
-                            }
                             const spec_fn_node = try draftNestedSpecRequestNode(source_ctx.draft, source_ctx.graph, spec);
                             const exact_interface = (try source_ctx.graph.sameFunctionInterface(spec_fn_node, request_fn_node));
                             const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
@@ -13627,7 +13550,6 @@ const Builder = struct {
                 if (spec.fn_id != owner_fn) Common.invariant("draft function named a nested specialization of another function");
                 if (spec.state != .lowering) continue;
                 if (spec.request_fn_ty != .none) continue;
-                if (signature_relation == .exact_graph and owner_draft_fn.signature_relation != .exact_graph) continue;
                 if (!DraftNestedFamilyAddress.init(spec.nested, spec.source_fn_key).sameRecursiveCallable(family)) continue;
                 if (!try evidenceChainEql(self.allocator, spec.evidence, requested_evidence)) continue;
                 if (!substitutionsShareClasses(source_ctx.graph, spec.evidence.subst, requested_evidence.subst)) continue;
@@ -13658,9 +13580,6 @@ const Builder = struct {
                     Common.invariant("draft nested request did not join its complete function interface");
                 }
             }
-            if (signature_relation == .exact_graph) {
-                source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation = .exact_graph;
-            }
             for (spec.capture_entry_guards, capture_entry_guards) |stored, requested| {
                 if (!source_ctx.graph.sameClass(stored, requested)) {
                     Common.invariant("recursive draft nested request changed its ordered capture entry cells");
@@ -13690,7 +13609,7 @@ const Builder = struct {
             .const_evidence = draft_evidence.entries,
             .const_evidence_frames = draft_evidence.frames,
             .const_evidence_frame_head = .of(stored_evidence.head),
-        }, .signature_relation = signature_relation });
+        } });
         const symbol = self.symbols.fresh();
         const spec_index = source_ctx.draft.nested_specs.items.len;
         try source_ctx.draft.nested_specs.append(self.allocator, .{
@@ -14886,7 +14805,6 @@ const Builder = struct {
             spec.evidence;
         const draft_fn = &body_draft.fns.items[@backingInt(spec.fn_id)];
         draft_fn.source.mono_fn_ty = .{ .sealed = draft_fn_ty };
-        const signature_relation = draft_fn.signature_relation;
 
         // Only a request every use of which is a direct call, and whose
         // identity is its template, its evidence, and its types alone, is
@@ -14926,7 +14844,6 @@ const Builder = struct {
                 request_fn_ty,
                 evidence,
                 request_subst,
-                signature_relation,
                 .already_counted,
                 request_digest,
                 null,
@@ -15354,26 +15271,6 @@ const Builder = struct {
                             {
                                 Common.compilerBug("equal draft specialization identities produced different solved types");
                             }
-                            if (fn_.signature_relation == .exact_graph) {
-                                const prior_slot = fn_slots[prior] orelse
-                                    Common.invariant("duplicate draft specialization had no retained function slot");
-                                switch (prior_slot) {
-                                    .local => |retained_fn| {
-                                        if (@backingInt(retained_fn) >= self.program.fnCount()) {
-                                            for (fn_slots[0..raw_index], emit_fns[0..raw_index], 0..) |candidate_slot, emits, candidate_index| {
-                                                if (emits and std.meta.eql(candidate_slot, prior_slot)) {
-                                                    body_draft.fns.items[candidate_index].signature_relation = .exact_graph;
-                                                    break;
-                                                }
-                                            } else {
-                                                Common.invariant("duplicate draft specialization lost its retained body");
-                                            }
-                                        } else {
-                                            self.promoteFnSignatureRelation(retained_fn, .exact_graph);
-                                        }
-                                    },
-                                }
-                            }
                             fn_slots[raw_index] = fn_slots[prior];
                             emit_fns[raw_index] = false;
                             if (template_spec != null) {
@@ -15403,9 +15300,6 @@ const Builder = struct {
                             .discovery => try self.recordDiscoveryCallee(body_draft, hit.local.fn_id),
                         }
                         traceLink("merge", body_draft, merged_demand, hit.local.fn_id);
-                        if (fn_.signature_relation == .exact_graph) {
-                            self.promoteFnSignatureRelation(hit.local.fn_id, .exact_graph);
-                        }
                         if (std.debug.runtime_safety and hit.local.status == .ready and
                             !try self.program.types.typeEql(
                                 &self.program.names,
@@ -15680,7 +15574,6 @@ const Builder = struct {
         return .{
             .reservation = pending.reservation,
             .fn_template = pending.fn_template,
-            .signature_relation = pending.signature_relation,
             .root_ty = root_ty,
             .lowered = .{
                 .args = pending.lowered.args,
@@ -15914,10 +15807,6 @@ const Builder = struct {
                     }
                     continue;
                 }
-                self.promoteFnSignatureRelation(
-                    fn_id,
-                    body_draft.fns.items[@backingInt(spec.fn_id)].signature_relation,
-                );
                 continue;
             }
 
@@ -16503,7 +16392,6 @@ comptime {
 
 const DraftFn = struct {
     source: DraftFnTemplate,
-    signature_relation: Ast.SignatureRelation = .independent_roots,
     parent_owner: DraftOwner = .root,
     /// The index in `BodyDraftStore.nested_specs` of the nested
     /// specialization this function's body lowers, when it is one. Recursive
@@ -17326,7 +17214,6 @@ const ActiveTemplateRoot = struct {
     /// Immutable reservation signature supplied by the job. Workers never
     /// read the coordinator's mutable function row for recursive references.
     reserved_fn_ty: Type.TypeId,
-    signature_relation: Ast.SignatureRelation,
 };
 
 const DraftNestedFamilyAddress = struct {
@@ -20770,7 +20657,6 @@ const BodyDraftStore = struct {
             if (emit_fns) |emit| if (!emit[index]) continue;
             program.fns.appendAssumeCapacity(.{
                 .source = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, evidence_span, evidence_frames_span.start),
-                .signature_relation = fn_.signature_relation,
             });
         }
 
@@ -32110,7 +31996,6 @@ const BodyContext = struct {
                     nested_evidence.chain,
                     nested_evidence.owned_scope,
                     false,
-                    .independent_roots,
                     .inherit,
                 )) {
                     .hit => |target| return self.finishNestedFnValue(task, target),
@@ -38492,7 +38377,6 @@ const BodyContext = struct {
                 callable_node,
                 edge,
                 .instantiation,
-                .independent_roots,
                 .inherit,
             );
             const draft_spec: ?u32 = switch (created.local) {
@@ -46943,7 +46827,6 @@ const BodyContext = struct {
             request_fn_node,
             edge,
             if (recursive_reference) .recursive_reference else .instantiation,
-            .independent_roots,
             .inherit,
         );
     }
@@ -47030,7 +46913,6 @@ const BodyContext = struct {
             requested_evidence,
             local.dispatch_scope,
             recursive_reference,
-            .independent_roots,
             codec_contract_selection,
         );
     }
@@ -49641,7 +49523,6 @@ const BodyContext = struct {
                     fn_ctx.evidence,
                     null,
                     false,
-                    .independent_roots,
                     .inherit,
                 );
             },
@@ -49659,7 +49540,6 @@ const BodyContext = struct {
                     request_fn_node,
                     .{ .subst = subst, .vector = retained_evidence.vector },
                     .instantiation,
-                    .independent_roots,
                     .inherit,
                 ));
             },
@@ -49745,7 +49625,6 @@ const BodyContext = struct {
                     fn_ctx.evidence,
                     null,
                     false,
-                    .independent_roots,
                     .inherit,
                 );
             },
@@ -52185,7 +52064,6 @@ const BodyContext = struct {
             nested_evidence.chain,
             nested_evidence.owned_scope,
             false,
-            .independent_roots,
             .inherit,
         );
     }
@@ -56751,7 +56629,6 @@ const BodyContext = struct {
                     request_fn_node,
                     edge,
                     .instantiation,
-                    .independent_roots,
                     codec_contract_selection,
                 );
             },
@@ -56925,7 +56802,6 @@ const BodyContext = struct {
                     request_fn_node,
                     edge,
                     .instantiation,
-                    .independent_roots,
                     .inherit,
                 );
             },
@@ -69403,7 +69279,6 @@ test "queued specialization skips a body claimed immediately before dispatch" {
                 .fn_ty = ty_,
                 .evidence = &.{},
                 .subst = null,
-                .signature_relation = .independent_roots,
                 .codec_contract = null,
             };
         }

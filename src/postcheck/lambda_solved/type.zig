@@ -166,8 +166,8 @@ pub const Content = union(enum) {
     mono: struct {
         id: MonoType.TypeId,
         /// Clone context tying the occurrences of one Monotype within one
-        /// instance of a Monotype cycle (or one whole producer-authored
-        /// signature graph) to one var, so a recursive back-reference reaches
+        /// instance of a Monotype cycle to one var, so a recursive
+        /// back-reference reaches
         /// the node it recurs into. `no_leaf_context` for a leaf that begins
         /// a tree of its own.
         ctx: u32 = no_leaf_context,
@@ -188,7 +188,7 @@ pub const NamedBacking = struct {
 pub const OptionalNamedBacking = collections.OptionalStruct(NamedBacking, "ty");
 
 comptime {
-    std.debug.assert(@sizeOf(NamedContent) == 152);
+    std.debug.assert(@sizeOf(NamedContent) == 76);
     std.debug.assert(@sizeOf(Field) == 20);
 }
 

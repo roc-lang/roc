@@ -595,12 +595,8 @@ Every request discards its graph and results on success or allocation failure
 while retaining capacity: no identity survives mutation of the source store.
 Allocation failure propagates to the caller.
 
-Representation finiteness is different from proof-query termination. Monotype
-bounds minted iterator identities at the single graph-owned construction choke
-point (`generatedIteratorNode` plus graph finalization); crossing that declared
-type-universe boundary produces the explicit `forced_dynamic` representation.
-SpecConstr's shape, structural-work, and constructor-size queries instead
-use typed proof exhaustion solely to decline an optional rewrite. Code-growth
+SpecConstr's shape, structural-work, and constructor-size queries use typed
+proof exhaustion solely to decline an optional rewrite. Code-growth
 admission is likewise separate from rewrite-legality proof: a growth limit may
 retain the ordinary shared control-flow form after a rewrite has been proven
 legal, but it cannot change a proof result or choose a runtime encoding.
@@ -10584,8 +10580,7 @@ The clone propagates constructor values through ordinary bindings and solves
 loop fixed points over their leaves. As a result, `.none` mode does not rebuild
 the successor iterator record and callable on each back edge when the producer
 shape is statically known. Iterator construction outside the loop remains an
-ordinary value operation, and a forced-dynamic iterator retains its explicit
-erased-callable dispatch. No stage recognizes iterator behavior from source
+ordinary value operation. No stage recognizes iterator behavior from source
 names, field spelling, generic loop shape, or backend output.
 
 Iterator and stream loops are important clients. Once explicit producer topology
@@ -10924,7 +10919,7 @@ propagates through the callee's exact used-argument plan.
 
 Inlining a call additionally requires exact closed Monotype identity between
 the call-site result and the callee body's result. Independently specialized
-graphs may prove a public/generated or minted/forced-dynamic relation without
+graphs may prove a public/generated-private relation without
 giving the two results the same runtime representation; that relation is not
 permission to substitute the callee's private value into the caller. Such a
 call remains explicit for Lambda Solved to consume at the representation
@@ -11211,11 +11206,10 @@ specialization mode may change compile-time work and generated shape only.
 
 The following properties require focused tests:
 
-- bounded iterator chains remain minted and have no iterator-attributable box or
-  erased callable;
-- recursive and over-cap chains terminate and use the forced-dynamic callable
-  representation;
-- forced-dynamic callable sets contain every member that can reach the boundary;
+- static iterator chains of any length lower to finite lambda sets with no
+  iterator-attributable box or erased callable;
+- chains whose length depends on run-time values terminate and use ordinary
+  recursive lambda-set layouts;
 - wrapper mode and ordinary mode agree on values and effects;
 - iterator loop scalarization preserves every reachable transition, including
   adapter-state changes across `continue` edges;
@@ -11223,8 +11217,8 @@ The following properties require focused tests:
   compile-time finalization.
 
 Backends receive only ordinary LIR and explicit ARC statements. They must not
-know whether a value originated as a public iterator, a minted iterator,
-forced-dynamic callable state, or a scalarized loop.
+know whether a value originated as an iterator, a stream, or a scalarized
+loop.
 
 ## Immutable Diagnostic Captures
 
@@ -12367,12 +12361,7 @@ on the cycle is one node, so a recursive type's back-reference reaches the
 node it recurs into (`rest : Iter(item)` is its enclosing iterator), and the
 next unrolling of the cycle is never a separate copy. A named type's argument
 scope binds each backing position of an argument's Monotype, up to nested
-named types, to that argument. An exact producer-authored signature graph
-(`Lifted.Fn.signature`) expands in one whole-root context in which every
-occurrence of a Monotype is one node, since its producer means them to be
-one value. Monotype lowers nested lambdas with exact signature graphs too, so
-a closure typed `Iter(I64) -> Iter(I64)` has one node for its argument and
-its result. Every other occurrence is its own leaf: a callable-free type
+named types, to that argument. Every other occurrence is its own leaf: a callable-free type
 holding a row a join can change and reaching no cycle is POSITIONAL
 (`Solver.LeafSharing`), and a callable-bearing or cyclic occurrence that is
 not on a cycle with its parent begins a tree of its own, in no context until
@@ -18957,15 +18946,7 @@ const TypeDef = struct {
     module: ModuleIdentityId,
     type_name: TypeNameId,
     source_decl: ?u32,
-    generated: ?TypeDigest,
-    iterator_representation: IteratorRepresentation,
-    iterator_depth: u8,
-};
-
-const IteratorRepresentation = enum(u8) {
-    none,
-    minted,
-    forced_dynamic,
+    site: bool,
 };
 
 const Fn = struct {
@@ -19285,17 +19266,9 @@ updated explicitly when a union moves that ownership.
 
 A worker lane may reuse a graph's allocated capacity between specializations,
 but reset invalidates every node identity and all node-indexed state. Nominal
-identity and backing relationships, constructor-evidence requests, and generated
-iterator membership and provenance counts belong only to that graph epoch.
-Only the cumulative immutable type and name stores survive the reset.
-
-Graph-owned generated iterators are indexed by their stable declaration, kind,
-callable evidence, and current argument roots. Root unions rekey only affected
-entries, so lookups avoid scanning unrelated candidates. Content replacement and
-root union update producer membership explicitly. Equal keys retain
-independently constructed nodes until an explicit relation joins them. A
-monotone provenance counter lets both iterator finalizers return immediately for
-graphs without generated iterators.
+identity and backing relationships and constructor-evidence requests belong
+only to that graph epoch. Only the cumulative immutable type and name stores
+survive the reset.
 
 Nominal backing instances are indexed the same way, by declaration and current
 argument roots, and a root union rekeys only the instances that mention its
@@ -19466,8 +19439,8 @@ none of theirs. A row tail, a padding field, or an argument of any other
 nominal type is not a value position. A request captures such a
 variable's substitution cell as a parametric hole, an unconstrained variable,
 when the cell is resolved and nothing it reaches carries private backing,
-source-interface or constructor evidence, forced-dynamic iterator identity, or
-generated or iterator representation authority. Structure reaching a hole stays
+source-interface or constructor evidence, or generated-private representation
+authority. Structure reaching a hole stays
 open instead of settling, so requests that differ only in their holes' contents
 share one input identity and one summary, and relating the summary back to a
 request fills its holes. Captured holes carry the explicit `interface_parameter`
@@ -19560,8 +19533,8 @@ Imported finished-type witnesses remain finished after replay, preserving the pr
 on rewriting a finalized representation. Import and summary replay register each
 witness on its singleton cell before relating it. Summary replay imports each
 settled leaf as its own occurrence rather than through the graph's shared import
-of that type, so class metadata the graph accumulated on its own occurrence, such
-as recursive-slot membership, cannot reach what the summary relates. Each union class stores its
+of that type, so class metadata the graph accumulated on its own occurrence
+cannot reach what the summary relates. Each union class stores its
 first finished witness, or explicit absence. Because union concatenates the
 winner's permanent-member list before the loser's, it retains the winner's
 witness when present and otherwise takes the loser's. Capture and finished-type
@@ -19577,12 +19550,6 @@ whichever checked occurrence each was reached through, become one leaf.
 This capture does not finalize the surrounding graph or apply variable defaults.
 Settled leaves retain only their interned identities; storage for open structure
 and producer evidence is proportional to the open portion of the interface.
-Recursive-slot and forced-dynamic membership are explicit bits on each
-instantiation union-find class. Marking resolves the current representative;
-unions OR both classes' bits into the winner. Capture, shareability, interface
-identity, and iterator finalization read that class metadata directly, never
-scan graph-wide inventories. Summary replay marks its newly instantiated cells
-before relating them. Unrelated marked classes impose no work on capture.
 Open constraints use local indices, never graph identities
 or defaulted Monotype views. Expansion
 uses an independent instantiation of the inputs so incidental caller state
@@ -19632,10 +19599,7 @@ A witness is no evidence: replaying an unchanged summary relates nothing back,
 while a fresh expansion relates witnessed copies of its settled leaves, so
 whether a class acquired one records which history reached it (pinned by the
 monotype test "interface agreement ignores finished witnesses of open
-classes"). Recursive-slot
-and forced-dynamic membership decide only iterator representations, so they
-are no evidence on a class that settles as a type containing no iterator
-interface. An unchanged summary stands for its input.
+classes"). An unchanged summary stands for its input.
 
 Digest discovery encodes each uncached node's scalar bytes once and retains
 ordered child offsets. Acyclic resolution and cyclic-group reduction replay
@@ -22699,22 +22663,18 @@ inspectable public backing it stands for.
 Monotype Lifted types enter the solved store as lazy leaves that materialize one
 level when unification or a shape read touches them. Which occurrences of one
 Monotype share a node is described in "Row Joins": a clone context holds one
-instance of a Monotype cycle (or one whole signature graph), and an
-occurrence off its parent's cycle begins a tree of its own. A leaf that has
+instance of a Monotype cycle, and an occurrence off its parent's cycle begins
+a tree of its own. A leaf that has
 never expanded stands for a fresh clone of its Monotype whose callable slots
 nothing else references when its expansion would be unobservable: the leaf
-has no clone context yet and reads no binding of an argument scope it
-inherited, or it is the only unexpanded leaf of a whole-root clone context
-whose every expansion registered at most one callable-bearing child, so every
-other entry of that context lies on its ancestor chain and no other expansion
-can reach the context again. Without a binding, a fresh clone's only ties are
+reaches no cycle (so it has no clone context) and reads no binding of an
+argument scope it inherited. Without a binding, a fresh clone's only ties are
 the ones its own Monotype imposes on every instance of it, which any class
 instantiated from that Monotype already has. Unifying such a leaf with a class already instantiated from the
 same Monotype only joins the clone's fresh callable slots to the class's, so the
 leaf joins the class without materializing. A Monotype that reaches a cycle, or
 that is uninhabited, keeps the ordinary relation. Leaves that survive solving
-were never unified: their callable slots all close empty and their
-forced-dynamic marks depend only on their Monotype, so finalization gives every
+were never unified: their callable slots all close empty, so finalization gives every
 untouched leaf of one Monotype one shared clone. An expression or pattern that
 no function body reaches is never typed by solving, and the store holds many
 of them (the rows a rewritten body no longer uses). Each gets the type its
@@ -31945,7 +31905,7 @@ joining it with an existing function cell contributes no lambda member. The
 proof still checks every argument/result shape and requires each repeated
 mutable source type (including each function type) to name one existing class.
 Thus it cannot lose a recursive tie or merge distinct callable occurrences.
-Forced-dynamic types, enclosing argument scopes, and externally observable
+Enclosing argument scopes and externally observable
 clone contexts retain their ordinary relation. The read-only proof does not
 expand target nodes; graph writes invalidate its recorded dependencies.
 

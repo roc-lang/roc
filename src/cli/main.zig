@@ -19388,7 +19388,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [42]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [41]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -19418,7 +19418,6 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [42]
         .{ .name = "Argument class snapshot nodes", .count = graph.argument_class_members_snapshotted },
         .{ .name = "Structural backing visited slots", .count = graph.structural_backing_scan_slots },
         .{ .name = "Generated-private guard returns", .count = graph.generated_private_guard_returns },
-        .{ .name = "Generated-iterator index lookups", .count = graph.generated_iterator_lookups },
         .{ .name = "Completion queries", .count = graph.completion_queries },
         .{ .name = "Completion pair entries", .count = graph.completion_pair_entries },
         .{ .name = "Completion pair expansions", .count = graph.completion_pair_expansions },
@@ -19525,8 +19524,8 @@ test "post-check diagnostics preserve labeled SpecConstr counts" {
         .bodies_committed = 8,
         .expressions_committed = 9,
         .peak_retained_shards = 10,
-        .committed_by_phase = .{ 11, 13, 15 },
-        .changed_by_phase = .{ 12, 14, 16 },
+        .committed_by_phase = .{ 11, 13 },
+        .changed_by_phase = .{ 12, 14 },
     });
     const names = [_][]const u8{
         "Tasks submitted",
@@ -19543,8 +19542,6 @@ test "post-check diagnostics preserve labeled SpecConstr counts" {
         "Pattern discovery changes",
         "Loop-result projection tasks",
         "Loop-result projection changes",
-        "Iterator fusion tasks",
-        "Iterator fusion changes",
     };
     for (rows, names, 1..) |row, name, count| {
         try std.testing.expectEqualStrings(name, row.name);
@@ -19789,8 +19786,8 @@ test "post-check diagnostics preserve labeled LIR pass counts" {
         .prepared_statement_rows = 100,
         .appended_statements = 30,
         .peak_retained_shards = 8,
-        .committed_by_phase = .{ 1, 2, 3, 4, 5, 6, 7, 8, 9 },
-        .changed_by_phase = .{ 0, 1, 2, 3, 4, 5, 6, 7, 8 },
+        .committed_by_phase = .{ 1, 2, 3, 4, 5, 6, 7, 8 },
+        .changed_by_phase = .{ 0, 1, 2, 3, 4, 5, 6, 7 },
     });
     try std.testing.expectEqualStrings("Tasks submitted", rows[0].name);
     try std.testing.expectEqual(@as(u64, 10), rows[0].count);
@@ -19799,7 +19796,6 @@ test "post-check diagnostics preserve labeled LIR pass counts" {
     const phase_names = .{
         "Branch expectation",
         "TRMC",
-        "Forwarding joins",
         "Tag-case fusion",
         "Join parameter pruning",
         "Join scalarization",
@@ -19824,7 +19820,6 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.graph.nodes_created = 201;
     diagnostics.graph.generated_private_nodes_visited = 202;
     diagnostics.graph.generated_private_guard_returns = 204;
-    diagnostics.graph.generated_iterator_lookups = 206;
     diagnostics.graph.nominal_backing_tombstone_deletions = 203;
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
@@ -19847,8 +19842,6 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqualStrings("Generated-private containment queries", graph[15].name);
     try std.testing.expectEqualStrings("Generated-private guard returns", graph[26].name);
     try std.testing.expectEqual(@as(u64, 204), graph[26].count);
-    try std.testing.expectEqualStrings("Generated-iterator index lookups", graph[27].name);
-    try std.testing.expectEqual(@as(u64, 206), graph[27].count);
 
     const body = monotypeBodyCounters(diagnostics);
     try std.testing.expectEqualStrings("Type instantiation scopes", body[3].name);

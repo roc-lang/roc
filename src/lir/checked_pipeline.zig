@@ -1185,8 +1185,8 @@ test "pipeline timing aggregates SpecConstr totals and preserves peaks" {
         .bodies_committed = 4,
         .expressions_committed = 30,
         .peak_retained_shards = 2,
-        .committed_by_phase = .{ 1, 2, 3 },
-        .changed_by_phase = .{ 1, 1, 2 },
+        .committed_by_phase = .{ 1, 2 },
+        .changed_by_phase = .{ 1, 1 },
     };
     timing.addSpecConstrParallel(first);
     var aggregate = Timing.init(std.testing.io);

@@ -535,7 +535,7 @@ pub fn expectSpecConstrParallelismDeterministicLir(
     try std.testing.expectEqualDeep(serial, timing.spec_constr_parallel);
     try std.testing.expectEqual(@as(u64, 0), serial.tasks_submitted);
     try std.testing.expectEqual(@as(u64, 0), serial.tasks_committed);
-    try std.testing.expectEqual([3]u64{ 0, 0, 0 }, serial.committed_by_phase);
+    try std.testing.expectEqual([2]u64{ 0, 0 }, serial.committed_by_phase);
     try std.testing.expect(serial.peak_retained_shards > 0);
     try std.testing.expect(serial.peak_retained_shards <= 32);
     if (options.inline_mode == .none) {

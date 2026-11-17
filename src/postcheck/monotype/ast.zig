@@ -386,16 +386,9 @@ comptime {
     if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(FnTemplate) == 464);
 }
 
-/// Monotype function-specialization metadata.
-pub const SignatureRelation = enum(u8) {
-    independent_roots,
-    exact_graph,
-};
-
-/// A specialized Monotype function and its producer-authored signature relation.
+/// A specialized Monotype function.
 pub const Fn = struct {
     source: FnTemplate,
-    signature_relation: SignatureRelation = .independent_roots,
 };
 
 /// Direct function slot in a Monotype program.
@@ -2084,12 +2077,6 @@ pub const ProgramView = struct {
         const raw = @backingInt(id);
         if (raw >= self.fns.len) Common.invariant("Monotype function id referenced a missing specialization");
         return self.fns[raw].source;
-    }
-
-    pub fn fnSignatureRelation(self: ProgramView, id: FnId) SignatureRelation {
-        const raw = @backingInt(id);
-        if (raw >= self.fns.len) Common.invariant("Monotype function id referenced a missing specialization");
-        return self.fns[raw].signature_relation;
     }
 
     pub fn constFnEvidence(self: ProgramView, spans: ConstEvidenceSpans) check.ConstStore.ConstFnEvidenceVector {

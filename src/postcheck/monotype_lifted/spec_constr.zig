@@ -371,8 +371,10 @@ pub const ParallelMetrics = struct {
     bodies_committed: u64 = 0,
     expressions_committed: u64 = 0,
     peak_retained_shards: u64 = 0,
-    committed_by_phase: [3]u64 = .{ 0, 0, 0 },
-    changed_by_phase: [3]u64 = .{ 0, 0, 0 },
+    committed_by_phase: [phase_count]u64 = @splat(0),
+    changed_by_phase: [phase_count]u64 = @splat(0),
+
+    const phase_count = @typeInfo(Phase).@"enum".field_names.len;
 
     /// Accumulate independent pass totals without wrapping long-lived counters.
     pub fn add(self: *ParallelMetrics, other: ParallelMetrics) void {
@@ -3006,7 +3008,6 @@ const Pass = struct {
             .source = source_fn.source,
             .root_identity = source_fn.root_identity,
             .spec_constr_pattern = prefixDigest(prefix_run),
-            .signature = .none,
             .args = try program.addTypedLocalSpan(params),
             .captures = .empty(),
             .body = .hosted,
@@ -3344,7 +3345,6 @@ const Pass = struct {
             .source = source_fn.source,
             .root_identity = source_fn.root_identity,
             .spec_constr_pattern = try patternDigest(self.program, pattern),
-            .signature = .none,
             .args = .empty(),
             .captures = source_fn.captures,
             .body = .hosted,
@@ -3417,7 +3417,6 @@ const Pass = struct {
             .source = source_fn.source,
             .root_identity = source_fn.root_identity,
             .spec_constr_pattern = try patternDigest(self.program, spec.pattern),
-            .signature = .none,
             .args = args,
             .captures = source_fn.captures,
             .body = body,
@@ -3563,7 +3562,6 @@ const Pass = struct {
             .source = fn_.source,
             .spec_constr_pattern = fn_.spec_constr_pattern,
             .root_identity = fn_.root_identity,
-            .signature = fn_.signature,
             .args = fn_.args,
             .captures = fn_.captures,
             .body = .{ .roc = cloned },
@@ -3607,7 +3605,6 @@ const Pass = struct {
             .source = fn_.source,
             .spec_constr_pattern = fn_.spec_constr_pattern,
             .root_identity = fn_.root_identity,
-            .signature = fn_.signature,
             .args = fn_.args,
             .captures = fn_.captures,
             .body = .{ .roc = cloned },
@@ -10994,7 +10991,6 @@ const Cloner = struct {
                 self.pass.program.setFn(task.worker_fn_id, .{
                     .symbol = task.symbol,
                     .source = task.source_fn.source,
-                    .signature = .none,
                     .args = task.args_span,
                     .captures = task.captures_span,
                     .body = .{ .roc = worker_body },
@@ -11107,7 +11103,6 @@ const Cloner = struct {
         task.worker_fn_id = try self.pass.program.addFn(.{
             .symbol = task.symbol,
             .source = worker_source,
-            .signature = .none,
             .args = task.args_span,
             .captures = task.captures_span,
             .body = .hosted,

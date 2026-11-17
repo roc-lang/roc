@@ -111,10 +111,6 @@ pub const Stmt = Mono.Stmt;
 pub const Fn = struct {
     symbol: Common.Symbol,
     source: ?Mono.FnTemplate = null,
-    /// Exact producer-authored Monotype signature graph. This is present only
-    /// while the lifted function still has that signature; transformations
-    /// that synthesize a different ABI clear it explicitly.
-    signature: collections.OptionalId(Type.TypeId) = .none,
     /// Digest of the SpecConstr call pattern this function was cloned for, or
     /// null for a function that is not a call-pattern clone. Clones share
     /// their source's checked template, so this is what keeps two clones of
@@ -133,7 +129,7 @@ pub const Fn = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(Fn) == 572);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(Fn) == 568);
 }
 
 /// What a lifted function body contains, recorded by whoever emitted its
