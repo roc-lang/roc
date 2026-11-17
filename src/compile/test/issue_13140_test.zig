@@ -23,7 +23,7 @@ test "issue 13140: boxy workers lowered from source are located at their bodies"
         \\    echo!(twice(|y| y + n, square(n)).to_str())
         \\    Ok({})
         \\}
-    , .{ .specialization_strategy = .boxy, .proc_debug_names = true }, struct {
+    , .{ .specialization_strategy = .boxy }, struct {
         fn inspect(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLirHarnessError!void {
             var square: ?lir.LIR.LirProcSpecId = null;
             var lambda_located = false;
