@@ -269,6 +269,12 @@ const SharedCrash = struct {
     }
 };
 
+/// A debug scope together with the source file of the code placed in it.
+const DebugFileScope = struct {
+    scope: LlvmBuilder.Metadata,
+    file: u32,
+};
+
 /// Lowers statement-only LIR procedures to LLVM bitcode.
 pub const MonoLlvmCodeGen = struct {
     pub const Entrypoint = struct {
@@ -529,6 +535,9 @@ pub const MonoLlvmCodeGen = struct {
     /// call-site scope is that procedure's concrete `DISubprogram`.
     debug_inline_subprograms: std.AutoHashMap(u32, LlvmBuilder.Metadata),
     debug_inline_callsites: std.AutoHashMap(u32, LlvmBuilder.Metadata),
+    /// Lexical blocks that put a scope's code from another source file under
+    /// that file (see `debugScopeInFile`), cleared with the inline scopes.
+    debug_file_scopes: std.AutoHashMap(DebugFileScope, LlvmBuilder.Metadata),
     /// Debug type metadata per layout index, memoized per module build.
     debug_types: std.AutoHashMap(u32, LlvmBuilder.Metadata),
 
@@ -704,6 +713,7 @@ pub const MonoLlvmCodeGen = struct {
             .stmt_entry_blocks = collections.DenseMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
             .debug_inline_subprograms = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
             .debug_inline_callsites = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
+            .debug_file_scopes = std.AutoHashMap(DebugFileScope, LlvmBuilder.Metadata).init(allocator),
             .debug_types = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
         };
     }
@@ -754,6 +764,7 @@ pub const MonoLlvmCodeGen = struct {
         self.deferred_str_captures.deinit();
         self.deferred_str_capture_scratch.deinit(self.allocator);
         self.debug_types.deinit();
+        self.debug_file_scopes.deinit();
         self.debug_inline_callsites.deinit();
         self.debug_inline_subprograms.deinit();
         self.proc_registry.deinit();
@@ -817,6 +828,7 @@ pub const MonoLlvmCodeGen = struct {
         self.current_source_stmt = null;
         self.debug_inline_subprograms.clearRetainingCapacity();
         self.debug_inline_callsites.clearRetainingCapacity();
+        self.debug_file_scopes.clearRetainingCapacity();
         self.debug_types.clearRetainingCapacity();
         self.stack_check_decls = null;
     }
@@ -2825,6 +2837,7 @@ pub const MonoLlvmCodeGen = struct {
         self.stmt_entry_blocks.clearRetainingCapacity();
         self.debug_inline_subprograms.clearRetainingCapacity();
         self.debug_inline_callsites.clearRetainingCapacity();
+        self.debug_file_scopes.clearRetainingCapacity();
 
         const outer_subprogram = self.current_subprogram;
         const outer_debug_file = self.current_debug_file;
@@ -4393,28 +4406,42 @@ pub const MonoLlvmCodeGen = struct {
     fn setStmtDebugLocation(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!void {
         const wip = self.wip orelse return;
         if (wip.strip) return;
-        if (self.current_subprogram.unwrap() == null) return;
+        const current_subprogram = self.current_subprogram.unwrap() orelse return;
         const loc = self.store.stmtLoc(stmt_id);
         const inline_scope = self.store.stmtInlineScope(stmt_id);
-        const scope = if (inline_scope == lir.LIR.InlineScopeId.none)
-            self.current_subprogram
+        const scope, const scope_file = if (inline_scope == lir.LIR.InlineScopeId.none)
+            .{ current_subprogram, self.current_debug_file }
         else
-            (try self.debugInlineSubprogram(inline_scope)).toOptional();
+            .{ try self.debugInlineSubprogram(inline_scope), self.store.inlineScope(inline_scope).source_loc.file };
         const inlined_at = if (inline_scope == lir.LIR.InlineScopeId.none)
             LlvmBuilder.Metadata.Optional.none
         else
             (try self.debugInlineCallsite(inline_scope)).toOptional();
         // ARC-inserted statements get line 0 so they do not affect stepping;
         // see `OriginKind.isArcInserted`.
-        const has_compatible_location = loc.hasLocation() and
-            !self.store.stmtOriginKind(stmt_id).isArcInserted() and
-            (inline_scope != lir.LIR.InlineScopeId.none or loc.file == self.current_debug_file);
+        const has_location = loc.hasLocation() and
+            !self.store.stmtOriginKind(stmt_id).isArcInserted();
         wip.debug_location = .{ .location = .{
-            .line = if (has_compatible_location) loc.line else 0,
-            .column = if (has_compatible_location) loc.column else 0,
-            .scope = scope,
+            .line = if (has_location) loc.line else 0,
+            .column = if (has_location) loc.column else 0,
+            .scope = (if (has_location) try self.debugScopeInFile(scope, scope_file, loc.file) else scope).toOptional(),
             .inlined_at = inlined_at,
         } };
+    }
+
+    /// The scope for code from source `file` inside `scope`, whose own file is
+    /// `scope_file`. A DWARF line row takes its file from its scope, so code
+    /// from another file (e.g. a compiler-generated callee's body, which
+    /// carries its call site's location, or a procedure with no location of
+    /// its own) goes in a lexical block that names its file.
+    fn debugScopeInFile(self: *MonoLlvmCodeGen, scope: LlvmBuilder.Metadata, scope_file: u32, file: u32) Error!LlvmBuilder.Metadata {
+        if (file == scope_file or file == SourceLoc.no_file) return scope;
+        const key: DebugFileScope = .{ .scope = scope, .file = file };
+        if (self.debug_file_scopes.get(key)) |existing| return existing;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const block = builder.debugLexicalBlock(scope, try self.debugFileFor(builder, file), 0, 0) catch return error.OutOfMemory;
+        try self.debug_file_scopes.put(key, block);
+        return block;
     }
 
     fn debugInlineSubprogram(self: *MonoLlvmCodeGen, id: lir.LIR.InlineScopeId) Error!LlvmBuilder.Metadata {
@@ -4460,17 +4487,17 @@ pub const MonoLlvmCodeGen = struct {
         if (self.debug_inline_callsites.get(@backingInt(root))) |existing| return existing;
         const builder = self.builder orelse return error.CompilationFailed;
 
-        const Pending = struct { id: lir.LIR.InlineScopeId, parent_scope: LlvmBuilder.Metadata };
+        const Pending = struct { id: lir.LIR.InlineScopeId, parent_scope: LlvmBuilder.Metadata, parent_file: u32 };
         var chain: std.ArrayList(Pending) = .empty;
         defer chain.deinit(self.allocator);
         var id = root;
         while (true) {
             const scope = self.store.inlineScope(id);
-            const parent_scope = if (scope.parent == lir.LIR.InlineScopeId.none)
-                self.current_subprogram.unwrap().?
+            const parent_scope, const parent_file = if (scope.parent == lir.LIR.InlineScopeId.none)
+                .{ self.current_subprogram.unwrap().?, self.current_debug_file }
             else
-                try self.debugInlineSubprogram(scope.parent);
-            try chain.append(self.allocator, .{ .id = id, .parent_scope = parent_scope });
+                .{ try self.debugInlineSubprogram(scope.parent), self.store.inlineScope(scope.parent).source_loc.file };
+            try chain.append(self.allocator, .{ .id = id, .parent_scope = parent_scope, .parent_file = parent_file });
             if (scope.parent == lir.LIR.InlineScopeId.none) break;
             if (self.debug_inline_callsites.contains(@backingInt(scope.parent))) break;
             id = scope.parent;
@@ -4486,7 +4513,7 @@ pub const MonoLlvmCodeGen = struct {
             callsite = builder.debugLocation(
                 if (scope.call_site.hasLocation()) scope.call_site.line else 0,
                 if (scope.call_site.hasLocation()) scope.call_site.column else 0,
-                pending.parent_scope,
+                try self.debugScopeInFile(pending.parent_scope, pending.parent_file, scope.call_site.file),
                 parent_callsite,
             ) catch return error.OutOfMemory;
             try self.debug_inline_callsites.put(@backingInt(pending.id), callsite);
@@ -13501,11 +13528,12 @@ pub const MonoLlvmCodeGen = struct {
         if (wip.strip) return;
         const scope = self.current_subprogram.unwrap() orelse return;
         // The variable belongs to the physical procedure, so its location
-        // does too, whatever inline scope the defining statement is in.
+        // does too, whatever inline scope or other file's block the defining
+        // statement is in.
         const previous_debug_location = wip.debug_location;
         defer wip.debug_location = previous_debug_location;
         const line = switch (previous_debug_location) {
-            .location => |location| if (location.inlined_at.unwrap() == null) location.line else self.current_proc_line,
+            .location => |location| if (location.inlined_at.unwrap() == null and location.scope == scope.toOptional()) location.line else self.current_proc_line,
             .no_location => self.current_proc_line,
         };
         wip.debug_location = .{ .location = .{
@@ -15689,6 +15717,116 @@ fn printedFunction(ir: []const u8, name: []const u8) ?[]const u8 {
         start = line_end;
     }
     return null;
+}
+
+test "issue 13146: debug locations name the file of their statement" {
+    const gpa = std.testing.allocator;
+    var store = lir.LirStore.init(gpa);
+    defer store.deinit();
+    var layouts = try layout.Store.init(gpa, .u64);
+    defer layouts.deinit();
+    try store.setSourceFiles(&.{
+        .{ .name = "main", .qualified_name = "main", .module_identity = @splat(0) },
+        .{ .name = "Platform", .qualified_name = "pf.Platform", .module_identity = @splat(1) },
+    });
+    // An inlined callee with no location of its own (a compiler-generated
+    // wrapper), whose code carries its call site's location.
+    const generated_scope = try store.addInlineScope(.{
+        .source_identity = lir.LIR.ProcIdentity.forTest(2),
+        .copies_site_code = false,
+        .source_name = .none,
+        .source_loc = .none,
+        .call_site = .{ .file = 0, .line = 4, .column = 5 },
+        .parent = .none,
+    });
+    // An inlined callee from another module.
+    const platform_scope = try store.addInlineScope(.{
+        .source_identity = lir.LIR.ProcIdentity.forTest(3),
+        .copies_site_code = false,
+        .source_name = .none,
+        .source_loc = .{ .file = 1, .line = 40, .column = 1 },
+        .call_site = .{ .file = 0, .line = 5, .column = 5 },
+        .parent = .none,
+    });
+    const origin = struct {
+        fn at(file: u32, line: u32, scope: lir.LIR.InlineScopeId) lir.LIR.StmtOrigin {
+            return .{ .loc = .{ .file = file, .line = line, .column = 2 }, .region = Base.Region.zero(), .inline_scope = scope, .kind = .source };
+        }
+    }.at;
+    const a = try store.addLocal(.{ .layout_idx = .i64 });
+    const b = try store.addLocal(.{ .layout_idx = .i64 });
+    const s1 = try store.addLocal(.{ .layout_idx = .i64 });
+    const s2 = try store.addLocal(.{ .layout_idx = .i64 });
+    const s3 = try store.addLocal(.{ .layout_idx = .i64 });
+    var body = try store.addCFStmt(.{ .ret = .{ .value = s3 } }, origin(0, 6, .none));
+    body = try store.addLowLevelStmt(s3, .num_int_add_wrap, &.{ s2, b }, body, origin(1, 9, .none));
+    body = try store.addLowLevelStmt(s2, .num_int_add_wrap, &.{ s1, a }, body, origin(1, 41, platform_scope));
+    body = try store.addLowLevelStmt(s1, .num_int_add_wrap, &.{ a, b }, body, origin(0, 7, generated_scope));
+    const proc = try store.addProcSpec(.{
+        .name = .fromRaw(1),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
+        .args = try store.addLocalSpan(&.{ a, b }),
+        .frame_locals = try store.addLocalSpan(&.{ s1, s2, s3 }),
+        .body = .some(body),
+        .ret_layout = .i64,
+    }, .{ .file = 0, .line = 3, .column = 1 });
+
+    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .x86_64, .os_tag = .linux });
+    var codegen = MonoLlvmCodeGen.initForLinkedObject(gpa, &store, target);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    codegen.emit_debug_info = true;
+    var ir: std.Io.Writer.Allocating = .init(gpa);
+    defer ir.deinit();
+    try codegen.printEntrypointModule("issue_13146", &.{.{
+        .symbol_name = "roc_main",
+        .proc = proc,
+        .arg_layouts = &.{ .i64, .i64 },
+        .ret_layout = .i64,
+    }}, &ir.writer);
+
+    // Statement lines (7, 41, 9, 6) and call-site lines (4, 5).
+    const expected = [_]struct { line: u32, file: []const u8 }{
+        .{ .line = 7, .file = "main" },
+        .{ .line = 4, .file = "main" },
+        .{ .line = 41, .file = "Platform" },
+        .{ .line = 5, .file = "main" },
+        .{ .line = 9, .file = "Platform" },
+        .{ .line = 6, .file = "main" },
+    };
+    for (expected) |entry| {
+        const file = printedDebugLocationFile(ir.written(), entry.line) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(entry.file, file);
+    }
+}
+
+/// The file of the scope of the first printed `DILocation` on `line`.
+fn printedDebugLocationFile(ir: []const u8, line: u32) ?[]const u8 {
+    var needle_buf: [40]u8 = undefined;
+    const needle = std.fmt.bufPrint(&needle_buf, "!DILocation(line: {d},", .{line}) catch return null;
+    const location = ir[(std.mem.find(u8, ir, needle) orelse return null)..];
+    const scope = printedMetadataDef(ir, printedMetadataRef(location, "scope: ") orelse return null) orelse return null;
+    const file = printedMetadataDef(ir, printedMetadataRef(scope, "file: ") orelse return null) orelse return null;
+    const key = "filename: \"";
+    const name = file[(std.mem.find(u8, file, key) orelse return null) + key.len ..];
+    return name[0 .. std.mem.findScalar(u8, name, '"') orelse return null];
+}
+
+/// The `!N` reference that follows `key` on the first line of `text`.
+fn printedMetadataRef(text: []const u8, key: []const u8) ?[]const u8 {
+    const line = text[0 .. std.mem.findScalar(u8, text, '\n') orelse text.len];
+    const start = (std.mem.find(u8, line, key) orelse return null) + key.len;
+    var end = start + 1;
+    while (end < line.len and std.ascii.isDigit(line[end])) end += 1;
+    return line[start..end];
+}
+
+/// The printed definition line of metadata node `id` (`!N`).
+fn printedMetadataDef(ir: []const u8, id: []const u8) ?[]const u8 {
+    var needle_buf: [24]u8 = undefined;
+    const needle = std.fmt.bufPrint(&needle_buf, "\n{s} = ", .{id}) catch return null;
+    const def = ir[(std.mem.find(u8, ir, needle) orelse return null) + 1 ..];
+    return def[0 .. std.mem.findScalar(u8, def, '\n') orelse def.len];
 }
 
 test "issue 12505: addressed Bool alias materializes its SSA source" {
