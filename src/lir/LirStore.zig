@@ -27,6 +27,7 @@ const StoredOriginKind = lir_defs.StoredOriginKind;
 const StmtOrigin = lir_defs.StmtOrigin;
 const LirProcSpec = lir_defs.LirProcSpec;
 const LirProcSpecId = lir_defs.LirProcSpecId;
+const BodyChunk = lir_defs.BodyChunk;
 const Local = lir_defs.Local;
 const LocalId = lir_defs.LocalId;
 const LocalSpan = lir_defs.LocalSpan;
@@ -120,95 +121,69 @@ comptime {
     }
 }
 
-/// Which coordinator rows a procedure rewrite has prepared so far, one bit
-/// per row of each rewritable column. Owned by the caller so the marks keep
-/// their capacity across procedures; a rewrite clears exactly the bits it
-/// set before `cloneForProcRewrite` returns, so between rewrites every bit
-/// is clear.
-pub const RewriteMarks = struct {
-    cf_stmts: std.bit_set.DynamicBitSetUnmanaged = .{},
-    cf_switch_branches: std.bit_set.DynamicBitSetUnmanaged = .{},
-    str_match_arms: std.bit_set.DynamicBitSetUnmanaged = .{},
-    join_points: std.bit_set.DynamicBitSetUnmanaged = .{},
-    allocator: Allocator,
+/// The columns a procedure rewrite can write, each of which a body chunk
+/// holds a range of (`LIR.BodyChunk`).
+pub const rewrite_columns = .{ "cf_stmts", "cf_switch_branches", "str_match_arms", "join_points" };
 
-    pub fn init(allocator: Allocator) RewriteMarks {
-        return .{ .allocator = allocator };
+/// The number of rows of column `field` across `chunks`.
+fn chunkRowCount(chunks: []const BodyChunk, comptime field: []const u8) u32 {
+    var count: u32 = 0;
+    for (chunks) |chunk| count += @field(chunk, field).len;
+    return count;
+}
+
+/// The position of row `id` of column `field` among the rows of `chunks`,
+/// taken in chunk order, if a chunk holds it. A procedure rewrite keeps its
+/// private copy of each column's rows at these positions.
+inline fn chunkPosition(chunks: []const BodyChunk, comptime field: []const u8, id: u32) ?u32 {
+    var first: u32 = 0;
+    for (chunks) |chunk| {
+        const range = @field(chunk, field);
+        if (range.offsetOf(id)) |offset| return first + offset;
+        first += range.len;
     }
+    return null;
+}
 
-    pub fn deinit(self: *RewriteMarks) void {
-        inline for (rewrite_columns) |field| @field(self, field).deinit(self.allocator);
-    }
-
-    /// Cover every row of `source`'s rewritable columns.
-    fn cover(self: *RewriteMarks, source: *const Self) Allocator.Error!void {
-        inline for (rewrite_columns) |field| {
-            const rows = @field(source, field).len();
-            if (@field(self, field).bit_length < rows) try @field(self, field).resize(self.allocator, rows, false);
+/// `chunkPosition` of the first row of a span of `len` rows. A span is
+/// appended in one piece, so the chunk holding its first row holds all of it.
+inline fn chunkSpanPosition(chunks: []const BodyChunk, comptime field: []const u8, start: u32, len: u32) ?u32 {
+    var first: u32 = 0;
+    for (chunks) |chunk| {
+        const range = @field(chunk, field);
+        if (range.offsetOf(start)) |offset| {
+            if (builtin.mode == .debug and len > range.len - offset)
+                base.invariant("LirStore invariant violated: a span of {s} crosses the end of a body chunk", .{field});
+            return first + offset;
         }
+        first += range.len;
     }
-};
+    return null;
+}
 
-/// The global ids a procedure rewrite has prepared in one column, and each
-/// id's position among them. Sparse, prepared copies retain global
-/// identities without allocating a global-sized index: after `finish` the
-/// ids are sorted, so a lookup is a binary search over them. Sorting before
-/// borrowing preserves overlapping spans.
-const RewriteKeys = struct {
-    ids: std.ArrayList(u32) = .empty,
+/// Walks the positions of a column's rows in `chunks` in increasing order,
+/// naming the store row each one copies.
+fn ChunkRows(comptime field: []const u8) type {
+    return struct {
+        chunks: []const BodyChunk,
+        chunk: usize = 0,
+        first: u32 = 0,
 
-    fn deinit(self: *RewriteKeys, allocator: Allocator) void {
-        self.ids.deinit(allocator);
-    }
-
-    /// Record `id` unless `marks` shows it prepared already.
-    fn prepare(self: *RewriteKeys, allocator: Allocator, marks: *std.bit_set.DynamicBitSetUnmanaged, id: u32) Allocator.Error!bool {
-        if (marks.isSet(id)) return false;
-        try self.ids.append(allocator, id);
-        marks.set(id);
-        return true;
-    }
-
-    /// Sort the prepared ids and clear their marks.
-    fn finish(self: *RewriteKeys, marks: *std.bit_set.DynamicBitSetUnmanaged) void {
-        for (self.ids.items) |id| marks.unset(id);
-        std.mem.sort(u32, self.ids.items, {}, std.sort.asc(u32));
-    }
-
-    /// Clear the marks of an unfinished preparation.
-    fn abandon(self: *const RewriteKeys, marks: *std.bit_set.DynamicBitSetUnmanaged) void {
-        for (self.ids.items) |id| marks.unset(id);
-    }
-
-    /// The dense position of `id` among the prepared ids, if prepared.
-    fn lookup(self: *const RewriteKeys, id: u32) ?u32 {
-        var low: usize = 0;
-        var high: usize = self.ids.items.len;
-        while (low < high) {
-            const mid = low + (high - low) / 2;
-            const candidate = self.ids.items[mid];
-            if (candidate == id) return @intCast(mid);
-            if (candidate < id) low = mid + 1 else high = mid;
+        /// The store row at `position`, which is at least every position
+        /// asked before.
+        fn rowAt(self: *@This(), position: u32) u32 {
+            while (position - self.first >= @field(self.chunks[self.chunk], field).len) {
+                self.first += @field(self.chunks[self.chunk], field).len;
+                self.chunk += 1;
+            }
+            return @field(self.chunks[self.chunk], field).start + (position - self.first);
         }
-        return null;
-    }
+    };
+}
 
-    fn index(self: *const RewriteKeys, start: u32, len: u32) ?u32 {
-        const first = self.lookup(start) orelse return null;
-        if (len > 1) {
-            // Sorted unique IDs make endpoint equality sufficient to prove
-            // every row of this span was prepared, without scanning it.
-            const last = first + len - 1;
-            if (last >= self.ids.items.len or self.ids.items[last] != start + len - 1)
-                base.invariant("{s}", .{"LirStore invariant violated: unprepared rewrite span"});
-        }
-        return first;
-    }
-};
-
-/// Private copies of one column's prepared rows, positioned by a
-/// `RewriteKeys`.
-fn RewriteRows(comptime T: type, comptime field: []const u8) type {
+/// Private copies of one column's rows for a procedure rewrite, at their
+/// `chunkPosition`s in the chunks' ranges of column `key_field`.
+fn RewriteRows(comptime T: type, comptime field: []const u8, comptime key_field: []const u8) type {
     return struct {
         rows: GuardedList.List(T, "LirStore." ++ field) = .empty,
         dirty: std.bit_set.DynamicBitSetUnmanaged = .{},
@@ -223,49 +198,54 @@ fn RewriteRows(comptime T: type, comptime field: []const u8) type {
 
         /// Rows are copied from the coordinator only when first borrowed
         /// mutably (see `mark`), so a pass that leaves a procedure untouched
-        /// never copies its body. Until then a prepared row reads through to
-        /// the frozen coordinator.
-        fn finish(self: *Rows, allocator: Allocator, keys: *const RewriteKeys) Allocator.Error!void {
-            try self.rows.appendNTimes(allocator, undefined, keys.ids.items.len);
-            try self.dirty.resize(allocator, keys.ids.items.len, false);
+        /// never copies its body. Until then a row reads through to the
+        /// frozen coordinator.
+        fn finish(self: *Rows, allocator: Allocator, chunks: []const BodyChunk) Allocator.Error!void {
+            const count = chunkRowCount(chunks, key_field);
+            try self.rows.appendNTimes(allocator, undefined, count);
+            try self.dirty.resize(allocator, count, false);
         }
 
-        /// Whether this column's prepared rows hold private copies. Spans may
-        /// overlap and a read may cover more rows than an earlier write, so
-        /// the first mutable borrow copies the whole column: every read of
-        /// the column then sees one owner, and a reader tests this before
-        /// looking up a row's position.
+        /// Whether this column's rows hold private copies. Spans may overlap
+        /// and a read may cover more rows than an earlier write, so the first
+        /// mutable borrow copies the whole column: every read of the column
+        /// then sees one owner, and a reader tests this before looking up a
+        /// row's position.
         fn owned(self: *const Rows) bool {
             return self.materialized;
         }
 
         /// Materialize the column from the coordinator on its first mutable
-        /// borrow, then record the span as written.
-        fn mark(self: *Rows, keys: *const RewriteKeys, source: *const Self, start: u32, len: u32) u32 {
-            const first = keys.index(start, len) orelse
-                base.invariant("{s}", .{"LirStore invariant violated: unprepared prefix mutation"});
+        /// borrow, then record the `len` rows at `position` as written.
+        fn mark(self: *Rows, chunks: []const BodyChunk, source: *const Self, position: u32, len: u32) void {
             if (!self.materialized) {
-                for (keys.ids.items, 0..) |id, dense_index| {
-                    self.rows.getPtrImmediate(dense_index).* = @field(source, field).get(id);
+                const coordinator_rows = @field(source, field).unsafeRawItemsForView();
+                const private = self.rows.unsafeRawItemsMutForStore();
+                var at: usize = 0;
+                for (chunks) |chunk| {
+                    const range = @field(chunk, key_field);
+                    @memcpy(private[at..][0..range.len], coordinator_rows[range.start..][0..range.len]);
+                    at += range.len;
                 }
                 self.materialized = true;
             }
-            self.dirty.setRangeValue(.{ .start = first, .end = first + len }, true);
-            return first;
+            self.dirty.setRangeValue(.{ .start = position, .end = position + len }, true);
         }
 
-        fn commit(self: *const Rows, keys: *const RewriteKeys, destination: *Self, prefix: BodyPrefix, relocation: BodyRelocation) void {
+        fn commit(self: *const Rows, chunks: []const BodyChunk, destination: *Self, prefix: BodyPrefix, relocation: BodyRelocation) void {
+            var rows: ChunkRows(key_field) = .{ .chunks = chunks };
             var dirty = self.dirty.iterator(.{});
-            while (dirty.next()) |index_| {
-                @field(destination, field).getPtrImmediate(keys.ids.items[index_]).* =
-                    relocateBodyValue(T, self.rows.get(index_), prefix, relocation);
+            while (dirty.next()) |position| {
+                @field(destination, field).getPtrImmediate(rows.rowAt(@intCast(position))).* =
+                    relocateBodyValue(T, self.rows.get(position), prefix, relocation);
             }
         }
 
-        fn changed(self: *const Rows, keys: *const RewriteKeys, source: *const Self) bool {
+        fn changed(self: *const Rows, chunks: []const BodyChunk, source: *const Self) bool {
+            var rows: ChunkRows(key_field) = .{ .chunks = chunks };
             var dirty = self.dirty.iterator(.{});
-            while (dirty.next()) |dense_index| {
-                if (!std.meta.eql(self.rows.get(dense_index), @field(source, field).get(keys.ids.items[dense_index])))
+            while (dirty.next()) |position| {
+                if (!std.meta.eql(self.rows.get(position), @field(source, field).get(rows.rowAt(@intCast(position)))))
                     return true;
             }
             return false;
@@ -273,96 +253,93 @@ fn RewriteRows(comptime T: type, comptime field: []const u8) type {
     };
 }
 
-/// One rewritten column with its own keys.
-fn RewriteColumn(comptime T: type, comptime field: []const u8) type {
-    return struct {
-        keys: RewriteKeys = .{},
-        data: RewriteRows(T, field) = .{},
-
-        const Column = @This();
-
-        fn deinit(self: *Column, allocator: Allocator) void {
-            self.keys.deinit(allocator);
-            self.data.deinit(allocator);
-        }
-
-        fn prepare(self: *Column, allocator: Allocator, marks: *RewriteMarks, id: u32) Allocator.Error!bool {
-            return try self.keys.prepare(allocator, &@field(marks, field), id);
-        }
-
-        fn owned(self: *const Column) bool {
-            return self.data.owned();
-        }
-
-        fn index(self: *const Column, start: u32, len: u32) ?u32 {
-            return self.keys.index(start, len);
-        }
-
-        fn mark(self: *Column, source: *const Self, start: u32, len: u32) u32 {
-            return self.data.mark(&self.keys, source, start, len);
-        }
-
-        fn commit(self: *const Column, destination: *Self, prefix: BodyPrefix, relocation: BodyRelocation) void {
-            self.data.commit(&self.keys, destination, prefix, relocation);
-        }
-
-        fn changed(self: *const Column, source: *const Self) bool {
-            return self.data.changed(&self.keys, source);
-        }
-    };
-}
-
-const rewrite_columns = .{ "cf_stmts", "cf_switch_branches", "str_match_arms", "join_points" };
-
 /// Statement provenance columns, parallel to `cf_stmts`. A procedure rewrite
-/// keeps their rows for exactly the statements it prepares, positioned by
-/// the statement column's keys, so replacing a prefix statement records the
-/// replacement's stated origin privately and publishes it with the
-/// statement on commit.
+/// keeps their rows for exactly the statements it prepares, at the
+/// statements' positions, so replacing a prefix statement records the
+/// replacement's stated origin privately and publishes it with the statement
+/// on commit.
 const origin_columns = .{ "cf_stmt_sources", "cf_stmt_inline_scopes", "cf_stmt_origin_kinds" };
 
 /// Exists only for opt-in procedure rewrites; ordinary lowering shards do not
-/// allocate overlays. All copies are prepared before infallible mutable borrows.
+/// allocate overlays. A rewrite prepares exactly the rows of the procedure's
+/// body chunks, so preparing it reads no statement; all copies are sized
+/// before infallible mutable borrows.
 const ProcRewrite = struct {
     proc_id: LirProcSpecId,
     proc: LirProcSpec,
-    cf_stmts: RewriteColumn(CFStmt, "cf_stmts") = .{},
-    /// Statement provenance rows, keyed by `cf_stmts.keys`.
-    cf_stmt_sources: RewriteRows(StmtSourceId, "cf_stmt_sources") = .{},
-    cf_stmt_inline_scopes: RewriteRows(InlineScopeId, "cf_stmt_inline_scopes") = .{},
-    cf_stmt_origin_kinds: RewriteRows(StoredOriginKind, "cf_stmt_origin_kinds") = .{},
-    cf_switch_branches: RewriteColumn(CFSwitchBranch, "cf_switch_branches") = .{},
-    str_match_arms: RewriteColumn(StrMatchArm, "str_match_arms") = .{},
-    join_points: RewriteColumn(JoinPoint, "join_points") = .{},
+    /// The procedure's body chunks, copied from the frozen coordinator.
+    chunks: []BodyChunk = &.{},
+    cf_stmts: RewriteRows(CFStmt, "cf_stmts", "cf_stmts") = .{},
+    /// Statement provenance rows, at the statements' positions.
+    cf_stmt_sources: RewriteRows(StmtSourceId, "cf_stmt_sources", "cf_stmts") = .{},
+    cf_stmt_inline_scopes: RewriteRows(InlineScopeId, "cf_stmt_inline_scopes", "cf_stmts") = .{},
+    cf_stmt_origin_kinds: RewriteRows(StoredOriginKind, "cf_stmt_origin_kinds", "cf_stmts") = .{},
+    cf_switch_branches: RewriteRows(CFSwitchBranch, "cf_switch_branches", "cf_switch_branches") = .{},
+    str_match_arms: RewriteRows(StrMatchArm, "str_match_arms", "str_match_arms") = .{},
+    join_points: RewriteRows(JoinPoint, "join_points", "join_points") = .{},
 
     fn deinit(self: *ProcRewrite, allocator: Allocator) void {
         inline for (rewrite_columns) |field| @field(self, field).deinit(allocator);
         inline for (origin_columns) |field| @field(self, field).deinit(allocator);
+        allocator.free(self.chunks);
     }
 
-    /// The position of statement `index` among the prepared statement keys,
-    /// if prepared. Preparation reads only the frozen coordinator's
-    /// statements, whose ids are below `stmt_prefix` (the worker's
+    /// The position of statement `index` among the prepared statements, if
+    /// prepared. Every chunk lies in the frozen coordinator's statements,
+    /// whose ids are below `stmt_prefix` (the worker's
     /// `body_prefix.cf_stmts`), so a statement the worker appended is never
     /// prepared.
-    fn preparedStmt(self: *const ProcRewrite, stmt_prefix: u32, index: u32) ?u32 {
-        if (index >= stmt_prefix) {
-            if (builtin.mode == .debug) std.debug.assert(self.cf_stmts.keys.lookup(index) == null);
-            return null;
-        }
-        return self.cf_stmts.keys.lookup(index);
+    inline fn preparedStmt(self: *const ProcRewrite, stmt_prefix: u32, index: u32) ?u32 {
+        if (index >= stmt_prefix) return null;
+        return chunkPosition(self.chunks, "cf_stmts", index);
     }
 
-    /// Typed traversal deliberately stops at unrelated identities and immutable
-    /// spans. It includes producer tail-call links as well as CFG successors.
-    fn prepareValue(self: *ProcRewrite, source: *const Self, allocator: Allocator, marks: *RewriteMarks, comptime T: type, value: T) Allocator.Error!void {
+    /// The position of the span of `len` rows of `field` at `start`, if
+    /// prepared.
+    inline fn preparedSpan(self: *const ProcRewrite, comptime field: []const u8, start: u32, len: u32) ?u32 {
+        return chunkSpanPosition(self.chunks, field, start, len);
+    }
+};
+
+/// Checks a procedure's body chunks against what its body reaches: every
+/// statement, switch branch, string-match arm, and join point the body and
+/// its metadata name, through successors and producer tail-call links, lies
+/// in a chunk, and every span lies in one chunk. Debug builds run it each
+/// time a procedure rewrite prepares a procedure.
+const ChunkCheck = struct {
+    store: *const Self,
+    proc_id: LirProcSpecId,
+    chunks: []const BodyChunk,
+    allocator: Allocator,
+    seen: collections.DenseMap(CFStmtId, void),
+    pending: std.ArrayList(CFStmtId) = .empty,
+
+    fn run(store: *const Self, allocator: Allocator, proc_id: LirProcSpecId, proc: LirProcSpec, chunks: []const BodyChunk) Allocator.Error!void {
+        for (chunks) |chunk| {
+            inline for (rewrite_columns) |field| {
+                const range = @field(chunk, field);
+                if (@as(u64, range.start) + range.len > @field(store, field).len())
+                    base.invariant("LirStore invariant violated: procedure {d} has a body chunk past the end of {s}", .{ @backingInt(proc_id), field });
+            }
+        }
+        var check: ChunkCheck = .{ .store = store, .proc_id = proc_id, .chunks = chunks, .allocator = allocator, .seen = .init(allocator) };
+        defer check.seen.deinit();
+        defer check.pending.deinit(allocator);
+        try check.visit(LirProcSpec, proc);
+        while (check.pending.pop()) |id| try check.visit(CFStmt, store.getCFStmtImmediate(id).*);
+    }
+
+    fn visit(self: *ChunkCheck, comptime T: type, value: T) Allocator.Error!void {
         if (T == CFStmtId) {
-            _ = try self.cf_stmts.prepare(allocator, marks, @backingInt(value));
+            const id = @backingInt(value);
+            if (chunkPosition(self.chunks, "cf_stmts", id) == null)
+                base.invariant("LirStore invariant violated: procedure {d} reaches statement {d} outside its body chunks", .{ @backingInt(self.proc_id), id });
+            if (!(try self.seen.getOrPut(value)).found_existing) try self.pending.append(self.allocator, value);
             return;
         }
         if (T == lir_defs.TailCallLink) {
             if (value.isSite()) {
-                if (value.next()) |next| try self.prepareValue(source, allocator, marks, CFStmtId, next);
+                if (value.next()) |next| try self.visit(CFStmtId, next);
             }
             return;
         }
@@ -372,28 +349,29 @@ const ProcRewrite = struct {
             .{ JoinPointSpan, "join_points", JoinPoint },
         }) |column| {
             if (T == column[0]) {
+                if (value.len == 0) return;
+                if (chunkSpanPosition(self.chunks, column[1], value.start, value.len) == null)
+                    base.invariant("LirStore invariant violated: procedure {d} reaches a span of {s} at {d} outside its body chunks", .{ @backingInt(self.proc_id), column[1], value.start });
                 for (value.start..value.start + value.len) |index| {
-                    const id: u32 = @intCast(index);
-                    if (try @field(self, column[1]).prepare(allocator, marks, id))
-                        try self.prepareValue(source, allocator, marks, column[2], @field(source, column[1]).get(id));
+                    try self.visit(column[2], @field(self.store, column[1]).get(index));
                 }
                 return;
             }
         }
         const info = @typeInfo(T);
         if (comptime collections.CompactOptionalPayload(T)) |Payload| {
-            if (value.get()) |payload| try self.prepareValue(source, allocator, marks, Payload, payload);
+            if (value.get()) |payload| try self.visit(Payload, payload);
         } else if (comptime std.meta.activeTag(info) == .optional) {
-            if (value) |payload| try self.prepareValue(source, allocator, marks, info.optional.child, payload);
+            if (value) |payload| try self.visit(info.optional.child, payload);
         } else if (comptime std.meta.activeTag(info) == .@"struct") {
             inline for (info.@"struct".field_names, info.@"struct".field_types) |field_name, field_type| {
-                try self.prepareValue(source, allocator, marks, field_type, @field(value, field_name));
+                try self.visit(field_type, @field(value, field_name));
             }
         } else if (comptime std.meta.activeTag(info) == .@"union") {
             const Tag = info.@"union".tag_type orelse return;
             inline for (info.@"union".field_names, info.@"union".field_types) |field_name, field_type| {
                 if (std.meta.activeTag(value) == @field(Tag, field_name)) {
-                    try self.prepareValue(source, allocator, marks, field_type, @field(value, field_name));
+                    try self.visit(field_type, @field(value, field_name));
                     return;
                 }
             }
@@ -403,44 +381,39 @@ const ProcRewrite = struct {
 };
 
 /// The coordinator must remain frozen until every worker in this phase has
-/// finished. Only reachable mutable rows and this procedure's metadata are owned.
+/// finished. Only the procedure's body chunks and its metadata are owned.
 pub fn cloneForProcRewrite(self: *const Self, allocator: Allocator, proc_id: LirProcSpecId) Allocator.Error!Self {
-    var marks = RewriteMarks.init(allocator);
-    defer marks.deinit();
-    return self.cloneForProcRewriteWithMarks(allocator, proc_id, &marks);
-}
-
-/// `cloneForProcRewrite` with the caller's retained marks, whose bits are
-/// all clear again when this returns.
-pub fn cloneForProcRewriteWithMarks(self: *const Self, allocator: Allocator, proc_id: LirProcSpecId, marks: *RewriteMarks) Allocator.Error!Self {
     std.debug.assert(self.body_coordinator == null);
-    try marks.cover(self);
     var result = try self.cloneForBodyShard(allocator);
     errdefer result.deinit();
+    const proc = self.getProcSpec(proc_id);
+    const chunks = self.procBodyChunks(proc_id);
+    if (builtin.mode == .debug) try ChunkCheck.run(self, allocator, proc_id, proc, chunks);
+    // Copied before the rewrite exists, so a failed copy leaves `result`
+    // without one.
+    const owned_chunks = try allocator.dupe(BodyChunk, chunks);
     result.proc_rewrite = .{
         .proc_id = proc_id,
-        .proc = self.getProcSpec(proc_id),
+        .proc = proc,
+        .chunks = owned_chunks,
     };
     const rewrite = &result.proc_rewrite.?;
-    {
-        errdefer inline for (rewrite_columns) |field| @field(rewrite, field).keys.abandon(&@field(marks, field));
-        try rewrite.prepareValue(self, allocator, marks, LirProcSpec, rewrite.proc);
-        var cursor: usize = 0;
-        while (cursor < rewrite.cf_stmts.keys.ids.items.len) : (cursor += 1) {
-            const id = rewrite.cf_stmts.keys.ids.items[cursor];
-            try rewrite.prepareValue(self, allocator, marks, CFStmt, self.getCFStmtImmediate(@fromBackingInt(id)).*);
-        }
-    }
-    inline for (rewrite_columns) |field| @field(rewrite, field).keys.finish(&@field(marks, field));
-    inline for (rewrite_columns) |field| try @field(rewrite, field).data.finish(allocator, &@field(rewrite, field).keys);
-    inline for (origin_columns) |field| try @field(rewrite, field).finish(allocator, &rewrite.cf_stmts.keys);
+    inline for (rewrite_columns) |field| try @field(rewrite, field).finish(allocator, rewrite.chunks);
+    inline for (origin_columns) |field| try @field(rewrite, field).finish(allocator, rewrite.chunks);
     return result;
 }
 
-/// Sorted global statement indices privately prepared by this worker. The
-/// coordinator can validate disjoint ownership before publishing a phase.
-pub fn procRewriteStatementIds(self: *const Self) []const u32 {
-    return self.proc_rewrite.?.cf_stmts.keys.ids.items;
+/// The body chunks of the procedure this worker rewrites: the coordinator
+/// rows it may write. The coordinator can validate disjoint ownership before
+/// publishing a phase.
+pub fn procRewriteChunks(self: *const Self) []const BodyChunk {
+    return self.proc_rewrite.?.chunks;
+}
+
+/// Number of coordinator statements this worker's procedure rewrite
+/// prepared.
+pub fn procRewriteStatementCount(self: *const Self) u32 {
+    return chunkRowCount(self.proc_rewrite.?.chunks, "cf_stmts");
 }
 
 /// Call while the phase's coordinator prefix is still frozen. Mutable access
@@ -449,10 +422,10 @@ pub fn procRewriteChanged(self: *const Self) bool {
     const rewrite = &self.proc_rewrite.?;
     const source = self.body_coordinator.?;
     inline for (rewrite_columns) |field| {
-        if (@field(rewrite, field).changed(source)) return true;
+        if (@field(rewrite, field).changed(rewrite.chunks, source)) return true;
     }
     inline for (origin_columns) |field| {
-        if (@field(rewrite, field).changed(&rewrite.cf_stmts.keys, source)) return true;
+        if (@field(rewrite, field).changed(rewrite.chunks, source)) return true;
     }
     if (!std.meta.eql(rewrite.proc, source.getProcSpec(rewrite.proc_id))) return true;
     inline for (.{
@@ -469,22 +442,98 @@ pub fn procRewriteChanged(self: *const Self) bool {
 }
 
 /// Publish in deterministic procedure order, after all phase tasks complete.
-/// appendBodyShard reserves before mutation; the remaining prefix patches cannot
-/// fail. Relocates only phase-generated joins, consistently across suffixes,
-/// prefix patches, and procedure metadata; the coordinator supplies the
-/// allocator range.
+/// Capacity for the procedure's new chunk and appendBodyShard's rows is
+/// reserved before mutation; the remaining prefix patches cannot fail.
+/// Relocates only phase-generated joins, consistently across suffixes, prefix
+/// patches, and procedure metadata; the coordinator supplies the allocator
+/// range. The appended suffix becomes the procedure's next body chunk.
 pub fn commitProcRewriteWithJoinRelocation(self: *Self, worker: *const Self, relocation: ?JoinPointRelocation) AppendBodyError!void {
     std.debug.assert(worker.body_coordinator == self);
     const rewrite = if (worker.proc_rewrite) |*prepared| prepared else base.invariant("{s}", .{"LirStore invariant violated: expected procedure rewrite shard"});
     const shard = try worker.captureBodyShard(worker.body_prefix);
+    try self.body_chunks.ensureUnusedCapacity(self.allocator, rewrite.proc.body_chunks.len + 1);
     const appended = try self.appendBodyShardWithJoinRelocation(shard, null, .empty(), relocation);
     inline for (rewrite_columns) |field|
-        @field(rewrite, field).commit(self, worker.body_prefix, appended.relocation);
+        @field(rewrite, field).commit(rewrite.chunks, self, worker.body_prefix, appended.relocation);
     inline for (origin_columns) |field|
-        @field(rewrite, field).commit(&rewrite.cf_stmts.keys, self, worker.body_prefix, appended.relocation);
+        @field(rewrite, field).commit(rewrite.chunks, self, worker.body_prefix, appended.relocation);
     const spec = self.getProcSpecPtr(rewrite.proc_id);
+    if (builtin.mode == .debug and !std.meta.eql(spec.body_chunks, rewrite.proc.body_chunks))
+        base.invariant("{s}", .{"LirStore invariant violated: a procedure rewrite changed its body chunks"});
     spec.* = relocateBodyValue(LirProcSpec, rewrite.proc, worker.body_prefix, appended.relocation);
     spec.shapes = spec.shapes.merged(worker.shapes);
+    self.appendBodyChunkAssumeCapacity(spec, appended.chunk);
+}
+
+/// Where a body appended directly to a coordinator store starts: the lengths
+/// of the columns a body chunk holds a range of (`recordBodyChunk`).
+pub const BodyMark = struct {
+    cf_stmts: u32,
+    cf_switch_branches: u32,
+    str_match_arms: u32,
+    join_points: u32,
+};
+
+/// The mark a producer takes before it appends a body to this coordinator
+/// store.
+pub fn bodyMark(self: *const Self) BodyMark {
+    std.debug.assert(self.body_coordinator == null);
+    var mark: BodyMark = undefined;
+    inline for (rewrite_columns) |field| @field(mark, field) = @intCast(@field(self, field).len());
+    return mark;
+}
+
+/// Record every row appended to the rewritable columns since `mark` as the
+/// next chunk of `proc`'s body. The producer that took the mark appended
+/// exactly those rows, and only for this body.
+pub fn recordBodyChunk(self: *Self, proc: LirProcSpecId, mark: BodyMark) Allocator.Error!void {
+    var chunk: BodyChunk = .{};
+    inline for (rewrite_columns) |field| {
+        const start = @field(mark, field);
+        @field(chunk, field) = .{ .start = start, .len = @as(u32, @intCast(@field(self, field).len())) - start };
+    }
+    try self.addBodyChunk(proc, chunk);
+}
+
+/// Append `chunk` to `proc`'s body chunks.
+pub fn addBodyChunk(self: *Self, proc: LirProcSpecId, chunk: BodyChunk) Allocator.Error!void {
+    std.debug.assert(self.body_coordinator == null);
+    const spec = self.getProcSpecPtr(proc);
+    try self.body_chunks.ensureUnusedCapacity(self.allocator, spec.body_chunks.len + 1);
+    self.appendBodyChunkAssumeCapacity(spec, chunk);
+}
+
+/// Append `chunk` to the chunks of `spec`, a procedure of this store, with
+/// capacity for all of its chunks and one more reserved. A procedure whose
+/// chunks end the list grows in place; otherwise its chunks move to the end,
+/// and the rows they leave behind are dead until the chunks are released.
+fn appendBodyChunkAssumeCapacity(self: *Self, spec: *LirProcSpec, chunk: BodyChunk) void {
+    if (chunk.isEmpty()) return;
+    const end: u32 = @intCast(self.body_chunks.len());
+    const old = spec.body_chunks;
+    if (old.len == 0 or old.start + old.len != end) {
+        for (old.start..old.start + old.len) |index| self.body_chunks.appendAssumeCapacity(self.body_chunks.get(index));
+        spec.body_chunks.start = end;
+    }
+    self.body_chunks.appendAssumeCapacity(chunk);
+    spec.body_chunks.len = old.len + 1;
+}
+
+/// The chunks `proc`'s body occupies (`LIR.BodyChunk`), in the order they
+/// were appended. A procedure's chunks are recorded from lowering until
+/// `releaseBodyChunks`; procedure-local rewrites rely on them.
+pub fn procBodyChunks(self: *const Self, proc: LirProcSpecId) []const BodyChunk {
+    if (self.body_coordinator) |coordinator| return coordinator.procBodyChunks(proc);
+    const span = self.getProcSpecImmediate(proc).body_chunks;
+    return self.body_chunks.unsafeRawItemsForView()[span.start..][0..span.len];
+}
+
+/// Forget every procedure's body chunks once no procedure-local rewrite will
+/// run again. Later stages append and replace rows without recording chunks.
+pub fn releaseBodyChunks(self: *Self) void {
+    std.debug.assert(self.body_coordinator == null);
+    for (self.proc_specs.unsafeRawItemsMutForStore()) |*spec| spec.body_chunks = .empty();
+    self.body_chunks.clearAndFree(self.allocator);
 }
 
 /// Lengths of the coordinator-owned prefix visible to a body worker.
@@ -573,6 +622,9 @@ pub const AppendedBody = struct {
     relocation: BodyRelocation,
     root: ?CFStmtId,
     frame_locals: LocalSpan,
+    /// The rows the shard's suffix now occupies in the columns a body chunk
+    /// holds a range of: the chunk the body it holds occupies.
+    chunk: BodyChunk,
 };
 
 /// Failures while validating or appending a private body suffix.
@@ -664,6 +716,7 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
         if (!std.meta.eql(prefix, self.body_prefix)) return error.InvalidBodyPrefix;
         if (self.next_synthetic_symbol != self.body_symbol_base or
             self.proc_specs.len() != 0 or
+            self.body_chunks.len() != 0 or
             self.proc_locs.len() != 0 or
             self.proc_debug_names.len() != 0 or
             self.source_file_bytes.len() != 0 or
@@ -961,6 +1014,12 @@ pub fn appendBodyShardWithJoinRelocation(
         .relocation = bases,
         .root = if (root) |id| relocateBodyValue(CFStmtId, id, prefix, bases) else null,
         .frame_locals = relocateBodyValue(LocalSpan, frame_locals, prefix, bases),
+        .chunk = .{
+            .cf_stmts = .{ .start = bases.cf_stmts, .len = @intCast(stmt_len) },
+            .cf_switch_branches = .{ .start = bases.cf_switch_branches, .len = @intCast(source.cf_switch_branches.len() - source_prefix.cf_switch_branches) },
+            .str_match_arms = .{ .start = bases.str_match_arms, .len = @intCast(source.str_match_arms.len() - source_prefix.str_match_arms) },
+            .join_points = .{ .start = bases.join_points, .len = @intCast(source.join_points.len() - source_prefix.join_points) },
+        },
     };
 }
 
@@ -992,6 +1051,9 @@ erased_call_arg_plans: GuardedList.List(ErasedCallArgsPlan, "LirStore.erased_cal
 /// entry, named by `LIR.StmtRowId`s held in statements.
 stmt_rows: StmtRowColumns,
 proc_specs: GuardedList.List(LirProcSpec, "LirStore.proc_specs"),
+/// Every procedure's body chunks (`procBodyChunks`), each procedure's in one
+/// span named by its `LirProcSpec.body_chunks`.
+body_chunks: GuardedList.List(BodyChunk, "LirStore.body_chunks"),
 strings: base.StringLiteral.Store,
 string_builder: base.StringLiteral.BuilderState,
 allocator: Allocator,
@@ -1087,6 +1149,7 @@ pub fn init(allocator: Allocator) Self {
         .erased_call_arg_plans = .empty,
         .stmt_rows = emptyStmtRows(),
         .proc_specs = .empty,
+        .body_chunks = .empty,
         .strings = base.StringLiteral.Store{},
         .string_builder = .{},
         .allocator = allocator,
@@ -1129,6 +1192,7 @@ pub fn releaseCode(self: *Self) void {
     for (0..self.proc_specs.len()) |index| {
         const spec = self.proc_specs.getPtrImmediate(@intCast(index));
         spec.body = .none;
+        spec.body_chunks = .empty();
         spec.args = LocalSpan.empty();
         spec.frame_locals = LocalSpan.empty();
         spec.join_points = JoinPointSpan.empty();
@@ -1154,6 +1218,7 @@ pub fn releaseCode(self: *Self) void {
         "cf_stmt_inline_scopes",
         "cf_stmt_origin_kinds",
         "local_names",
+        "body_chunks",
     }) |field| {
         @field(self, field).deinit(self.allocator);
         @field(self, field) = .empty;
@@ -1183,6 +1248,7 @@ pub fn deinit(self: *Self) void {
     self.erased_call_arg_plans.deinit(self.allocator);
     inline for (0..stmt_row_column_count) |column| self.stmt_rows[column].deinit(self.allocator);
     self.proc_specs.deinit(self.allocator);
+    self.body_chunks.deinit(self.allocator);
     self.string_builder.deinit(self.allocator);
     self.strings.deinit(self.allocator);
     self.source_file_bytes.deinit(self.allocator);
@@ -1572,11 +1638,11 @@ inline fn borrowStoreSpan(self: *const Self, comptime T: type, comptime field: [
 inline fn borrowRewritableStoreSpan(self: *const Self, comptime T: type, comptime field: []const u8, comptime getter: anytype, span: anytype) StoreSpanBorrow(T, field) {
     if (self.proc_rewrite) |*rewrite| {
         if (@field(rewrite, field).owned()) {
-            if (@field(rewrite, field).index(span.start, span.len)) |private| return @field(rewrite, field).data.rows.borrowSpan(private, span.len);
+            if (rewrite.preparedSpan(field, span.start, span.len)) |private| return @field(rewrite, field).rows.borrowSpan(private, span.len);
         } else if (builtin.mode == .debug) {
-            // `index` checks that a span starting at a prepared row was
-            // prepared whole.
-            _ = @field(rewrite, field).index(span.start, span.len);
+            // `preparedSpan` checks that a span starting at a prepared row
+            // was prepared whole.
+            _ = rewrite.preparedSpan(field, span.start, span.len);
         }
     }
     return self.borrowStoreSpan(T, field, getter, span);
@@ -1589,8 +1655,10 @@ inline fn borrowStoreSpanMut(self: *Self, comptime T: type, comptime field: []co
     if (span.len == 0) return @field(self, field).borrowSpanMut(0, 0);
     if (self.body_coordinator != null and span.start < @field(self.body_prefix, field)) {
         if (self.proc_rewrite) |*rewrite| {
-            const private = @field(rewrite, field).mark(self.body_coordinator.?, span.start, span.len);
-            return @field(rewrite, field).data.rows.borrowSpanMut(private, span.len);
+            const private = rewrite.preparedSpan(field, span.start, span.len) orelse
+                base.invariant("{s}", .{"LirStore invariant violated: unprepared prefix mutation"});
+            @field(rewrite, field).mark(rewrite.chunks, self.body_coordinator.?, private, span.len);
+            return @field(rewrite, field).rows.borrowSpanMut(private, span.len);
         }
         self.assertBodyMetadataImmutable();
     }
@@ -2000,9 +2068,14 @@ pub fn replaceCFStmt(self: *Self, id: CFStmtId, stmt: CFStmt, origin: StmtOrigin
     if (self.body_coordinator != null and index < self.body_prefix.cf_stmts) {
         if (self.proc_rewrite) |*rewrite| {
             const coordinator = self.body_coordinator.?;
-            rewrite.cf_stmt_sources.rows.getPtrImmediate(rewrite.cf_stmt_sources.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = source;
-            rewrite.cf_stmt_inline_scopes.rows.getPtrImmediate(rewrite.cf_stmt_inline_scopes.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.inline_scope;
-            rewrite.cf_stmt_origin_kinds.rows.getPtrImmediate(rewrite.cf_stmt_origin_kinds.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.kind.pack();
+            const private = rewrite.preparedStmt(self.body_prefix.cf_stmts, index) orelse
+                base.invariant("{s}", .{"LirStore invariant violated: unprepared prefix mutation"});
+            rewrite.cf_stmt_sources.mark(rewrite.chunks, coordinator, private, 1);
+            rewrite.cf_stmt_sources.rows.getPtrImmediate(private).* = source;
+            rewrite.cf_stmt_inline_scopes.mark(rewrite.chunks, coordinator, private, 1);
+            rewrite.cf_stmt_inline_scopes.rows.getPtrImmediate(private).* = origin.inline_scope;
+            rewrite.cf_stmt_origin_kinds.mark(rewrite.chunks, coordinator, private, 1);
+            rewrite.cf_stmt_origin_kinds.rows.getPtrImmediate(private).* = origin.kind.pack();
         } else if (!std.meta.eql(self.stmtOrigin(id), origin)) self.assertBodyMetadataImmutable();
     } else {
         const own = index - if (self.body_coordinator != null) self.body_prefix.cf_stmts else 0;
@@ -2029,7 +2102,7 @@ pub fn getCFStmt(self: *const Self, id: CFStmtId) CFStmt {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
         if (rewrite.cf_stmts.owned()) {
-            if (rewrite.preparedStmt(self.body_prefix.cf_stmts, index)) |private| return rewrite.cf_stmts.data.rows.get(private);
+            if (rewrite.preparedStmt(self.body_prefix.cf_stmts, index)) |private| return rewrite.cf_stmts.rows.get(private);
         }
     }
     if (self.body_coordinator) |coordinator| {
@@ -2048,7 +2121,7 @@ pub fn getCFStmtImmediate(self: *const Self, id: CFStmtId) *const CFStmt {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
         if (rewrite.cf_stmts.owned()) {
-            if (rewrite.preparedStmt(self.body_prefix.cf_stmts, index)) |private| return rewrite.cf_stmts.data.rows.getPtrConstImmediate(private);
+            if (rewrite.preparedStmt(self.body_prefix.cf_stmts, index)) |private| return rewrite.cf_stmts.rows.getPtrConstImmediate(private);
         }
     }
     if (self.body_coordinator) |coordinator| {
@@ -2064,7 +2137,10 @@ pub fn getCFStmtPtr(self: *Self, id: CFStmtId) *CFStmt {
     const index = @backingInt(id);
     if (self.body_coordinator != null and index < self.body_prefix.cf_stmts) {
         if (self.proc_rewrite) |*rewrite| {
-            return rewrite.cf_stmts.data.rows.getPtrImmediate(rewrite.cf_stmts.mark(self.body_coordinator.?, index, 1));
+            const private = rewrite.preparedStmt(self.body_prefix.cf_stmts, index) orelse
+                base.invariant("{s}", .{"LirStore invariant violated: unprepared prefix mutation"});
+            rewrite.cf_stmts.mark(rewrite.chunks, self.body_coordinator.?, private, 1);
+            return rewrite.cf_stmts.rows.getPtrImmediate(private);
         }
         self.assertBodyMetadataImmutable();
     }
@@ -2326,6 +2402,7 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
     var coordinator = Self.init(allocator);
     defer coordinator.deinit();
     const old_local = try coordinator.addLocal(.{ .layout_idx = .u64 });
+    const first_mark = coordinator.bodyMark();
     const ret = try coordinator.addCFStmt(.{ .ret = .{ .value = old_local } }, .test_fixture);
     const branches = try coordinator.addCFSwitchBranches(&.{.{ .value = 0, .body = ret }});
     const root = try coordinator.addCFStmt(.{ .switch_stmt = .{
@@ -2346,6 +2423,8 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
         .body = .some(root),
         .join_points = joins,
     }, .none);
+    try coordinator.recordBodyChunk(first, first_mark);
+    const second_mark = coordinator.bodyMark();
     const other_ret = try coordinator.addCFStmt(.{ .ret = .{ .value = old_local } }, .test_fixture);
     const second = try coordinator.addProcSpec(.{
         .identity = lir_defs.ProcIdentity.forTest(@intCast(coordinator.procSpecCount())),
@@ -2354,14 +2433,15 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
         .ret_layout = .u64,
         .body = .some(other_ret),
     }, .none);
+    try coordinator.recordBodyChunk(second, second_mark);
     // Unrelated prefix size must not determine per-worker owned storage.
     for (0..10000) |_| _ = try coordinator.addCFStmt(.{ .ret = .{ .value = old_local } }, .test_fixture);
     var a = try coordinator.cloneForProcRewrite(allocator, first);
     defer a.deinit();
     var b = try coordinator.cloneForProcRewrite(allocator, second);
     defer b.deinit();
-    try std.testing.expectEqual(@as(usize, 2), a.proc_rewrite.?.cf_stmts.data.rows.len());
-    try std.testing.expectEqual(@as(usize, 1), b.proc_rewrite.?.cf_stmts.data.rows.len());
+    try std.testing.expectEqual(@as(usize, 2), a.proc_rewrite.?.cf_stmts.rows.len());
+    try std.testing.expectEqual(@as(usize, 1), b.proc_rewrite.?.cf_stmts.rows.len());
     try std.testing.expectEqual(@as(usize, 0), a.cf_stmts.len());
     try std.testing.expect(!a.procRewriteChanged());
     _ = a.getCFStmtPtr(ret);
@@ -2418,6 +2498,16 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
     try std.testing.expectEqual(coordinator.getCFStmt(other_ret).assign_call.target, GuardedList.at(coordinator.getLocalSpan(committed_b.frame_locals), 0));
     try std.testing.expectEqual(committed_b.frame_locals, coordinator.getCFStmt(other_ret).assign_call.args);
     try std.testing.expectEqual(committed_b.body.get().?, coordinator.getCFStmt(other_ret).assign_call.next);
+    // Each commit's suffix became the procedure's next chunk.
+    const chunks_a = coordinator.procBodyChunks(first);
+    try std.testing.expectEqual(@as(usize, 2), chunks_a.len);
+    try std.testing.expectEqual(lir_defs.RowRange{ .start = @backingInt(committed_a.body.get().?), .len = 1 }, chunks_a[1].cf_stmts);
+    const chunks_b = coordinator.procBodyChunks(second);
+    try std.testing.expectEqual(@as(usize, 2), chunks_b.len);
+    try std.testing.expectEqual(lir_defs.RowRange{ .start = @backingInt(other_ret), .len = 1 }, chunks_b[0].cf_stmts);
+    try std.testing.expectEqual(lir_defs.RowRange{ .start = @backingInt(committed_b.body.get().?), .len = 1 }, chunks_b[1].cf_stmts);
+    coordinator.releaseBodyChunks();
+    try std.testing.expectEqual(@as(usize, 0), coordinator.procBodyChunks(first).len);
 }
 
 test "procedure rewrite relocates only generated joins across simultaneous shards" {
@@ -2430,6 +2520,7 @@ test "procedure rewrite relocates only generated joins across simultaneous shard
     var roots: [2]CFStmtId = undefined;
     var old_spans: [2]JoinPointSpan = undefined;
     for (0..2) |i| {
+        const mark = coordinator.bodyMark();
         roots[i] = try coordinator.addCFStmt(.{ .jump = .{ .target = source } }, .test_fixture);
         old_spans[i] = try coordinator.addJoinPointSpan(&.{.{ .id = source, .params = .empty(), .body = roots[i] }});
         procs[i] = try coordinator.addProcSpec(.{
@@ -2440,6 +2531,7 @@ test "procedure rewrite relocates only generated joins across simultaneous shard
             .body = .some(roots[i]),
             .join_points = old_spans[i],
         }, .none);
+        try coordinator.recordBodyChunk(procs[i], mark);
     }
     var a = try coordinator.cloneForProcRewrite(allocator, procs[0]);
     defer a.deinit();
@@ -2501,6 +2593,7 @@ test "procedure rewrite prepares tail chains and overlapping arm spans" {
     var coordinator = Self.init(allocator);
     defer coordinator.deinit();
     const local = try coordinator.addLocal(.{ .layout_idx = .str });
+    const mark = coordinator.bodyMark();
     const ret = try coordinator.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     const proc = try coordinator.addProcSpec(.{
         .identity = lir_defs.ProcIdentity.forTest(@intCast(coordinator.procSpecCount())),
@@ -2543,12 +2636,14 @@ test "procedure rewrite prepares tail chains and overlapping arm spans" {
     } }, .test_fixture);
     coordinator.getProcSpecPtr(proc).body = .some(root);
     coordinator.getProcSpecPtr(proc).tail_calls = .some(.{ .head = head, .loop = @fromBackingInt(@intCast(42)) });
+    try coordinator.recordBodyChunk(proc, mark);
     var worker = try coordinator.cloneForProcRewrite(allocator, proc);
     defer worker.deinit();
-    try std.testing.expectEqualSlices(u32, &.{
-        @backingInt(ret), @backingInt(tail), @backingInt(head), @backingInt(nested), @backingInt(root),
-    }, worker.procRewriteStatementIds());
-    try std.testing.expectEqual(@as(usize, 2), worker.proc_rewrite.?.str_match_arms.data.rows.len());
+    // The one chunk holds the statements the body reaches through the tail
+    // chain and both arm spans.
+    try std.testing.expectEqual(@as(u32, 5), worker.procRewriteStatementCount());
+    try std.testing.expectEqual(lir_defs.RowRange{ .start = @backingInt(ret), .len = 5 }, worker.procRewriteChunks()[0].cf_stmts);
+    try std.testing.expectEqual(@as(usize, 2), worker.proc_rewrite.?.str_match_arms.rows.len());
     const appended = try worker.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     GuardedList.atPtr(worker.getStrMatchArmsMut(subset), 0).on_match = appended;
     worker.getCFStmtPtr(tail).assign_call.tail_call = .site(appended);
@@ -2566,6 +2661,7 @@ test "procedure rewrite allocation failures leave coordinator unchanged" {
             var coordinator = Self.init(allocator);
             defer coordinator.deinit();
             const local = try coordinator.addLocal(.{ .layout_idx = .u64 });
+            const mark = coordinator.bodyMark();
             const ret = try coordinator.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
             const proc = try coordinator.addProcSpec(.{
                 .identity = lir_defs.ProcIdentity.forTest(@intCast(coordinator.procSpecCount())),
@@ -2574,6 +2670,7 @@ test "procedure rewrite allocation failures leave coordinator unchanged" {
                 .ret_layout = .u64,
                 .body = .some(ret),
             }, .none);
+            try coordinator.recordBodyChunk(proc, mark);
             const prefix = coordinator.captureBodyPrefix();
             const metadata = coordinator.getProcSpec(proc);
             var worker = try coordinator.cloneForProcRewrite(allocator, proc);
