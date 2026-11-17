@@ -1267,7 +1267,8 @@ fn rewriteSites(allocator: Allocator, store: *LirStore, proc_id: ProcId, sites: 
                     if (!call.reuse_closure and !call.result_reuse) continue;
                     call.reuse_closure = false;
                     call.result_reuse = false;
-                    store.getCFStmtPtr(stmt_id).assign_call_erased.data = try store.addStmtRow(LIR.ErasedCallData, call);
+                    const call_data = try store.addStmtRow(LIR.ErasedCallData, call);
+                    store.getCFStmtPtr(stmt_id).assign_call_erased.data = call_data;
                 },
                 .dyn => |dyn_stmt| {
                     var op = store.stmtRow(dyn_stmt.data);
@@ -1275,7 +1276,8 @@ fn rewriteSites(allocator: Allocator, store: *LirStore, proc_id: ProcId, sites: 
                     if (!op.call_erased.reuse_closure and !op.call_erased.result_reuse) continue;
                     op.call_erased.reuse_closure = false;
                     op.call_erased.result_reuse = false;
-                    store.getCFStmtPtr(stmt_id).dyn.data = try store.addStmtRow(LIR.DynOp, op);
+                    const op_data = try store.addStmtRow(LIR.DynOp, op);
+                    store.getCFStmtPtr(stmt_id).dyn.data = op_data;
                 },
                 .init_uninitialized,
                 .assign_ref,
@@ -1355,7 +1357,8 @@ fn rewriteSites(allocator: Allocator, store: *LirStore, proc_id: ProcId, sites: 
         defer all.deinit(allocator);
         for (0..existing.len) |index| all.appendAssumeCapacity(GuardedList.at(existing, index));
         all.appendSliceAssumeCapacity(frame_locals.items);
-        store.getProcSpecPtr(proc_id).frame_locals = try store.addLocalSpan(all.items);
+        const all_span = try store.addLocalSpan(all.items);
+        store.getProcSpecPtr(proc_id).frame_locals = all_span;
     }
 
     if (dropped.count() == 0) return;
@@ -2109,7 +2112,8 @@ test "a dynamic closure passed only to a keeping parameter gets frame storage si
         const call = try p.f.call(p.keeps, &.{p.callable}, result, try p.f.ret(result));
         const closure = try p.f.store.addDynStmt(p.callable, .{ .closure = .{ .proc = p.worker, .capture = record } }, call, .test_fixture);
         const proc = try p.packer(&.{ desc, record }, closure);
-        p.f.store.getProcSpecPtr(proc).frame_locals = try p.f.store.addLocalSpan(&.{ desc, record, p.callable, result });
+        const packer_frame_locals = try p.f.store.addLocalSpan(&.{ desc, record, p.callable, result });
+        p.f.store.getProcSpecPtr(proc).frame_locals = packer_frame_locals;
         const frame = capture_storage == .frame;
         try testing.expectEqual(@as(usize, @intFromBool(frame)), try p.run());
         const op = p.f.store.stmtRow(p.f.store.getCFStmt(closure).dyn.data).closure;
