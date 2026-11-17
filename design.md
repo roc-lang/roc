@@ -18431,8 +18431,8 @@ decision, so the certifier has already checked the placement it rewrites.
 The fact is a per-parameter mask, `LirProcSpec.nonescaping_fn_params`: bit
 `i` says parameter `i` is a function value the procedure only calls, never
 by a deferred call, retains, releases, aliases (including into a join
-parameter or variable), and passes to such parameters of its direct
-callees. It is a function of the procedure's own body and its callees'
+parameter or variable), passes to such parameters of its direct
+callees, and stores as one field of a capture record (below). It is a function of the procedure's own body and its callees'
 masks, solved as a greatest fixpoint over one store (`solveParams`): every
 candidate bit starts set and is cleared by any other use (a return, a store
 into an aggregate or capture, an argument to an erased call, a repack, a
@@ -18440,7 +18440,26 @@ low-level operation, a conditional release, or a call of the parameter that
 ARC deferred, since a deferred call runs after the frame that built the
 callable may be gone and the constant-stack guarantee of tail chains
 (Deferred Erased Calls) is not traded away). The erased ABI's reuse input
-is never a candidate. A body-less procedure keeps the mask its defining
+is never a candidate.
+
+A value stored as field `i` of a record does not escape when one statement
+defines the record and every other use of it is a retain, a release, or
+the capture of a packing whose callable does not escape by the same rules,
+and whose procedure keeps capture field `i`. The fixpoint solves the
+capture fields each erased-callable procedure keeps alongside the masks: a
+body whose capture is only loaded or viewed, and whose capture container
+only has fields read out of it, keeps every field whose function-valued
+reads do not escape. Such a body may call a capture field by a deferred
+call. An erased-callable procedure never hands a pending call up: the
+erased-call runtime makes it before the erased call that invoked the body
+returns, or the body makes it itself, and every call of a callable that
+does not escape is made now, so the pending call runs while the frame that
+built the captured value is still live. `List.sort_with` keeps its
+comparator this way, through the closure its sort builds around it. The
+capture-field masks are not published: a packing of a procedure another
+object defines keeps none. A packing in the frame-site analysis below still
+treats a capture as an escape, since the captured callable then lives as
+long as the callable that captured it. A body-less procedure keeps the mask its defining
 object published; a hosted procedure has none. A worker and the
 outcome-restitution variant its object publishes share one mask, since an
 importer reaches the variant with the worker's record.

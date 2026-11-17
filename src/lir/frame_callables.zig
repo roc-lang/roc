@@ -19,6 +19,16 @@
 //! escapes. `capture_reuse_fn_params`, solved beside it, names the
 //! parameters a call may hand over through the erased ABI's reuse channel.
 //!
+//! A function value stored into a capture record does not escape when the
+//! record is only the capture of packings whose callables do not escape,
+//! and whose procedures never let that capture field escape. The same
+//! fixpoint solves, for each erased-callable procedure, which capture fields
+//! its body keeps (`ProcUses.fields`). Such a body may call a capture field
+//! by a deferred call: the erased-call runtime makes a pending call before
+//! the erased call that invoked the body returns, and every call of a
+//! callable that does not escape is made now, so that pending call runs
+//! within the frame that called the callable.
+//!
 //! `markFrames` then rewrites every packing whose callable never outlives
 //! its frame into a frame packing: the backend builds the callable in
 //! storage the procedure reserves, its retains and releases are dropped,
@@ -61,14 +71,31 @@ fn isErased(store: *const LirStore, layouts: *const layout_mod.Store, local: Loc
     return layouts.getLayout(store.localLayout(local)).tag == .erased_callable;
 }
 
-/// The statements of one procedure that read each function-valued local.
+/// A read of capture field `index` of an erased-callable procedure's own
+/// capture, into the function-valued local `local`.
+const FieldRead = struct { index: u32, local: LocalId };
+
+/// The statements of one procedure that read each function-valued local,
+/// each record it builds from a function value, and its capture.
 const ProcUses = struct {
     map: collections.DenseMapUnmanaged(LocalId, std.ArrayList(CFStmtId)) = .empty,
+    /// How many statements define each record built from a function value.
+    record_defs: collections.DenseMapUnmanaged(LocalId, u32) = .empty,
+    /// The function-valued reads of an erased-callable procedure's capture
+    /// fields; null when the procedure has no capture or uses it other than
+    /// by reading fields, so every field may escape.
+    fields: ?std.ArrayList(FieldRead) = null,
 
     fn deinit(self: *ProcUses, allocator: Allocator) void {
         var lists = self.map.valueIterator();
         while (lists.next()) |list| list.deinit(allocator);
         self.map.deinit(allocator);
+        self.record_defs.deinit(allocator);
+        if (self.fields) |*fields| fields.deinit(allocator);
+    }
+
+    fn recordDefs(self: *const ProcUses, record: LocalId) u32 {
+        return self.record_defs.get(record) orelse 0;
     }
 
     fn of(self: *const ProcUses, local: LocalId) []const CFStmtId {
@@ -82,12 +109,17 @@ const UseCollector = struct {
     layouts: *const layout_mod.Store,
     allocator: Allocator,
     uses: *ProcUses,
+    /// When set, the locals other than function values whose uses are
+    /// collected instead of the function values'.
+    extra: ?*const collections.DenseMapUnmanaged(LocalId, void) = null,
     stmt: CFStmtId = undefined,
     failure: ?Allocator.Error = null,
 
     fn note(self: *UseCollector, local: LocalId) void {
         if (self.failure != null) return;
-        if (!isErased(self.store, self.layouts, local)) return;
+        if (self.extra) |extra| {
+            if (!extra.contains(local)) return;
+        } else if (!isErased(self.store, self.layouts, local)) return;
         self.add(local) catch |err| {
             self.failure = err;
         };
@@ -103,22 +135,151 @@ const UseCollector = struct {
     }
 };
 
-/// Record every statement of `body` that reads a function-valued local.
+/// The record a statement builds from operands that include a function
+/// value, and those operands in field order.
+fn builtRecord(store: *const LirStore, stmt: LIR.CFStmt) ?struct { record: LocalId, fields: LIR.LocalSpan } {
+    if (stmt == .assign_struct) return .{ .record = stmt.assign_struct.target, .fields = stmt.assign_struct.fields };
+    if (stmt != .dyn) return null;
+    const op = store.stmtRow(stmt.dyn.data);
+    if (op != .record) return null;
+    return .{ .record = stmt.dyn.target orelse frameInvariant("a record with no target"), .fields = op.record.fields };
+}
+
+/// The capture container `stmt` reads out of `capture`, an erased-callable
+/// procedure's capture argument: a borrowed load of the capture record, or a
+/// view over it.
+fn captureContainer(store: *const LirStore, stmt: LIR.CFStmt, capture: LocalId) ?LocalId {
+    if (stmt == .assign_low_level) {
+        const s = stmt.assign_low_level;
+        if (s.op != .erased_capture_load_borrowed) return null;
+        const args = store.getLocalSpan(s.args);
+        if (GuardedList.borrowLen(args) == 0 or GuardedList.at(args, 0) != capture) return null;
+        return s.target;
+    }
+    if (stmt != .dyn) return null;
+    const op = store.stmtRow(stmt.dyn.data);
+    if (op != .view or op.view.address != capture) return null;
+    return stmt.dyn.target orelse frameInvariant("a view with no target");
+}
+
+/// Counts the definitions of the records `collectUses` tracks.
+const DefCounter = struct {
+    allocator: Allocator,
+    extra: *const collections.DenseMapUnmanaged(LocalId, void),
+    uses: *ProcUses,
+    failure: ?Allocator.Error = null,
+
+    fn note(self: *DefCounter, local: LocalId) void {
+        if (self.failure != null or !self.extra.contains(local)) return;
+        const entry = self.uses.record_defs.getOrPut(self.allocator, local) catch |err| {
+            self.failure = err;
+            return;
+        };
+        if (!entry.found_existing) entry.value_ptr.* = 0;
+        entry.value_ptr.* += 1;
+    }
+};
+
+fn isRcStmt(stmt: LIR.CFStmt) bool {
+    return stmt == .incref or stmt == .decref or stmt == .free;
+}
+
+/// The capture field `stmt` reads out of `container`, if it reads one by
+/// its index.
+fn fieldRead(store: *const LirStore, stmt: LIR.CFStmt, container: LocalId) ?FieldRead {
+    if (stmt == .assign_ref) {
+        const r = stmt.assign_ref;
+        if (r.op.kind != .field or r.op.source != container) return null;
+        return .{ .index = r.op.index, .local = r.target };
+    }
+    if (stmt != .dyn) return null;
+    const op = store.stmtRow(stmt.dyn.data);
+    if (op != .field_addr or op.field_addr.base != container or op.field_addr.field_index != .immediate) return null;
+    return .{ .index = op.field_addr.field_index.immediate, .local = stmt.dyn.target orelse frameInvariant("a field read with no target") };
+}
+
+/// Record every statement of `spec`'s body that reads a function-valued
+/// local, a record built from one, or the procedure's capture, and the
+/// procedure's reads of its capture fields.
 fn collectUses(
     allocator: Allocator,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
+    spec: *const LIR.LirProcSpec,
     body: CFStmtId,
     uses: *ProcUses,
 ) Allocator.Error!void {
-    var collector: UseCollector = .{ .store = store, .layouts = layouts, .allocator = allocator, .uses = uses };
+    var extra = collections.DenseMapUnmanaged(LocalId, void).empty;
+    defer extra.deinit(allocator);
+    var containers = collections.DenseMapUnmanaged(LocalId, void).empty;
+    defer containers.deinit(allocator);
+    const capture = spec.erased_capture_arg.get();
+    if (capture) |local| try extra.put(allocator, local, {});
+    {
+        var collector: UseCollector = .{ .store = store, .layouts = layouts, .allocator = allocator, .uses = uses };
+        var walk = try BodyClone.ReachableStmts.initWithAllocator(store, body, allocator);
+        defer walk.deinit();
+        while (try walk.next()) |stmt_id| {
+            const stmt = store.getCFStmt(stmt_id);
+            collector.stmt = stmt_id;
+            BodyClone.forEachStmtRead(store, stmt, &collector, UseCollector.note);
+            if (collector.failure) |err| return err;
+            if (builtRecord(store, stmt)) |built| {
+                const fields = store.getLocalSpan(built.fields);
+                for (0..fields.len) |index| {
+                    if (!isErased(store, layouts, GuardedList.at(fields, index))) continue;
+                    try extra.put(allocator, built.record, {});
+                    break;
+                }
+            }
+            if (capture) |local| if (captureContainer(store, stmt, local)) |container| {
+                try extra.put(allocator, container, {});
+                try containers.put(allocator, container, {});
+            };
+        }
+    }
+    if (extra.count() == 0) return;
+
+    var collector: UseCollector = .{ .store = store, .layouts = layouts, .allocator = allocator, .uses = uses, .extra = &extra };
+    var counter: DefCounter = .{ .allocator = allocator, .extra = &extra, .uses = uses };
     var walk = try BodyClone.ReachableStmts.initWithAllocator(store, body, allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
+        const stmt = store.getCFStmt(stmt_id);
         collector.stmt = stmt_id;
-        BodyClone.forEachStmtRead(store, store.getCFStmt(stmt_id), &collector, UseCollector.note);
+        BodyClone.forEachStmtRead(store, stmt, &collector, UseCollector.note);
         if (collector.failure) |err| return err;
+        BodyClone.forEachStmtDef(store, stmt, &counter, DefCounter.note);
+        // A store writes its destination in place.
+        if (BodyClone.writtenLocal(stmt)) |written| if (BodyClone.definedTarget(stmt) == null) counter.note(written);
+        if (counter.failure) |err| return err;
     }
+
+    const capture_local = capture orelse return;
+    // The capture is only read into containers, and the containers only
+    // have fields read out of them; otherwise any field may escape.
+    for (uses.of(capture_local)) |stmt_id| {
+        if (captureContainer(store, store.getCFStmt(stmt_id), capture_local) == null) return;
+    }
+    var fields = std.ArrayList(FieldRead).empty;
+    errdefer fields.deinit(allocator);
+    var keys = containers.constKeyIterator();
+    while (keys.next()) |container| {
+        // A dynamic record's load reads its descriptor, which holds no
+        // field's value.
+        if (store.localLayout(container) == .opaque_ptr and store.localDyn(container) == null) continue;
+        for (uses.of(container)) |stmt_id| {
+            const stmt = store.getCFStmt(stmt_id);
+            if (isRcStmt(stmt)) continue;
+            const read = fieldRead(store, stmt, container);
+            const field = read orelse {
+                fields.deinit(allocator);
+                return;
+            };
+            if (isErased(store, layouts, field.local)) try fields.append(allocator, field);
+        }
+    }
+    uses.fields = fields;
 }
 
 /// How one statement uses a function value.
@@ -135,9 +296,12 @@ pub const Use = union(enum) {
     /// The value passed to a direct call, at every position `positions`
     /// names (positions at or past `mask_positions` escape).
     direct_arg: struct { callee: ProcId, positions: u64, replaces_frame: bool },
+    /// The value stored as field `field` of the record `record`.
+    captured: struct { record: LocalId, field: u32 },
     /// Anything that can let the value outlive the call: a return, a store
-    /// into an aggregate or capture, an argument to an erased call, a
-    /// repack, a low-level operation, or a conditional release.
+    /// into an aggregate other than as one field of a record, an argument
+    /// to an erased call, a repack, a low-level operation, or a conditional
+    /// release.
     escape,
 };
 
@@ -176,11 +340,16 @@ pub fn classifyUse(store: *const LirStore, stmt_id: CFStmtId, local: LocalId) Us
             }
             break :blk .{ .call = .{ .deferred = call.deferred, .transfers = call.reuse_closure } };
         },
+        .assign_struct => |s| capturedUse(store, s.target, s.fields, local),
         .dyn => |s| switch (store.stmtRow(s.data)) {
             .call_erased => |call| if (call.args != null and call.args.? == local)
                 .escape
             else
                 .{ .call = .{ .deferred = call.deferred, .transfers = call.reuse_closure } },
+            .record => |r| if (r.desc == local)
+                .escape
+            else
+                capturedUse(store, s.target orelse frameInvariant("a record with no target"), r.fields, local),
             .frame_alloc,
             .table_entry,
             .copy,
@@ -189,7 +358,6 @@ pub fn classifyUse(store: *const LirStore, stmt_id: CFStmtId, local: LocalId) Us
             .box_payload_addr,
             .tag_discriminant,
             .tag_payload_addr,
-            .record,
             .record_update,
             .tag,
             .list,
@@ -209,7 +377,6 @@ pub fn classifyUse(store: *const LirStore, stmt_id: CFStmtId, local: LocalId) Us
         .assign_packed_erased_fn,
         .assign_low_level,
         .assign_list,
-        .assign_struct,
         .assign_tag,
         .store_struct,
         .store_tag,
@@ -231,6 +398,27 @@ pub fn classifyUse(store: *const LirStore, stmt_id: CFStmtId, local: LocalId) Us
     };
 }
 
+/// A store of `local` into the record `record` built from `fields`: one
+/// field, or an escape when it is several.
+fn capturedUse(store: *const LirStore, record: LocalId, fields: LIR.LocalSpan, local: LocalId) Use {
+    const operands = store.getLocalSpan(fields);
+    var found: ?u32 = null;
+    for (0..operands.len) |index| {
+        if (GuardedList.at(operands, index) != local) continue;
+        if (found != null) return .escape;
+        found = @intCast(index);
+    }
+    return .{ .captured = .{ .record = record, .field = found orelse frameInvariant("a record classified for a local it does not hold") } };
+}
+
+/// The procedure a packing statement builds a callable of.
+fn packingProc(store: *const LirStore, stmt_id: CFStmtId) ProcId {
+    const stmt = store.getCFStmt(stmt_id);
+    if (stmt == .assign_packed_erased_fn) return store.stmtRow(stmt.assign_packed_erased_fn.data).proc;
+    if (stmt != .dyn) frameInvariant("a packing that is not a packing statement");
+    return store.stmtRow(stmt.dyn.data).closure.proc;
+}
+
 /// The masks a call reads for `callee`: the solved masks of a procedure
 /// with a body, or the ones its defining object published.
 fn calleeMask(store: *const LirStore, masks: []const u64, callee: ProcId) u64 {
@@ -250,8 +438,38 @@ const ParamSolver = struct {
     store: *const LirStore,
     masks: []u64,
     reuse_masks: []u64,
+    /// Per erased-callable procedure, the capture fields its body keeps
+    /// (bit `i` for field `i`), and those a call may hand over through the
+    /// reuse channel.
+    field_masks: []u64,
+    field_reuse_masks: []u64,
     members: collections.DenseMapUnmanaged(LocalId, void) = .empty,
     work: std.ArrayList(LocalId) = .empty,
+
+    fn fieldMask(self: *const ParamSolver, proc: ProcId) u64 {
+        // A procedure another object defines publishes no capture fields.
+        if (self.store.getProcSpecImmediate(proc).body == .none) return 0;
+        return self.field_masks[@backingInt(proc)];
+    }
+
+    fn fieldReuseMask(self: *const ParamSolver, proc: ProcId) u64 {
+        if (self.store.getProcSpecImmediate(proc).body == .none) return ~@as(u64, 0);
+        return self.field_reuse_masks[@backingInt(proc)];
+    }
+
+    /// The packings of the record `record`, when every use of it is a
+    /// retain, a release or the capture of a packing, and one statement
+    /// defines it; null otherwise.
+    fn recordPackings(self: *const ParamSolver, uses: *const ProcUses, record: LocalId) ?[]const CFStmtId {
+        if (uses.recordDefs(record) != 1) return null;
+        const record_uses = uses.of(record);
+        for (record_uses) |stmt_id| {
+            if (isRcStmt(self.store.getCFStmt(stmt_id))) continue;
+            const packing = Packing.of(self.store, stmt_id) orelse return null;
+            if (packing.capture != record) return null;
+        }
+        return record_uses;
+    }
 
     fn deinit(self: *ParamSolver) void {
         self.members.deinit(self.allocator);
@@ -259,8 +477,12 @@ const ParamSolver = struct {
     }
 
     /// Whether the value `param` holds on entry can outlive the call under
-    /// the current masks.
-    fn escapes(self: *ParamSolver, uses: *const ProcUses, param: LocalId) Allocator.Error!bool {
+    /// the current masks. `deferred_ok` says a deferred call of it is made
+    /// before the procedure's own invocation completes: for a capture field
+    /// of a procedure the erased-call runtime invokes, which makes a pending
+    /// call its body leaves before that invocation returns, while the
+    /// field's value is still the one the invoking frame keeps alive.
+    fn escapes(self: *ParamSolver, uses: *const ProcUses, param: LocalId, deferred_ok: bool) Allocator.Error!bool {
         self.members.clearRetainingCapacity();
         self.work.clearRetainingCapacity();
         try self.members.put(self.allocator, param, {});
@@ -276,9 +498,23 @@ const ParamSolver = struct {
                             try self.work.append(self.allocator, target);
                         }
                     },
-                    .call => |call| if (call.deferred) return true,
+                    .call => |call| if (call.deferred and !deferred_ok) return true,
                     .direct_arg => |arg| {
                         if ((calleeMask(self.store, self.masks, arg.callee) & arg.positions) != arg.positions) return true;
+                    },
+                    .captured => |cap| {
+                        // The value stays inside each callable packed from
+                        // the record, which must not escape, and whose body
+                        // must keep the field.
+                        if (cap.field >= mask_positions) return true;
+                        const record_uses = self.recordPackings(uses, cap.record) orelse return true;
+                        for (record_uses) |use| {
+                            const packing = Packing.of(self.store, use) orelse continue;
+                            if ((self.fieldMask(packingProc(self.store, use)) >> @intCast(cap.field)) & 1 == 0) return true;
+                            if (!(try self.members.getOrPut(self.allocator, packing.target)).found_existing) {
+                                try self.work.append(self.allocator, packing.target);
+                            }
+                        }
                     },
                     .escape => return true,
                 }
@@ -306,6 +542,16 @@ const ParamSolver = struct {
                     .call => |call| if (call.transfers) return true,
                     .direct_arg => |arg| {
                         if ((calleeReuseMask(self.store, self.reuse_masks, arg.callee) & arg.positions) != 0) return true;
+                    },
+                    .captured => |cap| {
+                        // Handing over a callable packed from the record
+                        // hands over the callable, not this value: only the
+                        // packed body's own use of the field counts.
+                        if (cap.field >= mask_positions) return true;
+                        for (uses.of(cap.record)) |use| {
+                            if (Packing.of(self.store, use) == null) continue;
+                            if ((self.fieldReuseMask(packingProc(self.store, use)) >> @intCast(cap.field)) & 1 != 0) return true;
+                        }
                     },
                 }
             }
@@ -348,6 +594,12 @@ pub fn solveParams(
     const candidate_masks = try allocator.alloc(u64, proc_count);
     defer allocator.free(candidate_masks);
     @memset(candidate_masks, 0);
+    const field_masks = try allocator.alloc(u64, proc_count);
+    defer allocator.free(field_masks);
+    @memset(field_masks, 0);
+    const field_reuse_masks = try allocator.alloc(u64, proc_count);
+    defer allocator.free(field_reuse_masks);
+    @memset(field_reuse_masks, 0);
 
     var candidates = std.ArrayList(u32).empty;
     defer candidates.deinit(allocator);
@@ -362,15 +614,25 @@ pub fn solveParams(
         const spec = store.getProcSpecImmediate(proc_id);
         const body = spec.body.get() orelse continue;
         const mask = candidatePositions(store, layouts, spec);
-        if (mask == 0) continue;
+        if (mask == 0 and spec.erased_capture_arg.get() == null) continue;
         masks[index] = mask;
         candidate_masks[index] = mask;
         try candidates.append(allocator, @intCast(index));
         try proc_uses.append(allocator, .{});
-        try collectUses(allocator, store, layouts, body, &proc_uses.items[proc_uses.items.len - 1]);
+        const uses = &proc_uses.items[proc_uses.items.len - 1];
+        try collectUses(allocator, store, layouts, spec, body, uses);
+        // Every field a body never reads into a function value it keeps.
+        if (uses.fields != null) field_masks[index] = ~@as(u64, 0);
     }
 
-    var solver: ParamSolver = .{ .allocator = allocator, .store = store, .masks = masks, .reuse_masks = reuse_masks };
+    var solver: ParamSolver = .{
+        .allocator = allocator,
+        .store = store,
+        .masks = masks,
+        .reuse_masks = reuse_masks,
+        .field_masks = field_masks,
+        .field_reuse_masks = field_reuse_masks,
+    };
     defer solver.deinit();
 
     var changed = true;
@@ -382,11 +644,24 @@ pub fn solveParams(
             while (remaining != 0) {
                 const position: u6 = @intCast(@ctz(remaining));
                 remaining &= remaining - 1;
-                if (try solver.escapes(uses, GuardedList.at(args, position))) {
+                if (try solver.escapes(uses, GuardedList.at(args, position), false)) {
                     masks[index] &= ~(@as(u64, 1) << position);
                     changed = true;
                 }
             }
+            const deferred_ok = switch (store.getProcSpecImmediate(@fromBackingInt(index)).abi) {
+                .erased_callable, .erased_record => true,
+                .roc => false,
+            };
+            if (uses.fields) |fields| for (fields.items) |field| {
+                if (field.index >= mask_positions) continue;
+                const bit = @as(u64, 1) << @intCast(field.index);
+                if (field_masks[index] & bit == 0) continue;
+                if (try solver.escapes(uses, field.local, deferred_ok)) {
+                    field_masks[index] &= ~bit;
+                    changed = true;
+                }
+            };
         }
         for (published) |pair| {
             const worker = @backingInt(pair.worker);
@@ -414,6 +689,15 @@ pub fn solveParams(
                     changed = true;
                 }
             }
+            if (uses.fields) |fields| for (fields.items) |field| {
+                if (field.index >= mask_positions) continue;
+                const bit = @as(u64, 1) << @intCast(field.index);
+                if (field_reuse_masks[index] & bit != 0) continue;
+                if (try solver.reusesCapture(uses, field.local)) {
+                    field_reuse_masks[index] |= bit;
+                    changed = true;
+                }
+            };
         }
         for (published) |pair| {
             const worker = @backingInt(pair.worker);
@@ -729,7 +1013,10 @@ const SiteSolver = struct {
                         if ((callee.nonescaping_fn_params & arg.positions) != arg.positions) return false;
                         if ((callee.capture_reuse_fn_params & arg.positions) != 0) self.capture_reuse = true;
                     },
-                    .escape => return false,
+                    // A callable captured by another one is live as long
+                    // as that one, which this packing's liveness does not
+                    // follow.
+                    .captured, .escape => return false,
                 }
             }
         }
@@ -1191,6 +1478,7 @@ fn verifyFrames(allocator: Allocator, store: *const LirStore, layouts: *const la
                                 frameInvariant("a frame callable is passed to a parameter that lets it escape");
                             }
                         },
+                        .captured => frameInvariant("a frame callable is captured by another callable"),
                         .escape => frameInvariant("a frame callable escapes its frame"),
                     }
                 }
@@ -1349,7 +1637,7 @@ test "returning, storing, or passing a parameter to an erased call lets it escap
                 break :blk try f.stmt(.{ .assign_struct = .{
                     .target = record,
                     .fields = try f.store.addLocalSpan(&.{param}),
-                    .next = try f.ret(result),
+                    .next = try f.ret(record),
                 } });
             },
             .erased_arg => try f.erasedCall(other, &.{param}, result, false, try f.ret(result)),
@@ -1399,6 +1687,78 @@ test "a parameter called by a deferred erased call escapes" {
         const proc = try f.proc(&.{param}, body);
         try f.solve(&.{});
         try testing.expectEqual(@as(u64, if (deferred) 0 else 1), f.mask(proc));
+    }
+}
+
+test "a parameter captured by a callable that keeps it does not escape, wherever its body calls the field" {
+    const Case = enum { called, deferred_call, body_returns_field, callable_returned, record_returned, external_body, roc_body_deferred };
+    for (std.enums.values(Case)) |case| {
+        var f = try Fixture.init();
+        defer f.deinit();
+        const record_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = f.erased }});
+
+        // The packed procedure: it loads its capture and reads field 0.
+        const capture_ptr = try f.local(.opaque_ptr);
+        const self_ref = try f.fnLocal();
+        const loaded = try f.local(record_layout);
+        const field = try f.fnLocal();
+        const field_result = try f.local(.u64);
+        const after_read = switch (case) {
+            .body_returns_field => try f.ret(field),
+            .deferred_call, .roc_body_deferred => try f.erasedCall(field, &.{}, field_result, true, try f.ret(field_result)),
+            .called, .callable_returned, .record_returned, .external_body => try f.erasedCall(field, &.{}, field_result, false, try f.ret(field_result)),
+        };
+        const read = try f.stmt(.{ .assign_ref = .{ .target = field, .op = LIR.RefOp.field(loaded, 0), .next = after_read } });
+        const load = try f.stmt(.{ .assign_low_level = .{
+            .target = loaded,
+            .op = .erased_capture_load_borrowed,
+            .rc_effect = try f.store.addRcEffect(LIR.LowLevel.erased_capture_load_borrowed.rcEffect()),
+            .args = try f.store.addLocalSpan(&.{ capture_ptr, self_ref }),
+            .next = read,
+        } });
+        const lambda = try f.proc(&.{ capture_ptr, self_ref }, if (case == .external_body) null else load);
+        {
+            const spec = f.store.getProcSpecPtr(lambda);
+            spec.erased_capture_arg = .some(capture_ptr);
+            spec.erased_reuse_arg = .some(self_ref);
+            spec.abi = if (case == .roc_body_deferred) .roc else .erased_callable;
+        }
+
+        // A callee that only calls its parameter.
+        const keeps_param = try f.fnLocal();
+        const keeps_result = try f.local(.u64);
+        const keeps = try f.proc(&.{keeps_param}, try f.erasedCall(keeps_param, &.{}, keeps_result, false, try f.release(keeps_param, try f.ret(keeps_result))));
+
+        // The packer: it stores its parameter into a record, packs the
+        // procedure above with it, and passes the callable to `keeps`.
+        const param = try f.fnLocal();
+        const record = try f.local(record_layout);
+        const callable = try f.fnLocal();
+        const result = try f.local(.u64);
+        const tail = switch (case) {
+            .callable_returned => try f.ret(callable),
+            .record_returned => try f.ret(record),
+            .called, .deferred_call, .body_returns_field, .external_body, .roc_body_deferred => try f.ret(result),
+        };
+        const pass = try f.call(keeps, &.{callable}, result, tail);
+        const pack = try f.stmt(.{ .assign_packed_erased_fn = .{
+            .target = callable,
+            .data = try f.store.addStmtRow(LIR.PackedErasedFnData, .{
+                .proc = lambda,
+                .capture = record,
+                .capture_layout = record_layout,
+                .on_drop = .{ .rc_helper = .{ .op = .decref, .layout_idx = record_layout } },
+            }),
+            .next = pass,
+        } });
+        const build = try f.stmt(.{ .assign_struct = .{ .target = record, .fields = try f.store.addLocalSpan(&.{param}), .next = pack } });
+        const packer = try f.proc(&.{param}, build);
+        try f.solve(&.{});
+        const keeps_it = switch (case) {
+            .called, .deferred_call => true,
+            .body_returns_field, .callable_returned, .record_returned, .external_body, .roc_body_deferred => false,
+        };
+        try testing.expectEqual(@as(u64, @intFromBool(keeps_it)), f.mask(packer));
     }
 }
 

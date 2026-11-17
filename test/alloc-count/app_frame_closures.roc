@@ -6,10 +6,9 @@ import FrameCallee
 # A capturing closure passed only to parameters that never let it escape is
 # built in its caller's frame (design.md "Frame Callables"), so each call below
 # allocates nothing: the list operations work in place on unique lists, and
-# the closures are not boxed. A closure passed to `Try.on_err`, whose callback
-# is called by a deferred tail call, is still a heap allocation, and so is the
-# comparator passed to `List.sort_with`, which the sort captures in a closure
-# of its own.
+# the closures are not boxed, including the comparator `List.sort_with`
+# captures in a closure of its own. A closure passed to `Try.on_err`, whose
+# callback is called by a deferred tail call, is still a heap allocation.
 numbers : U64 -> List(U64)
 numbers = |offset| {
 	var $list = List.with_capacity(8)
