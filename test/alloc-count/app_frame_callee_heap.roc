@@ -3,7 +3,7 @@ app [run!] { pf: platform "./platform/main.roc" }
 import pf.Host
 import FrameCallee
 
-# The closure handed to FrameCallee.apply_twice is also stored in a list, so
+# The closure handed to FrameCallee.apply_both is also stored in a list, so
 # it is a heap allocation. FrameCallee's object is the same as when an
 # importer passes it a callable built in its own frame (app_frame_closures.roc).
 run! : Str => Str
@@ -12,7 +12,7 @@ run! = |input| {
 	add = |n| n + offset
 	adders = [add]
 	before = Host.alloc_count!()
-	twice = FrameCallee.apply_twice(add, 1)
+	both = FrameCallee.apply_both(add, 1)
 	allocs = Host.alloc_count!() - before
-	"heap callee: ${twice.to_str()} ${List.len(adders).to_str()} ${allocs.to_str()}"
+	"heap callee: ${both.to_str()} ${List.len(adders).to_str()} ${allocs.to_str()}"
 }

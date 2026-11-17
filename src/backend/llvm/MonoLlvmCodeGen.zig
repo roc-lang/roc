@@ -12542,10 +12542,12 @@ pub const MonoLlvmCodeGen = struct {
                         try self.nullPtr(),
                     }));
                 } else if (c.frame) |frame| {
-                    try self.bindWord(target, try self.callBoxyRuntime("roc_desc_closure_frame", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty }, &.{
+                    try self.bindWord(target, try self.callBoxyRuntime("roc_desc_closure_frame", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{
                         worker.toValue(builder),
                         try self.bytesAddress(c.capture),
                         try self.dynAddress(frame),
+                        try self.nullPtr(),
+                        try self.nullPtr(),
                     }));
                 } else {
                     try self.bindWord(target, try self.callBoxyRuntime("roc_desc_closure", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{

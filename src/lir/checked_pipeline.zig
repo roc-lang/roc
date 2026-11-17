@@ -2449,11 +2449,7 @@ fn finishLoweredOutput(
         defer allocator.free(pairs);
         for (published_variants.items, pairs) |published, *pair| pair.* = .{ .worker = published.worker, .variant = published.variant };
         try FrameCallables.solveParams(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, pairs);
-        // A hot-reload capture prefix holds a code reference that only a
-        // callable's final drop releases, and a frame callable has none.
-        if (target.erased_capture_prefix == 0) {
-            _ = try FrameCallables.markFrames(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts);
-        }
+        _ = try FrameCallables.markFrames(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts);
     }
 
     var tail_drive_scope = PassStepScope.begin(target.timing, .tail_drive);

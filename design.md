@@ -18471,9 +18471,10 @@ procedure's flow graph. The capture record stays with its local, whose
 bytes the frame callable copies: in a loop the frame storage is reused
 each iteration, and the previous callable is dead before the packing runs
 again. A Debug compiler re-checks every frame packing afterwards
-(`verifyFrames`). A program with a hot-reload capture prefix builds no
-frame callables, since only a callable's final drop releases its code
-reference.
+(`verifyFrames`). Under a hot-reload capture prefix a frame callable
+carries the hot-reload header with no code reference: it never outlives the
+frame that built it, whose code image the hot-reload entry holds, and its
+final drop, which would release a reference, never runs.
 
 A `DynOp.closure` whose capture record is a dynamic record qualifies only
 when the record is a `frame` dynamic local, whose descriptor is known when

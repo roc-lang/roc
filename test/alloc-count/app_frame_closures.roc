@@ -7,7 +7,9 @@ import FrameCallee
 # built in its caller's frame (design.md "Frame Callables"), so each call below
 # allocates nothing: the list operations work in place on unique lists, and
 # the closures are not boxed. A closure passed to `Try.on_err`, whose callback
-# is called by a deferred tail call, is still a heap allocation.
+# is called by a deferred tail call, is still a heap allocation, and so is the
+# comparator passed to `List.sort_with`, which the sort captures in a closure
+# of its own.
 numbers : U64 -> List(U64)
 numbers = |offset| {
 	var $list = List.with_capacity(8)
@@ -49,9 +51,9 @@ run! = |input| {
 	expect found
 
 	cross_before = Host.alloc_count!()
-	twice = FrameCallee.apply_twice(|n| n + offset, 1)
+	both = FrameCallee.apply_both(|n| n + offset, 1)
 	cross_allocs = Host.alloc_count!() - cross_before
-	expect twice == 1 + 2 * offset
+	expect both == 3 + 2 * offset
 
 	failed : Try(U64, U64)
 	failed = Err(offset)
@@ -60,6 +62,6 @@ run! = |input| {
 	on_err_allocs = Host.alloc_count!() - on_err_before
 	expect recovered == Ok(2 * offset)
 
-	sum = List.sum(kept) + List.sum(sorted) + List.sum(contains) + twice
+	sum = List.sum(kept) + List.sum(sorted) + List.sum(contains) + both
 	"frame closures: keep_if ${keep_allocs.to_str()}, sort_with ${sort_allocs.to_str()}, Dict.update ${update_allocs.to_str()}, List.contains ${contains_allocs.to_str()}, cross-module ${cross_allocs.to_str()}, Try.on_err ${on_err_allocs.to_str()}, sum ${sum.to_str()}"
 }

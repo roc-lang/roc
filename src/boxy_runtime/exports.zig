@@ -259,15 +259,19 @@ pub fn roc_desc_closure_reuse(
 /// refcount word before `data` becomes `utils.REFCOUNT_FRAME`, so retains
 /// and releases of the callable do nothing, and the record's references
 /// stay with the record, which the procedure releases where the callable
-/// dies. Frame callables carry no hot-reload header.
+/// dies. With a hot-reload drop, the capture is preceded by the hot-reload
+/// header, with no code reference: the callable never outlives the frame
+/// that built it, whose code image the hot-reload entry holds.
 pub fn roc_desc_closure_frame(
     callable_fn: builtins.erased_callable.CallableFnPtr,
     record: [*]const u8,
     data: [*]u8,
+    hot_reload_drop: ?builtins.erased_callable.OnDropFn,
+    hot_reload_copy: ?builtins.rc_callback_abi.RcIncrefFn,
 ) callconv(.c) [*]u8 {
     const record_desc = captureRecordDesc(record);
     @as(*isize, @ptrCast(@alignCast(data - @sizeOf(usize)))).* = builtins.utils.REFCOUNT_FRAME;
-    writeClosure(data, callable_fn, record, record_desc, record_desc.size, null, null, null);
+    writeClosure(data, callable_fn, record, record_desc, record_desc.size, null, hot_reload_drop, hot_reload_copy);
     return data;
 }
 
