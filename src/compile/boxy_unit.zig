@@ -364,6 +364,8 @@ fn recordInterfaces(interfaces: *ExportInterfaces, entry: object_cache.Entry) Al
         .rc_ret_conditions = record.rc_ret_conditions,
         .may_leave_pending = record.may_leave_pending,
         .rc_outcomes = record.rc_outcomes,
+        .nonescaping_fn_params = record.nonescaping_fn_params,
+        .capture_reuse_fn_params = record.capture_reuse_fn_params,
         .table_needs = record.table_needs,
         .template = record.template,
         .visible = record.visible,
@@ -392,6 +394,8 @@ pub fn exportRecords(gpa: Allocator, lowered: *const lir.CheckedPipeline.Lowered
             .may_leave_pending = interface.may_leave_pending,
             .rc_ret_conditions = interface.rc_ret_conditions,
             .rc_outcomes = interface.rc_outcomes,
+            .nonescaping_fn_params = interface.nonescaping_fn_params,
+            .capture_reuse_fn_params = interface.capture_reuse_fn_params,
             .table_needs = interface.table_needs,
             .template = interface.template,
             .visible = interface.visible,
@@ -1059,6 +1063,8 @@ fn testRestoredMetadata(gpa: Allocator) (object_cache.DecodeError || error{ Test
                 .may_leave_pending = false,
                 .rc_ret_conditions = &.{ 7, 9 },
                 .rc_outcomes = &.{ 0, 1 },
+                .nonescaping_fn_params = 2,
+                .capture_reuse_fn_params = 1,
                 .table_needs = "table inputs",
             }},
             .hosted_symbols = &.{"roc_fx_test"},
@@ -1090,6 +1096,8 @@ fn testRestoredMetadata(gpa: Allocator) (object_cache.DecodeError || error{ Test
     try std.testing.expectEqualStrings("table inputs", built.exports[0].table_needs);
     try std.testing.expectEqualSlices(u32, &.{ 7, 9 }, built.exports[0].rc_ret_conditions);
     try std.testing.expectEqualSlices(u32, &.{ 0, 1 }, built.exports[0].rc_outcomes);
+    try std.testing.expectEqual(@as(u64, 2), built.exports[0].nonescaping_fn_params);
+    try std.testing.expectEqual(@as(u64, 1), built.exports[0].capture_reuse_fn_params);
     try std.testing.expectEqualStrings("roc_fx_test", built.hosted_symbols[0]);
     try std.testing.expectEqual(@as(u32, 5), built.expect_sites[0].region_start);
     try std.testing.expectEqual(@as(u32, 6), built.test_roots[0].symbol);

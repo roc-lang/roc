@@ -96,15 +96,18 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      changes.
 /// v78: procedure specs carry the outcome table of a published
 ///      outcome-restitution variant (`rc_outcomes`).
-/// v79: the layout store records which layouts lie on a recursive cycle
+/// v79: procedure specs carry their non-escaping and capture-reusing
+///      function parameters (`nonescaping_fn_params`,
+///      `capture_reuse_fn_params`).
+/// v80: packings carry `frame`, and procedure shapes record packings.
+/// v81: the layout store records which layouts lie on a recursive cycle
 ///      (`layouts_on_cycle`), combined with the v78 change.
-/// v80: a lowering module is named by a failure identity, combined with the
-///      v77-v79 changes.
-/// v81: procedure specs name their body chunks, and the store carries the
-///      chunk column, combined with the v78-v80 changes.
-/// v82: a tail-call loop records the frame locals it carries
-///      (`TailCalls.params`), combined with the v79-v81 changes.
-pub const FORMAT_VERSION: u32 = 82;
+/// v82: a lowering module is named by a failure identity, and a tail-call
+///      loop records the frame locals it carries (`TailCalls.params`),
+///      combined with the v79-v81 changes.
+/// v83: procedure specs name their body chunks, and the store carries the
+///      chunk column, combined with the v79-v82 changes.
+pub const FORMAT_VERSION: u32 = 83;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
