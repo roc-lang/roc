@@ -13874,6 +13874,33 @@ const Builder = struct {
                 }
             } else Common.invariant("draft function ownership ancestry contained a cycle");
         }
+        // A generalized function's recursive reference is checked at the
+        // function's own type, while the use that requested the body in
+        // progress was checked at an instance of it, so the two carry
+        // different source keys and the reference's family has no
+        // specialization of its own. It still names the in-progress
+        // specialization of its site on its ownership chain.
+        if (!family_exists and recursive_reference) {
+            for (source_ctx.draft.nested_specs.items, 0..) |*spec, raw_spec_usize| {
+                if (spec.state != .lowering) continue;
+                if (spec.request_fn_ty != .none) continue;
+                if (signature_relation == .exact_graph and
+                    source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation != .exact_graph)
+                {
+                    continue;
+                }
+                if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, source_fn_key), family)) continue;
+                if (!try evidenceChainEql(self.allocator, spec.evidence, requested_evidence)) continue;
+                if (!substitutionsShareClasses(source_ctx.graph, spec.evidence.subst, requested_evidence.subst)) continue;
+                if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
+                if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
+                if (!source_ctx.draft.ownerDescendsFromDraftFn(request_owner, spec.fn_id)) continue;
+                const raw_spec: u32 = @intCast(raw_spec_usize);
+                if (!selection.add(raw_spec, false)) {
+                    Common.invariant("checked recursive nested reference matched more than one in-progress specialization of its site on its ownership chain");
+                }
+            }
+        }
         if (selection.selected()) |raw_spec| {
             self.count("nested_hits");
             // As for template requests, a partially overlapping in-progress
@@ -34345,7 +34372,7 @@ const BodyContext = struct {
         /// A deferred intrinsic emitted once the body's graph is sealed,
         /// with the arguments its call site lowered, if any.
         deferred_body: ?struct { pre_lowered_args: ?DraftSpan(DraftExprId) } = null,
-        stage: enum { start, deferred_prepared, deferred_args, args } = .start,
+        stage: enum { start, codec_subject, deferred_prepared, deferred_args, args } = .start,
         /// The checked arguments. Owned.
         args: []CIR.Expr.Idx = &.{},
         arg_tys: [checked.IntrinsicId.max_callsite_arity]Type.TypeId = undefined,
@@ -40196,7 +40223,30 @@ const BodyContext = struct {
                     // `FieldName(shape)` row.
                     if (unresolved) return loweredExprStep(try self.deferCallsiteIntrinsic(task, null));
                 }
+                // A `FieldNames` operation reads the generated representation
+                // of its subject, and the subject expression is what carries
+                // it: a `match`, or a call through a function value, has no
+                // evidence to hand the request beforehand. While the request
+                // still holds the subject's public named type, the subject
+                // is lowered at the request's own cell first, which gives
+                // that cell the representation, and the operation's argument
+                // types are read afterwards.
+                if (intrinsicReadsFieldNames(task.intrinsic) and
+                    try self.graph.containsCodecQuery(callable.args[0], .public_codec_interface))
+                {
+                    task.stage = .codec_subject;
+                    return requestLowerChild(self, ExprSite.read(task.args[0]), DraftTypeCell.fromGraphNode(callable.args[0]));
+                }
                 try self.beginCallsiteIntrinsicBody(task);
+                return try self.nextCallsiteIntrinsicArg(task);
+            },
+            .codec_subject => {
+                const subject = input.?.exprValue();
+                const callable = try self.graph.functionNodes(task.callable_node);
+                try relateRequestComponent(self.graph, callable.args[0], try self.exprTypeCell(subject).toGraphNode(self.graph));
+                try self.beginCallsiteIntrinsicBody(task);
+                task.lowered_args[0] = subject;
+                task.index = 1;
                 return try self.nextCallsiteIntrinsicArg(task);
             },
             .deferred_prepared => {
@@ -40211,6 +40261,15 @@ const BodyContext = struct {
                 return try self.nextCallsiteIntrinsicArg(task);
             },
         }
+    }
+
+    /// Whether a call-site intrinsic's first argument is a `FieldNames` value
+    /// it reads.
+    fn intrinsicReadsFieldNames(intrinsic: checked.IntrinsicId) bool {
+        return switch (intrinsic) {
+            .field_names_rename_fields, .field_names_shortest_name, .field_names_longest_name, .field_names_iter, .field_names_for_size => true,
+            .str_inspect, .structural_eq, .parse_tag_union, .field_name => false,
+        };
     }
 
     /// Reserve a call-site intrinsic's expression, emitted once its body's
@@ -41114,25 +41173,20 @@ const BodyContext = struct {
 
         const fields_value = lowered_args[0];
         const rename_value = lowered_args[1];
-        if (self.generatedFieldNamesBackingValueFieldNames(arg_tys[0])) |backing_fields| {
-            const stable_backing_fields = try GuardedList.dupe(self.allocator, Type.Field, backing_fields);
-            defer self.allocator.free(stable_backing_fields);
-            const fields_local = try self.addLocal(self.builder.symbols.fresh(), ret_ty);
-            const rename_local = try self.addLocal(self.builder.symbols.fresh(), arg_tys[1]);
-            var body = try self.lowerGeneratedFieldNamesRenameFieldNames(
-                stable_backing_fields,
-                ret_ty,
-                fields_local,
-                rename_local,
-                arg_tys[1],
-            );
-            body = try self.wrapLet(rename_local, arg_tys[1], rename_value, body, ret_ty);
-            return try self.wrapLet(fields_local, ret_ty, fields_value, body, ret_ty);
-        }
-
+        const backing_fields = self.generatedFieldNamesBackingValueFieldNames(arg_tys[0]) orelse
+            Common.invariant("FieldNames.rename_fields argument was not the generated field-names representation");
+        const stable_backing_fields = try GuardedList.dupe(self.allocator, Type.Field, backing_fields);
+        defer self.allocator.free(stable_backing_fields);
         const fields_local = try self.addLocal(self.builder.symbols.fresh(), ret_ty);
-        var body = try self.localExpr(fields_local, ret_ty);
-        body = try self.wrapWildcardLet(arg_tys[1], rename_value, body, ret_ty);
+        const rename_local = try self.addLocal(self.builder.symbols.fresh(), arg_tys[1]);
+        var body = try self.lowerGeneratedFieldNamesRenameFieldNames(
+            stable_backing_fields,
+            ret_ty,
+            fields_local,
+            rename_local,
+            arg_tys[1],
+        );
+        body = try self.wrapLet(rename_local, arg_tys[1], rename_value, body, ret_ty);
         return try self.wrapLet(fields_local, ret_ty, fields_value, body, ret_ty);
     }
 
@@ -41309,36 +41363,18 @@ const BodyContext = struct {
         if (args.len != 1 or arg_tys.len != 1) Common.invariant("FieldNames name bound reached Monotype with an unexpected arity");
         if (!self.typeHasBuiltinOwner(ret_ty, .u64)) Common.invariant("FieldNames name bound result was not U64");
 
-        const shape_ty = self.fieldsShapeType(arg_tys[0]);
-        const fields = try GuardedList.dupe(self.allocator, Type.Field, self.recordFieldsForShape(shape_ty));
-        defer self.allocator.free(fields);
         const fields_value = lowered_args[0];
-        if (self.generatedFieldNamesBackingInfo(arg_tys[0])) |info| {
-            const fields_local = try self.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
-            const body = try self.lowerGeneratedFieldNamesNameBound(
-                info,
-                arg_tys[0],
-                fields_local,
-                ret_ty,
-                bound,
-            );
-            return try self.wrapLet(fields_local, arg_tys[0], fields_value, body, ret_ty);
-        }
-
-        var value: u64 = 0;
-        if (fields.len > 0) {
-            value = @intCast(self.nameStore().recordFieldLabelText(fields[0].name).len);
-            for (fields[1..]) |field| {
-                const len: u64 = @intCast(self.nameStore().recordFieldLabelText(field.name).len);
-                value = switch (bound) {
-                    .shortest => @min(value, len),
-                    .longest => @max(value, len),
-                };
-            }
-        }
-
-        const bound_expr = try self.intLiteralExpr(value, ret_ty);
-        return try self.wrapWildcardLet(arg_tys[0], fields_value, bound_expr, ret_ty);
+        const info = self.generatedFieldNamesBackingInfo(arg_tys[0]) orelse
+            Common.invariant("FieldNames name bound argument was not the generated field-names representation");
+        const fields_local = try self.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
+        const body = try self.lowerGeneratedFieldNamesNameBound(
+            info,
+            arg_tys[0],
+            fields_local,
+            ret_ty,
+            bound,
+        );
+        return try self.wrapLet(fields_local, arg_tys[0], fields_value, body, ret_ty);
     }
 
     fn lowerGeneratedFieldNamesNameBound(
@@ -41671,52 +41707,26 @@ const BodyContext = struct {
             break :blk try self.addLocal(self.builder.symbols.fresh(), arg_tys[1]);
         } else null;
 
-        var iter_expr = if (self.generatedFieldNamesBackingFieldNames(arg_tys[0], field_handle_ty, fields.len)) |backing_fields| blk: {
-            break :blk try self.lowerFieldNamesValueIter(
-                backing_fields,
-                arg_tys[0],
-                fields_local,
-                field_handle_ty,
-                ret_ty,
-                backing_ty,
-                len_field.ty,
-                step_fn_ty,
-                step_shape.ret,
-                size_local,
-                arg_tys,
-                checked_source_ty,
-                checked_expr_id,
-            );
-        } else if (mode == .all) blk: {
-            break :blk try self.lowerFieldNamesIterForLen(
-                fields,
-                null,
-                .static,
-                field_handle_ty,
-                ret_ty,
-                backing_ty,
-                len_field.ty,
-                step_fn_ty,
-                step_shape.ret,
-                null,
-                checked_source_ty,
-                checked_expr_id,
-            );
-        } else blk: {
-            break :blk try self.lowerFieldNamesForSizeIter(
-                fields,
-                field_handle_ty,
-                ret_ty,
-                backing_ty,
-                len_field.ty,
-                step_fn_ty,
-                step_shape.ret,
-                size_local.?,
-                arg_tys[1],
-                checked_source_ty,
-                checked_expr_id,
-            );
-        };
+        // Every FieldNames value is the generated representation (design.md
+        // "Explicit Iterator Representation Tiers"), which holds the renamed
+        // field names.
+        const backing_fields = self.generatedFieldNamesBackingFieldNames(arg_tys[0], field_handle_ty, fields.len) orelse
+            Common.invariant("FieldNames iterator argument was not the generated field-names representation");
+        var iter_expr = try self.lowerFieldNamesValueIter(
+            backing_fields,
+            arg_tys[0],
+            fields_local,
+            field_handle_ty,
+            ret_ty,
+            backing_ty,
+            len_field.ty,
+            step_fn_ty,
+            step_shape.ret,
+            size_local,
+            arg_tys,
+            checked_source_ty,
+            checked_expr_id,
+        );
         if (mode == .for_size) {
             const size_value = lowered_args[1];
             iter_expr = try self.wrapLet(size_local.?, arg_tys[1], size_value, iter_expr, ret_ty);
@@ -42591,7 +42601,7 @@ const BodyContext = struct {
         const body = try self.lowerFieldNamesIterForLen(
             item_fields,
             null,
-            .{ .value = .{ .items_ty = info.items_field.ty, .items_local = items_local } },
+            .{ .items_ty = info.items_field.ty, .items_local = items_local },
             field_handle_ty,
             iter_ty,
             iter_backing_ty,
@@ -42614,13 +42624,9 @@ const BodyContext = struct {
         } } });
     }
 
-    /// Where a FieldNames iterator reads each field's handle.
-    const FieldNamesItemSource = union(enum) {
-        /// The record's static field handles.
-        static,
-        /// The items of a generated FieldNames value, read from a local.
-        value: struct { items_ty: Type.TypeId, items_local: DraftLocalId },
-    };
+    /// The items of a generated FieldNames value, read from a local: where a
+    /// FieldNames iterator reads each field's handle.
+    const FieldNamesItems = struct { items_ty: Type.TypeId, items_local: DraftLocalId };
 
     /// The requested size a FieldNames step filters its field by.
     const FieldNamesSizeFilter = struct { local: DraftLocalId, ty: Type.TypeId };
@@ -42633,7 +42639,7 @@ const BodyContext = struct {
         self: *BodyContext,
         fields: []const Type.Field,
         target_len: ?usize,
-        item_source: FieldNamesItemSource,
+        items: FieldNamesItems,
         field_handle_ty: Type.TypeId,
         iter_ty: Type.TypeId,
         backing_ty: Type.TypeId,
@@ -42665,14 +42671,11 @@ const BodyContext = struct {
         var rest_expr = try self.lowerGeneratedIterRecord(iter_ty, backing_ty, done_level.len, done_step);
 
         while (levels.pop()) |level| {
-            const item_expr = switch (item_source) {
-                .static => try self.lowerRecordFieldHandle(field_handle_ty, fields[level.index], level.index),
-                .value => |items| try self.addFieldAccessExpr(
-                    try self.localExpr(items.items_local, items.items_ty),
-                    fields[level.index].name,
-                    field_handle_ty,
-                ),
-            };
+            const item_expr = try self.addFieldAccessExpr(
+                try self.localExpr(items.items_local, items.items_ty),
+                fields[level.index].name,
+                field_handle_ty,
+            );
             const step_expr = if (size_filter) |filter|
                 try self.lowerFieldNamesSizeFilteredStep(
                     checked_source_ty,
@@ -42698,71 +42701,6 @@ const BodyContext = struct {
             rest_expr = try self.lowerGeneratedIterRecord(iter_ty, backing_ty, level.len, step_expr);
         }
         return rest_expr;
-    }
-
-    fn lowerFieldNamesForSizeIter(
-        self: *BodyContext,
-        fields: []const Type.Field,
-        field_handle_ty: Type.TypeId,
-        iter_ty: Type.TypeId,
-        backing_ty: Type.TypeId,
-        len_ty: Type.TypeId,
-        step_fn_ty: Type.TypeId,
-        step_ret_ty: Type.TypeId,
-        size_local: DraftLocalId,
-        size_ty: Type.TypeId,
-        checked_source_ty: checked.CheckedTypeId,
-        source_expr_id: ExprSite,
-    ) Allocator.Error!DraftExprId {
-        var body = try self.lowerFieldNamesIterForLen(
-            fields,
-            null,
-            .static,
-            field_handle_ty,
-            iter_ty,
-            backing_ty,
-            len_ty,
-            step_fn_ty,
-            step_ret_ty,
-            null,
-            checked_source_ty,
-            source_expr_id,
-        );
-
-        var seen = std.ArrayList(usize).empty;
-        defer seen.deinit(self.allocator);
-        for (fields) |field| {
-            const len = self.nameStore().recordFieldLabelText(field.name).len;
-            var already_seen = false;
-            for (seen.items) |seen_len| {
-                if (seen_len == len) {
-                    already_seen = true;
-                    break;
-                }
-            }
-            if (already_seen) continue;
-            try seen.append(self.allocator, len);
-
-            const bucket = try self.lowerFieldNamesIterForLen(
-                fields,
-                len,
-                .static,
-                field_handle_ty,
-                iter_ty,
-                backing_ty,
-                len_ty,
-                step_fn_ty,
-                step_ret_ty,
-                null,
-                checked_source_ty,
-                source_expr_id,
-            );
-            const size_expr = try self.localExpr(size_local, size_ty);
-            const len_expr = try self.intLiteralExpr(@intCast(len), size_ty);
-            const cond = try self.lowLevelExpr(.num_is_eq, &.{ size_expr, len_expr }, try self.primitiveType(.bool));
-            body = try self.ifExpr(cond, bucket, body, iter_ty);
-        }
-        return body;
     }
 
     fn nextFieldIndexForLen(
@@ -43090,22 +43028,6 @@ const BodyContext = struct {
             .args = try self.addTypedLocalSpan(&.{}),
             .body = body,
         } } });
-    }
-
-    fn lowerRecordFieldHandle(
-        self: *BodyContext,
-        field_handle_ty: Type.TypeId,
-        record_field: Type.Field,
-        index: usize,
-    ) Allocator.Error!DraftExprId {
-        const str_ty = try self.primitiveType(.str);
-        const field_text = self.nameStore().recordFieldLabelText(record_field.name);
-        return try self.lowerRecordFieldHandleWithName(
-            field_handle_ty,
-            try self.stringExpr(field_text, str_ty),
-            try self.intLiteralExpr(@intCast(field_text.len), try self.primitiveType(.u64)),
-            index,
-        );
     }
 
     fn lowerRecordFieldHandleWithName(
@@ -45724,16 +45646,12 @@ const BodyContext = struct {
             precomputed_plan,
         );
         const value_local = try self.addLocal(self.builder.symbols.fresh(), value_ty);
-        const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const inserted = try self.lowerDictInsert(
-            dict_ty,
-            key_ty,
-            value_ty,
-            try self.localExpr(dict_local, dict_ty),
-            try self.localExpr(key_local, key_ty),
-            try self.localExpr(value_local, value_ty),
-        );
+        const value_rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        // The dict and state the entry leaves behind, once a key the dict
+        // already holds has been settled.
+        const settled_join = try self.reserveGeneratedJoinPoint(ret_ty);
         const inserted_local = try self.addLocal(self.builder.symbols.fresh(), dict_ty);
+        const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
 
         const entry_end = switch (entry_end_mode) {
             .uncounted => blk: {
@@ -45799,10 +45717,166 @@ const BodyContext = struct {
             } } }),
         };
 
-        const with_inserted = try self.wrapLet(inserted_local, dict_ty, inserted, entry_end, ret_ty);
-        const value_body = try self.sequenceTryRecord(value_parse, value_parse_ret_ty, value_local, value_name, rest_local, rest_name, with_inserted, ret_ty);
+        const insert_body = try self.lowerParseDictInsertEntry(
+            dict_ty,
+            key_ty,
+            value_ty,
+            encoding_expr,
+            encoding_ty,
+            state_ty,
+            dict_local,
+            key_local,
+            value_local,
+            value_rest_local,
+            settled_join,
+            ret_ty,
+        );
+        try self.completeGeneratedJoinPoint(
+            settled_join,
+            &.{
+                .{ .local = inserted_local, .ty = dict_ty },
+                .{ .local = rest_local, .ty = state_ty },
+            },
+            &.{},
+            entry_end,
+            insert_body,
+        );
+        const value_body = try self.sequenceTryRecord(value_parse, value_parse_ret_ty, value_local, value_name, value_rest_local, rest_name, settled_join, ret_ty);
         const separator_body = try self.sequenceTry(separator_try, separator_try_ty, value_state_local, value_body, ret_ty);
         return try self.sequenceTryRecord(key_parse, key_parse_ret_ty, key_local, value_name, after_key_local, rest_name, separator_body, ret_ty);
+    }
+
+    /// Add a parsed entry to the dict with `Dict.insert_fresh`, then jump to
+    /// `settled_join` with the resulting dict and the state to continue from.
+    /// A key the dict already holds goes to the format's
+    /// `parse_dict_duplicate_key`, called with the state after the entry's
+    /// value: `KeepFirst` leaves the dict as it is, and `KeepLast` replaces
+    /// the held value through `Dict.insert`.
+    fn lowerParseDictInsertEntry(
+        self: *BodyContext,
+        dict_ty: Type.TypeId,
+        key_ty: Type.TypeId,
+        value_ty: Type.TypeId,
+        encoding_expr: DraftExprId,
+        encoding_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+        dict_local: DraftLocalId,
+        key_local: DraftLocalId,
+        value_local: DraftLocalId,
+        value_rest_local: DraftLocalId,
+        settled_join: DraftExprId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        const ret_info = self.tryInfo(ret_ty);
+        const outcome = try self.lowerDictInsertFresh(
+            dict_ty,
+            key_ty,
+            value_ty,
+            try self.localExpr(dict_local, dict_ty),
+            try self.localExpr(key_local, key_ty),
+            try self.localExpr(value_local, value_ty),
+        );
+
+        const fresh_dict_local = try self.addLocal(self.builder.symbols.fresh(), dict_ty);
+        const inserted_pat = try self.addPat(.{ .ty = outcome.ty, .data = .{ .tag = .{
+            .name = outcome.inserted_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{try self.bindPat(fresh_dict_local, dict_ty)}),
+        } } });
+        const inserted_body = try self.jumpToGeneratedJoin(
+            settled_join,
+            &.{
+                try self.localExpr(fresh_dict_local, dict_ty),
+                try self.localExpr(value_rest_local, state_ty),
+            },
+            &.{},
+            &.{},
+            ret_ty,
+        );
+
+        const held_dict_local = try self.addLocal(self.builder.symbols.fresh(), dict_ty);
+        const refused_key_local = try self.addLocal(self.builder.symbols.fresh(), key_ty);
+        const refused_value_local = try self.addLocal(self.builder.symbols.fresh(), value_ty);
+        const occupied_fields = [_]DraftRecordDestruct{
+            .{ .name = try self.nameStoreMut().internRecordFieldLabel("dict"), .pattern = try self.bindPat(held_dict_local, dict_ty) },
+            .{ .name = try self.nameStoreMut().internRecordFieldLabel("key"), .pattern = try self.bindPat(refused_key_local, key_ty) },
+            .{ .name = try self.nameStoreMut().internRecordFieldLabel("value"), .pattern = try self.bindPat(refused_value_local, value_ty) },
+        };
+        const occupied_record_pat = try self.addPat(.{ .ty = outcome.occupied_ty, .data = .{ .record = try self.addRecordDestructSpan(&occupied_fields) } });
+        const occupied_pat = try self.addPat(.{ .ty = outcome.ty, .data = .{ .tag = .{
+            .name = outcome.occupied_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{occupied_record_pat}),
+        } } });
+
+        const decision_ty = try self.parseArrayEventType(state_ty, "KeepFirst", "KeepLast");
+        const decision_try_ty = try self.tryTypeLike(ret_ty, decision_ty, ret_info.err_ty);
+        const decision_try = try self.lowerParseFormatMethod(
+            "parse_dict_duplicate_key",
+            &.{ encoding_expr, try self.localExpr(value_rest_local, state_ty) },
+            &.{ encoding_ty, state_ty },
+            dict_ty,
+            decision_try_ty,
+        );
+        const decision_local = try self.addLocal(self.builder.symbols.fresh(), decision_ty);
+
+        const keep_first_tag = self.monoTagByText(decision_ty, "KeepFirst");
+        const keep_first_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const keep_first_pat = try self.addPat(.{ .ty = decision_ty, .data = .{ .tag = .{
+            .name = keep_first_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{try self.bindPat(keep_first_state_local, state_ty)}),
+        } } });
+        const keep_first_body = try self.jumpToGeneratedJoin(
+            settled_join,
+            &.{
+                try self.localExpr(held_dict_local, dict_ty),
+                try self.localExpr(keep_first_state_local, state_ty),
+            },
+            &.{},
+            &.{},
+            ret_ty,
+        );
+
+        const keep_last_tag = self.monoTagByText(decision_ty, "KeepLast");
+        const keep_last_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const keep_last_pat = try self.addPat(.{ .ty = decision_ty, .data = .{ .tag = .{
+            .name = keep_last_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{try self.bindPat(keep_last_state_local, state_ty)}),
+        } } });
+        const keep_last_body = try self.jumpToGeneratedJoin(
+            settled_join,
+            &.{
+                try self.lowerDictInsert(
+                    dict_ty,
+                    key_ty,
+                    value_ty,
+                    try self.localExpr(held_dict_local, dict_ty),
+                    try self.localExpr(refused_key_local, key_ty),
+                    try self.localExpr(refused_value_local, value_ty),
+                ),
+                try self.localExpr(keep_last_state_local, state_ty),
+            },
+            &.{},
+            &.{},
+            ret_ty,
+        );
+
+        const decision_branches = [_]DraftBranch{
+            .{ .pat = keep_first_pat, .body = keep_first_body },
+            .{ .pat = keep_last_pat, .body = keep_last_body },
+        };
+        const decision_match = try self.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
+            .scrutinee = try self.localExpr(decision_local, decision_ty),
+            .branches = try self.addBranchSpan(&decision_branches),
+        } } });
+        const occupied_body = try self.sequenceTry(decision_try, decision_try_ty, decision_local, decision_match, ret_ty);
+
+        const outcome_branches = [_]DraftBranch{
+            .{ .pat = inserted_pat, .body = inserted_body },
+            .{ .pat = occupied_pat, .body = occupied_body },
+        };
+        return try self.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
+            .scrutinee = outcome.expr,
+            .branches = try self.addBranchSpan(&outcome_branches),
+        } } });
     }
 
     fn lowerParseDictKey(
@@ -49460,8 +49534,14 @@ const BodyContext = struct {
         if (!try self.graph.containsGeneratedPrivate(completed_fn.ret)) return completed_node;
 
         const request_fn = try self.graph.functionNodes(request_node);
-        if (!try self.graph.containsIteratorInterface(request_fn.ret)) {
-            Common.invariant("callee completed an iterator representation for a non-iterator request");
+        // A codec representation's public named type in the request's result
+        // takes the representation once the callee's body relates the two,
+        // so by now the request's result may already hold it.
+        if (!try self.graph.containsIteratorInterface(request_fn.ret) and
+            !try self.graph.containsCodecQuery(request_fn.ret, .public_codec_interface) and
+            !try self.graph.containsGeneratedPrivate(request_fn.ret))
+        {
+            Common.invariant("callee completed a generated representation for a request with no producer-authored result");
         }
         const source_interface = self.graph.requestSourceInterface(request_node) orelse request_node;
         // The completed node can be the memoized import shared by every call
@@ -49495,17 +49575,25 @@ const BodyContext = struct {
         if (spec.state != .deferred) return current_node;
 
         const current_fn = try self.graph.functionNodes(current_node);
-        const has_iterator_result = try self.graph.containsIteratorInterface(current_fn.ret);
-        const has_private_result = try self.graph.containsGeneratedPrivate(current_fn.ret);
-        if (!has_iterator_result or has_private_result) {
+        // A codec representation's public named type in the result is a
+        // position only the callee's body relates to the representation it
+        // produces (the result of `FieldNames.rename_fields`, say), exactly
+        // as a public iterator result is.
+        const has_producer_result = try self.graph.containsIteratorInterface(current_fn.ret) or
+            try self.graph.containsCodecQuery(current_fn.ret, .public_codec_interface);
+        const has_private_result = try self.graph.containsGeneratedPrivate(current_fn.ret) and
+            !try self.graph.containsCodecQuery(current_fn.ret, .public_codec_interface);
+        if (!has_producer_result or has_private_result) {
             return current_node;
         }
-        // Representation-bearing inputs still belong to the caller's live
-        // graph. Recursive adapters can change those inputs at each edge, so
-        // their explicit forced-dynamic join must finish before the request is
-        // converted to an immutable specialization key.
+        // Iterator representations among the inputs still belong to the
+        // caller's live graph. Recursive adapters can change those inputs at
+        // each edge, so their explicit forced-dynamic join must finish before
+        // the request is converted to an immutable specialization key. A
+        // codec representation never changes, so it does not hold the
+        // request back.
         for (current_fn.args) |arg| {
-            if (try self.graph.containsGeneratedPrivate(arg)) return current_node;
+            if (try self.graph.containsCodecQuery(arg, .iterator_evidence)) return current_node;
         }
         // A same-family request inside the active root is an explicit
         // recursive edge. Its live graph must join the recursive argument and
@@ -54737,6 +54825,59 @@ const BodyContext = struct {
         });
     }
 
+    /// A call of `Dict.insert_fresh`, with its outcome row: `Inserted` holds
+    /// the dict with the entry added, and `Occupied` holds a record of the
+    /// unchanged dict and the key and value that were not inserted.
+    fn lowerDictInsertFresh(
+        self: *BodyContext,
+        dict_ty: Type.TypeId,
+        key_ty: Type.TypeId,
+        value_ty: Type.TypeId,
+        dict_expr: DraftExprId,
+        key_expr: DraftExprId,
+        value_expr: DraftExprId,
+    ) Allocator.Error!struct {
+        expr: DraftExprId,
+        ty: Type.TypeId,
+        inserted_tag: Type.Tag,
+        occupied_tag: Type.Tag,
+        occupied_ty: Type.TypeId,
+    } {
+        const prepared = try self.frozenFormatCodecCallForShape(.parser, "insert_fresh", dict_ty);
+        const lookup = prepared.lookup;
+        const callable_mono_ty = prepared.callable_ty;
+        const insert_fn = functionShape(self.typeStore(), callable_mono_ty, "Dict.insert_fresh target method was not a function");
+        const arg_tys = self.typeStore().span(insert_fn.args);
+        if (arg_tys.len != 3) Common.invariant("Dict.insert_fresh target method had an unexpected arity");
+        self.assertSameType(GuardedList.at(arg_tys, 0), dict_ty, "Dict.insert_fresh dict argument type differed from Dict type");
+        self.assertSameType(GuardedList.at(arg_tys, 1), key_ty, "Dict.insert_fresh key argument type differed from key type");
+        self.assertSameType(GuardedList.at(arg_tys, 2), value_ty, "Dict.insert_fresh value argument type differed from value type");
+
+        const outcome_ty = insert_fn.ret;
+        const inserted_tag = self.monoTagByText(outcome_ty, "Inserted");
+        const occupied_tag = self.monoTagByText(outcome_ty, "Occupied");
+        const occupied_ty = self.singleTagPayloadType(occupied_tag, "Dict.insert_fresh Occupied outcome");
+        self.assertSameType(self.singleTagPayloadType(inserted_tag, "Dict.insert_fresh Inserted outcome"), dict_ty, "Dict.insert_fresh Inserted payload type differed from Dict type");
+        self.assertSameType(self.recordFieldType(occupied_ty, try self.nameStoreMut().internRecordFieldLabel("dict")), dict_ty, "Dict.insert_fresh Occupied dict type differed from Dict type");
+        self.assertSameType(self.recordFieldType(occupied_ty, try self.nameStoreMut().internRecordFieldLabel("key")), key_ty, "Dict.insert_fresh Occupied key type differed from key type");
+        self.assertSameType(self.recordFieldType(occupied_ty, try self.nameStoreMut().internRecordFieldLabel("value")), value_ty, "Dict.insert_fresh Occupied value type differed from value type");
+
+        return .{
+            .expr = try self.addExpr(.{
+                .ty = outcome_ty,
+                .data = .{ .call_proc = .{
+                    .callee = try self.draftProcCalleeForSlot(prepared.callee),
+                    .args = try self.addExprSpan(&[_]DraftExprId{ dict_expr, key_expr, value_expr }),
+                    .captures = try self.methodTargetCaptureSpan(lookup),
+                } },
+            }),
+            .ty = outcome_ty,
+            .inserted_tag = inserted_tag,
+            .occupied_tag = occupied_tag,
+            .occupied_ty = occupied_ty,
+        };
+    }
+
     fn lowerDictToList(
         self: *BodyContext,
         dict_ty: Type.TypeId,
@@ -58472,8 +58613,13 @@ const BodyContext = struct {
             .structural => return request_fn_node,
         }
         const request_fn = try self.graph.functionNodes(request_fn_node);
-        if (!try self.graph.containsIteratorInterface(request_fn.ret) or
-            try self.graph.containsGeneratedPrivate(request_fn.ret))
+        // A codec representation's public named type in the result is
+        // callee-authored exactly as a public iterator result is
+        // (`completeDeferredIteratorResult`).
+        const has_public_codec_result = try self.graph.containsCodecQuery(request_fn.ret, .public_codec_interface);
+        if (!has_public_codec_result and
+            (!try self.graph.containsIteratorInterface(request_fn.ret) or
+                try self.graph.containsGeneratedPrivate(request_fn.ret)))
         {
             return request_fn_node;
         }
@@ -62979,6 +63125,31 @@ const BodyContext = struct {
         } });
     }
 
+    /// The `Dict.insert_fresh` outcome row at the checked-evidence boundary.
+    /// `freshDictInsertFreshOutcomeVar` in check/Check.zig builds the same row
+    /// and must agree with this one.
+    fn graphDictInsertFreshOutcome(
+        self: *BodyContext,
+        dict_node: NodeId,
+        key_node: NodeId,
+        value_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const occupied_payload = try self.graphClosedRecord(&.{
+            .{ .name = try self.nameStoreMut().internRecordFieldLabel("dict"), .ty = dict_node, .default = .none },
+            .{ .name = try self.nameStoreMut().internRecordFieldLabel("key"), .ty = key_node, .default = .none },
+            .{ .name = try self.nameStoreMut().internRecordFieldLabel("value"), .ty = value_node, .default = .none },
+        });
+        const inserted_name = try self.nameStoreMut().internTagLabel("Inserted");
+        const occupied_name = try self.nameStoreMut().internTagLabel("Occupied");
+        return try self.graph.newNode(.{ .tag_union = .{
+            .tags = try self.graph.arena().dupe(InstTag, &.{
+                .{ .name = inserted_name, .checked_name = inserted_name, .payloads = try self.graph.arena().dupe(NodeId, &.{dict_node}) },
+                .{ .name = occupied_name, .checked_name = occupied_name, .payloads = try self.graph.arena().dupe(NodeId, &.{occupied_payload}) },
+            }),
+            .ext = try self.graph.newNode(.empty_tag_union),
+        } });
+    }
+
     fn graphTryLike(
         self: *BodyContext,
         template_try: NodeId,
@@ -63477,6 +63648,14 @@ const BodyContext = struct {
             "parse_dict_after_entry",
             false,
         ) or added;
+        added = try self.prepareParseFormatControlCodecCall(
+            boundary_expr,
+            shape_node,
+            contract_subject_node,
+            boundary_callable_node,
+            "parse_dict_duplicate_key",
+            false,
+        ) or added;
         return added;
     }
 
@@ -63747,6 +63926,15 @@ const BodyContext = struct {
                     "insert",
                     &.{ dict_node, key_node, value_node },
                     dict_node,
+                ) or added;
+                added = try self.prepareOwnedCodecMethodCall(
+                    boundary_expr,
+                    kind,
+                    dict_node,
+                    dict_node,
+                    "insert_fresh",
+                    &.{ dict_node, key_node, value_node },
+                    try self.graphDictInsertFreshOutcome(dict_node, key_node, value_node),
                 ) or added;
                 break :blk added;
             },
@@ -66963,8 +67151,14 @@ const BodyContext = struct {
                     expected_node,
                 );
                 const fn_nodes = try self.graph.functionNodes(fn_node);
-                if (try self.graph.containsGeneratedPrivate(fn_nodes.ret)) break :blk fn_nodes.ret;
-                if (!try self.graph.containsIteratorInterface(fn_nodes.ret)) break :blk fn_nodes.ret;
+                // A codec representation's public named type in the result is
+                // callee-authored exactly as a public iterator result is
+                // (`completeDeferredIteratorResult`), so the branch's evidence
+                // is the completed callee's result.
+                if (!try self.graph.containsCodecQuery(fn_nodes.ret, .public_codec_interface)) {
+                    if (try self.graph.containsGeneratedPrivate(fn_nodes.ret)) break :blk fn_nodes.ret;
+                    if (!try self.graph.containsIteratorInterface(fn_nodes.ret)) break :blk fn_nodes.ret;
+                }
 
                 try self.ensureNestedCallablesAtNodes(call.args, fn_nodes.args);
                 const completed = try self.completedDirectCalleeAtNode(checked_value, target, source_fn_ty, fn_node);
@@ -73801,7 +73995,7 @@ test "request component relation follows root authority before nested private ev
         .named_type = inner_named_type,
         .def = inner_def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .some(.{
             .node = try graph.newNode(.empty_record),
@@ -73813,7 +74007,7 @@ test "request component relation follows root authority before nested private ev
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().dupe(NodeId, &.{private_arg}),
         .backing = .some(.{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only }),
     }));
@@ -73821,7 +74015,7 @@ test "request component relation follows root authority before nested private ev
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().dupe(NodeId, &.{private_arg}),
         .backing = .some(.{
             .node = try graph.newNode(.empty_record),
@@ -73860,7 +74054,7 @@ test "request component relation descends through matching private-bearing conta
         .named_type = inner_named_type,
         .def = inner_def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .some(.{
             .node = try graph.newNode(.empty_record),
@@ -73872,7 +74066,7 @@ test "request component relation descends through matching private-bearing conta
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().dupe(NodeId, &.{shared_private_arg}),
         .backing = .some(.{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only }),
     }));
@@ -73880,7 +74074,7 @@ test "request component relation descends through matching private-bearing conta
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().dupe(NodeId, &.{shared_private_arg}),
         .backing = .some(.{
             .node = try graph.newNode(.empty_record),
@@ -73925,7 +74119,7 @@ test "checked-to-mono relation preserves generated-private evidence inside a com
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .some(.{ .node = checked_backing, .use = .runtime_layout_only }),
     }));
@@ -73933,7 +74127,7 @@ test "checked-to-mono relation preserves generated-private evidence inside a com
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .some(.fields),
+        .builtin_owner = .none,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .some(.{
             .node = mono_backing,

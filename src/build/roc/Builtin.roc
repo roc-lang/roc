@@ -49,6 +49,16 @@ Builtin :: [].{
 	# parse_dict_after_key between a key and its value, and
 	# parse_dict_after_entry.
 	#
+	# A dict entry whose key equals, under the key type's is_eq, a key the
+	# dict already holds is the format's to settle:
+	#
+	#     parse_dict_duplicate_key : encoding, state
+	#         -> Try([KeepFirst(state), KeepLast(state)], err)
+	#
+	# The driver calls it with the state after the entry's value, and only for
+	# such an entry. KeepFirst drops the entry, KeepLast replaces the held
+	# value with the entry's, and Err refuses the input.
+	#
 	# Every fallible operation, including custom nested parsers and tag
 	# payload callbacks, uses the same format-owned err type. A required
 	# field that was not read calls missing_field : encoding, Str -> err.
@@ -1723,6 +1733,10 @@ Builtin :: [].{
 				match state {
 					Input(raw) => Json.parse_record_after_field_from_json(encoding, raw)
 				}
+
+			## A repeated JSON object name keeps the value given last.
+			parse_dict_duplicate_key : JsonEncoding, JsonState -> Try([KeepFirst(JsonState), KeepLast(JsonState)], [InvalidJson(Str)])
+			parse_dict_duplicate_key = |_, state| Ok(KeepLast(state))
 
 			skip_record_field : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str)])
 			skip_record_field = |encoding, state| Json.skip_json_value(encoding, state)
@@ -4499,12 +4513,12 @@ Builtin :: [].{
 		update = |list, index, func| {
 			if index < List.len(list) {
 				prepared_list = list_map_prepare_reuse(list)
-				match list_map_can_reuse(prepared_list, func) {
+				match list_owned_unique(prepared_list) {
 					1 => {
 						item = list_move_out_unsafe(prepared_list, index)
-						Ok(list_map_write_unsafe(prepared_list, index, func(item)))
+						Ok(list_move_in_unsafe(prepared_list, index, func(item)))
 					}
-					_ => Ok(list_replace_unsafe(prepared_list, index, func(list_get_unsafe(prepared_list, index))).list)
+					_ => Ok(list_set_unsafe(prepared_list, index, func(list_get_unsafe(prepared_list, index))))
 				}
 			} else {
 				Err(OutOfBounds)
@@ -6348,6 +6362,42 @@ Builtin :: [].{
 								{ bucket_index, dist_and_fingerprint },
 								key,
 								value,
+							),
+						)
+					}
+				}
+			}
+		}
+
+		## Insert a value into the dictionary at a specified key, unless the
+		## key already exists. An existing key leaves the dictionary unchanged
+		## and returns it along with the key and value that were not inserted.
+		## ```roc
+		## expect match Dict.single("Apples", 12).insert_fresh("Pears", 7) {
+		## 	Inserted(dict) => dict.get("Pears") == Ok(7)
+		## 	Occupied(_) => False
+		## }
+		##
+		## expect match Dict.single("Apples", 12).insert_fresh("Apples", 7) {
+		## 	Inserted(_) => False
+		## 	Occupied({ dict, key, value }) => dict.get("Apples") == Ok(12) and key == "Apples" and value == 7
+		## }
+		## ```
+		insert_fresh : Dict(k, v), k, v -> [Inserted(Dict(k, v)), Occupied({ dict : Dict(k, v), key : k, value : v })]
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+		insert_fresh = |dict, key, value| match dict {
+			HashMap(data) => {
+				match dict_find_for_insert(data, key) {
+					Found({ data: next_data, .. }) => Occupied({ dict: HashMap(next_data), key, value })
+					Missing({ data: next_data, bucket_index, dist_and_fingerprint }) => {
+						Inserted(
+							HashMap(
+								dict_insert_absent_data(
+									next_data,
+									{ bucket_index, dist_and_fingerprint },
+									key,
+									value,
+								),
 							),
 						)
 					}

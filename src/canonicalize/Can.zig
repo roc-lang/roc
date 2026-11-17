@@ -3410,7 +3410,9 @@ fn enterAssociatedBlockState(
 /// forward-reference pattern, which the member's declaration adopts when it is
 /// canonicalized, so references written ahead of a member keep their place in
 /// statement order. A member whose name shadows an enclosing binding or
-/// declaration is reported once, here.
+/// declaration is reported once, here, unless the member authorizes a derived
+/// method: that declares a method of its own owner and binds no value of its
+/// own to shadow with.
 fn bindAssociatedMemberNames(
     self: *Self,
     owner_path: AST.DeclIndex.TypePathIdx,
@@ -3425,7 +3427,7 @@ fn bindAssociatedMemberNames(
         const member_region = self.parserValueDeclNameRegion(entry.decl_idx);
 
         if (self.associatedMemberShadowedRegion(entry, block_scope_idx)) |original_region| {
-            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+            if (!self.parserDeclAuthorizesDerivedMethod(entry.decl_idx)) try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
                 .ident = entry.ident,
                 .region = member_region,
                 .original_region = original_region,
@@ -3440,6 +3442,19 @@ fn bindAssociatedMemberNames(
         );
         try self.putScopeIdent(block_scope_idx, entry.ident, pattern_idx);
     }
+}
+
+/// Whether a parser value declaration authorizes a derived method: an
+/// annotation with no paired definition whose type is `_` and whose name is a
+/// method the compiler derives.
+fn parserDeclAuthorizesDerivedMethod(self: *const Self, decl_idx: AST.DeclIndex.DeclIdx) bool {
+    const decl = self.parse_ir.decl_index.decls.items[@backingInt(decl_idx)];
+    if (decl.kind != .value_anno or decl.paired_decl != .none) return false;
+    const name = decl.nameIdent() orelse return false;
+    if (self.derivedMethodKind(name) == null) return false;
+    const statement = self.parse_ir.store.getStatement(@fromBackingInt(@intCast(decl.statement)));
+    if (statement != .type_anno) return false;
+    return self.parse_ir.store.getTypeAnno(statement.type_anno.anno) == .underscore;
 }
 
 /// Where the nearest enclosing binding or declaration that the associated
