@@ -964,7 +964,10 @@ pub const BuildEnv = struct {
         coord.boxy_program_observer = self.boxy_program_observer;
         coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
         coord.boxy_object_lowering = self.boxy_object_lowering;
-        if (self.detailed_monotype_diagnostics) coord.ctfe_timing.lowering.enableDetail();
+        if (self.detailed_monotype_diagnostics) {
+            coord.ctfe_timing.lowering.enableDetail();
+            coord.detailed_publication_timing = true;
+        }
         self.coordinator = coord;
     }
 
