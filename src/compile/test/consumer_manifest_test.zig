@@ -242,7 +242,7 @@ test "a build evaluates every compile-time value and materializes the ones its p
 
     // A separate runtime consumer, so completed values are materialized for
     // it rather than read out of the compile-time consumer's own slots.
-    const target: lir.CheckedPipeline.TargetConfig = .{ .inline_expects = .omit, .proc_debug_names = true };
+    const target: lir.CheckedPipeline.TargetConfig = .{ .inline_expects = .omit };
     coord.runtime_lowering = .{ .target = target };
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
@@ -335,7 +335,7 @@ test "one evaluated root has one completed-value slot however many places read i
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    const target: lir.CheckedPipeline.TargetConfig = .{ .inline_expects = .omit, .proc_debug_names = true };
+    const target: lir.CheckedPipeline.TargetConfig = .{ .inline_expects = .omit };
     coord.runtime_lowering = .{ .target = target };
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
@@ -462,7 +462,6 @@ test "a separate compile-time consumer lowers no runtime-only procedure" {
         // so this compilation's consumers cannot share one program.
         .inline_expects = .omit,
         .inline_mode = .none,
-        .proc_debug_names = true,
         .work_metrics = &metrics,
     };
     coord.runtime_lowering = .{ .target = target };

@@ -107,7 +107,6 @@ test "an optimized runtime program reads a generic function's custom literal con
         .inline_mode = .wrappers,
         .spec_constr_clone_inlining = .all_calls,
         .inline_expects = .omit,
-        .proc_debug_names = true,
     };
     coord.runtime_lowering = .{ .target = target };
     try coord.finishCheckedProgram(.executable_artifacts);

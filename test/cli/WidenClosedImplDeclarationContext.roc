@@ -4,13 +4,15 @@
 # caller supplies that encoder, so the method's function value is built from
 # the declaration context of the caller's instance of `make`.
 #
-# No evidence read there names a dictionary of `make`'s scope: an encoder's
-# contract resolves the requirements of the methods it calls with no
-# enclosing scope's requirements in reach, so a method's own requirement
-# takes its dictionary from the implementation, adapted to the wider row,
-# and the method's body hands `make`'s dictionary on from its own worker's
-# scope. Either way `Ok` must not be read back under the wider row's
-# numbering as `Extra`.
+# A method's own requirement takes its dictionary from the implementation,
+# adapted to the wider row, and a method's body hands `make`'s dictionary on
+# from its own worker's scope. When a generic caller of `make` hands `make`'s
+# codec requirement on, the encoder is built by the caller's caller, from the
+# instance of `make` that the caller's call of it instantiates: that
+# instance's dictionary is the caller's, handed on from the caller's scope at
+# the caller's narrower row, so it is adapted to the row `make` states. In
+# every case `Ok` must not be read back under the wider row's numbering as
+# `Extra`.
 WidenClosedImplDeclarationContext := {}
 
 Job := [Pending, Failed].{
@@ -112,6 +114,60 @@ sibling_requirement = |x| {
     |state| encoder({ inner: Inner.In(x) }, state)
 }
 
+Ticket := [Open].{
+    sample : () -> Ticket
+    sample = || Ticket.Open
+
+    status : Ticket -> [Ok(Str), Err(Str)]
+    status = |_| Ok("open")
+}
+
+Broken := [Broken].{
+    sample : () -> Broken
+    sample = || Broken.Broken
+
+    status : Broken -> [Ok(Str), Err(Str)]
+    status = |_| Err("broken")
+}
+
+Named : { name : Str }
+
+# A format method reads `make`'s requirement through `make`'s scope, at the
+# wider row `make` states.
+wide_format : a -> (Named, Str -> Try(Str, []))
+    where [a.sample : () -> a, a.status : a -> [Ok(Str), Err(Str), Extra]]
+wide_format = |_x| {
+    LocalFormat := [Default].{
+        rename_field : LocalFormat, Str -> Str
+        rename_field = |_, name| name
+
+        encode_record : Str, U64, (Str, (Str, Str, (Str -> Try(Str, [])) -> Try(Str, [])) -> Try(Str, [])) -> Try(Str, [])
+        encode_record = |state, _, write_fields| write_fields(state, |field_state, _name, write_value| write_value(field_state))
+
+        encode_str : Str, Str -> Try(Str, [])
+        encode_str = |value, state| {
+            Outer : a
+            made : a
+            made = Outer.sample()
+            Ok(Str.concat(Str.concat(state, value), show(made.status())))
+        }
+    }
+    encoder_of : value -> (value, Str -> Try(Str, []))
+        where [value.encoder_for : LocalFormat -> (value, Str -> Try(Str, []))]
+    encoder_of = |_sample| {
+        Shape : value
+        |v, st| Shape.encoder_for(LocalFormat.Default)(v, st)
+    }
+    sample_name : Str
+    sample_name = ""
+    encoder_of({ name: sample_name })
+}
+
+# The caller states the narrower row and hands the codec requirement on.
+narrow_caller : b -> (Named, Str -> Try(Str, []))
+    where [b.sample : () -> b, b.status : b -> [Ok(Str), Err(Str)]]
+narrow_caller = |x| wide_format(x)
+
 log_of : Try(Logged, []) -> Str
 log_of = |result| match result {
     Ok(state) => state.log
@@ -123,3 +179,6 @@ expect outer_requirement(Job.Pending)("") == Ok("Ok(cv)")
 expect outer_requirement(Job.Failed)("") == Ok("Err(broken)")
 expect sibling_requirement(Job.Pending)("") == Ok("Ok(cv)Ok(cv)")
 expect sibling_requirement(Job.Failed)("") == Ok("Err(broken)Err(broken)")
+expect wide_format(Ticket.Open)({ name: "x" }, "") == Ok("xOk(open)")
+expect narrow_caller(Ticket.Open)({ name: "x" }, "") == Ok("xOk(open)")
+expect narrow_caller(Broken.Broken)({ name: "x" }, "") == Ok("xErr(broken)")
