@@ -1137,6 +1137,12 @@ pub const TailCalls = struct {
     /// The statement the loop begins at, when it is not the body's first:
     /// the statements before it run once per call.
     entry: collections.OptionalId(CFStmtId) = .none,
+    /// The locals the loop carries, one per argument of a self call, when
+    /// they are not the procedure's own arguments: a `.boxy` procedure
+    /// carries a dynamic parameter that its self calls change in a frame
+    /// local its entry copies the parameter into (design.md "Tail Return
+    /// Continuations"). Empty when the loop carries the arguments.
+    params: LocalSpan = .empty(),
 };
 
 /// An optional `TailCalls` at its own size.
@@ -2099,7 +2105,7 @@ pub const LirProcSpec = struct {
     rc_outcomes: U32Span = U32Span.empty(),
 
     comptime {
-        std.debug.assert(@sizeOf(LirProcSpec) == 232);
+        std.debug.assert(@sizeOf(LirProcSpec) == 240);
     }
 
     /// The body ARC analyzes and places reference counts in. A static
