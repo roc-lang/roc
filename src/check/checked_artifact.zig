@@ -13962,6 +13962,9 @@ const EvidencePass = struct {
     /// Solver variables of the scheme whose params are being appended, in
     /// slot order, so each param resolves to its slot.
     scheme_var_scratch: std.ArrayListUnmanaged(Var) = .empty,
+    /// The class representative of each generated-codec renaming's source
+    /// variable, parallel to the module's `generated_codec_renamings`.
+    renaming_source_roots: []Var = &.{},
     /// Traversal scratch for `schemeExtendsLabeledTagRow`.
     labeled_row_visited: collections.DenseMapUnmanaged(Var, void) = .empty,
     labeled_row_pending: std.ArrayList(Var) = .empty,
@@ -14120,6 +14123,7 @@ const EvidencePass = struct {
         self.scheme_vars_pool.deinit(self.allocator);
         self.site_substitutions.deinit(self.allocator);
         self.scheme_var_scratch.deinit(self.allocator);
+        self.allocator.free(self.renaming_source_roots);
         self.labeled_row_visited.deinit(self.allocator);
         self.labeled_row_pending.deinit(self.allocator);
         self.enum_scratch.deinit(self.allocator);
@@ -14130,6 +14134,11 @@ const EvidencePass = struct {
 
     fn run(self: *EvidencePass) Allocator.Error!void {
         self.method_lookup_views = try methodLookupViews(self.allocator, self.import_views);
+        const renamings = self.module.moduleEnvConst().generated_codec_renamings.items();
+        self.renaming_source_roots = try self.allocator.alloc(Var, renamings.len);
+        for (renamings, self.renaming_source_roots) |renaming, *source_root| {
+            source_root.* = self.types.resolveVar(@fromBackingInt(@intCast(renaming.source_var))).var_;
+        }
         self.plan_resolved = try self.allocator.alloc(bool, self.plan_table.plans.items().len);
         @memset(self.plan_resolved, false);
         self.iterator_plan_resolved = try self.allocator.alloc(bool, self.plan_table.iterator_for_plans.items().len);
@@ -14538,15 +14547,19 @@ const EvidencePass = struct {
         return .{ .start = start, .len = @intCast(identity_vars.len) };
     }
 
-    /// The copy `renamings` makes of `var_`'s type, or `var_` itself when it
-    /// renames none.
+    /// The copy `renamings`, a range of the module's generated-codec
+    /// renamings, makes of `var_`'s type, or `var_` itself when it renames
+    /// none.
     fn renamedVar(self: *EvidencePass, renamings: []const ModuleEnv.GeneratedCodecRenaming, var_: Var) Var {
         if (renamings.len == 0) return var_;
+        const all_renamings = self.module.moduleEnvConst().generated_codec_renamings.items();
+        const offset = @intFromPtr(renamings.ptr) - @intFromPtr(all_renamings.ptr);
+        std.debug.assert(offset % @sizeOf(ModuleEnv.GeneratedCodecRenaming) == 0);
+        const start = offset / @sizeOf(ModuleEnv.GeneratedCodecRenaming);
+        std.debug.assert(start + renamings.len <= all_renamings.len);
         const root = self.types.resolveVar(var_).var_;
-        for (renamings) |renaming| {
-            if (self.types.resolveVar(@fromBackingInt(@intCast(renaming.source_var))).var_ == root) {
-                return @fromBackingInt(@intCast(renaming.copy_var));
-            }
+        for (renamings, self.renaming_source_roots[start..][0..renamings.len]) |renaming, source_root| {
+            if (source_root == root) return @fromBackingInt(@intCast(renaming.copy_var));
         }
         return var_;
     }
