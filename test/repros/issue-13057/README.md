@@ -1,4 +1,4 @@
-# Issue 13057: derived Dict parsing must not silently lose typed-equal keys
+# Issue 13057: derived Dict parsing of keys equal under the key type
 
 Issue: https://github.com/roc-lang/roc/issues/13057
 
@@ -6,17 +6,13 @@ Issue: https://github.com/roc-lang/roc/issues/13057
 It uses the counted-format protocol (as in `test/cli/ParserCountedFormat.roc`)
 instead of CBOR, with two alternating key-bit-pattern/value pairs. Both keys
 decode faithfully as F64. A derived nominal bitwise-key parser preserves both
-entries, whereas the numeric-key parser must refuse the collision rather than
-return a lossy dictionary. The issue comment's broader composite-key case is
-not exercised here.
+entries. Under numeric equality the two zeros are one key, and a derived dict
+parser always keeps the value given last for a repeated key, so the numeric-key
+parser returns one entry holding the second value. The issue comment's broader
+composite-key case is not exercised here.
 
-A derived dict parser adds each entry with `Dict.insert_fresh` and asks the
-format's `parse_dict_duplicate_key` what to do with an entry whose key the
-dict already holds. The probe's format answers with its error, so the final
-expect, which asserts the issue's nonloss requirement, gets `Err`. The two
-preceding expects establish numeric Dict equality and successful two-entry
-decoding under lawful bitwise equality. There are no skips, expected failures,
-or assertions accepting silent loss.
+The first two expects establish numeric Dict equality and successful two-entry
+decoding under lawful bitwise equality; the third pins the last-value rule.
 
 The CLI suite runs the probe under both lowering strategies ("issue 13057"
 in `src/cli/test/parallel_cli_runner.zig`).

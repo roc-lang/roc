@@ -100,9 +100,6 @@ Counted := [Default].{
 	parse_dict_after_entry : Counted, State -> Try([Continue(State), Done(State)], [Bad, MissingRequiredField(Str)])
 	parse_dict_after_entry = |_, _| Err(Bad)
 
-	parse_dict_duplicate_key : Counted, State -> Try([KeepFirst(State), KeepLast(State)], [Bad, MissingRequiredField(Str)])
-	parse_dict_duplicate_key = |_, state| Ok(KeepLast(state))
-
 	## This format's key position holds any value, so a key the driver cannot
 	## render as a key string is read by the key's own parser.
 	parse_key_start : Counted, State -> Try(State, [Bad, MissingRequiredField(Str)])
