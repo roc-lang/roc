@@ -4205,10 +4205,11 @@ pub const Interpreter = struct {
                 args_buf.ptr,
                 arg_offsets,
                 ret_buf.ptr,
-            ) catch |err| return self.invariantFailedError(
-                "hosted call C-ABI lowering failed for proc {d}: {s}",
-                .{ @backingInt(proc_id), @errorName(err) },
-            );
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                // This branch is compiled only where the trampoline is available.
+                error.UnsupportedArch => unreachable,
+            };
         } else {
             const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
             // Architectures without a register-image trampoline (e.g. wasm32, where
