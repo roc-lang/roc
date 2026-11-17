@@ -1751,10 +1751,7 @@ const minici_build_args = [_][]const u8{"-Dembed-builtin-unit=true"};
 /// It changes only how many compiles the build runner overlaps, never what
 /// they produce, so commands with and without it share every cached output.
 const memory_ceilings_arg = "-Dci-memory-ceilings=true";
-const declares_memory_ceilings = switch (builtin.os.tag) {
-    .linux, .windows => true,
-    else => false,
-};
+const declares_memory_ceilings = builtin.os.tag == .linux or builtin.os.tag == .windows;
 
 fn buildCommand(
     allocator: std.mem.Allocator,
