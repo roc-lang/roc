@@ -970,6 +970,47 @@ pub const JoinPointSpan = extern struct {
     }
 };
 
+/// A run of consecutive rows of one store column.
+pub const RowRange = extern struct {
+    start: u32 = 0,
+    len: u32 = 0,
+
+    /// The position of row `id` within this range, if the range holds it.
+    pub inline fn offsetOf(self: RowRange, id: u32) ?u32 {
+        const offset = id -% self.start;
+        return if (offset < self.len) offset else null;
+    }
+};
+
+/// The rows one appended run of a procedure's body occupies in each column a
+/// procedure rewrite can write (design.md "Statement Storage"). Lowering
+/// appends a body as one chunk, and each committed rewrite of the procedure
+/// appends one more.
+pub const BodyChunk = extern struct {
+    cf_stmts: RowRange = .{},
+    cf_switch_branches: RowRange = .{},
+    str_match_arms: RowRange = .{},
+    join_points: RowRange = .{},
+
+    /// Whether the chunk holds no row at all.
+    pub fn isEmpty(self: BodyChunk) bool {
+        return self.cf_stmts.len == 0 and self.cf_switch_branches.len == 0 and
+            self.str_match_arms.len == 0 and self.join_points.len == 0;
+    }
+};
+
+/// A procedure's body chunks, in the order they were appended: a span of the
+/// store's chunk list.
+pub const BodyChunkSpan = extern struct {
+    start: u32,
+    len: u32,
+
+    /// Returns an empty chunk span.
+    pub fn empty() BodyChunkSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+};
+
 /// Explicit ARC meaning of a `set_local` write. ARC insertion consumes this
 /// directly; it must not derive the meaning from control-flow shape.
 /// How an RC statement's count update must be performed. `atomic` is always
@@ -1947,6 +1988,9 @@ pub const LirProcSpec = struct {
     frame_locals: LocalSpan = LocalSpan.empty(),
     join_points: JoinPointSpan = JoinPointSpan.empty(),
     body: collections.OptionalId(CFStmtId) = .none,
+    /// Where the body's rows lie, from lowering until the procedure-local
+    /// rewrites finish (`LirStore.procBodyChunks`); empty otherwise.
+    body_chunks: BodyChunkSpan = BodyChunkSpan.empty(),
     ret_layout: layout.Idx,
     /// Hidden capture-pointer parameter for an erased callable procedure.
     erased_capture_arg: collections.OptionalId(LocalId) = .none,
@@ -2055,7 +2099,7 @@ pub const LirProcSpec = struct {
     rc_outcomes: U32Span = U32Span.empty(),
 
     comptime {
-        std.debug.assert(@sizeOf(LirProcSpec) == 224);
+        std.debug.assert(@sizeOf(LirProcSpec) == 232);
     }
 
     /// The body ARC analyzes and places reference counts in. A static
