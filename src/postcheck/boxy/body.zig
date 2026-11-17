@@ -368,7 +368,7 @@ const DeferredDictionaries = struct {
     /// declare local procedures its dictionaries call (`Declaration`).
     declaring: ?WorkerId = null,
     /// Only a declaration-context read needs the complete runtime instance.
-    /// Ordinary literal conversion reads the projected requirement interface.
+    /// Ordinary literal conversion reads the substituted requirement interface.
     callable: Callable = .none,
     substitution: []const checked.CheckedTypeId = &.{},
 
@@ -4977,7 +4977,7 @@ pub const Builder = struct {
                 return switch (node.instantiation) {
                     .alias => try self.enterLiteralAliasTarget(node, callee),
                     .monomorphic, .callable, .derived_from_callable => switch (node.nested) {
-                        .resolved => try self.enterProjectedWorkerFrame(callee, subst, table.nestedEvidence(node), edge, switch (node.instantiation) {
+                        .resolved => try self.enterSubstitutedWorkerFrame(callee, subst, table.nestedEvidence(node), edge, switch (node.instantiation) {
                             .callable, .derived_from_callable => |callable| .{ .function = callable },
                             .monomorphic => .none,
                             .alias => unreachable, // the enclosing switch entered the alias-chain branch
@@ -5026,7 +5026,7 @@ pub const Builder = struct {
                                 .callable_eval => invariant("a literal argument's edge uses a computed callable"),
                             };
                             if (tag == .platform_required_proc) invariant("a platform requirement's use is no literal argument edge");
-                            return try self.enterProjectedWorkerFrame(callee, self.siteSubstitution(expr), self.view.view.static_dispatch_plans.siteEvidence(expr) orelse &.{}, edge, .{ .function = self.bodies().exprType(expr) });
+                            return try self.enterSubstitutedWorkerFrame(callee, self.siteSubstitution(expr), self.view.view.static_dispatch_plans.siteEvidence(expr) orelse &.{}, edge, .{ .function = self.bodies().exprType(expr) });
                         },
                         // A use of a constant instantiates its entry
                         // procedure's scheme, as a read of its value does.
@@ -5038,7 +5038,7 @@ pub const Builder = struct {
                                 .reserved, .stored_const, .unimplemented => invariant("a literal argument's edge uses a constant with no entry procedure"),
                             };
                             const callee = try self.program.templateRefWorker(eval.entry_template);
-                            return try self.enterProjectedWorkerFrame(callee, self.siteSubstitution(expr), self.view.view.static_dispatch_plans.siteEvidence(expr) orelse &.{}, edge, .{ .value = self.bodies().exprType(expr) });
+                            return try self.enterSubstitutedWorkerFrame(callee, self.siteSubstitution(expr), self.view.view.static_dispatch_plans.siteEvidence(expr) orelse &.{}, edge, .{ .value = self.bodies().exprType(expr) });
                         },
                         .local_param, .local_value, .local_mutable_version, .pattern_binder, .platform_required_const, .platform_required_declaration, .platform_required_checked_error => invariant("a literal argument's edge uses no procedure"),
                     }
@@ -5055,11 +5055,11 @@ pub const Builder = struct {
 
     /// A literal frame borrows the checked substitution. It has no runtime
     /// arguments, result representation, or hidden descriptor table to build.
-    fn enterProjectedWorkerFrame(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence, edge: checked.LiteralEdge, callable: DeferredDictionaries.Callable) Allocator.Error![]const checked.LiteralRequirement {
+    fn enterSubstitutedWorkerFrame(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence, edge: checked.LiteralEdge, callable: DeferredDictionaries.Callable) Allocator.Error![]const checked.LiteralRequirement {
         const target = self.program.worker(callee).*;
         const arena = self.program.arena.allocator();
         const variables = target.scheme_vars[0 .. target.scheme_vars.len - target.row_nodes.len];
-        const env = try types.Projection.init(arena, target.module, variables, try self.program.keptSubstitution(callee, subst), self.module, self.env, .{ .module = target.module, .vars = &.{}, .bound = &.{} });
+        const env = try types.LazySubstitution.init(arena, target.module, variables, try self.program.keptSubstitution(callee, subst), self.module, self.env, .{ .module = target.module, .vars = &.{}, .bound = &.{} });
         var requirements = self.ownScopeRequirements(callee, &.{});
         requirements.env = env;
         var dictionaries = try self.deferredDictionaries(evidence, requirements, target.dictionary_params.len);
@@ -5086,14 +5086,14 @@ pub const Builder = struct {
     }
 
     /// A dispatch through an exact alias retains every lexical evidence frame,
-    /// but projects none of the aliases' unrelated type arguments.
+    /// but substitutes none of the aliases' unrelated type arguments.
     fn enterLiteralAliasTarget(self: *Builder, node: static_dispatch.EvidenceNode, callee: WorkerId) Allocator.Error![]const checked.LiteralRequirement {
         const table = self.view.view.static_dispatch_plans;
         var alias_step = self.aliasTargetFirstStep(node);
         var subst: []const checked.CheckedTypeId = table.site_substitutions.items()[node.subst.start..][0..node.subst.len];
         var evidence = table.aliasScopeEvidence(node);
         while (true) {
-            const env = try types.Projection.init(self.program.arena.allocator(), alias_step.module, alias_step.vars, subst, self.module, self.env, .{ .module = alias_step.module, .vars = &.{}, .bound = &.{} });
+            const env = try types.LazySubstitution.init(self.program.arena.allocator(), alias_step.module, alias_step.vars, subst, self.module, self.env, .{ .module = alias_step.module, .vars = &.{}, .bound = &.{} });
             const context: ParamContext = .{ .module = alias_step.module, .params = alias_step.params, .env = env };
             var dictionaries = try self.deferredDictionaries(evidence, context, alias_step.params.len);
             dictionaries.covered = true;
@@ -5121,7 +5121,7 @@ pub const Builder = struct {
                     .alias => |alias| alias_step = self.callableEvalAliasStep(alias.module, alias.template),
                     .worker => |target| {
                         if (target != callee) invariant("an alias's forwarded lookup reaches another target");
-                        return try self.enterProjectedWorkerFrame(callee, subst, evidence, .{ .use = lookup }, .{ .function = self.bodies().exprType(lookup) });
+                        return try self.enterSubstitutedWorkerFrame(callee, subst, evidence, .{ .use = lookup }, .{ .function = self.bodies().exprType(lookup) });
                     },
                     .callable_eval => invariant("an exact procedure alias reaches a computed callable"),
                 },
@@ -5136,7 +5136,7 @@ pub const Builder = struct {
     fn enterAliasFrame(self: *Builder, alias: AliasCallee, site: ExprId) Allocator.Error![]const checked.LiteralRequirement {
         const alias_step = self.callableEvalAliasStep(alias.module, alias.template);
         const evidence = self.view.view.static_dispatch_plans.siteEvidence(site) orelse &.{};
-        const env = try types.Projection.init(self.program.arena.allocator(), alias_step.module, alias_step.vars, self.siteSubstitution(site), self.module, self.env, .{ .module = alias_step.module, .vars = &.{}, .bound = &.{} });
+        const env = try types.LazySubstitution.init(self.program.arena.allocator(), alias_step.module, alias_step.vars, self.siteSubstitution(site), self.module, self.env, .{ .module = alias_step.module, .vars = &.{}, .bound = &.{} });
         const requirements: ParamContext = .{ .module = alias_step.module, .params = alias_step.params, .env = env };
         const deferred_dicts = try self.deferredDictionaries(evidence, requirements, alias_step.params.len);
         const args = self.view.view.checked_procedure_templates.literalEdgeArgs(.{ .use = site });
@@ -5166,7 +5166,7 @@ pub const Builder = struct {
         const context: ParamContext = .{
             .module = self.module,
             .params = self.scopeParams(scope_id),
-            .env = try types.Projection.init(arena, self.module, scheme.scheme_vars, subst, self.module, self.env, self.env),
+            .env = try types.LazySubstitution.init(arena, self.module, scheme.scheme_vars, subst, self.module, self.env, self.env),
         };
         const evidence = self.view.view.static_dispatch_plans.siteEvidence(site) orelse &.{};
         const deferred_dicts = try self.deferredDictionaries(evidence, context, scheme.dictionaries.len);

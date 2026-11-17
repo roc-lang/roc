@@ -18472,10 +18472,10 @@ unentered scope is a compiler invariant. A frame descriptor is never read: a
 frame's types are its environment.
 
 Literal frames retain checked substitutions rather than runtime call instances.
-Each demanded type is projected through those scoped substitutions before
-ordinary type conversion, including field kinds and lexical bindings.
-Projection is iterative and memoized within the frame. Unread substitutions
-are never converted, and the ordinary concrete converter does not perform
+Each demanded type reads its variables' actuals through those scoped
+substitutions before ordinary type conversion, including field kinds and
+lexical bindings (`LazySubstitution`). Substitution is lazy, iterative and
+memoized within the frame. Unread actuals are never converted, and the ordinary concrete converter does not perform
 lazy variable lookup. A local procedure that actually reads its declaration
 table demands that complete instance separately.
 

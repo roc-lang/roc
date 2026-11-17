@@ -489,9 +489,9 @@ pub const Env = struct {
     /// its conversions' lookups do not scan the scheme.
     positions: ?*const VarPositions = null,
     /// Only literal-chain frames carry a checked substitution. Conversion
-    /// projects a demanded root to a concrete environment before entering the
+    /// substitutes a demanded root into a concrete environment before entering the
     /// ordinary converter; ordinary variable lookups remain concrete.
-    projection: ?*Projection = null,
+    lazy_substitution: ?*LazySubstitution = null,
 
     pub const empty_bindings: []const checked.CheckedTypeId = &.{};
 
@@ -502,7 +502,7 @@ pub const Env = struct {
 
     /// The scheme position `id` is bound at, if any.
     pub fn lookupIndex(self: Env, module: ModuleIndex, id: checked.CheckedTypeId) ?usize {
-        std.debug.assert(self.projection == null);
+        std.debug.assert(self.lazy_substitution == null);
         if (module != self.module) return null;
         if (self.positions) |positions| {
             std.debug.assert(positions.vars.ptr == self.vars.ptr and positions.vars.len == self.vars.len);
@@ -515,9 +515,11 @@ pub const Env = struct {
     }
 };
 
-/// A literal frame's checked instantiation, not a runtime call instance.
-/// Its unused bindings can mention scopes the literal root never entered.
-pub const Projection = struct {
+/// A literal frame's checked instantiation, resolved lazily: each actual is
+/// converted only when a demanded type reads its variable. It is not a
+/// runtime call instance, and its unused bindings can mention scopes the
+/// literal root never entered.
+pub const LazySubstitution = struct {
     module: ModuleIndex,
     vars: []const checked.CheckedTypeId,
     actuals: []const checked.CheckedTypeId,
@@ -542,14 +544,14 @@ pub const Projection = struct {
     pub fn init(arena: Allocator, module: ModuleIndex, vars: []const checked.CheckedTypeId, actuals: []const checked.CheckedTypeId, source_module: ModuleIndex, source: Env, lexical: Env) Allocator.Error!Env {
         if (vars.len != actuals.len) invariant("a literal frame's substitution differs from its scheme");
         if (vars.len == 0) return lexical;
-        const frame = try arena.create(Projection);
+        const frame = try arena.create(LazySubstitution);
         frame.* = .{ .module = module, .vars = vars, .actuals = actuals, .source_module = source_module, .source = source, .lexical = lexical, .allocator = arena };
-        return .{ .module = module, .vars = &.{}, .bound = &.{}, .projection = frame };
+        return .{ .module = module, .vars = &.{}, .bound = &.{}, .lazy_substitution = frame };
     }
 
     fn binding(converter: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, original: Env) ?struct { source: Source, descend: bool = false } {
         var env = original;
-        while (env.projection) |frame| {
+        while (env.lazy_substitution) |frame| {
             if (module == frame.module) {
                 if (std.mem.findScalar(checked.CheckedTypeId, frame.vars, ty)) |index| {
                     const actual = frame.actuals[index];
@@ -596,7 +598,7 @@ pub const Projection = struct {
     }
 
     fn known(converter: Converter, query: Query) Allocator.Error!?TypeId {
-        const frame = query.env.projection orelse return try converter.convert(query.module, query.ty, query.env);
+        const frame = query.env.lazy_substitution orelse return try converter.convert(query.module, query.ty, query.env);
         return frame.memo.get(.{ .module = query.module, .ty = query.ty, .seal_kinds = converter.seal_undetermined_kinds });
     }
 
@@ -608,7 +610,7 @@ pub const Projection = struct {
         try stack.append(allocator, .{ .query = query, .bindings = bindings, .values = values });
     }
 
-    /// Project each demanded type once per frame, using an explicit dependency
+    /// Substitute each demanded type once per frame, using an explicit dependency
     /// stack. No type conversion or dictionary lookup resolves unused bindings.
     fn convert(converter: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env) Allocator.Error!TypeId {
         const allocator = converter.store.allocator;
@@ -644,7 +646,7 @@ pub const Projection = struct {
             defer allocator.free(variables);
             for (work.bindings, variables) |entry, *variable| variable.* = entry.variable;
             const value = try converter.convert(work.query.module, work.query.ty, .{ .module = work.query.module, .vars = variables, .bound = work.values });
-            const owner = work.query.env.projection.?;
+            const owner = work.query.env.lazy_substitution.?;
             try owner.memo.put(owner.allocator, .{ .module = work.query.module, .ty = work.query.ty, .seal_kinds = converter.seal_undetermined_kinds }, value);
             allocator.free(work.bindings);
             allocator.free(work.values);
@@ -1488,7 +1490,7 @@ pub const Converter = struct {
     /// A variable `env` does not bind must seal to its row default or its
     /// numeric default; any other unbound variable is an invariant failure.
     pub fn convert(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env) Allocator.Error!TypeId {
-        if (env.projection != null) return Projection.convert(self, module, ty, env);
+        if (env.lazy_substitution != null) return LazySubstitution.convert(self, module, ty, env);
         const allocator = self.store.allocator;
         var frames: std.ArrayList(Frame) = .empty;
         defer frames.deinit(allocator);
@@ -1767,8 +1769,8 @@ pub const Converter = struct {
         });
     }
 
-    /// Projection and conversion must visit the same flattened row children.
-    /// Projection additionally binds the field kinds that finish reads.
+    /// Lazy substitution and conversion must visit the same flattened row children.
+    /// Lazy substitution additionally binds the field kinds that finish reads.
     fn appendChildren(self: Converter, pending: *std.ArrayList(Child), module: ModuleIndex, payload: checked.CheckedTypePayload, comptime include_field_kinds: bool) Allocator.Error!bool {
         const allocator = self.store.allocator;
         const view = self.modules.get(module);
@@ -2598,7 +2600,7 @@ fn errorTestStore(allocator: Allocator) Allocator.Error!checked.CheckedTypeStore
     return store;
 }
 
-test "Boxy literal projection visits only demanded substitutions and preserves lexical scope" {
+test "Boxy literal substitution visits only demanded substitutions and preserves lexical scope" {
     const a = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
@@ -2622,20 +2624,20 @@ test "Boxy literal projection visits only demanded substitutions and preserves l
     defer store.deinit();
     const converter: Converter = .{ .store = &store, .modules = &modules };
     const empty: Env = .{ .module = module, .vars = &.{}, .bound = &.{} };
-    const outer = try Projection.init(arena.allocator(), module, &.{ first, second }, &.{ record, unrelated }, module, empty, empty);
+    const outer = try LazySubstitution.init(arena.allocator(), module, &.{ first, second }, &.{ record, unrelated }, module, empty, empty);
     try std.testing.expectEqual(try store.emptyRecord(), try converter.convert(module, first, outer));
-    try std.testing.expectEqual(@as(usize, 1), outer.projection.?.memo.count());
+    try std.testing.expectEqual(@as(usize, 1), outer.lazy_substitution.?.memo.count());
     // The local's own second binding shadows the unused outer argument.
-    const inner = try Projection.init(arena.allocator(), module, &.{second}, &.{tags}, module, empty, outer);
+    const inner = try LazySubstitution.init(arena.allocator(), module, &.{second}, &.{tags}, module, empty, outer);
     const result = try converter.convert(module, pair, inner);
     const items = store.span(store.get(result).tuple);
     try std.testing.expectEqualSlices(TypeId, &.{ try store.emptyRecord(), try store.emptyTagUnion() }, items);
-    const count = inner.projection.?.memo.count();
+    const count = inner.lazy_substitution.?.memo.count();
     try std.testing.expectEqual(result, try converter.convert(module, pair, inner));
-    try std.testing.expectEqual(count, inner.projection.?.memo.count());
+    try std.testing.expectEqual(count, inner.lazy_substitution.?.memo.count());
 }
 
-test "Boxy literal projection shares conversion row flattening and projects field kinds" {
+test "Boxy literal substitution shares conversion row flattening and binds field kinds" {
     const a = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
@@ -2667,7 +2669,7 @@ test "Boxy literal projection shares conversion row flattening and projects fiel
     const empty: Env = .{ .module = module, .vars = &.{}, .bound = &.{} };
     for ([_]TypeId{ try store.emptyTagUnion(), try store.variable(7) }) |row_value| {
         const row_binding: Env = .{ .module = module, .vars = &.{row}, .bound = &.{row_value} };
-        const projected = try Projection.init(arena.allocator(), module, &.{ value, kind }, &.{ empty_record, optional }, module, empty, row_binding);
+        const substituted = try LazySubstitution.init(arena.allocator(), module, &.{ value, kind }, &.{ empty_record, optional }, module, empty, row_binding);
         const concrete: Env = .{
             .module = module,
             .vars = &.{ value, kind, row },
@@ -2675,12 +2677,12 @@ test "Boxy literal projection shares conversion row flattening and projects fiel
         };
         // Extensions flatten; a root's row marker still visits its fields,
         // whereas a root bound to a whole value consumes that value directly.
-        try std.testing.expectEqual(try converter.convert(module, whole, concrete), try converter.convert(module, whole, projected));
-        try std.testing.expectEqual(try converter.convert(module, row, concrete), try converter.convert(module, row, projected));
+        try std.testing.expectEqual(try converter.convert(module, whole, concrete), try converter.convert(module, whole, substituted));
+        try std.testing.expectEqual(try converter.convert(module, row, concrete), try converter.convert(module, row, substituted));
     }
 }
 
-test "Boxy literal projection composes deep chains without native recursion" {
+test "Boxy literal substitution composes deep chains without native recursion" {
     const a = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
@@ -2697,9 +2699,9 @@ test "Boxy literal projection composes deep chains without native recursion" {
     defer store.deinit();
     const converter: Converter = .{ .store = &store, .modules = &modules };
     const empty: Env = .{ .module = module, .vars = &.{}, .bound = &.{} };
-    var env = try Projection.init(arena.allocator(), module, &.{variable}, &.{record}, module, empty, empty);
+    var env = try LazySubstitution.init(arena.allocator(), module, &.{variable}, &.{record}, module, empty, empty);
     for (0..4096) |_| {
-        env = try Projection.init(arena.allocator(), module, &.{variable}, &.{variable}, module, env, empty);
+        env = try LazySubstitution.init(arena.allocator(), module, &.{variable}, &.{variable}, module, env, empty);
     }
     try std.testing.expectEqual(try store.emptyRecord(), try converter.convert(module, variable, env));
 }
