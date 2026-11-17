@@ -2264,7 +2264,7 @@ const Inserter = struct {
     ownership_places: []collections.OptionalId(LIR.LocalId) = &.{},
     operand_first: []u32 = &.{},
     operand_sharing: std.AutoHashMapUnmanaged(LIR.LocalSpan, []const bool) = .empty,
-    view_shell_shapes: std.AutoHashMapUnmanaged(LIR.LocalId, ViewShellShape) = .empty,
+    view_shell_shapes: collections.DenseMapUnmanaged(LIR.LocalId, ViewShellShape) = .empty,
     /// Parameter locals the current variant's demand vector seeds as born
     /// unique; consumed by `uniqueArgsMask` through `isLocalUniqueHere`.
     /// A membership set in the same sense as `owned_binding_override`.
