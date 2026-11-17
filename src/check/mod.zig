@@ -138,6 +138,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_10759_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10804_test.zig"));
     std.testing.refAllDecls(@import("test/ambiguous_instantiation_use_test.zig"));
+    std.testing.refAllDecls(@import("test/late_rejected_literal_relation_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11444_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10824_test.zig"));
     std.testing.refAllDecls(@import("test/derived_codec_local_record_row_test.zig"));
@@ -211,6 +212,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/generic_derived_codec_forwarding_test.zig"));
     std.testing.refAllDecls(@import("test/derived_codec_signature_test.zig"));
     std.testing.refAllDecls(@import("test/where_clause_erroneous_type_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12999_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12587_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12677_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12794_test.zig"));

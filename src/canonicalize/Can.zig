@@ -3410,7 +3410,9 @@ fn enterAssociatedBlockState(
 /// forward-reference pattern, which the member's declaration adopts when it is
 /// canonicalized, so references written ahead of a member keep their place in
 /// statement order. A member whose name shadows an enclosing binding or
-/// declaration is reported once, here.
+/// declaration is reported once, here, unless the member authorizes a derived
+/// method: that declares a method of its own owner and binds no value of its
+/// own to shadow with.
 fn bindAssociatedMemberNames(
     self: *Self,
     owner_path: AST.DeclIndex.TypePathIdx,
@@ -3425,7 +3427,7 @@ fn bindAssociatedMemberNames(
         const member_region = self.parserValueDeclNameRegion(entry.decl_idx);
 
         if (self.associatedMemberShadowedRegion(entry, block_scope_idx)) |original_region| {
-            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+            if (!self.parserDeclAuthorizesDerivedMethod(entry.decl_idx)) try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
                 .ident = entry.ident,
                 .region = member_region,
                 .original_region = original_region,
@@ -3440,6 +3442,19 @@ fn bindAssociatedMemberNames(
         );
         try self.putScopeIdent(block_scope_idx, entry.ident, pattern_idx);
     }
+}
+
+/// Whether a parser value declaration authorizes a derived method: an
+/// annotation with no paired definition whose type is `_` and whose name is a
+/// method the compiler derives.
+fn parserDeclAuthorizesDerivedMethod(self: *const Self, decl_idx: AST.DeclIndex.DeclIdx) bool {
+    const decl = self.parse_ir.decl_index.decls.items[@backingInt(decl_idx)];
+    if (decl.kind != .value_anno or decl.paired_decl != .none) return false;
+    const name = decl.nameIdent() orelse return false;
+    if (self.derivedMethodKind(name) == null) return false;
+    const statement = self.parse_ir.store.getStatement(@fromBackingInt(@intCast(decl.statement)));
+    if (statement != .type_anno) return false;
+    return self.parse_ir.store.getTypeAnno(statement.type_anno.anno) == .underscore;
 }
 
 /// Where the nearest enclosing binding or declaration that the associated
@@ -9446,7 +9461,6 @@ fn warnTrailingTrySuffix(self: *Self, root: Expr.Idx) std.mem.Allocator.Error!vo
         .e_lambda,
         .e_binop,
         .e_unary_minus,
-        .e_unary_not,
         .e_field_access,
         .e_method_call,
         .e_dispatch_call,
@@ -10274,7 +10288,6 @@ const DefiniteInitAnalyzer = struct {
             else
                 seqJob(binop.lhs, Expr.Span{ .span = DataSpan.empty() }, binop.rhs),
             .e_unary_minus => |unary| .{ .expr = unary.expr },
-            .e_unary_not => |unary| .{ .expr = unary.expr },
             .e_field_access => |field| .{ .expr = field.receiver },
             .e_method_call => |call| seqJob(call.receiver, call.args, null),
             .e_dispatch_call => |call| seqJob(call.receiver, call.args, null),
@@ -10995,7 +11008,6 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = binop.rhs, .loop_depth = expr_frame.loop_depth } });
                     },
                     .e_unary_minus => |unary| try pending.append(stack_allocator, .{ .expr = .{ .idx = unary.expr, .loop_depth = expr_frame.loop_depth } }),
-                    .e_unary_not => |unary| try pending.append(stack_allocator, .{ .expr = .{ .idx = unary.expr, .loop_depth = expr_frame.loop_depth } }),
                     .e_field_access => |field| try pending.append(stack_allocator, .{ .expr = .{ .idx = field.receiver, .loop_depth = expr_frame.loop_depth } }),
                     .e_method_call => |call| {
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = call.receiver, .loop_depth = expr_frame.loop_depth } });
@@ -13446,9 +13458,7 @@ fn runExprKernel(
                     .e_unary_minus = Expr.UnaryMinus.init(can_operand.idx),
                 }, state.region)
             else if (operator_token.tag == .OpBang)
-                try self.env.addExpr(Expr{
-                    .e_unary_not = Expr.UnaryNot.init(can_operand.idx),
-                }, state.region)
+                try self.addBoolNotCall(can_operand.idx, state.region)
             else
                 unreachable; // finish_unary is pushed only for OpUnaryMinus and OpBang operators
 
@@ -14614,6 +14624,42 @@ fn runExprKernel(
 
     std.debug.assert(child_slots.items.len == 0);
     return last_expr;
+}
+
+/// Logical negation always calls the compiler-owned Bool.not, independent of
+/// the operand's type and any source declarations shadowing Bool.
+fn addBoolNotCall(self: *Self, operand: Expr.Idx, region: Region) std.mem.Allocator.Error!Expr.Idx {
+    const callee = if (self.builtin_auto_imported_types.get(self.env.idents.bool)) |bool_info| blk: {
+        const bool_stmt = bool_info.statement_idx orelse
+            base.invariant("compiler invariant violated: auto-imported builtin type Bool has no declaration", .{});
+        const type_node = bool_info.env.getExposedNodeIndexByStatementIdx(bool_stmt) orelse
+            base.invariant("compiler invariant violated: auto-imported builtin type Bool has no exposed node", .{});
+        break :blk try self.canonicalizedExternalAssociatedLookup(
+            try self.getOrCreateCompilerBuiltinAutoImport(),
+            type_node,
+            self.env.idents.bool,
+            self.env.idents.not,
+            region,
+        );
+    } else blk: {
+        // Builtin.roc refers to its own Bool declaration, including forward
+        // references from definitions that precede Bool.not.
+        const builtin_ident = try self.env.insertIdent(Ident.for_text("Builtin"));
+        const owner_path = self.moduleParserTypePathForSegments(&.{ builtin_ident, self.env.idents.bool }) orelse
+            base.invariant("compiler invariant violated: Builtin.roc has no Builtin.Bool type path", .{});
+        const qualified = try self.insertQualifiedIdent("Builtin.Bool", "not");
+        const pattern = (try self.lookupOrCreateAssocValuePattern(owner_path, self.env.idents.not, qualified, region)) orelse
+            base.invariant("compiler invariant violated: Builtin.roc has no Builtin.Bool.not value", .{});
+        break :blk try self.canonicalizedAssociatedLookup(owner_path, self.env.idents.not, pattern, region);
+    };
+    const args_start = self.env.store.scratchExprTop();
+    try self.env.store.addScratchExpr(operand);
+    const args = try self.env.store.exprSpanFrom(args_start);
+    return self.env.addExpr(.{ .e_call = .{
+        .func = callee.idx,
+        .args = args,
+        .called_via = .unary_op,
+    } }, region);
 }
 
 fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allocator.Error!Expr.Idx {

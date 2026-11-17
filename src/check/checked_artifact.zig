@@ -12425,7 +12425,6 @@ fn categorizeValueRef(
         .e_lambda,
         .e_binop,
         .e_unary_minus,
-        .e_unary_not,
         .e_field_access,
         .e_method_call,
         .e_dispatch_call,
@@ -24277,7 +24276,7 @@ pub fn pairCheckedPlatform(
             .root => {},
         };
     }
-    result.lowering_visibility = try collectLoweringVisibility(session, result.key.digest(), result.direct_import_module_keys.items(), result.public_api_dependencies, &result.checked_types, &result.checked_procedure_templates, &result.callable_eval_templates, &result.entry_wrappers, &result.const_templates, &result.resolved_value_refs, &result.top_level_procedure_bindings, &result.platform_required_bindings, &result.root_requests, &.{}, available_artifacts, &relations, &result.exported_procedure_templates, &result.exported_procedure_bindings, &result.exported_const_templates);
+    result.lowering_visibility = try collectLoweringVisibility(session, result.key.digest(), result.direct_import_module_keys.items(), result.public_api_dependencies, &result.checked_types, &result.checked_procedure_templates, &result.callable_eval_templates, &result.entry_wrappers, &result.const_templates, &result.resolved_value_refs, &result.top_level_procedure_bindings, &result.platform_required_bindings, &result.static_dispatch_plans, &result.root_requests, &.{}, available_artifacts, &relations, &result.exported_procedure_templates, &result.exported_procedure_bindings, &result.exported_const_templates);
     result.checked_types.key_names = null;
     return result;
 }
@@ -25585,7 +25584,7 @@ pub fn valueFormValueExpr(bodies: CheckedBodies, expr: CIR.Expr.Idx) CIR.Expr.Id
 fn valueFormCandidate(bodies: CheckedBodies, id: CIR.Expr.Idx) ?checked_bodies_mod.ExprData {
     switch (bodies.env.store.getExpr(id)) {
         .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_block => {},
-        .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
+        .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
     }
     if (bodies.exprIsRetired(id)) return null;
     return bodies.exprData(id);
@@ -29633,6 +29632,7 @@ fn collectPublicApiDependencies(
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
     exported_procedure_templates: *const ExportedProcedureTemplateTable,
@@ -29749,6 +29749,7 @@ fn collectPublicApiDependencies(
         resolved_value_refs,
         top_level_bindings,
         platform_required_bindings,
+        static_dispatch_plans,
         &keys,
         &type_owner_keys,
     );
@@ -29993,6 +29994,9 @@ fn publicApiDependencyKeyIsKnownBuiltin(
     return false;
 }
 
+/// Walks the templates a module's public API reaches, following each one's
+/// value refs and the procedures its dispatches select, and records every
+/// module they name.
 const PublicApiClosureDependencyCollector = struct {
     allocator: Allocator,
     artifact_key: ModuleId,
@@ -30005,11 +30009,13 @@ const PublicApiClosureDependencyCollector = struct {
     resolved_value_refs: *const ResolvedValueRefTable,
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     keys: *ArtifactKeyAccumulator,
     type_owner_keys: *ArtifactKeyAccumulator,
     visited_templates: std.AutoHashMap(canonical.ProcedureTemplateRef, void),
     visited_consts: std.AutoHashMap(ConstRef, void),
     visited_callable_eval_templates: std.AutoHashMap(ArtifactCallableEvalTemplateRef, void),
+    visited_evidence_nodes: collections.DenseMap(static_dispatch.EvidenceNodeId, void),
 
     fn init(
         allocator: Allocator,
@@ -30023,6 +30029,7 @@ const PublicApiClosureDependencyCollector = struct {
         resolved_value_refs: *const ResolvedValueRefTable,
         top_level_bindings: *const TopLevelProcedureBindingTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
+        static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
         keys: *ArtifactKeyAccumulator,
         type_owner_keys: *ArtifactKeyAccumulator,
     ) PublicApiClosureDependencyCollector {
@@ -30038,15 +30045,18 @@ const PublicApiClosureDependencyCollector = struct {
             .resolved_value_refs = resolved_value_refs,
             .top_level_bindings = top_level_bindings,
             .platform_required_bindings = platform_required_bindings,
+            .static_dispatch_plans = static_dispatch_plans,
             .keys = keys,
             .type_owner_keys = type_owner_keys,
             .visited_templates = std.AutoHashMap(canonical.ProcedureTemplateRef, void).init(allocator),
             .visited_consts = std.AutoHashMap(ConstRef, void).init(allocator),
             .visited_callable_eval_templates = std.AutoHashMap(ArtifactCallableEvalTemplateRef, void).init(allocator),
+            .visited_evidence_nodes = collections.DenseMap(static_dispatch.EvidenceNodeId, void).init(allocator),
         };
     }
 
     fn deinit(self: *PublicApiClosureDependencyCollector) void {
+        self.visited_evidence_nodes.deinit();
         self.visited_callable_eval_templates.deinit();
         self.visited_consts.deinit();
         self.visited_templates.deinit();
@@ -30118,6 +30128,9 @@ const PublicApiClosureDependencyCollector = struct {
         procedure_use: ProcedureUseTemplate,
         top_level_binding: ArtifactTopLevelProcedureBindingRef,
         platform_required_binding: PlatformRequiredBindingId,
+        static_dispatch_plans: StaticDispatchPlanTableRef,
+        evidence_node: static_dispatch.EvidenceNodeId,
+        checked_evidence: static_dispatch.CheckedEvidence,
     };
 
     /// Run one step. Steps it leads to are appended to `pending` in the order
@@ -30169,6 +30182,7 @@ const PublicApiClosureDependencyCollector = struct {
                     checkedArtifactInvariant("public API closure dependency procedure template ref disagreed with template row", .{});
                 }
                 try pending.append(gpa, .{ .resolved_value_refs = template.resolved_value_refs });
+                try pending.append(gpa, .{ .static_dispatch_plans = template.static_dispatch_plans });
             },
             .callable_eval_template => |template_ref| {
                 try self.appendArtifactKey(template_ref.artifact);
@@ -30217,7 +30231,13 @@ const PublicApiClosureDependencyCollector = struct {
                     if (raw >= self.resolved_value_refs.records.items().len) {
                         checkedArtifactInvariant("public API closure resolved-ref id was outside table", .{});
                     }
-                    switch (self.resolved_value_refs.records.items()[raw].ref) {
+                    const record = self.resolved_value_refs.records.items()[raw];
+                    // A generic use's evidence selects the procedures its
+                    // dispatches call.
+                    if (self.static_dispatch_plans.siteEvidence(record.expr)) |evidence| {
+                        for (evidence) |entry| try pending.append(gpa, .{ .checked_evidence = entry });
+                    }
+                    switch (record.ref) {
                         .top_level_const,
                         .imported_const,
                         => |const_use| try pending.append(gpa, .{ .const_ref = const_use.const_ref }),
@@ -30274,6 +30294,47 @@ const PublicApiClosureDependencyCollector = struct {
                     checkedArtifactInvariant("public API closure referenced missing platform-required binding", .{});
                 };
                 try pending.append(gpa, .{ .closure = self.platform_required_bindings.relationClosure(binding) });
+            },
+            .static_dispatch_plans => |table| {
+                const plans = self.static_dispatch_plans;
+                if (table.start + table.len > plans.template_refs.items().len) {
+                    checkedArtifactInvariant("public API closure dispatch-plan span was outside table", .{});
+                }
+                for (plans.template_refs.items()[table.start..][0..table.len]) |plan_id| {
+                    switch (plans.plans.items()[@backingInt(plan_id)].resolution) {
+                        .direct_closed, .direct_parametric => |direct| try pending.append(gpa, .{ .evidence_node = direct.evidence }),
+                        .direct_pending => |evidence| try pending.append(gpa, .{ .evidence_node = evidence }),
+                        // Site evidence or the dispatcher's type selects these.
+                        .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
+                    }
+                }
+            },
+            .evidence_node => |node_id| {
+                if ((try self.visited_evidence_nodes.getOrPut(node_id)).found_existing) return;
+                const plans = self.static_dispatch_plans;
+                const node = plans.evidenceNode(node_id);
+                switch (node.target.kind) {
+                    .procedure => |procedure| try pending.append(gpa, .{ .procedure_template = procedure.template }),
+                    .callable_binding => |binding| try pending.append(gpa, .{ .callable_eval_template = .{
+                        .artifact = binding.module,
+                        .template = binding.template,
+                    } }),
+                    .local_proc, .structural => {},
+                }
+                switch (node.nested) {
+                    .resolved => for (plans.nestedEvidence(node)) |nested| try pending.append(gpa, .{ .checked_evidence = nested }),
+                    .from_callable, .through_alias => {},
+                }
+            },
+            .checked_evidence => |evidence| {
+                const plans = self.static_dispatch_plans;
+                for (plans.evidence_refs.items()[evidence.callable_contracts.start..][0..evidence.callable_contracts.len]) |contract| {
+                    try pending.append(gpa, .{ .checked_evidence = contract });
+                }
+                switch (evidence.resolution) {
+                    .direct => |node_id| try pending.append(gpa, .{ .evidence_node = node_id }),
+                    .structural, .checked_error, .unreachable_value, .constraint, .from_callable, .from_scheme => {},
+                }
             },
         }
     }
@@ -30500,6 +30561,7 @@ fn collectLoweringVisibility(
     resolved_value_refs: *const ResolvedValueRefTable,
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     root_requests: *const RootRequestTable,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
@@ -30535,6 +30597,7 @@ fn collectLoweringVisibility(
         resolved_value_refs,
         top_level_bindings,
         platform_required_bindings,
+        static_dispatch_plans,
         &builder.keys,
         &builder.keys,
     );
@@ -32576,7 +32639,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 117;
+    const serialized_layout_version: u32 = 118;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -35344,7 +35407,6 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
                     .e_lambda,
                     .e_binop,
                     .e_unary_minus,
-                    .e_unary_not,
                     .e_interpolation,
                     .e_structural_eq,
                     .e_structural_hash,
@@ -35491,7 +35553,6 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .expr_record_update,
             .expr_bin_op,
             .expr_unary_minus,
-            .expr_unary_not,
             .expr_suffix_single_question,
             .expr_if_then_else,
             .expr_match,
@@ -36736,6 +36797,7 @@ pub fn publishFromTypedModule(
         &top_level_procedure_bindings,
         &platform_required_declarations,
         &platform_required_bindings,
+        &static_dispatch_plans,
         inputs.imports,
         inputs.available_artifacts,
         &exported_procedure_templates,
@@ -36761,6 +36823,7 @@ pub fn publishFromTypedModule(
         &resolved_value_refs,
         &top_level_procedure_bindings,
         &platform_required_bindings,
+        &static_dispatch_plans,
         &root_requests,
         inputs.imports,
         inputs.available_artifacts,
@@ -37958,6 +38021,7 @@ test "lowering visibility follows recursive public API and type-owner dependenci
     defer exported_const_templates.deinit(gpa);
 
     const direct_imports = [_]CheckedModuleArtifactKey{ key_d, key_a, key_a, key_builtin };
+    const static_dispatch_plans = static_dispatch.StaticDispatchPlanTable{};
     var visibility = try collectLoweringVisibility(
         gpa,
         root_key.digest(),
@@ -37971,6 +38035,7 @@ test "lowering visibility follows recursive public API and type-owner dependenci
         &resolved_value_refs,
         &top_level_bindings,
         &platform_required_bindings,
+        &static_dispatch_plans,
         &root_requests,
         &.{},
         &views,
@@ -38597,8 +38662,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xA1, 0x42, 0x44, 0x8B, 0x04, 0x35, 0xE7, 0xD8, 0x3B, 0x17, 0x7E, 0xC3, 0x08, 0x80, 0xF8, 0x7E,
-        0xFF, 0x47, 0x42, 0xAB, 0x7F, 0x18, 0x31, 0x42, 0x9E, 0x4B, 0x53, 0x58, 0xE7, 0xAD, 0xE5, 0x46,
+        0x12, 0xC9, 0x2F, 0x46, 0xE3, 0x49, 0x2B, 0x53, 0x58, 0x57, 0x91, 0x0E, 0xFA, 0x93, 0xFD, 0xEA,
+        0xF7, 0xAC, 0xE5, 0x21, 0x31, 0x76, 0xD3, 0x53, 0x62, 0x1C, 0x3A, 0x8A, 0x8C, 0x32, 0x9D, 0xFA,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

@@ -1193,7 +1193,6 @@ pub const ReportBuilder = struct {
     fn buildTypeMismatchForContext(self: *Self, mismatch: TypeMismatch) Allocator.Error!Report {
         return switch (mismatch.context) {
             .if_condition => self.buildNonBoolReport(mismatch.types, mismatch.actual_region, "if", "condition must evaluate to a"),
-            .logical_negation_operand => self.buildNonBoolReport(mismatch.types, mismatch.actual_region, "!", "operand is a tag union, so it must be a"),
             .if_branch => |ctx| self.buildIfBranchReport(mismatch.types, mismatch.actual_region, ctx),
             .match_pattern => |ctx| self.buildMatchPatternReport(mismatch.types, mismatch.actual_region, ctx),
             .match_alt_binder => |ctx| self.buildMatchAltBinderReport(mismatch.types, mismatch.actual_region, ctx),
@@ -3527,7 +3526,6 @@ pub const ReportBuilder = struct {
                 .e_typed_num_from_numeral,
                 .e_type_method_call,
                 .e_unary_minus,
-                .e_unary_not,
                 .e_zero_argument_tag,
                 => continue,
             }

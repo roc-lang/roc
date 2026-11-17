@@ -726,6 +726,23 @@ pub fn listIntTemplateWorkerIdentity(link_name: [32]u8, template: checked.Templa
     return .{ .bytes = hasher.finalResult() };
 }
 
+/// What names the worker at `binding` of the template named `template`
+/// within its module, whatever names the module: a stored function's recipe
+/// names a template's module by an entry of its module table, which the
+/// constant store renames as the reading lowering names modules
+/// (`ConstStore.hashGraph`), so the recipe's bytes after that table name
+/// no module themselves.
+pub fn templateNameDigest(template: checked.TemplateName, binding: TemplateBinding) [32]u8 {
+    var hasher = base.TypeDigestHasher.init();
+    hasher.update("roc.boxy.template_name.v1");
+    hashTemplateName(&hasher, template);
+    switch (binding) {
+        .generic => hasher.update(&.{0}),
+        .list_int => |item| hasher.update(&.{ 1, @backingInt(item) }),
+    }
+    return hasher.finalResult();
+}
+
 fn hashTemplateName(hasher: *base.TypeDigestHasher, template: checked.TemplateName) void {
     hasher.update(&.{@backingInt(std.meta.activeTag(template))});
     switch (template) {
@@ -900,6 +917,21 @@ pub const TemplateKey = struct { module: ModuleIndex, template: checked_names.Ch
 /// table, or null when the platform's hosted section omits it.
 pub const HostedEntry = struct { symbol: []const u8, dispatch_index: ?u32 };
 
+/// A worker and a type of its scope, keying `Program.row_node_reads`.
+const RowNodeRead = struct { worker: WorkerId, ty: TypeId };
+
+/// The conversion of each checked type of `module` asked about under the
+/// worker scope environment whose positions are `env`. A scope environment
+/// never changes once built (`Program.scopeEnv`), so neither do its
+/// conversions; this answers them without the converter's own memo probes.
+/// One map serves every body in turn, cleared when the environment changes,
+/// so a body pays only for the entries it adds.
+pub const ScopeConversions = struct {
+    types: types.CheckedTypeMap(TypeId) = .empty,
+    env: ?*const types.VarPositions = null,
+    module: ModuleIndex = undefined,
+};
+
 /// One `.boxy` lowering: its workers, types, layouts, and output.
 pub const Program = struct {
     pub const StoredValueKey = struct { module: ModuleIndex, node: checked.ConstNodeId, ty: TypeId };
@@ -924,6 +956,13 @@ pub const Program = struct {
     scope_envs: std.ArrayList(?*const types.Env) = .empty,
     /// Each type's content digest (`typeContent`), once computed.
     type_contents: collections.DenseMapUnmanaged(TypeId, [32]u8) = .empty,
+    /// `rowNodesAsVariables` of each worker with row nodes and type asked
+    /// about. A worker's row nodes and scope never change once it exists,
+    /// and interned nodes are immutable, so the rewrite of a type is the
+    /// same every time.
+    row_node_reads: std.AutoHashMapUnmanaged(RowNodeRead, TypeId) = .empty,
+    /// `Builder.convert`'s conversions under one worker scope environment.
+    scope_conversions: ScopeConversions = .{},
     /// The Builtin module, found on first use (`builtinModule`).
     builtin_module: ?ModuleIndex = null,
     /// The templates the Builtin module registers as methods of `List`,
@@ -1185,6 +1224,12 @@ pub const Program = struct {
             .generic => templateWorkerIdentity(self.modules.linkName(module_index), name),
             .list_int => |item| listIntTemplateWorkerIdentity(self.modules.linkName(module_index), name, item),
         };
+    }
+
+    /// What names module `module_index`'s template worker for `template` at
+    /// `binding` within the module (`templateNameDigest`).
+    pub fn templateNameWithin(self: *const Program, module_index: ModuleIndex, template: checked_names.CheckedProcedureTemplateId, binding: TemplateBinding) [32]u8 {
+        return templateNameDigest(self.module(module_index).view.templateName(template), binding);
     }
 
     /// The identity of the worker of module `module_index`'s default at
@@ -1624,6 +1669,8 @@ pub const Program = struct {
         self.scope_envs.deinit(self.allocator);
         self.worklist.deinit(self.allocator);
         self.type_contents.deinit(self.allocator);
+        self.row_node_reads.deinit(self.allocator);
+        self.scope_conversions.types.deinit(self.allocator);
         if (self.list_methods) |*methods| methods.deinit(self.allocator);
         self.list_item_slots.deinit(self.allocator);
         self.by_module_idx.deinit(self.allocator);
@@ -2096,11 +2143,11 @@ pub const Program = struct {
         const types_view = self.module(module_index).types();
         var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
         defer pending.deinit(self.allocator);
-        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
-        defer seen.deinit(self.allocator);
+        self.store.beginCheckedWalk();
+        defer self.store.endCheckedWalk();
         try pending.append(self.allocator, root);
         while (pending.pop()) |ty| {
-            if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
+            if (!try self.store.visitChecked(ty)) continue;
             switch (types_view.payload(ty)) {
                 .alias => |alias| try pending.append(self.allocator, alias.backing),
                 .record => |record| {
@@ -2181,10 +2228,14 @@ pub const Program = struct {
     pub fn rowNodesAsVariables(self: *Program, id: WorkerId, ty: TypeId) Allocator.Error!TypeId {
         const target = self.worker(id).*;
         if (target.row_nodes.len == 0) return ty;
+        const key: RowNodeRead = .{ .worker = id, .ty = ty };
+        if (self.row_node_reads.get(key)) |known| return known;
         const identity = try self.allocator.alloc(TypeId, target.scheme_vars.len);
         defer self.allocator.free(identity);
         for (identity, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
-        return try self.rewriteTypeWithRowNodes(self.allocator, ty, .{ .dense = identity }, null, target.row_nodes, .keep);
+        const read = try self.rewriteTypeWithRowNodes(self.allocator, ty, .{ .dense = identity }, null, target.row_nodes, .keep);
+        try self.row_node_reads.put(self.allocator, key, read);
+        return read;
     }
 
     /// A type of worker `id`'s signature at the instantiation `bound`, its
@@ -2220,11 +2271,6 @@ pub const Program = struct {
     pub fn templateRefScopeWorker(self: *Program, ref: checked_names.ProcedureTemplateRef) Allocator.Error!WorkerId {
         const view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
         return try self.templateScopeWorker(view.index, ref.template);
-    }
-
-    pub fn templateRefScope(self: *Program, ref: checked_names.ProcedureTemplateRef) Allocator.Error!WorkerId {
-        const view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
-        return try self.templateScope(view.index, ref.template);
     }
 
     /// The erased-callable worker of a lambda or closure expression of the
@@ -5111,7 +5157,10 @@ fn seedSourceFiles(program: *Program) Allocator.Error!void {
             .module_identity = program.modules.linkName(view.index),
         };
         program.source_files[module_position] = @intCast(file_index);
-        program.lowering_module_ids[module_position] = try program.result.appendLoweringModule(view.key);
+        // A module unit's object outlives the compilation that built it, and
+        // its key covers each module's link name but not its checked key.
+        const failure_identity = if (program.moduleUnit() != null) program.modules.linkName(view.index) else view.key.bytes;
+        program.lowering_module_ids[module_position] = try program.result.appendLoweringModule(view.key, failure_identity);
     }
     try program.result.store.setSourceFiles(files);
 }

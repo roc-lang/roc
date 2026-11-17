@@ -24,7 +24,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RUPC";
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 4;
+pub const format_version: u32 = 5;
 
 /// One source file the pieces' lines name, in the order the set indexes them.
 pub const SourceFile = struct {

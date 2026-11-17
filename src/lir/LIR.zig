@@ -1833,7 +1833,10 @@ pub const ComptimeValueRef = struct {
 
 /// What it means for generated code to fail at one statement, beyond
 /// crashing there. Every identity but a literal producer's stays meaningful in
-/// every compilation of the program (`LirStore.failureMeaning`).
+/// every compilation of the program (`LirStore.failureMeaning`): a module is
+/// named by the identity its lowering gives it
+/// (`LirStore.lowering_module_identities`), which a program's table reads back
+/// as a checked key (`Program.Result.meaningByCheckedKey`).
 pub const FailureMeaning = union(enum) {
     /// Code checking rejected and already reported.
     checked_error,

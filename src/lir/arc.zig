@@ -1964,7 +1964,7 @@ fn cloneOwnedSet(source: *const OwnedSet) OwnedSet {
 fn assignOwnedSet(target: *OwnedSet, source: *const OwnedSet) void {
     target.requireSameDomain(source);
     @constCast(source).unique = false;
-    target.entries.assignShared(&source.entries);
+    target.assignShared(source);
     target.unique = false;
 }
 
@@ -1975,7 +1975,7 @@ fn intersectOwnedSetChanged(target: *OwnedSet, other: *const OwnedSet) ResourceE
     target.requireSameDomain(other);
     target.unique = false;
     @constCast(other).unique = false;
-    return target.entries.meetWith(target.domain.set_allocator, &other.entries, {}, OwnedSet.meetEntry);
+    return target.meetChanged(other);
 }
 
 /// Sentinel outside the compact plan-index domain.
@@ -3739,7 +3739,7 @@ const Inserter = struct {
     fn collectReleaseDifferenceInto(self: *Inserter, releases: *std.ArrayList(ReleaseDecision), owned: *const OwnedSet, keep: *const OwnedSet) ResourceError!void {
         owned.requireSameDomain(keep);
         releases.clearRetainingCapacity();
-        try owned.entries.differenceWith(&keep.entries, ReleaseDifference{ .inserter = self, .releases = releases }, ReleaseDifference.emit);
+        try owned.differenceWith(keep, ReleaseDifference{ .inserter = self, .releases = releases }, ReleaseDifference.emit);
         // Materialization prepends in list order, so preserve reverse resource
         // order here to emit the same ascending release statements.
         std.mem.reverse(ReleaseDecision, releases.items);
@@ -4413,10 +4413,10 @@ const Inserter = struct {
         };
         result.dead = base.dead;
         var redecide = DeadUnitRedecide{ .inserter = self, .result = &result };
-        try result.source.entries.differenceWith(&base.source.entries, &redecide, DeadUnitRedecide.entryDiffers);
-        try base.source.entries.differenceWith(&result.source.entries, &redecide, DeadUnitRedecide.entryDiffers);
-        try result.reads.words.differenceWith(&base.reads.words, &redecide, DeadUnitRedecide.wordDiffers);
-        try base.reads.words.differenceWith(&result.reads.words, &redecide, DeadUnitRedecide.wordDiffers);
+        try result.source.differenceWith(&base.source, &redecide, DeadUnitRedecide.entryDiffers);
+        try base.source.differenceWith(&result.source, &redecide, DeadUnitRedecide.entryDiffers);
+        try result.reads.differenceWith(&base.reads, &redecide, DeadUnitRedecide.wordDiffers);
+        try base.reads.differenceWith(&result.reads, &redecide, DeadUnitRedecide.wordDiffers);
         return result;
     }
 
@@ -5895,9 +5895,21 @@ const Inserter = struct {
             if ((check_mask & bit) == 0) continue;
             if (local == target) continue;
             if (!self.localContainsRefcounted(local)) continue;
-            if (!self.isLocalUniqueHere(local)) continue;
+            // A check that only reads its argument may read it through a
+            // view, whose uniqueness is that of the value it views.
+            const unique_here = if ((rc_effect.consume_args & bit) == 0)
+                self.solution.isUniqueThroughViewsUnder(local, self.current_sig.unique_params)
+            else
+                self.isLocalUniqueHere(local);
+            if (!unique_here) continue;
             if ((rc_effect.consume_args & bit) != 0 and (preserve_consumed_args & bit) != 0) continue;
-            if (!owned.contains(local)) continue;
+            // A borrowed pure same-value alias reads the allocation its
+            // source's unit holds, so the claim rests on that unit being
+            // owned whole here.
+            const unit = self.solution.unitLocalOf(local);
+            if (!owned.contains(unit)) continue;
+            const full_residual = owned.fullResidualMask(unit);
+            if (full_residual != 0 and owned.residualMask(unit) != full_residual) continue;
             // The preserve scan proved the argument's borrow group dead
             // after this statement; a group member appearing as another
             // operand of this same statement is still live at the op.
@@ -5915,10 +5927,11 @@ const Inserter = struct {
     /// was born unique and the solver records the alias as the same value.
     fn valueHasAnotherOwnedUnit(self: *const Inserter, local: LIR.LocalId, owned: *const OwnedSet) bool {
         const root = self.solution.aliasRootOf(local);
+        const unit = self.solution.unitLocalOf(local);
         var units = owned.iterator(.{});
         while (units.next()) |bit_index| {
             const other = owned.domain.resource_locals[bit_index];
-            if (other == local) continue;
+            if (other == unit) continue;
             if (self.solution.aliasRootOf(other) == root) return true;
         }
         return false;
@@ -8141,13 +8154,32 @@ const OwnedSet = struct {
     /// Fresh sets update their one-owner tree in place until it is copied or
     /// combined with another state.
     unique: bool = true,
+    /// The present resources, when the domain has at most `inline_resources`
+    /// of them (the inline form). Unused in the tree form.
+    present: PresentMask = 0,
     /// Logically one exact entry per resource. Absent resources consume no
     /// tree storage, and control-flow forks share every unchanged subtree.
+    /// In the inline form it holds only the present resources whose residual
+    /// mask is nonzero, so a domain without committed field places never
+    /// allocates.
     entries: ArcSnapshot(OwnedEntry, .{}),
 
     /// Nodes are allocated in the domain's `set_allocator`.
     fn init(domain: *const ProcArcDomain) OwnedSet {
         return .{ .domain = domain, .entries = ArcSnapshot(OwnedEntry, .{}).init(domain.resource_locals.len) };
+    }
+
+    const PresentMask = u128;
+    const inline_resources = @bitSizeOf(PresentMask);
+
+    /// Whether this set's domain uses the inline form. Both forms describe
+    /// the same entries and answer every operation identically.
+    fn isInline(self: *const OwnedSet) bool {
+        return self.domain.resource_locals.len <= inline_resources;
+    }
+
+    fn presentBit(bit: usize) PresentMask {
+        return @as(PresentMask, 1) << @as(std.math.Log2Int(PresentMask), @intCast(bit));
     }
 
     /// Nodes have the surrounding proc arena's exact lifetime and may be
@@ -8178,7 +8210,53 @@ const OwnedSet = struct {
 
     fn eql(self: *const OwnedSet, other: *const OwnedSet) bool {
         self.requireSameDomain(other);
+        if (self.isInline() and self.present != other.present) return false;
         return self.entries.eql(&other.entries);
+    }
+
+    /// Makes this set share `source`'s entries.
+    fn assignShared(self: *OwnedSet, source: *const OwnedSet) void {
+        self.present = source.present;
+        self.entries.assignShared(&source.entries);
+    }
+
+    /// Intersects this set with `other` in place, reporting whether any entry
+    /// changed.
+    fn meetChanged(self: *OwnedSet, other: *const OwnedSet) ResourceError!bool {
+        const met_present = self.present & other.present;
+        const present_changed = met_present != self.present;
+        self.present = met_present;
+        const entries_changed = if (self.isInline())
+            try self.entries.meetWith(self.domain.set_allocator, &other.entries, {}, meetResidualEntry)
+        else
+            try self.entries.meetWith(self.domain.set_allocator, &other.entries, {}, meetEntry);
+        return present_changed or entries_changed;
+    }
+
+    /// `meetEntry` for the inline form's entries, which hold only nonzero
+    /// residual masks: a meet that leaves no residual leaves no entry.
+    fn meetResidualEntry(_: void, lhs: OwnedEntry, rhs: OwnedEntry) OwnedEntry {
+        const met = meetEntry({}, lhs, rhs);
+        return if (met.residual_mask == 0) .{} else met;
+    }
+
+    /// Calls `emitFn` with the resource and both entries of every present
+    /// resource of this set whose entry may differ in `other`, in ascending
+    /// resource order. `emitFn` must treat equal entries as no difference.
+    fn differenceWith(
+        self: *const OwnedSet,
+        other: *const OwnedSet,
+        context: anytype,
+        comptime emitFn: fn (@TypeOf(context), u32, OwnedEntry, OwnedEntry) Allocator.Error!void,
+    ) Allocator.Error!void {
+        if (!self.isInline()) return self.entries.differenceWith(&other.entries, context, emitFn);
+        var members = self.present;
+        while (members != 0) : (members &= members - 1) {
+            const bit: u32 = @ctz(members);
+            const lhs = self.entryAt(bit);
+            const rhs = other.entryAt(bit);
+            if (!std.meta.eql(lhs, rhs)) try emitFn(context, bit, lhs, rhs);
+        }
     }
 
     fn meetEntry(_: void, lhs: OwnedEntry, rhs: OwnedEntry) OwnedEntry {
@@ -8234,29 +8312,54 @@ const OwnedSet = struct {
     }
 
     fn putEntry(self: *OwnedSet, bit: u32, entry: OwnedEntry) ResourceError!void {
+        std.debug.assert(entry.present or entry.residual_mask == 0);
+        var stored = entry;
+        if (self.isInline()) {
+            if (entry.present) self.present |= presentBit(bit) else self.present &= ~presentBit(bit);
+            if (entry.residual_mask == 0) stored = .{};
+        }
         if (self.unique) {
-            try self.entries.putUnique(self.domain.set_allocator, bit, entry);
+            try self.entries.putUnique(self.domain.set_allocator, bit, stored);
         } else {
-            try self.entries.put(self.domain.set_allocator, bit, entry);
+            try self.entries.put(self.domain.set_allocator, bit, stored);
         }
     }
 
     fn clear(self: *OwnedSet) void {
+        self.present = 0;
         self.entries.clear();
     }
 
     fn entryAt(self: *const OwnedSet, bit: usize) OwnedEntry {
+        if (self.isInline()) {
+            if (self.present & presentBit(bit) == 0) return .{};
+            return .{ .present = true, .residual_mask = self.entries.get(@intCast(bit)).residual_mask };
+        }
         return self.entries.get(@intCast(bit));
     }
 
     fn Iterator(comptime options: std.bit_set.IteratorOptions) type {
         if (options.kind != .set) @compileError("ARC ownership sets iterate only present resources");
         return struct {
+            set: *const OwnedSet,
+            /// The inline form's present resources not yet returned.
+            pending: PresentMask,
+            /// The tree form's entries.
             sparse: ArcSnapshot(OwnedEntry, .{}).Iterator,
             /// Entry returned by the most recent successful next call.
             entry: OwnedEntry = .{},
 
             fn next(self: *@This()) ?usize {
+                if (self.set.isInline()) {
+                    if (self.pending == 0) return null;
+                    const bit: usize = switch (options.direction) {
+                        .forward => @ctz(self.pending),
+                        .reverse => inline_resources - 1 - @clz(self.pending),
+                    };
+                    self.pending &= ~presentBit(bit);
+                    self.entry = self.set.entryAt(bit);
+                    return bit;
+                }
                 const item = self.sparse.next() orelse return null;
                 std.debug.assert(item.value.present);
                 self.entry = item.value;
@@ -8266,7 +8369,7 @@ const OwnedSet = struct {
     }
 
     fn iterator(self: *const OwnedSet, comptime options: std.bit_set.IteratorOptions) Iterator(options) {
-        return .{ .sparse = self.entries.iteratorDirection(options.direction) };
+        return .{ .set = self, .pending = self.present, .sparse = self.entries.iteratorDirection(options.direction) };
     }
 
     fn requireSameDomain(self: *const OwnedSet, other: *const OwnedSet) void {
@@ -12671,11 +12774,13 @@ test "RC persistent-set work grows linearly with loop nesting depth" {
     // Liveness rows and keep-sets each hold every enclosing loop's list.
     // Keep-set construction, the liveness certificate, and every other
     // structural set operation must touch only where related sets differ.
-    const small = try loopNestStructuralWork(32);
-    const large = try loopNestStructuralWork(64);
+    // Each level holds two lists, so both depths give domains wider than the
+    // inline forms, which use the persistent trees whose work this measures.
+    const small = try loopNestStructuralWork(128);
+    const large = try loopNestStructuralWork(256);
     if (large > small * 3) {
         std.debug.print(
-            "loop-nest structural set work grew nonlinearly: {d} at depth 32, {d} at depth 64\n",
+            "loop-nest structural set work grew nonlinearly: {d} at depth 128, {d} at depth 256\n",
             .{ small, large },
         );
     }
@@ -14614,6 +14719,40 @@ test "uniqueness: the owned flag of a fresh list is check-free" {
         .next = append,
     } }, .test_fixture);
     const elem_assign = try f.assignI64(elem, 5, measure);
+    const body = try f.assignList(list, &.{}, elem_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(flag));
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: the owned flag read through a borrowed alias of a fresh list is check-free" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const view = try f.local(try f.layouts.insertList(try f.layouts.ensureZstLayout()));
+    const flag = try f.local(.u64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    // list = []; view = list; flag = list_owned_unique(view); appended = checked_op(list).
+    // The measurement reads the list through an alias that only borrows it
+    // and is typed without its items, which is the shape a Builtin wrapper's
+    // inlined parameter leaves behind for an op that never reads the items.
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const measure = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = flag,
+        .op = .list_owned_unique,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_owned_unique.rcEffect()),
+        .args = try f.span(&.{view}),
+        .next = append,
+    } }, .test_fixture);
+    const view_assign = try f.assignRefLocal(view, list, measure);
+    const elem_assign = try f.assignI64(elem, 5, view_assign);
     const body = try f.assignList(list, &.{}, elem_assign);
     _ = try f.addProc(&.{}, body, .i64);
 
@@ -20037,5 +20176,137 @@ test "ARC unary erased calls retain a directly passed value only when the caller
         try d.run(&.{proc});
         try d.f.expectRc(param, if (reuse) 1 else 0, 0, 0);
         try d.expectDynamicRcShape();
+    }
+}
+
+test "ARC inline ownership sets answer every operation as tree sets do" {
+    var arena = collections.SingleThreadArena.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    // A domain of `inline_resources` uses the inline form and a wider one the
+    // tree form; resources of the narrower domain mirror each other, and
+    // every fifth one is a dismantlable aggregate with three committed field
+    // places.
+    const Domain = struct {
+        locals: []LIR.LocalId,
+        global_local_index: collections.DenseMap(LIR.LocalId, u32),
+        domain: ProcArcDomain,
+
+        fn init(a: Allocator, width: usize) Allocator.Error!*@This() {
+            const self = try a.create(@This());
+            self.locals = try a.alloc(LIR.LocalId, width);
+            self.global_local_index = collections.DenseMap(LIR.LocalId, u32).init(a);
+            var indices = try ArcBitColumn.initFilled(a, width);
+            var absent = try ArcBitColumn.initFilled(a, width);
+            const masks = try a.alloc(u64, width);
+            for (self.locals, masks, 0..) |*local, *mask, ordinal| {
+                local.* = @fromBackingInt(@intCast(ordinal));
+                indices.set(ordinal, @fromBackingInt(@as(u32, @intCast(ordinal))));
+                try self.global_local_index.put(local.*, @intCast(ordinal));
+                mask.* = if (ordinal % 5 == 0) 0b111 else 0;
+            }
+            self.domain = .{
+                .global_local_index = &self.global_local_index,
+                .frame_locals = self.locals,
+                .resource_bit_index = indices.view(),
+                .resource_locals = self.locals,
+                .resource_full_masks = masks,
+                .group_bit_index = absent.view(),
+                .group_leaders = &.{},
+                .value_use_bit_index = absent.view(),
+                .value_use_locals = &.{},
+                .set_allocator = a,
+            };
+            return self;
+        }
+    };
+    const width = OwnedSet.inline_resources;
+    const small_domain = try Domain.init(allocator, width);
+    defer small_domain.global_local_index.deinit();
+    const wide_domain = try Domain.init(allocator, width + 66);
+    defer wide_domain.global_local_index.deinit();
+    const Pair = struct { small: OwnedSet, wide: OwnedSet };
+    var pairs: [4]Pair = undefined;
+    for (&pairs) |*pair| pair.* = .{ .small = OwnedSet.init(&small_domain.domain), .wide = OwnedSet.init(&wide_domain.domain) };
+    try testing.expect(pairs[0].small.isInline() and !pairs[0].wide.isInline());
+    const Difference = struct {
+        entries: std.ArrayList(struct { u32, OwnedEntry, OwnedEntry }) = .empty,
+        allocator: Allocator,
+        fn note(self: *@This(), bit: u32, lhs: OwnedEntry, rhs: OwnedEntry) Allocator.Error!void {
+            if (!std.meta.eql(lhs, rhs)) try self.entries.append(self.allocator, .{ bit, lhs, rhs });
+        }
+    };
+    var rng = std.Random.DefaultPrng.init(0x0473);
+    const random = rng.random();
+    for (0..3000) |_| {
+        const target = &pairs[random.uintLessThan(usize, pairs.len)];
+        const other = &pairs[random.uintLessThan(usize, pairs.len)];
+        const bit = random.uintLessThan(usize, width);
+        const entry = target.small.entryAt(bit);
+        const field: u64 = @as(u64, 1) << random.uintLessThan(u6, 3);
+        const aggregate = bit % 5 == 0;
+        switch (random.uintLessThan(u4, 9)) {
+            0, 1 => {
+                try target.small.set(small_domain.locals[bit]);
+                try target.wide.set(wide_domain.locals[bit]);
+            },
+            2 => {
+                try target.small.unset(small_domain.locals[bit]);
+                try target.wide.unset(wide_domain.locals[bit]);
+            },
+            3 => {
+                const mask: u64 = if (aggregate) random.uintLessThan(u64, 8) else 0;
+                try target.small.setWithResidual(small_domain.locals[bit], mask);
+                try target.wide.setWithResidual(wide_domain.locals[bit], mask);
+            },
+            4 => if (aggregate and entry.present and entry.residual_mask & field != 0) {
+                try target.small.takeResidualField(small_domain.locals[bit], field);
+                try target.wide.takeResidualField(wide_domain.locals[bit], field);
+            },
+            5 => if (aggregate and entry.present and entry.residual_mask & field == 0) {
+                try target.small.restoreResidualField(small_domain.locals[bit], field);
+                try target.wide.restoreResidualField(wide_domain.locals[bit], field);
+            },
+            6 => {
+                const small_changed = try intersectOwnedSetChanged(&target.small, &other.small);
+                const wide_changed = try intersectOwnedSetChanged(&target.wide, &other.wide);
+                try testing.expectEqual(wide_changed, small_changed);
+            },
+            7 => if (random.boolean()) {
+                assignOwnedSet(&target.small, &other.small);
+                assignOwnedSet(&target.wide, &other.wide);
+            } else {
+                target.small = cloneOwnedSet(&other.small);
+                target.wide = cloneOwnedSet(&other.wide);
+            },
+            else => {
+                target.small.clear();
+                target.wide.clear();
+            },
+        }
+        for (pairs) |pair| {
+            for (0..width) |index| try testing.expectEqual(pair.wide.entryAt(index), pair.small.entryAt(index));
+            inline for (.{ .forward, .reverse }) |direction| {
+                var small_members = pair.small.iterator(.{ .direction = direction });
+                var wide_members = pair.wide.iterator(.{ .direction = direction });
+                while (true) {
+                    const expected = wide_members.next();
+                    try testing.expectEqual(expected, small_members.next());
+                    if (expected == null) break;
+                    try testing.expectEqual(wide_members.entry, small_members.entry);
+                }
+            }
+        }
+        try testing.expectEqual(other.wide.eql(&target.wide), other.small.eql(&target.small));
+        var small_difference = Difference{ .allocator = allocator };
+        var wide_difference = Difference{ .allocator = allocator };
+        try target.small.differenceWith(&other.small, &small_difference, Difference.note);
+        try target.wide.differenceWith(&other.wide, &wide_difference, Difference.note);
+        try testing.expectEqual(wide_difference.entries.items.len, small_difference.entries.items.len);
+        for (wide_difference.entries.items, small_difference.entries.items) |expected, actual| {
+            try testing.expectEqual(expected[0], actual[0]);
+            try testing.expectEqual(expected[1], actual[1]);
+            try testing.expectEqual(expected[2], actual[2]);
+        }
     }
 }
