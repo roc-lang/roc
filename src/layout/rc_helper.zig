@@ -31,19 +31,28 @@ pub const HostDropFn = callback_abi.HostDropFn;
 /// `host_drop` is not a refcount operation over a layout. It names the
 /// generated adapter that performs the layout's `decref` while presenting the
 /// published `Payload.on_drop` signature, so it is only ever valid in an
-/// erased callable's final-drop slot. RC statements carry the other three.
-pub const RcOp = enum(u2) {
+/// erased callable's final-drop slot.
+///
+/// `decref_queued` is not one either. It names the helper that performs the
+/// layout's `decref` as a step of a teardown already in progress: it takes
+/// that teardown's queue (`builtins.utils.DropQueue`) and passes it to every
+/// queued teardown it reaches. Only plans name it, for a layout on a cycle
+/// of its type.
+///
+/// RC statements carry the other three.
+pub const RcOp = enum(u3) {
     incref,
     decref,
     free,
     host_drop,
+    decref_queued,
 
     /// The refcount operation a helper performs, with the host-shaped adapter
     /// resolved to the operation it forwards.
     pub fn performed(self: RcOp) PerformedOp {
         return switch (self) {
             .incref => .incref,
-            .decref, .host_drop => .decref,
+            .decref, .host_drop, .decref_queued => .decref,
             .free => .free,
         };
     }
@@ -51,8 +60,8 @@ pub const RcOp = enum(u2) {
 
 /// A refcount operation over a layout.
 ///
-/// This is `RcOp` without `host_drop`, which is a calling convention rather
-/// than an operation and so never reaches plan resolution.
+/// This is `RcOp` without `host_drop` and `decref_queued`, which are calling
+/// conventions rather than operations and so never reach plan resolution.
 pub const PerformedOp = enum { incref, decref, free };
 
 /// Parameters of the generated helper for `op`, in order.
@@ -65,6 +74,7 @@ pub fn abiParams(op: RcOp) []const callback_abi.Param {
         .incref => callback_abi.incref_params,
         .decref, .free => callback_abi.drop_params,
         .host_drop => callback_abi.host_drop_params,
+        .decref_queued => callback_abi.queued_drop_params,
     };
 }
 
@@ -72,6 +82,10 @@ pub fn abiParams(op: RcOp) []const callback_abi.Param {
 pub const HelperKey = struct {
     op: RcOp,
     layout_idx: Idx,
+
+    /// How many low bits `encode` uses; a cache that tags an encoded key
+    /// places its tag above them.
+    pub const encoded_bits = 32 + @bitSizeOf(RcOp);
 
     /// Pack the helper key into a stable integer for backend caches.
     pub fn encode(self: HelperKey) u64 {
@@ -82,7 +96,7 @@ pub const HelperKey = struct {
 
     pub fn decode(raw: u64) HelperKey {
         return .{
-            .op = @fromBackingInt(@intCast(@as(u2, @intCast(raw >> 32)))),
+            .op = @fromBackingInt(@intCast(@as(std.meta.Tag(RcOp), @intCast((raw >> 32) & ((1 << @bitSizeOf(RcOp)) - 1))))),
             .layout_idx = @fromBackingInt(@intCast(@as(u32, @truncate(raw)))),
         };
     }
@@ -136,6 +150,23 @@ pub const BoxPlan = struct {
     child: ?HelperKey,
 };
 
+/// RC plan for the teardown of a list that lies on a cycle of its type: its
+/// elements hold, at some depth, more lists of this layout. The teardown is
+/// queued (`builtins.utils.DropQueue`), and `child` is always a
+/// `decref_queued` helper, which receives the queue.
+pub const QueuedListPlan = struct {
+    elem_alignment: u32,
+    elem_width: usize,
+    child: HelperKey,
+};
+
+/// RC plan for the teardown of a box that lies on a cycle of its type; see
+/// `QueuedListPlan`.
+pub const QueuedBoxPlan = struct {
+    elem_alignment: u32,
+    child: HelperKey,
+};
+
 /// One child step inside a struct RC helper.
 pub const FieldPlan = struct {
     offset: u32,
@@ -151,9 +182,13 @@ pub const Plan = union(enum) {
     list_incref: ListPlan,
     list_decref: ListPlan,
     list_free: ListPlan,
+    list_decref_queued: QueuedListPlan,
+    list_free_queued: QueuedListPlan,
     box_incref,
     box_decref: BoxPlan,
     box_free: BoxPlan,
+    box_decref_queued: QueuedBoxPlan,
+    box_free_queued: QueuedBoxPlan,
     erased_callable_incref,
     erased_callable_decref,
     erased_callable_free,
@@ -184,9 +219,18 @@ pub const Resolver = struct {
     /// item or payload RC callback exactly when the builtin's
     /// "items are refcounted" flag, which is that same predicate, is set.
     ///
-    /// A `host_drop` adapter performs its layout's `decref`, so it plans as
-    /// one; the two differ only in the signature the backend gives the
-    /// generated function.
+    /// A `host_drop` adapter and a `decref_queued` helper perform their
+    /// layout's `decref`, so they plan as one; they differ from it only in
+    /// the signature the backend gives the generated function. A helper
+    /// passes the queue it received to each `decref_queued` child and each
+    /// queued teardown its plan names, and a helper that received none
+    /// passes null.
+    ///
+    /// A teardown that would otherwise nest one native frame per level of a
+    /// value is planned as a queued one: the list and box layouts that lie on
+    /// a cycle of their type (`Store.layoutOnCycle`). Every cycle of a type
+    /// passes through one of them, so the frames a teardown nests are
+    /// bounded by the type and never by the value.
     pub fn plan(self: *const Resolver, key: HelperKey) Plan {
         const op = key.op.performed();
         const l = self.store.getLayout(key.layout_idx);
@@ -217,13 +261,13 @@ pub const Resolver = struct {
             },
             .list, .list_of_zst => switch (op) {
                 .incref => .{ .list_incref = self.listPlan(key.layout_idx) },
-                .decref => .{ .list_decref = self.listPlan(key.layout_idx) },
-                .free => .{ .list_free = self.listPlan(key.layout_idx) },
+                .decref => if (self.queuedListPlan(key.layout_idx)) |queued| .{ .list_decref_queued = queued } else .{ .list_decref = self.listPlan(key.layout_idx) },
+                .free => if (self.queuedListPlan(key.layout_idx)) |queued| .{ .list_free_queued = queued } else .{ .list_free = self.listPlan(key.layout_idx) },
             },
             .box => switch (op) {
                 .incref => .box_incref,
-                .decref => .{ .box_decref = self.boxPlan(key.layout_idx) },
-                .free => .{ .box_free = self.boxPlan(key.layout_idx) },
+                .decref => if (self.queuedBoxPlan(key.layout_idx)) |queued| .{ .box_decref_queued = queued } else .{ .box_decref = self.boxPlan(key.layout_idx) },
+                .free => if (self.queuedBoxPlan(key.layout_idx)) |queued| .{ .box_free_queued = queued } else .{ .box_free = self.boxPlan(key.layout_idx) },
             },
             .erased_callable => switch (op) {
                 .incref => .erased_callable_incref,
@@ -238,10 +282,7 @@ pub const Resolver = struct {
                 .tag_union_idx = l.getTagUnion().idx,
                 .child_op = nestedDropOp(op),
             } },
-            .closure => .{ .closure = .{
-                .op = nestedDropOp(op),
-                .layout_idx = l.getClosure().captures_layout_idx,
-            } },
+            .closure => .{ .closure = self.childKey(nestedDropOp(op), l.getClosure().captures_layout_idx) },
         };
     }
 
@@ -261,10 +302,7 @@ pub const Resolver = struct {
 
         return .{
             .offset = self.store.getStructFieldOffset(struct_plan.struct_idx, @intCast(field_index)),
-            .child = .{
-                .op = struct_plan.child_op,
-                .layout_idx = field_layout_idx,
-            },
+            .child = self.childKey(struct_plan.child_op, field_layout_idx),
         };
     }
 
@@ -298,9 +336,38 @@ pub const Resolver = struct {
         if (!self.nestedContainsRefcounted(payload_layout)) return null;
         if (self.store.layoutSizeAlign(payload_layout).size == 0) return null;
 
+        return self.childKey(tag_plan.child_op, payload_layout_idx);
+    }
+
+    /// The helper a struct, tag union or closure helper calls for a child
+    /// it performs `op` on. A drop of a child on a cycle of its type goes to
+    /// the child's `decref_queued` helper, so the queue of a teardown in
+    /// progress reaches every queued teardown below it.
+    fn childKey(self: *const Resolver, op: RcOp, layout_idx: Idx) HelperKey {
         return .{
-            .op = tag_plan.child_op,
-            .layout_idx = payload_layout_idx,
+            .op = if (op == .decref and self.store.layoutOnCycle(layout_idx)) .decref_queued else op,
+            .layout_idx = layout_idx,
+        };
+    }
+
+    fn queuedListPlan(self: *const Resolver, list_layout_idx: Idx) ?QueuedListPlan {
+        if (!self.store.layoutOnCycle(list_layout_idx)) return null;
+        const abi = self.store.builtinListAbi(list_layout_idx);
+        return .{
+            .elem_alignment = abi.elem_alignment,
+            .elem_width = abi.elem_size,
+            // A list on a cycle holds refcounted elements: the cycle
+            // leads back to the list itself.
+            .child = .{ .op = .decref_queued, .layout_idx = abi.elem_layout_idx.? },
+        };
+    }
+
+    fn queuedBoxPlan(self: *const Resolver, box_layout_idx: Idx) ?QueuedBoxPlan {
+        if (!self.store.layoutOnCycle(box_layout_idx)) return null;
+        const abi = self.store.builtinBoxAbi(box_layout_idx);
+        return .{
+            .elem_alignment = abi.elem_alignment,
+            .child = .{ .op = .decref_queued, .layout_idx = abi.elem_layout_idx.? },
         };
     }
 

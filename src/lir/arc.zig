@@ -7799,7 +7799,12 @@ const Inserter = struct {
         if (self.dismantles.completeTakeRoot(receipt.projection) != null) return null;
         if (self.dismantles.ownedOnlyContainerOf(receipt.place.root) != null and
             !self.owned_binding_override.contains(receipt.place.root)) return null;
-        return receipt;
+        // A tag-union container's fields are numbered in its payload view,
+        // which holds no unit: the union's unit is the resource whose residual
+        // mask a restituting edge refills.
+        var resolved = receipt;
+        resolved.place.root = self.unitOf(receipt.place.root);
+        return resolved;
     }
 
     /// The dismantle plan for this local's release in the current emission,
@@ -8113,6 +8118,7 @@ const Inserter = struct {
             .incref => .incref,
             .decref, .free => .decref,
             .host_drop => arcInvariant("ARC RC statement carried a host-shaped drop adapter"),
+            .decref_queued => arcInvariant("ARC RC statement carried a queued drop helper"),
         };
     }
 

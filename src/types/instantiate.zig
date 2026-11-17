@@ -1670,20 +1670,18 @@ pub const Instantiator = struct {
                     }
                 };
 
-                // Remember this substitution for recursive references
-                // IMPORTANT: This has to be registered _before_ any child copy runs
-                const fresh_var = try self.store.freshFromContentWithRank(.{ .flex = Flex.init() }, self.current_rank);
-                try self.var_map.put(resolved_var, fresh_var);
-
                 if (self.purpose == .expected_shape or rigid.constraints.len() == 0) {
                     const fresh_content = switch (fresh_type) {
                         .flex => Content{ .flex = Flex{ .name = rigid.name, .constraints = StaticDispatchConstraint.SafeList.Range.empty() } },
                         .rigid => Content{ .rigid = Rigid{ .name = rigid.name, .constraints = StaticDispatchConstraint.SafeList.Range.empty() } },
                     };
-                    try self.fillPlaceholder(fresh_var, fresh_content, flags);
-                    try machine.value_stack.append(self.store.gpa, fresh_var);
-                    return true;
+                    return self.pushLeafCopy(resolved_var, fresh_content, flags);
                 }
+
+                // Remember this substitution for recursive references
+                // IMPORTANT: This has to be registered _before_ any child copy runs
+                const fresh_var = try self.store.freshFromContentWithRank(.{ .flex = Flex.init() }, self.current_rank);
+                try self.var_map.put(resolved_var, fresh_var);
 
                 try machine.frames.append(self.store.gpa, .{ .flex_like = .{
                     .common = .{
@@ -1703,22 +1701,18 @@ pub const Instantiator = struct {
             },
             .flex => {
                 const flex = self.store.flexAt(desc_idx);
+                if (self.close_bounded_row_exts and resolved.word.flags().bounded_row_ext) {
+                    return self.pushLeafCopy(resolved_var, .{ .structure = .empty_tag_union }, flags.forKind(.empty_tag_union));
+                }
+                if (self.purpose == .expected_shape or flex.constraints.len() == 0) {
+                    const fresh_content = Content{ .flex = Flex{ .name = flex.name, .constraints = StaticDispatchConstraint.SafeList.Range.empty() } };
+                    return self.pushLeafCopy(resolved_var, fresh_content, flags);
+                }
+
                 // Remember this substitution for recursive references
                 // IMPORTANT: This has to be registered _before_ any child copy runs
                 const fresh_var = try self.store.fresh();
                 try self.var_map.put(resolved_var, fresh_var);
-
-                if (self.close_bounded_row_exts and resolved.word.flags().bounded_row_ext) {
-                    try self.fillPlaceholder(fresh_var, .{ .structure = .empty_tag_union }, flags.forKind(.empty_tag_union));
-                    try machine.value_stack.append(self.store.gpa, fresh_var);
-                    return true;
-                }
-                if (self.purpose == .expected_shape or flex.constraints.len() == 0) {
-                    const fresh_content = Content{ .flex = Flex{ .name = flex.name, .constraints = StaticDispatchConstraint.SafeList.Range.empty() } };
-                    try self.fillPlaceholder(fresh_var, fresh_content, flags);
-                    try machine.value_stack.append(self.store.gpa, fresh_var);
-                    return true;
-                }
 
                 try machine.frames.append(self.store.gpa, .{ .flex_like = .{
                     .common = .{
@@ -1758,28 +1752,16 @@ pub const Instantiator = struct {
                 // A resolved presence fact carries no inner variables. It is
                 // still copied to a fresh var so an instantiated field-kind
                 // axis has the same identity semantics as every other axis.
-                const fresh_var = try self.store.fresh();
-                try self.var_map.put(resolved_var, fresh_var);
-                try self.fillPlaceholder(fresh_var, .{ .field_presence = field_presence }, flags);
-                try machine.value_stack.append(self.store.gpa, fresh_var);
-                return true;
+                return self.pushLeafCopy(resolved_var, .{ .field_presence = field_presence }, flags);
             },
-            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => {
+            .empty_record => return self.pushLeafCopy(resolved_var, Content{ .structure = FlatType.empty_record }, flags),
+            .empty_tag_union => return self.pushLeafCopy(resolved_var, Content{ .structure = FlatType.empty_tag_union }, flags),
+            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union => {
                 const fresh_var = try self.store.fresh();
                 try self.var_map.put(resolved_var, fresh_var);
 
                 switch (resolved.word.kind) {
-                    .flex, .rigid, .alias, .field_presence, .err => unreachable, // the outer switch takes these kinds
-                    .empty_record => {
-                        try self.fillPlaceholder(fresh_var, Content{ .structure = FlatType.empty_record }, flags);
-                        try machine.value_stack.append(self.store.gpa, fresh_var);
-                        return true;
-                    },
-                    .empty_tag_union => {
-                        try self.fillPlaceholder(fresh_var, Content{ .structure = FlatType.empty_tag_union }, flags);
-                        try machine.value_stack.append(self.store.gpa, fresh_var);
-                        return true;
-                    },
+                    .flex, .rigid, .alias, .field_presence, .err, .empty_record, .empty_tag_union => unreachable, // the outer switch takes these kinds
                     .tuple => {
                         const tuple = self.store.tupleAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .tuple = .{
@@ -1891,14 +1873,26 @@ pub const Instantiator = struct {
                     },
                 }
             },
-            .err => {
-                const fresh_var = try self.store.fresh();
-                try self.var_map.put(resolved_var, fresh_var);
-                try self.fillPlaceholder(fresh_var, Content.err, flags);
-                try machine.value_stack.append(self.store.gpa, fresh_var);
-                return true;
-            },
+            .err => return self.pushLeafCopy(resolved_var, Content.err, flags),
         }
+    }
+
+    /// Copy a var whose content has no children: its copy is complete when
+    /// it is created, so it is created with that content.
+    fn pushLeafCopy(
+        self: *Self,
+        resolved_var: Var,
+        content: Content,
+        flags: types_mod.DescriptorFlags,
+    ) std.mem.Allocator.Error!bool {
+        const fresh_var = try self.store.register(.{
+            .content = content,
+            .rank = self.current_rank,
+            .flags = flags,
+        });
+        try self.var_map.put(resolved_var, fresh_var);
+        try self.scratch().value_stack.append(self.store.gpa, fresh_var);
+        return true;
     }
 
     /// Update the placeholder fresh var with its real content.
@@ -1908,14 +1902,11 @@ pub const Instantiator = struct {
         content: Content,
         flags: types_mod.DescriptorFlags,
     ) std.mem.Allocator.Error!void {
-        try self.store.dangerousSetVarDesc(
-            fresh_var,
-            .{
-                .content = content,
-                .rank = self.current_rank,
-                .flags = flags,
-            },
-        );
+        try self.store.fillFreshPlaceholder(fresh_var, .{
+            .content = content,
+            .rank = self.current_rank,
+            .flags = flags,
+        });
     }
 
     /// Fill `common`'s placeholder and publish it as this frame's result.

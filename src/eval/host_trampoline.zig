@@ -51,17 +51,14 @@ pub const available = supported;
 const max_gp = 8;
 const max_sse = 8;
 const max_result_sse = 4;
-/// Stack argument area: bounded; hosted functions with more than this much stack-passed
-/// argument data are rejected rather than silently truncated.
-const max_stack_bytes = 256;
-
-/// Error returned when a hosted signature cannot be marshaled by the fixed trampoline (too
-/// many register or stack arguments). These are not expected for real hosted functions.
-pub const Error = error{ TooManyRegisters, TooManyStackBytes, UnsupportedArch };
+/// Error returned when a hosted call cannot be made: this architecture has no trampoline, or
+/// `arena` could not hold the call's lowering.
+pub const Error = std.mem.Allocator.Error || error{UnsupportedArch};
 
 /// Call hosted function `target` with the platform C ABI. `args_buf` holds the arguments
 /// packed in Roc layout order (the interpreter's existing buffer); `ret_buf` receives the
-/// return value. Hosted functions take their natural C ABI: no RocOps is passed.
+/// return value. Hosted functions take their natural C ABI: no RocOps is passed. The call's
+/// lowering and its stack argument area come from `arena`, which must outlive the call.
 pub fn call(
     store: *const Store,
     arena: std.mem.Allocator,
@@ -83,12 +80,16 @@ pub fn call(
 
     // Hosted functions take their natural C ABI under the symbol ABI: the host
     // reaches its own runtime operations directly, so no leading *RocOps.
-    const lowered = layout.abi.lower(arena, store, target_abi, arg_layouts, ret_layout, false) catch return Error.TooManyRegisters;
-    const physical = layout.abi.assignPhysicalArgs(arena, store, target_abi, lowered, arg_layouts) catch return Error.TooManyRegisters;
+    const lowered = try layout.abi.lower(arena, store, target_abi, arg_layouts, ret_layout, false);
+    const physical = try layout.abi.assignPhysicalArgs(arena, store, target_abi, lowered, arg_layouts);
 
     var gp: [max_gp]u64 = @splat(0);
     var sse: [max_sse]u128 = @splat(0);
-    var stack: [max_stack_bytes]u8 align(16) = @splat(0);
+    // The stub copies the area rounded up to the stack alignment, so the
+    // image is that size, with the padding zeroed like the rest.
+    const stack_size = std.mem.alignForward(usize, physical.stack_size, 16);
+    const stack = try arena.alignedAlloc(u8, .@"16", stack_size);
+    @memset(stack, 0);
     var sret: ?*anyopaque = null;
 
     // Return placement: a memory-class return passes the result buffer as the sret pointer.
@@ -105,7 +106,6 @@ pub fn call(
         }
     }
 
-    if (physical.stack_size > max_stack_bytes) return Error.TooManyStackBytes;
     for (physical.args, arg_offsets) |placement, arg_offset| {
         const value = args_buf + arg_offset;
         switch (placement) {
@@ -122,7 +122,6 @@ pub fn call(
                     // The slot carries the promoted C scalar, not the Roc
                     // value's own bytes.
                     const end = @as(usize, stack_value.offset) + promoted_stack_size;
-                    if (end > max_stack_bytes) return Error.TooManyStackBytes;
                     const promoted = promote(
                         readUnaligned(u64, value, @intCast(stack_value.size)),
                         @intCast(stack_value.size),
@@ -132,7 +131,6 @@ pub fn call(
                     continue;
                 }
                 const end = @as(usize, stack_value.offset) + stack_value.size;
-                if (end > max_stack_bytes) return Error.TooManyStackBytes;
                 @memcpy(stack[stack_value.offset..end], value[0..stack_value.size]);
             },
             .registers => |pieces| {
@@ -157,8 +155,8 @@ pub fn call(
         .target = target,
         .gp = &gp,
         .sse = &sse,
-        .stack = if (physical.stack_size == 0) null else &stack,
-        .stack_size = std.mem.alignForward(usize, physical.stack_size, 16),
+        .stack = if (stack_size == 0) null else stack.ptr,
+        .stack_size = stack_size,
         .sret = sret,
         .res_gp = &res_gp,
         .res_sse = &res_sse,

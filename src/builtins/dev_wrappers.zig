@@ -265,6 +265,7 @@ const listWithCapacity = list.listWithCapacity;
 const listAppendUnsafe = list.listAppendUnsafe;
 const listDecref = list.listDecref;
 const RcDropFn = rc_callback_abi.RcDecrefFn;
+const RcQueuedDropFn = rc_callback_abi.RcQueuedDropFn;
 const RcIncFn = rc_callback_abi.RcIncrefFn;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1257,6 +1258,21 @@ pub fn roc_builtins_list_free_with(list_bytes: ?[*]u8, list_len: usize, list_cap
     }
 }
 
+/// Drop a list whose elements hold more lists of its own teardown (a list
+/// on a cycle of its type), visiting the dying lists it reaches in a loop
+/// instead of nesting a native frame per list (see `utils.DropQueue`).
+///
+/// `queue` is the queue of the teardown this call runs inside, or null when
+/// it runs inside none. `element_drop` releases what one element holds and
+/// receives the queue to pass on.
+pub fn roc_builtins_list_drop_queued(list_ptr: *const RocList, alignment: u32, element_width: usize, element_drop: RcQueuedDropFn, queue: ?*utils.DropQueue, mode: utils.DropMode) callconv(.c) void {
+    list_ptr.dropQueued(alignment, element_width, @intFromPtr(element_drop), queue, mode, element_drop, callQueuedDrop, in_process_host.ops());
+}
+
+fn callQueuedDrop(callback: RcQueuedDropFn, value: [*]u8, queue: *utils.DropQueue) void {
+    callback(value, queue);
+}
+
 /// Prepare a boxed payload allocation for replacement.
 ///
 /// The returned pointer is unique for the caller. It is either the original
@@ -1321,6 +1337,14 @@ pub fn roc_builtins_box_free_with(payload_ptr: ?[*]u8, payload_alignment: u32, p
     }
 
     freeDataPtrC(payload_ptr, payload_alignment, payload_has_refcounted_children, roc_ops);
+}
+
+/// Drop a box whose payload holds more boxes of its own teardown (a box on a
+/// cycle of its type), visiting the dying boxes it reaches in a loop instead
+/// of nesting a native frame per box (see `utils.DropQueue` and
+/// `roc_builtins_list_drop_queued`).
+pub fn roc_builtins_box_drop_queued(payload_ptr: ?[*]u8, payload_alignment: u32, payload_drop: RcQueuedDropFn, queue: ?*utils.DropQueue, mode: utils.DropMode) callconv(.c) void {
+    utils.boxDropQueued(payload_ptr, payload_alignment, @intFromPtr(payload_drop), queue, mode, payload_drop, callQueuedDrop, in_process_host.ops());
 }
 
 /// Incref a boxed erased callable payload pointer.

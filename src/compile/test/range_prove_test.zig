@@ -1169,7 +1169,7 @@ test "SIMD alignment prerequisite inlines checked wrappers with either crash arm
     }) |body| {
         try harness.expectLirInspectionWithOptions(
             guardedWrapperApp(body),
-            .{ .inline_mode = .wrappers, .proc_debug_names = true },
+            .{ .inline_mode = .wrappers },
             inspectGuardedWrapper,
         );
         try std.testing.expect(!guarded_proc_survives);
@@ -1183,7 +1183,7 @@ test "wrapper inlining admits a guard whose arm returns an argument or a literal
     }) |body| {
         try harness.expectLirInspectionWithOptions(
             guardedWrapperApp(body),
-            .{ .inline_mode = .wrappers, .proc_debug_names = true },
+            .{ .inline_mode = .wrappers },
             inspectGuardedWrapper,
         );
         try std.testing.expect(!guarded_proc_survives);
@@ -1193,7 +1193,7 @@ test "wrapper inlining admits a guard whose arm returns an argument or a literal
 test "a guard that recurses into itself stays a procedure" {
     try harness.expectLirInspectionWithOptions(
         guardedWrapperApp("if n == 0 { x } else { guarded(x.shl_wrap(1), n - 1) }"),
-        .{ .inline_mode = .wrappers, .proc_debug_names = true },
+        .{ .inline_mode = .wrappers },
         inspectGuardedWrapper,
     );
     try std.testing.expect(guarded_proc_survives);
@@ -1206,7 +1206,7 @@ test "wrapper inlining admits a guard whose arms each pass through to one operat
     }) |body| {
         try harness.expectLirInspectionWithOptions(
             guardedWrapperApp(body),
-            .{ .inline_mode = .wrappers, .proc_debug_names = true },
+            .{ .inline_mode = .wrappers },
             inspectGuardedWrapper,
         );
         try std.testing.expect(!guarded_proc_survives);
@@ -1219,7 +1219,7 @@ test "wrapper inlining keeps a body with its own bindings out" {
     }) |body| {
         try harness.expectLirInspectionWithOptions(
             guardedWrapperApp(body),
-            .{ .inline_mode = .wrappers, .proc_debug_names = true },
+            .{ .inline_mode = .wrappers },
             inspectGuardedWrapper,
         );
         try std.testing.expect(guarded_proc_survives);
@@ -1282,7 +1282,7 @@ test "a shared checked List.get inlines at every site so a guard proves the read
         \\    Ok({})
         \\}
     ,
-        .{ .inline_mode = .wrappers, .prove_ranges = true, .proc_debug_names = true },
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
         countSharedGetShape,
     );
     try std.testing.expect(shared_get_shape.found);

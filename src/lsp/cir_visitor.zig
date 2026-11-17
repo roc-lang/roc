@@ -194,9 +194,6 @@ pub fn CirVisitor(comptime Context: type) type {
                 .e_unary_minus => |u| {
                     self.walkExpr(store, u.expr);
                 },
-                .e_unary_not => |u| {
-                    self.walkExpr(store, u.expr);
-                },
                 .e_field_access => |field_access| {
                     self.walkExpr(store, field_access.receiver);
                     if (self.stopped) return;

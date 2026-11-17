@@ -292,9 +292,6 @@ pub const InlineExpectMode = enum {
 
 /// Configuration for lowering checked modules into Monotype IR.
 pub const Options = struct {
-    /// Preserve source-level procedure names for consumers that present runtime
-    /// diagnostics from lowered code.
-    proc_debug_names: bool = false,
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
     /// Optional deterministic workload diagnostics. The checked pipeline
@@ -5705,7 +5702,6 @@ const SpecJobWorkerInputs = struct {
     source_file_ids: *const SourceFileIds,
     lowering_module_ids: *const LoweringModuleIds,
     snapshot: *const WorkerInputs.Snapshot,
-    proc_debug_names: bool,
     interface_summaries: *const SharedSummaries,
     interface_summary_end: usize,
     collect_counters: bool,
@@ -6248,7 +6244,6 @@ const Builder = struct {
     program: *Ast.Program,
     current_loc: base.SourceLoc,
     current_region: base.Region,
-    proc_debug_names: bool,
     /// Frame stacks of finished `BodyContext.runLower` calls, kept with their
     /// capacity for the next run. Each run takes its own stack, so a nested
     /// run never moves the frame an outer step is still working on, and a
@@ -6557,7 +6552,6 @@ const Builder = struct {
             .program = program,
             .current_loc = program.current_loc,
             .current_region = program.current_region,
-            .proc_debug_names = options.proc_debug_names,
             .counters = counters,
             .diagnostics = options.diagnostics,
             .active_spec_job_diagnostics = null,
@@ -6717,7 +6711,6 @@ const Builder = struct {
         const builder = try worker.allocator.create(Builder);
         errdefer worker.allocator.destroy(builder);
         builder.* = Builder.init(worker.allocator, inputs.modules, worker.input_program.?, .{
-            .proc_debug_names = inputs.proc_debug_names,
             .specialization_counters = if (inputs.collect_counters) &worker.counters else null,
             .diagnostics = if (inputs.collect_diagnostics) &worker.diagnostics else null,
             .inline_expects = inputs.inline_expects,
@@ -7745,7 +7738,6 @@ const Builder = struct {
             .source_file_ids = self.sourceFileIds(),
             .lowering_module_ids = self.loweringModuleIds(),
             .snapshot = &snapshot,
-            .proc_debug_names = self.proc_debug_names,
             .interface_summaries = &self.shared_summaries.?,
             .interface_summary_end = self.shared_summaries.?.count,
             .replay_interface_summaries = self.replay_interface_summaries,
@@ -7957,7 +7949,6 @@ const Builder = struct {
             .source_file_ids = self.sourceFileIds(),
             .lowering_module_ids = self.loweringModuleIds(),
             .snapshot = &snapshot,
-            .proc_debug_names = self.proc_debug_names,
             .interface_summaries = &self.shared_summaries.?,
             .interface_summary_end = self.shared_summaries.?.count,
             .collect_counters = self.counters != null,
@@ -10162,7 +10153,6 @@ const Builder = struct {
                             .source_file_ids = self.sourceFileIds(),
                             .lowering_module_ids = self.loweringModuleIds(),
                             .snapshot = &context.snapshot,
-                            .proc_debug_names = self.proc_debug_names,
                             .interface_summaries = &self.shared_summaries.?,
                             .interface_summary_end = self.shared_summaries.?.count,
                             .collect_counters = self.counters != null,
@@ -11685,7 +11675,6 @@ const Builder = struct {
         view: ModuleView,
         template: names.ProcTemplate,
     ) Allocator.Error!void {
-        if (!self.proc_debug_names) return;
         const proc_base = view.names.procBase(template.proc_base);
         const export_name = proc_base.export_name.get() orelse return;
         const name = try self.program.names.internExportName(view.names.exportNameText(export_name));
@@ -11699,7 +11688,6 @@ const Builder = struct {
         view: ModuleView,
         template: names.ProcTemplate,
     ) Allocator.Error!void {
-        if (!self.proc_debug_names) return;
         const proc_base = view.names.procBase(template.proc_base);
         const export_name = proc_base.export_name.get() orelse return;
         const name = try self.activeNameStore().internExportName(view.names.exportNameText(export_name));
@@ -18307,9 +18295,14 @@ const CheckedCodecContractAnchor = struct {
     derivation: static_dispatch.GeneratedCodecDerivationId,
     call_index: u32,
     kind: CodecKind,
-    /// The forwarded evidence the contract was instantiated with. It is
-    /// determined by the contract's boundary shape, whose type each forwarded
-    /// call's subject is part of, so it adds nothing to the anchor's identity.
+    /// The forwarded evidence the contract was instantiated with. It adds
+    /// nothing to the anchor's identity: each forwarded call's subject is part
+    /// of the boundary shape type, and its format, state and error types are
+    /// parts of the constructor type, both of which the identity holds. A type
+    /// has one method of a name (a body-local type's identity includes the
+    /// enclosing variables its methods read, design.md "Body-Local Type
+    /// Context"), and structural derivations at one type are equivalent
+    /// contracts (`codec_identity`), so equal types select equal evidence.
     forwarded: *const ForwardedCodecVector = &no_forwarded_codec_calls,
 };
 
@@ -34064,10 +34057,14 @@ const BodyContext = struct {
         cursor.* = .{ .line_starts = line_starts, .line = line };
         const column = base.RegionInfo.columnIdx(line_starts, line, offset) catch
             Common.invariant("checked node region resolved to an invalid line/column position");
+        const user_line = if (self.view.module_env.staged_source_map) |map|
+            map.userLineIdx(line, offset) orelse return base.SourceLoc.none
+        else
+            line;
         return .{
             .file = self.source_file_id orelse
                 Common.invariant("expression-capable body context had no source-file identity"),
-            .line = line + 1,
+            .line = user_line + 1,
             .column = column + 1,
         };
     }
@@ -45646,12 +45643,16 @@ const BodyContext = struct {
             precomputed_plan,
         );
         const value_local = try self.addLocal(self.builder.symbols.fresh(), value_ty);
-        const value_rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        // The dict and state the entry leaves behind, once a key the dict
-        // already holds has been settled.
-        const settled_join = try self.reserveGeneratedJoinPoint(ret_ty);
-        const inserted_local = try self.addLocal(self.builder.symbols.fresh(), dict_ty);
         const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const inserted = try self.lowerDictInsert(
+            dict_ty,
+            key_ty,
+            value_ty,
+            try self.localExpr(dict_local, dict_ty),
+            try self.localExpr(key_local, key_ty),
+            try self.localExpr(value_local, value_ty),
+        );
+        const inserted_local = try self.addLocal(self.builder.symbols.fresh(), dict_ty);
 
         const entry_end = switch (entry_end_mode) {
             .uncounted => blk: {
@@ -45717,166 +45718,10 @@ const BodyContext = struct {
             } } }),
         };
 
-        const insert_body = try self.lowerParseDictInsertEntry(
-            dict_ty,
-            key_ty,
-            value_ty,
-            encoding_expr,
-            encoding_ty,
-            state_ty,
-            dict_local,
-            key_local,
-            value_local,
-            value_rest_local,
-            settled_join,
-            ret_ty,
-        );
-        try self.completeGeneratedJoinPoint(
-            settled_join,
-            &.{
-                .{ .local = inserted_local, .ty = dict_ty },
-                .{ .local = rest_local, .ty = state_ty },
-            },
-            &.{},
-            entry_end,
-            insert_body,
-        );
-        const value_body = try self.sequenceTryRecord(value_parse, value_parse_ret_ty, value_local, value_name, value_rest_local, rest_name, settled_join, ret_ty);
+        const with_inserted = try self.wrapLet(inserted_local, dict_ty, inserted, entry_end, ret_ty);
+        const value_body = try self.sequenceTryRecord(value_parse, value_parse_ret_ty, value_local, value_name, rest_local, rest_name, with_inserted, ret_ty);
         const separator_body = try self.sequenceTry(separator_try, separator_try_ty, value_state_local, value_body, ret_ty);
         return try self.sequenceTryRecord(key_parse, key_parse_ret_ty, key_local, value_name, after_key_local, rest_name, separator_body, ret_ty);
-    }
-
-    /// Add a parsed entry to the dict with `Dict.insert_fresh`, then jump to
-    /// `settled_join` with the resulting dict and the state to continue from.
-    /// A key the dict already holds goes to the format's
-    /// `parse_dict_duplicate_key`, called with the state after the entry's
-    /// value: `KeepFirst` leaves the dict as it is, and `KeepLast` replaces
-    /// the held value through `Dict.insert`.
-    fn lowerParseDictInsertEntry(
-        self: *BodyContext,
-        dict_ty: Type.TypeId,
-        key_ty: Type.TypeId,
-        value_ty: Type.TypeId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
-        state_ty: Type.TypeId,
-        dict_local: DraftLocalId,
-        key_local: DraftLocalId,
-        value_local: DraftLocalId,
-        value_rest_local: DraftLocalId,
-        settled_join: DraftExprId,
-        ret_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const ret_info = self.tryInfo(ret_ty);
-        const outcome = try self.lowerDictInsertFresh(
-            dict_ty,
-            key_ty,
-            value_ty,
-            try self.localExpr(dict_local, dict_ty),
-            try self.localExpr(key_local, key_ty),
-            try self.localExpr(value_local, value_ty),
-        );
-
-        const fresh_dict_local = try self.addLocal(self.builder.symbols.fresh(), dict_ty);
-        const inserted_pat = try self.addPat(.{ .ty = outcome.ty, .data = .{ .tag = .{
-            .name = outcome.inserted_tag.name,
-            .payloads = try self.addPatSpan(&[_]DraftPatId{try self.bindPat(fresh_dict_local, dict_ty)}),
-        } } });
-        const inserted_body = try self.jumpToGeneratedJoin(
-            settled_join,
-            &.{
-                try self.localExpr(fresh_dict_local, dict_ty),
-                try self.localExpr(value_rest_local, state_ty),
-            },
-            &.{},
-            &.{},
-            ret_ty,
-        );
-
-        const held_dict_local = try self.addLocal(self.builder.symbols.fresh(), dict_ty);
-        const refused_key_local = try self.addLocal(self.builder.symbols.fresh(), key_ty);
-        const refused_value_local = try self.addLocal(self.builder.symbols.fresh(), value_ty);
-        const occupied_fields = [_]DraftRecordDestruct{
-            .{ .name = try self.nameStoreMut().internRecordFieldLabel("dict"), .pattern = try self.bindPat(held_dict_local, dict_ty) },
-            .{ .name = try self.nameStoreMut().internRecordFieldLabel("key"), .pattern = try self.bindPat(refused_key_local, key_ty) },
-            .{ .name = try self.nameStoreMut().internRecordFieldLabel("value"), .pattern = try self.bindPat(refused_value_local, value_ty) },
-        };
-        const occupied_record_pat = try self.addPat(.{ .ty = outcome.occupied_ty, .data = .{ .record = try self.addRecordDestructSpan(&occupied_fields) } });
-        const occupied_pat = try self.addPat(.{ .ty = outcome.ty, .data = .{ .tag = .{
-            .name = outcome.occupied_tag.name,
-            .payloads = try self.addPatSpan(&[_]DraftPatId{occupied_record_pat}),
-        } } });
-
-        const decision_ty = try self.parseArrayEventType(state_ty, "KeepFirst", "KeepLast");
-        const decision_try_ty = try self.tryTypeLike(ret_ty, decision_ty, ret_info.err_ty);
-        const decision_try = try self.lowerParseFormatMethod(
-            "parse_dict_duplicate_key",
-            &.{ encoding_expr, try self.localExpr(value_rest_local, state_ty) },
-            &.{ encoding_ty, state_ty },
-            dict_ty,
-            decision_try_ty,
-        );
-        const decision_local = try self.addLocal(self.builder.symbols.fresh(), decision_ty);
-
-        const keep_first_tag = self.monoTagByText(decision_ty, "KeepFirst");
-        const keep_first_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const keep_first_pat = try self.addPat(.{ .ty = decision_ty, .data = .{ .tag = .{
-            .name = keep_first_tag.name,
-            .payloads = try self.addPatSpan(&[_]DraftPatId{try self.bindPat(keep_first_state_local, state_ty)}),
-        } } });
-        const keep_first_body = try self.jumpToGeneratedJoin(
-            settled_join,
-            &.{
-                try self.localExpr(held_dict_local, dict_ty),
-                try self.localExpr(keep_first_state_local, state_ty),
-            },
-            &.{},
-            &.{},
-            ret_ty,
-        );
-
-        const keep_last_tag = self.monoTagByText(decision_ty, "KeepLast");
-        const keep_last_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const keep_last_pat = try self.addPat(.{ .ty = decision_ty, .data = .{ .tag = .{
-            .name = keep_last_tag.name,
-            .payloads = try self.addPatSpan(&[_]DraftPatId{try self.bindPat(keep_last_state_local, state_ty)}),
-        } } });
-        const keep_last_body = try self.jumpToGeneratedJoin(
-            settled_join,
-            &.{
-                try self.lowerDictInsert(
-                    dict_ty,
-                    key_ty,
-                    value_ty,
-                    try self.localExpr(held_dict_local, dict_ty),
-                    try self.localExpr(refused_key_local, key_ty),
-                    try self.localExpr(refused_value_local, value_ty),
-                ),
-                try self.localExpr(keep_last_state_local, state_ty),
-            },
-            &.{},
-            &.{},
-            ret_ty,
-        );
-
-        const decision_branches = [_]DraftBranch{
-            .{ .pat = keep_first_pat, .body = keep_first_body },
-            .{ .pat = keep_last_pat, .body = keep_last_body },
-        };
-        const decision_match = try self.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
-            .scrutinee = try self.localExpr(decision_local, decision_ty),
-            .branches = try self.addBranchSpan(&decision_branches),
-        } } });
-        const occupied_body = try self.sequenceTry(decision_try, decision_try_ty, decision_local, decision_match, ret_ty);
-
-        const outcome_branches = [_]DraftBranch{
-            .{ .pat = inserted_pat, .body = inserted_body },
-            .{ .pat = occupied_pat, .body = occupied_body },
-        };
-        return try self.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
-            .scrutinee = outcome.expr,
-            .branches = try self.addBranchSpan(&outcome_branches),
-        } } });
     }
 
     fn lowerParseDictKey(
@@ -54858,59 +54703,6 @@ const BodyContext = struct {
         });
     }
 
-    /// A call of `Dict.insert_fresh`, with its outcome row: `Inserted` holds
-    /// the dict with the entry added, and `Occupied` holds a record of the
-    /// unchanged dict and the key and value that were not inserted.
-    fn lowerDictInsertFresh(
-        self: *BodyContext,
-        dict_ty: Type.TypeId,
-        key_ty: Type.TypeId,
-        value_ty: Type.TypeId,
-        dict_expr: DraftExprId,
-        key_expr: DraftExprId,
-        value_expr: DraftExprId,
-    ) Allocator.Error!struct {
-        expr: DraftExprId,
-        ty: Type.TypeId,
-        inserted_tag: Type.Tag,
-        occupied_tag: Type.Tag,
-        occupied_ty: Type.TypeId,
-    } {
-        const prepared = try self.frozenFormatCodecCallForShape(.parser, "insert_fresh", dict_ty);
-        const lookup = prepared.lookup;
-        const callable_mono_ty = prepared.callable_ty;
-        const insert_fn = functionShape(self.typeStore(), callable_mono_ty, "Dict.insert_fresh target method was not a function");
-        const arg_tys = self.typeStore().span(insert_fn.args);
-        if (arg_tys.len != 3) Common.invariant("Dict.insert_fresh target method had an unexpected arity");
-        self.assertSameType(GuardedList.at(arg_tys, 0), dict_ty, "Dict.insert_fresh dict argument type differed from Dict type");
-        self.assertSameType(GuardedList.at(arg_tys, 1), key_ty, "Dict.insert_fresh key argument type differed from key type");
-        self.assertSameType(GuardedList.at(arg_tys, 2), value_ty, "Dict.insert_fresh value argument type differed from value type");
-
-        const outcome_ty = insert_fn.ret;
-        const inserted_tag = self.monoTagByText(outcome_ty, "Inserted");
-        const occupied_tag = self.monoTagByText(outcome_ty, "Occupied");
-        const occupied_ty = self.singleTagPayloadType(occupied_tag, "Dict.insert_fresh Occupied outcome");
-        self.assertSameType(self.singleTagPayloadType(inserted_tag, "Dict.insert_fresh Inserted outcome"), dict_ty, "Dict.insert_fresh Inserted payload type differed from Dict type");
-        self.assertSameType(self.recordFieldType(occupied_ty, try self.nameStoreMut().internRecordFieldLabel("dict")), dict_ty, "Dict.insert_fresh Occupied dict type differed from Dict type");
-        self.assertSameType(self.recordFieldType(occupied_ty, try self.nameStoreMut().internRecordFieldLabel("key")), key_ty, "Dict.insert_fresh Occupied key type differed from key type");
-        self.assertSameType(self.recordFieldType(occupied_ty, try self.nameStoreMut().internRecordFieldLabel("value")), value_ty, "Dict.insert_fresh Occupied value type differed from value type");
-
-        return .{
-            .expr = try self.addExpr(.{
-                .ty = outcome_ty,
-                .data = .{ .call_proc = .{
-                    .callee = try self.draftProcCalleeForSlot(prepared.callee),
-                    .args = try self.addExprSpan(&[_]DraftExprId{ dict_expr, key_expr, value_expr }),
-                    .captures = try self.methodTargetCaptureSpan(lookup),
-                } },
-            }),
-            .ty = outcome_ty,
-            .inserted_tag = inserted_tag,
-            .occupied_tag = occupied_tag,
-            .occupied_ty = occupied_ty,
-        };
-    }
-
     fn lowerDictToList(
         self: *BodyContext,
         dict_ty: Type.TypeId,
@@ -63187,31 +62979,6 @@ const BodyContext = struct {
         } });
     }
 
-    /// The `Dict.insert_fresh` outcome row at the checked-evidence boundary.
-    /// `freshDictInsertFreshOutcomeVar` in check/Check.zig builds the same row
-    /// and must agree with this one.
-    fn graphDictInsertFreshOutcome(
-        self: *BodyContext,
-        dict_node: NodeId,
-        key_node: NodeId,
-        value_node: NodeId,
-    ) Allocator.Error!NodeId {
-        const occupied_payload = try self.graphClosedRecord(&.{
-            .{ .name = try self.nameStoreMut().internRecordFieldLabel("dict"), .ty = dict_node, .default = .none },
-            .{ .name = try self.nameStoreMut().internRecordFieldLabel("key"), .ty = key_node, .default = .none },
-            .{ .name = try self.nameStoreMut().internRecordFieldLabel("value"), .ty = value_node, .default = .none },
-        });
-        const inserted_name = try self.nameStoreMut().internTagLabel("Inserted");
-        const occupied_name = try self.nameStoreMut().internTagLabel("Occupied");
-        return try self.graph.newNode(.{ .tag_union = .{
-            .tags = try self.graph.arena().dupe(InstTag, &.{
-                .{ .name = inserted_name, .checked_name = inserted_name, .payloads = try self.graph.arena().dupe(NodeId, &.{dict_node}) },
-                .{ .name = occupied_name, .checked_name = occupied_name, .payloads = try self.graph.arena().dupe(NodeId, &.{occupied_payload}) },
-            }),
-            .ext = try self.graph.newNode(.empty_tag_union),
-        } });
-    }
-
     fn graphTryLike(
         self: *BodyContext,
         template_try: NodeId,
@@ -63710,14 +63477,6 @@ const BodyContext = struct {
             "parse_dict_after_entry",
             false,
         ) or added;
-        added = try self.prepareParseFormatControlCodecCall(
-            boundary_expr,
-            shape_node,
-            contract_subject_node,
-            boundary_callable_node,
-            "parse_dict_duplicate_key",
-            false,
-        ) or added;
         return added;
     }
 
@@ -63988,15 +63747,6 @@ const BodyContext = struct {
                     "insert",
                     &.{ dict_node, key_node, value_node },
                     dict_node,
-                ) or added;
-                added = try self.prepareOwnedCodecMethodCall(
-                    boundary_expr,
-                    kind,
-                    dict_node,
-                    dict_node,
-                    "insert_fresh",
-                    &.{ dict_node, key_node, value_node },
-                    try self.graphDictInsertFreshOutcome(dict_node, key_node, value_node),
                 ) or added;
                 break :blk added;
             },

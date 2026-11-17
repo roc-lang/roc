@@ -56,7 +56,7 @@ test "issue 13027: a boxy descriptor needed only for layout keeps no to_inspect 
             \\    echo!(n.to_str())
             \\    Ok({})
             \\}
-        , .{ .specialization_strategy = .boxy, .proc_debug_names = true, .target_usize = width }, expectNoTokenToInspect);
+        , .{ .specialization_strategy = .boxy, .target_usize = width }, expectNoTokenToInspect);
     }
 }
 
@@ -76,7 +76,7 @@ test "issue 13027: a boxy descriptor needed only for layout keeps no is_eq overr
             \\    echo!(n.to_str())
             \\    Ok({})
             \\}
-        , .{ .specialization_strategy = .boxy, .proc_debug_names = true, .target_usize = width }, expectNoTokenIsEq);
+        , .{ .specialization_strategy = .boxy, .target_usize = width }, expectNoTokenIsEq);
     }
 }
 
@@ -101,7 +101,7 @@ test "issue 13027: hashing another type keeps no to_hash override of a descripto
             \\    echo!(n.to_str())
             \\    Ok({})
             \\}
-        , .{ .specialization_strategy = .boxy, .proc_debug_names = true, .target_usize = width }, expectNoTokenToHash);
+        , .{ .specialization_strategy = .boxy, .target_usize = width }, expectNoTokenToHash);
     }
 }
 
@@ -120,6 +120,6 @@ test "issue 13027: inspecting a value through its boxy descriptor keeps its to_i
             \\    echo!(Str.inspect([identity(token)]))
             \\    Ok({})
             \\}
-        , .{ .specialization_strategy = .boxy, .proc_debug_names = true, .target_usize = width }, expectTokenToInspect);
+        , .{ .specialization_strategy = .boxy, .target_usize = width }, expectTokenToInspect);
     }
 }

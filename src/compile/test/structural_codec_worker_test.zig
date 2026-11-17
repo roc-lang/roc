@@ -23,7 +23,6 @@ test "structural codec: one derivation reached by dictionary evidence at several
     // one, and the use at `{ a : Bool, b : List(Str) }` has its own.
     try harness.runLoweredInspection(source, .{
         .specialization_strategy = .boxy,
-        .proc_debug_names = true,
     }, expectTwoCodecConstructors);
 }
 

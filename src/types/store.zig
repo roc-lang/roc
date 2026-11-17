@@ -1800,6 +1800,22 @@ pub const Store = struct {
         try self.setDesc(resolved.desc_idx, desc);
     }
 
+    /// Give `fresh_var` its descriptor: a variable this store minted as an
+    /// unbound flex placeholder that nothing has unified, written once the
+    /// content it stands for is complete. Construction, not a rewrite of the
+    /// solved graph: the placeholder is its own unfrozen root, so the write
+    /// reaches exactly its descriptor, as `dangerousSetVarDesc` would.
+    pub inline fn fillFreshPlaceholder(self: *Self, fresh_var: Var, desc: Desc) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        const desc_idx = self.resolveDescIdx(fresh_var);
+        if (std.debug.runtime_safety) {
+            const word = self.descs.getWord(desc_idx);
+            std.debug.assert(word.kind == .flex and !word.flags().frozen);
+            std.debug.assert(self.getRootMeta(desc_idx).checked_var == fresh_var);
+        }
+        try self.setDesc(desc_idx, desc);
+    }
+
     /// Show `target_var`'s whole class with `content` until the active
     /// savepoint rolls back: a diagnostic's view of a class as it stood
     /// before a decision. The view is of the class itself, so a frozen class

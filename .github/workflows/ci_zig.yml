@@ -29,6 +29,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
+      - name: Enlarge swap (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/enlarge-linux-swap
+
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.17.1
@@ -106,6 +110,9 @@ jobs:
       - name: Enlarge pagefile (Windows)
         if: runner.os == 'Windows'
         uses: ./.github/actions/enlarge-windows-pagefile
+      - name: Enlarge swap (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/enlarge-linux-swap
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.17.1
@@ -190,20 +197,15 @@ jobs:
       - name: Enlarge pagefile (Windows)
         if: runner.os == 'Windows'
         uses: ./.github/actions/enlarge-windows-pagefile
+      - name: Enlarge swap (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/enlarge-linux-swap
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.17.1
           use-cache: false
 
-      - name: Install Rust wasm target
-        run: rustup target add wasm32-unknown-unknown
-
-      # The RustGlue glue-runtime contract case compiles a `#![no_std]` host
-      # with `rustc --target <arch>-unknown-linux-musl --crate-type staticlib`,
-      # which needs that target's precompiled `core`.
-      - name: Install Rust musl target (Linux)
-        if: runner.os == 'Linux'
-        run: rustup target add ${{ runner.arch == 'ARM64' && 'aarch64-unknown-linux-musl' || 'x86_64-unknown-linux-musl' }}
+      - uses: ./.github/actions/setup-rust
 
       - name: Cache Zig dependency packages
         uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
@@ -305,6 +307,9 @@ jobs:
       - name: Enlarge pagefile (Windows)
         if: runner.os == 'Windows'
         uses: ./.github/actions/enlarge-windows-pagefile
+      - name: Enlarge swap (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/enlarge-linux-swap
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.17.1
@@ -430,6 +435,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+      - name: Enlarge swap (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/enlarge-linux-swap
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.17.1
@@ -507,6 +515,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+      - name: Enlarge swap (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/enlarge-linux-swap
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.17.1

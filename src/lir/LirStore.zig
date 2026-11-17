@@ -1010,11 +1010,13 @@ source_file_qualified_ends: GuardedList.List(u32, "LirStore.source_file_qualifie
 /// comparisons ("does this failed statement belong to the finalized
 /// module?") must use these, never names.
 source_file_identities: GuardedList.List([32]u8, "LirStore.source_file_identities"),
-/// Checked artifact key bytes of each `LoweringModuleId`, written only through
-/// `Program.Result`'s lowering-module table, so code generation can name a
-/// statement's owning module in identities that stay meaningful in every
-/// compilation.
-lowering_module_keys: GuardedList.List([32]u8, "LirStore.lowering_module_keys"),
+/// The identity code generation names each `LoweringModuleId` by in failure
+/// meanings (`failureMeaning`), written only through `Program.Result`'s
+/// lowering-module table: the checked artifact key in a program, and in a
+/// module unit the module's link name, which the unit's object key covers, so
+/// an object reused across compilations names no module by an identity that
+/// changed without changing its key (design.md "Per-Module Output").
+lowering_module_identities: GuardedList.List([32]u8, "LirStore.lowering_module_identities"),
 /// Source location and checked source region per statement, parallel to
 /// `cf_stmts`, as a row of `stmt_sources`. Reference-count statements always
 /// record `SourceLoc.none` and `Region.zero`; they have no source counterpart.
@@ -1094,7 +1096,7 @@ pub fn init(allocator: Allocator) Self {
         .source_file_qualified_bytes = .empty,
         .source_file_qualified_ends = .empty,
         .source_file_identities = .empty,
-        .lowering_module_keys = .empty,
+        .lowering_module_identities = .empty,
         .cf_stmt_sources = .empty,
         .stmt_sources = .empty,
         .cf_stmt_inline_scopes = .empty,
@@ -1188,7 +1190,7 @@ pub fn deinit(self: *Self) void {
     self.source_file_qualified_bytes.deinit(self.allocator);
     self.source_file_qualified_ends.deinit(self.allocator);
     self.source_file_identities.deinit(self.allocator);
-    self.lowering_module_keys.deinit(self.allocator);
+    self.lowering_module_identities.deinit(self.allocator);
     self.cf_stmt_sources.deinit(self.allocator);
     self.stmt_sources.deinit(self.allocator);
     self.stmt_source_rows.deinit(self.allocator);
@@ -1226,6 +1228,12 @@ pub fn localName(self: *const Self, id: LocalId) ?[]const u8 {
 pub fn setProcDebugName(self: *Self, id: LirProcSpecId, name: []const u8) Allocator.Error!void {
     if (name.len == 0) return;
     self.setProcDebugNameIndex(id, try self.insertString(name));
+}
+
+/// Record the source location of a proc added before its body was known.
+pub fn setProcLoc(self: *Self, id: LirProcSpecId, loc: base.SourceLoc) void {
+    self.assertBodyMetadataImmutable();
+    self.proc_locs.set(@backingInt(id), loc);
 }
 
 /// Copy proc source metadata from one proc to another, for compiler-generated variants.
@@ -1318,12 +1326,12 @@ pub fn failureMeaning(self: *const Self, stmt: CFStmtId) ?lir_defs.FailureMeanin
         .crash => |crash| crash: {
             if (crash.checked_error) break :crash .checked_error;
             const extra = self.stmtRowOrDefault(crash.extra);
-            if (extra.failed_value) |value| break :crash .{ .failed_value = .{ .module = self.loweringModuleKey(value.owner), .producer = value.producer } };
-            if (extra.literal_rejection) |site| break :crash .{ .literal_rejection = .{ .module = self.loweringModuleKey(site.owner), .node = site.node, .kind = site.kind } };
+            if (extra.failed_value) |value| break :crash .{ .failed_value = .{ .module = self.loweringModuleIdentity(value.owner), .producer = value.producer } };
+            if (extra.literal_rejection) |site| break :crash .{ .literal_rejection = .{ .module = self.loweringModuleIdentity(site.owner), .node = site.node, .kind = site.kind } };
             break :crash null;
         },
         .comptime_exhaustiveness_failed => |failed| .{ .exhaustiveness = .{
-            .module = self.loweringModuleKey(failed.owner),
+            .module = self.loweringModuleIdentity(failed.owner),
             .checked_site = failed.checked_site,
         } },
         .init_uninitialized,
@@ -1360,9 +1368,9 @@ pub fn failureMeaning(self: *const Self, stmt: CFStmtId) ?lir_defs.FailureMeanin
 }
 
 /// Checked artifact key bytes of one lowering module.
-pub fn loweringModuleKey(self: *const Self, module: lir_defs.LoweringModuleId) [32]u8 {
-    if (self.body_coordinator) |coordinator| return coordinator.loweringModuleKey(module);
-    return self.lowering_module_keys.get(@backingInt(module));
+pub fn loweringModuleIdentity(self: *const Self, module: lir_defs.LoweringModuleId) [32]u8 {
+    if (self.body_coordinator) |coordinator| return coordinator.loweringModuleIdentity(module);
+    return self.lowering_module_identities.get(@backingInt(module));
 }
 
 /// Deep module content identity of one source file table entry. Use this

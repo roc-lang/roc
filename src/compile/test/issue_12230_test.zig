@@ -37,7 +37,7 @@ fn expectPlainAndLiftedEncoderSpecializations(lowered: *const lir.CheckedPipelin
 test "issue 12230: a function returning Ok(Json.to_str(record)) is specialized once across calling modules" {
     try harness.runAppPathLoweredInspection(
         fixture_dir ++ "app.roc",
-        .{ .proc_debug_names = true },
+        .{},
         expectOneEncoderSpecialization,
     );
 }
@@ -45,7 +45,7 @@ test "issue 12230: a function returning Ok(Json.to_str(record)) is specialized o
 test "issue 12230: a caller passing a nominal with its own encoder keeps a separate specialization" {
     try harness.runAppPathLoweredInspection(
         fixture_dir ++ "lifted.roc",
-        .{ .proc_debug_names = true },
+        .{},
         expectPlainAndLiftedEncoderSpecializations,
     );
 }
