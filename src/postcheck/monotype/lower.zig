@@ -6216,7 +6216,7 @@ const LiteralArgumentRootIndex = struct {
 const LoweringModuleIds = std.AutoHashMap([32]u8, Common.LoweringModuleId);
 
 /// A result query needs only the result half; a checked-type-only call needs
-/// both halves fixed. This is semantic interface data, not a graph snapshot.
+/// both halves fixed. This is checked interface data, not a graph snapshot.
 const ClosedCallRepresentation = struct {
     arguments_depend: ?bool = null,
     result_depends: bool,
