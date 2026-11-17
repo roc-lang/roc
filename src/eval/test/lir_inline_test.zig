@@ -3609,7 +3609,9 @@ test "single-use block helper with nested self-call is not inlined" {
     , "helper", false);
 }
 
-test "call value wrapper is not inlined" {
+// A body that calls a callable it reads from an argument, or from a field or
+// tuple item of one, is one indirect call: a wrapper.
+test "call through an argument is a wrapper" {
     try expectInlinePlanDecision(
         \\callee : U64 -> U64
         \\callee = |x| x + 1
@@ -3619,7 +3621,54 @@ test "call value wrapper is not inlined" {
         \\
         \\main : U64
         \\main = apply(callee, 41)
-    , "apply", false);
+    , "apply", true);
+}
+
+test "call through a field of an argument is a wrapper" {
+    try expectInlinePlanDecision(
+        \\callee : U64 -> U64
+        \\callee = |x| x + 1
+        \\
+        \\step : { f : (U64 -> U64) }, U64 -> U64
+        \\step = |r, x| (r.f)(x)
+        \\
+        \\main : U64
+        \\main = step({ f: callee }, 41)
+    , "step", true);
+}
+
+// The callee is the result of another call, not a read of an argument.
+test "call through a computed callable is not a wrapper" {
+    try expectInlinePlanDecision(
+        \\callee : U64 -> U64
+        \\callee = |x| x + 1
+        \\
+        \\make : {} -> (U64 -> U64)
+        \\make = |_| callee
+        \\
+        \\apply_made : ({} -> (U64 -> U64)), U64 -> U64
+        \\apply_made = |mk, x| (mk({}))(x)
+        \\
+        \\main : U64
+        \\main = apply_made(make, 41)
+    , "apply_made", false);
+}
+
+// A statement before the call is work a wrapper does not do.
+test "call through an argument after a statement is not a wrapper" {
+    try expectInlinePlanDecision(
+        \\callee : U64 -> U64
+        \\callee = |x| x + 1
+        \\
+        \\apply_bound : (U64 -> U64), U64 -> U64
+        \\apply_bound = |fn, x| {
+        \\    y = x * 2
+        \\    fn(y)
+        \\}
+        \\
+        \\main : U64
+        \\main = apply_bound(callee, 41)
+    , "apply_bound", false);
 }
 
 test "self-recursive direct wrapper is not inlined" {

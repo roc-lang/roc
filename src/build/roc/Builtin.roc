@@ -3835,9 +3835,7 @@ Builtin :: [].{
 
 		## Advance the stream by one step.
 		next! : Stream(item) => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done]
-		next! = |source| match source {
-			{ step!, .. } => step!()
-		}
+		next! = |source| (source.step!)()
 
 		## Returns the stream's length if it is known up front.
 		len_if_known : Stream(item) -> Try(U64, [Unknown])

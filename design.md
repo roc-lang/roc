@@ -10279,6 +10279,14 @@ appends to would be copied on each call. The existing wrapper eligibility remain
 for proven small call-through and low-level wrappers even when they have multiple
 direct uses.
 
+A wrapper body (`wrapper_body.zig`) does less work than a call to it costs: one
+operation, a constant, or a single guard whose arms are each of those or a
+literal crash, reading nothing but its arguments. A direct call and a
+low-level operation are one operation each, and so is one indirect call of a
+callable read from an argument or from a field or tuple item of one, such as
+`Iter.next`'s `(iterator.step)()`. A callable computed by another call, or a
+call after a statement, is not one operation.
+
 Under `.wrappers_and_source_single_use`, how many callers a whole program has
 plays no part. Checking outputs, per module, the procedure templates its
 source calls at exactly one site and never uses as a value, among those no
