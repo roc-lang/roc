@@ -41,8 +41,11 @@ const TextSymbol = struct {
     obj_addr: u64,
     exe_addr: ?u64,
 
+    /// At a shared address (e.g. `ltmp0` and the first function), symbols
+    /// missing from the executable sort first, so lookups pick a survivor.
     fn lessThan(_: void, lhs: TextSymbol, rhs: TextSymbol) bool {
-        return lhs.obj_addr < rhs.obj_addr;
+        if (lhs.obj_addr != rhs.obj_addr) return lhs.obj_addr < rhs.obj_addr;
+        return lhs.exe_addr == null and rhs.exe_addr != null;
     }
 };
 
@@ -280,6 +283,38 @@ fn mapTextAddress(text_symbols: []const TextSymbol, obj_addr: u64) SpliceError!?
     return exe_addr + (obj_addr - anchor.obj_addr);
 }
 
+/// The executable address for object-space `__text` address `obj_addr` at
+/// `field_off` of a DWARF section, or a tombstone if its code was
+/// dead-stripped. `debug_ranges` holds the unrelocated bytes when the
+/// section is `__debug_ranges`.
+fn relocateTextAddress(
+    text_symbols: []const TextSymbol,
+    debug_ranges: ?[]const u8,
+    field_off: usize,
+    obj_addr: u64,
+) SpliceError!u64 {
+    const ranges = debug_ranges orelse return (try mapTextAddress(text_symbols, obj_addr)) orelse 0;
+    const mapped = if (isRangeEnd(ranges, field_off, obj_addr))
+        // A range end is one past its last byte, where the next function
+        // (possibly dead-stripped) starts, so map it through the last byte.
+        if (try mapTextAddress(text_symbols, obj_addr - 1)) |last| last + 1 else null
+    else
+        try mapTextAddress(text_symbols, obj_addr);
+    // A (0, 0) pair would end the list, so dead ranges become empty (1, 1)
+    // ranges instead, as lld writes them.
+    return mapped orelse 1;
+}
+
+/// Whether the address at `field_off` of a DWARF 4 `__debug_ranges` section
+/// ends a non-empty range. LLVM writes the lists back to back as 16-byte
+/// (start, end) entries; a base address selection entry pairs the all-ones
+/// marker with a start address.
+fn isRangeEnd(ranges: []const u8, field_off: usize, obj_addr: u64) bool {
+    if (field_off % 16 != 8) return false;
+    const start = std.mem.readInt(u64, ranges[field_off - 8 ..][0..8], .little);
+    return start != std.math.maxInt(u64) and obj_addr > start;
+}
+
 fn applyRelocations(
     data: []u8,
     obj_bytes: []const u8,
@@ -290,6 +325,10 @@ fn applyRelocations(
     text_symbols: []const TextSymbol,
     exe_symbols: *const std.StringHashMap(u64),
 ) SpliceError!void {
+    const debug_ranges: ?[]const u8 = if (std.mem.eql(u8, sect.sectName(), "__debug_ranges"))
+        obj_bytes[sect.offset..][0..data.len]
+    else
+        null;
     var i: usize = 0;
     while (i < sect.nreloc) : (i += 1) {
         const off: usize = sect.reloff + i * @sizeOf(macho.relocation_info);
@@ -323,7 +362,7 @@ fn applyRelocations(
             value = if (exe_symbols.get(name)) |addr| addr +% stored else 0;
         } else if (reloc.r_symbolnum == text.ordinal) {
             // The stored bytes are an object-space address inside __text.
-            value = (try mapTextAddress(text_symbols, stored)) orelse 0;
+            value = try relocateTextAddress(text_symbols, debug_ranges, field_off, stored);
         } else {
             // References between DWARF sections are already section-relative
             // offsets and carry no relocation.
@@ -530,4 +569,33 @@ fn makeName(name: []const u8) [16]u8 {
     var out = @as([16]u8, @splat(0));
     @memcpy(out[0..name.len], name);
     return out;
+}
+
+test "issue 13168: a range ending where dead-stripped code starts keeps its end" {
+    // The object layout from the issue: `roc_default_start_main` (0x354) is
+    // followed by `_bzero` (0x38c), which the linker dead-strips.
+    var symbols = [_]TextSymbol{
+        .{ .obj_addr = 0x38c, .exe_addr = null },
+        .{ .obj_addr = 0x354, .exe_addr = 0x1_0000_2a44 },
+        .{ .obj_addr = 0x0, .exe_addr = 0x1_0000_26f0 },
+        .{ .obj_addr = 0x0, .exe_addr = null }, // ltmp0
+        .{ .obj_addr = 0x438, .exe_addr = null },
+    };
+    std.mem.sort(TextSymbol, &symbols, {}, TextSymbol.lessThan);
+
+    // Live range, base address selection entry, dead range.
+    const fields = [_]u64{ 0x354, 0x38c, std.math.maxInt(u64), 0x354, 0x38c, 0x438 };
+    var ranges: [fields.len * 8]u8 = undefined;
+    for (fields, 0..) |field, i| std.mem.writeInt(u64, ranges[i * 8 ..][0..8], field, .little);
+
+    try std.testing.expectEqual(0x1_0000_2a44, try relocateTextAddress(&symbols, &ranges, 0, 0x354));
+    try std.testing.expectEqual(0x1_0000_2a7c, try relocateTextAddress(&symbols, &ranges, 8, 0x38c));
+    try std.testing.expectEqual(0x1_0000_2a44, try relocateTextAddress(&symbols, &ranges, 24, 0x354));
+    try std.testing.expectEqual(1, try relocateTextAddress(&symbols, &ranges, 32, 0x38c));
+    try std.testing.expectEqual(1, try relocateTextAddress(&symbols, &ranges, 40, 0x438));
+
+    // Outside `__debug_ranges`, every address is a start.
+    try std.testing.expectEqual(0, try relocateTextAddress(&symbols, null, 8, 0x38c));
+    // A live symbol wins over a dead one at the same address.
+    try std.testing.expectEqual(0x1_0000_2718, try relocateTextAddress(&symbols, null, 0, 0x28));
 }
