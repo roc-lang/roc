@@ -63,7 +63,7 @@ fn isErased(store: *const LirStore, layouts: *const layout_mod.Store, local: Loc
 
 /// The statements of one procedure that read each function-valued local.
 const ProcUses = struct {
-    map: std.AutoHashMapUnmanaged(LocalId, std.ArrayList(CFStmtId)) = .empty,
+    map: collections.DenseMapUnmanaged(LocalId, std.ArrayList(CFStmtId)) = .empty,
 
     fn deinit(self: *ProcUses, allocator: Allocator) void {
         var lists = self.map.valueIterator();
@@ -72,7 +72,7 @@ const ProcUses = struct {
     }
 
     fn of(self: *const ProcUses, local: LocalId) []const CFStmtId {
-        const list = self.map.getPtr(local) orelse return &.{};
+        const list = self.map.getPtrConst(local) orelse return &.{};
         return list.items;
     }
 };
@@ -250,7 +250,7 @@ const ParamSolver = struct {
     store: *const LirStore,
     masks: []u64,
     reuse_masks: []u64,
-    members: std.AutoHashMapUnmanaged(LocalId, void) = .empty,
+    members: collections.DenseMapUnmanaged(LocalId, void) = .empty,
     work: std.ArrayList(LocalId) = .empty,
 
     fn deinit(self: *ParamSolver) void {
@@ -435,13 +435,12 @@ pub fn solveParams(
     }
 }
 
-
 /// One procedure's flow graph: its statements control reaches from the body,
 /// their flow successors (a jump's is its join's body), and their
 /// predecessors.
 const FlowGraph = struct {
     stmts: std.ArrayList(CFStmtId) = .empty,
-    index: std.AutoHashMapUnmanaged(CFStmtId, u32) = .empty,
+    index: collections.DenseMapUnmanaged(CFStmtId, u32) = .empty,
     succ_start: std.ArrayList(u32) = .empty,
     succs: std.ArrayList(u32) = .empty,
     pred_start: std.ArrayList(u32) = .empty,
@@ -465,7 +464,7 @@ const FlowGraph = struct {
     }
 
     fn build(self: *FlowGraph, allocator: Allocator, store: *const LirStore, body: CFStmtId) Allocator.Error!void {
-        var join_bodies = std.AutoHashMapUnmanaged(LIR.JoinPointId, CFStmtId).empty;
+        var join_bodies = collections.DenseMapUnmanaged(LIR.JoinPointId, CFStmtId).empty;
         defer join_bodies.deinit(allocator);
         {
             var walk = try BodyClone.ReachableStmts.initWithAllocator(store, body, allocator);
@@ -535,7 +534,7 @@ const SuccessorCollector = struct {
 fn flowSuccessors(
     allocator: Allocator,
     store: *const LirStore,
-    join_bodies: *const std.AutoHashMapUnmanaged(LIR.JoinPointId, CFStmtId),
+    join_bodies: *const collections.DenseMapUnmanaged(LIR.JoinPointId, CFStmtId),
     stmt_id: CFStmtId,
     out: *std.ArrayList(CFStmtId),
 ) Allocator.Error!void {
@@ -568,7 +567,7 @@ const FrameSite = struct {
 const ProcFacts = struct {
     uses: ProcUses = .{},
     /// Statements defining each function-valued or capture-record local.
-    defs: std.AutoHashMapUnmanaged(LocalId, std.ArrayList(CFStmtId)) = .empty,
+    defs: collections.DenseMapUnmanaged(LocalId, std.ArrayList(CFStmtId)) = .empty,
     packs: std.ArrayList(CFStmtId) = .empty,
 
     fn deinit(self: *ProcFacts, allocator: Allocator) void {
@@ -580,7 +579,7 @@ const ProcFacts = struct {
     }
 
     fn defsOf(self: *const ProcFacts, local: LocalId) []const CFStmtId {
-        const list = self.defs.getPtr(local) orelse return &.{};
+        const list = self.defs.getPtrConst(local) orelse return &.{};
         return list.items;
     }
 };
@@ -590,7 +589,7 @@ const DefCollector = struct {
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     facts: *ProcFacts,
-    captures: *const std.AutoHashMapUnmanaged(LocalId, void),
+    captures: *const collections.DenseMapUnmanaged(LocalId, void),
     stmt: CFStmtId = undefined,
     failure: ?Allocator.Error = null,
 
@@ -645,7 +644,7 @@ fn collectProcFacts(
     body: CFStmtId,
     facts: *ProcFacts,
 ) Allocator.Error!void {
-    var captures = std.AutoHashMapUnmanaged(LocalId, void).empty;
+    var captures = collections.DenseMapUnmanaged(LocalId, void).empty;
     defer captures.deinit(allocator);
     var collector: UseCollector = .{ .store = store, .layouts = layouts, .allocator = allocator, .uses = &facts.uses };
     {
@@ -696,7 +695,7 @@ const SiteSolver = struct {
     }
 
     fn inGroup(self: *const SiteSolver, local: LocalId) bool {
-        return std.mem.indexOfScalar(LocalId, self.group.items, local) != null;
+        return std.mem.findScalar(LocalId, self.group.items, local) != null;
     }
 
     /// Whether `pack` builds a callable whose every use keeps it within
@@ -934,25 +933,38 @@ fn rewriteSites(allocator: Allocator, store: *LirStore, proc_id: ProcId, sites: 
     // Releases first, while every statement is still where ARC put it.
     // Several callables can die on one edge; their releases form one chain
     // the edge is pointed at once.
-    var heads = std.AutoArrayHashMapUnmanaged([2]CFStmtId, CFStmtId).empty;
-    defer heads.deinit(allocator);
+    const Death = struct { edge: [2]CFStmtId, release: LocalId, subject: LocalId };
+    var deaths = std.ArrayList(Death).empty;
+    defer deaths.deinit(allocator);
     for (sites) |site| {
         const release = site.release orelse continue;
         const subject = (Packing.of(store, site.pack) orelse frameInvariant("a frame site that is not a packing")).target;
-        const release_layout = store.localLayout(release);
-        for (site.deaths) |edge| {
-            const entry = try heads.getOrPut(allocator, edge);
-            const next = if (entry.found_existing) entry.value_ptr.* else edge[1];
-            entry.value_ptr.* = try store.addCFStmt(.{ .decref = .{
-                .value = release,
-                .rc = try rcHelperRef(store, .decref, release_layout),
-                .next = next,
-            } }, releaseOrigin(store, edge[0], subject));
-        }
+        for (site.deaths) |edge| try deaths.append(allocator, .{ .edge = edge, .release = release, .subject = subject });
     }
-    for (heads.keys(), heads.values()) |edge, head| redirectFlowEdge(store, edge[0], edge[1], head);
+    std.mem.sort(Death, deaths.items, {}, struct {
+        fn lessThan(_: void, a: Death, b: Death) bool {
+            if (a.edge[0] != b.edge[0]) return @backingInt(a.edge[0]) < @backingInt(b.edge[0]);
+            return @backingInt(a.edge[1]) < @backingInt(b.edge[1]);
+        }
+    }.lessThan);
+    var start: usize = 0;
+    while (start < deaths.items.len) {
+        const edge = deaths.items[start].edge;
+        var end = start;
+        var head = edge[1];
+        while (end < deaths.items.len and std.mem.eql(CFStmtId, &deaths.items[end].edge, &edge)) : (end += 1) {
+            const death = deaths.items[end];
+            head = try store.addCFStmt(.{ .decref = .{
+                .value = death.release,
+                .rc = try rcHelperRef(store, .decref, store.localLayout(death.release)),
+                .next = head,
+            } }, releaseOrigin(store, edge[0], death.subject));
+        }
+        redirectFlowEdge(store, edge[0], edge[1], head);
+        start = end;
+    }
 
-    var dropped = std.AutoHashMapUnmanaged(CFStmtId, CFStmtId).empty;
+    var dropped = collections.DenseMapUnmanaged(CFStmtId, CFStmtId).empty;
     defer dropped.deinit(allocator);
     const body = store.getProcSpecImmediate(proc_id).body.get() orelse frameInvariant("rewriting the frame sites of a procedure with no body");
     {
@@ -1061,7 +1073,7 @@ fn rewriteSites(allocator: Allocator, store: *LirStore, proc_id: ProcId, sites: 
 
     if (dropped.count() == 0) return;
     const Resolve = struct {
-        dropped: *const std.AutoHashMapUnmanaged(CFStmtId, CFStmtId),
+        dropped: *const collections.DenseMapUnmanaged(CFStmtId, CFStmtId),
         fn call(self: @This(), id: CFStmtId) CFStmtId {
             var target = id;
             while (self.dropped.get(target)) |next| target = next;
@@ -1082,7 +1094,7 @@ fn rewriteSites(allocator: Allocator, store: *LirStore, proc_id: ProcId, sites: 
         const join = GuardedList.atPtr(joins, index);
         join.body = resolve.call(join.body);
     }
-    }
+}
 
 /// Rewrite into frame packings every packing of `store` whose callable
 /// never outlives its procedure's frame, reading each callee's
@@ -1163,7 +1175,7 @@ fn verifyFrames(allocator: Allocator, store: *const LirStore, layouts: *const la
                         .rc => frameInvariant("a frame callable is retained or released"),
                         .alias => |alias| {
                             if (stmt != .assign_ref) frameInvariant("a frame callable flows into a variable");
-                            if (std.mem.indexOfScalar(LocalId, group.items, alias) == null) try group.append(allocator, alias);
+                            if (std.mem.findScalar(LocalId, group.items, alias) == null) try group.append(allocator, alias);
                         },
                         .call => |call| {
                             if (call.deferred) frameInvariant("a frame callable is called after its frame returns");
@@ -1219,7 +1231,7 @@ const Fixture = struct {
     erased: layout_mod.Idx,
     next_identity: u8 = 1,
 
-    fn init() !Fixture {
+    fn init() Allocator.Error!Fixture {
         var layouts = try layout_mod.Store.init(testing.allocator, .u64);
         errdefer layouts.deinit();
         const erased = try layouts.insertErasedCallable();
@@ -1231,19 +1243,19 @@ const Fixture = struct {
         self.layouts.deinit();
     }
 
-    fn local(self: *Fixture, layout_idx: layout_mod.Idx) !LocalId {
+    fn local(self: *Fixture, layout_idx: layout_mod.Idx) Allocator.Error!LocalId {
         return self.store.addLocal(.{ .layout_idx = layout_idx });
     }
 
-    fn fnLocal(self: *Fixture) !LocalId {
+    fn fnLocal(self: *Fixture) Allocator.Error!LocalId {
         return self.local(self.erased);
     }
 
-    fn stmt(self: *Fixture, s: LIR.CFStmt) !CFStmtId {
+    fn stmt(self: *Fixture, s: LIR.CFStmt) Allocator.Error!CFStmtId {
         return self.store.addCFStmt(s, .test_fixture);
     }
 
-    fn proc(self: *Fixture, params: []const LocalId, body: ?CFStmtId) !ProcId {
+    fn proc(self: *Fixture, params: []const LocalId, body: ?CFStmtId) Allocator.Error!ProcId {
         const identity = LIR.ProcIdentity.forTest(self.next_identity);
         self.next_identity += 1;
         return self.store.addProcSpec(.{
@@ -1255,7 +1267,7 @@ const Fixture = struct {
         }, .none);
     }
 
-    fn external(self: *Fixture, params: []const LocalId, published_mask: u64) !ProcId {
+    fn external(self: *Fixture, params: []const LocalId, published_mask: u64) Allocator.Error!ProcId {
         const id = try self.proc(params, null);
         const spec = self.store.getProcSpecPtr(id);
         spec.external = true;
@@ -1265,7 +1277,7 @@ const Fixture = struct {
     }
 
     /// `result = f(arg)` through the erased ABI, then `next`.
-    fn erasedCall(self: *Fixture, closure: LocalId, args: []const LocalId, result: LocalId, deferred: bool, next: CFStmtId) !CFStmtId {
+    fn erasedCall(self: *Fixture, closure: LocalId, args: []const LocalId, result: LocalId, deferred: bool, next: CFStmtId) Allocator.Error!CFStmtId {
         var arg_layouts: [4]layout_mod.Idx = undefined;
         for (args, 0..) |arg, index| arg_layouts[index] = self.store.localLayout(arg);
         const plan = try self.store.internErasedCallArgsPlan(&self.layouts, arg_layouts[0..args.len]);
@@ -1281,7 +1293,7 @@ const Fixture = struct {
         } });
     }
 
-    fn call(self: *Fixture, callee: ProcId, args: []const LocalId, result: LocalId, next: CFStmtId) !CFStmtId {
+    fn call(self: *Fixture, callee: ProcId, args: []const LocalId, result: LocalId, next: CFStmtId) Allocator.Error!CFStmtId {
         return self.stmt(.{ .assign_call = .{
             .target = result,
             .proc = callee,
@@ -1290,7 +1302,7 @@ const Fixture = struct {
         } });
     }
 
-    fn release(self: *Fixture, value: LocalId, next: CFStmtId) !CFStmtId {
+    fn release(self: *Fixture, value: LocalId, next: CFStmtId) Allocator.Error!CFStmtId {
         return self.stmt(.{ .decref = .{
             .value = value,
             .rc = try self.store.addRcHelperRef(.{ .concrete = .{ .op = .decref, .layout_idx = self.erased } }),
@@ -1298,11 +1310,11 @@ const Fixture = struct {
         } });
     }
 
-    fn ret(self: *Fixture, value: LocalId) !CFStmtId {
+    fn ret(self: *Fixture, value: LocalId) Allocator.Error!CFStmtId {
         return self.stmt(.{ .ret = .{ .value = value } });
     }
 
-    fn solve(self: *Fixture, published: []const PublishedPair) !void {
+    fn solve(self: *Fixture, published: []const PublishedPair) Allocator.Error!void {
         try solveParams(testing.allocator, &self.store, &self.layouts, published);
     }
 
@@ -1475,11 +1487,11 @@ const PackFixture = struct {
     keeps: ProcId,
     escapes: ProcId,
 
-    fn init() !PackFixture {
+    fn init() Allocator.Error!PackFixture {
         return initCapturing(.str);
     }
 
-    fn initCapturing(captured: layout_mod.Idx) !PackFixture {
+    fn initCapturing(captured: layout_mod.Idx) Allocator.Error!PackFixture {
         var f = try Fixture.init();
         errdefer f.deinit();
         const capture_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = captured }});
@@ -1505,7 +1517,7 @@ const PackFixture = struct {
         self.f.deinit();
     }
 
-    fn pack(self: *PackFixture, reuse: ?LocalId, next: CFStmtId) !CFStmtId {
+    fn pack(self: *PackFixture, reuse: ?LocalId, next: CFStmtId) Allocator.Error!CFStmtId {
         return self.f.stmt(.{ .assign_packed_erased_fn = .{
             .target = self.callable,
             .data = try self.f.store.addStmtRow(LIR.PackedErasedFnData, .{
@@ -1523,13 +1535,13 @@ const PackFixture = struct {
     }
 
     /// The procedure around `body`, with its packing shape recorded.
-    fn packer(self: *PackFixture, params: []const LocalId, body: CFStmtId) !ProcId {
+    fn packer(self: *PackFixture, params: []const LocalId, body: CFStmtId) Allocator.Error!ProcId {
         const id = try self.f.proc(params, body);
         self.f.store.getProcSpecPtr(id).shapes.erased_pack = true;
         return id;
     }
 
-    fn run(self: *PackFixture) !usize {
+    fn run(self: *PackFixture) Allocator.Error!usize {
         try self.f.solve(&.{});
         return markFrames(testing.allocator, &self.f.store, &self.f.layouts);
     }
