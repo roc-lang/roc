@@ -21290,7 +21290,7 @@ fn checkProvidesEntryHostBoundary(
                 const name = switch (desc.content) {
                     .rigid => |rigid| rigid.name,
                     .flex => |flex| flex.name orelse continue,
-                    else => continue,
+                    .alias, .field_presence, .structure, .err => continue,
                 };
                 if (name.eql(alias.rigid_name)) {
                     data.suggestion = .{ .variable = name, .alias = alias.alias_name };
