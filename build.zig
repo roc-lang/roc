@@ -1935,6 +1935,10 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     .{ .app = "boxed_model_update_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "boxed_model_update_static_lib_app.wasm", .run_args = &.{ "--expected", "ok" } },
     .{ .app = "issue_10836_boxed_low_alignment_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_10836_boxed_low_alignment_static_lib_app.wasm", .run_args = &.{ "--expected", "7,9;11,13;Inc(42)" } },
     .{ .app = "issue_12560_boxed_bool_not_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12560_boxed_bool_not_static_lib_app.wasm", .run_args = &.{ "--expected", "ok" } },
+    // Dropping a value of a recursive type nests no wasm frame per level of
+    // the value, under either backend.
+    .{ .app = "issue_12917_deep_recursive_drop_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12917_deep_recursive_drop_dev_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" } },
+    .{ .app = "issue_12917_deep_recursive_drop_static_lib_app.roc", .options = &.{"--opt=size"}, .output = "issue_12917_deep_recursive_drop_size_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" } },
     // A constant record whose pointer fields are laid out in the opposite
     // order to their field order: its relocations must still reach the
     // object in offset order, or wasm-ld refuses it (#11419).

@@ -729,6 +729,11 @@ the order a walk from that value finds them. `lir.Program`
 `content_data_symbol_prefix`) and `ProcIdentity.symbol_name_prefix` are the
 only places these forms are spelled.
 
+Debug information shows a procedure by its source name and states its
+`roc__p{hash}` symbol as the linkage name ("Procedure Source Names"), so
+tools that read debug info show Roc names while the symbol stays the one
+cached code links under.
+
 A symbol's scope says whether its name means the same thing in every program,
 which decides whether code referring to it can be cached and linked into
 another program. Code generation declares the scope of every symbol it refers
@@ -771,6 +776,28 @@ layout index. An inline scope names the procedure it inlined by identity
 scope LIR inlining made, and a digest of the lifted function's checked source
 for a scope SpecConstr made. The LLVM backend names inlined debug subprograms
 and source frames from it.
+
+### Procedure Source Names
+
+A procedure's source name is provenance: it says what the programmer called
+the function the procedure was lowered from, and it is independent of the
+procedure's `ProcIdentity` and of its symbol. Lowering records it for every
+procedure that has one, beside the procedure's source location
+(`LirStore.setProcDebugName`, `LirStore.procLoc`), in every build: recording
+it is not an option a consumer turns on, so no consumer can be handed LIR
+without names. A procedure the compiler generates has no source name, and a
+Boxy worker that is not a template's is named for what it is (`boxy.adapter`,
+`boxy.codec.runtime`).
+
+Both native backends put the name in debug information as the subprogram's
+name, with the procedure's symbol as its linkage name; a procedure with no
+source name is shown by its symbol alone. The LLVM backend reads the name from
+the LIR store. The dev backend lifts a procedure's code into an excerpt that
+outlives the LIR it came from, so the excerpt carries the name beside the
+procedure's location (`CodeExcerpt.Excerpt.name`), through unit pieces and
+their cache encoding and through composition, to the DWARF subprogram entry
+(`Dwarf.ProcEntry`). The first placement of an identity supplies the name and
+location its code reports, as it supplies the code.
 
 ### Named Type Identity
 
@@ -28078,6 +28105,57 @@ builtins module tests and, under ThreadSanitizer, in
 `zig build run-test-builtins-tsan`, which checks the orderings against the
 memory model rather than against the host CPU.
 
+### Queued Teardown
+
+Dropping a value uses native stack bounded by the value's type, never by the
+value. A program can build a value of a recursive type in a loop, to any depth
+its memory allows, so a teardown that nested one native frame per level would
+overflow the stack on a value the program had no trouble building.
+
+Every cycle of a type passes through a heap allocation: a list or a box. The
+layout store records which layouts lie on a cycle of the layout graph
+(`Store.layoutOnCycle`), marked when a graph commit finishes the layouts it
+reserved. The RC plan of a list or box on a cycle is a queued teardown
+(`list_decref_queued`, `list_free_queued`, `box_decref_queued`,
+`box_free_queued`), and every other plan is unchanged, so a type that is not
+recursive gets exactly the helpers it would get without this rule.
+
+A queued teardown owns a queue (`builtins.utils.DropQueue`). When it releases
+the last reference to its allocation it visits that allocation's items or
+payload, and a dying allocation of the same teardown met during the visit is
+pushed onto the queue instead of being visited where it is met. The teardown
+then pops and visits queued allocations in a loop until the queue is empty. A
+queued allocation is exclusively owned with a count of zero, so its refcount
+word holds the link to the next queued allocation, and queuing allocates
+nothing. A queued list also records its item count in its header, as a list
+with seamless slices does, because it is visited without the list value that
+named it.
+
+The queue reaches the allocations below a teardown through the helpers
+between them. A drop of a child whose layout lies on a cycle goes to that
+layout's `decref_queued` helper, which takes the queue as a second parameter
+and passes it to each `decref_queued` child and each queued teardown its plan
+names. A helper that received no queue passes null, and a queued teardown
+given null starts a queue of its own. `decref_queued` is a calling convention
+over the layout's `decref` plan, as `host_drop` is: only plans name it, never
+an RC statement.
+
+A queue takes allocations of one teardown, identified by everything that
+decides how an allocation is torn down: list or box, alignment, item width,
+and the helper that releases each item (`DropQueue.Teardown`). A teardown that
+meets a dying allocation of a different teardown starts that one nested
+inside itself, linked to it through `DropQueue.outer`, and the nested teardown
+finds the outer queue through that link when it meets the outer kind again.
+Nesting is therefore at most the number of distinct teardowns a type has.
+
+Every producer of teardown code follows the same plans: the interpreter
+(`LayoutRuntime.performRcPlan`), and the dev, LLVM and wasm backends, whose
+helpers call `roc_builtins_list_drop_queued` and
+`roc_builtins_box_drop_queued`. An erased callable's captures are released
+through its `on_drop` slot, a host-shaped callback chosen where the closure is
+created, which carries no queue; a chain of erased callables that each
+capture the next is torn down one native frame per callable.
+
 ### Uniqueness Inference
 
 Ops with `may_runtime_uniqueness_check_args` branch at runtime: when the
@@ -32513,9 +32591,9 @@ fact-graph walks spent looking for one; loop-invariant candidates admitted,
 verified and dead; regions and statements walked; slack walks and the roots
 they visited; and sum refreshes with the size of their closures, the passes
 and relaxations they ran, and how many stopped at the pass cap. Setting the
-variable also makes the lowering record procedure debug names, which it
-otherwise records only for the diagnostics that print them; a
-compiler-generated procedure has no source name and prints as `<unnamed>`.
+name is the one lowering records for every procedure ("Procedure Source
+Names"); a compiler-generated procedure has no source name and prints as
+`<unnamed>`.
 The counts measure what a procedure cost the prover and change nothing it
 proves. They are counted in every compiler, and the pipeline's `WorkMetrics`
 sums them over the lowered procedures for tests that pin how much work a

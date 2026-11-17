@@ -153,5 +153,5 @@ test "issue 10848: a helper-built record does not retain List.set's list" {
         \\    echo!(read($s).to_str())
         \\    Ok({})
         \\}
-    , .{ .inline_mode = .wrappers, .proc_debug_names = true }, expectCallBuiltRecordListSetHasNoRetain);
+    , .{ .inline_mode = .wrappers }, expectCallBuiltRecordListSetHasNoRetain);
 }

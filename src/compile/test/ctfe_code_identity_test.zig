@@ -369,7 +369,6 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
             .prove_ranges = false,
             .reuse_boxes = false,
             .thread_confined_rc = false,
-            .proc_debug_names = true,
         },
     };
     try coord.finishCheckedProgram(.executable_artifacts);

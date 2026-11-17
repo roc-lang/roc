@@ -8009,6 +8009,7 @@ const Inserter = struct {
             .incref => .incref,
             .decref, .free => .decref,
             .host_drop => arcInvariant("ARC RC statement carried a host-shaped drop adapter"),
+            .decref_queued => arcInvariant("ARC RC statement carried a queued drop helper"),
         };
     }
 
