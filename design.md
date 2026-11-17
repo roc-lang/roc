@@ -72,7 +72,7 @@ types and the descriptors in scope.
 ## UTF-8 validation
 
 `Str.from_utf8` and `Str.from_utf8_lossy` share one Zig builtin validator,
-`validateUtf8` in `src/builtins/str.zig`. It accepts exactly the well-formed
+`validate` in `src/builtins/utf8.zig`. It accepts exactly the well-formed
 sequences of Unicode Table 3-7 and, for ill-formed input, returns the zero-based
 start index of the first ill-formed sequence and its problem. The problem is
 decided in a fixed order: a byte that is neither ASCII nor C0-F7 is
@@ -82,16 +82,50 @@ F0-F7: 4), and a sequence running past the end of the input is
 outside 80-BF is `ExpectedContinuation`; otherwise the lead and second byte
 decide `OverlongEncoding`, `EncodesSurrogateHalf`, or `CodepointTooLarge`.
 
-Validation never decodes code points. While no sequence is in progress, ASCII
-is skipped in 32- and 16-byte blocks; a tail shorter than 16 bytes is checked
-with loads that may overlap already-validated bytes. Other bytes go through a
+Validation never decodes code points, and two kernels implement it with
+identical results. The DFA kernel skips ASCII in 32- and 16-byte blocks while no
+sequence is in progress, checks a tail shorter than 16 bytes with loads that may
+overlap already-validated bytes, and runs every other byte through a
 shift-based DFA over the nine states of Table 3-7: a 256-entry table of packed
 `u64` rows, one table load and one shift per byte, 16 bytes per unrolled chunk.
-Only a rejection reruns the DFA, out of line, from the start of the sequence in
-progress to find where the ill-formed sequence begins. The blocks use generic
-`@Vector(16, u8)` operations, so the pointer-width builtin bitcode stays
-target-independent (see "Backend Builtins"); targets without SIMD, such as
-`wasm32v1`, lower them to scalar instructions.
+The lookup kernel runs the Keiser-Lemire "lookup" algorithm as simdutf
+implements it, 32 bytes per step: three 16-entry tables, indexed by the high
+and low nibble of the previous byte and the high nibble of the current one, mark
+each byte pair's possible errors, and saturating subtractions mark where the
+third and fourth bytes of longer sequences must be continuation bytes. An
+all-ASCII step only checks that the previous step did not end inside a
+sequence, and the final 16-byte window ends at the last byte, overlapping bytes
+already checked, and also checks that the input does not end inside a
+sequence. Inputs shorter than 16 bytes use the DFA kernel. In both kernels only
+a rejection reruns the DFA, out of line, from the start of the sequence in
+progress to find where the ill-formed sequence begins.
+
+The kernel is fixed by the CPU features the builtins are compiled for
+(`Kernel.forCpu`), never by a runtime probe: a lookup kernel exactly when the
+features carry a 16-lane byte table lookup (x86 SSSE3 `pshufb`, AArch64 NEON
+`tbl`, Wasm simd128 `i8x16.swizzle`), and the DFA otherwise. Generic
+`@Vector(16, u8)` operations implement everything but the table lookup, which
+each lookup kernel names with its target's instruction. Where builtins are
+compiled decides what each backend runs:
+
+- A dev builtins object is compiled for its Roc target's CPU contract (see
+  "Backend Builtins"), so it gets the kernel that contract selects: default
+  x86-64 objects (x86-64-v3) the SSSE3 kernel, `x64v1` objects the DFA,
+  AArch64 objects at both levels the NEON kernel, the `wasm32` object the
+  simd128 kernel, and the `wasm32v1` object the DFA.
+- The 64-bit LLVM payload is compiled before its target is known, so it
+  references its validation function by symbol, and the LLVM backend links one
+  of three separate payloads into it before pruning: the one built for the
+  kernel the target machine's CPU features select (the DFA, x86 SSSE3, or
+  AArch64 NEON), each compiled for exactly the features its kernel needs. The
+  default x86-64 level (x86-64-v3) gets SSSE3, `x64v1` targets the DFA, and
+  both AArch64 levels NEON. The 32-bit payload, rooted at the `llvm32_*`
+  wrappers that mark it (`roc_llvm_payload`), links the same way: `wasm32`
+  gets the simd128 kernel, and `wasm32v1` and the arm32 targets the DFA.
+- The interpreter and compile-time evaluator run the compiler's own builtins,
+  whose kernel its compile target selects. The x86-64 Debug floor that adds
+  SSSE3 to the generic CPU model for the SHA-256 extension is not a promise
+  about the machine, so it selects the DFA.
 
 `Str.from_utf8` makes one validation pass and shares the input allocation on
 success. `Str.from_utf8_lossy` shares it for valid input too; for invalid input
@@ -125,7 +159,13 @@ bitwise operations, lane shifts, comparisons, bitmasks, and wrapping narrows
 used here lower to scalar instructions over sixteen-byte stack slots; list
 appends use the existing explicit LIR uniqueness data. BE lanes are byte-swapped with explicit
 shifts and masks before classification and narrowing. Bounds are checked before
-each full block; partial blocks use scalar decoding. Typed `load_units` APIs
+each full block; partial blocks use scalar decoding. The UTF-16 sizing pass
+also sizes each other 16-byte block of eight units at once when every
+surrogate in it is a high surrogate directly followed by a low one in the same
+block, as simdutf computes UTF-8 lengths from UTF-16: the block needs 8 bytes
+plus one per unit above 0x7F and one more per unit above 0x7FF, less one per
+surrogate, since a pair's two units encode as four bytes. Any other block is
+sized unit by unit, so every error keeps its kind and position. Typed `load_units` APIs
 remain available independently and do not implement byte decoding.
 
 The private Roc helpers return `{ index : U64, status : U8, string : Str }`;
@@ -1541,14 +1581,30 @@ checker recovery. The recovery rules:
   at `echo!(letter)`, whose unification grounded the literal; `letter` is then
   bound from an erroneous value, and `Range.iter`'s `range_iter` requirement,
   which `echo!(letter)` made concrete, is withdrawn with that void relation.
-  Because checking
+  A requirement a value use's instantiation copied (a scheme's where-clause
+  or inferred requirement, `Check.use_instance_by_fn_var`), and what derives
+  from it, belongs the same way to the call whose callee that use is
+  (`Check.callee_use_calls`): the call relates the use's instance to its
+  arguments and result, so the requirement resolves under the call's
+  relation over its operands, whichever later unification grounds its
+  receiver; where it fails is still decided by the queued entry carrying
+  it. In `z = 1`, `s = apply(z)`, `_n = List.len(z)` with
+  `apply : p -> Str where [p.to_str : p -> Str]`, `List.len(z)` grounds both
+  the literal, which it rejects, and `apply`'s copied `to_str`; the `to_str`
+  failure belongs to `apply(z)`, which reads `z`, erroneous through its
+  name, so it is withdrawn and only the literal is reported. Because checking
   replaces rejected expressions with runtime errors, each expression's operands
   are captured when its checking begins (`relation_operands`). A relation is
   void when one of its operands is erroneous through a name: a use of a name
   that binds nothing, or whose source value (`binder_source_exprs`) is
-  erroneous in any way, or an expression checking retires with such an
-  operand (Erroneous Call Operand Retirement), so a name bound from such an
-  expression binds nothing either. An operand rejected in place is not read
+  erroneous in any way, or an expression that evaluates such an operand
+  before it produces its value (a call or another call-like consumer, as in
+  Erroneous Call Operand Retirement, and a construction: a list, record,
+  tuple, tag, or nominal value, an access, or a comparison; never a
+  conditional or match, which runs only one branch), so a name bound from
+  such an expression binds nothing either: `apply_l([z])`, `apply_r({ a: z })`,
+  and a loop binder over `[1, 2]` whose items a later use rejects read an
+  erroneous value through a name. An operand rejected in place is not read
   through a name; its rejection is reported by the relation that rejected it,
   which may be the relation reading it. Each erroneous value records the
   relation under which it was made erroneous, named by the expression that
@@ -3166,6 +3222,20 @@ ordinary object-symbol references resolved by linking the target's
 `roc_builtins.o`. The dev backend keeps using target-specific builtin object
 files because it does not produce LLVM bitcode.
 
+Every object `roc` embeds for a dev link (the builtins, the Boxy runtime, their
+stack-checked wasm twins, the unit image built from them, and the default
+platform's runtime, executable and compiler-rt objects) is compiled for the
+query `RocTarget.llvmTargetQuery` derives from its Roc target's CPU contract,
+so it carries exactly the instructions that target declares and no others.
+Each `v1` target has objects of its own, compiled for the `v1` floor; no
+target links objects compiled for another CPU level. `dev_object_targets` in
+build.zig lists the targets with objects, and `EmbeddedTargetObjects.forTarget`
+in src/cli/main.zig hands a generic Linux target its glibc twin's objects and a
+freestanding ELF target its musl twin's, each with the same CPU contract,
+architecture and operating system. The native objects the interpreter host
+links run on the machine running `roc` and are compiled for the compiler's own
+target.
+
 The LLVM backend emits application LLVM bitcode. LLVM builds must not link
 `roc_builtins.o`. Instead, the compiler selects builtin LLVM bitcode by the
 target pointer width, links that builtin module with the application module
@@ -3213,9 +3283,10 @@ extension), and with portable rounds otherwise; `Rounds.forCpu` in
 `src/builtins/sha256.zig` is the one rule. Code compiled into Roc programs
 never selects rounds at runtime with CPUID or any other probe; only the
 compiler binary's own hashing dispatches at runtime. A dev builtins object gets
-the rounds its own compile target selects, and since a `v1` target links its
-default twin's object, those objects carry no instruction above the
-architecture baseline (the native objects drop the compiler's SHA-256 floor).
+the rounds its Roc target's CPU contract selects: the default-level AArch64
+objects, `arm64mac`'s included, compress with `sha2`, and every other dev
+object, the `v1` objects included, with the portable rounds. The native objects drop the
+compiler's SHA-256 floor, which is not a promise about the machine.
 The 64-bit LLVM payload cannot choose, because it is compiled before its target
 is known, so it references its compression function by symbol, and the LLVM
 backend links one of three separate compression payloads into it before
@@ -3226,6 +3297,11 @@ its rounds need. The 32-bit payload keeps portable rounds inline, since no
 SHA-256 state is the builtin's own versioned format (the chaining words, the
 pending partial block, and the message length), independent of which rounds
 produced it, so saved states resume identically on every target.
+
+Both LLVM payload families link their UTF-8 validation kernel the same way:
+they reference `roc_builtins_utf8_validate`, and the LLVM backend links the
+payload built for the kernel the target machine's CPU features select (see
+"UTF-8 validation").
 
 LLVM object emission must request function and data sections, and the final
 target linker must use section garbage collection where the target format
@@ -3279,6 +3355,26 @@ LLVM's `optsize` and `minsize` and no `inlinehint`, so LLVM's size cost model
 is the one measure of every inlining decision, exactly as it is for a C or
 Zig module built for minimum size. The pinned leaf builtins keep
 `alwaysinline` in every mode.
+
+A size build for a WebAssembly target with bulk memory (`wasm32`, not
+`wasm32v1`) also lowers every `llvm.memcpy`, `llvm.memmove` and
+`llvm.memset` that needs more than one store to one `memory.copy` or
+`memory.fill`. With a constant length either instruction encodes in about
+as many bytes as one load/store pair and in fewer than any longer sequence,
+while LLVM's WebAssembly backend keeps its generic limit of four stores for
+`optsize` code. A copy from a constant is no exception: the WebAssembly
+backend does not turn constant loads into immediates, so its expansion loads
+from the constant's address like any other copy. LLVM exposes the limit only
+as its `max-store-memcpy`, `max-store-memmove` and `max-store-memset`
+options, which are process-wide, replace the limits for size and speed alike,
+and are read when code generation decides each expansion. Every LLVM compile
+therefore sets them for itself before it emits
+(`builder.MemoryIntrinsicStores`, `ZigLLVMSetMemoryIntrinsicStoreLimit`): 1
+for a size compile whose target has `bulk_memory_opt`, and 0, LLVM's "use the
+target's limits", for every other compile, including the in-process host
+objects of `roc test`, eval and glue (`llvm_compile`). A process runs its
+LLVM compiles one at a time, so the value a compile sets is the one its code
+generation reads.
 
 There are two string joins with one meaning. `str_concat` is the join a
 program spells (`Str.concat`); its LLVM wrapper carries the small-into-small
@@ -4093,15 +4189,20 @@ compiler-owned builtin scope before source declarations are introduced. If that
 proof stops being local and obvious, the initialization path must use the same
 type-binding API.
 
-Logical negation `!expr` canonicalizes to `e_unary_not`, as `-expr`
-canonicalizes to `e_unary_minus`. Checking relates it like `expr.not()` with
-type `a -> a`: a `not` static-dispatch constraint on the operand, published as
-an `e_dispatch_call` whose surface origin is `unary_not`. A structural
-tag-union operand resolves at the builtin `Bool` (Solver-Mutating Rewrites,
-Logical Negation Of Tag Literals); no other operand is related to `Bool`.
-Later stages consume the checked dispatch plan. On `Bool` it selects
-`Bool.not`, whose provided low-level is `bool_not`, so Monotype lowers it to
-that low-level directly.
+Logical negation `!expr` desugars in `Can` to an ordinary call to the
+compiler-owned `Bool.not`, with type `Bool -> Bool`. It does not introduce a
+static-dispatch constraint on the operand. Source declarations shadowing `Bool`
+do not change this target; within Builtin.roc the call refers to its local
+`Bool.not` definition. Checking and later stages consume the ordinary call.
+
+`!` is deliberately not sugar for a `not` method, unlike unary `-` and
+`negate`. A tag literal such as `True` has a structural tag-union type, and
+structural types have no methods, so a dispatching `!` would reject
+`done = False` followed by `!done` unless the checker carried a rule that
+resolves a negated tag literal at `Bool`. Fixing the operand at `Bool` needs no
+such rule: `!done` unifies `done` with `Bool` like any other call argument. A
+type that wants a complement operation exposes a `not` method, and callers
+write `x.not()`.
 
 Result suffix desugaring has a separate owner inside `Can`. The suffix forms
 `expr?`, `expr ? handler`, and `expr ?? default` all lower to a match over the
@@ -9113,11 +9214,8 @@ body other than the body's local procedures it refers to (a sibling method
 it calls), and built from a declaration context each of those is itself
 built from the same context. A body building the dictionaries of a
 call of its own procedure builds its own local procedures from its worker
-chain, since they are this body's values. Restoring a stored generated runtime builds
-those values in the declaration context of the instance of the stored value's
-procedure that built it, which the value records, since compile-time
-evaluation stores none of them. Building a local procedure's value anywhere
-else is a compiler bug.
+chain, since they are this body's values. Building a local procedure's value
+anywhere else is a compiler bug.
 
 Boxy generated encoders call the same format methods, with the same callback
 protocols, as the checked derivation contract names. A tag union of any
@@ -9424,8 +9522,11 @@ variables and captures one dictionary per forwarded call after its local
 procedure values: the use that builds the family's constructor supplies each
 from its own dictionary for the variable's requirement. The family's list
 operations take their item descriptor, since an item can hold such a
-variable. A stored generated runtime records no dictionaries, so restoring one
-applies only to a family without forwarded calls.
+variable. A compile-time constant holding such a codec's runtime stores it in
+each strategy's own form (Stored Function Values): `.boxy` stores the runtime
+worker's recipe, whose captures include the forwarded dictionaries the
+constructor captured, and `.lss` stores the generated runtime with the evidence
+of the procedure that built it, which Monotype restores it against.
 
 A `ParseTagUnionSpec` describes exactly one union. A payload that is itself a
 tag union is parsed with that union's own spec, never with the enclosing
@@ -9539,19 +9640,10 @@ a value its app supplied for a requirement (`provided = required`), which was
 lowered from the app's bodies, and the platform's checked key covers its
 platform/app relation. The stored function was lowered from bodies that
 closure reaches, so one of its modules recorded an equal contract.
-Boxy resolves a stored function's codec dictionary edge from the same module,
-and builds the generated codec worker in it: the dictionary's requirement comes
-from the template's module and the shape from the use's module, and neither
-need hold the contract. A generic method selected for that dictionary, such as
-`List.encoder_for`, names its item and its format only in the encoder it
-returns, so Boxy relates the method to the requirement's position at the call,
-and the method's own codec requirements are read at what that relation binds.
 A variable of the template that built a stored nested function can reach neither
 the function's type nor its captures, as the format of an encoder a generic method
 returned does not, so the function keeps its template specialization's concrete
-type (`ConstFn.owner_fn_ty`) and Boxy relates the template to it. Relating a
-requirement to its selected method then binds the variables only that requirement
-names, for dictionaries and descriptors alike. A
+type (`ConstFn.owner_fn_ty`), which Monotype restores the function's owner at. A
 generated codec runtime body reads its edge in that body's module when that
 module holds an equal contract; otherwise, as for a custom format's contract
 reached through a Builtin method, it reads the edge the same way, from the storing
@@ -11160,9 +11252,9 @@ consumes it, and a list in it is copied each iteration. The rewrite is exact:
   consists of local aliases, discriminant reads, field reads, literals,
   descriptor-free struct builds,
   `bool_not` of a known two-variant tag (which selects the other variant; `!`
-  on a `Bool` dispatches to `Bool.not`, which is the `bool_not` low-level, so
-  `while !$done` tests this), join declarations, and writes of the next join's
-  parameters before its jump, until one body reaches a switch whose condition is a known discriminant of
+  is `Bool.not`, which is the `bool_not` low-level, so `while !$done` tests
+  this), join declarations, and writes of the next join's parameters before
+  its jump, until one body reaches a switch whose condition is a known discriminant of
   a tag built on the edge (directly or through a tag bound once), and whose
   selected arm is a bare jump to a parameterless join or code that runs in
   place (which the rewrite moves into the body of a fresh parameterless join
@@ -12169,51 +12261,6 @@ expected context still needs two incompatible `read` methods on one
 parameter, and an arity mismatch against the expected function type is the
 ordinary mismatch.
 
-### Logical Negation Of Tag Literals
-
-`!x` is sugar for `x.not()` (`a -> a`), so its operand needs a `not` method.
-A tag literal such as `True` has a structural tag-union type, and structural
-types have no methods. Without a rule, `done = False` followed by `!done` would
-be rejected unless something else related `done` to `Bool`. The rule: a unary
-`!`'s `not` relation whose operand is still a structural tag union when the
-operand's generalization boundary is reached relates that operand to the
-builtin `Bool` by ordinary unification (`resolveTagLiteralNegations`), and
-its `not` then dispatches to `Bool.not`.
-
-Until then the relation is held, like a relation on a flex receiver
-(`tagLiteralNegationOperand` in the deferred-dispatch drain), so anything that
-relates the operand to a type before its boundary decides it: an `if` or
-`while` condition, an `and`/`or` operand, an annotation, or a call argument.
-The outcome therefore does not depend on the order in which checking relates
-those. The boundary is the last point at which the operand's type can still
-change: generalization cannot publish a structural receiver with an unmet
-`not` requirement, so the rule decides it there, before the boundary relates
-or captures the definition's other pending requirements (Methods On Open
-Rows), so a negated tag literal never becomes a requirement on its row
-variable. Type finalization applies the rule to every operand no boundary
-reached (for example a REPL expression).
-
-The rule reads only explicit data: the constraint's origin
-(`desugared_unaryop`), its method name (`not`), and the `unary_not` surface
-origin of the dispatch its introducing expression published, whose
-constraint function variable is the relation's own. A copy that
-instantiating a scheme makes of that relation, a `not` requirement from a
-`where` clause, and a written `x.not()` call never take this path. A function
-inferred from `|x| !x` therefore has the type `a -> a where [a.not : a -> a]`,
-exactly as if that type were written, and calling it on a tag literal is the
-ordinary missing-method report. The other outcomes are the ordinary ones: a
-nominal operand dispatches to its own `not` (a type without one is a missing
-method), and a tag union with tags `Bool` lacks is a mismatch against `Bool`,
-reported for the operand (`logical_negation_operand` context).
-
-Pinned by the `check type - unary not` tests in
-`src/check/test/type_checking_integration.zig`. Accepted: a nominal type's own
-`not`; `!True == False`; `!` on an unannotated binding, on a `var`, inside
-`.map`, nested `!!x`, and on a method result of type `Bool`; an annotation
-pinning a tag-literal operand to a nominal type with `not`. Rejected: `!"hi"`
-is a missing method, `![Foo]`'s operand is a mismatch against `Bool`, and a
-generic `|x| !x` applied to a tag literal is a missing method.
-
 ### Unquantified Literal Type Parameters Default To `[]`
 
 A custom literal's conversion is a dispatch on the literal's own type
@@ -12232,8 +12279,8 @@ module's open rows (`commitUncommittedTails`, `decideOpenRowsAtModuleEnd`,
 Methods On Open Rows), so no row that a commitment or an open-row requirement
 still decides is a candidate, and before the dispatch work those commitments
 create is drained, which it joins without a round of its own. A variable
-carrying a requirement, a row holder's or a negated tag literal's (Logical
-Negation Of Tag Literals) among them, is never a candidate. The literal's
+carrying a requirement, a row holder's among them, is never a candidate. The
+literal's
 conversion is then closed: it gets its own conversion root
 (Literal Arguments), and the definition's entry wrapper is called with no
 literal argument to supply.
@@ -12779,10 +12826,11 @@ the copy stands a fresh variable at the current rank in its place
 the result position the variable must fit, and the definition's scheme
 quantifies the position with the rest of its annotation. A row's open TAIL
 is not such a variable, whichever scope owns it: the tags the row holds
-relate now, the tail stays shared with the value's own row or is re-opened
-in a copy exactly as above, and every tag the row gains later joins
-through that tail or propagates into the copy (Row Joins,
-`Check.propagateValueRowsToWidenedUses`), so a top-level value forwarded
+relate now, and the tail stays shared with the value's own row, so every
+tag the row gains later joins through that tail (Row Joins). A copy re-opens
+only a row that can gain no tag: a closed row, or one whose extension an
+annotation bounds, which the unifier refuses to extend. A debug assertion in
+`Check.widenedRowCopy` pins this. So a top-level value forwarded
 into several results keeps one row of its own. The variable's
 own relation to that position is recorded (`Check.DeferredResultRelation`)
 for the generalization boundary that owns the variable, which discharges
@@ -14138,8 +14186,8 @@ parked relations before its settled default-materialization fixpoint
 (`checkInstantiatedStaticDispatchConstraints(.settled)`), and a default that
 fixpoint materializes can ground a receiver whose derived codec relation then
 parks. That fixpoint therefore validates whatever is parked before it judges
-another round, and propagates a validated relation's error-row growth to the
-widened uses of the value that holds the row, as the drain before it does.
+another round. A widened use re-opens only a value row that can gain no tag
+(Row Subsumption), so a late validation cannot add a tag a widened use lacks.
 
 The instance's copy of each of the template's variables is that variable
 throughout the instance's derivation (`Check.final_codec_instance_copies`). A
@@ -16490,11 +16538,6 @@ Other solved-graph mutations:
   empty tag union, at the weak-value default commitment point after
   `commitUncommittedTails` and `decideOpenRowsAtModuleEnd`; it introduces
   no redirect rule and writes nothing outside unification.
-- `resolveTagLiteralNegations`—policy: Logical Negation Of Tag Literals
-  (above). A probe of whether a held unary `!` relation's operand is a
-  structural tag union at its generalization boundary gates an ordinary
-  unification of that operand with the builtin `Bool`. It writes nothing
-  outside unification and introduces no redirect rule.
 - `seedLambdaParamsFromContext`—policy: Lambda Parameters Seeded From
   Context (above). A probe of whether the expected context names a type
   constructor gates an ordinary unification of a skeleton over an
@@ -17390,8 +17433,7 @@ does not discharge stay variables of the family: a rigid tail names a row the
 enclosing scope chooses, and the other two may be a format's own error type or
 a producer's. Widening is the same conversion as any sealed result's, at the
 one place both rows are known: a family's constructor is adapted to the
-callable type of its use (`constructorAt`), and a stored runtime restored from
-its captures to the stored function's type (`restoreRuntime`).
+callable type of its use (`constructorAt`).
 
 A conversion worker belongs to the module that emits it and is memoized
 within that module only: two modules converting the same pair each carry
@@ -19378,7 +19420,9 @@ from that view without traversing stored graphs or types. A missing function
 representation is pending even when the other strategy has completed its value.
 Coordinator object eligibility, evaluation selection and Boxy reads use this
 same view. Pending reads use the existing compile-time root slots; runtime
-lowering never reconstructs another strategy's callable captures. Non-function
+lowering never reconstructs another strategy's callable captures, so Boxy
+restoring an `.lss` function value (`ConstValue.fn_value`) is a compiler
+invariant violation. Non-function
 values remain shared. Storing another representation replaces that root's
 previous debug observations rather than replaying both copies in one command.
 The baked Builtin producer completes both function representations before
@@ -29548,9 +29592,21 @@ image or a `.boxy` module object's `CodeLocations`:
   means more than a crash at its statement (`LIR.FailureMeaning`): code
   checking rejected, a literal conversion rejecting its literal, an
   exhaustiveness failure at a checked site, or a read of a compile-time value
-  whose producer failed. Meanings name checked modules by checked module key and
-  checked ids, never program-local statement ids or numbering, so cached code
-  reports its failures exactly like freshly compiled code. `LirStore`
+  whose producer failed. Meanings name modules and checked ids, never
+  program-local statement ids or numbering, so cached code reports its
+  failures exactly like freshly compiled code. A program names each module by
+  its checked module key. A `.boxy` module unit names each module by its link
+  name (`LirStore.lowering_module_identities`): the unit's object is reused
+  across compilations whose checked keys differ (an import's implementation
+  edit changes the importer's key, but not its object key, which covers its
+  imports' interfaces and every module's link name), so naming a module by
+  its checked key would make a reused object differ from a fresh build of it.
+  A compile-time program that links module objects lowers as a module unit
+  too, so its own code and the objects it loads name modules in one link-name
+  domain. The evaluator reads every meaning it takes from running code
+  through its program's table from each module's identity to its checked key
+  (`Program.Result.meaningByCheckedKey`), one lookup per module the meaning
+  names, so every consumer reads meanings by checked key. `LirStore`
   derives a failing statement's meaning (`failureMeaning`); code generation
   records it at each crash call, and the interpreter applies it to the
   statement it stopped at, so both evaluators classify failures from one
@@ -33037,10 +33093,9 @@ Every input of a wasm32v1 module is WebAssembly 1.0, not only Roc's own code.
 Emitting a vector instruction, a `v128` local, or a `v128` function type at
 the v1 level is a compiler invariant violation. The builtins, Boxy runtime,
 and compiler-rt objects a wasm32v1 build links are built for the
-WebAssembly 1.0 CPU (Zig's wasm baseline includes later proposals, so
-wasm32v1 does not share wasm32's objects the way other v1 targets share
-their default twins'), and Binaryen optimizes a wasm32v1 module with every
-proposal disabled. The evaluator's wasm backend runs each eval program at
+WebAssembly 1.0 CPU, as every `v1` target's objects are built for its floor,
+and Binaryen optimizes a wasm32v1 module with every proposal disabled. The
+`wasm32` objects are built for its contract, simd128 included. The evaluator's wasm backend runs each eval program at
 both CPU levels and requires the same result, which puts the full SIMD
 differential corpus through the v1 lowering.
 

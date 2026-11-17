@@ -784,8 +784,10 @@ fn glueLlvmCompileOptions(opt: GlueOpt) llvm_compile.CompileOptions {
         .debug = opt == .dev,
         .target_ptr_width_bits = targetPtrWidthBits(base.target.TargetUsize.native),
         // The target machine names no CPU features, so LLVM assumes only its
-        // default CPU for the triple, which has no SHA-256 instructions.
+        // default CPU for the triple, which has no SHA-256 instructions. The
+        // UTF-8 kernel is the one that baseline CPU supports.
         .sha256_rounds = .portable,
+        .utf8_kernel = builtins.utf8.Kernel.forCpu(std.Target.Cpu.baseline(builtin.cpu.arch, builtin.os)),
     };
 }
 

@@ -2,13 +2,19 @@ import A
 import Point
 import Adder
 import Spaced
+import Html
 
 B := {}.{
     run : Str -> Str
     run = |s| A.keep(s)
 
     label : Str
-    label = "b-${A.name}"
+    label = Html.to_str(html(A.name))
+
+    # A custom interpolation converts in place at runtime, so B's object
+    # holds its rejection site, which names B.
+    html : Str -> Html
+    html = |n| "b-${n}"
 
     runtime : U64 -> U64
     runtime = |n| A.other(n)
