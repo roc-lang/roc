@@ -2666,9 +2666,12 @@ keeps each node its own input segment through the relocatable composition
 link, which joins input segments that share a name, so the final link's
 `--gc-sections` still drops each node nothing references. The standard
 prefix lets the final `wasm-ld` merge the surviving nodes into its one
-`.rodata` (and `.bss`) output segment, so the module carries a few active
-segments rather than one per constant, each of which would cost a segment
-header and a separate copy at instantiation.
+`.rodata` (and `.bss`) output segment rather than one active segment per
+constant, each of which would cost a segment header and a separate copy at
+instantiation. In an optimized build, Binaryen's memory packing may then
+split an output segment around a run of zero bytes long enough that leaving
+it to zero-filled memory saves more than the extra segment header costs, so
+the final module's segment count follows where its static data holds zeros.
 
 The guard pass also marks each guard's crash statement as the failure path of a
 read of its slot's value (`CrashExtra.failed_value`), naming the producer. Failed

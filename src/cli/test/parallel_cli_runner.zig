@@ -1459,6 +1459,10 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "issue 13009: Set and Dict keys that are records of ten tag-union fields hash and compare (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=interpreter" }, .roc_file = "test/echo/issue_13009_hash_record_of_tag_unions.roc", .app_args = &.{"ab"}, .stdout_exact = "set 6 True False\ndict 5 Ok(5.0) Ok(4.0) Err(KeyNotFound)\n" } } },
     .{ .id = 0, .suite = .echo, .name = "issue 13009: Set and Dict keys that are records of ten tag-union fields hash and compare (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=dev" }, .roc_file = "test/echo/issue_13009_hash_record_of_tag_unions.roc", .app_args = &.{"ab"}, .stdout_exact = "set 6 True False\ndict 5 Ok(5.0) Ok(4.0) Err(KeyNotFound)\n" } } },
     .{ .id = 0, .suite = .echo, .name = "issue 13009: Set and Dict keys that are records of ten tag-union fields hash and compare (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=speed" }, .roc_file = "test/echo/issue_13009_hash_record_of_tag_unions.roc", .app_args = &.{"ab"}, .stdout_exact = "set 6 True False\ndict 5 Ok(5.0) Ok(4.0) Err(KeyNotFound)\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "match branch alternatives bind their names in constants and at run time (interpreter, --specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/match_alternative_binders.roc", .app_args = &.{ "x", "y" }, .stdout_exact = "a:1 b:2 c:3 d big e small f 12 h { n: 1, s: \"i\" } (3.0, 4.0)k:4 l m:2 big n 7 o [2, 7] 42" } } },
+    .{ .id = 0, .suite = .echo, .name = "match branch alternatives bind their names in constants and at run time (interpreter, --specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=interpreter", "--specialize=yes" }, .roc_file = "test/echo/match_alternative_binders.roc", .app_args = &.{ "x", "y" }, .stdout_exact = "a:1 b:2 c:3 d big e small f 12 h { n: 1, s: \"i\" } (3.0, 4.0)k:4 l m:2 big n 7 o [2, 7] 42" } } },
+    .{ .id = 0, .suite = .echo, .name = "match branch alternatives bind their names in constants and at run time (dev, --specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/match_alternative_binders.roc", .app_args = &.{ "x", "y" }, .stdout_exact = "a:1 b:2 c:3 d big e small f 12 h { n: 1, s: \"i\" } (3.0, 4.0)k:4 l m:2 big n 7 o [2, 7] 42" } } },
+    .{ .id = 0, .suite = .echo, .name = "match branch alternatives bind their names in constants and at run time (dev, --specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=dev", "--specialize=yes" }, .roc_file = "test/echo/match_alternative_binders.roc", .app_args = &.{ "x", "y" }, .stdout_exact = "a:1 b:2 c:3 d big e small f 12 h { n: 1, s: \"i\" } (3.0, 4.0)k:4 l m:2 big n 7 o [2, 7] 42" } } },
     .{ .id = 0, .suite = .echo, .name = "a list pattern nested in a record pattern reads its list through one binding (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=interpreter" }, .roc_file = "test/echo/nested_list_pattern_reads_inner_list.roc", .app_args = &.{ "x", "y" }, .stdout_exact = "[2, 2, 3] [4.0]\n[] [7.0, 8.0, 9.0]\n" } } },
     .{ .id = 0, .suite = .echo, .name = "a list pattern nested in a record pattern reads its list through one binding (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=dev" }, .roc_file = "test/echo/nested_list_pattern_reads_inner_list.roc", .app_args = &.{ "x", "y" }, .stdout_exact = "[2, 2, 3] [4.0]\n[] [7.0, 8.0, 9.0]\n" } } },
     .{ .id = 0, .suite = .echo, .name = "issue 13010: a constant whose recursive closure and a sibling closure share captures reads back its values (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=interpreter" }, .roc_file = "test/echo/issue_13010_recursive_const_shared_capture.roc", .app_args = &.{ "x", "y" }, .stdout_exact = "6 19\n" } } },
@@ -14248,30 +14252,30 @@ fn wasmSectionPayload(bytes: []const u8, wanted: u8) (std.Io.Reader.TakeLeb128Er
     return null;
 }
 
-/// How many segments of the data section `section` hold `text` in their
-/// bytes. An active segment's offset is an `i32.const` expression, the only
-/// form a wasm32 link writes.
-fn countDataSegmentsContaining(section: []const u8, text: []const u8) (std.Io.Reader.TakeLeb128Error || error{UnsupportedDataSegment})!u32 {
-    var reader = std.Io.Reader.fixed(section);
-    const segment_count = try reader.takeLeb128(u32);
-    var containing: u32 = 0;
-    for (0..segment_count) |_| {
+/// The index of the first segment in a wasm data section payload whose bytes
+/// contain `needle`, or null when none does.
+fn wasmDataSegmentContaining(data_section: []const u8, needle: []const u8) (std.Io.Reader.TakeLeb128Error || error{UnsupportedDataSegment})!?u32 {
+    var reader = std.Io.Reader.fixed(data_section);
+    const count = try reader.takeLeb128(u32);
+    for (0..count) |index| {
+        // Flags 0: active in memory 0. 1: passive, with no offset.
+        // 2: active in an explicitly indexed memory.
         const flags = try reader.takeLeb128(u32);
-        switch (flags) {
-            0, 2 => {
-                if (flags == 2) _ = try reader.takeLeb128(u32);
-                if (try reader.takeByte() != 0x41) return error.UnsupportedDataSegment;
-                _ = try reader.takeLeb128(i32);
-                if (try reader.takeByte() != 0x0b) return error.UnsupportedDataSegment;
-            },
-            1 => {},
-            else => return error.UnsupportedDataSegment,
-        }
-        const size = try reader.takeLeb128(u32);
-        const bytes = try reader.take(size);
-        if (std.mem.find(u8, bytes, text) != null) containing += 1;
+        if (flags > 2) return error.UnsupportedDataSegment;
+        if (flags == 2) _ = try reader.takeLeb128(u32);
+        if (flags != 1) try skipWasmI32ConstExpr(&reader);
+        const len = try reader.takeLeb128(u32);
+        const bytes = try reader.take(len);
+        if (std.mem.find(u8, bytes, needle) != null) return @intCast(index);
     }
-    return containing;
+    return null;
+}
+
+/// Skip an `i32.const <n> end` offset expression.
+fn skipWasmI32ConstExpr(reader: *std.Io.Reader) (std.Io.Reader.TakeLeb128Error || error{UnsupportedDataSegment})!void {
+    if (try reader.takeByte() != 0x41) return error.UnsupportedDataSegment;
+    _ = try reader.takeLeb128(i32);
+    if (try reader.takeByte() != 0x0b) return error.UnsupportedDataSegment;
 }
 
 /// Runtime symbol names can occur in the embedded LIR's data section; only
@@ -15274,13 +15278,13 @@ fn customIssue13028WasmSpeedSmallCopyIsScalar(
 /// Under `--opt=size` on wasm32, every static-data constant reaches the
 /// final link as its own `.rodata.<symbol>` segment. The link drops the ones
 /// nothing references and merges the rest into one standard output segment,
-/// so the fixture's six label strings share one data segment rather than
-/// each being a segment of their own. The segment count of the whole module
-/// is not the measure: the size build's memory packing splits a merged
-/// segment wherever a run of zero bytes is cheaper to leave out, which Boxy's
-/// static descriptors have. The fixture's marker constant is named only by a
-/// branch the optimizer proves dead, so its bytes must be absent from the
-/// module.
+/// rather than giving each constant an active segment of its own, so the
+/// fixture's six label strings all lie in one data segment. Binaryen's memory
+/// packing then splits the merged segment around long runs of zero bytes,
+/// which zero-filled memory already holds, so the module's segment count
+/// depends on where the program's static data has zeros and is not what this
+/// measures. The fixture's marker constant is named only by a branch the
+/// optimizer proves dead, so its bytes must be absent from the module.
 /// https://github.com/roc-lang/roc/issues/13029
 fn customIssue13029WasmSizeStaticDataSegmentsMerged(
     io: std.Io,
@@ -15289,8 +15293,14 @@ fn customIssue13029WasmSizeStaticDataSegmentsMerged(
     timer: *harness.Timer,
     timeout_ms: u64,
 ) ?TestResult {
-    const label_constants = 6;
-    const label_text = "label is too long to be stored inline";
+    const labels = [_][]const u8{
+        "the first label is too long to be stored inline",
+        "the second label is too long to be stored inline",
+        "the third label is too long to be stored inline",
+        "the fourth label is too long to be stored inline",
+        "the fifth label is too long to be stored inline",
+        "the sixth label is too long to be stored inline",
+    };
     const unused_marker = "UNREACHABLE-STATIC-CONSTANT-MARKER";
     const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "static-data.wasm" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
@@ -15314,7 +15324,7 @@ fn customIssue13029WasmSizeStaticDataSegmentsMerged(
     const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
         return customFailure(allocator, timer, "static data wasm execution failed: {}", .{err});
     // The host's input is 21 bytes long, so the program picks label 3.
-    const expected = "the fourth label is too long to be stored inline";
+    const expected = labels[3];
     if (!std.mem.eql(u8, result, expected)) {
         return customFailure(allocator, timer, "static data wasm returned \"{s}\", expected \"{s}\"", .{ result, expected });
     }
@@ -15325,10 +15335,18 @@ fn customIssue13029WasmSizeStaticDataSegmentsMerged(
     const data = wasmSectionPayload(wasm_bytes, 11) catch |err|
         return customFailure(allocator, timer, "failed to read the static data module's sections: {}", .{err});
     const section = data orelse return customFailure(allocator, timer, "the static data module has no data section", .{});
-    const label_segments = countDataSegmentsContaining(section, label_text) catch |err|
-        return customFailure(allocator, timer, "failed to read the static data module's data segments: {}", .{err});
-    if (label_segments != 1) {
-        return customFailure(allocator, timer, "the fixture's {d} label constants lie in {d} data segments, expected 1: static data constants were not merged into standard output segments", .{ label_constants, label_segments });
+    var first_segment: ?u32 = null;
+    for (labels) |label| {
+        const segment = wasmDataSegmentContaining(section, label) catch |err|
+            return customFailure(allocator, timer, "failed to read the static data module's data segments: {}", .{err});
+        const index = segment orelse return customFailure(allocator, timer, "no data segment holds the label \"{s}\"", .{label});
+        const first = first_segment orelse {
+            first_segment = index;
+            continue;
+        };
+        if (index != first) {
+            return customFailure(allocator, timer, "the label \"{s}\" is in data segment {d} and the first label in segment {d}: static data constants were not merged into one standard output segment", .{ label, index, first });
+        }
     }
     if (std.mem.find(u8, wasm_bytes, unused_marker) != null) {
         return customFailure(allocator, timer, "the module holds a static constant nothing references: the link kept it", .{});

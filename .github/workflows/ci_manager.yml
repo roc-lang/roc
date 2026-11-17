@@ -262,6 +262,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
+      - name: Enlarge swap (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/enlarge-linux-swap
+
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.17.1
@@ -304,6 +308,10 @@ jobs:
       - name: Enlarge pagefile (Windows)
         if: runner.os == 'Windows'
         uses: ./.github/actions/enlarge-windows-pagefile
+
+      - name: Enlarge swap (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/enlarge-linux-swap
 
       # `use-tool-cache` installs Zig at $RUNNER_TOOL_CACHE/zig/<version>/<arch>,
       # the same path in this build job and in every shard of its OS. Without
@@ -501,6 +509,10 @@ jobs:
       - name: Enlarge pagefile (Windows)
         if: runner.os == 'Windows'
         uses: ./.github/actions/enlarge-windows-pagefile
+
+      - name: Enlarge swap (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/enlarge-linux-swap
 
       # Same deterministic Zig path as the build job (see `use-tool-cache` in
       # `minici-build-linux`), so the restored cache hits.
@@ -739,6 +751,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
+      - name: Enlarge swap (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/enlarge-linux-swap
+
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.17.1
@@ -809,6 +825,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
+      - name: Enlarge swap (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/enlarge-linux-swap
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
