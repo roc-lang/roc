@@ -30,6 +30,8 @@ The entire repository test suite, snapshot suite, and MiniCI were not run.
 Linux x86_64, Zig 0.17.1. Both compiler executables were built using
 `zig build roc -Doptimize=fast`; the baseline was captured before editing
 `src/lir/arc.zig`. No revision checkout or history comparison was used.
+These measurements preceded the publication-time merge of `origin/main`;
+the optimized comparison was not repeated after that merge.
 
 Binary SHA-256 identities:
 
