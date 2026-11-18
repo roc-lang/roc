@@ -46,7 +46,8 @@ const TypeStore = TypeView;
 // TypeView's analysis namespace, including Pattern, Union, assumptions and
 // traversal keys. Only exportBlockers converts back to mutable source roots.
 const Var = types.Var;
-const InhabitednessMemo = @import("inhabitedness_memo.zig").Memo;
+const inhabitedness_memo = @import("inhabitedness_memo.zig");
+const InhabitednessMemo = inhabitedness_memo.Memo;
 
 fn resolveType(store: *TypeStore, var_: Var) error{OutOfMemory}!TypeView.Resolved {
     return store.resolveVar(var_);
@@ -147,7 +148,7 @@ pub const NominalOpenCache = struct {
             .known_absent => &self.inhabited_graphs.known_absent,
             .general => {
                 for (self.inhabited_graphs.general.items) |*entry| {
-                    if (std.mem.eql(Var, entry.known_empty, known_empty)) {
+                    if (inhabitedness_memo.varsEqual(entry.known_empty, known_empty)) {
                         std.debug.assert(entry.graph.store == store);
                         return &entry.graph;
                     }
