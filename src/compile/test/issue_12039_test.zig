@@ -98,6 +98,7 @@ test "issue 12039: a platform exposing a type its imported module lacks reports 
             \\
             \\import Util
             \\
+            \\main_for_host! : {} => U64
             \\main_for_host! = |_| main!({})
             \\
             ,
