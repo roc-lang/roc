@@ -134,6 +134,19 @@ is respected. Type errors do not stop it: checking replaces rejected code with r
 and every query here reads through those replacements to the code as written, so occurrences
 inside rejected code are renamed, listed, and highlighted like any other.
 
+Associated functions keep their canonical qualified identity, but rename uses their
+written member name. A lazy, LSP-owned source index joins the parser's exact name tokens
+to checked bindings, so renaming `Validate.run` edits only `run` and includes both its
+annotation and definition. No refactoring metadata is added to ordinary compiler output
+or serialized caches.
+
+Associated-name collision checking runs the proposed edit through the compiler and
+compares local binding identities, including references that were not edited. Merely
+checking that the edit compiles would miss capture. The speculative document never
+replaces the open document or its diagnostics. Generic method uses that cannot be
+attributed to one definition, and implicit uses with no editable name token, prevent
+renaming that associated name.
+
 It refuses rather than producing a partial rewrite, because editing every occurrence but one
 silently breaks the program. It refuses when:
 - the document could not be built, so there is no CIR to read occurrences from
