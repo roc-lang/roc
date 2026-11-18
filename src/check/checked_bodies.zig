@@ -658,6 +658,18 @@ pub const CheckedBodies = struct {
         return refs.lookupIdByExpr(id);
     }
 
+    /// The constant a lookup reads, when its resolved value reference names
+    /// a constant: a top-level, imported, or selected hoisted constant.
+    pub fn constLookupRef(self: CheckedBodies, id: ExprId) ?checked_artifact.ConstRef {
+        const refs = self.tables.refs orelse return null;
+        const ref_id = refs.lookupIdByExpr(id) orelse return null;
+        return switch (refs.records.items()[@backingInt(ref_id)].ref) {
+            .top_level_const, .imported_const => |use| use.const_ref,
+            .selected_hoisted_const => |selected| selected.const_use.const_ref,
+            .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => null,
+        };
+    }
+
     /// A call's direct procedure target, when it has one.
     pub fn callDirectTarget(self: CheckedBodies, id: ExprId) ?ResolvedValueId {
         const refs = self.tables.refs orelse return null;
