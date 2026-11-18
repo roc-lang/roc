@@ -1479,11 +1479,16 @@ from compile-time evaluation.
 Selection decides which expressions are roots, in two steps. The checker
 traversal above selects candidates: every maximal eligible expression and
 every binding a candidate or runtime code reads. Publication then makes each
-candidate a root except a data constant in value form ("Value-Form Roots")
-that binds no top-level name and whose binding no kept candidate reads
-(`SelectedHoistedRoot.read_by_root`, which pruning records as it keeps the
-reading candidate): such an expression computes nothing, so its body keeps it
-("Value-Form Expressions Stay In Their Bodies"). This is the selection rule,
+candidate a root except a data constant in value form ("Value-Form Roots"),
+or one that only reads a stored constant or another kept candidate's
+binding, that binds no top-level name and whose binding no kept candidate
+reads (`SelectedHoistedRoot.read_by_root`, which pruning records as it keeps
+the reading candidate): such an expression computes nothing, so its body
+keeps it ("Value-Form Expressions Stay In Their Bodies"). A kept candidate
+that only reads another's binding records that read only once it is known
+to stay a root itself, because a kept candidate reads its binding or it
+binds a top-level name; pruning settles these after keeping every
+candidate, readers before what they read. This is the selection rule,
 not a demotion: value form is a fact of the checked expression, decided
 before any evaluation and never after one fails. Once the module's dispatch
 plans are published, publication records for each root it makes which
@@ -2337,6 +2342,11 @@ CIR kinds (as the checked body reader presents them) and checked types:
   value is that expression's, so `if n == 0 { [] } else { ["a", "b"] }`
   has two value-form branches (`valueFormValueExpr` names the expression a
   writer reads the value from);
+- for a root, a lookup of a constant the checked-value writer completes: a
+  requested `constant` or `hoisted_constant` root, of the root's own module
+  or of a module it imports, whose own completion is the writer's
+  (`config = { port: default_port }`, `x = other_constant`,
+  `[Consts.a, Consts.b]`), and which checking recorded no error at;
 
 and no part other than the root itself is read at a row other than its own
 (`CheckedBodies.rowCoercion`). The root's own coercion belongs to the site
@@ -2349,6 +2359,18 @@ form, and a literal with a conversion root always has such a plan, so the
 conversion roots published later decide nothing. Deciding reads the checked
 types and changes none.
 
+A lookup is decided last, once every root of the module exists with its
+request eligibility: publication resolves it from checked CIR to the root it
+reads (the module's own roots by the pattern they bind, an imported
+module's from the roots that module published), since value references are
+published after the roots. A root reading constants of its own module joins
+the writer only after each root it reads has: a read of a root an evaluator
+completes keeps the reader with the evaluator, and so does a cycle of reads,
+which no valid program has. Publication marks every root that reads other
+constants (`CompileTimeRoot.reads_constants`). The value-form expressions a
+body keeps (next section) are only those that read no constant: a read
+inside a body is the runtime read of the stored value, never a literal.
+
 Everything else stays with the evaluator, deliberately:
 
 - A literal converted by a custom `from_numeral` or `from_quote`, a literal
@@ -2360,19 +2382,17 @@ Everything else stays with the evaluator, deliberately:
   finishes: its target is not a builtin scalar the checker fixed.
 - String interpolation, a record update, a record whose type stores a field
   by its presence or fills it from a default, a call, a dispatch, an
-  operator (unary minus included), a lookup of any definition, a field or
-  tuple access, a block with a statement, a branch, `dbg`, `expect`, and
-  `crash`.
-- A reference to another root's completed value. Its value is complete when
-  the root runs, but writing it would copy or share another root's nodes,
-  which this rule leaves to a later step.
+  operator (unary minus included), a lookup of a procedure, a local
+  binding, a platform requirement, or a constant an evaluator completes or
+  whose value is not stored (a polymorphic one), a field or tuple access, a
+  block with a statement, a branch, `dbg`, `expect`, and `crash`.
 
 Nothing reported during evaluation can arise for a value-form root: it calls
 nothing, so it cannot crash, fail an `expect`, print with `dbg`, or reach an
 exhaustiveness failure; its literals convert by the builtin conversion and
-fit their types, so none is rejected; and it reads no value, so it fails by
-no read of a failed root. A root for which any of these could happen is not
-in value form.
+fit their types, so none is rejected; and it reads only roots the writer
+completes, which cannot fail either, so it fails by no read of a failed
+root. A root for which any of these could happen is not in value form.
 
 The writer stores the root under the plan, layout and stored type the
 `.boxy` compile-time evaluator stores it under, computed from the root's
@@ -2384,21 +2404,38 @@ representation either strategy stores such a root in. One store writer
 serves both producers (`eval/const_store_writer.zig`): the plan-directed walk,
 the node shapes it fills, the field and variant order, packed scalar and
 product lists, nominal wrapping, and the stored type are shared, and only
-where a value's parts come from differs: an evaluator's result memory, or the
-checked expression's parts. A numeral's bytes are the bytes lowering gives
-the literal (`exact_numeral.encodeBits`), and a literal list or string has
-no capacity beyond its items (Static Lists And Strings Keep Their Capacity).
+where a value's parts come from differs: an evaluator's result memory, the
+checked expression's parts, or the stored value of a constant the expression
+reads. A numeral's bytes are the bytes lowering gives the literal
+(`exact_numeral.encodeBits`), and a literal list or string has no capacity
+beyond its items (Static Lists And Strings Keep Their Capacity). A read of a
+constant is the constant's stored value, capacity included: the writer
+copies the read root's nodes into the reading root's store under the
+reading root's own plan, choosing each tag's variant by name, so a read at a
+wider tag row stores the same value, and copying a packed list's bytes as
+they are, since a list of one item type packs one way. It reads a root of
+the module being written from the store being written, since every artifact
+of one checked identity owns its own store, and an imported root from the
+schema's view of its module.
 Every part of a value-form root is a node of its own: the writer shares no
-node between two parts, equal or not. Sharing is an evaluator's record that
-two parts were one allocation, and a checked expression has no allocations
-to record. Equal string and packed list bytes are still stored once, because
-the store interns blob data by content.
+node between two parts, equal or not, nor with the root it reads. Sharing is
+an evaluator's record that two parts were one allocation, and a checked
+expression has no allocations to record. Equal string and packed list bytes
+are still stored once, because the store interns blob data by content.
 
-A value-form root reads nothing, so finalization completes every pending
-one before any evaluator starts: the evaluators' dependency graph never
-names them, no program is built for them, and a module whose pending roots
-are all in value form builds no program and is complete for its unit
-scheduler at once. The checked artifact still carries each such root's
+A value-form root reads only roots the writer completes, so finalization
+completes every pending one before any evaluator starts: the evaluators'
+dependency graph never names them, no program is built for them, and a
+module whose pending roots are all in value form builds no program and is
+complete for its unit scheduler at once. Within a module the writer
+completes the roots that read no constant first, then the readers, each
+after the readers it reads (`valueFormReaderOrder`); across modules it
+completes a module after its imports, whose roots finalization completes
+first in either order it runs modules in (a module's evaluation during
+checking starts once its imports are complete, and a program's finalization
+takes its modules in dependency order). A read records no root read
+(`CompileTimeRootReadTable`), as no `.boxy` evaluation of a root does: the
+read root is complete whenever the reader is. The checked artifact still carries each such root's
 request, entry wrapper template, and const template: the root graph walks no
 wrapper of a completed root, but a module's object defines each completed
 root's wrapper for the other objects of a link, and runtime reads restore
@@ -2417,6 +2454,27 @@ lists these expressions instead, ascending
 (`CompileTimeRootTable.inline_literals`), and their bodies keep them. A
 binding whose right-hand side is listed is an ordinary local binding: its
 declaration stays in the body and its uses read the local.
+
+A selected data constant that is only a lookup, through blocks with no
+statements, of another constant, such as `start = Tables.min_match_len` or
+`var $i = min_match_len` in a function body, is no root under the same
+conditions, and nothing lists it: the lookup is the read of a value
+compile-time evaluation stores already, so its body keeps the lookup, and
+running it restores that value, exactly as a read of the root would have.
+The read constant must be one whose value is stored: a requested `constant`
+or `hoisted_constant` root, of the module or of one it imports, that is not
+guarded, whose evaluation failing would leave its value to runtime
+lowering. A lookup of any other constant (a polymorphic one, whose value
+runtime code computes at each instantiation, or a guarded one) stays a
+root, and so does a lookup checking recorded an error at. A selected data
+constant that is only a lookup of another selected root's binding, such as
+the branch `{ start }` reading that `start`, is no root under the same
+conditions, whatever that binding is: its body reads the binding, which is
+the root's value or, when that is no root either, the local the body
+keeps. Checking does not count such a read as the binding's
+(`read_by_root`) unless the reader stays a root ("Root Selection During
+Checking"), so `start` and every read of it like `{ start }` stay out of
+the root table together.
 
 The rule applies at every position. A value-form part of a larger selected
 expression that is not in value form, such as `[1, 2]` in
@@ -4734,6 +4792,26 @@ field, a generalized constructor helper, an annotated structural parameter
 that feeds a backing, and an imported backing; the accepted controls keep a
 structural payload and a nominal payload side by side in one backing, and
 pass a structural value through a forwarding parameter that feeds it.
+
+Unification opens a backing through the openings its type store has recorded
+(`instantiate.BackingOpenings`). An opening substitutes the application's args
+without reading them, and every variable it mints takes the same rank, so an
+opening whose minted variables hold structure alone and name nothing but each
+other and the args is a fixed run of writes: descriptors minted in order, with
+these marks, and runs of vars-pool entries, record fields and tags. Such an
+opening of a declaration is recorded with each variable named by its place
+among the minted variables or the args, together with every template variable
+the walk read and the descriptor it held. A later opening of the declaration
+replays the record under the new names instead of walking the template again,
+and writes exactly what the walk would write, in the same order, as long as
+each of those template variables is still the root of its class and holds the
+descriptor the walk read. A template is not fixed for the life of the store:
+its variable-free classes are shared with other uses of the declarations they
+apply (every annotation naming `Top` in a module can be one class), so
+unification can merge such a class with an equal one after an opening was
+recorded, giving it another root or a descriptor whose args range is stored
+elsewhere. When any template variable changed, the opening walks the template
+as it now is and its walk replaces the record.
 
 ### Settled-State Re-Decision
 
@@ -8008,6 +8086,11 @@ the root. A format method that is a local procedure reaches a Boxy codec
 family as a captured function value; the constructor calls `rename_field`
 through the value it captures, since the names tuple that holds the values for
 every other piece is what the constructor builds.
+
+Restoring a stored function replays each lexical scope's dispatch relations
+with that scope's retained evidence frame as the head. Scope labels alone
+cannot select evidence: depth/index references are relative to their owning
+frame, not to the innermost frame of the restored closure.
 
 A block-local value binding whose own binders are referenced inside its
 expression is a recursive value. Canonicalization rejects an eager
@@ -16757,7 +16840,8 @@ Other solved-graph mutations:
   lift.
 - `markNominalBackingStructure`—mechanism: provenance on vars an opening
   of a nominal declaration backing has just minted below its root, written before any
-  relation reads them. Unification consults the mark under the declared
+  relation reads them (a replayed opening, `instantiate.BackingOpenings`,
+  writes the recorded marks with the descriptors it mints). Unification consults the mark under the declared
   rule in Declared Backing Structure (above); the write itself never changes
   content or links classes.
 - `generalizeRank` / `commitUncommittedTail`—policy: Uncommitted Record
@@ -18496,8 +18580,7 @@ ends, unwrapping its `Try` as an in-place conversion does.
 A root exists once the literal's own type is closed, which says nothing about
 the other types at its edge: `inner({ w: y }, 0)` with `0 : U64` has a root
 while `y` is a variable of the enclosing scheme. The wrapper has no enclosing
-scope, so such a variable seals, and a requirement over it names a type no
-value of the program has and a dictionary only the unentered scope holds. A
+scope, and an unrelated constrained row cannot be sealed there. A
 chain frame therefore composes nothing when it is entered: each dictionary and
 each literal argument is composed at its first read, in the scope holding the
 frame's edge (`Body.frameDictionary`, `frameLiteral`), and an exact procedure
@@ -18506,6 +18589,14 @@ evidence reads through them. A conversion reads the requirements of the
 literal's own closed type, whose evidence names no scope, so a read of an
 unentered scope is a compiler invariant. A frame descriptor is never read: a
 frame's types are its environment.
+
+Literal frames retain checked substitutions rather than runtime call instances.
+Each demanded type reads its variables' actuals through those scoped
+substitutions before ordinary type conversion, including field kinds and
+lexical bindings (`LazySubstitution`). Substitution is lazy, iterative and
+memoized within the frame. Unread actuals are never converted, and the ordinary concrete converter does not perform
+lazy variable lookup. A local procedure that actually reads its declaration
+table demands that complete instance separately.
 
 Forwarding a dictionary through a chain frame still crosses that frame's
 parameter interface. Every frame composes its dictionary through the same
@@ -25331,6 +25422,15 @@ correspondingly offer no `_try`, `_wrap`, or `_saturated` forms on `F32` and
 `F64`. Fast-math flags are the float analogue of no-wraparound assertions; they
 change results and are not enabled.
 
+Decimal multiplication rescales the exact wide product before testing the
+sign-dependent fixed-point bounds. `dec_mul` crashes on overflow;
+`dec_mul_saturated` returns the appropriate bound. Both use the same arithmetic
+kernel, including truncation toward zero and the extra negative magnitude at
+`Dec.lowest`. Saturation is a distinct operation so it computes the wide product
+only once. A division-based operand threshold is not equivalent: the division
+can overflow for fractional factors, and truncating it can reject products
+that fit.
+
 The names state what happens rather than using "checked", which fails to
 distinguish three members that all check. `_overflows` is present tense because
 it asks about a hypothetical addition rather than reporting on one that ran.
@@ -27977,6 +28077,11 @@ because that bind retains through the place. This use
 query follows the explicit borrow-source chain through every alias and payload
 read to the nearest binding made owned by the current ARC variant. Descendants
 of that binding belong to its new place, not its former lender's place.
+Place identity is fixed within one binding-override context, unlike path-local
+unit availability. ARC memoizes that identity and operand-span sharing within
+the context, preserving duplicate operands. Source preparation's base context
+and each emitted variant own separate indexes; neither may change the solved
+borrow links or reuse another context's answers.
 The use
 query is definition-sensitive: a `set_local` that writes the root ends the
 current place definition after its value operand is read. Uses reached through
@@ -27997,7 +28102,9 @@ representation availability distinct from ownership-unit availability. A
 materialized same-layout alias of a shell carries the exact committed-layout
 RC-field indices that are absent in LIR. ARC derives that list directly from the
 path's solved residual mask; it is not reconstructed from nearby retains or
-field reads. A borrowed struct lives only as long as the ownership place it
+field reads. A view's overlap with its container's committed pieces is fixed
+within an emission, so ARC shares that shape across path visits, never the
+resulting absent-slot mask. A borrowed struct lives only as long as the ownership place it
 borrows from, such as a payload copied out of a box that the place stores, so
 once that place's unit has left the path state, the borrowed struct is a shell
 too and its aliases list every refcounted field as absent. Debug evaluators use the list only to avoid interpreting the stale

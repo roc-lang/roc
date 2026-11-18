@@ -1728,6 +1728,25 @@ test "hoist roots select the pure receiver binding of an effectful static dispat
     try std.testing.expect(roots[0].pattern != .none);
 }
 
+test "issue 12954: hoist roots exclude annotated recursive effectful calls" {
+    // A recursive call's body-inference contribution must not make the call
+    // eligible for compile-time execution.
+    var test_env = try TestEnv.init("Test",
+        \\effect! : () => {}
+        \\effect! = || {}
+        \\
+        \\forever! : () => {}
+        \\forever! = || {
+        \\    effect!()
+        \\    forever!()
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
 test "hoist roots are not selected when an effectful function argument is called" {
     // Repro for https://github.com/roc-lang/roc/issues/10154
     var test_env = try TestEnv.init("Test",

@@ -301,6 +301,10 @@ pub const Store = struct {
     /// graph-copy machine. Runtime-only scratch: never serialized, cloned, or
     /// relocated; capacity persists across instantiations until sealing.
     instantiate_scratch: instantiate.Scratch = .{},
+    /// Openings of nominal declaration backings recorded for replay
+    /// (`instantiate.BackingOpenings`). Runtime-only: never serialized,
+    /// cloned, or relocated; released when the store is sealed.
+    backing_openings: instantiate.BackingOpenings = .{},
 
     /// For each frozen class (see `DescriptorFlags.frozen`), keyed by its
     /// descriptor, the variable it was frozen at. A merge leaves a frozen
@@ -670,6 +674,8 @@ pub const Store = struct {
     fn releaseCheckerBuffers(self: *Self) void {
         self.instantiate_scratch.deinit(self.gpa);
         self.instantiate_scratch = .{};
+        self.backing_openings.deinit(self.gpa);
+        self.backing_openings = .{};
         self.frozen_anchors.deinit();
         self.frozen_anchors = .init(self.gpa);
         self.class_watch.deinit(self.gpa);
@@ -1217,7 +1223,22 @@ pub const Store = struct {
         const next_len = @as(usize, self.descs.backing.len()) + 1;
         try self.descs.backing.ensureTotalCapacity(self.gpa, next_len);
         try self.root_metas.ensureTotalCapacity(self.gpa, next_len);
+        return self.appendNewClassRowAssumeCapacity(row, checked_var);
+    }
 
+    /// `appendClassRow` into descriptor and root metadata room reserved
+    /// earlier. A reissued descriptor's writes may still journal.
+    inline fn appendClassRowAssumeCapacity(self: *Self, row: Desc.Row, checked_var: Var) Allocator.Error!DescStore.Idx {
+        if (self.takeFreeDesc()) |desc_idx| {
+            // As in `appendClassRow`, both writes journal inside a probe.
+            try self.setDescRowUnguarded(desc_idx, row);
+            try self.setRootMeta(desc_idx, .{ .checked_var = checked_var });
+            return desc_idx;
+        }
+        return self.appendNewClassRowAssumeCapacity(row, checked_var);
+    }
+
+    inline fn appendNewClassRowAssumeCapacity(self: *Self, row: Desc.Row, checked_var: Var) DescStore.Idx {
         const desc_idx = self.descs.appendRowAssumeCapacity(row);
         const meta_idx = self.root_metas.appendAssumeCapacity(.{
             .checked_var = checked_var,
@@ -1594,6 +1615,27 @@ pub const Store = struct {
         return self.registerRow(try self.encodeDesc(desc));
     }
 
+    /// Create one new variable per row of `rows`, in order, each holding its
+    /// row, a descriptor already encoded for this store, as `register` does
+    /// for each in turn (`instantiate.BackingOpenings` replays the
+    /// descriptors an opening of a nominal declaration's backing minted).
+    pub fn registerEncodedRows(self: *Self, rows: []const Desc.Row) std.mem.Allocator.Error!void {
+        self.debugAssertUnsealed();
+        try self.slots.ensureUnusedCapacity(self.gpa, rows.len);
+        try self.union_ranks.ensureUnusedCapacity(self.gpa, rows.len);
+        const descs_len = @as(usize, self.descs.backing.len()) + rows.len;
+        try self.descs.backing.ensureTotalCapacity(self.gpa, descs_len);
+        try self.root_metas.ensureTotalCapacity(self.gpa, descs_len);
+        for (rows) |row| {
+            const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(self.slots.len()))));
+            const desc_idx = try self.appendClassRowAssumeCapacity(row, Self.slotIdxToVar(slot_idx));
+            const inserted_slot_idx = self.slots.appendAssumeCapacity(.{ .root = desc_idx });
+            const rank_idx = self.union_ranks.appendAssumeCapacity(0);
+            std.debug.assert(inserted_slot_idx == slot_idx);
+            std.debug.assert(@backingInt(rank_idx) == @backingInt(slot_idx));
+        }
+    }
+
     /// `register` for a descriptor already encoded.
     fn registerRow(self: *Self, row: Desc.Row) std.mem.Allocator.Error!Var {
         self.debugAssertUnsealed();
@@ -1820,6 +1862,13 @@ pub const Store = struct {
 
     pub fn groundEpoch(self: *const Self) u64 {
         return self.ground_epoch;
+    }
+
+    /// Advance the ground epoch by `count` writes (`instantiate.BackingOpenings`
+    /// replays the advance an opening of a nominal declaration's backing made).
+    pub fn advanceGroundEpoch(self: *Self, count: u64) void {
+        self.debugAssertUnsealed();
+        self.ground_epoch +%= count;
     }
 
     /// Set a type variable to the provided content
@@ -2320,7 +2369,8 @@ pub const Store = struct {
     /// Append `s` to the vars pool as a range: its length goes in the slot
     /// just before it (`varRange`), so a stored descriptor keeps only the
     /// range's start. Every range of the pool is made here or by
-    /// `mkAliasWithPackedSourceDecl`.
+    /// `mkAliasWithPackedSourceDecl`, or copied from ranges they made by
+    /// `appendVarsPoolEntries`.
     pub fn appendVars(self: *Self, s: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
         self.debugAssertUnsealed();
         const trace = tracy.traceNamed(@src(), "typesStore.appendVars");
@@ -2349,6 +2399,27 @@ pub const Store = struct {
 
     fn isRangeLengthSlot(slot: Var) bool {
         return @backingInt(slot) & range_length_bit != 0;
+    }
+
+    /// Whether a vars-pool entry is the length slot `appendVars` writes
+    /// before a range rather than a variable.
+    pub fn isVarsPoolLengthSlot(entry: Var) bool {
+        return isRangeLengthSlot(entry);
+    }
+
+    /// Append `entries` to the vars pool as they are, returning the index of
+    /// the first. `entries` is a run of whole ranges as `appendVars` wrote
+    /// them, each led by its length slot (`instantiate.BackingOpenings`
+    /// replays the run an opening of a nominal declaration's backing
+    /// appended).
+    pub fn appendVarsPoolEntries(self: *Self, entries: []const Var) std.mem.Allocator.Error!u32 {
+        self.debugAssertUnsealed();
+        return @backingInt((try self.vars.appendSlice(self.gpa, entries)).start);
+    }
+
+    /// The number of entries in the vars pool.
+    pub fn varsPoolLen(self: *const Self) u32 {
+        return @intCast(self.vars.items.len);
     }
 
     /// What a stored descriptor keeps of the vars range `range`: its start,
@@ -3979,6 +4050,10 @@ test "sealing releases checker-only buffers without allocating" {
         store.instantiate_scratch.reach_state = .init(gpa);
         try store.instantiate_scratch.reach_state.?.put(value, true);
         store.instantiate_scratch.marker_visited = .init(gpa);
+        inline for (.{ "rows", "pool", "fields", "tags", "pinned", "replay_pool", "replay_fields", "replay_tags", "replay_rows", "args" }) |field| {
+            try @field(store.backing_openings, field).ensureTotalCapacity(gpa, 8);
+        }
+        try store.backing_openings.recordings.ensureTotalCapacity(gpa, 8);
         {
             const pool = &store.instantiate_scratch.marker_visited.?;
             var visited = pool.acquire();
