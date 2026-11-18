@@ -1394,28 +1394,12 @@ const structural_component_method_literal_stdout = "True True False True False T
 const local_type_literal_conversion_stdout = "hello 5 11 abc 3 11\n";
 const local_type_generic_hashing_stdout = "2 2 2 2\n";
 const local_type_derived_eq_stdout = "1 True True False True False False False\n";
-const issue_11130_speed_expected_stdout = if (builtin.os.tag == .windows)
-    "first\r\nsecond\r\nold:0\r\nnew:0\r\nold\r\nold\r\nunused\r\n"
-else
-    issue_11130_expected_stdout;
-
 const issue_13007_generic_codecs_stdout = "{\"value\":0}\n{\"value\":\"s\"}\n{\"value\":{\"inner\":0}}\n{\"value\":[\"s\",\"s\"]}\n[0,\"s\"]\n[\"s\",0]\n[true,{\"k\":\"s\"}]\n{\"both\":[0,0],\"first\":0}\n{\"both\":[\"s\",\"s\"],\"first\":\"s\"}\n{\"items\":[{\"v\":0},{\"v\":0}]}\n{\"items\":[{\"v\":\"s\"},{\"v\":\"s\"}]}\n{\"count\":2,\"left\":0,\"right\":[\"s\"]}\n{\"count\":2,\"left\":\"s\",\"right\":[{\"n\":0}]}\n{\"count\":2,\"left\":0,\"right\":[0]}\n{\"x\":0,\"y\":5}\n{\"x\":\"s\",\"y\":5}\n{\"A\":0}\n{\"A\":[\"s\"]}\n{\"value\":{\"deep\":\"s\"}}\n{\"value\":{\"s\":0}}\ntag 0\nparsed 0 s s 7\n";
 const issue_13007_imported_codecs_stdout = "{\"value\":0}\n{\"value\":{\"name\":\"s\"}}\n{\"left\":[\"s\"],\"right\":[0,\"s\"]}\n{\"left\":[0],\"right\":[[\"s\"],0]}\nparsed s\n";
 const boxy_json_parse_shapes_expected_stdout = "Ok({})\nOk({ age: 36, name: \"ada\" })\nErr(InvalidJson(\"Missing field: age\"))\nOk((\"a\", 2))\nOk([[1, 2], [], [3]])\nOk([Green, Rgb(1, 2, 3), Red])\n";
 const effectful_callback_through_annotated_function_expected_stdout = "first\nfallback\nProgram exited with error: Fail(\"ran\")\n";
 const boxy_try_low_levels_expected_stdout = "Ok(\"ab\")\nErr(BadUtf8({ index: 0, problem: InvalidStartByte }))\nOk(300)\nErr(OutOfRange)\nOk(-42)\nTrue\nTrue\nTrue\nTrue\n";
-// Built Windows apps write through the CRT's text-mode stdout.
-const boxy_try_low_levels_built_expected_stdout = if (builtin.os.tag == .windows)
-    "Ok(\"ab\")\r\nErr(BadUtf8({ index: 0, problem: InvalidStartByte }))\r\nOk(300)\r\nErr(OutOfRange)\r\nOk(-42)\r\nTrue\r\nTrue\r\nTrue\r\nTrue\r\n"
-else
-    boxy_try_low_levels_expected_stdout;
 const boxy_inspect_expected_stdout = "{ label: \"hi\", nums: [1.0, 2.0] }\n{ label: \"bye\", nums: [3, 4] }\n{ label: <missing>, nums: <missing> }\nOk(3)\n";
-const boxy_inspect_size_expected_stdout = if (builtin.os.tag == .windows)
-    "{ label: \"hi\", nums: [1.0, 2.0] }\r\n{ label: \"bye\", nums: [3, 4] }\r\n{ label: <missing>, nums: <missing> }\r\nOk(3)\r\n"
-else
-    boxy_inspect_expected_stdout;
-
-const issue_11217_size_expected_stdout = if (builtin.os.tag == .windows) "ok\r\n" else "ok\n";
 const issue_11351_expected_stdout = "[]\n0\n{ a: [], b: Err([]) }\n[]\n";
 const issue_11578_expected_stdout =
     \\("x", U, 3)
@@ -1436,10 +1420,6 @@ const issue_11578_expected_stdout =
     \\Box(("x", meters!))
     \\
 ;
-const issue_11351_size_expected_stdout = if (builtin.os.tag == .windows)
-    "[]\r\n0\r\n{ a: [], b: Err([]) }\r\n[]\r\n"
-else
-    issue_11351_expected_stdout;
 
 const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "Str.from_utf8 reports the first ill-formed sequence at every position (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=interpreter" }, .roc_file = "test/echo/utf8_errors_at_every_position.roc", .stdout_exact = "ok 18702\n" } } },
@@ -1928,7 +1908,7 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "issue 12038: a constant list too large to allocate is a compile-time crash (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_12038_constant_list_too_large.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "Attempted to allocate a collection larger than the platform address space" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .echo, .name = "issue 11130: record versions and eager effects (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/issue_11130_record_versions.roc", .stdout_exact = issue_11130_expected_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "issue 11130: record versions and eager effects (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/issue_11130_record_versions.roc", .stdout_exact = issue_11130_expected_stdout } } },
-    .{ .id = 0, .suite = .echo, .name = "issue 11130: record versions and eager effects (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/echo/issue_11130_record_versions.roc", .stdout_exact = issue_11130_speed_expected_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "issue 11130: record versions and eager effects (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/echo/issue_11130_record_versions.roc", .stdout_exact = issue_11130_expected_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: hello (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/hello.roc", .stdout_exact = "Hello, World!" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: hello (dev backend)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/hello.roc", .stdout_exact = "Hello, World!" } } },
     // A run that builds an executable starts it before releasing the build's
@@ -2102,10 +2082,10 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "issue 12070: tail-recursive step reached through a boxed closure with an unused erased capture (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/issue_12070_boxed_tce_unused_capture.roc", .stdout_exact = "3" } } },
     .{ .id = 0, .suite = .echo, .name = "issue 12070: tail-recursive step reached through a boxed closure with an unused erased capture (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/echo/issue_12070_boxed_tce_unused_capture.roc", .stdout_exact = "3" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11663 record update after recursive return (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/issue_11663_dev_stack_overflow.roc", .stdout_exact = "1" } } },
-    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11217 Boxy polymorphic captures and aliases (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no" }, .roc_file = "test/echo/issue_11217.roc", .stdout_exact = issue_11217_size_expected_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11217 Boxy polymorphic captures and aliases (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no" }, .roc_file = "test/echo/issue_11217.roc", .stdout_exact = "ok\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11351 Boxy unbound type variables use their sealed default (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11351.roc", .stdout_exact = issue_11351_expected_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11351 Boxy unbound type variables use their sealed default (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11351.roc", .stdout_exact = issue_11351_expected_stdout } } },
-    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11351 Boxy unbound type variables use their sealed default (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no" }, .roc_file = "test/echo/issue_11351.roc", .stdout_exact = issue_11351_size_expected_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11351 Boxy unbound type variables use their sealed default (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no" }, .roc_file = "test/echo/issue_11351.roc", .stdout_exact = issue_11351_expected_stdout } } },
     // repro for https://github.com/roc-lang/roc/issues/11578
     //
     // `Str.inspect` must render every part of a value under `--specialize=no`
@@ -2372,7 +2352,7 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy dynamic tag with ZST payload materializes to concrete union (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/boxy_zst_tag_materialize.roc", .stdout_exact = "some unit\nnone\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy inspect of erased record and tag values matches concrete rendering (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/boxy_inspect_dynamic.roc", .stdout_exact = boxy_inspect_expected_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy inspect of erased record and tag values matches concrete rendering (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/boxy_inspect_dynamic.roc", .stdout_exact = boxy_inspect_expected_stdout } } },
-    .{ .id = 0, .suite = .echo, .name = "echo platform: boxy inspect of erased record and tag values matches concrete rendering (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no" }, .roc_file = "test/echo/boxy_inspect_dynamic.roc", .stdout_exact = boxy_inspect_size_expected_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: boxy inspect of erased record and tag values matches concrete rendering (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no" }, .roc_file = "test/echo/boxy_inspect_dynamic.roc", .stdout_exact = boxy_inspect_expected_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy derived JSON parsers drive every container shape (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/boxy_json_parse_shapes.roc", .stdout_exact = boxy_json_parse_shapes_expected_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy derived JSON parsers drive every container shape (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/boxy_json_parse_shapes.roc", .stdout_exact = boxy_json_parse_shapes_expected_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy derived JSON dict parser (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/boxy_json_parse_dict.roc", .stdout_exact = "Ok(2) 2\n" } } },
@@ -7249,7 +7229,7 @@ fn runCustomCase(
             .roc_file = "test/echo/boxy_try_low_levels.roc",
             .output_name = "boxy_try_low_levels",
             .exit = .success,
-            .stdout_exact = boxy_try_low_levels_built_expected_stdout,
+            .stdout_exact = boxy_try_low_levels_expected_stdout,
         }),
         .build_default_app_interpreter_args => customBuildDefaultAppArgs(io, allocator, &env, &timer, timeout_ms, .interpreter, null),
         .build_interpreter_owns_intermediates => customBuildInterpreterOwnsIntermediates(io, allocator, &env, &timer, timeout_ms),
