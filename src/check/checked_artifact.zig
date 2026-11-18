@@ -30581,7 +30581,11 @@ const PublicApiClosureDependencyCollector = struct {
         self: *PublicApiClosureDependencyCollector,
         closure: ImportedTemplateClosureView,
     ) Allocator.Error!void {
-        try self.runClosureSteps(.{ .closure = closure });
+        var pending: std.ArrayListUnmanaged(ClosureStep) = .empty;
+        defer pending.deinit(self.allocator);
+        try appendClosureSteps(self.allocator, closure, &pending);
+        std.mem.reverse(ClosureStep, pending.items);
+        try self.drainClosureSteps(&pending);
     }
 
     fn appendProcedureTemplateRef(
@@ -30612,15 +30616,28 @@ const PublicApiClosureDependencyCollector = struct {
         var pending: std.ArrayListUnmanaged(ClosureStep) = .empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, first);
+        try self.drainClosureSteps(&pending);
+    }
+
+    /// Run the steps on `pending`, last first, until none is left. The steps
+    /// one step leads to are appended in the order they run and then reversed,
+    /// so the first of them is the next step run.
+    fn drainClosureSteps(
+        self: *PublicApiClosureDependencyCollector,
+        pending: *std.ArrayListUnmanaged(ClosureStep),
+    ) Allocator.Error!void {
         while (pending.pop()) |step| {
             const start = pending.items.len;
-            try self.runClosureStep(step, &pending);
+            try self.runClosureStep(step, pending);
             std.mem.reverse(ClosureStep, pending.items[start..]);
         }
     }
 
+    /// A closure is never a step itself: its refs are appended as steps where
+    /// it is reached (`appendClosureSteps`), which keeps a step small. The
+    /// stack copies and reverses steps, and a closure view is several times
+    /// the size of any ref.
     const ClosureStep = union(enum) {
-        closure: ImportedTemplateClosureView,
         artifact_key: ModuleId,
         type_owner_key: ModuleId,
         procedure_template: canonical.ProcedureTemplateRef,
@@ -30644,26 +30661,6 @@ const PublicApiClosureDependencyCollector = struct {
     ) Allocator.Error!void {
         const gpa = self.allocator;
         switch (step) {
-            .closure => |closure| {
-                for (closure.checked_bodies) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
-                for (closure.checked_type_roots) |value| {
-                    try pending.append(gpa, .{ .artifact_key = value.artifact });
-                    try pending.append(gpa, .{ .type_owner_key = value.artifact });
-                }
-                for (closure.checked_type_schemes) |value| {
-                    try pending.append(gpa, .{ .artifact_key = value.artifact });
-                    try pending.append(gpa, .{ .type_owner_key = value.artifact });
-                }
-                for (closure.checked_callable_bodies) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
-                for (closure.checked_const_bodies) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
-                for (closure.checked_procedure_templates) |value| try pending.append(gpa, .{ .procedure_template = value });
-                for (closure.callable_eval_templates) |value| try pending.append(gpa, .{ .callable_eval_template = value });
-                for (closure.const_templates) |value| try pending.append(gpa, .{ .const_ref = value });
-                for (closure.nested_proc_sites) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
-                for (closure.resolved_value_refs) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
-                for (closure.static_dispatch_plans) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
-                for (closure.interface_capabilities) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
-            },
             .artifact_key => |key| try self.appendArtifactKey(key),
             .type_owner_key => |key| try self.appendTypeOwnerArtifactKey(key),
             .procedure_template => |template_ref| {
@@ -30795,7 +30792,7 @@ const PublicApiClosureDependencyCollector = struct {
                 const binding = self.platform_required_bindings.lookupByBindingId(@backingInt(binding_id)) orelse {
                     checkedArtifactInvariant("public API closure referenced missing platform-required binding", .{});
                 };
-                try pending.append(gpa, .{ .closure = self.platform_required_bindings.relationClosure(binding) });
+                try appendClosureSteps(gpa, self.platform_required_bindings.relationClosure(binding), pending);
             },
             .static_dispatch_plans => |table| {
                 const plans = self.static_dispatch_plans;
@@ -30839,6 +30836,32 @@ const PublicApiClosureDependencyCollector = struct {
                 }
             },
         }
+    }
+
+    /// Append one step for each ref of `closure`, in the order they run.
+    fn appendClosureSteps(
+        gpa: Allocator,
+        closure: ImportedTemplateClosureView,
+        pending: *std.ArrayListUnmanaged(ClosureStep),
+    ) Allocator.Error!void {
+        for (closure.checked_bodies) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
+        for (closure.checked_type_roots) |value| {
+            try pending.append(gpa, .{ .artifact_key = value.artifact });
+            try pending.append(gpa, .{ .type_owner_key = value.artifact });
+        }
+        for (closure.checked_type_schemes) |value| {
+            try pending.append(gpa, .{ .artifact_key = value.artifact });
+            try pending.append(gpa, .{ .type_owner_key = value.artifact });
+        }
+        for (closure.checked_callable_bodies) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
+        for (closure.checked_const_bodies) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
+        for (closure.checked_procedure_templates) |value| try pending.append(gpa, .{ .procedure_template = value });
+        for (closure.callable_eval_templates) |value| try pending.append(gpa, .{ .callable_eval_template = value });
+        for (closure.const_templates) |value| try pending.append(gpa, .{ .const_ref = value });
+        for (closure.nested_proc_sites) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
+        for (closure.resolved_value_refs) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
+        for (closure.static_dispatch_plans) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
+        for (closure.interface_capabilities) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
     }
 
     fn appendArtifactKey(
