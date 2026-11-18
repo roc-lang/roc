@@ -274,10 +274,10 @@ pub const ModuleEnvStorage = union(enum) {
 pub const CheckedModuleArtifactKey = extern struct {
     bytes: [32]u8 = @as([32]u8, @splat(0)),
 
-    /// Integer equality over the key's identity bytes: a single 256-bit
-    /// compare, never a byte-wise comparison.
+    /// Equality over the key's identity bytes, as words rather than a
+    /// byte-wise comparison.
     pub fn eql(a: CheckedModuleArtifactKey, b: CheckedModuleArtifactKey) bool {
-        return @as(u256, @bitCast(a.bytes)) == @as(u256, @bitCast(b.bytes));
+        return base.byte_encoding.digestsEql(&a.bytes, &b.bytes);
     }
 
     /// The digest that references to this artifact carry. The constituent

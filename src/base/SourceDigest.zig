@@ -18,6 +18,7 @@
 //! birthday collision.
 
 const std = @import("std");
+const byte_encoding = @import("byte_encoding.zig");
 
 const SourceDigest = @This();
 
@@ -31,9 +32,9 @@ pub fn of(source: []const u8) SourceDigest {
     return digest;
 }
 
-/// Whether two digests name the same bytes: a single 256-bit compare.
+/// Whether two digests name the same bytes.
 pub fn eql(a: SourceDigest, b: SourceDigest) bool {
-    return @as(u256, @bitCast(a.bytes)) == @as(u256, @bitCast(b.bytes));
+    return byte_encoding.digestsEql(&a.bytes, &b.bytes);
 }
 
 test "a source digest is the BLAKE3-256 of the bytes" {
