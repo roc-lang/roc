@@ -55347,7 +55347,8 @@ const EnclosingVarRank = struct {
 
 /// Process one deferred dispatch entry, keeping every enclosing-scope
 /// variable its relations reach at its own rank (design.md "Frozen Scheme
-/// Relations Keep Enclosing Variables Monomorphic").
+/// Relations Keep Enclosing Variables Monomorphic"). The entry's relations
+/// record those variables in `enclosing` just before they resolve.
 inline fn processDeferredDispatchEntry(
     self: *Self,
     env: *Env,
@@ -55356,10 +55357,7 @@ inline fn processDeferredDispatchEntry(
 ) std.mem.Allocator.Error!DeferredEntryOutcome {
     var enclosing: std.ArrayList(EnclosingVarRank) = .empty;
     defer enclosing.deinit(self.gpa);
-    if (self.captured_scheme_owners.count() != 0) {
-        try self.collectFrozenRelationEnclosingVars(env.deferred_static_dispatch_constraints.items()[entry_index], &enclosing);
-    }
-    const outcome = try self.processDeferredDispatchEntryRelations(env, drain, entry_index);
+    const outcome = try self.processDeferredDispatchEntryRelations(env, drain, entry_index, &enclosing);
     if (enclosing.items.len != 0) try self.restoreEnclosingVarRanks(enclosing.items, env);
     return outcome;
 }
@@ -55417,14 +55415,20 @@ fn restoreEnclosingVarRanks(
 }
 
 /// Process the deferred relation at `entry_index` of the drain's queue.
+/// Before relating anything, record in `enclosing` the enclosing-scope
+/// variables its frozen schemes' relations reach
+/// (`collectFrozenRelationEnclosingVars`). An entry that is settled, waits,
+/// or is queued again on its row's value relates nothing and records none.
 inline fn processDeferredDispatchEntryRelations(
     self: *Self,
     env: *Env,
     drain: *StaticDispatchDrain,
     entry_index: usize,
+    enclosing: *std.ArrayList(EnclosingVarRank),
 ) std.mem.Allocator.Error!DeferredEntryOutcome {
     const is_numeric_default_pass = drain.is_numeric_default_pass;
-    var deferred_constraint = env.deferred_static_dispatch_constraints.items()[entry_index];
+    const queued_entry = env.deferred_static_dispatch_constraints.items()[entry_index];
+    var deferred_constraint = queued_entry;
     deferred_constraint.retained_unchanged = false;
     deferred_constraint.waiting_on_repeated_state = false;
     deferred_constraint.waiting_on_plain_decision = false;
@@ -55491,6 +55495,9 @@ inline fn processDeferredDispatchEntryRelations(
         waiting.waiting_on_plain_decision = true;
         try self.scratch_deferred_static_dispatch_constraints.append(waiting);
         return .next;
+    }
+    if (self.captured_scheme_owners.count() != 0) {
+        try self.collectFrozenRelationEnclosingVars(queued_entry, enclosing);
     }
     dispatch_resolution: while (true) {
         if (dispatcher_content == .err) {
