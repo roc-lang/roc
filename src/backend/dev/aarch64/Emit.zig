@@ -50,6 +50,25 @@ pub fn Emit(comptime machine_abi: Abi) type {
             pub const STACK_PTR = Registers.GeneralReg.ZRSP;
             pub const STACK_ALIGNMENT: u32 = 16;
 
+            /// Roc-internal return registers (first, second, third) for
+            /// results of compiled-proc calls.
+            pub const ROC_RET_REGS = [3]Registers.GeneralReg{ .X0, .X1, .X2 };
+            /// Callee-saved register that internal procs receiving stack
+            /// arguments set to the caller's stack-argument base: deferred
+            /// prologues put FP at the bottom of the frame, so incoming
+            /// arguments are not at a fixed FP offset.
+            pub const CALLER_STACK_ARG_BASE_REG = Registers.GeneralReg.X28;
+            /// Offset of the first incoming stack argument from
+            /// `CALLER_STACK_ARG_BASE_REG`.
+            pub const INCOMING_STACK_ARG_BASE_OFFSET: i32 = 0;
+            /// Registers a frame-replacing call hands to the frame teardown:
+            /// the callee's address, and the signed distance from this
+            /// procedure's entry stack pointer to the callee's. Neither carries
+            /// an argument, is callee-saved, or is used by address
+            /// materialization.
+            pub const TAIL_CALL_TARGET_REG = Registers.GeneralReg.IP1;
+            pub const TAIL_CALL_DELTA_REG = Registers.GeneralReg.X15;
+
             /// Align a stack size to the platform's required alignment.
             pub fn alignStackSize(size: u32) u32 {
                 return (size + STACK_ALIGNMENT - 1) & ~(STACK_ALIGNMENT - 1);

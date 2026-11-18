@@ -56,6 +56,25 @@ pub fn Emit(comptime machine_abi: Abi) type {
             pub const STACK_PTR = Registers.GeneralReg.RSP;
             pub const STACK_ALIGNMENT: u32 = 16;
 
+            /// Roc-internal return registers (first, second, third) for
+            /// results of compiled-proc calls.
+            pub const ROC_RET_REGS = [3]Registers.GeneralReg{ .RAX, .RDX, .RCX };
+            /// Register that addresses the caller's stack arguments in
+            /// internal procs that receive them. The frame pointer does, since
+            /// incoming arguments sit at a fixed offset above it.
+            pub const CALLER_STACK_ARG_BASE_REG = BASE_PTR;
+            /// Offset of the first incoming stack argument from
+            /// `CALLER_STACK_ARG_BASE_REG`: the saved frame pointer and the
+            /// return address, then the shadow space.
+            pub const INCOMING_STACK_ARG_BASE_OFFSET: i32 = 16 + @as(i32, SHADOW_SPACE);
+            /// Register a frame-replacing call hands to the frame teardown:
+            /// the callee's address. It carries no argument, is not
+            /// callee-saved, and is not used by address materialization.
+            pub const TAIL_CALL_TARGET_REG = Registers.GeneralReg.R11;
+            /// The stack-pointer distance to the callee's frame. x86_64's
+            /// tail calls do not use it; R10 is free for it like R11.
+            pub const TAIL_CALL_DELTA_REG = Registers.GeneralReg.R10;
+
             /// Align a stack size to the platform's required alignment.
             pub fn alignStackSize(size: u32) u32 {
                 return (size + STACK_ALIGNMENT - 1) & ~(STACK_ALIGNMENT - 1);

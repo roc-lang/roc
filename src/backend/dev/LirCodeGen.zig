@@ -445,66 +445,38 @@ pub fn LirCodeGen(comptime machine_abi: Abi) type {
         /// The ABI this LirCodeGen was instantiated for
         pub const code_abi = machine_abi;
 
+        /// Emit/calling-convention types for this architecture.
+        const EmitType = @TypeOf(@as(CodeGen, undefined).emit);
+        /// The architecture's register roles and ABI constants.
+        const CC = EmitType.CC;
+        const Builder = CallingConventionMod.CallBuilder(EmitType);
+
         /// Frame pointer register for the target architecture
-        const frame_ptr: GeneralReg = switch (isa) {
-            .x86_64 => .RBP,
-            .aarch64 => .FP,
-        };
+        const frame_ptr: GeneralReg = CC.BASE_PTR;
 
         /// Stack pointer register for the target architecture
-        const stack_ptr: GeneralReg = switch (isa) {
-            .x86_64 => .RSP,
-            .aarch64 => .ZRSP,
-        };
+        const stack_ptr: GeneralReg = CC.STACK_PTR;
 
         /// Scratch/temporary register (not preserved across calls)
-        const scratch_reg: GeneralReg = switch (isa) {
-            .x86_64 => .R11,
-            .aarch64 => .X9,
-        };
+        const scratch_reg: GeneralReg = CC.SCRATCH_REG;
 
-        /// AArch64 callee-saved register reserved for the caller's stack-argument
-        /// base in internal procs that actually receive stack arguments.
-        const caller_stack_arg_base_reg: GeneralReg = switch (isa) {
-            .x86_64 => frame_ptr,
-            .aarch64 => .X28,
-        };
+        /// Register that addresses the caller's stack arguments in internal
+        /// procs that receive them.
+        const caller_stack_arg_base_reg: GeneralReg = CC.CALLER_STACK_ARG_BASE_REG;
 
         /// Registers a frame-replacing call hands to the frame teardown: the
         /// callee's address, and on AArch64 the signed distance from this
-        /// procedure's entry stack pointer to the callee's. Neither carries an
-        /// argument, is callee-saved, or is used by address materialization.
-        const tail_call_target_reg: GeneralReg = switch (isa) {
-            .x86_64 => .R11,
-            .aarch64 => .IP1,
-        };
-        const tail_call_delta_reg: GeneralReg = switch (isa) {
-            .x86_64 => .R10,
-            .aarch64 => .X15,
-        };
+        /// procedure's entry stack pointer to the callee's.
+        const tail_call_target_reg: GeneralReg = CC.TAIL_CALL_TARGET_REG;
+        const tail_call_delta_reg: GeneralReg = CC.TAIL_CALL_DELTA_REG;
 
         /// Return value registers (first, second, third)
-        const ret_reg_0: GeneralReg = switch (isa) {
-            .x86_64 => .RAX,
-            .aarch64 => .X0,
-        };
-        const ret_reg_1: GeneralReg = switch (isa) {
-            .x86_64 => .RDX,
-            .aarch64 => .X1,
-        };
-        const ret_reg_2: GeneralReg = switch (isa) {
-            .x86_64 => .RCX,
-            .aarch64 => .X2,
-        };
+        const ret_reg_0: GeneralReg = CC.ROC_RET_REGS[0];
+        const ret_reg_1: GeneralReg = CC.ROC_RET_REGS[1];
+        const ret_reg_2: GeneralReg = CC.ROC_RET_REGS[2];
 
-        /// Emit/calling-convention types for this architecture.
-        const EmitType = @TypeOf(@as(CodeGen, undefined).emit);
-        const Builder = CallingConventionMod.CallBuilder(EmitType);
-        const abi_shadow_space: i32 = @intCast(EmitType.CC.SHADOW_SPACE);
-        const incoming_stack_arg_base_offset: i32 = switch (isa) {
-            .x86_64 => 16 + abi_shadow_space,
-            .aarch64 => 0,
-        };
+        const abi_shadow_space: i32 = @intCast(CC.SHADOW_SPACE);
+        const incoming_stack_arg_base_offset: i32 = CC.INCOMING_STACK_ARG_BASE_OFFSET;
         const outgoing_stack_arg_base_offset: i32 = abi_shadow_space;
         const max_arg_regs: u8 = @intCast(EmitType.CC.PARAM_REGS.len);
         const pass_by_ptr_arg_regs: u8 = @intCast(EmitType.CC.PARAM_REGS.len + 1);
