@@ -50,9 +50,10 @@ pub fn Emit(comptime machine_abi: Abi) type {
             pub const STACK_PTR = Registers.GeneralReg.ZRSP;
             pub const STACK_ALIGNMENT: u32 = 16;
 
-            /// Roc-internal return registers (first, second, third) for
-            /// results of compiled-proc calls.
-            pub const ROC_RET_REGS = [3]Registers.GeneralReg{ .X0, .X1, .X2 };
+            /// Roc-internal return registers, in order, for results of
+            /// compiled-proc calls; a result of several words fills them from
+            /// the first.
+            pub const ROC_RET_REGS = [_]Registers.GeneralReg{ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
             /// Callee-saved register that internal procs receiving stack
             /// arguments set to the caller's stack-argument base: deferred
             /// prologues put FP at the bottom of the frame, so incoming
@@ -72,6 +73,9 @@ pub fn Emit(comptime machine_abi: Abi) type {
             pub const RESULT_PTR_SAVE_REG = Registers.GeneralReg.X19;
             /// Callee-saved register that holds the RocOps pointer.
             pub const ROC_OPS_SAVE_REG = Registers.GeneralReg.X20;
+            /// Register that holds an immediate result while it is stored
+            /// through the hidden return pointer, which `SCRATCH_REG` holds.
+            pub const RET_PTR_COPY_REG = Registers.GeneralReg.X10;
 
             /// Align a stack size to the platform's required alignment.
             pub fn alignStackSize(size: u32) u32 {

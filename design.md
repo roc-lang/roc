@@ -31178,6 +31178,21 @@ describe the compiler's own machine. Word sizes and register bit counts use
 `RegisterWidth` has no `w64` member, so a stray `.w64` is one too, until the
 driver routes those values through register pairs.
 
+Outside code for one instruction set, the driver reads every register that
+plays a fixed role from the instruction set's `Emit(target).CC`, never from a
+`switch (isa)`: the argument registers (`PARAM_REGS`, `FLOAT_PARAM_REGS`), the
+frame, stack and scratch registers (`BASE_PTR`, `STACK_PTR`, `SCRATCH_REG`),
+the C and Roc return registers (`RETURN_REGS`, `ROC_RET_REGS`), the register
+that holds an immediate result stored through the hidden return pointer
+(`RET_PTR_COPY_REG`), the tail-call registers (`TAIL_CALL_TARGET_REG`,
+`TAIL_CALL_DELTA_REG`), the caller's stack-argument base and the incoming
+stack-argument offset (`CALLER_STACK_ARG_BASE_REG`,
+`INCOMING_STACK_ARG_BASE_OFFSET`), and the callee-saved registers the entry
+code keeps the result and `RocOps` pointers in (`RESULT_PTR_SAVE_REG`,
+`ROC_OPS_SAVE_REG`). A new instruction set supplies its roles by defining its
+`CC`. The entry wrappers keep their own registers, because there the roles
+differ from the `CC` names.
+
 An explicit reference-count statement on a stack value computes the value's
 address directly into the helper's first argument register and loads an
 incref's count directly into the second; neither passes through a frame slot.

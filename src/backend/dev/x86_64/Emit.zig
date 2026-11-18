@@ -56,9 +56,10 @@ pub fn Emit(comptime machine_abi: Abi) type {
             pub const STACK_PTR = Registers.GeneralReg.RSP;
             pub const STACK_ALIGNMENT: u32 = 16;
 
-            /// Roc-internal return registers (first, second, third) for
-            /// results of compiled-proc calls.
-            pub const ROC_RET_REGS = [3]Registers.GeneralReg{ .RAX, .RDX, .RCX };
+            /// Roc-internal return registers, in order, for results of
+            /// compiled-proc calls; a result of several words fills them from
+            /// the first.
+            pub const ROC_RET_REGS = [_]Registers.GeneralReg{ .RAX, .RDX, .RCX, .R8, .R9, .R10, .R11, .RDI, .RSI };
             /// Register that addresses the caller's stack arguments in
             /// internal procs that receive them. The frame pointer does, since
             /// incoming arguments sit at a fixed offset above it.
@@ -78,6 +79,9 @@ pub fn Emit(comptime machine_abi: Abi) type {
             pub const RESULT_PTR_SAVE_REG = Registers.GeneralReg.RBX;
             /// Callee-saved register that holds the RocOps pointer.
             pub const ROC_OPS_SAVE_REG = Registers.GeneralReg.R12;
+            /// Register that holds an immediate result while it is stored
+            /// through the hidden return pointer, which `SCRATCH_REG` holds.
+            pub const RET_PTR_COPY_REG = Registers.GeneralReg.RAX;
 
             /// Align a stack size to the platform's required alignment.
             pub fn alignStackSize(size: u32) u32 {

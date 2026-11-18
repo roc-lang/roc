@@ -7742,10 +7742,10 @@ pub fn LirCodeGen(comptime machine_abi: Abi) type {
             const result_reg = try self.allocTempGeneral();
             switch (isa) {
                 .aarch64 => {
-                    try self.codegen.emit.movRegReg(.w64, result_reg, .X0);
+                    try self.codegen.emit.movRegReg(.w64, result_reg, CC.RETURN_REGS[0]);
                 },
                 .x86_64 => {
-                    try self.codegen.emit.movRegReg(.w64, result_reg, .RAX);
+                    try self.codegen.emit.movRegReg(.w64, result_reg, CC.RETURN_REGS[0]);
                 },
             }
             switch (isa) {
@@ -11949,14 +11949,7 @@ pub fn LirCodeGen(comptime machine_abi: Abi) type {
 
         /// Get the register used for return values
         fn getReturnRegister(_: *Self) GeneralReg {
-            switch (isa) {
-                .aarch64 => {
-                    return .X0;
-                },
-                .x86_64 => {
-                    return .RAX;
-                },
-            }
+            return ret_reg_0;
         }
 
         /// Emit a call instruction to a specific code offset.
@@ -14926,14 +14919,6 @@ pub fn LirCodeGen(comptime machine_abi: Abi) type {
             }
 
             // Register-class return: store each result register into the return slot.
-            const hosted_ret_reg_0: GeneralReg = switch (isa) {
-                .x86_64 => .RAX,
-                .aarch64 => .X0,
-            };
-            const hosted_ret_reg_1: GeneralReg = switch (isa) {
-                .x86_64 => .RDX,
-                .aarch64 => .X1,
-            };
             switch (lowered.ret) {
                 .none, .indirect => {},
                 .registers => |registers| {
@@ -14943,7 +14928,7 @@ pub fn LirCodeGen(comptime machine_abi: Abi) type {
                         const dst_off = ret_slot + @as(i32, @intCast(piece.offset));
                         switch (piece.class) {
                             .integer => {
-                                const reg = if (gp_i == 0) hosted_ret_reg_0 else hosted_ret_reg_1;
+                                const reg = CC.RETURN_REGS[gp_i];
                                 if (piece.size <= 4) {
                                     try self.emitStore(.w32, frame_ptr, dst_off, reg);
                                 } else {
@@ -19615,13 +19600,13 @@ pub fn LirCodeGen(comptime machine_abi: Abi) type {
                         const num_regs = (size_align.size + target_ptr_size - 1) / target_ptr_size;
                         switch (isa) {
                             .aarch64 => {
-                                const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
+                                const regs = CC.ROC_RET_REGS;
                                 for (0..@min(num_regs, regs.len)) |i| {
                                     try self.codegen.emit.strRegMemSoff(.w64, regs[i], .FP, stack_offset + @as(i32, @intCast(i * 8)));
                                 }
                             },
                             .x86_64 => {
-                                const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8, .R9, .R10, .R11, .RDI, .RSI };
+                                const regs = CC.ROC_RET_REGS;
                                 for (0..@min(num_regs, regs.len)) |i| {
                                     try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + @as(i32, @intCast(i * 8)), regs[i]);
                                 }
@@ -20740,13 +20725,13 @@ pub fn LirCodeGen(comptime machine_abi: Abi) type {
                         const num_regs = (size_align.size + target_ptr_size - 1) / target_ptr_size;
                         switch (isa) {
                             .aarch64 => {
-                                const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
+                                const regs = CC.ROC_RET_REGS;
                                 for (0..@min(num_regs, regs.len)) |i| {
                                     try self.codegen.emitLoadStack(.w64, regs[i], stack_offset + @as(i32, @intCast(i * 8)));
                                 }
                             },
                             .x86_64 => {
-                                const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8, .R9, .R10, .R11, .RDI, .RSI };
+                                const regs = CC.ROC_RET_REGS;
                                 for (0..@min(num_regs, regs.len)) |i| {
                                     try self.codegen.emitLoadStack(.w64, regs[i], stack_offset + @as(i32, @intCast(i * 8)));
                                 }
@@ -20817,10 +20802,7 @@ pub fn LirCodeGen(comptime machine_abi: Abi) type {
             // so writing even one byte past ret_size corrupts the caller's
             // frame.
             const ptr_reg: GeneralReg = scratch_reg;
-            const temp_reg: GeneralReg = switch (isa) {
-                .aarch64 => .X10,
-                .x86_64 => .RAX,
-            };
+            const temp_reg: GeneralReg = CC.RET_PTR_COPY_REG;
 
             // Register and immediate scalars store their exact width straight
             // through the return pointer instead of bouncing through a spill
