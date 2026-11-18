@@ -4590,7 +4590,7 @@ Builtin :: [].{
 					var $out = list_map_cast_unsafe(prepared_list)
 					var $index = 0
 					while $index < length {
-						item = list_map_extract_unsafe($out, $index, transform)
+						item = list_map_extract_unsafe($out, $index, prepared_list)
 						$out = list_map_write_unsafe($out, $index, transform(item))
 						$index = $index + 1
 					}
@@ -28012,10 +28012,10 @@ list_map_cast_unsafe : List(input) -> List(output)
 
 # Implemented by the compiler. Moves ownership of the item at the given
 # index out of the list's buffer; the slot keeps stale bytes until
-# list_map_write_unsafe stores its replacement. No bounds checks. The
-# transform is never evaluated: the list's type names only the output item,
-# so the transform's type is what says the slot holds an input item.
-list_map_extract_unsafe : List(output), U64, (input -> output) -> input
+# list_map_write_unsafe stores its replacement. No bounds checks. The input
+# list is never evaluated: the buffer's type names only the output item, so
+# the input list's type is what says the slot holds one of its items.
+list_map_extract_unsafe : List(output), U64, List(input) -> input
 
 # Implemented by the compiler. Stores an owned item into the slot at the
 # given index, which must have been vacated by list_map_extract_unsafe.
