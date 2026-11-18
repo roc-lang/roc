@@ -1363,6 +1363,100 @@ test "check type - record - default - list literal absorbs omitted defaulted fie
     );
 }
 
+test "issue 10886 - Set result annotation supplies defaults to implicit nominal list elements" {
+    // https://github.com/roc-lang/roc/issues/10886
+    const source =
+        \\Foo := { a : U64, b : U64 ?? 0 }.{
+        \\    is_eq : _
+        \\    to_hash : _
+        \\}
+        \\
+        \\set : Set(Foo)
+        \\set = Set.from_list([{ a: 123 }, { a: 456, b: 789 }])
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "set" } }, "Set(Foo)");
+}
+
+test "issue 10886 - generic call result context reaches list element defaults" {
+    const source =
+        \\Foo := { a : U64, b : U64 ?? 0 }
+        \\identity = |xs| xs
+        \\
+        \\items : List(Foo)
+        \\items = identity([{ a: 123 }, { a: 456, b: 789 }])
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "items" } }, "List(Foo)");
+}
+
+test "issue 10886 - nested calls reuse result context for omitted defaults" {
+    const source =
+        \\Foo := { a : U64, b : U64 ?? 0 }
+        \\identity = |value| value
+        \\
+        \\items : List(Foo)
+        \\items = identity(identity([{ a: 123 }, { a: 456, b: 789 }]))
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "items" } }, "List(Foo)");
+}
+
+test "issue 10886 - result context reaches a resolved method's arguments" {
+    const source =
+        \\Foo := { a : U64, b : U64 ?? 0 }
+        \\Factory := [New].{
+        \\    identity : Factory, a -> a
+        \\    identity = |_, value| value
+        \\}
+        \\
+        \\items : List(Foo)
+        \\items = Factory.New.identity([{ a: 123 }, { a: 456, b: 789 }])
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "items" } }, "List(Foo)");
+}
+
+test "issue 10886 - generic result context cannot absorb required fields" {
+    const source =
+        \\Foo := { a : U64, b : U64 }
+        \\identity = |value| value
+        \\
+        \\items : List(Foo)
+        \\items = identity([{ a: 123 }, { a: 456, b: 789 }])
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "issue 10886 - callback result context reaches early and final returns" {
+    const source =
+        \\Foo := { a : U64, b : U64 ?? 0 }
+        \\items : List(Foo)
+        \\items = List.map([True, False], |flag| {
+        \\    if flag { return { a: 123 } }
+        \\    { a: 456, b: 789 }
+        \\})
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "items" } }, "List(Foo)");
+}
+
+test "issue 10886 - rejected result context preserves the callee and argument types" {
+    const source =
+        \\identity = |value| value
+        \\bad : Str
+        \\bad = identity(42.U64)
+        \\good = identity(True)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "issue 10886 - result context still checks actual dispatch obligations" {
+    const source =
+        \\Foo := { a : U64, b : U64 ?? 0 }
+        \\identity : a -> a where [a.missing : a -> a]
+        \\identity = |value| value.missing()
+        \\item : Foo
+        \\item = identity({ a: 123 })
+    ;
+    try checkTypesModule(source, .fail_first, "Missing Method");
+}
+
 test "issue 10886 - call parameter shape reaches nested list record constructions" {
     const source =
         \\Foo := { a : U64, b : U64 ?? 0 }
