@@ -52,17 +52,34 @@ const platform_files = [_]SourceFile{
     },
 };
 
+/// The module the corpus imports constants from.
+const corpus_imports = [_]SourceFile{
+    .{ .path = "Consts.roc", .source =
+    \\module [limit, names, point]
+    \\limit : U64
+    \\limit = 10
+    \\names : List(Str)
+    \\names = ["first", "a name long enough that no target holds it inline"]
+    \\point : { x : I32, y : I32 }
+    \\point = { x: -3, y: 9 }
+    },
+};
+
 /// Every kind of value-form root: each builtin number type at its extremes,
 /// strings short, long and on several lines, booleans, empty and non-empty
 /// lists of numbers, strings, records, tuples, tags and zero-sized values,
 /// records, tuples, single-tag, enum-like and payload unions, `Try`,
 /// nominal tags and records, a recursive nominal, repeated equal long
-/// literals, and a local binding a kept root reads. The lists `parse`
-/// concatenates with runtime data and the binding `labels` of `measure` are
-/// no roots: their bodies keep them.
+/// literals, and a local binding a kept root reads. Each kind also reads
+/// other constants of its own module and of an imported one: bare, ahead of
+/// their definitions, through a chain of such reads, and as items of packed
+/// and unpacked lists, fields, payloads, and nominal backings. The lists
+/// `parse` concatenates with runtime data and the binding `labels` of
+/// `measure` are no roots: their bodies keep them.
 const corpus =
     \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
     \\import pf.Echo
+    \\import Consts
     \\
     \\Color := [Red, Green, Blue(U8)]
     \\Point := { x : I32, y : I32 }
@@ -171,6 +188,55 @@ const corpus =
     \\tree : Tree
     \\tree = Tree.Node(Tree.Leaf, 5, Tree.Node(Tree.Leaf, 6, Tree.Leaf))
     \\
+    \\alias_of_number : U8
+    \\alias_of_number = u8_value
+    \\forward_alias : List(U8)
+    \\forward_alias = later_bytes
+    \\later_bytes : List(U8)
+    \\later_bytes = [4, 5, 6]
+    \\chained_alias : List(U8)
+    \\chained_alias = forward_alias
+    \\packed_reading : List(U8)
+    \\packed_reading = [u8_value, 1, u8_value]
+    \\wide_reading : List(I128)
+    \\wide_reading = [i128_value, 0]
+    \\point_record : { x : I32, y : I32 }
+    \\point_record = { x: 7, y: 8 }
+    \\products_reading : List({ x : I32, y : I32 })
+    \\products_reading = [{ x: i32_value, y: 2 }, point_record, Consts.point]
+    \\products_alias : List({ x : I32, y : I32 })
+    \\products_alias = points
+    \\record_reading : { b : Str, n : U64, c : List(U8) }
+    \\record_reading = { b: long_str, n: u64_value, c: bytes }
+    \\nested_reading : List(List(Str))
+    \\nested_reading = [strings, ["x"], nested_lists_head]
+    \\nested_lists_head : List(Str)
+    \\nested_lists_head = ["y", "z"]
+    \\tags_alias : List([A, B(U8)])
+    \\tags_alias = tags
+    \\payload_reading : [Wrap({ b : Str, a : U64, c : List(U8) }), Empty]
+    \\payload_reading = Wrap(record)
+    \\color_reading : List(Color)
+    \\color_reading = [color, plain_color, Color.Blue(u8_value)]
+    \\point_reading : Point
+    \\point_reading = Point.{ x: i32_value, y: 3 }
+    \\tree_reading : Tree
+    \\tree_reading = Tree.Node(tree, 7, Tree.Leaf)
+    \\bool_reading : List(Bool)
+    \\bool_reading = [no, True, no]
+    \\try_reading : List(Try(U32, [Bad]))
+    \\try_reading = [ok, err, Ok(u32_value)]
+    \\tuple_reading : (U8, Str, Dec)
+    \\tuple_reading = (u8_value, short_str, dec_value)
+    \\float_reading : (F32, F64)
+    \\float_reading = (f32_value, f64_value)
+    \\unit_reading : List({})
+    \\unit_reading = [unit, {}]
+    \\imported_reading : { limit : U64, names : List(Str) }
+    \\imported_reading = { limit: Consts.limit, names: Consts.names }
+    \\imported_alias : List(Str)
+    \\imported_alias = Consts.names
+    \\
     \\parse : List(U8) -> Try({ x : U8, y : U8 }, [Empty, Long])
     \\parse = |input| {
     \\    padded = List.concat(input, [7, 8, 9])
@@ -187,7 +253,8 @@ const corpus =
     \\measure : List(U8) -> U64
     \\measure = |input| {
     \\    base = [1.U8, 2, 3]
-    \\    total = List.len(base)
+    \\    read_base = [u8_value, 2]
+    \\    total = List.len(base) + List.len(read_base)
     \\    labels = ["x", "y"]
     \\    List.len(input) + total + List.len(List.concat(labels, [Str.inspect(List.len(input))]))
     \\}
@@ -203,7 +270,21 @@ const corpus =
     \\    []
     \\}
     \\
+    \\aliased : U8 -> U8
+    \\aliased = |n| {
+    \\    limit = u8_value
+    \\    if n > limit { limit } else { n }
+    \\}
+    \\
+    \\imported_aliased : U64 -> U64
+    \\imported_aliased = |n| {
+    \\    cap = Consts.limit
+    \\    if n > cap { cap } else { n }
+    \\}
+    \\
     \\main! = |args| {
+    \\    Echo.line!(Str.inspect(aliased(1)))
+    \\    Echo.line!(Str.inspect(imported_aliased(List.len(args))))
     \\    Echo.line!(Str.inspect(parse([])))
     \\    Echo.line!(Str.inspect(measure([])))
     \\    Echo.line!(Str.inspect(branches(List.len(args))))
@@ -214,8 +295,10 @@ const corpus =
 ;
 
 /// Literals at custom types, interpolation, a record update, records at a
-/// type with optional fields, calls, operators and lookups: none is in value
-/// form.
+/// type with optional fields, calls, operators, and reads of constants an
+/// evaluator computes, directly or through another read: none is in value
+/// form. Reads of constants in value form (`lookup`, `list_with_lookup`)
+/// are.
 const near_misses =
     \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
     \\import pf.Echo
@@ -244,6 +327,10 @@ const near_misses =
     \\negated = -(1.I64)
     \\lookup = value_form
     \\list_with_lookup = [base_record]
+    \\reads_called = called
+    \\list_reading_called = [called, 3]
+    \\reads_reader_of_called = reads_called
+    \\record_reading_operator = { sum: operator, one: 1.U8 }
     \\no_options : { size ?: U8 }
     \\no_options = {}
     \\some_options : { size ?: U8, name : Str }
@@ -299,12 +386,13 @@ const CheckAppError = std.mem.Allocator.Error ||
 
 /// Check an echo-platform app as `roc check` does, completing its value-form
 /// roots with `value_form_roots`.
-fn checkApp(allocator: std.mem.Allocator, source: []const u8, strategy: base.SpecializationStrategy, value_form_roots: ValueFormRoots) CheckAppError!Checked {
+fn checkApp(allocator: std.mem.Allocator, source: []const u8, imports: []const SourceFile, strategy: base.SpecializationStrategy, value_form_roots: ValueFormRoots) CheckAppError!Checked {
     const io = std.testing.io;
     var tmp_dir = std.testing.tmpDir(.{});
     errdefer tmp_dir.cleanup();
     try tmp_dir.dir.createDirPath(io, ".roc_echo_platform");
     for (platform_files) |file| try tmp_dir.dir.writeFile(io, .{ .sub_path = file.path, .data = file.source });
+    for (imports) |file| try tmp_dir.dir.writeFile(io, .{ .sub_path = file.path, .data = file.source });
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "main.roc", .data = source });
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", allocator);
     defer allocator.free(app_path);
@@ -410,14 +498,15 @@ const WriterMatchesEvaluatorError = CheckAppError || error{
     TooFewRootsCompletedDirectly,
     WrongInlineLiteralCount,
     InlineLiteralIsRoot,
+    ConstantReadIsRoot,
 };
 
 fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMatchesEvaluatorError!void {
     const allocator = std.testing.allocator;
-    var evaluated = try checkApp(allocator, corpus, strategy, .evaluate);
+    var evaluated = try checkApp(allocator, corpus, &corpus_imports, strategy, .evaluate);
     defer evaluated.deinit();
     try evaluated.expectErrors(false);
-    var written = try checkApp(allocator, corpus, strategy, .write);
+    var written = try checkApp(allocator, corpus, &corpus_imports, strategy, .write);
     defer written.deinit();
     try written.expectErrors(false);
 
@@ -430,6 +519,7 @@ fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMat
     try std.testing.expectEqual(left_roots.len, right_roots.len);
     var constants: usize = 0;
     var hoisted: usize = 0;
+    var readers: usize = 0;
     for (left_roots, right_roots) |left_root, right_root| {
         try std.testing.expectEqual(left_root.kind, right_root.kind);
         try std.testing.expectEqual(left_root.completion, right_root.completion);
@@ -439,6 +529,7 @@ fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMat
             return error.CorpusConstantNotValueForm;
         };
         if (right_root.completion != .write_value) continue;
+        if (right_root.reads_constants) readers += 1;
         switch (right_root.kind) {
             .constant => constants += 1,
             .hoisted_constant => hoisted += 1,
@@ -467,9 +558,12 @@ fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMat
             return err;
         };
     }
-    try std.testing.expectEqual(@as(usize, 52), constants);
-    // `base` in `measure`, which the root `List.len(base)` reads.
-    try std.testing.expectEqual(@as(usize, 1), hoisted);
+    try std.testing.expectEqual(@as(usize, 76), constants);
+    // `base` and `read_base` in `measure`, which the root computing `total`
+    // reads.
+    try std.testing.expectEqual(@as(usize, 2), hoisted);
+    // The 21 top-level constants and `read_base` that read other constants.
+    try std.testing.expectEqual(@as(usize, 22), readers);
     if (written.rootsCompletedDirectly() < constants + hoisted) {
         std.debug.print("{d} roots were completed directly, fewer than {d}\n", .{ written.rootsCompletedDirectly(), constants + hoisted });
         return error.TooFewRootsCompletedDirectly;
@@ -507,6 +601,27 @@ fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMat
                 return error.InlineLiteralIsRoot;
             }
         }
+        // The bindings `limit` and `cap` only read stored constants, so their
+        // bodies read the constants and neither is a root.
+        var selected_reads: usize = 0;
+        for (env.selected_hoisted_roots.items()) |selected| {
+            if (selected.body != .expr or selected.top_level or selected.read_by_root) continue;
+            switch (env.store.getExpr(selected.expr)) {
+                .e_lookup_local, .e_lookup_external => {},
+                .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_block, .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => continue,
+            }
+            selected_reads += 1;
+            for (artifact.compile_time_roots.roots.items()) |root| {
+                if (root.expr.get()) |root_expr| if (root_expr == selected.expr) {
+                    std.debug.print("root {d} only reads a stored constant\n", .{@backingInt(root.id)});
+                    return error.ConstantReadIsRoot;
+                };
+            }
+        }
+        if (selected_reads < 2) {
+            std.debug.print("{d} selected bindings only read a constant\n", .{selected_reads});
+            return error.ConstantReadIsRoot;
+        }
     }
 }
 
@@ -520,22 +635,23 @@ test "the checked-value writer stores each value-form root as an lss compilation
     try expectWriterMatchesEvaluator(.lss);
 }
 
-test "a literal at a custom type, interpolation, an update, an optional field, a call, an operator, or a lookup is evaluated" {
+test "a literal at a custom type, interpolation, an update, an optional field, a call, an operator, or a read of an evaluated constant is evaluated" {
     if (is_freestanding) return error.SkipZigTest;
-    var checked = try checkApp(std.testing.allocator, near_misses, .boxy, .write);
+    var checked = try checkApp(std.testing.allocator, near_misses, &.{}, .boxy, .write);
     defer checked.deinit();
     try checked.expectErrors(false);
     const app = checked.app();
     var seen: usize = 0;
     for (app.compile_time_roots.roots.items()) |root| {
         const name = rootName(app, root) orelse continue;
-        const value_form = std.mem.eql(u8, name, "base_record") or std.mem.eql(u8, name, "value_form");
+        const value_form = std.mem.eql(u8, name, "base_record") or std.mem.eql(u8, name, "value_form") or
+            std.mem.eql(u8, name, "lookup") or std.mem.eql(u8, name, "list_with_lookup");
         try std.testing.expectEqual(if (value_form) check.CheckedArtifact.CompileTimeRootCompletion.write_value else .evaluate, root.completion);
         // Every root completed, whichever producer completed it.
         try std.testing.expect(root.payload == .const_node);
         seen += 1;
     }
-    try std.testing.expectEqual(@as(usize, 14), seen);
+    try std.testing.expectEqual(@as(usize, 18), seen);
 }
 
 test "a literal checking rejects is evaluated and reported" {
@@ -549,7 +665,7 @@ test "a literal checking rejects is evaluated and reported" {
         \\    Echo.line!(Str.inspect(too_big))
         \\    Ok({})
         \\}
-    , .boxy, .write);
+    , &.{}, .boxy, .write);
     defer checked.deinit();
     try checked.expectErrors(true);
     const app = checked.app();

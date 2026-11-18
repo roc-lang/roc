@@ -74,10 +74,11 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// evidence parameters recording the edge that hands a captured codec
 /// requirement on, an alias-bound dispatch edge's among them, private codec
 /// instances whose copies of a template's variables the ambiguity rule does
-/// not judge, and procedure templates' closed row nodes. It rejects every
-/// earlier format, including the independent version 19 through 49 formats.
-/// Platform-pairing entries share it.
-const checked_envelope_version: u32 = 50;
+/// not judge, procedure templates' closed row nodes, and compile-time roots
+/// the checked-value writer completes when they read only constants it
+/// completes. It rejects every earlier format, including the independent
+/// version 19 through 50 formats. Platform-pairing entries share it.
+const checked_envelope_version: u32 = 51;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment.
