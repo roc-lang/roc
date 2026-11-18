@@ -16042,6 +16042,28 @@ test "lambda set generalization: equal instantiations share one copy" {
     , "12", .{ .multi_member_sets = 0, .instance_fns = 1, .instances = 4 });
 }
 
+// Each `if` joins the closures `make` returns at two instantiations into one
+// set, which holds `make`'s inner lambda twice. The two sets are equal, but
+// their instantiations were made in opposite orders, so the members of one
+// lambda pair up only as sets, not by position: `apply(a, 10)` and
+// `apply(b, 10)` are one instance, and the two sets are one class.
+test "lambda set generalization: equal sets holding one lambda at instantiations made in opposite orders" {
+    try expectPolymorphism(poly_functions ++
+        \\make : (I64 -> I64) -> (I64 -> I64)
+        \\make = |f| |x| f(x) + 1
+        \\
+        \\main : I64
+        \\main = {
+        \\    n = apply(inc, 0)
+        \\    a = if n > 0 { make(inc) } else { make(double) }
+        \\    b = if n > 0 { make(double) } else { make(inc) }
+        \\    total = apply(a, 10) + apply(b, 10)
+        \\    dbg total
+        \\    total
+        \\}
+    , "33", .{ .multi_member_sets = 1, .instance_fns = 3, .instances = 8 });
+}
+
 /// The number of length tests range proving hoisted to loop entries: each
 /// reads its list's length in a statement the prover made.
 fn hoistedLengthTestCount(lowered: *const lir.CheckedPipeline.LoweredProgram) usize {

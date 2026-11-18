@@ -484,6 +484,12 @@ const Discovery = struct {
     assumed: std.AutoHashMapUnmanaged([2]Ref, void) = .empty,
     assumed_occs: std.AutoHashMapUnmanaged([2]Occ, void) = .empty,
     pending: std.ArrayList([2]Ref) = .empty,
+    /// How many member trials (`memberTrial`) enclose the comparison now,
+    /// and the assumptions made inside them, which a failed trial takes
+    /// back.
+    trial_depth: u32 = 0,
+    trial_assumed: std.ArrayList([2]Ref) = .empty,
+    trial_assumed_occs: std.ArrayList([2]Occ) = .empty,
     /// Whether comparisons follow procedure identity (`proc_identity.zig`):
     /// erased callables by their source function type only, and a
     /// function's own callable set not at all.
@@ -502,6 +508,8 @@ const Discovery = struct {
         self.assumed.deinit(self.allocator);
         self.assumed_occs.deinit(self.allocator);
         self.pending.deinit(self.allocator);
+        self.trial_assumed.deinit(self.allocator);
+        self.trial_assumed_occs.deinit(self.allocator);
         self.merges.deinit(self.allocator);
     }
 
@@ -690,8 +698,9 @@ const Discovery = struct {
     /// Whether `rep` and `other`, two occurrences of one group's
     /// instantiations, give every scheme node equal images. Each pair of
     /// types compared is assumed equal while its parts are compared, so
-    /// cycles close; any difference fails the whole comparison, so success
-    /// means the assumed pairs are a bisimulation. On success the pairs it
+    /// cycles close; any difference outside a member trial
+    /// (`memberTrial`) fails the whole comparison, so success means the
+    /// assumed pairs are a bisimulation. On success the pairs it
     /// related are appended to `merges`.
     fn instancesEqual(self: *Discovery, rep: Occ, other: Occ) Allocator.Error!bool {
         self.assumed.clearRetainingCapacity();
@@ -700,12 +709,19 @@ const Discovery = struct {
         if (self.relaxed) {
             if (!try self.pushIdentityRoots(rep, other)) return false;
         } else if (!try self.pushOccPair(rep, other)) return false;
-        while (self.pending.pop()) |pair| {
+        return try self.drain(0);
+    }
+
+    /// Compare the pending pairs above `base` and every pair they lead to.
+    fn drain(self: *Discovery, base: usize) Allocator.Error!bool {
+        while (self.pending.items.len > base) {
+            const pair = self.pending.pop().?;
             const a = resolve(self.program, pair[0]);
             const b = resolve(self.program, pair[1]);
             if (std.meta.eql(a, b)) continue;
             const entry = try self.assumed.getOrPut(self.allocator, .{ a, b });
             if (entry.found_existing) continue;
+            if (self.trial_depth != 0) try self.trial_assumed.append(self.allocator, .{ a, b });
             if (!try self.contentsMatch(a, b)) return false;
             try self.merges.append(self.allocator, .{ a, b });
         }
@@ -725,6 +741,7 @@ const Discovery = struct {
         if (row_a.images == null or row_b.images == null) return false;
         const entry = try self.assumed_occs.getOrPut(self.allocator, .{ a, b });
         if (entry.found_existing) return true;
+        if (self.trial_depth != 0) try self.trial_assumed_occs.append(self.allocator, .{ a, b });
         // Every scheme node's image, not only the function types': a set
         // can hold two members of one lambda at two instantiations, so the
         // path from a function type to a member's captures does not single
@@ -875,21 +892,93 @@ const Discovery = struct {
         return true;
     }
 
+    /// Whether two sets hold the same members. A set is ordered by lambda,
+    /// then by instantiation, and can hold one lambda at several
+    /// instantiations, whose order says nothing about which of them are
+    /// equal; and lowering keeps one member per lambda and instance
+    /// (`canonicalMembers`). So the members of each lambda are compared as
+    /// sets: every member of one side must equal some member of the other.
+    /// A lambda held once on each side has one candidate and is compared
+    /// directly; otherwise each candidate pairing is a trial.
     fn membersMatch(self: *Discovery, a: Type.Span, a_env: Env, b: Type.Span, b_env: Env) Allocator.Error!bool {
         const store = self.types();
-        const t = self.table();
-        if (a.count() != b.count()) return false;
-        for (0..a.count()) |index| {
-            const lm = store.memberItem(a, index);
-            const rm = store.memberItem(b, index);
-            if (lm.lambda != rm.lambda) return false;
-            if (!try self.pushOccPair(t.occOf(self.program, lm.inst, a_env), t.occOf(self.program, rm.inst, b_env))) return false;
-            if (lm.captures.count() != rm.captures.count()) return false;
-            for (0..lm.captures.count()) |capture| {
-                try self.pushPair(store.captureItem(lm.captures, capture).ty, a_env, store.captureItem(rm.captures, capture).ty, b_env);
+        var left: usize = 0;
+        var right: usize = 0;
+        while (left < a.count() or right < b.count()) {
+            if (left == a.count() or right == b.count()) return false;
+            const lambda = store.memberItem(a, left).lambda;
+            if (store.memberItem(b, right).lambda != lambda) return false;
+            const left_end = lambdaRunEnd(store, a, left);
+            const right_end = lambdaRunEnd(store, b, right);
+            if (left_end - left == 1 and right_end - right == 1) {
+                if (!try self.pushMemberPair(store.memberItem(a, left), a_env, store.memberItem(b, right), b_env)) return false;
+            } else {
+                for (left..left_end) |left_index| {
+                    const member = store.memberItem(a, left_index);
+                    const found = for (right..right_end) |right_index| {
+                        if (try self.memberTrial(member, a_env, store.memberItem(b, right_index), b_env)) break true;
+                    } else false;
+                    if (!found) return false;
+                }
+                for (right..right_end) |right_index| {
+                    const member = store.memberItem(b, right_index);
+                    const found = for (left..left_end) |left_index| {
+                        if (try self.memberTrial(store.memberItem(a, left_index), a_env, member, b_env)) break true;
+                    } else false;
+                    if (!found) return false;
+                }
             }
+            left = left_end;
+            right = right_end;
         }
         return true;
+    }
+
+    fn lambdaRunEnd(store: *const Type.Store, members: Type.Span, start: usize) usize {
+        const lambda = store.memberItem(members, start).lambda;
+        var end = start + 1;
+        while (end < members.count() and store.memberItem(members, end).lambda == lambda) end += 1;
+        return end;
+    }
+
+    fn pushMemberPair(self: *Discovery, lm: Type.FnMember, a_env: Env, rm: Type.FnMember, b_env: Env) Allocator.Error!bool {
+        const store = self.types();
+        const t = self.table();
+        if (!try self.pushOccPair(t.occOf(self.program, lm.inst, a_env), t.occOf(self.program, rm.inst, b_env))) return false;
+        if (lm.captures.count() != rm.captures.count()) return false;
+        for (0..lm.captures.count()) |capture| {
+            try self.pushPair(store.captureItem(lm.captures, capture).ty, a_env, store.captureItem(rm.captures, capture).ty, b_env);
+        }
+        return true;
+    }
+
+    /// Whether two members are equal, compared to completion under the
+    /// assumptions already made. A trial that fails takes back every
+    /// assumption and merge it made, so a failed pairing leaves the
+    /// comparison as it was; a trial that succeeds keeps them. Every kept
+    /// assumption is then either a pair of equal types or part of a
+    /// comparison that fails as a whole, so the comparison stays exact.
+    fn memberTrial(self: *Discovery, lm: Type.FnMember, a_env: Env, rm: Type.FnMember, b_env: Env) Allocator.Error!bool {
+        const base = self.pending.items.len;
+        const merges_before = self.merges.items.len;
+        const assumed_before = self.trial_assumed.items.len;
+        const assumed_occs_before = self.trial_assumed_occs.items.len;
+        self.trial_depth += 1;
+        defer {
+            self.trial_depth -= 1;
+            if (self.trial_depth == 0) {
+                self.trial_assumed.clearRetainingCapacity();
+                self.trial_assumed_occs.clearRetainingCapacity();
+            }
+        }
+        if (try self.pushMemberPair(lm, a_env, rm, b_env) and try self.drain(base)) return true;
+        for (self.trial_assumed.items[assumed_before..]) |pair| _ = self.assumed.remove(pair);
+        for (self.trial_assumed_occs.items[assumed_occs_before..]) |pair| _ = self.assumed_occs.remove(pair);
+        self.trial_assumed.shrinkRetainingCapacity(assumed_before);
+        self.trial_assumed_occs.shrinkRetainingCapacity(assumed_occs_before);
+        self.pending.shrinkRetainingCapacity(base);
+        self.merges.shrinkRetainingCapacity(merges_before);
+        return false;
     }
 };
 

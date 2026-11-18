@@ -23667,8 +23667,15 @@ single out an instantiation: one set can hold two members of one lambda at
 two instantiations, whose captures a path from the function type cannot tell
 apart. Members compare by lambda and by their occurrences, which compare the
 same way unless their group is already visited, when they compare by
-instance. Any difference fails the whole comparison, so equality is exact:
-the assumed pairs are a bisimulation. Equal occurrences are one instance, and
+instance. A set orders its members by lambda and then by instantiation, and
+that order says nothing about which of one lambda's members are equal, so two
+sets compare each lambda's members as sets: every member on one side must
+equal some member on the other (lowering keeps one member per lambda and
+instance). A lambda held once on each side compares directly; otherwise each
+candidate pairing is a trial, compared to completion under the assumptions
+already made, and a failed trial takes back everything it assumed. Any other
+difference fails the whole comparison, so equality is exact: the assumed
+pairs are a bisimulation. Equal occurrences are one instance, and
 each pair of types their comparison related becomes one class.
 
 A group's first instance belongs to the global environment, which every type
