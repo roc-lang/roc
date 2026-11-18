@@ -174,7 +174,6 @@ pub const Writer = struct {
                 .fn_value, .erased_fn => return .lss,
                 .pending, .layout_only, .zst, .scalar, .str => {},
                 .list, .box => |child| try pending.append(self.allocator, child),
-                .boxed_sequence => |sequence| try pending.append(self.allocator, sequence.payload),
                 .tuple, .record => |children| try pending.appendSlice(self.allocator, children),
                 .tag_union => |variants| for (variants) |variant| try pending.appendSlice(self.allocator, variant.payloads),
                 .named => |named| try pending.append(self.allocator, named.backing),
@@ -240,7 +239,6 @@ pub const Writer = struct {
                 .str,
                 .list,
                 .box,
-                .boxed_sequence,
                 .tuple,
                 .record,
                 .tag_union,
@@ -488,15 +486,6 @@ pub const Writer = struct {
             },
             .box => |elem_plan| blk: {
                 try self.appendBoxRequest(children, elem_plan, layout_idx, runtimePart(part));
-                break :blk .{ .box = node };
-            },
-            .boxed_sequence => |sequence| blk: {
-                const handle = self.readBoxDataPointer(runtimePart(part)) orelse writerInvariant("boxed sequence had a null handle");
-                try children.append(self.allocator, .{
-                    .plan = sequence.payload,
-                    .layout_idx = sequence.view_layout,
-                    .value = .{ .runtime = .{ .ptr = builtins.boxed_sequence.recordPtr(handle) } },
-                });
                 break :blk .{ .box = node };
             },
             .tuple => |items| blk: {
@@ -1065,7 +1054,7 @@ pub const Writer = struct {
                         .offset = leaf.offset + self.program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, @intCast(component_index)),
                     });
                 },
-                .pending, .layout_only, .str, .list, .box, .boxed_sequence, .tag_union, .fn_value, .erased_fn, .boxy_fn => writerInvariant("a product plan holds a part other than a number, record, tuple or named type"),
+                .pending, .layout_only, .str, .list, .box, .tag_union, .fn_value, .erased_fn, .boxy_fn => writerInvariant("a product plan holds a part other than a number, record, tuple or named type"),
             };
         }
         return memory;
@@ -1209,7 +1198,7 @@ pub const Writer = struct {
             .named => |*named| (&named.backing)[0..1],
             .record, .tuple => |children| children,
             .pending, .layout_only => writerInvariant("product eligibility reached an unfinished const plan"),
-            .str, .list, .box, .boxed_sequence, .tag_union, .fn_value, .erased_fn, .boxy_fn => return false,
+            .str, .list, .box, .tag_union, .fn_value, .erased_fn, .boxy_fn => return false,
         };
         try frames.append(self.allocator, .{ .id = id, .children = children });
         return null;
@@ -1262,7 +1251,6 @@ pub const Writer = struct {
             .str,
             .list,
             .box,
-            .boxed_sequence,
             .tuple,
             .record,
             .tag_union,

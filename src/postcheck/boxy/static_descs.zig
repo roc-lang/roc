@@ -695,8 +695,7 @@ pub const StaticDescs = struct {
     /// type without one continues into its backing, except that inspection
     /// prints an opaque type without one as opaque; a record, tuple, tag
     /// payload, list item, box payload, or recursion box continues into its
-    /// components; a function value ends it, but inspection renders a
-    /// boxed sequence through its own descriptor; a SIMD vector inspects
+    /// components; a function value ends it; a SIMD vector inspects
     /// through its `to_inspect`.
     fn followDemand(self: *StaticDescs, key: Key, op: DescOp) Allocator.Error!void {
         const ty = key.ty;
@@ -709,10 +708,7 @@ pub const StaticDescs = struct {
                     .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => {},
                 },
                 .empty_record, .function => return,
-                .box => |payload| if (self.store.isErasedBoxPayload(payload)) {
-                    if (op == .inspect and self.store.isSequence(payload)) try self.demand(.{ .ty = payload, .recursive_box = false }, op);
-                    return;
-                },
+                .box => |payload| if (self.store.isErasedBoxPayload(payload)) return,
                 .nominal => |nominal| {
                     if (nominal.builtin == .bool) return;
                     if (try self.overrideCallable(key, op) != null) return;
@@ -1240,7 +1236,6 @@ pub const StaticDescs = struct {
                 try self.fillVariants(item.node, &pointers, committed_layout, tags, scope_id);
             },
             .nominal => |nominal| {
-                flags.sequence = self.store.isSequence(ty);
                 if (nominal.builtin == .bool) {
                     kind = .bool;
                     discriminant_size = 1;

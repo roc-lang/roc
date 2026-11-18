@@ -3257,7 +3257,6 @@ const Solver = struct {
         args: []const Type.TypeVarId,
     ) Allocator.Error!void {
         switch (op) {
-            .boxed_sequence_pack, .boxed_sequence_unpack => Common.invariant("LIR-only sequence operation reached lambda solving"),
             .box_box => {
                 expectLowLevelArity(op, args, 1);
                 try self.unify(args[0], try self.boxElem(expected));

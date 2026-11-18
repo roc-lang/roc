@@ -21081,11 +21081,6 @@ fn checkHostBoundaryType(self: *Self, var_: Var, region: Region) std.mem.Allocat
 
         pub fn builtin(ctx: @This(), nominal: types_mod.NominalType) boundary.Builtin {
             if (!nominal.originIsBuiltin()) return .other;
-            if (ctx.check.builtin_ctx.builtin_indices) |indices| {
-                const source_decl = nominal.sourceDeclOptional() orelse return .other;
-                if (source_decl == @backingInt(indices.iter_type)) return .iter;
-                if (source_decl == @backingInt(indices.stream_type)) return .stream;
-            }
             return switch (ctx.check.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional()) orelse return .other) {
                 .box => .box,
                 .list => .list,
@@ -21106,11 +21101,6 @@ fn checkHostBoundaryType(self: *Self, var_: Var, region: Region) std.mem.Allocat
         _ = try self.problems.appendProblem(.{ .hosted_unboxed_function = .{
             .region = region,
             .path = try self.problems.putExtraString(violation.path),
-            .kind = switch (violation.kind) {
-                .function => .function,
-                .iter => .iter,
-                .stream => .stream,
-            },
         } });
     }
     if (try self.varViolatesHostBoundaryRule(.closed_rows, var_)) {

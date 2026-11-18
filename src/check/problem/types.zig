@@ -204,7 +204,6 @@ pub const PolymorphicRecursion = struct {
 pub const HostedUnboxedFunction = struct {
     region: base.Region,
     path: ExtraStringIdx,
-    kind: enum { function, iter, stream },
 };
 
 /// Every function the host provides is effectful, so a hosted declaration

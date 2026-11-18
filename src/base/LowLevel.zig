@@ -644,10 +644,6 @@ pub const LowLevel = enum(u16) {
     erased_capture_load,
     /// ARC-only borrowing variant of erased_capture_load.
     erased_capture_load_borrowed,
-    /// Pack an erased step and its length hint into one opaque sequence handle.
-    boxed_sequence_pack,
-    /// Unpack a sequence's record while borrowing the owning handle.
-    boxed_sequence_unpack,
 
     // Compiler-internal pointer operations, introduced by the TRMC pass
     // (src/lir/trmc.zig). Never produced by user code or canonicalization.
@@ -1256,8 +1252,6 @@ pub const LowLevel = enum(u16) {
 
         .erased_capture_load = byType(.{ .may_retain_or_release = true, .consume_args = arg_1, .result_shares_args = arg_1 }),
         .erased_capture_load_borrowed = byType(.retainsResultBorrowingArgs(arg_1)),
-        .boxed_sequence_pack = byType(.allocatesConsumingArgs(arg_0)),
-        .boxed_sequence_unpack = byType(.retainsResultBorrowingArgs(arg_0)),
 
         .box_alloc_zeroed = byType(.allocates()),
 

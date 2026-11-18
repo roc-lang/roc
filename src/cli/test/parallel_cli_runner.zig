@@ -2826,7 +2826,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: recursive-slot boxed edges wrap by-value types and compile", .body = .{ .custom = .glue_recursive_slot_box } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: function stored in a generic type is an erased callable in every generator", .body = .{ .custom = .glue_generic_callable_arg } },
     .{ .id = 0, .suite = .glue, .name = "issue 11505: hosted Box of a generic function is an erased callable in every generator", .body = .{ .custom = .glue_hosted_erased_generic_callback } },
-    .{ .id = 0, .suite = .glue, .name = "issue 12887: boxed sequences are opaque owning handles in every generator", .body = .{ .custom = .glue_boxed_sequences } },
+    .{ .id = 0, .suite = .glue, .name = "issue 12887: boxed sequences are boxes of their backing record in every generator", .body = .{ .custom = .glue_boxed_sequences } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: a heap payload holding the app's type by value is opaque in every generator", .body = .{ .custom = .glue_boxed_app_type } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: each instantiation of a generic nominal is its own type in every generator", .body = .{ .custom = .glue_generic_nominal_shapes } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: a value holding an opaque Roc value has no host release in any generator", .body = .{ .custom = .glue_opaque_ownership } },
@@ -19748,29 +19748,32 @@ fn customGlueHostedErasedGenericCallback(io: std.Io, allocator: Allocator, env: 
 }
 
 fn customGlueBoxedSequences(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // A boxed Iter or Stream is an ordinary box: a pointer to its backing
+    // record, whose step field is an erased callable.
     return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/boxed-sequences/main.roc", .{
         .zig = &.{
-            "pub extern fn roc_iter(arg0: RocErasedCallable) callconv(.c) RocErasedCallable;",
-            "pub extern fn roc_stream(arg0: RocErasedCallable) callconv(.c) RocErasedCallable;",
-            "pub extern fn roc_hold_iter(arg0: RocErasedCallable) callconv(.c) void;",
-            "pub extern fn roc_hold_stream(arg0: RocErasedCallable) callconv(.c) void;",
-            "@\"inner\": RocErasedCallable",
+            "pub extern fn roc_iter(arg0: *Iter) callconv(.c) *Iter;",
+            "pub extern fn roc_stream(arg0: *Stream) callconv(.c) *Stream;",
+            "pub extern fn roc_hold_iter(arg0: *Iter) callconv(.c) void;",
+            "pub extern fn roc_hold_stream(arg0: *Stream) callconv(.c) void;",
+            "@\"inner\": *Iter",
+            "@\"step\": RocErasedCallable",
+            "@\"step!\": RocErasedCallable",
         },
         .c = &.{
-            "extern RocErasedCallable roc_iter(RocErasedCallable arg0);",
-            "extern RocErasedCallable roc_stream(RocErasedCallable arg0);",
-            "extern void roc_hold_iter(RocErasedCallable arg0);",
-            "extern void roc_hold_stream(RocErasedCallable arg0);",
-            "RocErasedCallable inner;",
+            "extern Iter* roc_iter(Iter* arg0);",
+            "extern Stream* roc_stream(Stream* arg0);",
+            "extern void roc_hold_iter(Iter* arg0);",
+            "extern void roc_hold_stream(Stream* arg0);",
+            "Iter* inner;",
         },
         .rust = &.{
-            "pub fn roc_iter(arg0: RocErasedCallable) -> RocErasedCallable;",
-            "pub fn roc_stream(arg0: RocErasedCallable) -> RocErasedCallable;",
-            "pub fn roc_hold_iter(arg0: RocErasedCallable);",
-            "pub fn roc_hold_stream(arg0: RocErasedCallable);",
-            "pub inner: RocErasedCallable",
+            "pub fn roc_iter(arg0: *mut Iter) -> *mut Iter;",
+            "pub fn roc_stream(arg0: *mut Stream) -> *mut Stream;",
+            "pub fn roc_hold_iter(arg0: *mut Iter);",
+            "pub fn roc_hold_stream(arg0: *mut Stream);",
+            "pub inner: *mut Iter",
         },
-        .absent = &.{ "len_if_known", "IterStep", "StreamStep" },
     });
 }
 

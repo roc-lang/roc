@@ -5660,18 +5660,11 @@ pub const ReportBuilder = struct {
     }
 
     fn buildHostedUnboxedFunctionReport(self: *Self, data: HostedUnboxedFunction) Allocator.Error!Report {
-        return self.buildHighlightedRegionReport("Hosted Function Requires Boxed Lambda", "Host-visible functions, Iter, and Stream must be boxed.", .runtime_error, data.region, &.{
+        return self.buildHighlightedRegionReport("Hosted Function Requires Boxed Lambda", "Host-visible functions must be boxed.", .runtime_error, data.region, &.{
             D.bytes(self.problems.getExtraString(data.path)).withAnnotation(.inline_code),
             D.bytes("contains an unboxed"),
-            D.bytes(switch (data.kind) {
-                .function => "function",
-                .iter => "Iter",
-                .stream => "Stream",
-            }).withAnnotation(.inline_code),
-            D.bytes(switch (data.kind) {
-                .function => "value. Make that value the immediate payload of its own Box, or box a record, tuple, list, tag, or user type that holds it. An argument or result of a boxed function does not count, because the host passes and receives those values itself.",
-                .iter, .stream => "value. Make that value the immediate payload of its own Box. Boxing an enclosing record, tuple, list, tag, or user type does not count.",
-            }),
+            D.bytes("function").withAnnotation(.inline_code),
+            D.bytes("value. Make that value the immediate payload of its own Box, or box a record, tuple, list, tag, or user type that holds it. An argument or result of a boxed function does not count, because the host passes and receives those values itself."),
         });
     }
 

@@ -1304,8 +1304,19 @@ fn hostedHostReleaseStoredBoxed() callconv(.c) void {
     }
 }
 
+/// The backing record of `Iter(U8)` and `Stream(U8)`: the length hint
+/// `Try(U64, [Unknown])`, then the erased step callable.
+const HostSequence = extern struct {
+    len_if_known: extern struct { payload: u64, discriminant: u8 },
+    step: ?[*]u8,
+};
+
+fn hostSequenceDropPayload(payload: ?[*]u8) callconv(.c) void {
+    builtins.erased_callable.decref(capturePtrAs(HostSequence, payload).step, builtins.in_process_host.ops());
+}
+
 fn hostedHostReleaseBoxedSequence(boxed: ?[*]u8) callconv(.c) void {
-    builtins.erased_callable.decref(boxed, g_roc_ops.?);
+    builtins.dev_wrappers.roc_builtins_box_decref_with(boxed, @alignOf(HostSequence), &hostSequenceDropPayload);
 }
 
 fn hostedHostRoundtripBoxed(boxed: ?[*]u8) callconv(.c) ?[*]u8 {

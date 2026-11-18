@@ -5089,18 +5089,6 @@ pub const Interpreter = struct {
         const list_elems = listElemSource(ll, arg_layout);
 
         return switch (ll.op) {
-            .boxed_sequence_pack => blk: {
-                const result = try self.alloc(ll.ret_layout);
-                const handle = builtins.boxed_sequence.pack(args[0].ptr, self.helper.sizeOf(ll.arg_layouts[0]), args[1].read(u32), &self.roc_ops);
-                self.writeBoxedDataPointer(result, handle);
-                break :blk result;
-            },
-            .boxed_sequence_unpack => blk: {
-                const step = self.readBoxedDataPointer(args[0]) orelse self.invariantFailed("boxed sequence has a null step", .{});
-                const result = try self.alloc(ll.ret_layout);
-                builtins.boxed_sequence.unpack(result.ptr, step, self.helper.sizeOf(ll.ret_layout));
-                break :blk result;
-            },
             .num_plus, .num_minus, .num_times => unreachable, // lowering resolves source-policy arithmetic to a family member, and verifyArithmeticBoundary rejects it in LIR
             .list_prefetched => unreachable, // LIR lowering splits this into an alias and `list_prefetch`
             // ── String ops ──

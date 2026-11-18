@@ -5055,13 +5055,7 @@ const Lowerer = struct {
             .zst => .zst,
             .hole => Common.invariant("a demand hole reached a constant plan"),
             .list => |elem| if (input) |elem_plan| .{ .list = elem_plan.get(.plan) } else return .{ .call = .{ .plan = .{ .ty = elem } } },
-            .box => |elem| if (input) |elem_plan| blk: {
-                if (self.sequenceType(elem)) |sequence| break :blk .{ .boxed_sequence = .{
-                    .payload = elem_plan.get(.plan),
-                    .view_layout = try self.layoutOfType(self.runtimeBackingType(sequence)),
-                } };
-                break :blk .{ .box = elem_plan.get(.plan) };
-            } else return .{ .call = .{ .plan = .{ .ty = elem } } },
+            .box => |elem| if (input) |elem_plan| .{ .box = elem_plan.get(.plan) } else return .{ .call = .{ .plan = .{ .ty = elem } } },
             .tuple, .record => blk: {
                 if (input) |component| {
                     task.plans[task.index] = component.get(.plan);
@@ -8722,12 +8716,6 @@ const Lowerer = struct {
             const arg = GuardedList.at(args, 0);
             const source_ty = try self.lowerExprTy(arg);
             const source = try self.addTemp(source_ty);
-            const source_content = self.types.get(self.unaliasedType(source_ty));
-            const sequence_ty = if (op == .box_box) source_ty else source_content.box;
-            if (self.sequenceType(sequence_ty)) |sequence| {
-                const assign = try self.assignBoxedSequence(where, target, source, sequence, op == .box_box, next);
-                return .{ .tail = exprTask(where, source, arg, source_ty, assign) };
-            }
             const source_layout = self.result.store.getLocal(source).layout_idx;
             const saved_return_target = self.current_return_target;
             if (saved_return_target == target and op == .box_box) {
@@ -12717,65 +12705,6 @@ const Lowerer = struct {
         return (try self.runBoundary(where, .{ .box = .{ .target = target, .source = source, .source_layout = source_layout, .next = next } })).?;
     }
 
-    fn unaliasedType(self: *Lowerer, ty: Type.TypeId) Type.TypeId {
-        var current = ty;
-        for (0..self.types.typeCount()) |_| {
-            const content = self.types.get(current);
-            if (content != .named or content.named.kind != .alias) return current;
-            current = (content.named.backing.get() orelse Common.invariant("a transparent alias has no backing")).ty;
-        }
-        Common.invariant("a transparent alias chain is cyclic");
-    }
-
-    fn sequenceType(self: *Lowerer, ty: Type.TypeId) ?Type.TypeId {
-        const current = self.unaliasedType(ty);
-        const content = self.types.get(current);
-        if (content != .named) return null;
-        const owner = content.named.builtin_owner.get() orelse return null;
-        return if (owner == .iter or owner == .stream) current else null;
-    }
-
-    fn assignBoxedSequence(self: *Lowerer, where: LowerSite, target: LIR.LocalId, source: LIR.LocalId, sequence: Type.TypeId, packing: bool, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        // These are the compiler-owned builtin sequence fields, not a search
-        // for a user type whose structure happens to resemble an iterator.
-        const fields = self.recordFields(sequence);
-        if (fields.len != 2) Common.invariant("a builtin sequence has two fields");
-        var length_index: ?u32 = null;
-        var step_index: ?u32 = null;
-        for (0..fields.len) |index| {
-            const field = GuardedList.at(fields, index);
-            const name = self.solved.lifted.names.recordFieldLabelText(field.name);
-            if (std.mem.eql(u8, name, "len_if_known")) length_index = @intCast(index);
-            if (std.mem.eql(u8, name, "step") or std.mem.eql(u8, name, "step!")) step_index = @intCast(index);
-        }
-        const li = length_index orelse Common.invariant("a builtin sequence has a length hint");
-        const si = step_index orelse Common.invariant("a builtin sequence has a step");
-        if (li != 0 or si != 1) Common.invariant("builtin sequence fields must retain their logical field order");
-        const backing_ty = self.runtimeBackingType(sequence);
-        const backing = try self.addTemp(backing_ty);
-        const backing_layout = self.result.store.getLocal(backing).layout_idx;
-        if (packing) {
-            const info = self.result.layouts.getLayout(backing_layout).getStruct();
-            const step_offset = self.result.layouts.getStructFieldOffsetByOriginalIndex(info.idx, si);
-            const offset = try self.addLocalForLayout(.u32);
-            const pack = try self.result.store.addCFStmt(.{ .assign_low_level = .{
-                .target = target,
-                .op = .boxed_sequence_pack,
-                .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.boxed_sequence_pack.rcEffect()),
-                .args = try self.result.store.addLocalSpan(&.{ backing, offset }),
-                .next = next,
-            } }, where.source());
-            const set_offset = try self.result.store.addCFStmt(.{ .assign_literal = .{
-                .target = offset,
-                .value = .{ .i64_literal = .{ .value = step_offset, .layout_idx = .u32 } },
-                .next = pack,
-            } }, where.source());
-            return self.assignNominalBoundary(where, backing, source, self.result.store.getLocal(source).layout_idx, set_offset);
-        }
-        const wrap = try self.assignNominalBoundary(where, target, backing, backing_layout, next);
-        return self.assignUnaryLowLevel(where, backing, .boxed_sequence_unpack, source, wrap);
-    }
-
     fn assignRefRead(self: *Lowerer, where: LowerSite, target: LIR.LocalId, storage_layout: layout.Idx, op: LIR.RefOp, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         return (try self.runBoundary(where, .{ .ref_read = .{ .target = target, .storage_layout = storage_layout, .op = op, .next = next } })).?;
     }
@@ -14945,7 +14874,7 @@ const Lowerer = struct {
                 },
                 .list => |elem| return .{ .child = elem },
                 .box => |elem| {
-                    if (self.lowerer.sequenceType(elem) == null and !try self.isErasedCallableValueType(elem)) return .{ .child = elem };
+                    if (!try self.isErasedCallableValueType(elem)) return .{ .child = elem };
                     self.graph.setNode(node, .erased_callable);
                     return .{ .done = .{ .input = layout.localGraphInput(node) } };
                 },

@@ -17031,8 +17031,7 @@ The closure has these seeds and propagation rules:
   Records, tuples (padding excluded), tag payloads, list items, box payloads,
   and recursion boxes continue into their components with the same operation.
   `Bool`, scalars, strings, and function values stop. A SIMD vector demands
-  only its `to_inspect`, and only for inspection. A boxed function stops; a
-  boxed sequence continues into the sequence's descriptor for inspection only.
+  only its `to_inspect`, and only for inspection. A boxed function stops.
 
 Building an override callable reserves tables and queues the workers its
 dictionary entry needs, and lowering those can demand more, so lowering
@@ -29850,54 +29849,32 @@ producer metadata; only non-debug size builds remove target-feature metadata.
 
 ## Host Symbol ABI
 
-Every function value visible to the host must be inside a `Box`, and every
-`Iter` and `Stream` visible to the host must be the immediate payload of its
-own `Box`. A directly boxed function is a callable the host may invoke, so its
-arguments and result are host-visible values in turn. Any other `Box` payload
-is a value the host only holds: it may store the pointer and hand it back.
-Every function a `Box` holds is an erased callable (see Erased Callable
-Requirements), so the payload's bytes are fixed whatever functions it contains,
-at any depth and in any record, tuple, list, tag, or user nominal; those
-functions' signatures are not host-visible. This is what lets a platform keep
-an app's whole state, including the app's own functions, in one `Box(State)`
-between calls. Sequences take their handle representation only as an immediate
-`Box` payload, so a held payload still needs each `Iter` and `Stream` it
-contains directly boxed. Aliases are transparent; nominal and opaque user types
-are checked through their declared backing with their actual parameters
-substituted. The rule applies equally to hosted and provided arguments and
-results. A procedure's own signature is not a function value. Boxed iterators
-and streams are opaque handles: their private step closures are implementation
-state, not further host-visible values.
+Every function value visible to the host must be inside a `Box`. A directly
+boxed function is a callable the host may invoke, so its arguments and result
+are host-visible values in turn. Any other `Box` payload is a value the host
+only holds: it may store the pointer and hand it back. Every function a `Box`
+holds is an erased callable (see Erased Callable Requirements), so the
+payload's bytes are fixed whatever functions it contains, at any depth and in
+any record, tuple, list, tag, or nominal; those functions' signatures are not
+host-visible. This is what lets a platform keep an app's whole state,
+including the app's own functions, in one `Box(State)` between calls.
+`Iter` and `Stream` follow the same rule as any other nominal: their backing
+record holds a step function, so an unboxed `Iter` or `Stream` is a
+host-visible function value and is rejected, while `Box(Iter(a))` is a held
+payload of statically known size, a length hint and one erased step. Aliases
+are transparent; nominal and opaque types are checked through their declared
+backing with their actual parameters substituted. The rule applies equally to
+hosted and provided arguments and results. A procedure's own signature is not
+a function value.
 
 The rule reads declared signatures. A type variable inside a declared `Box`
-(`store! : Box(a) => {}`) is a held payload whose type only the app names, so
-an app may instantiate it with a type that holds a sequence outside its own
-`Box`. Such a sequence keeps the representation tier its producer selected,
-and code that reads the payload back names the public type. The two agree on
-the stored bytes: every tier's backing has the public record's shape, with
-`rest` naming the tier's own type, and every callable a `Box` holds is erased,
-so a held sequence is its length hint and one erased step whichever tier
-produced it. The handle representation is the only other layout, and the
-`Box` payload's type alone selects it.
+(`store! : Box(a) => {}`) is a held payload whose type only the app names, and
+every function it holds is erased whichever type the app chooses.
 
-Boxed sequences share the erased-callable ownership protocol. Their captures
-and private record view occupy one allocation; the view's step points back to
-that allocation without owning another reference. Unboxing retains the step
-when its record is copied. A unique step can be resized for boxing; copying a
-shared step retains its captured references independently. The callable header
-therefore carries the capture extent and its retain plan as well as final-drop
-information. Hosts need neither the capture layout nor a separate destructor.
-
-Boxing selects the existing forced-dynamic iterator interface before Monotype
-is sealed, so steps and successors agree even when producer state differs.
-This does not erase ordinary unboxed iterator pipelines. Constant storage
-preserves the checked box and nominal record while storing the same
-single-allocation representation; interpreter-owned callable context must
-remain valid when those captures are copied.
-
-Glue describes directly boxed sequences as opaque `RocErasedCallable` handles.
-It does not expose their step signatures or backing records. The host can
-retain, release, store, and return a handle, but only Roc steps it.
+Glue describes `Box(Iter(a))` and `Box(Stream(a))` as it describes any box:
+a pointer to the backing record, whose step field is a `RocErasedCallable`.
+A host that releases one releases the box and, in its drop function, the
+step callable.
 
 The program's hosted catalog retains every visible hosted declaration and
 classifies its platform binding as mapped or unavailable. Only mapped entries

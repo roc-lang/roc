@@ -753,16 +753,9 @@ pub const Store = struct {
         return self.nodes.items[@backingInt(id)];
     }
 
-    /// Whether this is the compiler-owned Iter or Stream nominal.
-    pub fn isSequence(self: *const Store, id: TypeId) bool {
-        const node = self.get(id);
-        if (node != .nominal) return false;
-        return node.nominal.builtin == .iter or node.nominal.builtin == .stream;
-    }
-
     /// Direct payloads whose explicit Box is one erased allocation.
     pub fn isErasedBoxPayload(self: *const Store, id: TypeId) bool {
-        return self.get(id) == .function or self.isSequence(id);
+        return self.get(id) == .function;
     }
 
     pub fn isClosed(self: *const Store, id: TypeId) bool {

@@ -34,7 +34,7 @@ test "issue 12953: provides accepts a boxed imported state that holds a function
 test "issue 12953: functions are accepted anywhere a host only holds them" {
     const Case = struct { ty: []const u8, valid: bool };
     const cases = [_]Case{
-        // Held: the box's payload is not itself a function or sequence.
+        // Held: the box's payload is not itself a function.
         .{ .ty = "Box(State)", .valid = true },
         .{ .ty = "Box(Generic(U64 -> U64))", .valid = true },
         .{ .ty = "Box({ inner : { run : U64 -> U64 } })", .valid = true },
@@ -44,6 +44,9 @@ test "issue 12953: functions are accepted anywhere a host only holds them" {
         .{ .ty = "Box(((U64 -> U64), Str))", .valid = true },
         .{ .ty = "List(Box(State))", .valid = true },
         .{ .ty = "Box({ items : Box(Iter(U8)), run : U64 -> U64 })", .valid = true },
+        .{ .ty = "Box(Sequenced)", .valid = true },
+        .{ .ty = "Box({ items : Iter(U8), run : U64 -> U64 })", .valid = true },
+        .{ .ty = "Box(List(Stream(U8)))", .valid = true },
         // Still rejected: the host passes or reads the value itself.
         .{ .ty = "State", .valid = false },
         .{ .ty = "{ state : Box(State), run : U64 -> U64 }", .valid = false },
@@ -51,10 +54,9 @@ test "issue 12953: functions are accepted anywhere a host only holds them" {
         // Still rejected: a directly boxed function is called by the host.
         .{ .ty = "Box((U64 -> U64) -> U64)", .valid = false },
         .{ .ty = "Box(U64 -> State)", .valid = false },
-        // Still rejected: sequences are handles only as an immediate payload.
-        .{ .ty = "Box(Sequenced)", .valid = false },
-        .{ .ty = "Box({ items : Iter(U8), run : U64 -> U64 })", .valid = false },
-        .{ .ty = "Box(List(Stream(U8)))", .valid = false },
+        // Still rejected: an unboxed sequence holds its step function.
+        .{ .ty = "Iter(U8)", .valid = false },
+        .{ .ty = "{ items : Stream(U8) }", .valid = false },
     };
     for (cases) |case| {
         for ([_]bool{ false, true }) |result| {
