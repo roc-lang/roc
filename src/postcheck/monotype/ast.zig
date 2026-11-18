@@ -316,6 +316,25 @@ pub const CodecContractIdentity = struct {
 pub const OptionalCodecContractIdentity = collections.OptionalStruct(CodecContractIdentity, "constructor_ty");
 
 /// Function template plus source and monomorphic type identities.
+/// What `FnTemplate.provided_low_level` records about a template's checked
+/// provided low-level operation.
+pub const ProvidedLowLevel = enum(u8) {
+    none,
+    operation,
+    /// The operation has type-only operands (`LowLevel.typeOnlyOperands`).
+    /// They have no runtime value, so every inline mode substitutes the body
+    /// at its calls.
+    operation_with_type_only_operands,
+
+    /// What a template whose checked provided operation is `op` records.
+    pub fn of(op: ?can.CIR.Expr.LowLevel) ProvidedLowLevel {
+        const provided = op orelse return .none;
+        return if (provided.typeOnlyOperands() == 0) .operation else .operation_with_type_only_operands;
+    }
+};
+
+/// Facts a specialized function carries about the checked template it comes
+/// from.
 pub const FnTemplate = struct {
     /// Identity in the common frozen Monotype owner, stamped by lifting.
     /// Consumer-specific symbols and layout specializations never replace it.
@@ -344,12 +363,12 @@ pub const FnTemplate = struct {
     /// whose closed types commit the same layouts share one procedure
     /// (design.md "Layout-Keyed Builtin Procedures").
     procedure_keyed_by_layout: bool = false,
-    /// Set for a specialization of a Builtin template whose body is its
-    /// checked provided low-level operation
+    /// Whether this is a specialization of a Builtin template whose body is
+    /// its checked provided low-level operation
     /// (`CheckedProcedureTemplate.provided_low_level`). The compiler defines
     /// that body, so a caller that substitutes it at a call depends on no
     /// source but its own.
-    provides_low_level: bool = false,
+    provided_low_level: ProvidedLowLevel = .none,
     /// The checked template is called at exactly one site of its module's
     /// source and from nowhere else (`templateHasSingleSourceCall`), stamped
     /// when Monotype finalizes the program. Dev inline analysis decides

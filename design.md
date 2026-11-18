@@ -10562,8 +10562,13 @@ record the same continuation proof rather than relying on downstream discovery.
 
 The explicit `InlineMode` controls the optional specialization work:
 
-- `.none` runs only iterator fusion from Monotype Lifted SpecConstr and
-  produces an empty solved inline plan. The interpreter selects this.
+- `.none` runs only iterator fusion from Monotype Lifted SpecConstr, and its
+  solved inline plan substitutes only wrappers of compiler-provided operations
+  with type-only operands (`LowLevel.typeOnlyOperands`). The interpreter
+  selects this. Every mode substitutes those wrappers: a type-only operand has
+  no runtime value, and a wrapper procedure would take it as a runtime
+  argument, keeping it live until the call (`List.map`'s input list would
+  then share the buffer the loop rewrites in place).
 - `.wrappers` runs SpecConstr and produces wrapper and exact-single-use inline
   decisions from Lambda Solved. Size and speed modes select this. A body is
   single-use when the functions the program's roots reach, by direct calls
@@ -10577,7 +10582,7 @@ The explicit `InlineMode` controls the optional specialization work:
   procedures remain eligible for early native-code reuse. The one exception
   is a wrapper whose body the compiler provides: a specialization of a
   Builtin template whose body is its checked provided low-level operation
-  (`FnTemplate.provides_low_level`). Substituting it makes no caller's code
+  (`FnTemplate.provided_low_level`). Substituting it makes no caller's code
   depend on another procedure's source, and leaves its operation visible to
   the LIR rewrites that bound list copying (`while !$done` tests the
   `bool_not` low-level that known-tag jump threading reads). Like `.none`, it
