@@ -1,6 +1,6 @@
 platform ""
     requires {
-        [Model : model, Msg : msg] for init : Str -> (Model, Msg),
+        [Model : model, Msg : msg] for init : Str -> (model, msg),
         show : Model -> Str
     }
     exposes [Stdout, Stderr, Stdin, Builder, Host, NodeA, NodeB, Element, Padded, Proc, Rb]

@@ -4590,7 +4590,7 @@ Builtin :: [].{
 					var $out = list_map_cast_unsafe(prepared_list)
 					var $index = 0
 					while $index < length {
-						item = list_map_extract_unsafe($out, $index, transform)
+						item = list_map_extract_unsafe($out, $index, prepared_list)
 						$out = list_map_write_unsafe($out, $index, transform(item))
 						$index = $index + 1
 					}
@@ -16491,9 +16491,10 @@ Builtin :: [].{
 			## expect Dec.times_saturated(Dec.lowest, 2.0) == Dec.lowest
 			##
 			## expect Dec.times_saturated(2.5, 4.0) == 10.0
+			##
+			## expect Dec.times_saturated(1.0, 0.5) == 0.5
 			## ```
 			times_saturated : Dec, Dec -> Dec
-			times_saturated = |a, b| signed_times_saturated_rescaled(Dec.lowest, Dec.highest, 0.0, -1.0, a, b)
 
 			## Raise a [Dec] to a [Dec] power. Results are limited to [Dec]'s
 			## fixed 18 fractional decimal places. Fractional exponents require a
@@ -26970,56 +26971,6 @@ signed_times_try = |a, b|
 		Ok(a.times_wrap(b))
 	}
 
-signed_times_try_rescaled : item, item, item, item, item, item -> Try(item, [Overflow])
-	where [
-		item.is_gt : item, item -> Bool,
-		item.is_lt : item, item -> Bool,
-		item.is_eq : item, item -> Bool,
-		item.minus : item, item -> item,
-		item.times : item, item -> item,
-		item.div_trunc_by : item, item -> item,
-	]
-signed_times_try_rescaled = |lowest, highest, zero, neg_one, a, b|
-	if a == zero {
-		Ok(zero)
-	} else if b == zero {
-		Ok(zero)
-	} else if a == neg_one {
-		if b == lowest {
-			Err(Overflow)
-		} else {
-			Ok(zero - b)
-		}
-	} else if b == neg_one {
-		if a == lowest {
-			Err(Overflow)
-		} else {
-			Ok(zero - a)
-		}
-	} else if a > zero {
-		if b > zero {
-			if a > highest.div_trunc_by(b) {
-				Err(Overflow)
-			} else {
-				Ok(a * b)
-			}
-		} else if b < lowest.div_trunc_by(a) {
-			Err(Overflow)
-		} else {
-			Ok(a * b)
-		}
-	} else if b > zero {
-		if a < lowest.div_trunc_by(b) {
-			Err(Overflow)
-		} else {
-			Ok(a * b)
-		}
-	} else if a < highest.div_trunc_by(b) {
-		Err(Overflow)
-	} else {
-		Ok(a * b)
-	}
-
 signed_div_try : item, item, item, item, item -> Try(item, [DivByZero, Overflow])
 	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
 signed_div_try = |lowest, zero, neg_one, a, b|
@@ -27283,32 +27234,6 @@ signed_times_saturated = |lowest, highest, zero, a, b|
 		}
 	} else {
 		a.times_wrap(b)
-	}
-
-signed_times_saturated_rescaled : item, item, item, item, item, item -> item
-	where [
-		item.is_gt : item, item -> Bool,
-		item.is_lt : item, item -> Bool,
-		item.is_eq : item, item -> Bool,
-		item.minus : item, item -> item,
-		item.times : item, item -> item,
-		item.div_trunc_by : item, item -> item,
-	]
-signed_times_saturated_rescaled = |lowest, highest, zero, neg_one, a, b|
-	match signed_times_try_rescaled(lowest, highest, zero, neg_one, a, b) {
-		Ok(result) => result
-		Err(Overflow) =>
-			if a < zero {
-				if b > zero {
-					lowest
-				} else {
-					highest
-				}
-			} else if b < zero {
-				lowest
-			} else {
-				highest
-			}
 	}
 
 integer_is_even : item, item, item -> Bool
@@ -28012,10 +27937,10 @@ list_map_cast_unsafe : List(input) -> List(output)
 
 # Implemented by the compiler. Moves ownership of the item at the given
 # index out of the list's buffer; the slot keeps stale bytes until
-# list_map_write_unsafe stores its replacement. No bounds checks. The
-# transform is never evaluated: the list's type names only the output item,
-# so the transform's type is what says the slot holds an input item.
-list_map_extract_unsafe : List(output), U64, (input -> output) -> input
+# list_map_write_unsafe stores its replacement. No bounds checks. The input
+# list is never evaluated: the buffer's type names only the output item, so
+# the input list's type is what says the slot holds one of its items.
+list_map_extract_unsafe : List(output), U64, List(input) -> input
 
 # Implemented by the compiler. Stores an owned item into the slot at the
 # given index, which must have been vacated by list_map_extract_unsafe.

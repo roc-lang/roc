@@ -5,6 +5,32 @@ const TestEnv = @import("./TestEnv.zig");
 
 const testing = std.testing;
 
+test "issue 13067 - imported nominal record update reports incompatible list element fields" {
+    // https://github.com/roc-lang/roc/issues/13067
+    var model = try TestEnv.init("Model",
+        \\Model := { items : List({ name : Str }) }.{
+        \\    Other : Str
+        \\    empty : Model
+        \\    empty = Model.{ items: [] }
+        \\}
+    );
+    defer model.deinit();
+    try model.assertNoErrors();
+
+    var project = try TestEnv.initWithImport("Project",
+        \\import Model
+        \\
+        \\expect {
+        \\    model = { ..Model.empty, items: [{ name: "a", extra: Bool.False }] }
+        \\    model.items.len() == 1
+        \\}
+    , "Model", &model);
+    defer project.deinit();
+    try project.assertOneTypeError("Type Mismatch");
+    try project.assertOneTypeProblemMsgContains("Type Mismatch", "The type of the field `items` is incompatible.");
+    try project.assertOneTypeProblemMsgContains("Type Mismatch", "extra");
+}
+
 test "cross-module - check type - monomorphic function passes" {
     const source_a =
         \\main! : Str -> Str

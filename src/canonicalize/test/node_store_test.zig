@@ -1082,6 +1082,13 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .builtin_import_conflict = .{
+            .name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .type_parameter_conflict = .{
             .name = rand_ident_idx(),
             .parameter_name = rand_ident_idx(),

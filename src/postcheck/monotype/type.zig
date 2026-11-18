@@ -267,9 +267,8 @@ pub const Tag = struct {
     payloads: Span,
 };
 
-/// One entry of a nominal record's declared fields. The backing row is always
-/// lexicographic; layout selection consumes this separate source order only
-/// when padding opts into declared order.
+/// One entry of a nominal record's explicit layout order. The backing row is
+/// always lexicographic; only an unnamed field opts into a separate order.
 /// See design.md "Nominal Record Field Order".
 pub const DeclaredField = union(enum(u8)) {
     /// A named backing field, matched against the lexicographic backing row by
@@ -290,8 +289,8 @@ pub const Content = union(enum(u8)) {
         builtin_owner: collections.OptionalEnum(static_dispatch.BuiltinOwner) = .none,
         args: Span,
         backing: OptionalNamedBacking = .none,
-        /// Declared fields for a nominal/opaque record backing; empty for other
-        /// named types.
+        /// Layout order for a nominal/opaque record with explicit padding;
+        /// empty for structural-order backings and other named types.
         declared_order: Span = Span.empty(),
     },
     record: Span,
@@ -367,6 +366,9 @@ pub const TypeCache = packed struct(u8) {
     }
 
     pub fn get(self: TypeCache, comptime query: Store.ContainmentQuery) ?bool {
+        // Closed-call summaries memoize this query by checked callable instead
+        // of growing every Monotype's one-byte cache for a lowering-only query.
+        if (comptime query == .producer_interface) return null;
         return switch (@field(self, @tagName(query))) {
             .unknown => null,
             .no => false,
@@ -375,6 +377,7 @@ pub const TypeCache = packed struct(u8) {
     }
 
     pub fn with(self: TypeCache, comptime query: Store.ContainmentQuery, answer: bool) TypeCache {
+        if (comptime query == .producer_interface) return self;
         var result = self;
         @field(result, @tagName(query)) = if (answer) .yes else .no;
         return result;
@@ -905,13 +908,22 @@ pub const Store = struct {
         return try self.containsAt(root, .generated_private);
     }
 
-    pub const ContainmentQuery = enum { iterator_interface, generated_private };
+    /// Whether a closed type can carry producer-authored representation
+    /// evidence. The caller memoizes the argument/result summary; reuse the
+    /// existing stack-safe structural walk without another per-type column.
+    pub fn containsProducerInterface(self: *Store, root: TypeId) std.mem.Allocator.Error!bool {
+        return try self.containsAt(root, .producer_interface);
+    }
+
+    pub const ContainmentQuery = enum { iterator_interface, generated_private, producer_interface };
 
     fn cachedContainment(self: *const Store, index: usize, comptime query: ContainmentQuery) ?bool {
+        if (comptime query == .producer_interface) return null;
         return self.type_cache.unsafeRawItemsForView()[index].get(query);
     }
 
     fn setCachedContainment(self: *Store, index: usize, comptime query: ContainmentQuery, answer: bool) void {
+        if (comptime query == .producer_interface) return;
         self.type_cache.set(index, self.type_cache.get(index).with(query, answer));
     }
 
@@ -930,15 +942,17 @@ pub const Store = struct {
         while (self.iterator_interface_pending.pop()) |ty| {
             const ty_index = @backingInt(ty);
             if (self.iterator_interface_visit_epochs.testAndInsert(ty)) continue;
-            try self.iterator_interface_visited.append(self.allocator, ty);
             self.requireConstructed(ty);
-            if (ty != root) {
-                if (self.cachedContainment(ty_index, query)) |cached| {
-                    if (cached) {
-                        self.setCachedContainment(root_index, query, true);
-                        return true;
+            if (comptime query != .producer_interface) {
+                try self.iterator_interface_visited.append(self.allocator, ty);
+                if (ty != root) {
+                    if (self.cachedContainment(ty_index, query)) |cached| {
+                        if (cached) {
+                            self.setCachedContainment(root_index, query, true);
+                            return true;
+                        }
+                        continue;
                     }
-                    continue;
                 }
             }
             switch (self.get(ty)) {
@@ -981,6 +995,11 @@ pub const Store = struct {
                     const found = switch (query) {
                         .iterator_interface => if (named.builtin_owner.get()) |owner| static_dispatch.isIteratorOwner(owner) else false,
                         .generated_private => if (named.backing.get()) |backing| backing.authority == .generated_private else false,
+                        .producer_interface => (if (named.backing.get()) |backing| backing.authority == .generated_private else false) or
+                            (if (named.builtin_owner.get()) |owner| switch (owner) {
+                                .iter, .stream, .fields, .field, .parse_tag_union_spec => true,
+                                .list, .box, .dict, .set, .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => false,
+                            } else false),
                     };
                     if (found) {
                         self.setCachedContainment(ty_index, query, true);
@@ -5057,6 +5076,66 @@ test "monotype type store aborted transaction leaves no speculative state" {
     transaction.abort(&store);
     try std.testing.expectEqual(types_len, store.types.len());
     try std.testing.expect(store.verify(&name_store) == null);
+}
+
+test "producer interface containment includes nested codecs iterators and private backings" {
+    const allocator = std.testing.allocator;
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    var store = Store.init(allocator);
+    defer store.deinit();
+    const unit = try store.internZst(&name_store);
+    const module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x31))));
+    const label = try name_store.internRecordFieldLabel("value");
+    const tag = try name_store.internTagLabel("Value");
+    const owners = [_]?static_dispatch.BuiltinOwner{ .iter, .stream, .fields, .field, .parse_tag_union_spec, null };
+    for (owners) |owner| {
+        const leaf = try store.internNamed(&name_store, .{
+            .named_type = .{ .module = .{} },
+            .def = .{ .module = module, .type_name = try name_store.internTypeName(if (owner) |o| @tagName(o) else "Plain") },
+            .kind = .@"opaque",
+            .builtin_owner = owner,
+            .backing = .{ .ty = unit, .use = .runtime_layout_only },
+        });
+        const shapes = [_]TypeId{
+            leaf,
+            try store.internList(&name_store, leaf),
+            try store.internBox(&name_store, leaf),
+            try store.internTuple(&name_store, &.{ unit, leaf }),
+            try store.internRecord(&name_store, &.{.{ .name = label, .ty = leaf, .default = .none }}),
+            try store.internTagUnion(&name_store, &.{.{ .name = tag, .checked_name = tag, .payloads = &.{leaf} }}),
+            try store.internFunc(&name_store, &.{leaf}, unit),
+            try store.internFunc(&name_store, &.{unit}, leaf),
+            try store.internNamed(&name_store, .{
+                .named_type = .{ .module = .{} },
+                .def = .{ .module = module, .type_name = try name_store.internTypeName("Wrapper") },
+                .kind = .nominal,
+                .args = &.{leaf},
+                .backing = .{ .ty = leaf, .use = .inspectable },
+            }),
+        };
+        for (shapes) |shape| {
+            const visited_capacity = store.iterator_interface_visited.capacity;
+            try std.testing.expectEqual(owner != null, try store.containsProducerInterface(shape));
+            // Only cached queries need a second list of nodes to stamp.
+            try std.testing.expectEqual(visited_capacity, store.iterator_interface_visited.capacity);
+        }
+
+        const transaction = store.beginTransaction();
+        const recursive = try transaction.reserve(&store);
+        transaction.fill(&store, recursive, .{ .tuple = try store.addSpan(&.{ recursive, leaf }) });
+        var committed = try store.commitTransaction(&name_store, transaction, recursive);
+        defer committed.deinit();
+        try std.testing.expectEqual(owner != null, try store.containsProducerInterface(committed.root));
+    }
+    const private = try store.internNamed(&name_store, .{
+        .named_type = .{ .module = .{} },
+        .def = .{ .module = module, .type_name = try name_store.internTypeName("Private") },
+        .kind = .@"opaque",
+        .backing = .{ .ty = unit, .use = .runtime_layout_only, .authority = .generated_private },
+    });
+    try std.testing.expect(try store.containsProducerInterface(private));
+    try std.testing.expectEqual(@as(usize, 1), @sizeOf(TypeCache));
 }
 
 test "monotype type store restores keep durable iterator containment answers" {

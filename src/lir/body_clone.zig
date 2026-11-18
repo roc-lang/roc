@@ -2545,6 +2545,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                             .frozen_capture_layout = s.frozen_capture_layout,
                             .reuse = try self.mapMaybeLocal(s.reuse),
                             .reuse_unique = s.reuse_unique,
+                            .frame = s.frame,
                         }),
                         .next = inline_stmt.next,
                     } };

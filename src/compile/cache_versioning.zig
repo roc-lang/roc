@@ -74,14 +74,18 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// evidence parameters recording the edge that hands a captured codec
 /// requirement on, an alias-bound dispatch edge's among them, private codec
 /// instances whose copies of a template's variables the ambiguity rule does
-/// not judge, and procedure templates' closed row nodes. It rejects every
-/// earlier format, including the independent version 19 through 49 formats.
+/// not judge, procedure templates' closed row nodes, and compile-time roots
+/// the checked-value writer completes when they read only constants it
+/// completes. It rejects every earlier format, including the independent
+/// version 19 through 51 formats.
+/// Version 52 also excludes artifacts with builtin-conflicting import bindings.
 /// Platform-pairing entries share it.
-const checked_envelope_version: u32 = 50;
+const checked_envelope_version: u32 = 52;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
-/// body order and alignment.
-const canonicalized_envelope_version: u32 = 4;
+/// body order and alignment. Version 5 rejects builtin-conflicting import
+/// bindings and records their uses as explicit errors.
+const canonicalized_envelope_version: u32 = 5;
 
 /// The running compiler's admission hash for `entry`.
 pub fn entryVersionHash(comptime entry: Entry) [32]u8 {

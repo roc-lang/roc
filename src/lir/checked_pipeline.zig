@@ -14,6 +14,7 @@ const core = @import("lir_core");
 const Arc = @import("arc.zig");
 const ImmortalLocals = @import("immortal_locals.zig");
 const TailDrive = @import("tail_drive.zig");
+const FrameCallables = @import("frame_callables.zig");
 const ProcPasses = @import("proc_passes.zig");
 const RangeProve = @import("range_prove.zig");
 const ReturnSlot = @import("return_slot.zig");
@@ -887,6 +888,9 @@ pub const PassStep = enum {
     tag_reachability,
     /// Dropping procedures and data nothing references, before ARC.
     reachable_procs_before_arc,
+    /// Solving which function parameters never outlive their call, and
+    /// building the callables passed only to them in their frames.
+    frame_callables,
     tail_drive,
     /// Dropping procedures and data nothing references, after ARC.
     reachable_procs_after_arc,
@@ -1985,10 +1989,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         procedure_usage = try postcheck.MonotypeLifted.SpecConstr.collectProcedureUsage(allocator, &solved.lifted);
     }
 
-    var inline_plan_timing_scope = PipelineStageScope.begin(
-        if (target.inline_mode != .none) target.timing else null,
-        .inline_plan,
-    );
+    var inline_plan_timing_scope = PipelineStageScope.begin(target.timing, .inline_plan);
     defer inline_plan_timing_scope.end();
     const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved);
     inline_plan_timing_scope.end();
@@ -2440,6 +2441,22 @@ fn finishLoweredOutput(
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
     if (arc_detail) |*detail| target.timing.?.addArc(detail);
     arc_timing_scope.end();
+
+    // Which function parameters never outlive their call, and the callables
+    // built in their caller's frame for them (design.md "Frame Callables").
+    // Both read the deferred and frame-replacing calls ARC emitted, after
+    // the certifier checked ARC's placement, and run before tail drive
+    // stamps where pending calls run; a frame callable's capture release
+    // is a reference-count statement, which a handed-up call may precede.
+    if (target.specialization_strategy == .boxy) {
+        var frame_scope = PassStepScope.begin(target.timing, .frame_callables);
+        defer frame_scope.end();
+        const pairs = try allocator.alloc(FrameCallables.PublishedPair, published_variants.items.len);
+        defer allocator.free(pairs);
+        for (published_variants.items, pairs) |published, *pair| pair.* = .{ .worker = published.worker, .variant = published.variant };
+        try FrameCallables.solveParams(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, pairs);
+        _ = try FrameCallables.markFrames(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts);
+    }
 
     var tail_drive_scope = PassStepScope.begin(target.timing, .tail_drive);
     try TailDrive.run(allocator, &lowered.lir_result.store, &.{entered_from_outside.items}, arc_result.deferred_erased_calls);

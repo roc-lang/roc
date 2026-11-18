@@ -124,6 +124,7 @@ pub fn lowLevelAccess(op: LowLevel) OpAccess {
         .num_float_sub,
         .num_float_mul,
         .dec_mul,
+        .dec_mul_saturated,
         .num_div_by,
         .num_div_by_checked,
         .num_div_trunc_by,

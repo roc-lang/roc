@@ -334,6 +334,9 @@ builtin_auto_imported_types: collections.DenseMap(Ident.Idx, AutoImportedType),
 /// Auto-imported builtin type names that some type declaration in this
 /// source also declares. Only these can yield to a source declaration.
 builtin_type_names_declared_in_source: collections.DenseMap(Ident.Idx, void),
+/// Whether any import in this module was rejected. Valid modules never need
+/// the lexical recovery-table walk at source lookups.
+has_rejected_import_names: bool = false,
 /// Map from module identifier to Import.Idx for tracking unique imports.
 import_indices: collections.DenseMap(Ident.Idx, Import.Idx),
 /// Canonicalization state for parser-owned type declarations.
@@ -400,6 +403,10 @@ bound_vars_index: collections.DenseMap(Pattern.Idx, void),
 /// `scratch_bound_vars` so it survives across the body canonicalization without
 /// being disturbed by the block's own capture/free-var bookkeeping.
 scratch_defining_bound_vars: base.Scratch(Pattern.Idx),
+/// Active initializer binders, indexed by canonical identity. Positions let a
+/// lambda suspend its enclosing context without copying or clearing entries.
+/// Capacity follows simultaneously active binders, not the module's node ids.
+defining_bound_positions: std.AutoHashMapUnmanaged(Pattern.Idx, u32) = .empty,
 /// Scratch recording, for the declaration pattern currently being canonicalized,
 /// the existing `var` patterns it reassigns (e.g. the `index` in `(word, index) =
 /// ...` when `index` is an existing mutable binder). These reuse a prior binder
@@ -426,12 +433,9 @@ scratch_global_value_defs: std.ArrayList(CIR.Def.Idx),
 closure_counter: u32 = 0,
 /// Current loop depth for validating break statements
 loop_depth: u32 = 0,
-/// The exact set of pattern indices bound by the current declaration's pattern,
-/// stored as a span into `scratch_defining_bound_vars`. A reference whose resolved
-/// pattern is a member of this set is a self-referential definition (e.g. `a = a`
-/// or `(a, b) = (a, b)`), which would loop forever at runtime for non-functions.
-/// This is null when we're inside a lambda or other context where inner definitions
-/// are independent of outer ones.
+/// The active eager initialization context in `scratch_defining_bound_vars`.
+/// Nested initializers extend it; ordinary scopes preserve it. A lambda
+/// suspends it until its body is finished, without discarding the outer entries.
 defining_bound_vars: ?DataSpan = null,
 /// The associated-block type alias declaration whose annotation is currently
 /// being canonicalized. A type lookup made by that annotation must not resolve
@@ -533,6 +537,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .globally_resolvable_patterns = .keyed,
     .builtin_auto_imported_types = .input,
     .builtin_type_names_declared_in_source = .input,
+    .has_rejected_import_names = .keyed,
     .import_indices = .keyed,
     .parser_type_decl_states = .keyed,
     .forward_prepared_type_decls = .keyed,
@@ -562,6 +567,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .scratch_bound_vars = .scratch,
     .bound_vars_index = .scratch,
     .scratch_defining_bound_vars = .frame_partitioned,
+    .defining_bound_positions = .lexical,
     .scratch_reassign_targets = .scratch,
     .scratch_local_function_patterns = .frame_partitioned,
     .scratch_block_local_defs = .frame_partitioned,
@@ -998,6 +1004,7 @@ pub fn deinit(
     self.scratch_bound_vars.deinit();
     self.bound_vars_index.deinit();
     self.scratch_defining_bound_vars.deinit();
+    self.defining_bound_positions.deinit(gpa);
     self.scratch_reassign_targets.deinit();
     self.scratch_local_function_patterns.deinit();
     self.pattern_binders.deinit(gpa);
@@ -1704,6 +1711,17 @@ fn declScopeEnter(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Alloca
 
     std.debug.assert(!self.active_decl_scopes.contains(scope_idx));
     try self.active_decl_scopes.put(scope_idx, active_binding);
+
+    // Whole-scope imports must be rejected before any forward use can select
+    // a builtin with the same spelling. No bindings or imports are resolved here.
+    if (parser_scope.forward_policy == .whole_scope) {
+        for (decl_index.scopeDecls(scope_idx)) |decl_idx| {
+            const decl = decl_index.decls.items[@backingInt(decl_idx)];
+            if (decl.kind != .import) continue;
+            const stmt = self.parse_ir.store.getStatement(@fromBackingInt(@intCast(decl.statement)));
+            if (stmt == .import) try self.rejectReservedImportNames(stmt.import);
+        }
+    }
 
     for (decl_index.scopeNames(scope_idx, .value)) |name| {
         const ident = name.ident;
@@ -6030,8 +6048,8 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
 }
 
 /// Begin self-reference tracking for a declaration whose pattern is `pattern_idx`.
-/// Collects the pattern's FRESHLY-bound binders onto `scratch_defining_bound_vars`
-/// and returns the span identifying them. The caller stores this in
+/// Adds the pattern's FRESHLY-bound binders to the eager initialization context
+/// and returns its extended span. The caller stores this in
 /// `defining_bound_vars` and passes the previous value to `endDefiningBoundVars`
 /// once the declaration body is canonicalized.
 ///
@@ -6042,6 +6060,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
 /// therefore not self-referential, so it is excluded from the set.
 fn beginDefiningBoundVars(self: *Self, pattern_idx: Pattern.Idx, reassign_targets_start: u32) Allocator.Error!DataSpan {
     const start = self.scratch_defining_bound_vars.top();
+    errdefer self.scratch_defining_bound_vars.clearFrom(start);
     try self.collectBoundVarsInto(&self.scratch_defining_bound_vars, pattern_idx, false);
 
     const reassign_targets = self.scratch_reassign_targets.sliceFromStart(reassign_targets_start);
@@ -6060,36 +6079,59 @@ fn beginDefiningBoundVars(self: *Self, pattern_idx: Pattern.Idx, reassign_target
         self.scratch_defining_bound_vars.clearFrom(start + @as(u32, @intCast(write)));
     }
 
-    return self.scratch_defining_bound_vars.spanFrom(start);
+    const span = self.scratch_defining_bound_vars.spanFrom(if (self.defining_bound_vars) |outer| outer.start else start);
+    // A singleton context needs only one identity comparison, not an index.
+    // On its first extension, index that existing binder along with the new
+    // ones; an already-indexed context only adds its new suffix.
+    if (span.len > 1) {
+        const index_start = if (self.defining_bound_vars) |outer|
+            if (outer.len > 1) start else outer.start
+        else
+            start;
+        const indexed = self.scratch_defining_bound_vars.sliceFromStart(index_start);
+        try self.defining_bound_positions.ensureUnusedCapacity(self.env.gpa, @intCast(indexed.len));
+        for (indexed, 0..) |bound, index| {
+            const entry = self.defining_bound_positions.getOrPutAssumeCapacity(bound);
+            // A malformed duplicate binder may occur twice in one pattern.
+            if (!entry.found_existing) entry.value_ptr.* = index_start + @as(u32, @intCast(index));
+        }
+    }
+    return span;
 }
 
-/// Restore `defining_bound_vars` to `saved`, popping the current declaration's
-/// bound-var set off `scratch_defining_bound_vars`. Pairs with
-/// `beginDefiningBoundVars`; declarations restore strictly LIFO, so the current
-/// set is always the topmost frame.
+/// Restore the saved eager context, retiring only this initializer's additions.
+/// A block/branch saves the same span and therefore releases nothing. A lambda
+/// restores the suspended outer context after its own initializers have ended.
 fn endDefiningBoundVars(self: *Self, saved: ?DataSpan) void {
     if (self.defining_bound_vars) |cur| {
         if (cur.start + cur.len != self.scratch_defining_bound_vars.top()) {
             base.invariant("canonicalization invariant violated: closing the defining bound-var set at {d}..{d} but the innermost set ends at {d}", .{ cur.start, cur.start + cur.len, self.scratch_defining_bound_vars.top() });
         }
-        if (saved) |outer| {
-            if (outer.start + outer.len > cur.start) {
+        const restore_top = if (saved) |outer| blk: {
+            if (outer.start > cur.start or outer.start + outer.len > cur.start + cur.len) {
                 base.invariant("canonicalization invariant violated: closing the defining bound-var set at {d}..{d} would release the enclosing set at {d}..{d}", .{ cur.start, cur.start + cur.len, outer.start, outer.start + outer.len });
             }
+            break :blk if (outer.start == cur.start) outer.start + outer.len else cur.start;
+        } else cur.start;
+        if (self.defining_bound_positions.count() != 0) {
+            for (self.scratch_defining_bound_vars.sliceFromStart(restore_top)) |bound| {
+                if (self.defining_bound_positions.get(bound)) |position| {
+                    if (position >= restore_top) _ = self.defining_bound_positions.remove(bound);
+                }
+            }
         }
-        self.scratch_defining_bound_vars.clearFrom(cur.start);
+        self.scratch_defining_bound_vars.clearFrom(restore_top);
     }
     self.defining_bound_vars = saved;
 }
 
-/// Whether `pattern_idx` is bound by the declaration currently being defined,
-/// i.e. a reference to it is a self-referential definition.
+/// Whether the binding is unfinished in this eager initialization context.
 fn isDefiningBoundVar(self: *Self, pattern_idx: Pattern.Idx) bool {
     const span = self.defining_bound_vars orelse return false;
-    for (self.scratch_defining_bound_vars.sliceFromSpan(span)) |bound| {
-        if (bound == pattern_idx) return true;
-    }
-    return false;
+    if (span.len == 0) return false;
+    if (span.len == 1) return self.scratch_defining_bound_vars.sliceFromSpan(span)[0] == pattern_idx;
+    const position = self.defining_bound_positions.get(pattern_idx) orelse return false;
+    return position >= span.start and position - span.start < span.len;
 }
 
 fn collectReassignBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Error!void {
@@ -6554,7 +6596,8 @@ fn resolvePlatformProvides(
 /// 1. Introduces the rigid type variables (e.g., `model`) into a temporary scope
 /// 2. Creates aliases (e.g., `Model`) that refer to the SAME type as the rigid
 /// 3. Canonicalizes the entrypoint type annotation with rigids in scope
-/// 4. Stores the required type for type checking
+/// 4. Publishes the aliases for use outside the declaring signature
+/// 5. Stores the required type for type checking
 ///
 /// IMPORTANT: Both the rigid (`model`) and the alias (`Model`) reference the
 /// same rigid variable
@@ -6574,8 +6617,8 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
         // For each alias:
         // 1. Create a type annotation for the rigid and introduce it to the
         //    type var scope
-        // 2. Create a type alias, pointing to the rigid and introduce at the
-        //    root scope
+        // 2. Create a type alias pointing to the rigid, without exposing it
+        //    inside the signature that introduces this binder
         // 3. Store the alias for later use during type checking
         for (self.parse_ir.store.forClauseTypeAliasSlice(entry.type_aliases)) |alias_idx| {
             const alias = self.parse_ir.store.getForClauseTypeAlias(alias_idx);
@@ -6587,9 +6630,7 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
             // Get the alias name (uppercase, e.g., "Model")
             const alias_name = self.parse_ir.tokens.resolveIdentifier(alias.alias_name) orelse continue;
 
-            // Create a SINGLE type annotation for this rigid variable
-            // IMPORTANT: We use the rigid_name in the annotation, but introduce it
-            // under BOTH names in the scope
+            // The binder and its eventual alias share one identity.
             const rigid_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
                 .name = rigid_name,
             } }, alias_region);
@@ -6597,11 +6638,6 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
             // Introduce the rigid (model) into the type variable scope
             _ = try self.scopeIntroduceTypeVar(rigid_name, rigid_anno_idx);
 
-            // IMPORTANT: Also introduce Model as a type alias in the module-level scope.
-            // This allows platform functions to use `Box(Model)` in their type signatures.
-            // The alias points to the same rigid annotation, which will be unified with
-            // the app's concrete type during type checking.
-            //
             // Create a type header for the alias (no type parameters)
             const alias_header = CIR.TypeHeader{
                 .name = alias_name,
@@ -6618,17 +6654,6 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
                 },
             };
             const alias_stmt_idx = try self.env.addStatement(alias_stmt, alias_region);
-
-            // Add to the module-level scope (index 0) as a local_alias binding.
-            // This makes Model available for use in type annotations throughout the platform module.
-            const alias_decision = try Scope.introduceTypeBinding(
-                self.env.gpa,
-                self.scopes.items,
-                0,
-                alias_name,
-                Scope.TypeBindingInput{ .local_alias = alias_stmt_idx },
-            );
-            try self.handleTypeBindingDecision(alias_name, alias_region, alias_decision, true);
 
             // Store the alias mapping for use during type checking
             _ = try self.env.for_clause_aliases.append(self.env.gpa, .{
@@ -6657,6 +6682,20 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
         // But disallows regular undeclared type variables.
         var type_anno_ctx = TypeAnnoCtx.init(.for_clause_anno);
         const type_anno_idx = try self.runTypeAnnoKernel(entry.type_anno, &type_anno_ctx);
+
+        // The declaring signature uses the lowercase binder; platform code
+        // and subsequent requirements may name the resulting abstract alias.
+        for (self.env.for_clause_aliases.sliceRange(type_aliases_range)) |alias| {
+            const alias_region = self.env.store.getStatementRegion(alias.alias_stmt_idx);
+            const alias_decision = try Scope.introduceTypeBinding(
+                self.env.gpa,
+                self.scopes.items,
+                0,
+                alias.alias_name,
+                Scope.TypeBindingInput{ .local_alias = alias.alias_stmt_idx },
+            );
+            try self.handleTypeBindingDecision(alias.alias_name, alias_region, alias_decision, true);
+        }
 
         // Store the required type in the module env
         _ = try self.env.requires_types.append(self.env.gpa, .{
@@ -6741,6 +6780,9 @@ fn resolveLiteralTypeSuffix(
         .deprecated_builtin => |type_name| return try self.resolveUnqualifiedLiteralTypeSuffix(type_name, region),
         .path => |path| path,
     };
+    if (self.rejectedImportPath(self.parse_ir.store.tokenSlice(path.qualifiers), path.final_token)) |diagnostic| {
+        return .{ .malformed = diagnostic };
+    }
     if (path.qualifiers.span.len == 0) {
         const type_name = self.parse_ir.tokens.resolveIdentifier(path.final_token) orelse unreachable; // parseLiteralTypeSuffix builds suffix paths only from `.Upper` identifier tokens
         return try self.resolveUnqualifiedLiteralTypeSuffix(type_name, region);
@@ -6790,6 +6832,7 @@ fn resolveUnqualifiedLiteralTypeSuffix(
     type_ident: Ident.Idx,
     region: Region,
 ) std.mem.Allocator.Error!LiteralTypeSuffixResolution {
+    if (self.rejectedImportName(type_ident)) |diagnostic| return .{ .malformed = diagnostic };
     const undeclared = LiteralTypeSuffixResolution{ .malformed = .{ .undeclared_type = .{
         .name = type_ident,
         .region = region,
@@ -7628,6 +7671,7 @@ fn deferImportStatement(
     for (self.env.store.sliceExposedItems(exposed_items_span)) |exposed_item_idx| {
         const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
         const local_ident = exposed_item.alias orelse exposed_item.name;
+        if (self.rejectedImportName(local_ident) != null) continue;
         const selects_type = self.isSourceTagIdent(local_ident);
         const failure: ModuleEnv.DeferredRefFailure = if (selects_type) .type_not_exposed else .value_not_exposed;
         const item_ref = try self.pushDeferredRef(.{
@@ -7688,6 +7732,67 @@ fn normalizedImportModuleIdent(
     return try self.env.insertIdent(base.Ident.for_text(self.scratchBytesFrom(scratch_top)));
 }
 
+/// Record rejected import names separately from accepted bindings: recovery
+/// must not turn an invalid import into an implicit reference to a builtin.
+fn rejectImportName(self: *Self, name: Ident.Idx, region: Region) Allocator.Error!void {
+    if (!self.hasBuiltinAutoImportedType(name)) return;
+    const entry = try self.currentScope().rejected_import_names.getOrPut(self.env.gpa, name);
+    if (entry.found_existing) return;
+    entry.value_ptr.* = region;
+    self.has_rejected_import_names = true;
+    try self.env.pushDiagnostic(.{ .builtin_import_conflict = .{ .name = name, .region = region } });
+}
+
+fn rejectReservedImportNames(self: *Self, import_stmt: @TypeOf(@as(AST.Statement, undefined).import)) Allocator.Error!void {
+    const target = import_stmt.target;
+    const alias_tok = import_stmt.alias_tok orelse if (target.hasNestedTypes())
+        target.nested_start_tok.? + target.nested_len - 1
+    else
+        target.module_name_tok;
+    if (self.parse_ir.tokens.resolveIdentifier(alias_tok)) |alias| {
+        if (self.hasBuiltinAutoImportedType(alias)) {
+            const module_name = try self.normalizedImportModuleIdent(import_stmt);
+            // `import Bool` names the builtin itself, not a user binding.
+            if (target.hasNestedTypes() or !module_name.eql(alias)) {
+                try self.rejectImportName(alias, self.parse_ir.tokens.resolve(alias_tok));
+            }
+        }
+    }
+    for (self.parse_ir.store.exposedItemSlice(import_stmt.exposes)) |item_idx| {
+        const item = self.parse_ir.store.getExposedItem(item_idx);
+        const name_tok, const region = switch (item) {
+            .lower_ident => |value| .{ value.as orelse value.ident, value.region },
+            .upper_ident => |value| .{ value.as orelse value.ident, value.region },
+            .upper_ident_star => |value| .{ value.ident, value.region },
+            .malformed => continue,
+        };
+        if (self.parse_ir.tokens.resolveIdentifier(name_tok)) |name| {
+            try self.rejectImportName(name, self.parse_ir.tokenizedRegionToRegion(region));
+        }
+    }
+}
+
+fn rejectedImportName(self: *const Self, name: Ident.Idx) ?Diagnostic {
+    if (!self.has_rejected_import_names) return null;
+    var i = self.scopes.items.len;
+    while (i > 0) {
+        i -= 1;
+        const scope = &self.scopes.items[i];
+        if (scope.rejected_import_names.get(name)) |region| {
+            return .{ .builtin_import_conflict = .{ .name = name, .region = region } };
+        }
+        if (scope.type_bindings.contains(name) or scope.module_aliases.contains(name)) return null;
+    }
+    return null;
+}
+
+fn rejectedImportPath(self: *const Self, qualifiers: []const u32, final_token: ?Token.Idx) ?Diagnostic {
+    if (!self.has_rejected_import_names) return null;
+    const token = if (qualifiers.len > 0) qualifiers[0] else final_token orelse return null;
+    const name = self.parse_ir.tokens.resolveIdentifier(token) orelse return null;
+    return self.rejectedImportName(name);
+}
+
 /// Canonicalize an import statement, handling both top-level file imports and statement imports
 fn canonicalizeImportStatement(
     self: *Self,
@@ -7695,6 +7800,14 @@ fn canonicalizeImportStatement(
 ) std.mem.Allocator.Error!?Statement.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    const scope_idx: ?AST.DeclIndex.ScopeIdx = if (self.decl_scope_stack.items.len > 0)
+        self.decl_scope_stack.items[self.decl_scope_stack.items.len - 1].binding.parser_scope
+    else
+        null;
+    if (scope_idx == null or self.parse_ir.decl_index.scopes.items[@backingInt(scope_idx.?)].forward_policy != .whole_scope) {
+        try self.rejectReservedImportNames(import_stmt);
+    }
 
     // 1. Build the complete module name selected by the parser.
     const default_alias = self.parse_ir.tokens.resolveIdentifier(import_stmt.target.module_name_tok) orelse return null;
@@ -8025,6 +8138,7 @@ fn introduceExposedItems(
     for (exposed_items_slice) |exposed_item_idx| {
         const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
         const local_ident = exposed_item.alias orelse exposed_item.name;
+        if (self.rejectedImportName(local_ident) != null) continue;
         const is_type_name = self.isSourceTagIdent(local_ident);
 
         try self.scopeIntroduceExposedItem(local_ident, Scope.ExposedItemInfo{
@@ -8567,6 +8681,9 @@ fn canonicalizeQualifiedIdentExpr(
     region: Region,
     qualifier_tokens: []const u32,
 ) std.mem.Allocator.Error!?IdentExprResolution {
+    if (self.rejectedImportPath(qualifier_tokens, null)) |diagnostic| {
+        return .{ .expr = try self.canonicalizedRuntimeErrorExpr(diagnostic) };
+    }
     const qualified_ident = try self.joinedQualifiedIdent(qualifier_tokens, ident);
 
     switch (self.scopeLookup(.ident, qualified_ident)) {
@@ -9675,7 +9792,6 @@ fn beginBlockState(
     decl_scope: ?AST.DeclIndex.ScopeIdx,
 ) std.mem.Allocator.Error!BlockState {
     const saved_defining_bound_vars = self.defining_bound_vars;
-    self.defining_bound_vars = null;
 
     const saved_stmt_pos = self.in_statement_position;
     self.in_statement_position = true;
@@ -11980,7 +12096,6 @@ fn runExprKernel(
                 },
                 .for_expr => |e| {
                     const saved_defining_bound_vars = self.defining_bound_vars;
-                    self.defining_bound_vars = null;
 
                     const saved_stmt_pos = self.in_statement_position;
                     self.in_statement_position = true;
@@ -12738,7 +12853,6 @@ fn runExprKernel(
                 },
                 .@"for" => |for_stmt| {
                     const saved_defining_bound_vars = self.defining_bound_vars;
-                    self.defining_bound_vars = null;
 
                     const saved_stmt_pos = self.in_statement_position;
                     self.in_statement_position = true;
@@ -14482,7 +14596,6 @@ fn runExprKernel(
 
             const body_free_vars_start = self.scratch_free_vars.top();
             const saved_defining_bound_vars = self.defining_bound_vars;
-            self.defining_bound_vars = null;
 
             if (ast_branch.guard) |guard_expr_idx| {
                 try stacks.push(.match_after_guard, frame_allocator, .{
@@ -15390,6 +15503,9 @@ fn resolveNominalTypePath(
     type_tok: Token.Idx,
     region: Region,
 ) std.mem.Allocator.Error!NominalTypePathTarget {
+    if (self.rejectedImportPath(self.parse_ir.store.tokenSlice(qualifiers), type_tok)) |diagnostic| {
+        return .{ .malformed = diagnostic };
+    }
     const Target = NominalTypePathTarget;
     const type_region = self.parse_ir.tokens.resolve(type_tok);
     const final_type_ident = self.parse_ir.tokens.resolveIdentifier(type_tok) orelse
@@ -15509,6 +15625,9 @@ fn finishTagExprWithArgs(
     region: base.Region,
     free_vars_start: u32,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
+    if (self.rejectedImportPath(self.parse_ir.store.tokenSlice(e.qualifiers), null)) |diagnostic| {
+        return self.canonicalizedRuntimeErrorExpr(diagnostic);
+    }
     const tag_name = self.parse_ir.tokens.resolveIdentifier(e.token) orelse {
         // Parser should have validated this, but handle gracefully
         const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
@@ -16252,6 +16371,9 @@ fn finishTagPattern(
     tag_name: Ident.Idx,
     tag_pattern_idx: Pattern.Idx,
 ) std.mem.Allocator.Error!Pattern.Idx {
+    if (self.rejectedImportPath(self.parse_ir.store.tokenSlice(qualifiers), null)) |diagnostic| {
+        return self.malformedNominalPattern(tag_pattern_idx, diagnostic);
+    }
     if (qualifiers.span.len == 0) {
         // Tag without a qualifier is an anonymous structural tag
         return tag_pattern_idx;
@@ -16520,7 +16642,10 @@ fn finishNominalBackingPattern(
 /// and stays its source: checking finds those binders there and makes them
 /// erroneous, and every use of them is retired.
 fn malformedNominalPattern(self: *Self, backing_pattern: Pattern.Idx, problem: Diagnostic) std.mem.Allocator.Error!Pattern.Idx {
-    const diagnostic_idx = try self.env.addDiagnostic(problem);
+    const diagnostic_idx = if (problem == .builtin_import_conflict)
+        try self.env.store.addDiagnosticUnregistered(problem)
+    else
+        try self.env.addDiagnostic(problem);
     try self.env.store.replacePatternWithRuntimeError(backing_pattern, diagnostic_idx);
     return backing_pattern;
 }
@@ -19462,6 +19587,10 @@ fn resolveTypePath(
 ) std.mem.Allocator.Error!ResolvedTypePath {
     const qualifier_toks = self.parse_ir.store.tokenSlice(qualifiers);
 
+    if (self.rejectedImportPath(qualifier_toks, token)) |diagnostic| {
+        return .{ .name = diagnostic.builtin_import_conflict.name, .target = .{ .malformed = diagnostic } };
+    }
+
     // Get the type ident
     const type_name_ident = self.parse_ir.tokens.resolveIdentifier(token) orelse
         base.invariant("canonicalization invariant violated: a type name token is not an identifier", .{});
@@ -20915,6 +21044,8 @@ fn scopeIntroduceModuleAliasAt(
     const gpa = self.env.gpa;
 
     const target_scope = &self.scopes.items[scope_idx];
+
+    if (target_scope.rejected_import_names.contains(alias_name)) return .duplicate;
 
     // Check if this alias conflicts with an existing type binding (e.g., auto-imported type or primitive builtin)
     // Primitive builtins (Str, List, Box) are now added to type_bindings in setupAutoImportedBuiltinTypes

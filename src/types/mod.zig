@@ -64,6 +64,7 @@ pub const polarity_var_text = types.polarity_var_text;
 
 test {
     std.testing.refAllDecls(@import("test/test_rigid_instantiation.zig"));
+    std.testing.refAllDecls(@import("test/test_backing_openings.zig"));
     std.testing.refAllDecls(@import("generalize.zig"));
     std.testing.refAllDecls(@import("numeral.zig"));
     std.testing.refAllDecls(@import("literal_defaulting.zig"));

@@ -1353,6 +1353,12 @@ pub fn roc_builtins_erased_callable_incref(payload_ptr: ?[*]u8, amount: isize) c
     erased_callable.incref(payload_ptr, amount, roc_ops);
 }
 
+/// Incref a boxed erased callable whose allocation is proven
+/// thread-confined, with a plain count update.
+pub fn roc_builtins_erased_callable_incref_single_thread(payload_ptr: ?[*]u8, amount: isize) callconv(.c) void {
+    erased_callable.increfWithAtomicity(payload_ptr, amount, .single_thread, in_process_host.ops());
+}
+
 /// Decref a boxed erased callable payload pointer, running the payload's
 /// `on_drop` callback if the outer refcount reaches zero.
 pub fn roc_builtins_erased_callable_decref(payload_ptr: ?[*]u8) callconv(.c) void {
@@ -1803,6 +1809,9 @@ fn int128BinaryWrapper(comptime T: type, comptime op: anytype) fn (*u64, *u64, u
 
 /// Dec multiply (decomposed)
 pub const roc_builtins_dec_mul = decBinaryWrapper(dec.mulOrPanicC);
+
+/// Dec saturating multiply (decomposed)
+pub const roc_builtins_dec_mul_saturated = decBinaryWrapper(dec.mulSaturatedC);
 
 /// Dec divide (decomposed)
 pub const roc_builtins_dec_div = decBinaryWrapper(dec.divC);

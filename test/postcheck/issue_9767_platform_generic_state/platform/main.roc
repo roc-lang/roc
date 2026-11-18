@@ -3,9 +3,9 @@ platform ""
         [State : state, Model : model] for program : {
             init! : {
                 config : {},
-                run! : Host => Try(State(model), [Exit(I64)]),
+                run! : Host => Try(state, [Exit(I64)]),
             },
-            render! : State(model), Host => Try(State(model), [Exit(I64), ..]),
+            render! : state, Host => Try(state, [Exit(I64), ..]),
         }
     }
     exposes [App, Host]

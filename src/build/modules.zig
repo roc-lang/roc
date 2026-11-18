@@ -139,6 +139,23 @@ fn targetMatchesHost(target: ResolvedTarget) bool {
         target.result.abi == builtin.target.abi;
 }
 
+/// The watch module uses real macOS FSEvents (CoreFoundation/CoreServices) when building
+/// natively for macOS, and kernel32 for directory-change notifications on Windows. Any step
+/// that compiles the watch module (the roc exe and the tests that import it) must link these.
+///
+/// The frameworks come from stubs in src/build/darwin/Frameworks, not the macOS SDK, so the
+/// dylib versions recorded in the binary don't depend on the build machine's Xcode, and a
+/// release target (which skips SDK detection, see `getReleaseTargetQuery`) can find them.
+pub fn linkWatchPlatformLibs(step: *Step.Compile, target: ResolvedTarget) void {
+    if (target.result.os.tag == .macos and targetMatchesHost(target)) {
+        step.root_module.addFrameworkPath(step.step.owner.path("src/build/darwin/Frameworks"));
+        step.root_module.linkFramework("CoreFoundation", .{});
+        step.root_module.linkFramework("CoreServices", .{});
+    } else if (target.result.os.tag == .windows) {
+        step.root_module.linkSystemLibrary("kernel32", .{});
+    }
+}
+
 /// Represents a test module's compilation step.
 ///
 /// Deliberately does not carry a pre-made `Step.Run`. Every run of these
@@ -803,12 +820,7 @@ pub const RocModules = struct {
                 test_step.root_module.addAssemblyFile(b.path("src/eval/host_trampoline.S"));
             }
 
-            // Watch module needs Core Foundation and FSEvents on macOS (only when not cross-compiling)
-            // These frameworks provide the FSEvents API for proper event-driven file system monitoring on macOS.
-            if (module_type == .watch and target.result.os.tag == .macos and targetMatchesHost(target)) {
-                test_step.root_module.linkFramework("CoreFoundation", .{});
-                test_step.root_module.linkFramework("CoreServices", .{});
-            }
+            if (module_type == .watch) linkWatchPlatformLibs(test_step, target);
 
             // Add only the necessary dependencies for each module test
             self.addModuleDependencies(test_step, module_type);

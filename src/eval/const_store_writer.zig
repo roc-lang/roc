@@ -1,8 +1,9 @@
 //! Store compile-time values as checked constants: an evaluator's results,
 //! read from the memory its program left them in, and value-form roots,
-//! read from their checked expressions (design.md "Value-Form Roots"). Both
-//! go through one plan-directed walk, which differs between them only in
-//! where a value's parts come from (`Part`).
+//! read from their checked expressions and from the stored values of the
+//! constants those read (design.md "Value-Form Roots"). All go through one
+//! plan-directed walk, which differs between them only in where a value's
+//! parts come from (`Part`).
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -30,10 +31,27 @@ const CIR = can.CIR;
 const exact_numeral = checked.exact_numeral;
 
 /// A value being stored, or one of its parts: the memory an evaluated
-/// program left it in, or a checked expression in value form.
+/// program left it in, a checked expression in value form, or a node of a
+/// stored constant such an expression reads.
 pub const Part = union(enum) {
     runtime: Value,
     checked: CIR.Expr.Idx,
+    stored: StoredPart,
+};
+
+/// A node of a constant's stored value, in the store of the constant's
+/// module, which may be the store being written.
+pub const StoredPart = struct {
+    store: *const const_store.ConstStore,
+    node: checked.ConstNodeId,
+
+    fn value(self: StoredPart) checked.ConstValue {
+        return self.store.get(self.node);
+    }
+
+    fn child(self: StoredPart, node: checked.ConstNodeId) Part {
+        return .{ .stored = .{ .store = self.store, .node = node } };
+    }
 };
 
 /// What storing parts from checked expressions reads: the module's checked
@@ -96,6 +114,13 @@ pub const Writer = struct {
     /// Set for a writer that stores value-form roots from their checked
     /// expressions.
     checked: ?CheckedValues = null,
+    /// The module a writer of value-form roots stores into, whose roots a
+    /// value-form root may read from the store being written.
+    checked_module: ?*const checked.CheckedModuleArtifact = null,
+    /// Whether the value-form root being stored reads other constants
+    /// (`CompileTimeRoot.reads_constants`); a root that reads none has no
+    /// part that is a lookup.
+    checked_reads_constants: bool = false,
     /// Scratch for a checked string's bytes.
     checked_text: std.ArrayList(u8) = .empty,
     /// Scratch for a checked record's field values in plan order.
@@ -145,6 +170,7 @@ pub const Writer = struct {
     pub fn initChecked(allocator: Allocator, module: *checked.CheckedModuleArtifact, values: CheckedValues) Writer {
         var writer = init(allocator, module, values.schema.result());
         writer.checked = values;
+        writer.checked_module = module;
         return writer;
     }
 
@@ -269,16 +295,19 @@ pub const Writer = struct {
     }
 
     /// Store a value-form root from its checked expression `expr`, by the
-    /// plan and layout of its result (`BoxyValueSchema.root`). Every part of
-    /// the expression is a node of its own.
+    /// plan and layout of its result (`BoxyValueSchema.root`), and from the
+    /// stored values of the constants it reads when `reads_constants`. Every
+    /// part of the expression is a node of its own.
     pub fn storeCheckedRoot(
         self: *Writer,
         plan: LirProgram.ConstPlanId,
         ret_layout: layout.Idx,
         expr: CIR.Expr.Idx,
+        reads_constants: bool,
     ) Error!checked.ConstNodeId {
         if (self.checked == null) writerInvariant("a writer of evaluated values stored a checked expression");
-        return self.storeValue(plan, ret_layout, .{ .checked = expr });
+        self.checked_reads_constants = reads_constants;
+        return self.storeValue(plan, ret_layout, self.resolvePart(.{ .checked = expr }));
     }
 
     fn typeNames(self: *const Writer) *check.CanonicalNames.CanonicalNameStore {
@@ -448,7 +477,7 @@ pub const Writer = struct {
                 try self.beginFresh(node, request);
                 return node;
             },
-            .checked => {},
+            .checked, .stored => {},
         }
         const node = try self.store.reserve();
         try self.beginFresh(node, request);
@@ -517,13 +546,15 @@ pub const Writer = struct {
                         break :name selected.name;
                     },
                     .checked => |expr| try self.appendCheckedTagRequests(children, request.plan, variants, layout_idx, expr),
+                    .stored => |stored| try self.appendStoredTagRequests(children, request.plan, variants, layout_idx, stored),
                 };
                 break :blk .{ .tag = .{ .node = node, .name = name } };
             },
             .named => |named| blk: {
                 const backing: Part = switch (part) {
                     .runtime => part,
-                    .checked => |expr| .{ .checked = self.checkedBacking(expr) },
+                    .checked => |expr| self.resolvePart(.{ .checked = self.checkedBacking(expr) }),
+                    .stored => |stored| storedBacking(stored),
                 };
                 try children.append(self.allocator, .{ .plan = named.backing, .layout_idx = layout_idx, .value = backing });
                 break :blk .{ .nominal = .{ .node = node, .named = named } };
@@ -694,6 +725,13 @@ pub const Writer = struct {
                     defer self.allocator.free(memory);
                     try self.storeProductList(target_node, plan, memory, len, capacity);
                 },
+                // A constant of this list's type stored its items packed by
+                // this same product plan.
+                .stored => |stored| {
+                    const items = storedPackedItems(stored);
+                    if (builtin.mode == .debug) std.debug.assert(items.element == null and items.product_width == plan.packed_width);
+                    try self.storeCopiedPackedList(target_node, stored, items, capacity);
+                },
             }
             return true;
         }
@@ -712,6 +750,7 @@ pub const Writer = struct {
         return switch (part) {
             .runtime => |value| @as(*const RocList, @ptrCast(@alignCast(value.ptr))).len(),
             .checked => |expr| self.checkedListItems(expr).len,
+            .stored => |stored| @intCast(storedListItems(stored).len()),
         };
     }
 
@@ -722,6 +761,9 @@ pub const Writer = struct {
         return switch (part) {
             .runtime => |value| listCapacity(value),
             .checked => |expr| self.checkedListItems(expr).len,
+            // A read of a constant is the constant's value, capacity
+            // included.
+            .stored => |stored| storedList(stored).capacity,
         };
     }
 
@@ -739,7 +781,16 @@ pub const Writer = struct {
                 const items = self.checkedListItems(expr);
                 const elem_layout = if (layout_value.tag == .list_of_zst) layout.Idx.zst else layout_value.getIdx();
                 try out.ensureUnusedCapacity(self.allocator, items.len);
-                for (items) |item| out.appendAssumeCapacity(.{ .plan = elem_plan, .layout_idx = elem_layout, .value = .{ .checked = item } });
+                for (items) |item| out.appendAssumeCapacity(.{ .plan = elem_plan, .layout_idx = elem_layout, .value = self.resolvePart(.{ .checked = item }) });
+                return;
+            },
+            .stored => |stored| {
+                // Items stored as nodes of their own: `storeListLeaf` stored
+                // every list whose items are packed or absent.
+                const items = storedItemNodes(stored);
+                const elem_layout = if (layout_value.tag == .list_of_zst) layout.Idx.zst else layout_value.getIdx();
+                try out.ensureUnusedCapacity(self.allocator, items.len);
+                for (items) |item| out.appendAssumeCapacity(.{ .plan = elem_plan, .layout_idx = elem_layout, .value = stored.child(item) });
                 return;
             },
         };
@@ -803,7 +854,8 @@ pub const Writer = struct {
         if (plans.len == 0) return;
         const struct_value = switch (part) {
             .runtime => |value| value,
-            .checked => |expr| return self.appendCheckedStructRequests(out, plan, plans, struct_layout, expr),
+            .checked => |expr| return self.appendComponentRequests(out, plans, struct_layout, try self.checkedComponents(plan, expr, plans.len), CheckedParts{ .writer = self }),
+            .stored => |stored| return self.appendComponentRequests(out, plans, struct_layout, storedComponents(stored, plans.len), stored),
         };
         var layout_idx = struct_layout;
         var value = struct_value;
@@ -930,6 +982,7 @@ pub const Writer = struct {
         return switch (part) {
             .runtime => |value| self.storeScalar(layout_idx, value),
             .checked => |expr| try self.checkedScalar(layout_idx, expr),
+            .stored => |stored| self.storedScalar(layout_idx, stored),
         };
     }
 
@@ -941,6 +994,14 @@ pub const Writer = struct {
             .checked => |expr| blk: {
                 const text = try self.checkedStrText(expr);
                 break :blk .{ .str = .{ .bytes = try self.storeBytes(text), .capacity = text.len } };
+            },
+            // A read of a constant is the constant's value, capacity
+            // included.
+            .stored => |stored| blk: {
+                const value = stored.value();
+                if (value != .str) writerInvariant("a constant read at the string type is not a stored string");
+                const string = value.str;
+                break :blk .{ .str = .{ .bytes = try self.copyBlob(stored.store, string.bytes), .capacity = string.capacity } };
             },
         };
     }
@@ -1022,15 +1083,24 @@ pub const Writer = struct {
         const byte_len = std.math.mul(usize, items.len, width) catch return error.OutOfMemory;
         const bytes = try self.allocator.alloc(u8, byte_len);
         defer self.allocator.free(bytes);
-        for (items, 0..) |item, index| {
-            writePackedScalar(bytes[index * width ..][0..width], element, try self.checkedScalar(elem_layout, item));
+        // The items of a root that reads no constant are all literals, which
+        // convert with no per-item check for a read.
+        if (self.checked_reads_constants) {
+            for (items, 0..) |item, index| {
+                writePackedScalar(bytes[index * width ..][0..width], element, try self.partScalar(elem_layout, self.resolvePart(checkedPart(item))));
+            }
+        } else {
+            for (items, 0..) |item, index| {
+                writePackedScalar(bytes[index * width ..][0..width], element, try self.checkedScalar(elem_layout, item));
+            }
         }
         return try self.store.addBlobData(bytes);
     }
 
     /// The memory `items`, value-form products of plan `elem_plan`, would
     /// occupy as a list's elements at layout `elem_layout`, each
-    /// `memory_width` bytes, padding zero.
+    /// `memory_width` bytes, padding zero. A part reading a constant takes
+    /// the constant's stored value.
     fn checkedProductMemory(
         self: *Writer,
         memory_len: usize,
@@ -1042,35 +1112,66 @@ pub const Writer = struct {
         const memory = try self.allocator.alloc(u8, memory_len);
         errdefer self.allocator.free(memory);
         @memset(memory, 0);
-        const Leaf = struct { plan: LirProgram.ConstPlanId, layout_idx: layout.Idx, expr: CIR.Expr.Idx, offset: usize };
+        const Leaf = struct { plan: LirProgram.ConstPlanId, layout_idx: layout.Idx, part: Part, offset: usize };
         var pending = std.ArrayList(Leaf).empty;
         defer pending.deinit(self.allocator);
         for (items, 0..) |item, index| {
-            try pending.append(self.allocator, .{ .plan = elem_plan, .layout_idx = elem_layout, .expr = item, .offset = index * memory_width });
-            while (pending.pop()) |leaf| switch (self.constPlan(leaf.plan)) {
-                .zst => {},
-                .scalar => {
-                    const bytes = try self.checkedScalarBytes(leaf.layout_idx, leaf.expr);
-                    const size = self.program.layouts.layoutSize(self.program.layouts.getLayout(leaf.layout_idx));
-                    @memcpy(memory[leaf.offset..][0..size], bytes[0..size]);
-                },
-                .named => |named| try pending.append(self.allocator, .{ .plan = named.backing, .layout_idx = leaf.layout_idx, .expr = self.checkedBacking(leaf.expr), .offset = leaf.offset }),
-                .tuple, .record => |components| {
-                    const layout_value = self.program.layouts.getLayout(leaf.layout_idx);
-                    if (components.len == 0 or layout_value.tag == .zst) continue;
-                    if (layout_value.tag != .struct_) writerInvariant("a product's layout is not a struct");
-                    const struct_idx = layout_value.getStruct().idx;
-                    const parts = try self.checkedComponents(leaf.plan, leaf.expr, components.len);
-                    try pending.ensureUnusedCapacity(self.allocator, components.len);
-                    for (components, parts, 0..) |component, part, component_index| pending.appendAssumeCapacity(.{
-                        .plan = component,
-                        .layout_idx = self.program.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(component_index)),
-                        .expr = part,
-                        .offset = leaf.offset + self.program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, @intCast(component_index)),
-                    });
-                },
-                .pending, .layout_only, .str, .list, .box, .boxed_sequence, .tag_union, .fn_value, .erased_fn, .boxy_fn => writerInvariant("a product plan holds a part other than a number, record, tuple or named type"),
-            };
+            try pending.append(self.allocator, .{ .plan = elem_plan, .layout_idx = elem_layout, .part = checkedPart(item), .offset = index * memory_width });
+            while (pending.pop()) |unresolved| {
+                var leaf = unresolved;
+                leaf.part = self.resolvePart(leaf.part);
+                switch (self.constPlan(leaf.plan)) {
+                    .zst => {},
+                    .scalar => {
+                        const bytes = switch (leaf.part) {
+                            .checked => |expr| try self.checkedScalarBytes(leaf.layout_idx, expr),
+                            .stored => |stored| scalarMemoryBytes(self.storedScalar(leaf.layout_idx, stored)),
+                            .runtime => writerInvariant("a value-form product holds an evaluated part"),
+                        };
+                        const size = self.program.layouts.layoutSize(self.program.layouts.getLayout(leaf.layout_idx));
+                        @memcpy(memory[leaf.offset..][0..size], bytes[0..size]);
+                    },
+                    .named => |named| try pending.append(self.allocator, .{
+                        .plan = named.backing,
+                        .layout_idx = leaf.layout_idx,
+                        .part = switch (leaf.part) {
+                            .checked => |expr| checkedPart(self.checkedBacking(expr)),
+                            .stored => |stored| storedBacking(stored),
+                            .runtime => writerInvariant("a value-form product holds an evaluated part"),
+                        },
+                        .offset = leaf.offset,
+                    }),
+                    .tuple, .record => |components| {
+                        const layout_value = self.program.layouts.getLayout(leaf.layout_idx);
+                        if (components.len == 0 or layout_value.tag == .zst) continue;
+                        if (layout_value.tag != .struct_) writerInvariant("a product's layout is not a struct");
+                        const struct_idx = layout_value.getStruct().idx;
+                        try pending.ensureUnusedCapacity(self.allocator, components.len);
+                        switch (leaf.part) {
+                            .checked => |expr| {
+                                const parts = try self.checkedComponents(leaf.plan, expr, components.len);
+                                for (components, parts, 0..) |component, part, component_index| pending.appendAssumeCapacity(.{
+                                    .plan = component,
+                                    .layout_idx = self.program.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(component_index)),
+                                    .part = checkedPart(part),
+                                    .offset = leaf.offset + self.program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, @intCast(component_index)),
+                                });
+                            },
+                            .stored => |stored| {
+                                const parts = storedComponents(stored, components.len);
+                                for (components, parts, 0..) |component, part, component_index| pending.appendAssumeCapacity(.{
+                                    .plan = component,
+                                    .layout_idx = self.program.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(component_index)),
+                                    .part = stored.child(part),
+                                    .offset = leaf.offset + self.program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, @intCast(component_index)),
+                                });
+                            },
+                            .runtime => writerInvariant("a value-form product holds an evaluated part"),
+                        }
+                    },
+                    .pending, .layout_only, .str, .list, .box, .boxed_sequence, .tag_union, .fn_value, .erased_fn, .boxy_fn => writerInvariant("a product plan holds a part other than a number, record, tuple or named type"),
+                }
+            }
         }
         return memory;
     }
@@ -1098,26 +1199,27 @@ pub const Writer = struct {
         return self.checked_components.items;
     }
 
-    /// The component requests of value-form tuple or record `expr`, as
+    /// The component requests of a value-form tuple or record, or of a
+    /// stored one such a value reads, whose components in plan order are
+    /// `items`, each made a part by `source` (`componentPart`), as
     /// `appendStructRequests` gives an evaluated one's.
-    fn appendCheckedStructRequests(
+    fn appendComponentRequests(
         self: *Writer,
         out: *std.ArrayList(ValueRequest),
-        plan: LirProgram.ConstPlanId,
         plans: []const LirProgram.ConstPlanId,
         struct_layout: layout.Idx,
-        expr: CIR.Expr.Idx,
+        items: anytype,
+        source: anytype,
     ) Allocator.Error!void {
         var layout_value = self.program.layouts.getLayout(struct_layout);
         while (layout_value.tag == .box) layout_value = self.program.layouts.getLayout(layout_value.getIdx());
         const zero_sized = layout_value.tag == .zst or layout_value.tag == .box_of_zst;
         if (!zero_sized and layout_value.tag != .struct_) writerInvariant("struct const plan had non-struct layout");
-        const parts = try self.checkedComponents(plan, expr, plans.len);
         try out.ensureUnusedCapacity(self.allocator, plans.len);
-        for (plans, parts, 0..) |component, part, index| out.appendAssumeCapacity(.{
+        for (plans, items, 0..) |component, item, index| out.appendAssumeCapacity(.{
             .plan = component,
             .layout_idx = if (zero_sized) .zst else self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, @intCast(index)),
-            .value = .{ .checked = part },
+            .value = componentPart(source, item),
         });
     }
 
@@ -1142,8 +1244,43 @@ pub const Writer = struct {
         else
             writerInvariant("a value-form tag union value is not a tag");
         const selected = variants[try values.schema.tagVariant(union_plan, name)];
-        if (selected.payloads.len != args.len) writerInvariant("a value-form tag does not have its variant's payloads");
-        if (args.len == 0) return selected.name;
+        try self.appendPayloadRequests(out, selected, layout_idx, args, CheckedParts{ .writer = self });
+        return selected.name;
+    }
+
+    /// Select the variant of `variants` stored tag `stored` holds and append
+    /// its payloads' requests, as `appendCheckedTagRequests` does for a
+    /// value-form tag; the variant's name, which the plan owns.
+    fn appendStoredTagRequests(
+        self: *Writer,
+        out: *std.ArrayList(ValueRequest),
+        union_plan: LirProgram.ConstPlanId,
+        variants: []const LirProgram.ConstTagVariant,
+        layout_idx: layout.Idx,
+        stored: StoredPart,
+    ) Allocator.Error![]const u8 {
+        const value = stored.value();
+        if (value != .tag) writerInvariant("a constant read at a tag union type is not a stored tag");
+        // The stored name is read before anything appends to the store
+        // holding it, which may be the store being written.
+        const selected = variants[try self.checkedValues().schema.tagVariant(union_plan, value.tag.tag_name)];
+        try self.appendPayloadRequests(out, selected, layout_idx, value.tag.payloads, stored);
+        return selected.name;
+    }
+
+    /// The requests of the payloads `items` of a value-form or stored tag of
+    /// variant `selected`, at `layout_idx`, each made a part by `source`
+    /// (`componentPart`).
+    fn appendPayloadRequests(
+        self: *Writer,
+        out: *std.ArrayList(ValueRequest),
+        selected: LirProgram.ConstTagVariant,
+        layout_idx: layout.Idx,
+        items: anytype,
+        source: anytype,
+    ) Allocator.Error!void {
+        if (selected.payloads.len != items.len) writerInvariant("a value-form tag does not have its variant's payloads");
+        if (items.len == 0) return;
         const base_layout = self.program.layouts.getLayout(layout_idx);
         const tag_layout: layout.Idx = switch (base_layout.tag) {
             .zst, .tag_union => layout_idx,
@@ -1151,19 +1288,108 @@ pub const Writer = struct {
             .hole, .dynamic, .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => writerInvariant("tag value read had non-tag layout"),
         };
         const payload_layout = self.tagPayloadLayout(tag_layout, selected.discriminant);
-        try out.ensureUnusedCapacity(self.allocator, args.len);
-        if (args.len == 1) {
-            out.appendAssumeCapacity(.{ .plan = selected.payloads[0], .layout_idx = payload_layout, .value = .{ .checked = args[0] } });
-            return selected.name;
+        try out.ensureUnusedCapacity(self.allocator, items.len);
+        if (items.len == 1) {
+            out.appendAssumeCapacity(.{ .plan = selected.payloads[0], .layout_idx = payload_layout, .value = componentPart(source, items[0]) });
+            return;
         }
         const payload_value = self.program.layouts.getLayout(payload_layout);
         if (payload_value.tag != .zst and payload_value.tag != .struct_) writerInvariant("multi-payload tag did not use a struct payload layout");
-        for (selected.payloads, args, 0..) |plan, arg, index| out.appendAssumeCapacity(.{
+        for (selected.payloads, items, 0..) |plan, item, index| out.appendAssumeCapacity(.{
             .plan = plan,
             .layout_idx = if (payload_value.tag == .zst) .zst else self.program.layouts.getStructFieldLayoutByOriginalIndex(payload_value.getStruct().idx, @intCast(index)),
-            .value = .{ .checked = arg },
+            .value = componentPart(source, item),
         });
-        return selected.name;
+    }
+
+    /// The part a value-form or stored value's component reads: a checked
+    /// expression `source` resolves (`CheckedParts`), or a node of the
+    /// stored value `source` holds.
+    fn componentPart(source: anytype, item: anytype) Part {
+        return if (@TypeOf(source) == StoredPart) source.child(item) else source.part(item);
+    }
+
+    /// The parts of a value-form expression's components, each a checked
+    /// expression or, when it reads a constant, the constant's stored
+    /// value. A part is resolved where it is made, so storing a part never
+    /// asks again.
+    const CheckedParts = struct {
+        writer: *const Writer,
+
+        fn part(self: CheckedParts, expr: CIR.Expr.Idx) Part {
+            return self.writer.resolvePart(.{ .checked = expr });
+        }
+    };
+
+    /// `part`, or, when it is a value-form expression reading a constant,
+    /// the constant's stored value (design.md "Value-Form Roots").
+    fn resolvePart(self: *const Writer, part: Part) Part {
+        const expr = switch (part) {
+            .checked => |expr| expr,
+            .runtime, .stored => return part,
+        };
+        if (!self.checked_reads_constants) return part;
+        const values = self.checkedValues();
+        const value_expr = checked.valueFormValueExpr(values.bodies, expr);
+        switch (values.bodies.exprData(value_expr)) {
+            .lookup_local, .lookup_external => {},
+            .numeral, .str, .str_segment, .bytes_literal, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return part,
+        }
+        const const_ref = values.bodies.constLookupRef(value_expr) orelse writerInvariant("a value-form root reads a lookup that names no constant");
+        return .{ .stored = self.storedConst(const_ref) };
+    }
+
+    /// The stored value of the constant `const_ref` names, which the
+    /// checked-value writer completed before the root reading it: a root of
+    /// the module being written, from the store being written, since every
+    /// artifact of one checked identity owns its own store, or a root of a
+    /// module the schema holds.
+    fn storedConst(self: *const Writer, const_ref: checked.ConstRef) StoredPart {
+        const module = self.checked_module orelse writerInvariant("a writer of evaluated values read a constant");
+        const store: *const const_store.ConstStore, const roots: *const checked.CompileTimeRootTable = if (const_ref.artifact.eql(module.key.digest()))
+            .{ self.store, &module.compile_time_roots }
+        else blk: {
+            const view = self.checkedValues().schema.moduleView(const_ref.artifact);
+            break :blk .{ view.const_store, view.compile_time_roots };
+        };
+        const root_id = switch (const_ref.owner) {
+            .top_level_binding => |top_level| roots.lookupIdByPattern(top_level.pattern) orelse writerInvariant("a constant a value-form root reads has no compile-time root"),
+            .hoisted_root => |hoisted| hoisted.root,
+        };
+        const root = roots.root(root_id);
+        if (builtin.mode == .debug) std.debug.assert(root.completion == .write_value);
+        return switch (root.payload) {
+            .const_node => |node| .{ .store = store, .node = node },
+            .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => writerInvariant("a constant a value-form root reads is not complete"),
+        };
+    }
+
+    /// The scalar stored node `stored` holds, which a constant of the
+    /// number type of `layout_idx` stored.
+    fn storedScalar(self: *Writer, layout_idx: layout.Idx, stored: StoredPart) checked.ConstScalar {
+        const value = stored.value();
+        if (value != .scalar) writerInvariant("a constant read at a number type is not a stored scalar");
+        if (builtin.mode == .debug) {
+            var bytes = scalarMemoryBytes(value.scalar);
+            std.debug.assert(std.meta.eql(self.storeScalar(layout_idx, .{ .ptr = &bytes }), value.scalar));
+        }
+        return value.scalar;
+    }
+
+    /// The blob `blob` of `source` as a blob of the store being written: the
+    /// same blob when `source` is that store, which interns blobs by
+    /// content, and otherwise its bytes interned there.
+    fn copyBlob(self: *Writer, source: *const const_store.ConstStore, blob: const_store.ConstBlobDataId) Allocator.Error!const_store.ConstBlobDataId {
+        if (source == @as(*const const_store.ConstStore, self.store)) return blob;
+        return try self.store.addBlobData(source.blobData(blob));
+    }
+
+    /// Store the list of packed items `items`, which `stored` holds, as
+    /// the list of a value reading it, with `capacity`.
+    fn storeCopiedPackedList(self: *Writer, node: checked.ConstNodeId, stored: StoredPart, items: const_store.ConstPackedList, capacity: u64) Allocator.Error!void {
+        var copied = items;
+        copied.bytes = try self.copyBlob(stored.store, items.bytes);
+        self.store.fill(node, .{ .list = .{ .items = .{ .packed_bytes = copied }, .capacity = capacity } });
     }
 
     fn storeBytes(self: *Writer, bytes: []const u8) Allocator.Error!const_store.ConstStr {
@@ -1335,21 +1561,34 @@ pub const Writer = struct {
                 } }, .capacity = capacity } });
                 return;
             },
+            // A constant of this list's type stored its items packed as
+            // this same scalar.
+            .stored => |stored| {
+                const items = storedPackedItems(stored);
+                if (builtin.mode == .debug) std.debug.assert(items.element != null and items.element.? == element);
+                try self.storeCopiedPackedList(target_node, stored, items, capacity);
+                return;
+            },
         };
 
-        const byte_len = std.math.mul(usize, roc_list.len(), element.byteWidth()) catch
+        const width: usize = element.byteWidth();
+        if (builtin.mode == .debug) std.debug.assert(self.program.layouts.layoutSize(self.program.layouts.getLayout(elem_layout)) == width);
+        const byte_len = std.math.mul(usize, roc_list.len(), width) catch
             writerInvariant("packed list byte length overflowed");
         if (roc_list.bytes == null and roc_list.len() != 0) {
             writerInvariant("non-empty packed list had null element pointer");
         }
         const bytes = try self.store.reserveBlobData(byte_len);
-        if (roc_list.bytes) |source| {
-            const width: usize = element.byteWidth();
-            for (0..roc_list.len()) |index| {
+        if (roc_list.bytes) |source| switch (builtin.cpu.arch.endian()) {
+            .little => packMemoryScalars(element, bytes, source[0..byte_len]),
+            // A big-endian program's memory holds no scalar wider than a
+            // byte as its packed little-endian bytes, so each item is
+            // packed on its own.
+            .big => for (0..roc_list.len()) |index| {
                 const scalar = self.storeScalar(elem_layout, .{ .ptr = source + index * width });
                 writePackedScalar(bytes[index * width ..][0..width], element, scalar);
-            }
-        }
+            },
+        };
         const data = try self.store.commitBlobData(byte_len);
         self.store.fill(target_node, .{ .list = .{ .items = .{ .packed_bytes = .{
             .bytes = data,
@@ -1550,6 +1789,19 @@ fn interpreterErasedCallable(_: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError
     };
 }
 
+/// Pack the scalars of `element` that a little-endian program's memory holds
+/// in `source` into `out`, as `writePackedScalar` packs each one. Every
+/// packed scalar is its little-endian bytes, so the bytes are copied as they
+/// are, a float's with every NaN made Roc's one NaN as it is copied.
+fn packMemoryScalars(element: const_store.ConstPackedScalar, out: []u8, source: []const u8) void {
+    if (builtin.mode == .debug) std.debug.assert(builtin.cpu.arch.endian() == .little and out.len == source.len);
+    switch (element) {
+        .f32 => builtins.float_bits.copyNormalizingF32NanBits(out, source),
+        .f64 => builtins.float_bits.copyNormalizingF64NanBits(out, source),
+        .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => @memcpy(out, source),
+    }
+}
+
 fn writePackedScalar(out: []u8, element: const_store.ConstPackedScalar, scalar: checked.ConstScalar) void {
     if (out.len != element.byteWidth()) writerInvariant("packed scalar output width disagreed with its encoding");
     switch (element) {
@@ -1604,13 +1856,79 @@ fn checkedStrSegments(bodies: checked.CheckedBodies, expr: CIR.Expr.Idx) []const
     return data.str;
 }
 
+/// The bytes a value of a number type holding `scalar` occupies in memory,
+/// as an evaluated program's memory holds it and `storeScalar` reads it.
+fn scalarMemoryBytes(scalar: checked.ConstScalar) [16]u8 {
+    var bytes: [16]u8 = @splat(0);
+    switch (scalar) {
+        inline .i8, .i16, .i32, .i64, .i128, .u8, .u16, .u32, .u64, .u128, .f32_bits, .f64_bits, .dec_bits => |value| {
+            @memcpy(bytes[0..@sizeOf(@TypeOf(value))], std.mem.asBytes(&value));
+        },
+    }
+    return bytes;
+}
+
 /// The evaluated value a part is; a part only an evaluated program produces
 /// (a box, a sequence, a function) is never a checked expression's.
 fn runtimePart(part: Part) Value {
     return switch (part) {
         .runtime => |value| value,
-        .checked => writerInvariant("a value-form root holds a part only an evaluation produces"),
+        .checked, .stored => writerInvariant("a value-form root holds a part only an evaluation produces"),
     };
+}
+
+/// A part of value-form expression `expr`.
+fn checkedPart(expr: CIR.Expr.Idx) Part {
+    return .{ .checked = expr };
+}
+
+/// The stored list `stored`.
+fn storedList(stored: StoredPart) const_store.ConstList {
+    const value = stored.value();
+    if (value != .list) writerInvariant("a constant read at a list type is not a stored list");
+    return value.list;
+}
+
+/// The items of the stored list `stored`.
+fn storedListItems(stored: StoredPart) const_store.ConstListItems {
+    return storedList(stored).items;
+}
+
+/// The packed items of stored list `stored`, which a list of a type whose
+/// items pack stores.
+fn storedPackedItems(stored: StoredPart) const_store.ConstPackedList {
+    return switch (storedListItems(stored)) {
+        .packed_bytes => |items| items,
+        .nodes, .empty => writerInvariant("a stored list of packed items does not hold them packed"),
+    };
+}
+
+/// The item nodes of stored list `stored`, which a non-empty list of a type
+/// whose items do not pack stores.
+fn storedItemNodes(stored: StoredPart) []const checked.ConstNodeId {
+    return switch (storedListItems(stored)) {
+        .nodes => |items| items,
+        .packed_bytes, .empty => writerInvariant("a stored list of items that do not pack does not hold them as nodes"),
+    };
+}
+
+/// The components of stored tuple or record `stored`, `count` of them, in
+/// the order its plan stores them.
+fn storedComponents(stored: StoredPart, count: usize) []const checked.ConstNodeId {
+    const components = switch (stored.value()) {
+        .tuple => |items| items,
+        .record => |fields| fields,
+        .pending, .zst, .scalar, .str, .list, .box, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => writerInvariant("a constant read at a tuple or record type is not a stored tuple or record"),
+    };
+    if (components.len != count) writerInvariant("a stored product does not have its plan's components");
+    return components;
+}
+
+/// The backing of stored nominal value `stored`.
+fn storedBacking(stored: StoredPart) Part {
+    const value = stored.value();
+    if (value != .nominal) writerInvariant("a constant read at a named type is not a stored nominal value");
+    return stored.child(value.nominal.backing);
 }
 
 fn writerInvariant(comptime message: []const u8) noreturn {
@@ -2017,4 +2335,38 @@ test "const store writer boxy recipe ownership frees a failed popped frame only 
         try std.testing.expectEqual(freed + "child".len + "parent".len, tracking.freed_bytes);
     }
     try std.testing.expectEqual(tracking.allocated_bytes, tracking.freed_bytes);
+}
+
+test "packing a little-endian float list's memory matches packing each item" {
+    if (builtin.cpu.arch.endian() != .little) return error.SkipZigTest;
+    const f32_items = [_]u32{
+        0x7f80_0001, 0x7fa1_2345, 0x7fc0_0000, 0xff80_0001, 0xffc1_2345, 0xffff_ffff, 0x7f80_0000, 0xff80_0000,
+        0x0000_0000, 0x8000_0000, 0x0000_0001, 0x807f_ffff, 0x7f7f_ffff, 0x3f80_0000, 0xbf80_0000, 0x4049_0fdb,
+        0x7fbf_ffff, 0xff80_0002, 0x0040_0000, 0x8000_0001, 0x7fc0_0001, 0x4000_0000, 0xc000_0000,
+    };
+    var f32_memory: [f32_items.len * 4]u8 = undefined;
+    for (f32_items, 0..) |bits, index| std.mem.writeInt(u32, f32_memory[index * 4 ..][0..4], bits, .native);
+    var f32_packed: [f32_memory.len]u8 = undefined;
+    packMemoryScalars(.f32, &f32_packed, &f32_memory);
+    var f32_expected: [f32_memory.len]u8 = undefined;
+    for (f32_items, 0..) |bits, index| {
+        writePackedScalar(f32_expected[index * 4 ..][0..4], .f32, .{ .f32_bits = builtins.float_bits.normalizeF32NanBits(@bitCast(@as(f32, @bitCast(bits)))) });
+    }
+    try std.testing.expectEqualSlices(u8, &f32_expected, &f32_packed);
+
+    const f64_items = [_]u64{
+        0x7ff0_0000_0000_0001, 0x7ff1_2345_6789_abcd, 0x7ff8_0000_0000_0000, 0xfff0_0000_0000_0001,
+        0xfff9_2345_6789_abcd, 0xffff_ffff_ffff_ffff, 0x7ff0_0000_0000_0000, 0xfff0_0000_0000_0000,
+        0x0000_0000_0000_0000, 0x8000_0000_0000_0000, 0x0000_0000_0000_0001, 0x800f_ffff_ffff_ffff,
+        0x7fef_ffff_ffff_ffff, 0x3ff0_0000_0000_0000, 0xbff0_0000_0000_0000,
+    };
+    var f64_memory: [f64_items.len * 8]u8 = undefined;
+    for (f64_items, 0..) |bits, index| std.mem.writeInt(u64, f64_memory[index * 8 ..][0..8], bits, .native);
+    var f64_packed: [f64_memory.len]u8 = undefined;
+    packMemoryScalars(.f64, &f64_packed, &f64_memory);
+    var f64_expected: [f64_memory.len]u8 = undefined;
+    for (f64_items, 0..) |bits, index| {
+        writePackedScalar(f64_expected[index * 8 ..][0..8], .f64, .{ .f64_bits = builtins.float_bits.normalizeF64NanBits(@bitCast(@as(f64, @bitCast(bits)))) });
+    }
+    try std.testing.expectEqualSlices(u8, &f64_expected, &f64_packed);
 }

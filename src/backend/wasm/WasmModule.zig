@@ -1883,10 +1883,14 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
                 symbol_remap[src_sym_idx] = new_sym_idx;
             },
             .table => {
-                // PIC: __indirect_function_table → just enable the module's table.
+                // Function-address relocations implicitly need the table, so
+                // object composition must preserve its explicit retention.
                 if (src_sym.isUndefined()) {
                     if (src_name) |name| {
                         if (self.findSymbolByNameAndKind(name, .table)) |existing| {
+                            if (mode == .relocatable_object) {
+                                self.linking.symbol_table.items[existing].flags |= src_sym.flags & WasmLinking.SymFlag.NO_STRIP;
+                            }
                             symbol_remap[src_sym_idx] = existing;
                             continue;
                         }
@@ -1894,6 +1898,7 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
                             if (src_sym.index >= source.table_imports.items.len) return error.InvalidSection;
                             const src_imp = source.table_imports.items[src_sym.index];
                             const symbol = try self.addTableImportWithSymbolNamed(src_imp.module_name, src_imp.field_name);
+                            self.linking.symbol_table.items[symbol.raw()].flags |= src_sym.flags & WasmLinking.SymFlag.NO_STRIP;
                             symbol_remap[src_sym_idx] = symbol.raw();
                             continue;
                         }
@@ -6839,6 +6844,76 @@ test "mergeModuleForObject - preserves wasm object ABI symbols as imports" {
     try std.testing.expectEqualStrings("__table_base", table_base.name.?);
 
     try app.verifyNoLinkObjectContract();
+}
+
+test "issue 13102: object merge retains a new indirect function table" {
+    try expectMergedTableRetention(false);
+}
+
+test "issue 13102: object merge retains an existing indirect function table" {
+    try expectMergedTableRetention(true);
+}
+
+fn expectMergedTableRetention(existing_table: bool) (MergeError || error{ TestUnexpectedResult, TestExpectedEqual })!void {
+    const allocator = std.testing.allocator;
+    var app = Self.init(allocator);
+    defer app.deinit();
+    if (existing_table) _ = try app.addTableImportWithSymbol();
+
+    var source = Self.init(allocator);
+    defer source.deinit();
+    const source_table = try source.addTableImportWithSymbol();
+    // https://github.com/roc-lang/roc/issues/13102
+    // Function-address relocations implicitly use the table. LLVM marks it
+    // NO_STRIP so it remains live even without a reachable call_indirect.
+    source.linking.symbol_table.items[source_table.raw()].flags |= WasmLinking.SymFlag.NO_STRIP;
+
+    var result = try app.mergeModuleForObject(&source);
+    defer result.deinit();
+    const table = app.linking.symbol_table.items[result.symbol_remap[source_table.raw()]];
+    try std.testing.expect(table.isUndefined());
+    try std.testing.expectEqualStrings("__indirect_function_table", table.name.?);
+    try std.testing.expectEqual(@as(usize, 1), app.table_imports.items.len);
+    try std.testing.expectEqual(WasmLinking.SymFlag.NO_STRIP, table.flags & WasmLinking.SymFlag.NO_STRIP);
+}
+
+test "issue 13102: object table retention is the union of explicit input requirements" {
+    const allocator = std.testing.allocator;
+    const no_strip = WasmLinking.SymFlag.NO_STRIP;
+    for ([_]?bool{ null, false, true }) |destination_retained| {
+        for ([_]bool{ false, true }) |source_retained| {
+            var app = Self.init(allocator);
+            defer app.deinit();
+            if (destination_retained) |retained| {
+                const table = try app.addTableImportWithSymbol();
+                if (retained) app.linking.symbol_table.items[table.raw()].flags |= no_strip;
+            }
+
+            var source = Self.init(allocator);
+            defer source.deinit();
+            const source_table = try source.addTableImportWithSymbol();
+            if (source_retained) source.linking.symbol_table.items[source_table.raw()].flags |= no_strip;
+            // Retention is semantic; unrelated source visibility must not
+            // replace the destination import's canonical flags.
+            source.linking.symbol_table.items[source_table.raw()].flags |= WasmLinking.SymFlag.VISIBILITY_HIDDEN;
+
+            var result = try app.mergeModuleForObject(&source);
+            defer result.deinit();
+            const expected_flags = WasmLinking.SymFlag.UNDEFINED | WasmLinking.SymFlag.EXPLICIT_NAME |
+                @as(u32, if (source_retained or (destination_retained orelse false)) no_strip else 0);
+            const table = app.linking.symbol_table.items[result.symbol_remap[source_table.raw()]];
+            try std.testing.expectEqual(expected_flags, table.flags);
+            try std.testing.expectEqual(@as(usize, 1), app.table_imports.items.len);
+
+            // The final linker consumes serialized metadata, not this module.
+            const bytes = try app.encodeRelocatable(allocator);
+            defer allocator.free(bytes);
+            var decoded = try Self.preload(allocator, bytes, .relocatable_for_merge);
+            defer decoded.deinit();
+            const decoded_table = decoded.findSymbolByNameAndKind("__indirect_function_table", .table).?;
+            try std.testing.expectEqual(expected_flags, decoded.linking.symbol_table.items[decoded_table].flags);
+        }
+    }
 }
 
 test "mergeModule final link - resolves PIC globals and table symbols" {

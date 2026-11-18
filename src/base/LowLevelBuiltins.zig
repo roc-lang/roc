@@ -62,6 +62,7 @@ pub fn floatRounding(op: LowLevel, is_f32: bool) BuiltinFn {
 pub fn decBinaryArith(op: LowLevel) BuiltinFn {
     return lookup(op, .{
         .{ LowLevel.dec_mul, BuiltinFn.dec_mul },
+        .{ LowLevel.dec_mul_saturated, BuiltinFn.dec_mul_saturated },
         .{ LowLevel.num_div_by, BuiltinFn.dec_div },
         .{ LowLevel.num_div_trunc_by, BuiltinFn.dec_div_trunc },
         .{ LowLevel.num_pow, BuiltinFn.dec_pow },
@@ -343,7 +344,7 @@ pub fn rcHelper(helper: RcHelper, atomicity: RcAtomicity) BuiltinFn {
         .list_free => .list_free_with,
         .box_decref => if (single) BuiltinFn.box_decref_with_single_thread else BuiltinFn.box_decref_with,
         .box_free => .box_free_with,
-        .erased_callable_incref => if (single) BuiltinFn.incref_data_ptr_single_thread else BuiltinFn.erased_callable_incref,
+        .erased_callable_incref => if (single) BuiltinFn.erased_callable_incref_single_thread else BuiltinFn.erased_callable_incref,
         .erased_callable_decref => if (single) BuiltinFn.erased_callable_decref_single_thread else BuiltinFn.erased_callable_decref,
         .erased_callable_free => .erased_callable_free,
     };

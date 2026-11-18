@@ -17,42 +17,23 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - external_decl_lookup.md:4:1:4:17
-DOES NOT EXIST - external_decl_lookup.md:8:14:8:23
+RESERVED TYPE NAME - external_decl_lookup.md:4:12:4:17
 DOES NOT EXIST - external_decl_lookup.md:9:5:9:17
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
-		(severity warning)
-		(title "Duplicate Definition")
-		(region (start 4 1) (end 4 17))
-		(headline
-			(reflow "The name ")
-			(annotated symbol-unqualified "Json")
-			(reflow " is being redeclared here."))
-		(document
-			(source-region (file "external_decl_lookup.md") (start 4 1) (end 4 17) (annotation error) (line-text "import json.Json"))
-			(line-break)
-			(reflow "In this scope, ")
-			(annotated symbol-unqualified "Json")
-			(reflow " was already defined in ")
-			(source-location
-				(file "external_decl_lookup.md")
-				(line 1)
-				(column 1))
-			(reflow ".")
-			(line-break)
-			(source-region (file "external_decl_lookup.md") (start 1 1) (end 1 1) (annotation dim) (line-text "app [main!] { pf: platform \"../basic-cli/platform.roc\" }"))))
-	(report
 		(severity runtime_error)
-		(title "Does Not Exist")
-		(region (start 8 14) (end 8 23))
+		(title "Reserved Type Name")
+		(region (start 4 12) (end 4 17))
 		(headline
-			(annotated symbol-unqualified "Json.utf8")
-			(reflow " does not exist."))
+			(text "This import cannot bind ")
+			(annotated symbol-unqualified "Json")
+			(text " because that name is reserved for a builtin type."))
 		(document
-			(source-region (file "external_decl_lookup.md") (start 8 14) (end 8 23) (annotation error) (line-text "    result = Json.utf8(\"Hello from external mod!\")"))))
+			(reflow "Use `as` to give the imported type a different name.")
+			(line-break)
+			(source-region (file "external_decl_lookup.md") (start 4 12) (end 4 17) (annotation error) (line-text "import json.Json"))))
 	(report
 		(severity runtime_error)
 		(title "Does Not Exist")
