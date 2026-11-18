@@ -282,7 +282,11 @@ const jobs = [_]Job{
         .placement = .primary_host,
         .skip_reason = if (host_is_linux_x86_64) null else "needs a Linux x86-64 host (see ci/check_baseline_codegen.sh)\n",
     },
-    .{ .name = "run-check-match-extension-codegen" },
+    // Builds the fixture for named targets, so the counts it pins are the same
+    // from every host. Its x64musl count disassembles with the host's
+    // objdump, which on an AArch64 Linux host is binutils built for AArch64
+    // alone.
+    .{ .name = "run-check-match-extension-codegen", .placement = .primary_host },
     .{
         .name = "run-check-str-eq-same-allocation",
         .placement = .primary_host,

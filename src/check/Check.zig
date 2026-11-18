@@ -89,14 +89,6 @@ const ExpectDispatchWatcher = struct {
     fn_var: Var,
 };
 
-/// How a type variable occurrence will be represented in the checked type
-/// artifact consumed by later compiler stages.
-const InspectTypePosition = enum(u2) {
-    value,
-    record_row,
-    tag_row,
-};
-
 /// Transient checker input carrying the platform root's requirement surface:
 /// the platform's checked env (read-only; instantiated into the app's store,
 /// never referenced by checker output) and its path for diagnostics.
@@ -215,11 +207,6 @@ snapshot_ground_copies: collections.DenseMapUnmanaged(Var, collections.OptionalI
 snapshot_ground_epoch: u64 = 0,
 /// A map from one var to another. Used in instantiation and var copying
 var_set: collections.DenseMap(Var, void),
-/// Reusable visited set for validating the concrete content of values passed
-/// to `Str.inspect`. Each value is a bitset of occurrence positions because
-/// the same type variable can appear both as a row tail and as an ordinary
-/// value.
-inspect_type_visits: collections.DenseMap(Var, u8),
 /// Explicit visit stack for `varContainsError`'s heap-worklist type-graph
 /// walk. Entries are base-relative: each entry point operates only on the
 /// slots it pushed and drains back to its entry length, so the walk may nest
@@ -1836,7 +1823,6 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .snapshot_ground_copies = .keyed,
     .snapshot_ground_epoch = .keyed,
     .var_set = .scratch,
-    .inspect_type_visits = .scratch,
     .type_visit_stack = .scratch,
     .ground_hash_pending = .scratch,
     .ground_hash_seen = .scratch,
@@ -4976,7 +4962,6 @@ fn initAssumePrepared(
         .try_lambda_host_origins = collections.DenseMap(CIR.Expr.Idx, Ident.Idx).init(gpa),
         .try_return_rows = TryReturnRows.init(gpa),
         .var_set = collections.DenseMap(Var, void).init(gpa),
-        .inspect_type_visits = collections.DenseMap(Var, u8).init(gpa),
         .ground_hash_seen = collections.DenseMap(Var, u32).init(gpa),
         .type_decl_generation_states = try initNodeSlots(TypeDeclGenerationState, gpa, node_count, .not_generated),
         .type_decl_dense_indices = try initNodeSlots(collections.OptionalU32, gpa, node_count, .none),
@@ -20957,74 +20942,6 @@ fn checkEffectfulFunctionName(self: *Self, pattern_idx: CIR.Pattern.Idx, expr_id
         .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pattern_idx)),
     } });
 }
-
-fn varHasUnresolvedInspectContent(
-    self: *Self,
-    var_: Var,
-    position: InspectTypePosition,
-    visited: *collections.DenseMap(Var, u8),
-) std.mem.Allocator.Error!bool {
-    var scan = UnresolvedInspectScan{ .check = self, .visited = visited };
-    return UnresolvedInspectScan.Eval.run(self.gpa, &scan, .{ .var_ = var_, .position = position });
-}
-
-/// Whether a type reaches content that `Str.inspect` cannot render yet. Each
-/// var is visited once per position, in the order a left-to-right walk
-/// reaches it.
-const UnresolvedInspectScan = struct {
-    check: *Self,
-    visited: *collections.DenseMap(Var, u8),
-
-    const Leaf = struct { var_: Var, position: InspectTypePosition };
-    const Eval = collections.AnyAll.Evaluation(Leaf, UnresolvedInspectScan);
-
-    pub fn enter(scan: *UnresolvedInspectScan, items: Eval.Items, leaf: Leaf) std.mem.Allocator.Error!Eval.Expansion {
-        const self = scan.check;
-        const resolved = self.types.resolveVar(leaf.var_);
-        const position_bit = @as(u8, 1) << @backingInt(leaf.position);
-        const visit = try scan.visited.getOrPut(resolved.var_);
-        if (!visit.found_existing) visit.value_ptr.* = 0;
-        if (visit.value_ptr.* & position_bit != 0) return .{ .value = false };
-        visit.value_ptr.* |= position_bit;
-
-        // Checked-type publication attaches an explicit close-to-empty default to
-        // each unconstrained row-tail occurrence, and to a flexible one whose
-        // constraints the empty row discharges. Ordinary value occurrences have
-        // no such default.
-        switch (resolved.desc.content) {
-            .flex => |flex| return .{ .value = switch (leaf.position) {
-                .value => true,
-                .record_row, .tag_row => !self.rowDefaultDischargesConstraints(flex.constraints),
-            } },
-            .rigid => |rigid| return .{ .value = switch (leaf.position) {
-                .value => true,
-                .record_row, .tag_row => rigid.constraints.len() > 0,
-            } },
-            .err, .field_presence => return .{ .value = false },
-            .alias => |alias| try items.add(.{ .var_ = self.types.getAliasBackingVar(alias), .position = leaf.position }),
-            .structure => |flat_type| switch (flat_type) {
-                .tuple => |tuple| for (self.types.sliceVars(tuple.elems)) |elem| try items.add(.{ .var_ = elem, .position = .value }),
-                .nominal_type => |nominal| for (self.types.sliceNominalArgs(nominal)) |arg| try items.add(.{ .var_ = arg, .position = .value }),
-                .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return .{ .value = false },
-                .record => |record| {
-                    const fields = self.types.getRecordFieldsSlice(record.fields);
-                    for (fields.items(.presence)) |presence| try items.add(.{ .var_ = presence.typeVar(), .position = .value });
-                    try items.add(.{ .var_ = record.ext, .position = .record_row });
-                },
-                .tag_union => |tag_union| {
-                    const tags = self.types.getTagsSlice(tag_union.tags);
-                    for (tags.items(.args)) |args| {
-                        for (self.types.sliceVars(args)) |arg| try items.add(.{ .var_ = arg, .position = .value });
-                    }
-                    try items.add(.{ .var_ = tag_union.ext, .position = .tag_row });
-                },
-            },
-        }
-        return .{ .group = .any };
-    }
-
-    pub fn exit(_: *UnresolvedInspectScan, _: Leaf, _: ?bool) std.mem.Allocator.Error!void {}
-};
 
 fn varHasUnresolvedStaticDispatchConstraints(
     self: *Self,
@@ -37692,53 +37609,6 @@ fn getExprPatternIdent(self: *const Self, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
     return null;
 }
 
-/// A top-level value passed to `Str.inspect` must have a type with no
-/// unresolved content: nothing later can pick the type it is rendered at.
-fn checkInspectedTopLevelValues(self: *Self) Allocator.Error!void {
-    var raw_node_idx: u32 = 0;
-    while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
-        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
-        if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
-
-        const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node_idx));
-        const expr = self.cir.store.getExpr(expr_idx);
-        if (expr != .e_call) continue;
-        const call = expr.e_call;
-        if (!self.exprIsBuiltinStrInspect(call.func)) continue;
-        const args = self.cir.store.sliceExpr(call.args);
-        if (args.len != 1) continue;
-        if (!self.exprIsTopLevelLookup(args[0])) continue;
-
-        const arg_var = ModuleEnv.varFrom(args[0]);
-        self.inspect_type_visits.clearRetainingCapacity();
-        if (try self.varHasUnresolvedInspectContent(arg_var, .value, &self.inspect_type_visits)) {
-            try self.reportPolymorphicValueProblem(arg_var, arg_var, null);
-        }
-    }
-}
-
-fn exprIsBuiltinStrInspect(self: *Self, expr_idx: CIR.Expr.Idx) bool {
-    const expr = self.cir.store.getExpr(expr_idx);
-    if (expr == .e_lookup_local) {
-        const ident = self.getPatternIdent(expr.e_lookup_local.pattern_idx) orelse return false;
-        return ident.eql(self.cir.idents.builtin_str_inspect);
-    }
-    if (expr != .e_lookup_external) return false;
-    const ext = expr.e_lookup_external;
-    const module_idx = self.cir.imports.getResolvedModule(ext.module_idx) orelse return false;
-    if (module_idx >= self.imported_modules.len) return false;
-    const other_env = self.imported_modules[module_idx];
-    const def_idx: CIR.Def.Idx = @fromBackingInt(@intCast(@as(u32, ext.target_node_idx)));
-    const ident = patternIdentInModule(other_env, def_idx) orelse return false;
-    return ident.eql(other_env.idents.builtin_str_inspect);
-}
-
-fn exprIsTopLevelLookup(self: *Self, expr_idx: CIR.Expr.Idx) bool {
-    const expr = self.cir.store.getExpr(expr_idx);
-    if (expr != .e_lookup_local) return false;
-    return self.patternIsTopLevelDef(expr.e_lookup_local.pattern_idx);
-}
-
 const OwnerEnvCandidate = struct {
     env: *const ModuleEnv,
     is_this_module: bool,
@@ -38012,40 +37882,6 @@ fn methodTypeVarFromOriginalEnv(
     } else blk: {
         const imported_scheme = try self.importedSchemeFromSource(original_env, type_node_idx);
         break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region }, evidence);
-    };
-}
-
-fn patternIdentInModule(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?Ident.Idx {
-    // An exposed name bound by a top-level destructure is reached through its
-    // binder pattern rather than a def.
-    const tag = module_env.store.nodes.get(ModuleEnv.nodeIdxFrom(def_idx)).tag;
-    const pattern_idx: CIR.Pattern.Idx = if (tag == .def)
-        module_env.store.getDef(def_idx).pattern
-    else if (tag == .pattern_identifier or tag == .pattern_var_identifier or tag == .pattern_as)
-        @fromBackingInt(@intCast(@backingInt(def_idx)))
-    else
-        return null;
-    const pattern = module_env.store.getPattern(pattern_idx);
-    return switch (pattern) {
-        inline .assign, .var_assign, .as => |assign| assign.ident,
-        .applied_tag,
-        .nominal,
-        .nominal_external,
-        .record_destructure,
-        .list,
-        .tuple,
-        .num_literal,
-        .small_dec_literal,
-        .dec_literal,
-        .frac_f32_literal,
-        .frac_f64_literal,
-        .num_from_numeral_literal,
-        .str_literal,
-        .str_interpolation,
-        .underscore,
-        .runtime_error,
-        => null,
-        .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
     };
 }
 
@@ -44728,7 +44564,6 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
 
     switch (scope) {
         .module => {
-            try self.checkInspectedTopLevelValues();
             try self.checkAllFromNumeralFlexConstraintCompatibility(env);
         },
         // The REPL result expression is not module state; its type may have

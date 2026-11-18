@@ -339,27 +339,6 @@ fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
     }
 }
 
-/// The watch module uses real macOS FSEvents (CoreFoundation/CoreServices) when building
-/// natively for macOS, and kernel32 for directory-change notifications on Windows. Any step
-/// that compiles the watch module (the roc exe and the tests that import it) must link these.
-///
-/// The frameworks come from stubs in src/build/darwin/Frameworks, not the macOS SDK, so the
-/// dylib versions recorded in the binary don't depend on the build machine's Xcode, and a
-/// release target (which skips SDK detection, see `getReleaseTargetQuery`) can find them.
-fn linkWatchPlatformLibs(step: *Step.Compile, target: ResolvedTarget) void {
-    if (target.result.os.tag == .macos and
-        builtin.target.os.tag == .macos and
-        target.result.cpu.arch == builtin.target.cpu.arch and
-        target.result.abi == builtin.target.abi)
-    {
-        step.root_module.addFrameworkPath(step.step.owner.path("src/build/darwin/Frameworks"));
-        step.root_module.linkFramework("CoreFoundation", .{});
-        step.root_module.linkFramework("CoreServices", .{});
-    } else if (target.result.os.tag == .windows) {
-        step.root_module.linkSystemLibrary("kernel32", .{});
-    }
-}
-
 const TestHostOptions = struct {
     uses_stack_handler: bool = false,
     /// Extra source files compiled as their own objects and added to the host
@@ -450,7 +429,7 @@ fn testHostNeedsLibc(options: TestHostOptions, target: ResolvedTarget) bool {
 fn isNativeishOrMusl(target: ResolvedTarget) bool {
     return target.result.cpu.arch == builtin.target.cpu.arch and
         target.result.os.tag == builtin.target.os.tag and
-        (target.query.isNativeAbi() or target.result.abi.isMusl());
+        (target.result.abi == builtin.target.abi or target.result.abi.isMusl());
 }
 
 const NativeSharedArchiveTarget = struct {
@@ -2152,6 +2131,16 @@ pub fn build(b: *std.Build) void {
         // instructions a native build emits into musl startup code.
         if (builtin.target.cpu.arch == .x86_64) {
             default_target_query.cpu_model = .baseline;
+        }
+
+        // Name the macOS version and ABI, as the release target does. A
+        // native macOS target makes Zig read the build machine's library
+        // paths: its Xcode SDK, or under Nix the store paths in NIX_LDFLAGS,
+        // which it records in the roc executable as run-path entries.
+        if (builtin.target.os.tag == .macos) {
+            default_target_query.os_tag = .macos;
+            default_target_query.os_version_min = .{ .semver = release_macos_min };
+            default_target_query.abi = .none;
         }
 
         break :blk withSha256Floor(b, b.standardTargetOptions(.{ .default_target = default_target_query }), optimize);
@@ -4857,7 +4846,7 @@ pub fn build(b: *std.Build) void {
         const cli_test = roc_test_binaries.add(.{ .name = "cli_test", .root = "src/cli/main.zig", .links_llvm = true });
         cli_test.root_module.addImport("compiler_version", compiler_version_module);
         cli_test.root_module.addOptions("cli_test_helpers", cli_test_helpers);
-        linkWatchPlatformLibs(cli_test, target);
+        modules.linkWatchPlatformLibs(cli_test, target);
 
         test_suites.register(.{
             .step_suffix = "cli-main",
@@ -4883,7 +4872,7 @@ pub fn build(b: *std.Build) void {
         add_tracy(b, roc_modules.build_options, watch_test, target, false, flag_enable_tracy);
 
         // Link platform-specific libraries for file watching
-        linkWatchPlatformLibs(watch_test, target);
+        modules.linkWatchPlatformLibs(watch_test, target);
 
         test_suites.register(.{
             .step_suffix = "watch-cli",
@@ -6254,7 +6243,7 @@ fn addMainExe(
     splitCompilerSections(exe);
     configureBackend(exe, target);
     exe.root_module.addImport("llvm_codegen", llvm_codegen_module);
-    linkWatchPlatformLibs(exe, target);
+    modules.linkWatchPlatformLibs(exe, target);
 
     // Create builtins object file at build time with minimal dependencies.
     // This is a plain .o (not a .a archive) since we don't bundle compiler_rt here
