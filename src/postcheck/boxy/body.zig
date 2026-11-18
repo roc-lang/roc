@@ -560,6 +560,9 @@ pub const Builder = struct {
     view: *const types.ModuleView,
     env: types.Env,
     store: *LirStore,
+    /// Where the worker's body starts in the store: everything the builder
+    /// appends from here on is the body's one chunk (`finishProc`).
+    body_mark: LirStore.BodyMark,
     frame_locals: std.ArrayList(LocalId) = .empty,
     binders: collections.DenseMapUnmanaged(BinderId, LocalId) = .empty,
     /// Where this worker's scope inputs are (`Tables.InputLayout`), once its
@@ -764,6 +767,7 @@ pub const Builder = struct {
             .view = program.module(worker.module),
             .env = env,
             .store = &program.result.store,
+            .body_mark = program.result.store.bodyMark(),
             .tail_calls = lir_core.TailCallBuilder.init(program.allocator, worker.proc),
             .recipes = Tables.Recipes.init(program.allocator),
         };
@@ -2284,10 +2288,38 @@ pub const Builder = struct {
     /// Link the entry chain to the body and finish the procedure.
     pub fn finishProc(self: *Builder, entry: CFStmtId, body_start: CFStmtId, args: []const LocalId, ret_layout: layout.Idx) Allocator.Error!void {
         const worker = self.currentWorker().*;
+        // A dynamic parameter that a self tail call changes is carried in
+        // frame storage, so the call loops (design.md "Tail Return
+        // Continuations"): the body's local for it becomes a frame local,
+        // which the entry chain copies a fresh parameter into once the
+        // region exists, and which each loop jump writes again.
+        const changed = try self.allocator.alloc(bool, self.tail_calls.loop_params.len);
+        defer self.allocator.free(changed);
+        const carried = try self.tail_calls.changedDynamicParams(self.store, changed);
+        const fresh_args = try self.allocator.dupe(LocalId, if (carried) args else &.{});
+        defer self.allocator.free(fresh_args);
+        const proc_args: []const LocalId = if (carried) fresh_args else args;
+        if (carried) {
+            if (args.ptr != self.tail_calls.loop_params.ptr) invariant("a procedure's loop parameters are not its parameters");
+            for (args, changed, fresh_args) |param, is_changed, *proc_arg| {
+                if (!is_changed) continue;
+                const local = self.store.getLocal(param);
+                const dyn = local.dyn orelse invariant("a carried loop parameter is not dynamic");
+                if (dyn.storage != .param) invariant("a carried loop parameter is not a parameter");
+                proc_arg.* = try self.addLocal(local);
+                self.store.getLocalPtr(param).dyn_storage = .frame;
+            }
+        }
         const has_dynamic_frame = self.hasDynamicFrame();
         // Entry chain, then the dynamic frame region, then the body.
         if (has_dynamic_frame) {
             try self.emitEntry(.{ .dyn = .{ .target = null, .data = try self.store.addStmtRow(LIR.DynOp, .frame_alloc), .next = undefined } });
+        }
+        if (carried) {
+            for (args, proc_args, changed) |param, proc_arg, is_changed| {
+                if (!is_changed) continue;
+                try self.emitEntry(.{ .dyn = .{ .target = param, .data = try self.store.addStmtRow(LIR.DynOp, .{ .copy = .{ .src = proc_arg, .desc = self.store.localDyn(param).?.desc } }), .next = undefined } });
+            }
         }
         // The entry chain's last hole continues into the body: it becomes a
         // copy of the body's first statement.
@@ -2310,7 +2342,7 @@ pub const Builder = struct {
             }
         }.lessThan);
         const proc = self.store.getProcSpecPtr(worker.proc);
-        proc.args = try self.store.addLocalSpan(args);
+        proc.args = try self.store.addLocalSpan(proc_args);
         proc.ret_layout = ret_layout;
         proc.dyn_result = .of(self.result_local);
         proc.frame_locals = try self.store.addLocalSpan(self.frame_locals.items);
@@ -2322,7 +2354,12 @@ pub const Builder = struct {
         // reads no argument from the dynamic frame region, so with its
         // parameters known it loops even when the procedure has a region.
         if (has_dynamic_frame and self.tail_calls.loop_params.len == 0) self.tail_calls.self_calls = .replace_frame;
-        proc.tail_calls = .of(try self.tail_calls.finish(self.store));
+        var sites = try self.tail_calls.finish(self.store);
+        if (carried) {
+            if (sites) |*loop| loop.params = try self.store.addLocalSpan(args);
+        }
+        self.store.getProcSpecPtr(worker.proc).tail_calls = .of(sites);
+        try self.store.recordBodyChunk(worker.proc, self.body_mark);
     }
 
     /// Crash with a checked runtime error; the value of type `ty` it stands
@@ -7930,13 +7967,16 @@ pub const Builder = struct {
         const evidence = table.aliasScopeEvidence(node);
         // The module holding the alias chain records the target's
         // instantiation composed through it (design.md "Literal Arguments").
-        // A dispatch through another module's alias derives the literal
-        // arguments from that instantiation.
+        // A dispatch through another module's alias whose first scope takes
+        // no literal argument reads each alias's forwarded lookup, an edge of
+        // the alias's module, in that alias's scope, as a use of the alias
+        // does; one whose first scope takes literal arguments derives them
+        // from that instantiation.
         const literal_source: AliasLiterals = if (alias_module == self.module) blk: {
             const literals = try self.program.arena.allocator().alloc(Word, self.program.worker(callee).literal_params);
             try self.fillLiteralArgs(null, edge, literals);
             break :blk .{ .edge = literals };
-        } else .derived;
+        } else if (first.literal_requirements.len == 0) .scopes else .derived;
         const call_fn = try self.convert(node.instantiation.alias);
         return try self.aliasChainInstance(.{
             .callee = callee,

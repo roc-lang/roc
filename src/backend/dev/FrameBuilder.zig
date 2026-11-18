@@ -259,8 +259,8 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             7 +
             // sub rsp, 0x1000 (REX.W + 81 + ModRM + imm32 = 7 bytes)
             7 +
-            // mov [rsp], eax (89 + ModRM disp32 + SIB + disp32 = 7 bytes)
-            7 +
+            // mov [rsp], eax (89 + ModRM + SIB + disp8 = 4 bytes)
+            4 +
             // sub eax, 0x1000 (RAX short form: 2D + imm32 = 5 bytes)
             5 +
             // cmp eax, 0x1000 (RAX short form: 3D + imm32 = 5 bytes)
@@ -269,8 +269,8 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             6 +
             // sub rsp, rax (REX.W + 29 + ModRM = 3 bytes)
             3 +
-            // mov [rsp], eax (final probe, 7 bytes)
-            7;
+            // mov [rsp], eax (final probe, 4 bytes)
+            4;
 
         /// True when this frame must probe the stack page-by-page. Direct
         /// stack-pointer movement by at least one page can skip guard pages;

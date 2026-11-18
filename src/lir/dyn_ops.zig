@@ -162,6 +162,7 @@ pub const Operands = struct {
             .closure => |closure| {
                 result.single(closure.capture);
                 if (closure.reuse) |reuse| result.single(reuse);
+                if (closure.frame) |frame| result.single(frame);
             },
             .view => |view| {
                 result.single(view.address);
@@ -293,7 +294,7 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
             .deferred = call.deferred,
             .drive = call.drive,
         } },
-        .closure => |closure| .{ .closure = .{ .proc = closure.proc, .capture = try Remap.one(context, closure.capture), .reuse = try Remap.opt(context, closure.reuse), .reuse_unique = closure.reuse_unique } },
+        .closure => |closure| .{ .closure = .{ .proc = closure.proc, .capture = try Remap.one(context, closure.capture), .reuse = try Remap.opt(context, closure.reuse), .reuse_unique = closure.reuse_unique, .frame = try Remap.opt(context, closure.frame) } },
         .view => |view| .{ .view = .{ .address = try Remap.one(context, view.address), .owner = try Remap.opt(context, view.owner) } },
         .adapt => |adapt| .{ .adapt = .{ .src = try Remap.one(context, adapt.src), .plan = try Remap.one(context, adapt.plan) } },
     };

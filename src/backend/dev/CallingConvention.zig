@@ -525,7 +525,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 .from_imm => |value| {
                     switch (isa) {
                         .aarch64 => try self.emit.movRegImm64(dst, @bitCast(value)),
-                        .x86_64 => try self.emit.movRegImm64(dst, value),
+                        .x86_64 => try self.emit.movRegImm(dst, value),
                     }
                 },
             }
@@ -663,7 +663,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 },
                 .from_imm => |value| {
                     std.debug.assert(arg.size == 8);
-                    try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, value);
+                    try self.emit.movRegImm(CC_EMIT.SCRATCH_REG, value);
                     try self.emit.movMemReg(width, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
                 },
                 .from_lea => |lea| {
@@ -1214,10 +1214,10 @@ test "CallBuilder 4-arg call with immediates on Windows x64" {
     try std.testing.expect(found_call);
 
     // Windows: should have sub rsp, 32 somewhere (shadow space)
-    // sub rsp, 32 = 48 81 EC 20 00 00 00
+    // sub rsp, 32 = 48 83 EC 20
     var found_sub = false;
-    for (0..emit.buf.items.len - 6) |i| {
-        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x81 and
+    for (0..emit.buf.items.len - 3) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x83 and
             emit.buf.items[i + 2] == 0xEC and emit.buf.items[i + 3] == 0x20)
         {
             found_sub = true;
@@ -1248,9 +1248,14 @@ test "CallBuilder 6-arg call System V - all args in registers" {
 
     try builder.call(0x12345678);
 
-    // System V: 6 register args (RDI, RSI, RDX, RCX, R8, R9) - no stack args
-    // Should be shorter than Windows version (no shadow space)
-    try std.testing.expect(emit.buf.items.len > 50);
+    // System V: 6 register args (RDI, RSI, RDX, RCX, R8, R9) - no stack args,
+    // each loaded with the zero-extending `mov r32, imm32`.
+    try std.testing.expect(findPattern3(emit.buf.items, 0xBF, 0x01, 0x00) != null); // mov edi, 1
+    try std.testing.expect(findPattern3(emit.buf.items, 0xBE, 0x02, 0x00) != null); // mov esi, 2
+    try std.testing.expect(findPattern3(emit.buf.items, 0xBA, 0x03, 0x00) != null); // mov edx, 3
+    try std.testing.expect(findPattern3(emit.buf.items, 0xB9, 0x04, 0x00) != null); // mov ecx, 4
+    try std.testing.expect(findPattern3(emit.buf.items, 0x41, 0xB8, 0x05) != null); // mov r8d, 5
+    try std.testing.expect(findPattern3(emit.buf.items, 0x41, 0xB9, 0x06) != null); // mov r9d, 6
 
     // Look for the call instruction (call r11 = 41 FF D3)
     var found_call = false;
@@ -1299,10 +1304,10 @@ test "CallBuilder 6-arg call Windows - 4 reg + 2 stack args" {
     }
     try std.testing.expect(found_call);
 
-    // Look for sub rsp, 48 = 48 81 EC 30 00 00 00
+    // Look for sub rsp, 48 = 48 83 EC 30
     var found_sub = false;
-    for (0..emit.buf.items.len - 6) |i| {
-        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x81 and
+    for (0..emit.buf.items.len - 3) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x83 and
             emit.buf.items[i + 2] == 0xEC and emit.buf.items[i + 3] == 0x30)
         {
             found_sub = true;
@@ -1391,10 +1396,10 @@ test "CallBuilder with LEA argument System V" {
     // Verify code was emitted
     try std.testing.expect(emit.buf.items.len > 0);
 
-    // System V: lea rdi, [rbp-32] = 48 8D BD + disp32(-32)
+    // System V: lea rdi, [rbp-32] = 48 8D 7D E0
     var found_lea = false;
     for (0..emit.buf.items.len - 6) |i| {
-        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8D and emit.buf.items[i + 2] == 0xBD) {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8D and emit.buf.items[i + 2] == 0x7D) {
             found_lea = true;
             break;
         }
@@ -1421,10 +1426,10 @@ test "CallBuilder with LEA argument Windows" {
     // Verify code was emitted
     try std.testing.expect(emit.buf.items.len > 0);
 
-    // Windows: lea rcx, [rbp-32] = 48 8D 8D + disp32(-32)
+    // Windows: lea rcx, [rbp-32] = 48 8D 4D E0
     var found_lea = false;
     for (0..emit.buf.items.len - 6) |i| {
-        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8D and emit.buf.items[i + 2] == 0x8D) {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8D and emit.buf.items[i + 2] == 0x4D) {
             found_lea = true;
             break;
         }
@@ -1451,10 +1456,10 @@ test "CallBuilder with memory argument System V" {
     // Verify code was emitted
     try std.testing.expect(emit.buf.items.len > 0);
 
-    // System V: mov rdi, [rbp-16] = 48 8B BD F0 FF FF FF
+    // System V: mov rdi, [rbp-16] = 48 8B 7D F0
     var found_mov = false;
     for (0..emit.buf.items.len - 6) |i| {
-        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8B and emit.buf.items[i + 2] == 0xBD) {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8B and emit.buf.items[i + 2] == 0x7D) {
             found_mov = true;
             break;
         }
@@ -1481,10 +1486,10 @@ test "CallBuilder with memory argument Windows" {
     // Verify code was emitted
     try std.testing.expect(emit.buf.items.len > 0);
 
-    // Windows: mov rcx, [rbp-16] = 48 8B 8D F0 FF FF FF
+    // Windows: mov rcx, [rbp-16] = 48 8B 4D F0
     var found_mov = false;
     for (0..emit.buf.items.len - 6) |i| {
-        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8B and emit.buf.items[i + 2] == 0x8D) {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8B and emit.buf.items[i + 2] == 0x4D) {
             found_mov = true;
             break;
         }
@@ -1514,10 +1519,10 @@ test "CallBuilder stack alignment is 16-byte on Windows" {
     try builder.call(0x12345678);
 
     // Should allocate 48 bytes (32 shadow + 8 arg + 8 padding for 16-byte alignment)
-    // Look for sub rsp, 48 = 48 81 EC 30 00 00 00
+    // Look for sub rsp, 48 = 48 83 EC 30
     var found_sub = false;
-    for (0..emit.buf.items.len - 6) |i| {
-        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x81 and
+    for (0..emit.buf.items.len - 3) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x83 and
             emit.buf.items[i + 2] == 0xEC and emit.buf.items[i + 3] == 0x30)
         {
             found_sub = true;
@@ -1550,10 +1555,10 @@ test "CallBuilder return by pointer sets up first arg System V" {
     try std.testing.expect(emit.buf.items.len > 0);
 
     // System V: First arg (RDI) should be LEA to output buffer
-    // Look for lea rdi, [rbp-64] = 48 8D BD + disp32
+    // Look for lea rdi, [rbp-64] = 48 8D 7D C0
     var found_lea = false;
     for (0..emit.buf.items.len - 6) |i| {
-        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8D and emit.buf.items[i + 2] == 0xBD) {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8D and emit.buf.items[i + 2] == 0x7D) {
             found_lea = true;
             break;
         }
@@ -1584,10 +1589,10 @@ test "CallBuilder return by pointer sets up first arg Windows" {
     try std.testing.expect(emit.buf.items.len > 0);
 
     // Windows: First arg (RCX) should be LEA to output buffer
-    // Look for lea rcx, [rbp-64] = 48 8D 8D + disp32
+    // Look for lea rcx, [rbp-64] = 48 8D 4D C0
     var found_lea = false;
     for (0..emit.buf.items.len - 6) |i| {
-        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8D and emit.buf.items[i + 2] == 0x8D) {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8D and emit.buf.items[i + 2] == 0x4D) {
             found_lea = true;
             break;
         }
@@ -1646,11 +1651,11 @@ test "CallBuilder addF64MemArg loads from memory to XMM" {
     // Verify code was emitted
     try std.testing.expect(emit.buf.items.len > 0);
 
-    // Look for movsd xmm0, [rbp+disp32] = F2 0F 10 85 ...
+    // Look for movsd xmm0, [rbp-48] = F2 0F 10 45 D0
     var found_movsd_mem = false;
-    for (0..emit.buf.items.len -| 3) |i| {
+    for (0..emit.buf.items.len -| 4) |i| {
         if (emit.buf.items[i] == 0xF2 and emit.buf.items[i + 1] == 0x0F and
-            emit.buf.items[i + 2] == 0x10 and emit.buf.items[i + 3] == 0x85)
+            emit.buf.items[i + 2] == 0x10 and emit.buf.items[i + 3] == 0x45 and emit.buf.items[i + 4] == 0xD0)
         {
             found_movsd_mem = true;
             break;
@@ -1710,8 +1715,10 @@ test "CallBuilder mixed int and float args" {
 
     try builder.call(0x12345678);
 
-    // Verify code was emitted with reasonable length (all args + call + cleanup)
-    try std.testing.expect(emit.buf.items.len > 30);
+    // The integers take RDI and RSI and the float takes XMM0.
+    try std.testing.expect(findPattern3(emit.buf.items, 0xBF, 0x01, 0x00) != null); // mov edi, 1
+    try std.testing.expect(findPattern3(emit.buf.items, 0xBE, 0x02, 0x00) != null); // mov esi, 2
+    try std.testing.expect(findPattern4(emit.buf.items, 0xF2, 0x0F, 0x10, 0xC5) != null); // movsd xmm0, xmm5
 }
 
 test "CallBuilder callReg allocates shadow space on Windows" {
@@ -1735,10 +1742,10 @@ test "CallBuilder callReg allocates shadow space on Windows" {
     // Verify code was emitted
     try std.testing.expect(emit.buf.items.len > 0);
 
-    // Should have shadow space allocation: sub rsp, 32 = 48 81 EC 20 00 00 00
+    // Should have shadow space allocation: sub rsp, 32 = 48 83 EC 20
     var found_sub = false;
-    for (0..emit.buf.items.len -| 6) |i| {
-        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x81 and
+    for (0..emit.buf.items.len -| 3) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x83 and
             emit.buf.items[i + 2] == 0xEC and emit.buf.items[i + 3] == 0x20)
         {
             found_sub = true;
@@ -1768,18 +1775,17 @@ test "CallBuilder R12 save emits correct MOV instruction on Windows" {
     var stack_offset: i32 = -16;
     _ = try Builder.init(&emit, &stack_offset);
 
-    // On Windows, init should emit: mov [rbp-24], r12
-    // mov [rbp+disp32], r12 = 4C 89 A5 E8 FF FF FF (for -24)
-    // REX.WR=4C, opcode=89, ModRM=A5 (mod=10, reg=R12(4), rm=RBP(5)), disp32
+    // On Windows, init should emit: mov [rbp-32], r12
+    // mov [rbp+disp8], r12 = 4C 89 65 E0
+    // REX.WR=4C, opcode=89, ModRM=65 (mod=01, reg=R12(4), rm=RBP(5)), disp8
 
     // Check that R12 save was emitted
     try std.testing.expect(emit.buf.items.len > 0);
 
-    // Look for the MOV [rbp+disp], r12 pattern
-    // 4C 89 A5 = REX.WR + MOV r/m64,r64 + ModRM for [rbp+disp32], r12
+    // Look for the MOV [rbp+disp8], r12 pattern
     var found_r12_save = false;
     for (0..emit.buf.items.len -| 2) |i| {
-        if (emit.buf.items[i] == 0x4C and emit.buf.items[i + 1] == 0x89 and emit.buf.items[i + 2] == 0xA5) {
+        if (emit.buf.items[i] == 0x4C and emit.buf.items[i + 1] == 0x89 and emit.buf.items[i + 2] == 0x65) {
             found_r12_save = true;
             break;
         }
@@ -1802,11 +1808,11 @@ test "CallBuilder R12 restore emits correct MOV instruction on Windows" {
     try builder.addImmArg(42);
     try builder.call(0x12345678);
 
-    // Look for the MOV r12, [rbp+disp] pattern (restore)
-    // 4C 8B A5 = REX.WR + MOV r64,r/m64 + ModRM for r12, [rbp+disp32]
+    // Look for the MOV r12, [rbp+disp8] pattern (restore)
+    // 4C 8B 65 = REX.WR + MOV r64,r/m64 + ModRM for r12, [rbp+disp8]
     var found_r12_restore = false;
     for (0..emit.buf.items.len -| 2) |i| {
-        if (emit.buf.items[i] == 0x4C and emit.buf.items[i + 1] == 0x8B and emit.buf.items[i + 2] == 0xA5) {
+        if (emit.buf.items[i] == 0x4C and emit.buf.items[i + 1] == 0x8B and emit.buf.items[i + 2] == 0x65) {
             found_r12_restore = true;
             break;
         }
@@ -1908,15 +1914,6 @@ fn findPattern4(buf: []const u8, b0: u8, b1: u8, b2: u8, b3: u8) ?usize {
     if (buf.len < 4) return null;
     for (0..buf.len - 3) |i| {
         if (buf[i] == b0 and buf[i + 1] == b1 and buf[i + 2] == b2 and buf[i + 3] == b3) return i;
-    }
-    return null;
-}
-
-fn findPattern7(buf: []const u8, b0: u8, b1: u8, b2: u8, b3: u8, b4: u8, b5: u8, b6: u8) ?usize {
-    if (buf.len < 7) return null;
-    for (0..buf.len - 6) |i| {
-        if (buf[i] == b0 and buf[i + 1] == b1 and buf[i + 2] == b2 and buf[i + 3] == b3 and
-            buf[i + 4] == b4 and buf[i + 5] == b5 and buf[i + 6] == b6) return i;
     }
     return null;
 }
@@ -2050,8 +2047,8 @@ test "parallel move: LEA then REG reading same dest—reordered" {
     // mov rsi, rdi = 48 89 FE (must come first—preserves original RDI)
     const mov_pos = findPattern3(emit.buf.items, 0x48, 0x89, 0xFE);
     try std.testing.expect(mov_pos != null);
-    // lea rdi, [rbp-32] = 48 8D BD ...
-    const lea_pos = findPattern3(emit.buf.items, 0x48, 0x8D, 0xBD);
+    // lea rdi, [rbp-32] = 48 8D 7D E0
+    const lea_pos = findPattern4(emit.buf.items, 0x48, 0x8D, 0x7D, 0xE0);
     try std.testing.expect(lea_pos != null);
 
     // Critical: mov must precede lea (otherwise RDI is clobbered before read)
@@ -2293,11 +2290,11 @@ test "parallel move: reg args + stack overflow args" {
 
     // Verify call instruction
     try std.testing.expect(findPattern3(emit.buf.items, 0x41, 0xFF, 0xD3) != null);
-    // Verify stack allocation for 2 args: sub rsp, 16 = 48 81 EC 10 00 00 00
+    // Verify stack allocation for 2 args: sub rsp, 16 = 48 83 EC 10
     // (2 * 8 = 16 bytes, already 16-byte aligned)
     var found_sub = false;
-    for (0..emit.buf.items.len -| 6) |i| {
-        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x81 and
+    for (0..emit.buf.items.len -| 3) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x83 and
             emit.buf.items[i + 2] == 0xEC and emit.buf.items[i + 3] == 0x10)
         {
             found_sub = true;
@@ -2350,10 +2347,10 @@ test "parallel move: mixed LEA, MEM, IMM, REG without conflicts" {
     try builder.call(0x12345678);
 
     // Verify all instructions emitted
-    // lea rdi, [rbp-64] = 48 8D BD
-    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x8D, 0xBD) != null);
-    // mov rsi, [rbp-32] = 48 8B B5
-    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x8B, 0xB5) != null);
+    // lea rdi, [rbp-64] = 48 8D 7D C0
+    try std.testing.expect(findPattern4(emit.buf.items, 0x48, 0x8D, 0x7D, 0xC0) != null);
+    // mov rsi, [rbp-32] = 48 8B 75 E0
+    try std.testing.expect(findPattern4(emit.buf.items, 0x48, 0x8B, 0x75, 0xE0) != null);
     // call r11 = 41 FF D3
     try std.testing.expect(findPattern3(emit.buf.items, 0x41, 0xFF, 0xD3) != null);
     // No scratch needed
@@ -2384,14 +2381,12 @@ test "relocatable call stabilizes memory args before clobbering base param regis
 
     // Without stabilization, the first argument would emit `mov rdi, [rdi]`
     // and the second would then read through the clobbered RDI.
-    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x8B, 0x3F) == null);
-    try std.testing.expect(findPattern7(emit.buf.items, 0x48, 0x8B, 0xBF, 0x00, 0x00, 0x00, 0x00) == null);
+    try std.testing.expect(findPattern4(emit.buf.items, 0x48, 0x8B, 0x7F, 0x00) == null);
     try std.testing.expect(findPattern4(emit.buf.items, 0x48, 0x8B, 0x77, 0x08) == null);
-    try std.testing.expect(findPattern7(emit.buf.items, 0x48, 0x8B, 0xB7, 0x08, 0x00, 0x00, 0x00) == null);
 
-    // The original RDI is read into scratch before parameter registers move.
-    // The x86 emitter currently uses the disp32 memory form even for offset 0.
-    try std.testing.expect(findPattern7(emit.buf.items, 0x4C, 0x8B, 0x9F, 0x00, 0x00, 0x00, 0x00) != null);
+    // The original RDI is read into scratch (`mov r11, [rdi+0]`) before
+    // parameter registers move.
+    try std.testing.expect(findPattern4(emit.buf.items, 0x4C, 0x8B, 0x5F, 0x00) != null);
     try std.testing.expectEqual(@as(usize, 1), owner.relocations.items.len);
 }
 
