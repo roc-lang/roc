@@ -18113,7 +18113,9 @@ values the procedure captures as its leading parameters, in its site's
 runtime-capture order, then its explicit parameters, then its type table when
 it has inputs, which is the table its function value would have captured,
 or, for a generalized local procedure, the table its argument record would
-have led with, at the call's instantiation of its scheme. Its declaration
+have led with, at the call's instantiation of its scheme. Its reuse variants
+(below) take one more argument after these: an erased worker's reuse
+allocation. Its declaration
 creates the worker, records the values it captures, and binds nothing. A call
 evaluates its arguments and calls the worker with the captured values, which
 the declaring body reads as its declaration recorded them and a nested body
@@ -18142,6 +18144,30 @@ before the packing statement, and the runtime then packs afresh. The retain
 must precede the packing because the packing decides by the allocation's
 count whether to repack in place; a retain after it would let the packing
 overwrite the captures that later reads still view.
+
+An erased worker whose reuse argument is still unconsumed hands it on to a
+direct call when three facts hold: the callee is a local procedure only
+direct calls reach (`Worker.direct`); the call is in result position, which
+is the body's root, a block's final expression, an `if` or `match` branch,
+or a part of a record, tuple, tag or nominal value in result position; and
+the call's result holds exactly one erased-callable slot (`erasedResultSlots`,
+the test `result_reuse` uses). The call then targets the callee's reuse
+variant for the allocation's kind (`WorkerKey.lambda.reuse`: a dynamic
+capture record, or a closed capture layout), which takes the allocation as
+its last argument, named by `LirProcSpec.erased_reuse_arg`, and consumes it
+as an erased worker consumes its own: its first packing of that kind repacks
+it, and otherwise ARC releases it as an owned argument. The variant's
+procedure identity names the kind, and a closed layout by its layout content
+digest, so it is the same in every lowering. A variant's lambdas are its
+original's (`Program.reuseOriginal`), since the variant's body is the
+original's body with one more argument. `List.iter`'s step thunk builds the
+next step by calling its local `make` in result position, so each step
+repacks the allocation of the step before it, and a `for` loop over a list
+allocates one step closure, not one per item. A template worker is not
+handed an allocation: the captures of the step that calls it, such as the
+iterator an adapter's step wraps, stay shared with the allocation until the
+template's packing repacks it, so the wrapped iterator is not unique when it
+is stepped and allocates anyway.
 
 An erased call passes its arguments as one record in the uniform ABI. When the
 call's argument types are closed, that record has a static layout; when they
@@ -28783,6 +28809,10 @@ affects only whether allocation can be avoided, never the ownership contract.
 The procedure's one read of the capture bytes is an `erased_capture_load` at
 entry that names the reuse argument as its owner ("Constraints Per Statement
 Form"), so a repack or release of the transferred allocation follows it.
+
+Under `.boxy`, an erased worker can also hand its reuse argument on to a
+direct call of a local procedure, whose reuse variant takes it as an owned
+last argument ("Function Values" under `.boxy`).
 
 ARC, not lowering, decides each call's transfer: an erased call transfers its
 closure's unit exactly when that unit dies at the call (the callee consumes

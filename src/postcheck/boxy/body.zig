@@ -232,7 +232,7 @@ pub const Task = union(enum) {
     /// reach and call its worker `callee` with `captures`, the arguments
     /// (adapted from `arg_types` to `params` when `arg_types` is not empty),
     /// and its table at `inputs` (`finishDirectLocalCall`).
-    finish_direct_local_call: struct { callee: WorkerId, captures: []const LocalId, inputs: []const Word, params: []const TypeId, arg_types: []const TypeId, ret: TypeId, result: TypeId },
+    finish_direct_local_call: struct { callee: WorkerId, captures: []const LocalId, inputs: []const Word, params: []const TypeId, arg_types: []const TypeId, ret: TypeId, result: TypeId, hand_on: bool = false },
     /// Push an interpolation's literal segments as the `List(Str)` of `ty`.
     segments_arg: struct { expr: ExprId, ty: TypeId },
     /// Pop an interpolation's assembler and call it with the interpolated
@@ -677,6 +677,14 @@ pub const Builder = struct {
     /// The expressions whose value is the procedure's result, as their
     /// parents read them.
     tail_exprs: collections.DenseMapUnmanaged(ExprId, void) = .empty,
+    /// The expressions whose value is the procedure's result or a part of
+    /// the record, tuple, tag or nominal value the procedure returns: a
+    /// call among them may receive the procedure's reuse allocation
+    /// (`handOnReuse`).
+    result_exprs: collections.DenseMapUnmanaged(ExprId, void) = .empty,
+    /// Set by a call task whose expression is in `result_exprs`, for the
+    /// call it finishes next.
+    hand_on_armed: bool = false,
     /// The procedure's calls and joins as emitted, for its tail calls.
     tail_calls: lir_core.TailCallBuilder,
     /// The statement emitted last, while nothing follows it.
@@ -715,7 +723,7 @@ pub const Builder = struct {
     /// layout `static`, which a packing of that same layout repacks.
     reuse_kind: ReuseKind = .none,
 
-    pub const ReuseKind = union(enum) { none, dynamic, static: layout.Idx };
+    pub const ReuseKind = lower.ReuseKind;
 
     /// The reuse argument for a packing emitted in the body, consumed:
     /// later packings start fresh.
@@ -728,6 +736,48 @@ pub const Builder = struct {
         }
         self.reuse_available = false;
         return self.reuse_arg;
+    }
+
+    /// Hand this body's unconsumed reuse allocation to a direct call of
+    /// `callee.*` whose result `ret` holds exactly one erased-callable
+    /// slot: `callee.*` becomes the callee's variant that receives an
+    /// allocation of this body's reuse kind as its last argument, which is
+    /// returned. Only a local procedure only direct calls reach has such
+    /// variants.
+    pub fn handOnReuse(self: *Builder, hand_on: bool, callee: *WorkerId, ret: TypeId) Allocator.Error!?LocalId {
+        if (!hand_on or !self.reuse_available or self.emitting_entry or self.reuse_kind == .none) return null;
+        const worker = self.program.worker(callee.*).*;
+        if (worker.key != .lambda or !worker.direct) return null;
+        if (try self.program.converter().erasedResultSlots(ret) != .single) return null;
+        callee.* = try self.program.directReuseVariant(callee.*, self.reuse_kind);
+        self.reuse_available = false;
+        return self.reuse_arg;
+    }
+
+    /// Record `root` and every expression whose value is a part of its
+    /// value as a result: a block's final expression, every branch of an
+    /// `if` or `match`, and the parts of a record, tuple, tag or nominal
+    /// value (`result_exprs`).
+    fn markResultExprs(self: *Builder, root: ExprId) Allocator.Error!void {
+        var pending: std.ArrayList(ExprId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |expr| {
+            try self.result_exprs.put(self.allocator, expr, {});
+            switch (self.bodies().exprData(expr)) {
+                .block => |block| try pending.append(self.allocator, block.final_expr),
+                .if_ => |if_| {
+                    for (if_.branches) |branch| try pending.append(self.allocator, self.bodies().ifBranch(branch).body);
+                    try pending.append(self.allocator, if_.final_else);
+                },
+                .match_ => |match| for (match.branches) |branch| try pending.append(self.allocator, self.bodies().matchBranch(branch).value),
+                .tag => |tag| try pending.appendSlice(self.allocator, tag.args),
+                .tuple => |elems| try pending.appendSlice(self.allocator, elems),
+                .record => |record| for (record.fields) |field| try pending.append(self.allocator, self.bodies().recordField(field).value),
+                .nominal => |nominal| try pending.append(self.allocator, nominal.backing_expr),
+                .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .call, .empty_record, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            }
+        }
     }
 
     /// The reuse parameter of an erased worker: the trailing argument the
@@ -806,6 +856,7 @@ pub const Builder = struct {
         self.coerced_destinations.deinit(self.allocator);
         self.value_destinations.deinit(self.allocator);
         self.tail_exprs.deinit(self.allocator);
+        self.result_exprs.deinit(self.allocator);
         self.tail_calls.deinit();
         self.merges.deinit(self.allocator);
         self.loops.deinit(self.allocator);
@@ -2039,6 +2090,7 @@ pub const Builder = struct {
                         // type, which its rows join (design.md "Row Joins").
                         try self.destination_types.put(self.allocator, lambda.body, worker.ret);
                         try self.tail_exprs.put(self.allocator, lambda.body, {});
+                        try self.markResultExprs(lambda.body);
                         try self.tasks.append(self.allocator, .{ .expr = lambda.body });
                     },
                     .hosted_lambda => {
@@ -2472,6 +2524,7 @@ pub const Builder = struct {
         try self.tasks.append(self.allocator, .ret);
         try self.destination_types.put(self.allocator, lambda.body, worker.ret);
         try self.tail_exprs.put(self.allocator, lambda.body, {});
+        try self.markResultExprs(lambda.body);
         try self.tasks.append(self.allocator, .{ .expr = lambda.body });
         try self.run();
         if (self.reuse_arg == null) _ = try self.beginReuseArg(.none);
@@ -2507,6 +2560,9 @@ pub const Builder = struct {
         for (worker.params) |param_ty| try args.append(self.allocator, try self.localOf(param_ty, .param));
         const instance_start = args.items.len;
         if (self.table_local) |table| try args.append(self.allocator, table);
+        const reuse_kind = worker.key.lambda.reuse;
+        const reuse_param: ?LocalId = if (reuse_kind != .none) try self.beginReuseArg(reuse_kind) else null;
+        if (reuse_param) |param| try args.append(self.allocator, param);
         var ret_layout: layout.Idx = undefined;
         if (try self.closed(worker.ret)) {
             ret_layout = try self.program.layouts.layoutOf(worker.ret);
@@ -2521,6 +2577,7 @@ pub const Builder = struct {
         try self.tasks.append(self.allocator, .ret);
         try self.destination_types.put(self.allocator, lambda.body, worker.ret);
         try self.tail_exprs.put(self.allocator, lambda.body, {});
+        try self.markResultExprs(lambda.body);
         try self.tasks.append(self.allocator, .{ .expr = lambda.body });
         try self.run();
 
@@ -2528,6 +2585,7 @@ pub const Builder = struct {
         self.tail_calls.instance_start = instance_start;
         defer self.tail_calls.loop_params = &.{};
         try self.finishProc(entry, body_start, args.items, ret_layout);
+        if (reuse_param) |param| self.store.getProcSpecPtr(self.currentWorker().proc).erased_reuse_arg = .of(param);
     }
 
     /// An adapter's body (`WorkerKey.adapter`): each argument adapted to the
@@ -3488,7 +3546,10 @@ pub const Builder = struct {
                 }
             },
             .finish_local_call => |call| try self.finishLocalCall(call.closure, call.words, call.params, call.ret, call.arg_types, call.result),
-            .finish_direct_local_call => |call| try self.finishDirectLocalCall(call.callee, call.captures, call.inputs, call.params, call.arg_types, call.ret, call.result),
+            .finish_direct_local_call => |call| {
+                self.hand_on_armed = call.hand_on;
+                try self.finishDirectLocalCall(call.callee, call.captures, call.inputs, call.params, call.arg_types, call.ret, call.result);
+            },
             .finish_hash => |hash| {
                 const hasher = self.popValue();
                 const value = self.popValue();
@@ -6610,6 +6671,7 @@ pub const Builder = struct {
                 .arg_types = arg_types,
                 .ret = ret,
                 .result = try self.exprType(expr_id),
+                .hand_on = self.result_exprs.contains(expr_id),
             } });
             return try self.pushExprsReversed(call.args);
         }
@@ -6667,6 +6729,7 @@ pub const Builder = struct {
             .arg_types = &.{},
             .ret = function.ret,
             .result = try self.exprType(expr_id),
+            .hand_on = self.result_exprs.contains(expr_id),
         } });
         try self.pushExprsReversed(call.args);
     }
@@ -6683,14 +6746,22 @@ pub const Builder = struct {
         if (arg_types.len != 0) {
             for (args, arg_types, params) |*arg, arg_ty, param_ty| arg.* = try self.adaptValue(arg.*, arg_ty, param_ty);
         }
-        const table: ?LocalId = if (self.isOwnTable(callee, inputs)) self.table_local else try self.tableLocal(callee, inputs);
-        const all = try self.allocator.alloc(LocalId, captures.len + args.len + @intFromBool(table != null));
+        // A call whose result holds exactly one erased-callable slot hands
+        // this body's unconsumed reuse allocation to the callee's variant
+        // that receives one of its kind.
+        var target_worker = callee;
+        const hand_on = self.hand_on_armed;
+        self.hand_on_armed = false;
+        const reuse = try self.handOnReuse(hand_on, &target_worker, ret);
+        const table: ?LocalId = if (self.isOwnTable(target_worker, inputs)) self.table_local else try self.tableLocal(target_worker, inputs);
+        const all = try self.allocator.alloc(LocalId, captures.len + args.len + @intFromBool(table != null) + @intFromBool(reuse != null));
         defer self.allocator.free(all);
         @memcpy(all[0..captures.len], captures);
         @memcpy(all[captures.len..][0..args.len], args);
-        if (table) |local| all[all.len - 1] = local;
+        if (table) |local| all[captures.len + args.len] = local;
+        if (reuse) |local| all[all.len - 1] = local;
         const target = try self.localOf(ret, .frame);
-        try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(callee).proc, .args = try self.store.addLocalSpan(all), .next = undefined } });
+        try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(target_worker).proc, .args = try self.store.addLocalSpan(all), .next = undefined } });
         try self.pushValue(try self.adaptValue(target, ret, result_ty));
     }
 

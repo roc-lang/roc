@@ -6364,8 +6364,10 @@ test "F32 and F64 range syntax fuses without Iter.next" {
 }
 
 // Optimized loops do not rebuild their iterators every element. Mode `.none`
-// inlines nothing, so each element calls the step, which builds the next
-// iterator; that iterator is a by-value record and allocates nothing.
+// inlines nothing, so each element of a range loop calls the step, which
+// builds the next iterator; that iterator is a by-value record and allocates
+// nothing. `List.fold` is an index loop over the list, so it builds no
+// iterator per element at either mode.
 test "issue 10991 optimized loops do not rebuild their iterators every element" {
     const allocator = std.testing.allocator;
     const cases = [_]struct { name: []const u8, source: []const u8, counted_loop: bool }{
@@ -6399,7 +6401,7 @@ test "issue 10991 optimized loops do not rebuild their iterators every element" 
 
         var ordinary = try lowerModuleWithOptions(allocator, case.source, .none, .{});
         defer ordinary.deinit(allocator);
-        try std.testing.expect(try perElementProcDebugName(allocator, &ordinary.lowered, "iter_from_step"));
+        try std.testing.expectEqual(case.counted_loop, try perElementProcDebugName(allocator, &ordinary.lowered, "iter_from_step"));
         try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "box_box_count", 0);
         if (case.counted_loop) {
             const constructions = try perElementConstructionSummary(allocator, &ordinary.lowered);
