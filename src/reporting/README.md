@@ -42,7 +42,10 @@ rows and computes their underline spans without allocating; target hooks add
 escaping, gutters, and markup around those computed rows. Report snippets use
 `Snippet` to expand leading tabs, dedent source, and transform caret coordinates
 together. This keeps the primary and secondary report snippets aligned using
-the same calculations. Title uppercasing is shared with the snapshot tool
+the same calculations. Excerpt bounds and diagnostic spans stay separate: context
+must not change the header's location or a highlight's source row. Each row's
+own indentation determines its caret columns after expansion and dedenting.
+Title uppercasing is shared with the snapshot tool
 through the exported `writeShouted` helper.
 
 `report_sexpr.zig` serializes the semantic report structure independently of

@@ -62,6 +62,7 @@ pub fn floatRounding(op: LowLevel, is_f32: bool) BuiltinFn {
 pub fn decBinaryArith(op: LowLevel) BuiltinFn {
     return lookup(op, .{
         .{ LowLevel.dec_mul, BuiltinFn.dec_mul },
+        .{ LowLevel.dec_mul_saturated, BuiltinFn.dec_mul_saturated },
         .{ LowLevel.num_div_by, BuiltinFn.dec_div },
         .{ LowLevel.num_div_trunc_by, BuiltinFn.dec_div_trunc },
         .{ LowLevel.num_pow, BuiltinFn.dec_pow },

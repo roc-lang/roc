@@ -9998,6 +9998,7 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
 /// operation.
 fn boxyListOp(op: base.LowLevel) ?BoxyListOp {
     return switch (op) {
+        .dec_mul_saturated => null,
         .boxed_sequence_pack, .boxed_sequence_unpack => null,
         .list_capacity => .capacity,
         .list_slack_unique => .slack_unique,
@@ -10052,6 +10053,7 @@ fn generateDynElemLowLevel(self: *Self, assign: anytype) Allocator.Error!void {
     const extra = self.store.stmtRowOrDefault(assign.extra);
 
     switch (assign.op) {
+        .dec_mul_saturated => {},
         .boxed_sequence_pack, .boxed_sequence_unpack => unreachable, // sequence operations never carry list element descriptors
         .list_prefetch => {
             if (self.localDyn(dst) == null) {
@@ -11866,6 +11868,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitProcLocal(GuardedList.at(args, 0));
             self.currentCode().append(self.allocator, Op.f64_reinterpret_i64) catch return error.OutOfMemory;
         },
+
+        .dec_mul_saturated => try self.emitDecBinaryMath(args, BuiltinSignatures.kindOf(comptime LowLevelBuiltins.decBinaryArith(.dec_mul_saturated))),
 
         // Float math functions (direct wasm opcodes)
         .num_pow => {
