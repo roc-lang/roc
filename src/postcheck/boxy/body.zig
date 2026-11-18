@@ -1082,6 +1082,15 @@ pub const Builder = struct {
         };
     }
 
+    /// Locate the worker's procedure at the expression its body lowers, as
+    /// the specialized lowering locates a procedure at its body. Debug info
+    /// scopes the body's statements to this location's file; glue workers,
+    /// with no source body, stay unlocated.
+    fn locateProc(self: *Builder, body: ExprId) void {
+        const loc = self.program.sourceLoc(self.module, self.bodies().expr(body).source_region);
+        self.store.setProcLoc(self.currentWorker().proc, loc);
+    }
+
     /// The source location of the current region, resolved once for a run
     /// of statements lowered from one region rather than once per statement.
     fn regionLoc(self: *Builder) base.SourceLoc {
@@ -2019,6 +2028,7 @@ pub const Builder = struct {
                 switch (self.bodies().exprData(root_expr)) {
                     .lambda => |lambda| {
                         if (lambda.args.len != params.len) invariant("a template's lambda arity differs from its signature");
+                        self.locateProc(lambda.body);
                         for (lambda.args, params, worker.params) |pattern, param, param_ty| try self.bindIrrefutable(pattern, param, param_ty);
                         try self.tasks.append(self.allocator, .ret);
                         // The body's value is built at the function's result
@@ -2052,6 +2062,7 @@ pub const Builder = struct {
                     },
                     .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .run_low_level => {
                         if (params.len != 0) invariant("a non-lambda template body has parameters");
+                        self.locateProc(root_expr);
                         try self.tasks.append(self.allocator, .ret);
                         try self.tasks.append(self.allocator, .{ .own_expr = root_expr });
                     },
@@ -2277,10 +2288,38 @@ pub const Builder = struct {
     /// Link the entry chain to the body and finish the procedure.
     pub fn finishProc(self: *Builder, entry: CFStmtId, body_start: CFStmtId, args: []const LocalId, ret_layout: layout.Idx) Allocator.Error!void {
         const worker = self.currentWorker().*;
+        // A dynamic parameter that a self tail call changes is carried in
+        // frame storage, so the call loops (design.md "Tail Return
+        // Continuations"): the body's local for it becomes a frame local,
+        // which the entry chain copies a fresh parameter into once the
+        // region exists, and which each loop jump writes again.
+        const changed = try self.allocator.alloc(bool, self.tail_calls.loop_params.len);
+        defer self.allocator.free(changed);
+        const carried = try self.tail_calls.changedDynamicParams(self.store, changed);
+        const fresh_args = try self.allocator.dupe(LocalId, if (carried) args else &.{});
+        defer self.allocator.free(fresh_args);
+        const proc_args: []const LocalId = if (carried) fresh_args else args;
+        if (carried) {
+            if (args.ptr != self.tail_calls.loop_params.ptr) invariant("a procedure's loop parameters are not its parameters");
+            for (args, changed, fresh_args) |param, is_changed, *proc_arg| {
+                if (!is_changed) continue;
+                const local = self.store.getLocal(param);
+                const dyn = local.dyn orelse invariant("a carried loop parameter is not dynamic");
+                if (dyn.storage != .param) invariant("a carried loop parameter is not a parameter");
+                proc_arg.* = try self.addLocal(local);
+                self.store.getLocalPtr(param).dyn_storage = .frame;
+            }
+        }
         const has_dynamic_frame = self.hasDynamicFrame();
         // Entry chain, then the dynamic frame region, then the body.
         if (has_dynamic_frame) {
             try self.emitEntry(.{ .dyn = .{ .target = null, .data = try self.store.addStmtRow(LIR.DynOp, .frame_alloc), .next = undefined } });
+        }
+        if (carried) {
+            for (args, proc_args, changed) |param, proc_arg, is_changed| {
+                if (!is_changed) continue;
+                try self.emitEntry(.{ .dyn = .{ .target = param, .data = try self.store.addStmtRow(LIR.DynOp, .{ .copy = .{ .src = proc_arg, .desc = self.store.localDyn(param).?.desc } }), .next = undefined } });
+            }
         }
         // The entry chain's last hole continues into the body: it becomes a
         // copy of the body's first statement.
@@ -2303,7 +2342,7 @@ pub const Builder = struct {
             }
         }.lessThan);
         const proc = self.store.getProcSpecPtr(worker.proc);
-        proc.args = try self.store.addLocalSpan(args);
+        proc.args = try self.store.addLocalSpan(proc_args);
         proc.ret_layout = ret_layout;
         proc.dyn_result = .of(self.result_local);
         proc.frame_locals = try self.store.addLocalSpan(self.frame_locals.items);
@@ -2315,7 +2354,11 @@ pub const Builder = struct {
         // reads no argument from the dynamic frame region, so with its
         // parameters known it loops even when the procedure has a region.
         if (has_dynamic_frame and self.tail_calls.loop_params.len == 0) self.tail_calls.self_calls = .replace_frame;
-        proc.tail_calls = .of(try self.tail_calls.finish(self.store));
+        var sites = try self.tail_calls.finish(self.store);
+        if (carried) {
+            if (sites) |*loop| loop.params = try self.store.addLocalSpan(args);
+        }
+        self.store.getProcSpecPtr(worker.proc).tail_calls = .of(sites);
         try self.store.recordBodyChunk(worker.proc, self.body_mark);
     }
 
@@ -2338,6 +2381,7 @@ pub const Builder = struct {
             .lambda => |lambda| lambda,
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a lambda worker's expression is not a lambda"),
         };
+        self.locateProc(lambda.body);
         if (worker.direct) return try self.lowerDirectLambdaBody(lambda);
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
@@ -2973,6 +3017,7 @@ pub const Builder = struct {
     /// own type's variables, whose descriptors are its parameters.
     pub fn lowerDefaultBody(self: *Builder, expr: ExprId) Allocator.Error!void {
         const worker = self.currentWorker().*;
+        self.locateProc(expr);
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
         const has_table = self.program.inputCount(self.worker_id) != 0;
@@ -3000,6 +3045,7 @@ pub const Builder = struct {
     /// the expression's own value, built from its literals.
     pub fn lowerInlineLiteralInitializer(self: *Builder, expr: ExprId) Allocator.Error!void {
         const worker = self.currentWorker().*;
+        self.locateProc(expr);
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
         const ret_layout = try self.program.layouts.layoutOf(worker.ret);
@@ -7921,13 +7967,16 @@ pub const Builder = struct {
         const evidence = table.aliasScopeEvidence(node);
         // The module holding the alias chain records the target's
         // instantiation composed through it (design.md "Literal Arguments").
-        // A dispatch through another module's alias derives the literal
-        // arguments from that instantiation.
+        // A dispatch through another module's alias whose first scope takes
+        // no literal argument reads each alias's forwarded lookup, an edge of
+        // the alias's module, in that alias's scope, as a use of the alias
+        // does; one whose first scope takes literal arguments derives them
+        // from that instantiation.
         const literal_source: AliasLiterals = if (alias_module == self.module) blk: {
             const literals = try self.program.arena.allocator().alloc(Word, self.program.worker(callee).literal_params);
             try self.fillLiteralArgs(null, edge, literals);
             break :blk .{ .edge = literals };
-        } else .derived;
+        } else if (first.literal_requirements.len == 0) .scopes else .derived;
         const call_fn = try self.convert(node.instantiation.alias);
         return try self.aliasChainInstance(.{
             .callee = callee,

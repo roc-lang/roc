@@ -391,13 +391,20 @@ fn hashByteSlice(hasher: anytype, bytes: []const u8) void {
 /// digest alone.
 fn hashModuleSourceInputs(module_env: *const ModuleEnv) [32]u8 {
     const deps = module_env.file_dependencies.items();
-    if (deps.len == 0) {
+    const staged = module_env.staged_source_map;
+    if (deps.len == 0 and staged == null) {
         return module_env.source_digest.bytes;
     }
 
     var hasher = base.Sha256.init(.{});
-    hashByteSlice(&hasher, "roc-module-source-inputs-v3");
+    hashByteSlice(&hasher, "roc-module-source-inputs-v4");
     hasher.update(&module_env.source_digest.bytes);
+    // A staged copy's lowered code names the user's lines, not the copy's.
+    if (staged) |map| {
+        hasher.update(&.{1});
+        hashU32(&hasher, map.header_lines);
+        hashU32(&hasher, map.footer_start);
+    } else hasher.update(&.{0});
     hashU32(&hasher, @intCast(deps.len));
     for (deps) |dep| {
         hashByteSlice(&hasher, module_env.fileDependencyRelativePath(dep));
@@ -39075,6 +39082,26 @@ test "a module env stores the BLAKE3 digest of its source" {
     // A module with no file imports is named by that digest alone.
     try env.initCIRFields("Test");
     try std.testing.expectEqualSlices(u8, &expected, &hashModuleSourceInputs(&env));
+}
+
+test "issue 13124: a staged source map is one of a module's source inputs" {
+    const gpa = std.testing.allocator;
+    var env = try ModuleEnv.init(gpa, "answer = 42\n");
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const plain = hashModuleSourceInputs(&env);
+
+    // Its lowered code names other lines, so it must not share a cache entry
+    // with an unstaged module of the same text, or with another staging.
+    env.staged_source_map = .{ .header_lines = 6, .footer_start = 12 };
+    const staged: u256 = @bitCast(hashModuleSourceInputs(&env));
+    env.staged_source_map = .{ .header_lines = 0, .footer_start = 12 };
+    const other_staging: u256 = @bitCast(hashModuleSourceInputs(&env));
+    const plain_bits: u256 = @bitCast(plain);
+
+    try std.testing.expect(plain_bits != staged);
+    try std.testing.expect(plain_bits != other_staging);
+    try std.testing.expect(staged != other_staging);
 }
 
 test "module identity and keys read the source through the stored digest, never the text" {

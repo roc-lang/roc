@@ -1333,6 +1333,17 @@ strongly connected groups can be condensed, marked effectful if any member is
 effectful, and then propagated to callers. Ordinary caller-to-callee edges must
 remain one-way.
 
+A call of a member of the recursive group still being checked answers two
+questions separately. What it adds to the enclosing body's fixpoint follows
+the rule above: a declared effect kind on the in-flight scheme seeds nothing,
+and an inferred unbound kind is a directed edge. What the call itself does is
+read from the callee's function type: a callee already declared effectful
+makes the call an effectful call, so the call is no compile-time root and its
+checked callable is effectful, whatever the fixpoint concludes about the body.
+A callee whose kind is still unbound leaves the call's checked callable
+depending on it, and the post-solve walk over a selected root's dependencies
+rejects a root that reaches a call whose callable settled effectful.
+
 Every static-dispatch call that is not resolved when the expression frame
 finishes is represented by explicit checked state. The active effect slot owns
 the watcher for that dispatch function variable. If the same expression is also
@@ -2724,9 +2735,12 @@ keeps each node its own input segment through the relocatable composition
 link, which joins input segments that share a name, so the final link's
 `--gc-sections` still drops each node nothing references. The standard
 prefix lets the final `wasm-ld` merge the surviving nodes into its one
-`.rodata` (and `.bss`) output segment, so the module carries a few active
-segments rather than one per constant, each of which would cost a segment
-header and a separate copy at instantiation.
+`.rodata` (and `.bss`) output segment rather than one active segment per
+constant, each of which would cost a segment header and a separate copy at
+instantiation. In an optimized build, Binaryen's memory packing may then
+split an output segment around a run of zero bytes long enough that leaving
+it to zero-filled memory saves more than the extra segment header costs, so
+the final module's segment count follows where its static data holds zeros.
 
 The guard pass also marks each guard's crash statement as the failure path of a
 read of its slot's value (`CrashExtra.failed_value`), naming the producer. Failed
@@ -10443,14 +10457,28 @@ along unchanged: a polymorphic recursive call at other types needs the
 descriptors its body composes at entry composed again, which a loop jump never
 does. The call passes them unchanged when its callee's type table is the
 procedure's own table at its own inputs, in order, which lowering recognizes
-on the table's recipe and passes as the table the procedure holds. So is one
-that does not pass each dynamic parameter along unchanged: a
+on the table's recipe and passes as the table the procedure holds. A
 dynamic parameter is the address of storage its caller owns, which a loop jump
-cannot rebind, while a frame-replacing call moves its dynamic arguments. A
-self call that passes every dynamic parameter along unchanged reads no
-argument from the procedure's dynamic frame region, so it loops even when
-the procedure has one: the region is allocated once, in the entry chain, and
-each frame local's slot is written again only by its own definition. Only a
+cannot rebind, while a frame-replacing call moves its dynamic arguments, which
+the dev backend and the LLVM backend do into a fresh carry allocation. So a
+dynamic parameter that a self tail call changes is carried in the frame
+instead: when a proven self-tail call passes the procedure's own table and
+gives each dynamic parameter it changes an independent value, a frame local
+of its own that is no parameter, lowering makes the body's local for each
+such parameter a frame local, takes a fresh parameter in its place, and
+copies that parameter into it in the entry chain once the region exists
+(`TailCallBuilder.changedDynamicParams`). The loop carries those frame locals
+(`TailCalls.params`), and each jump writes the call's values into them, so the
+call loops and allocates nothing. Every independent value is a frame local
+other than the ones it writes, so the jump's writes overlap no bytes they read
+and form no cycle among dynamic locals. A self call that changes a dynamic
+parameter to anything else (a view into a value, or another parameter) is
+lowered as a tail call to any other procedure and replaces the frame. A self
+call that passes every dynamic parameter along unchanged reads no argument
+from the procedure's dynamic frame region, so it loops even when the
+procedure has one: the region is allocated once, in the entry chain, and
+each frame local's slot is written again only by its own definition or, for
+a carried parameter, by a loop jump. Only a
 `.boxy` procedure whose parameters lowering does not record (a generated
 worker other than a template's) replaces its frame on every self call when
 it has a region, since nothing tells it its arguments are not in it. A
@@ -18408,6 +18436,16 @@ strategy).
   dictionaries, reading each lookup's edge in that alias's scope. A dispatch
   edge bound to an alias holds the target's arguments composed through the
   chain (`aliasChainSubstitution`), resolved in the scope holding the edge.
+  Only the module declaring the alias records that composition. A dispatch
+  edge of another module bound to it reads the chain the way a use does,
+  each lookup's edge in that alias's scope, so a lookup at a closed type
+  reads the alias module's root (`U64.range_iter = range_iter_standard`
+  reached through `Range.iter`'s dictionary converts no literal at run
+  time), when the first alias's scope takes no literal argument; when it
+  takes some, which no edge of the dispatching module supplies, the
+  target's arguments derive from its instantiation (below). A module's
+  object exports the entry wrappers of the roots its alias lookups read, so
+  another unit can read them (`recordExports`).
 - The root's value type is the conversion's `Ok` payload type at the closed
   type: the literal's type for a numeral or a quote, the assembler's function
   type for an interpolation. A root whose value holds a function
@@ -18554,7 +18592,9 @@ exist.
 A function value is an erased callable: one Roc refcounted allocation whose
 payload starts with the erased-callable header (`src/builtins/erased_callable.zig`)
 and holds the capture bytes after the fixed capture offset. This is the host
-ABI representation of `Box(function)` and is unchanged by strategy.
+ABI representation of `Box(function)` and is unchanged by strategy. A
+callable that never outlives the frame building it is the same bytes in
+that frame instead (Frame Callables).
 
 The captures of a compiler-created callable are the captured binders' values,
 followed by its worker's type table, whose first input is the type table of
@@ -18668,6 +18708,112 @@ A hidden table is read using its prefix descriptor before the complete block's
 descriptor and product fields are established. Runtime-sized interior views
 continue to borrow and must still be packed independently for deferred calls.
 
+#### Frame Callables
+
+A capturing function value that is only called, retained, released, and
+passed to callee parameters that never let it outlive their call needs no
+heap allocation: it is built in the frame of the procedure that packs it.
+The decision is made after ARC, over ARC-complete LIR, where every transfer,
+deferred erased call and frame-replacing call is explicit
+(`lir/frame_callables.zig`); like `immortal_locals`, it changes no ownership
+decision, so the certifier has already checked the placement it rewrites.
+
+The fact is a per-parameter mask, `LirProcSpec.nonescaping_fn_params`: bit
+`i` says parameter `i` is a function value the procedure only calls, never
+by a deferred call, retains, releases, aliases (including into a join
+parameter or variable), passes to such parameters of its direct
+callees, and stores as one field of a capture record (below). It is a function of the procedure's own body and its callees'
+masks, solved as a greatest fixpoint over one store (`solveParams`): every
+candidate bit starts set and is cleared by any other use (a return, a store
+into an aggregate or capture, an argument to an erased call, a repack, a
+low-level operation, a conditional release, or a call of the parameter that
+ARC deferred, since a deferred call runs after the frame that built the
+callable may be gone and the constant-stack guarantee of tail chains
+(Deferred Erased Calls) is not traded away). The erased ABI's reuse input
+is never a candidate.
+
+A value stored as field `i` of a record does not escape when one statement
+defines the record and every other use of it is a retain, a release, or
+the capture of a packing whose callable does not escape by the same rules,
+and whose procedure keeps capture field `i`. The fixpoint solves the
+capture fields each erased-callable procedure keeps alongside the masks: a
+body whose capture is only loaded or viewed, and whose capture container
+only has fields read out of it, keeps every field whose function-valued
+reads do not escape. Such a body may call a capture field by a deferred
+call. An erased-callable procedure never hands a pending call up: the
+erased-call runtime makes it before the erased call that invoked the body
+returns, or the body makes it itself, and every call of a callable that
+does not escape is made now, so the pending call runs while the frame that
+built the captured value is still live. `List.sort_with` keeps its
+comparator this way, through the closure its sort builds around it. The
+capture-field masks are not published: a packing of a procedure another
+object defines keeps none. A packing in the frame-site analysis below still
+treats a capture as an escape, since the captured callable then lives as
+long as the callable that captured it. A body-less procedure keeps the mask its defining
+object published; a hosted procedure has none. A worker and the
+outcome-restitution variant its object publishes share one mask, since an
+importer reaches the variant with the worker's record.
+
+A second mask, `LirProcSpec.capture_reuse_fn_params`, solved and published
+with the first as a least fixpoint, says which function parameters some call
+may hand over through the erased ABI's reuse channel (`reuse_closure`),
+directly or through a callee. A heap callable handed over as it dies reaches
+its body with its captures unshared, so a capture the body updates is
+updated in place; a frame callable's captures stay shared with its capture
+record until the call returns. A callable whose capture record holds
+reference-counted data therefore stays on the heap when any of its calls
+transfers it or any parameter it is passed to has this bit, and a callable
+whose captures hold none loses nothing by living in the frame.
+
+A packing qualifies (`markFrames`) when its target is defined once, its
+aliases are `assign_ref` copies defined once, and every use of them is a
+retain, release or free, a call of the callable that ARC did not defer, or
+an argument of a direct call that does not replace the frame at a position
+whose callee mask is set; and when the capture record, if it holds
+reference-counted data, is not written while the callable is live. The
+rewrite marks the packing `frame` (`PackedErasedFnData.frame`), drops its
+reuse allocation and releases that allocation instead, drops every retain
+and release of the callable, clears `reuse_closure` and `result_reuse` on
+its calls, and releases the capture record local on every flow edge where
+the callable dies, found by the liveness of the callable over the
+procedure's flow graph. The capture record stays with its local, whose
+bytes the frame callable copies: in a loop the frame storage is reused
+each iteration, and the previous callable is dead before the packing runs
+again. A Debug compiler re-checks every frame packing afterwards
+(`verifyFrames`). Under a hot-reload capture prefix a frame callable
+carries the hot-reload header with no code reference: it never outlives the
+frame that built it, whose code image the hot-reload entry holds, and its
+final drop, which would release a reference, never runs.
+
+A `DynOp.closure` whose capture record is a dynamic record qualifies only
+when the record is a `frame` dynamic local, whose descriptor is known when
+the frame region is placed and whose bytes stay put. The rewrite gives it a
+fresh `frame_callable` dynamic local (`DynStorage.frame_callable`) with the
+record's descriptor as its `frame` operand: `frame_alloc` places that
+storage in the dynamic frame region beside the `frame` locals, sized by the
+descriptor, and the runtime's `roc_desc_closure_frame` builds the callable
+there. A record of variable type may hold reference-counted data, so its
+release is always placed.
+
+A frame callable is laid out as a heap one, in storage of the statement's
+own that the backend reserves in its frame: 16 bytes whose last word is the
+refcount word, then the erased-callable header and the capture. Its refcount
+word is `utils.REFCOUNT_FRAME`, distinct from `REFCOUNT_STATIC_DATA`: the
+erased-callable retain, release and free do nothing when they read it, and
+it is never unique, so no repack, uniqueness test or capture move ever
+reuses frame storage, and a callee's ordinary ownership of its function
+parameter, including transferring it to an erased call's reuse channel or
+freeing it in a unique variant, is harmless. The retain and release test
+the word with the same atomicity as the count update they guard: a heap
+callable's count may be updated by another thread under atomic reference
+counting, so its word is then loaded atomically (monotonic, which costs a
+plain load on every target), while the frame marker itself is written once,
+before the callable is reachable, and never again. The dev backend, LLVM, wasm and
+the interpreter all build frame callables; each follows the flag. The
+interpreter keeps a frame callable in its activation's storage and, in a
+Debug build, retires it when the activation ends, so any later retain,
+release or call of it fails as a use after free.
+
 #### Ownership
 
 A dynamic local is a refcount-bearing owned unit to ARC exactly as a list or
@@ -18707,7 +18853,10 @@ type, which static data materialization evaluates as it does under `.lss`.
 
 #### Runtime
 
-The Boxy runtime reads descriptors and nothing else: descriptor-guided copy,
+The erased-callable retain, release and free of the shared runtime do
+nothing to a callable whose refcount word is `REFCOUNT_FRAME` (Frame
+Callables), and the wasm backend's inline erased-callable reference counts
+test the same word. The Boxy runtime reads descriptors and nothing else: descriptor-guided copy,
 incref, decref, equality, hashing, inspection, and representation
 adaptation, component addressing and construction, the list operations that
 take an item descriptor, and the shared capture drop. It composes,
@@ -18781,7 +18930,11 @@ Nothing a module emits depends on a module that imports it:
   publishes whether or not any module calls it (Mode Specialization, emission
   units; Outcome-Conditioned Argument Restitution). That capability is a
   function of the worker's own body, so the variants a module carries are
-  its published outcome variants and the variants its own calls demand.
+  its published outcome variants and the variants its own calls demand;
+- each exported worker's non-escaping and capture-reusing function
+  parameters (`nonescaping_fn_params`, `capture_reuse_fn_params`, Frame
+  Callables) are functions of its body and its callees' published masks, and whether a caller in another module
+  passes it a frame callable changes nothing in the worker's object.
 
 This is the invariant the per-module Boxy cache (Caching Under `.boxy`) rests
 on, and it is the reason modules can be lowered independently and in
@@ -18927,10 +19080,11 @@ and Per-Module Output is the invariant that makes it possible:
   a warm build, and two machines, write the same bytes. It holds everything
   lowered for the module, through the object's machine code, and the few
   words of ARC interface a downstream module compiles against (each exported
-  procedure's solved ownership signature and uniqueness data, and the
-  outcome table of the outcome-restitution variant it publishes, which is an
-  exported procedure with a record of its own; Per-Module Output makes all
-  of it a function of the module and its imports), with
+  procedure's solved ownership signature and uniqueness data, its
+  non-escaping and capture-reusing function parameters, and the outcome table of the
+  outcome-restitution variant it publishes, which is an exported procedure
+  with a record of its own; Per-Module Output makes all of it a function of
+  the module and its imports), with
   the digest of the importer-visible ones (`exportRecordsDigest`). A record
   is importer-visible when another unit can read it
   (`lower.recordExports`): it reads a worker's ownership signature and
@@ -18954,10 +19108,11 @@ and Per-Module Output is the invariant that makes it possible:
   digest, which combines that records digest with its imports' export
   digests (`Digests.recordExportsDigest`), so a restored object's records
   are not hashed again. This is a checked interface digest, never a
-  payload-integrity hash. The v3 export digest composition covers only
-  visible records and includes their outcome tables. Object format 24
-  carries each record's outcome table, template position and visibility
-  and invalidates the older entries. Its inputs
+  payload-integrity hash. The v4 export records digest covers only visible
+  records and includes their outcome tables and function parameter masks.
+  Object format 25 carries each record's outcome table, function parameter
+  masks, template position and visibility and
+  invalidates the older entries. Its inputs
   remain the module's own export records and its imports, never its
   importers or other modules in the program. There
   is no index, no manifest, no second cache the file refers to, and nothing
@@ -26138,7 +26293,11 @@ generates constraints per statement:
   refcounted payload, `assign_packed_erased_fn`: the target's top-level
   resource is a newly created reference count, so its binding mode is owned.
   Operand occurrences that are stored into the new allocation must be owned
-  at that occurrence (storage constraint).
+  at that occurrence (storage constraint). Inference treats every packing
+  so, including one later rewritten into a frame callable: that rewrite runs
+  after ARC and the certifier and drops only the callable's own retains and
+  releases, its calls' transfers and its repack, releasing its capture
+  record where it dies (Frame Callables).
 - `assign_ref` with `.field`, `.tag_payload`, `.tag_payload_struct`: a payload
   read. The result may be a borrow of the source. The source must be live as
   long as the result is used (lifetime constraint), and the access mode of
@@ -26168,7 +26327,9 @@ generates constraints per statement:
   reads its captures out of the transferred allocation (see
   `erased_capture_load` below). A call whose result holds exactly one
   erased-callable slot (`result_reuse`) also consumes the unit there, because
-  the callee can repack a transferred allocation as its result.
+  the callee can repack a transferred allocation as its result. A frame
+  callable (Frame Callables) is never transferred: its refcount word makes
+  a callee's release of it, and any repack test, a no-op.
 - dictionary calls are erased calls and follow the erased-call rule above.
   A type table argument and the descriptors and dictionaries read from it are
   pointer-sized opaque values that own nothing. Method selection is already encoded in the dictionary;
@@ -26654,6 +26815,12 @@ returns the one representation the driving statement reads. Nothing about a
 result's representation is recorded on a pending call, and no conversion is
 skipped or replayed.
 
+A callable built in its caller's frame (Frame Callables) is never called by
+a deferred call: a call ARC defers in the procedure that built the callable
+keeps it on the heap, and a parameter a procedure may call by a deferred
+call, directly or through a callee, is not in its `nonescaping_fn_params`,
+so a tail chain through erased calls keeps its constant stack.
+
 A `.boxy` erased call through a dynamic function value (`call_erased`) is
 deferred and driven the same way. Its packed argument record is copied into
 the pending call at its descriptor's size, and whoever makes the call passes
@@ -27052,9 +27219,10 @@ in the template's own module, so that call demands the template's owned
 field-take variant exactly as a direct call written in the module does. A function value therefore hands its arguments to its target
 with the ownership a direct call would. A module's object therefore
 carries only its published outcome variants and the variants its own calls
-demanded, and a procedure's solved base signature, uniqueness data and
-published outcome table—functions of its body and its callees—are the whole
-of what another module compiles against (Per-Module Output). Imports are acyclic, so no same-SCC tail call crosses a unit.
+demanded, and a procedure's solved base signature, uniqueness data,
+published outcome table and function parameter masks (Frame
+Callables)—functions of its body and its callees—are the whole of what
+another module compiles against (Per-Module Output). Imports are acyclic, so no same-SCC tail call crosses a unit.
 Variants inherit their source's unit.
 
 Ownership solving and field-take analysis finish before parallel emission
@@ -27180,7 +27348,9 @@ the worker's is ("Caching Under `.boxy`"): an importer demands the variant
 only through a call of the worker, and it calls only a visible worker. Since the capability is a function of
 the worker's own body, the module's output still depends only on its own
 bodies and its imports, never on whether an importer calls the variant
-(Per-Module Output).
+(Per-Module Output). An importer reaches the variant with the worker's
+function parameter masks, so the module solves the worker and its
+published variant to one pair of masks (Frame Callables).
 
 An importing unit binds the table onto the worker's body-less external
 procedure with the rest of its interface. Its solve gives that procedure the
@@ -28343,6 +28513,15 @@ against the borrow typing rules:
 - every call site satisfies the callee variant's signature, and every pinned
   signature holds
 
+Frame callables (Frame Callables) are rewritten after certification, so the
+certifier checks the heap placement they replace. A Debug compiler then
+re-checks every frame packing on its own (`FrameCallables.verifyFrames`):
+no retain or release of the callable or its aliases remains, every call of
+it is made now and transfers nothing, and every direct call it is passed to
+keeps its frame and names a parameter its callee's mask keeps. A Debug
+interpreter retires a frame callable when its activation ends, so a frame
+callable that outlived its call fails at its next retain, release or call.
+
 The certifier consumes only the emitted LIR and the stage-local signature
 table, and leaves no unverified residue: every procedure is certified to a
 fixpoint. The guaranteed property is that every emitted schedule balances
@@ -29209,7 +29388,10 @@ largest variant's, a list of callables holds any number, a box holds its
 payload's, a nominal its backing's, and a type variable holds none). ARC sets
 `reuse_closure` when the closure dies at the call; a deferred `.boxy`
 transferring call's pending record carries the unit to the driver (Deferred
-Erased Calls). Every erased-ABI procedure, codec workers included, declares
+Erased Calls). A frame callable (Frame Callables) takes part in none of
+this: its calls transfer nothing, its packing repacks nothing, and a callee
+that is handed one as its reuse input finds it never unique and releases it,
+which does nothing. Every erased-ABI procedure, codec workers included, declares
 its reuse argument, so every transferred unit is consumed.
 
 A `.boxy` dynamic closure's capture record carries its allocation's capture
@@ -31555,12 +31737,17 @@ or stack pointer change, is a compiler invariant violation. Code the host provid
 business and needs no room.
 
 Compiler-owned code compiled ahead of time follows the same rule. Builtins
-never recurse. The runtime functions that walk values and layouts of any depth
-call `builtins.stack_guard.check` at their entry, which compiles to nothing
-except in the stack-checked twins of the embedded wasm builtins, boxy runtime,
-and LLVM builtins bitcode, whose roots declare `roc_wasm_stack_checks`. Only a
-platform that reserves low memory links those twins, so no other build carries
-a check.
+never recurse on their own; the queued drop builtins call back into generated
+helpers that can call them again. They and the runtime functions that walk
+values and layouts of any depth call `builtins.stack_guard.check` at their
+entry, which compiles to nothing except in the stack-checked twins of the
+embedded wasm builtins, boxy runtime, and LLVM builtins bitcode, whose roots
+declare `roc_wasm_stack_checks`. Only a platform that reserves low memory
+links those twins, so no other build carries a check. The builtins and Boxy
+runtime twins are compiled without position independence, so every check
+names `__stack_low` by a relocated `i32.const`, the one form `StackRoom` reads
+a check's bound from; position-independent code would load that address from
+a GOT global instead.
 
 A failed check calls `roc_wasm_stack_overflow`, which sets the stack pointer
 below `__stack_low` and traps. Every wasm module exports `__stack_pointer`,

@@ -7466,10 +7466,15 @@ fn devRootLocation(module: *const checked.CheckedModuleArtifact, root: checked.C
     const info = env.calcRegionInfo(region);
     const source = env.getSourceAll();
     const line_starts = env.getLineStartsAll();
+    // A staged default app's roots are the user's code, so name the user's line.
+    const user_line_idx = if (env.staged_source_map) |map|
+        map.userLineIdx(info.start_line_idx, region.start.offset) orelse info.start_line_idx
+    else
+        info.start_line_idx;
     return .{
         .module_name = env.module_name,
         .line_text = base.RegionInfo.getLineText(source, line_starts, info.start_line_idx, info.start_line_idx),
-        .line = info.start_line_idx + 1,
+        .line = user_line_idx + 1,
         .column = info.start_col_idx + 1,
     };
 }

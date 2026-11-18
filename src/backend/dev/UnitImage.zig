@@ -39,7 +39,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RBXU".*;
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 6;
+pub const format_version: u32 = 7;
 /// Alignment of the code block inside an image, and of every region the
 /// linker places.
 pub const page_size: u32 = 4096;
@@ -1932,7 +1932,127 @@ fn parseMachO(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildE
         }
         if (pending_addend != null) return error.InvalidObject;
     }
+    try addMachODebugOffsetRelocs(arena, sections, nsyms, &relocs);
     return .{ .sections = sections, .symbols = symbols, .relocs = relocs.items, .text_section = text_section, .static_data_section = static_data_section, .x86_64 = x86_64 };
+}
+
+/// Mach-O DWARF refers from `__debug_info` into `__debug_abbrev` and
+/// `__debug_line` by plain section offsets with no relocation, since a
+/// Mach-O linker leaves debug sections in their object. An image moves those
+/// sections (it joins objects, and a fast dev link joins images), so each
+/// unit's abbreviation offset and `DW_AT_stmt_list` get the relocation an
+/// ELF or COFF object carries, against the target section's symbol:
+/// section `i`'s is symbol `first_section_symbol + i`.
+pub fn addMachODebugOffsetRelocs(arena: Allocator, sections: []const Section, first_section_symbol: u32, relocs: *std.ArrayList(Reloc)) BuildError!void {
+    const info_section = sectionOfClass(sections, .debug_info) orelse return;
+    const abbrev_section = sectionOfClass(sections, .debug_abbrev) orelse return error.InvalidObject;
+    const info = sections[info_section].bytes;
+    const abbrev = sections[abbrev_section].bytes;
+    var unit: usize = 0;
+    while (unit < info.len) {
+        if (info.len - unit < 11) return error.InvalidObject;
+        const length = readU32(info, unit);
+        // 64-bit DWARF's escape and the reserved lengths.
+        if (length >= 0xffff_fff0) return error.UnsupportedSection;
+        if (length > info.len - unit - 4) return error.InvalidObject;
+        const unit_bytes = info[0 .. unit + 4 + length];
+        const version = readU16(info, unit + 4);
+        if (version < 2 or version > 4) return error.UnsupportedSection;
+        const abbrev_offset = readU32(info, unit + 6);
+        try relocs.append(arena, .{ .section = info_section, .offset = unit + 6, .kind = .abs32, .symbol = first_section_symbol + abbrev_section, .addend = abbrev_offset });
+        var at = unit + 11;
+        const code = try readUleb(unit_bytes, &at);
+        if (code != 0) {
+            var spec = try findAbbrev(abbrev, abbrev_offset, code);
+            while (true) {
+                const attribute = try readUleb(abbrev, &spec);
+                const form = try readUleb(abbrev, &spec);
+                if (attribute == 0 and form == 0) break;
+                if (attribute == DW_AT_stmt_list) {
+                    if (form != DW_FORM_sec_offset and form != DW_FORM_data4) return error.UnsupportedSection;
+                    if (unit_bytes.len - at < 4) return error.InvalidObject;
+                    const line_section = sectionOfClass(sections, .debug_line) orelse return error.InvalidObject;
+                    try relocs.append(arena, .{ .section = info_section, .offset = at, .kind = .abs32, .symbol = first_section_symbol + line_section, .addend = readU32(info, at) });
+                    break;
+                }
+                at = try skipForm(unit_bytes, at, form, info[unit + 10]);
+            }
+        }
+        unit = unit_bytes.len;
+    }
+}
+
+const DW_AT_stmt_list = 0x10;
+const DW_FORM_data4 = 0x06;
+const DW_FORM_sec_offset = 0x17;
+
+fn sectionOfClass(sections: []const Section, class: SectionClass) ?u32 {
+    for (sections, 0..) |section, index| {
+        if (section.class == class) return @intCast(index);
+    }
+    return null;
+}
+
+fn readUleb(bytes: []const u8, at: *usize) BuildError!u64 {
+    var value: u64 = 0;
+    var shift: u32 = 0;
+    while (at.* < bytes.len) {
+        const byte = bytes[at.*];
+        at.* += 1;
+        if (shift < 64) value |= @as(u64, byte & 0x7f) << @intCast(shift);
+        if (byte & 0x80 == 0) return value;
+        shift += 7;
+    }
+    return error.InvalidObject;
+}
+
+/// Where the attribute specifications of abbreviation `code` start in the
+/// table at `table_offset`.
+fn findAbbrev(abbrev: []const u8, table_offset: u64, code: u64) BuildError!usize {
+    if (table_offset > abbrev.len) return error.InvalidObject;
+    var at: usize = @intCast(table_offset);
+    while (true) {
+        const entry = try readUleb(abbrev, &at);
+        if (entry == 0) return error.InvalidObject;
+        _ = try readUleb(abbrev, &at); // tag
+        if (at >= abbrev.len) return error.InvalidObject;
+        at += 1; // has children
+        if (entry == code) return at;
+        while (true) {
+            const attribute = try readUleb(abbrev, &at);
+            const form = try readUleb(abbrev, &at);
+            if (attribute == 0 and form == 0) break;
+        }
+    }
+}
+
+/// The offset past an attribute value of `form` at `at`.
+fn skipForm(bytes: []const u8, at: usize, form: u64, address_size: u8) BuildError!usize {
+    var end = at;
+    const size: u64 = switch (form) {
+        0x01 => address_size, // addr
+        0x0b, 0x0c, 0x11 => 1, // data1, flag, ref1
+        0x05, 0x12 => 2, // data2, ref2
+        0x06, 0x0e, 0x13, 0x17 => 4, // data4, strp, ref4, sec_offset
+        0x07, 0x14, 0x20 => 8, // data8, ref8, ref_sig8
+        0x19 => 0, // flag_present
+        0x08 => string: { // string
+            const terminator = std.mem.findScalarPos(u8, bytes, at, 0) orelse return error.InvalidObject;
+            break :string terminator + 1 - at;
+        },
+        0x0d, 0x0f, 0x15 => leb: { // sdata, udata, ref_udata
+            _ = try readUleb(bytes, &end);
+            break :leb 0;
+        },
+        0x0a => if (at < bytes.len) @as(u64, bytes[at]) + 1 else return error.InvalidObject, // block1
+        0x09, 0x18 => block: { // block, exprloc
+            const len = try readUleb(bytes, &end);
+            break :block len;
+        },
+        else => return error.UnsupportedSection,
+    };
+    if (size > bytes.len - end) return error.InvalidObject;
+    return end + @as(usize, @intCast(size));
 }
 
 fn classifyMachO(segname: []const u8, sectname: []const u8, flags: u32, options: BuildOptions) BuildError!SectionClass {
@@ -3495,7 +3615,12 @@ test "an arm64 Mach-O object becomes an image with its C names" {
 test "a Mach-O debug section relocates text addresses by section" {
     const allocator = std.testing.allocator;
     const text = words(&.{ret_instruction});
-    var info: [16]u8 = @splat(0);
+    // A unit header (length, version 4, abbreviation offset, address size)
+    // and a null entry, then an address.
+    var info: [20]u8 = @splat(0);
+    std.mem.writeInt(u32, info[0..4], 16, .little);
+    std.mem.writeInt(u16, info[4..6], 4, .little);
+    info[10] = 8;
     const object = try TestMachObject.encode(allocator, &.{
         .{ .segname = "__TEXT", .sectname = "__text", .bytes = &text, .flags = S_ATTR_PURE_INSTRUCTIONS },
         .{ .segname = "__DWARF", .sectname = "__debug_info", .bytes = &info, .@"align" = 0, .flags = S_ATTR_DEBUG },
@@ -3503,20 +3628,68 @@ test "a Mach-O debug section relocates text addresses by section" {
     }, &.{
         .{ .name = "_f", .section = 1, .value = 0, .external = true },
     }, &.{
-        .{ .section = 2, .offset = 8, .symbol = 1, .external = false, .type = ARM64_RELOC_UNSIGNED, .pcrel = false, .length = 3 },
+        .{ .section = 2, .offset = 12, .symbol = 1, .external = false, .type = ARM64_RELOC_UNSIGNED, .pcrel = false, .length = 3 },
     });
     defer allocator.free(object);
     const image = try build(allocator, &.{object}, .{ .keep_debug = true, .atoms = .whole });
     defer allocator.free(image);
     const view = try View.init(image);
     try std.testing.expectEqualStrings("abbrev", view.debugAbbrev());
-    try std.testing.expectEqual(@as(usize, 1), view.localSites().len);
+    // The address, and the unit's abbreviation offset.
+    try std.testing.expectEqual(@as(usize, 2), view.localSites().len);
     try std.testing.expectEqual(@backingInt(Region.debug_info), view.localSites()[0].region);
     try std.testing.expectEqual(@backingInt(Region.block), view.localSites()[0].target_region);
-    try std.testing.expectEqual(@as(u32, 8), view.localSites()[0].offset);
+    try std.testing.expectEqual(@as(u32, 12), view.localSites()[0].offset);
+    try std.testing.expectEqual(@backingInt(Region.debug_abbrev), view.localSites()[1].target_region);
+    try std.testing.expectEqual(@as(u32, 6), view.localSites()[1].offset);
     const dropped = try build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .whole });
     defer allocator.free(dropped);
     try std.testing.expectEqual(@as(usize, 0), (try View.init(dropped)).debugInfo().len);
+}
+
+test "issue 13145: each Mach-O unit's offsets into the other debug sections are relocated" {
+    const allocator = std.testing.allocator;
+    const text = words(&.{ret_instruction});
+    // Abbreviation 1: a compile unit with a name and a line program.
+    const abbrev = [_]u8{ 1, 0x11, 0, 0x03, 0x08, DW_AT_stmt_list, DW_FORM_sec_offset, 0, 0, 0 };
+    // A unit header, then the unit: abbreviation 1, "a", stmt_list 0.
+    var info: [18]u8 = @splat(0);
+    std.mem.writeInt(u32, info[0..4], 14, .little);
+    std.mem.writeInt(u16, info[4..6], 4, .little);
+    info[10] = 8;
+    info[11] = 1;
+    info[12] = 'a';
+    var objects: [2][]u8 = undefined;
+    for (&objects, [_][]const u8{ "_f", "_g" }, [_][]const u8{ "line 1", "line two" }) |*object, name, line| {
+        object.* = try TestMachObject.encode(allocator, &.{
+            .{ .segname = "__TEXT", .sectname = "__text", .bytes = &text, .flags = S_ATTR_PURE_INSTRUCTIONS },
+            .{ .segname = "__DWARF", .sectname = "__debug_line", .bytes = line, .@"align" = 0, .flags = S_ATTR_DEBUG },
+            .{ .segname = "__DWARF", .sectname = "__debug_abbrev", .bytes = &abbrev, .@"align" = 0, .flags = S_ATTR_DEBUG },
+            .{ .segname = "__DWARF", .sectname = "__debug_info", .bytes = &info, .@"align" = 0, .flags = S_ATTR_DEBUG },
+        }, &.{
+            .{ .name = name, .section = 1, .value = 0, .external = true },
+        }, &.{});
+    }
+    defer for (objects) |object| allocator.free(object);
+    const image = try build(allocator, &objects, .{ .keep_debug = true, .atoms = .whole });
+    defer allocator.free(image);
+    const sites = (try View.init(image)).localSites();
+    // The second unit follows the first in each section: its fields 18
+    // bytes on, pointing past the first unit's 10 abbreviation and 6 line
+    // bytes.
+    const expected = [_]struct { offset: u32, target: Region, addend: i64 }{
+        .{ .offset = 6, .target = .debug_abbrev, .addend = 0 },
+        .{ .offset = 14, .target = .debug_line, .addend = 0 },
+        .{ .offset = 24, .target = .debug_abbrev, .addend = 10 },
+        .{ .offset = 32, .target = .debug_line, .addend = 6 },
+    };
+    try std.testing.expectEqual(expected.len, sites.len);
+    for (expected, sites) |want, site| {
+        try std.testing.expectEqual(@backingInt(Region.debug_info), site.region);
+        try std.testing.expectEqual(want.offset, site.offset);
+        try std.testing.expectEqual(@backingInt(want.target), site.target_region);
+        try std.testing.expectEqual(want.addend, site.addend);
+    }
 }
 
 test "arm64 sites encode branches, pages and scaled offsets" {

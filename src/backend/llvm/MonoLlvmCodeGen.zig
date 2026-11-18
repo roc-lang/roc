@@ -367,6 +367,10 @@ pub const MonoLlvmCodeGen = struct {
     /// One address slot per `frame` dynamic local of the procedure being
     /// compiled, in run order.
     frame_slots: LlvmBuilder.Value = .none,
+    /// The `frame_callable` dynamic locals of the procedure being compiled,
+    /// whose storage `frame_alloc` places after the runs (design.md "Frame
+    /// Callables").
+    frame_callable_locals: std.ArrayListUnmanaged(LocalId) = .empty,
     /// Group storage this function allocated to enter other groups, and the
     /// function those slots belong to.
     tail_scratch_slots: std.ArrayList(?LlvmBuilder.Value) = .empty,
@@ -745,6 +749,7 @@ pub const MonoLlvmCodeGen = struct {
         for (self.shared_crashes.items) |*shared| shared.deinit(self.allocator);
         self.shared_crashes.deinit(self.allocator);
         self.frame_runs.deinit(self.allocator);
+        self.frame_callable_locals.deinit(self.allocator);
         self.inline_everywhere.deinit(self.allocator);
         self.stack_check_procs.deinit(self.allocator);
         self.local_slot_storage.deinit(self.allocator);
@@ -1322,6 +1327,53 @@ pub const MonoLlvmCodeGen = struct {
             builder.metadataString(name) catch return error.OutOfMemory,
             builder.metadataString(".") catch return error.OutOfMemory,
         ) catch return error.OutOfMemory;
+    }
+
+    /// Gives the generated function under construction an artificial
+    /// subprogram and puts its instructions at line 0 in it. LLVM keeps the
+    /// locations of inlined code only in callers that have a subprogram, so
+    /// every generated function that calls Roc procs needs one.
+    fn beginGeneratedFunctionDebugInfo(
+        self: *MonoLlvmCodeGen,
+        name: LlvmBuilder.Metadata.String,
+        linkage_name: LlvmBuilder.Metadata.String,
+        loc: SourceLoc,
+    ) Error!void {
+        const builder, const wip = try self.builderAndWip();
+        if (wip.strip) return;
+        const compile_unit = self.debug_compile_unit.unwrap() orelse return;
+        const line = if (loc.hasLocation()) loc.line else 0;
+        const func = wip.function;
+        const subprogram = builder.debugSubprogram(
+            try self.debugFileFor(builder, loc.file),
+            name,
+            linkage_name,
+            line,
+            line,
+            builder.debugSubroutineType(null) catch return error.OutOfMemory,
+            .{
+                .di_flags = .{ .Artificial = true },
+                .sp_flags = .{
+                    .Definition = true,
+                    .LocalToUnit = func.ptrConst(builder).global.ptrConst(builder).linkage == .internal,
+                },
+            },
+            compile_unit,
+        ) catch return error.OutOfMemory;
+        func.setSubprogram(subprogram, builder);
+        wip.debug_location = .{ .location = .{
+            .line = 0,
+            .column = 0,
+            .scope = subprogram.toOptional(),
+            .inlined_at = .none,
+        } };
+    }
+
+    fn beginEntrypointWrapperDebugInfo(self: *MonoLlvmCodeGen, symbol_name: []const u8, entry_proc: LirProcSpecId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        if (builder.strip) return;
+        const name = builder.metadataString(symbol_name) catch return error.OutOfMemory;
+        try self.beginGeneratedFunctionDebugInfo(name, name, self.store.procLoc(entry_proc));
     }
 
     fn procDebugName(
@@ -2274,6 +2326,10 @@ pub const MonoLlvmCodeGen = struct {
         var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = driver.function, .strip = builder.strip }) catch return error.OutOfMemory;
         defer wip.deinit();
         self.wip = &wip;
+        if (!builder.strip) {
+            const name = builder.metadataString(driver.function.name(builder).slice(builder).?) catch return error.OutOfMemory;
+            try self.beginGeneratedFunctionDebugInfo(name, name, .none);
+        }
         const ptr_ty = try self.ptrType();
         const pending_ptr = self.tail_pending_ptr.?;
         const args_ptr = self.tail_args_ptr.?;
@@ -2657,6 +2713,11 @@ pub const MonoLlvmCodeGen = struct {
         var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = packed_fn, .strip = builder.strip }) catch return error.OutOfMemory;
         defer wip.deinit();
         self.wip = &wip;
+        if (!builder.strip) try self.beginGeneratedFunctionDebugInfo(
+            try self.procDebugName(builder, proc_id, proc),
+            try self.procSymbolDebugName(builder, proc_id, proc),
+            self.store.procLoc(proc_id),
+        );
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
         if (self.stack_checks) try self.emitStackCheck(packed_fn);
@@ -3237,10 +3298,11 @@ pub const MonoLlvmCodeGen = struct {
             self.rc_arg_scratch = outer_rc_scratch;
         }
 
-        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = wrapper, .strip = true }) catch return error.OutOfMemory;
+        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = wrapper, .strip = builder.strip }) catch return error.OutOfMemory;
         defer wip.deinit();
         self.wip = &wip;
         self.rc_arg_scratch = null;
+        if (entry_proc) |proc_id| try self.beginEntrypointWrapperDebugInfo(symbol_name, proc_id);
 
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
@@ -3348,6 +3410,7 @@ pub const MonoLlvmCodeGen = struct {
         defer wip.deinit();
         self.wip = &wip;
         self.rc_arg_scratch = null;
+        try self.beginEntrypointWrapperDebugInfo(symbol_name, entry_proc);
 
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
@@ -3571,8 +3634,24 @@ pub const MonoLlvmCodeGen = struct {
     /// block's length for every use of the frame register in that block.
     fn allocFrameSlots(self: *MonoLlvmCodeGen, proc: LirProcSpec) Error!void {
         self.frame_runs.clearRetainingCapacity();
+        self.frame_callable_locals.clearRetainingCapacity();
         self.frame_slots = .none;
         const frame_locals = self.store.getLocalSpan(proc.frame_locals);
+        for (0..frame_locals.len) |i| {
+            const local = GuardedList.at(frame_locals, i);
+            const dyn = self.localDyn(local) orelse continue;
+            if (dyn.storage != .frame_callable) continue;
+            try self.frame_callable_locals.append(self.allocator, local);
+            const local_slot = &self.local_slots[@backingInt(local)];
+            if (local_slot.allocated) continue;
+            local_slot.* = .{
+                .ptr = try self.allocEntryBlockSlot(.i8, self.targetWordSize(), self.targetPointerAlignment(), "frame_callable"),
+                .layout_idx = self.store.getLocal(local).layout_idx,
+                .size = self.targetWordSize(),
+                .alignment = self.targetPointerAlignment(),
+                .allocated = true,
+            };
+        }
         var count: u32 = 0;
         for (0..frame_locals.len) |i| {
             const local = GuardedList.at(frame_locals, i);
@@ -4556,6 +4635,7 @@ pub const MonoLlvmCodeGen = struct {
                     assign.on_copy,
                     assign.reuse,
                     assign.reuse_unique,
+                    assign.frame,
                 );
                 try work.append(wa, .{ .node = assign_stmt.next });
             },
@@ -5216,6 +5296,7 @@ pub const MonoLlvmCodeGen = struct {
         on_copy: lir.LIR.ErasedCallableOnDrop,
         reuse: ?LocalId,
         reuse_unique: bool,
+        frame: bool,
     ) Error!void {
         try self.prepareLocalWrite(target);
         if (capture) |capture_local| try self.materializeLocalIfDeferred(capture_local);
@@ -5273,7 +5354,26 @@ pub const MonoLlvmCodeGen = struct {
             );
         } else blk: {
             const payload_size: u64 = builtins.erased_callable.payloadSizeFor(self.targetWordSize(), capture_size);
-            const fresh_ptr = try self.callBuiltin(
+            const fresh_ptr = if (frame) frame_blk: {
+                // The callable lives in an entry-block slot of this
+                // statement's own, whose refcount word is the frame marker.
+                const prefix: u32 = builtins.erased_callable.payload_alignment;
+                const storage = try self.allocEntryBlockSlot(
+                    .i8,
+                    @intCast(prefix + payload_size),
+                    LlvmBuilder.Alignment.fromByteUnits(builtins.erased_callable.payload_alignment),
+                    "frame_callable",
+                );
+                const word = self.targetWordSize();
+                const wip = self.wip orelse return error.CompilationFailed;
+                _ = wip.store(
+                    .normal,
+                    builder.intValue(self.ptrSizedIntType(), builtins.utils.targetRefcountFrame(word)) catch return error.OutOfMemory,
+                    try self.offsetPtr(storage, prefix - word),
+                    LlvmBuilder.Alignment.fromByteUnits(word),
+                ) catch return error.OutOfMemory;
+                break :frame_blk try self.offsetPtr(storage, prefix);
+            } else try self.callBuiltin(
                 .allocate_with_refcount,
                 ptr_ty,
                 &.{ self.ptrSizedIntType(), .i32, .i1 },
@@ -12256,7 +12356,24 @@ pub const MonoLlvmCodeGen = struct {
         for (self.frame_runs.items) |run| {
             total = try self.callBoxyRuntime("roc_desc_frame_run_size", usize_ty, &.{ ptr_ty, .i32, usize_ty }, &.{ try self.wordValue(run.desc), try self.intValue(.i32, run.count), total });
         }
+        // Each frame callable's storage: 16-byte aligned, its data pointer
+        // after the 16-byte prefix ending in its refcount word, then the
+        // header and the capture record its descriptor sizes.
+        const callable_offsets = try self.allocator.alloc(LlvmBuilder.Value, self.frame_callable_locals.items.len);
+        defer self.allocator.free(callable_offsets);
+        const prefix: u32 = builtins.erased_callable.payload_alignment;
+        for (self.frame_callable_locals.items, callable_offsets) |local, *offset_value| {
+            const aligned = wip.bin(.@"and", wip.bin(.add, total, try self.intValue(usize_ty, prefix - 1), "") catch return error.OutOfMemory, try self.intValue(usize_ty, -@as(i64, prefix)), "") catch return error.OutOfMemory;
+            offset_value.* = wip.bin(.add, aligned, try self.intValue(usize_ty, prefix), "") catch return error.OutOfMemory;
+            const record_size = try self.loadDescField(try self.wordValue(self.localDyn(local).?.desc), desc_size_offset);
+            const header_end = wip.bin(.add, offset_value.*, try self.intValue(usize_ty, builtins.erased_callable.captureOffset(word)), "") catch return error.OutOfMemory;
+            total = wip.bin(.add, header_end, record_size, "") catch return error.OutOfMemory;
+        }
         const region = wip.alloca(.normal, .i8, total, LlvmBuilder.Alignment.fromByteUnits(collections.max_roc_alignment.toByteUnits()), .default, "dyn_region") catch return error.OutOfMemory;
+        for (self.frame_callable_locals.items, callable_offsets) |local, offset_value| {
+            const address = wip.gep(.inbounds, .i8, region, &.{offset_value}, "") catch return error.OutOfMemory;
+            try self.storePointer(self.slot(local).ptr, address);
+        }
         var offset = try self.intValue(usize_ty, 0);
         for (self.frame_runs.items) |run| {
             offset = try self.callBoxyRuntime("roc_desc_frame_place_run", usize_ty, &.{ ptr_ty, .i32, ptr_ty, usize_ty, ptr_ty }, &.{
@@ -12479,6 +12596,14 @@ pub const MonoLlvmCodeGen = struct {
                         try self.wordValue(reuse),
                         try self.intValue(.i8, @intFromBool(c.reuse_unique)),
                         try self.nullPtr(),
+                        try self.nullPtr(),
+                        try self.nullPtr(),
+                    }));
+                } else if (c.frame) |frame| {
+                    try self.bindWord(target, try self.callBoxyRuntime("roc_desc_closure_frame", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{
+                        worker.toValue(builder),
+                        try self.bytesAddress(c.capture),
+                        try self.dynAddress(frame),
                         try self.nullPtr(),
                         try self.nullPtr(),
                     }));
@@ -13197,9 +13322,6 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitRcHelperErasedCallableIncref(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, count_value: LlvmBuilder.Value, atomicity: RcAtomicity) Error!void {
         const payload_ptr = try self.loadPointer(value_ptr);
-        // An erased-callable incref is a plain data-pointer incref on the
-        // payload allocation, so the single-thread mode uses the data-pointer
-        // entry directly.
         try self.callBuiltinVoid(
             LowLevelBuiltins.rcHelper(.erased_callable_incref, tableAtomicity(atomicity)),
             &.{ try self.ptrType(), self.ptrSizedIntType() },
@@ -15812,6 +15934,62 @@ fn printedFunction(ir: []const u8, name: []const u8) ?[]const u8 {
         start = line_end;
     }
     return null;
+}
+
+test "issue 13125: generated functions that call procs have debug subprograms" {
+    // Wrappers and adapters around a proc need a subprogram, or LLVM drops the
+    // locations of the proc code it inlines into them; the verifier then also
+    // requires a location on each of their calls.
+    const gpa = std.testing.allocator;
+    var store = lir.LirStore.init(gpa);
+    defer store.deinit();
+    var layouts = try layout.Store.init(gpa, .u64);
+    defer layouts.deinit();
+    try store.setSourceFiles(&.{.{ .name = "main", .qualified_name = "main", .module_identity = @splat(0) }});
+    const arg = try store.addLocal(.{ .layout_idx = .i64 });
+    const args = try store.addLocalSpan(&.{arg});
+    const body = try store.addCFStmt(.{ .ret = .{ .value = arg } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = lir.LIR.Symbol.fromRaw(0),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
+        .args = args,
+        .frame_locals = args,
+        .body = .some(body),
+        .ret_layout = .i64,
+    }, .{ .file = 0, .line = 3, .column = 1 });
+    var symbol_buf: [lir.LIR.ProcIdentity.symbol_name_len]u8 = undefined;
+    const adapter_name = store.getProcSpec(proc).identity.writeSymbolName(&symbol_buf);
+
+    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .x86_64, .os_tag = .linux });
+    inline for (.{ MonoLlvmCodeGen.ProgramKind.platform, MonoLlvmCodeGen.ProgramKind.in_process }) |program_kind| {
+        var codegen = MonoLlvmCodeGen.initForLinkedObject(gpa, &store, target);
+        defer codegen.deinit();
+        codegen.layout_store = &layouts;
+        codegen.program_kind = program_kind;
+        codegen.emit_debug_info = true;
+        var ir: std.Io.Writer.Allocating = .init(gpa);
+        defer ir.deinit();
+        try codegen.printEntrypointModule("issue_13125", &.{.{
+            .symbol_name = "roc_main",
+            .proc = proc,
+            .arg_layouts = &.{.i64},
+            .ret_layout = .i64,
+        }}, &ir.writer);
+
+        for ([_][]const u8{ "roc_main", adapter_name }) |name| {
+            const function = printedFunction(ir.written(), name) orelse return error.TestUnexpectedResult;
+            var lines = std.mem.splitScalar(u8, function, '\n');
+            const define_line = lines.first();
+            try std.testing.expect(std.mem.find(u8, define_line, " !dbg !") != null);
+            var calls: usize = 0;
+            while (lines.next()) |line| {
+                if (std.mem.find(u8, line, "call ") == null) continue;
+                calls += 1;
+                try std.testing.expect(std.mem.find(u8, line, ", !dbg !") != null);
+            }
+            try std.testing.expect(calls > 0);
+        }
+    }
 }
 
 test "issue 12505: addressed Bool alias materializes its SSA source" {

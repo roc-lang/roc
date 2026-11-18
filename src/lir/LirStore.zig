@@ -1296,6 +1296,12 @@ pub fn setProcDebugName(self: *Self, id: LirProcSpecId, name: []const u8) Alloca
     self.setProcDebugNameIndex(id, try self.insertString(name));
 }
 
+/// Record the source location of a proc added before its body was known.
+pub fn setProcLoc(self: *Self, id: LirProcSpecId, loc: base.SourceLoc) void {
+    self.assertBodyMetadataImmutable();
+    self.proc_locs.set(@backingInt(id), loc);
+}
+
 /// Copy proc source metadata from one proc to another, for compiler-generated variants.
 pub fn copyProcDebugInfo(self: *Self, dst: LirProcSpecId, src: LirProcSpecId) Allocator.Error!void {
     self.proc_locs.set(@backingInt(dst), self.proc_locs.get(@backingInt(src)));
@@ -2302,11 +2308,12 @@ pub fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
             const row = self.stmtRow(dyn.data);
             if (row == .table_entry) self.shapes.static_literal = true;
             if (row == .call_erased) self.shapes.erased_call = true;
+            if (row == .closure) self.shapes.erased_pack = true;
         },
         .assign_call_erased => self.shapes.erased_call = true,
+        .assign_packed_erased_fn => self.shapes.erased_pack = true,
         .init_uninitialized,
         .assign_ref,
-        .assign_packed_erased_fn,
         .assign_list,
         .store_struct,
         .store_tag,

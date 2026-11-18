@@ -1726,6 +1726,10 @@ const VariantTable = struct {
             .rc_ret_unique = source_spec.rc_ret_unique,
             .rc_ret_unique_fields = source_spec.rc_ret_unique_fields,
             .rc_ret_conditions = source_spec.rc_ret_conditions,
+            // The defining object solves a worker and its published variant
+            // to one pair of masks.
+            .nonescaping_fn_params = source_spec.nonescaping_fn_params,
+            .capture_reuse_fn_params = source_spec.capture_reuse_fn_params,
         }, store.procLoc(callee));
         try store.copyProcDebugInfo(variant, callee);
         return variant;
@@ -2829,6 +2833,7 @@ const Inserter = struct {
                             .frozen_capture_layout = assign.frozen_capture_layout,
                             .reuse = assign.reuse,
                             .reuse_unique = step.reuse_unique,
+                            .frame = assign.frame,
                         }),
                         .next = next,
                     } }, origin);
@@ -7799,7 +7804,12 @@ const Inserter = struct {
         if (self.dismantles.completeTakeRoot(receipt.projection) != null) return null;
         if (self.dismantles.ownedOnlyContainerOf(receipt.place.root) != null and
             !self.owned_binding_override.contains(receipt.place.root)) return null;
-        return receipt;
+        // A tag-union container's fields are numbered in its payload view,
+        // which holds no unit: the union's unit is the resource whose residual
+        // mask a restituting edge refills.
+        var resolved = receipt;
+        resolved.place.root = self.unitOf(receipt.place.root);
+        return resolved;
     }
 
     /// The dismantle plan for this local's release in the current emission,

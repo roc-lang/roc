@@ -679,6 +679,7 @@ const CustomCase = enum {
     boxy_platform_evaluation,
     boxy_platform_bindings,
     boxy_interface_edits,
+    frame_callee_object_reuse,
     boxy_reused_object_failure,
     issue_11710_shared_object_cache,
     issue_12220_shared_object_cache_literals,
@@ -1459,6 +1460,10 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "issue 13009: Set and Dict keys that are records of ten tag-union fields hash and compare (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=interpreter" }, .roc_file = "test/echo/issue_13009_hash_record_of_tag_unions.roc", .app_args = &.{"ab"}, .stdout_exact = "set 6 True False\ndict 5 Ok(5.0) Ok(4.0) Err(KeyNotFound)\n" } } },
     .{ .id = 0, .suite = .echo, .name = "issue 13009: Set and Dict keys that are records of ten tag-union fields hash and compare (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=dev" }, .roc_file = "test/echo/issue_13009_hash_record_of_tag_unions.roc", .app_args = &.{"ab"}, .stdout_exact = "set 6 True False\ndict 5 Ok(5.0) Ok(4.0) Err(KeyNotFound)\n" } } },
     .{ .id = 0, .suite = .echo, .name = "issue 13009: Set and Dict keys that are records of ten tag-union fields hash and compare (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=speed" }, .roc_file = "test/echo/issue_13009_hash_record_of_tag_unions.roc", .app_args = &.{"ab"}, .stdout_exact = "set 6 True False\ndict 5 Ok(5.0) Ok(4.0) Err(KeyNotFound)\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "match branch alternatives bind their names in constants and at run time (interpreter, --specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/match_alternative_binders.roc", .app_args = &.{ "x", "y" }, .stdout_exact = "a:1 b:2 c:3 d big e small f 12 h { n: 1, s: \"i\" } (3.0, 4.0)k:4 l m:2 big n 7 o [2, 7] 42" } } },
+    .{ .id = 0, .suite = .echo, .name = "match branch alternatives bind their names in constants and at run time (interpreter, --specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=interpreter", "--specialize=yes" }, .roc_file = "test/echo/match_alternative_binders.roc", .app_args = &.{ "x", "y" }, .stdout_exact = "a:1 b:2 c:3 d big e small f 12 h { n: 1, s: \"i\" } (3.0, 4.0)k:4 l m:2 big n 7 o [2, 7] 42" } } },
+    .{ .id = 0, .suite = .echo, .name = "match branch alternatives bind their names in constants and at run time (dev, --specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/match_alternative_binders.roc", .app_args = &.{ "x", "y" }, .stdout_exact = "a:1 b:2 c:3 d big e small f 12 h { n: 1, s: \"i\" } (3.0, 4.0)k:4 l m:2 big n 7 o [2, 7] 42" } } },
+    .{ .id = 0, .suite = .echo, .name = "match branch alternatives bind their names in constants and at run time (dev, --specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=dev", "--specialize=yes" }, .roc_file = "test/echo/match_alternative_binders.roc", .app_args = &.{ "x", "y" }, .stdout_exact = "a:1 b:2 c:3 d big e small f 12 h { n: 1, s: \"i\" } (3.0, 4.0)k:4 l m:2 big n 7 o [2, 7] 42" } } },
     .{ .id = 0, .suite = .echo, .name = "a list pattern nested in a record pattern reads its list through one binding (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=interpreter" }, .roc_file = "test/echo/nested_list_pattern_reads_inner_list.roc", .app_args = &.{ "x", "y" }, .stdout_exact = "[2, 2, 3] [4.0]\n[] [7.0, 8.0, 9.0]\n" } } },
     .{ .id = 0, .suite = .echo, .name = "a list pattern nested in a record pattern reads its list through one binding (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=dev" }, .roc_file = "test/echo/nested_list_pattern_reads_inner_list.roc", .app_args = &.{ "x", "y" }, .stdout_exact = "[2, 2, 3] [4.0]\n[] [7.0, 8.0, 9.0]\n" } } },
     .{ .id = 0, .suite = .echo, .name = "issue 13010: a constant whose recursive closure and a sibling closure share captures reads back its values (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=interpreter" }, .roc_file = "test/echo/issue_13010_recursive_const_shared_capture.roc", .app_args = &.{ "x", "y" }, .stdout_exact = "6 19\n" } } },
@@ -1498,6 +1503,7 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "issue 12705: generic method returns inline lambda calling a capturing local (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/issue_12705_generic_method_returns_lambda_calling_capturing_local.roc", .stdout_exact = "xx", .not_contains = &.{.{ .stream = .stderr, .text = "invariant violated" }} } } },
     .{ .id = 0, .suite = .echo, .name = "issue 12705: generic method returns inline lambda calling a capturing local (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/issue_12705_generic_method_returns_lambda_calling_capturing_local.roc", .stdout_exact = "xx", .not_contains = &.{.{ .stream = .stderr, .text = "invariant violated" }} } } },
     .{ .id = 0, .suite = .echo, .name = "issue 12705: generic method returns inline lambda calling a capturing local (dev, --specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=no" }, .roc_file = "test/echo/issue_12705_generic_method_returns_lambda_calling_capturing_local.roc", .stdout_exact = "xx", .not_contains = &.{.{ .stream = .stderr, .text = "invariant violated" }} } } },
+    .{ .id = 0, .suite = .echo, .name = "issue 13024: a field returned to a Try payload is taken again after the join (dev, --specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/issue_13024_restituted_try_payload_field.roc", .stdout_exact = "done\n", .not_contains = &.{.{ .stream = .stderr, .text = "invariant violated" }} } } },
     .{ .id = 0, .suite = .echo, .name = "issue 12569: specialized callables on wasm32", .timeout_ms = 600_000, .body = .{ .custom = .issue_12569_wasm_callables } },
     .{ .id = 0, .suite = .echo, .name = "issue 12569: callable behavior (dev, default)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/issue_12569_specialized_callables.roc", .stdout_exact = "a captured string longer than inline storage: 8\n42\n" } } },
     .{ .id = 0, .suite = .echo, .name = "issue 12569: callable behavior (dev, --specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=yes" }, .roc_file = "test/echo/issue_12569_specialized_callables.roc", .stdout_exact = "a captured string longer than inline storage: 8\n42\n" } } },
@@ -1992,6 +1998,8 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc prints expected output (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache", "--specialize=no" }, .roc_file = "test/echo/all_syntax_test.roc", .stdout_exact = all_syntax_expected_stdout, .stderr_exact = all_syntax_expected_stderr } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc prints expected output (dev backend, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=no" }, .roc_file = "test/echo/all_syntax_test.roc", .stdout_exact = all_syntax_expected_stdout, .stderr_exact = all_syntax_expected_stderr } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: roc test all_syntax_test.roc passes", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/echo/all_syntax_test.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }} } } },
+    // The multi-module fixture of ci/perf/bench.roc; keeps it compiling.
+    .{ .id = 0, .suite = .echo, .name = "echo platform: perf fixture test/perf/all_syntax_modules runs (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/perf/all_syntax_modules/main.roc", .contains = &.{.{ .stream = .stdout, .text = "\"Names: Alice, Bob, Charlie\"" }} } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11737 imported callable contracts (interpreter, specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/issue_11737_callable_contracts_runtime.roc", .stdout_exact = "((\"xxx\", \"a\"), (\"xxx\", 42))\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11737 independent nested dispatch (interpreter, specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/issue_11737_independent_nested_dispatch.roc", .stdout_exact = "(\"aaa\", [[1], [1], [1]])\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11737 imported callable contracts (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/issue_11737_callable_contracts_runtime.roc", .stdout_exact = "((\"xxx\", \"a\"), (\"xxx\", 42))\n" } } },
@@ -3001,6 +3009,13 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "local closures called only directly keep their results (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/cli/BoxyDirectLocalClosures.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (13) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "local closures called only directly keep their results (boxy interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/BoxyDirectLocalClosures.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (13) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "local closures called only directly keep their results (boxy dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/BoxyDirectLocalClosures.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (13) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    // Self tail calls of generic functions that change a parameter of
+    // variable type: under `--specialize=no` the loop carries the parameter in
+    // its frame (design.md "Tail Return Continuations").
+    .{ .id = 0, .suite = .subcommands, .name = "generic self tail calls changing a dynamic parameter keep their results (interpreter)", .backend = .interpreter, .timeout_ms = 600_000, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/cli/BoxyGenericTailLoops.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (9) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "generic self tail calls changing a dynamic parameter keep their results (dev)", .backend = .dev, .timeout_ms = 600_000, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/cli/BoxyGenericTailLoops.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (9) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "generic self tail calls changing a dynamic parameter keep their results (boxy interpreter)", .backend = .interpreter, .timeout_ms = 600_000, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/BoxyGenericTailLoops.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (9) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "generic self tail calls changing a dynamic parameter keep their results (boxy dev)", .backend = .dev, .timeout_ms = 600_000, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/BoxyGenericTailLoops.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (9) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "polymorphic recursion is a type error", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/PolymorphicRecursion.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "polymorphic recursion" }, .{ .stream = .stderr, .text = "4 errors" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "polymorphic recursion is rejected without specializing forever (specialized, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=yes", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/PolymorphicRecursion.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "polymorphic recursion" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "invariant" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "polymorphic recursion is rejected the same way without specialization (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/PolymorphicRecursion.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "polymorphic recursion" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "invariant" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -4107,6 +4122,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no build files one object per module and rebuilds only edited modules", .timeout_ms = 600_000, .body = .{ .custom = .boxy_module_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "boxy per-module objects: a module's object is the same whether or not an importer calls its published outcome variant", .timeout_ms = 600_000, .body = .{ .custom = .boxy_published_restitution } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no objects depend on their imports' interfaces, not their implementations", .timeout_ms = 900_000, .body = .{ .custom = .boxy_interface_edits } },
+    .{ .id = 0, .suite = .subcommands, .name = "a module's object is the same whether an importer passes it a frame callable or a heap one", .timeout_ms = 900_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .frame_callee_object_reuse } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no compile-time evaluation classifies a rejection inside a reused module object", .timeout_ms = 900_000, .body = .{ .custom = .boxy_reused_object_failure } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12220: shared object cache keeps each module's list literals in a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_12220_shared_object_cache_literals } },
@@ -4645,14 +4661,14 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "a literal a function body keeps is read from the image (dev, specializing)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=yes" }, .roc_file = "test/alloc-count/app_inline_literal.roc", .contains = &.{.{ .stream = .stderr, .text = "sum: 21000, labels: 3000, allocations: 0 2 2000" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "a literal a function body keeps is read from the image (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_inline_literal.roc", .contains = &.{.{ .stream = .stderr, .text = "sum: 21000, labels: 3000, allocations: 0 2 2000" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "a literal a function body keeps is read from the image (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/alloc-count/app_inline_literal.roc", .contains = &.{.{ .stream = .stderr, .text = "sum: 21000, labels: 3000, allocations: 0 2 2000" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12836: boxing a capture-free callable does not heap-allocate (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_box_capture_free_fn.roc", .contains = &.{.{ .stream = .stderr, .text = "results: 1000 2000 499500, allocations: capture-free lambda 0, top-level function 0, capturing closure 1000" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12836: boxing a capture-free callable does not heap-allocate (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/alloc-count/app_box_capture_free_fn.roc", .contains = &.{.{ .stream = .stderr, .text = "results: 1000 2000 499500, allocations: capture-free lambda 0, top-level function 0, capturing closure 1000" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12836: boxing a capture-free callable does not heap-allocate (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_box_capture_free_fn.roc", .contains = &.{.{ .stream = .stderr, .text = "results: 1000 2000 499500, allocations: capture-free lambda 0, top-level function 0, capturing closure 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12836: boxing a capture-free callable does not heap-allocate (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/alloc-count/app_box_capture_free_fn.roc", .contains = &.{.{ .stream = .stderr, .text = "results: 1000 2000 499500, allocations: capture-free lambda 0, top-level function 0, capturing closure 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12836: boxing a capture-free callable does not heap-allocate (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_box_capture_free_fn.roc", .contains = &.{.{ .stream = .stderr, .text = "results: 1000 2000 499500, allocations: capture-free lambda 0, top-level function 0, capturing closure 1000" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12836: boxing a capture-free callable does not heap-allocate (size)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--no-cache" }, .roc_file = "test/alloc-count/app_box_capture_free_fn.roc", .contains = &.{.{ .stream = .stderr, .text = "results: 1000 2000 499500, allocations: capture-free lambda 0, top-level function 0, capturing closure 1000" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12836: boxing a capture-free callable does not heap-allocate (dev, --specialize=no)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_box_capture_free_fn.roc", .contains = &.{.{ .stream = .stderr, .text = "results: 1000 2000 499500, allocations: capture-free lambda 0, top-level function 0, capturing closure 1000" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12836: boxing a capture-free callable does not heap-allocate (interpreter, --specialize=no)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_box_capture_free_fn.roc", .contains = &.{.{ .stream = .stderr, .text = "results: 1000 2000 499500, allocations: capture-free lambda 0, top-level function 0, capturing closure 1000" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12836: boxing a capture-free callable does not heap-allocate (speed, --specialize=no)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_box_capture_free_fn.roc", .contains = &.{.{ .stream = .stderr, .text = "results: 1000 2000 499500, allocations: capture-free lambda 0, top-level function 0, capturing closure 1000" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12836: boxing a capture-free callable does not heap-allocate (size, --specialize=no)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_box_capture_free_fn.roc", .contains = &.{.{ .stream = .stderr, .text = "results: 1000 2000 499500, allocations: capture-free lambda 0, top-level function 0, capturing closure 1000" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12836: boxing a capture-free callable does not heap-allocate (size)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--no-cache" }, .roc_file = "test/alloc-count/app_box_capture_free_fn.roc", .contains = &.{.{ .stream = .stderr, .text = "results: 1000 2000 499500, allocations: capture-free lambda 0, top-level function 0, capturing closure 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12836: boxing a capture-free callable does not heap-allocate (dev, --specialize=no)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_box_capture_free_fn.roc", .contains = &.{.{ .stream = .stderr, .text = "results: 1000 2000 499500, allocations: capture-free lambda 0, top-level function 0, capturing closure 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12836: boxing a capture-free callable does not heap-allocate (interpreter, --specialize=no)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_box_capture_free_fn.roc", .contains = &.{.{ .stream = .stderr, .text = "results: 1000 2000 499500, allocations: capture-free lambda 0, top-level function 0, capturing closure 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12836: boxing a capture-free callable does not heap-allocate (speed, --specialize=no)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_box_capture_free_fn.roc", .contains = &.{.{ .stream = .stderr, .text = "results: 1000 2000 499500, allocations: capture-free lambda 0, top-level function 0, capturing closure 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12836: boxing a capture-free callable does not heap-allocate (size, --specialize=no)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_box_capture_free_fn.roc", .contains = &.{.{ .stream = .stderr, .text = "results: 1000 2000 499500, allocations: capture-free lambda 0, top-level function 0, capturing closure 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "erased tail call: recording a pending call keeps small arguments inline (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_erased_tail_call.roc", .contains = &.{.{ .stream = .stderr, .text = "results: 1000 2000 10000, allocations: one argument 0, string argument 0, wide chain 2000 with 2" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "erased tail call: recording a pending call keeps small arguments inline (dev, --specialize=no)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_erased_tail_call.roc", .contains = &.{.{ .stream = .stderr, .text = "results: 1000 2000 10000, allocations: one argument 0, string argument 0, wide chain 2000 with 2" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "erased tail call: recording a pending call keeps small arguments inline (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/alloc-count/app_erased_tail_call.roc", .contains = &.{.{ .stream = .stderr, .text = "results: 1000 2000 10000, allocations: one argument 0, string argument 0, wide chain 2000 with 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
@@ -4677,6 +4693,8 @@ const subcommand_cases = [_]CliCase{
     // Values").
     .{ .id = 0, .suite = .subcommands, .name = "boxy local closures called only directly allocate nothing (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_direct_local_closures.roc", .contains = &.{.{ .stream = .stderr, .text = "direct local closure allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "boxy local closures called only directly allocate nothing (boxy size)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_direct_local_closures.roc", .contains = &.{.{ .stream = .stderr, .text = "direct local closure allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy generic arithmetic and range literals allocate nothing per step (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_generic_arith_loops.roc", .contains = &.{.{ .stream = .stderr, .text = "generic recursion: 79200 0 allocations; range of 116: 6670 118 allocations" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy generic arithmetic and range literals allocate nothing per step (boxy size)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_generic_arith_loops.roc", .contains = &.{.{ .stream = .stderr, .text = "generic recursion: 79200 0 allocations; range of 116: 6670 118 allocations" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12306: List.sort_with does not heap-allocate (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=yes" }, .roc_file = "test/alloc-count/app_list_sort_with.roc", .contains = &.{.{ .stream = .stderr, .text = "sorted length: 8, sort allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12306: List.sort_with does not heap-allocate (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_list_sort_with.roc", .contains = &.{.{ .stream = .stderr, .text = "sorted length: 8, sort allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     // Specialized: under `.boxy` each predicate that captures `offset` is a
@@ -4800,6 +4818,10 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 13002: Dict and Set inserts of new keys update in place (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_dict_set_insert.roc", .contains = &.{.{ .stream = .stderr, .text = "2016 inserts: Dict allocations fewer than half the inserts, Set allocations fewer than half the inserts" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "a Dict overwriting present keys takes the entry list out of the lookup result and updates it in place (dev, --specialize=no)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_dict_overwrite_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "2016 overwrites: allocations fewer than the overwrites" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "a Dict overwriting present keys takes the entry list out of the lookup result and updates it in place (speed, --specialize=no)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_dict_overwrite_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "2016 overwrites: allocations fewer than the overwrites" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "a capturing closure passed only to parameters that keep it is built in its caller's frame (dev, --specialize=no)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_frame_closures.roc", .contains = &.{.{ .stream = .stderr, .text = "frame closures: keep_if 0, sort_with 0, Dict.update 0, List.contains 0, cross-module 0, Try.on_err 1" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "a capturing closure passed only to parameters that keep it is built in its caller's frame (interpreter, --specialize=no)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_frame_closures.roc", .contains = &.{.{ .stream = .stderr, .text = "frame closures: keep_if 0, sort_with 0, Dict.update 0, List.contains 0, cross-module 0, Try.on_err 1" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "a capturing closure passed only to parameters that keep it is built in its caller's frame (speed, --specialize=no)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_frame_closures.roc", .contains = &.{.{ .stream = .stderr, .text = "frame closures: keep_if 0, sort_with 0, Dict.update 0, List.contains 0, cross-module 0, Try.on_err 1" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "a capturing closure passed only to parameters that keep it is built in its caller's frame (size, --specialize=no)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_frame_closures.roc", .contains = &.{.{ .stream = .stderr, .text = "frame closures: keep_if 0, sort_with 0, Dict.update 0, List.contains 0, cross-module 0, Try.on_err 1" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 13002: Dict.update of present keys allocates nothing (dev, --specialize=no)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_dict_update.roc", .contains = &.{.{ .stream = .stderr, .text = "update allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "test/alloc-count/app_dict_insert_overwrite.roc: overwriting an existing key allocates nothing (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_dict_insert_overwrite.roc", .contains = &.{.{ .stream = .stderr, .text = "entries: 1016, overwrite allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12195: Dict.update of an existing key allocates nothing (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_dict_update.roc", .contains = &.{.{ .stream = .stderr, .text = "entries: 1016, update allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
@@ -4845,10 +4867,10 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a list allocates nothing per element under --specialize=no (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_list_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "totals: 64 1024, loop allocations: 0 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a list allocates nothing per element under --specialize=no (size)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_list_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "totals: 64 1024, loop allocations: 0 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a list allocates nothing per element under --specialize=no (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_list_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "totals: 64 1024, loop allocations: 0 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a chain of iterator adapters allocates nothing per element under --specialize=no (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_chain_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "sums: 2246 30086, allocations: 1 1" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a chain of iterator adapters allocates nothing per element under --specialize=no (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_chain_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "sums: 2246 30086, allocations: 1 1" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a chain of iterator adapters allocates nothing per element under --specialize=no (size)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_chain_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "sums: 2246 30086, allocations: 1 1" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a chain of iterator adapters allocates nothing per element under --specialize=no (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_chain_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "sums: 2246 30086, allocations: 1 1" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a chain of iterator adapters allocates nothing per element under --specialize=no (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_chain_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "sums: 2246 30086, allocations: 0 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a chain of iterator adapters allocates nothing per element under --specialize=no (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_chain_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "sums: 2246 30086, allocations: 0 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a chain of iterator adapters allocates nothing per element under --specialize=no (size)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_chain_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "sums: 2246 30086, allocations: 0 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a chain of iterator adapters allocates nothing per element under --specialize=no (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_chain_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "sums: 2246 30086, allocations: 0 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     // Specialized: the `for` loop itself allocates nothing under `.boxy`, but
     // stepping the `Str.iter_utf8` and `List.iter_rev` iterator values packs a
     // fresh closure each step (design.md "Iterator `for`"), and the derived
@@ -7114,6 +7136,7 @@ fn runCustomCase(
         .boxy_module_object_cache => customBoxyModuleObjectCache(io, allocator, &env, &timer, timeout_ms),
         .boxy_published_restitution => customBoxyPublishedRestitution(io, allocator, &env, &timer, timeout_ms),
         .boxy_interface_edits => customBoxyInterfaceEdits(io, allocator, &env, &timer, timeout_ms),
+        .frame_callee_object_reuse => customFrameCalleeObjectReuse(io, allocator, &env, &timer, timeout_ms),
         .boxy_reused_object_failure => customBoxyReusedObjectFailure(io, allocator, &env, &timer, timeout_ms),
         .issue_11710_shared_object_cache => customIssue11710SharedObjectCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12220_shared_object_cache_literals => customIssue12220SharedObjectCacheLiterals(io, allocator, &env, &timer, timeout_ms),
@@ -12177,6 +12200,42 @@ fn boxyObjectCount(io: std.Io, allocator: Allocator, cache_root: []const u8) Cli
     return objects;
 }
 
+/// A callee's non-escaping function parameters are a function of its own
+/// body (design.md "Frame Callables"), so its object is the same whether an
+/// importer passes it a callable built in the importer's frame or a heap
+/// one. The second app restores FrameCallee's object from the first app's
+/// build, and `ROC_VERIFY_BOXY_OBJECT_REUSE` rebuilds it in the second
+/// app's compilation and requires the same bytes.
+fn customFrameCalleeObjectReuse(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err| return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
+    defer isolated.env_map.deinit();
+    const cache_root = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "frame_callee_cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the cache root: {}", .{err});
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        isolated.env_map.put(key, cache_root) catch |err| return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
+    }
+    isolated.env_map.put("ROC_VERIFY_BOXY_OBJECT_REUSE", "1") catch |err| return customInfraFailure(allocator, timer, "failed to enable verification: {}", .{err});
+    const apps = [_]struct { file: []const u8, stderr: []const u8 }{
+        .{ .file = "test/alloc-count/app_frame_closures.roc", .stderr = "cross-module 0" },
+        .{ .file = "test/alloc-count/app_frame_callee_heap.roc", .stderr = "heap callee: " },
+    };
+    for (apps) |app| {
+        const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "frame callee test timed out");
+        const ran = runRocInEnv(io, allocator, &isolated, &.{ "--opt=dev", "--specialize=no" }, app.file, .relative, &.{}, null, remaining) catch |err|
+            return customInfraFailure(allocator, timer, "run: {}", .{err});
+        if (!processSucceeded(ran.term) or std.mem.find(u8, ran.stderr, app.stderr) == null or std.mem.find(u8, ran.stderr, "Expect failed") != null) {
+            return failureFromRun(allocator, timer, ran, "an app passing FrameCallee a callable did not run as expected");
+        }
+    }
+    return null;
+}
+
 /// A module's object depends on its imports' interfaces, so an edit rebuilds
 /// exactly the modules that edit can reach (design.md "Caching Under
 /// `.boxy`"). Each run also rebuilds every object it restores and compares
@@ -14245,30 +14304,30 @@ fn wasmSectionPayload(bytes: []const u8, wanted: u8) (std.Io.Reader.TakeLeb128Er
     return null;
 }
 
-/// How many segments of the data section `section` hold `text` in their
-/// bytes. An active segment's offset is an `i32.const` expression, the only
-/// form a wasm32 link writes.
-fn countDataSegmentsContaining(section: []const u8, text: []const u8) (std.Io.Reader.TakeLeb128Error || error{UnsupportedDataSegment})!u32 {
-    var reader = std.Io.Reader.fixed(section);
-    const segment_count = try reader.takeLeb128(u32);
-    var containing: u32 = 0;
-    for (0..segment_count) |_| {
+/// The index of the first segment in a wasm data section payload whose bytes
+/// contain `needle`, or null when none does.
+fn wasmDataSegmentContaining(data_section: []const u8, needle: []const u8) (std.Io.Reader.TakeLeb128Error || error{UnsupportedDataSegment})!?u32 {
+    var reader = std.Io.Reader.fixed(data_section);
+    const count = try reader.takeLeb128(u32);
+    for (0..count) |index| {
+        // Flags 0: active in memory 0. 1: passive, with no offset.
+        // 2: active in an explicitly indexed memory.
         const flags = try reader.takeLeb128(u32);
-        switch (flags) {
-            0, 2 => {
-                if (flags == 2) _ = try reader.takeLeb128(u32);
-                if (try reader.takeByte() != 0x41) return error.UnsupportedDataSegment;
-                _ = try reader.takeLeb128(i32);
-                if (try reader.takeByte() != 0x0b) return error.UnsupportedDataSegment;
-            },
-            1 => {},
-            else => return error.UnsupportedDataSegment,
-        }
-        const size = try reader.takeLeb128(u32);
-        const bytes = try reader.take(size);
-        if (std.mem.find(u8, bytes, text) != null) containing += 1;
+        if (flags > 2) return error.UnsupportedDataSegment;
+        if (flags == 2) _ = try reader.takeLeb128(u32);
+        if (flags != 1) try skipWasmI32ConstExpr(&reader);
+        const len = try reader.takeLeb128(u32);
+        const bytes = try reader.take(len);
+        if (std.mem.find(u8, bytes, needle) != null) return @intCast(index);
     }
-    return containing;
+    return null;
+}
+
+/// Skip an `i32.const <n> end` offset expression.
+fn skipWasmI32ConstExpr(reader: *std.Io.Reader) (std.Io.Reader.TakeLeb128Error || error{UnsupportedDataSegment})!void {
+    if (try reader.takeByte() != 0x41) return error.UnsupportedDataSegment;
+    _ = try reader.takeLeb128(i32);
+    if (try reader.takeByte() != 0x0b) return error.UnsupportedDataSegment;
 }
 
 /// Runtime symbol names can occur in the embedded LIR's data section; only
@@ -15271,13 +15330,13 @@ fn customIssue13028WasmSpeedSmallCopyIsScalar(
 /// Under `--opt=size` on wasm32, every static-data constant reaches the
 /// final link as its own `.rodata.<symbol>` segment. The link drops the ones
 /// nothing references and merges the rest into one standard output segment,
-/// so the fixture's six label strings share one data segment rather than
-/// each being a segment of their own. The segment count of the whole module
-/// is not the measure: the size build's memory packing splits a merged
-/// segment wherever a run of zero bytes is cheaper to leave out, which Boxy's
-/// static descriptors have. The fixture's marker constant is named only by a
-/// branch the optimizer proves dead, so its bytes must be absent from the
-/// module.
+/// rather than giving each constant an active segment of its own, so the
+/// fixture's six label strings all lie in one data segment. Binaryen's memory
+/// packing then splits the merged segment around long runs of zero bytes,
+/// which zero-filled memory already holds, so the module's segment count
+/// depends on where the program's static data has zeros and is not what this
+/// measures. The fixture's marker constant is named only by a branch the
+/// optimizer proves dead, so its bytes must be absent from the module.
 /// https://github.com/roc-lang/roc/issues/13029
 fn customIssue13029WasmSizeStaticDataSegmentsMerged(
     io: std.Io,
@@ -15286,8 +15345,14 @@ fn customIssue13029WasmSizeStaticDataSegmentsMerged(
     timer: *harness.Timer,
     timeout_ms: u64,
 ) ?TestResult {
-    const label_constants = 6;
-    const label_text = "label is too long to be stored inline";
+    const labels = [_][]const u8{
+        "the first label is too long to be stored inline",
+        "the second label is too long to be stored inline",
+        "the third label is too long to be stored inline",
+        "the fourth label is too long to be stored inline",
+        "the fifth label is too long to be stored inline",
+        "the sixth label is too long to be stored inline",
+    };
     const unused_marker = "UNREACHABLE-STATIC-CONSTANT-MARKER";
     const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "static-data.wasm" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
@@ -15311,7 +15376,7 @@ fn customIssue13029WasmSizeStaticDataSegmentsMerged(
     const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
         return customFailure(allocator, timer, "static data wasm execution failed: {}", .{err});
     // The host's input is 21 bytes long, so the program picks label 3.
-    const expected = "the fourth label is too long to be stored inline";
+    const expected = labels[3];
     if (!std.mem.eql(u8, result, expected)) {
         return customFailure(allocator, timer, "static data wasm returned \"{s}\", expected \"{s}\"", .{ result, expected });
     }
@@ -15322,10 +15387,18 @@ fn customIssue13029WasmSizeStaticDataSegmentsMerged(
     const data = wasmSectionPayload(wasm_bytes, 11) catch |err|
         return customFailure(allocator, timer, "failed to read the static data module's sections: {}", .{err});
     const section = data orelse return customFailure(allocator, timer, "the static data module has no data section", .{});
-    const label_segments = countDataSegmentsContaining(section, label_text) catch |err|
-        return customFailure(allocator, timer, "failed to read the static data module's data segments: {}", .{err});
-    if (label_segments != 1) {
-        return customFailure(allocator, timer, "the fixture's {d} label constants lie in {d} data segments, expected 1: static data constants were not merged into standard output segments", .{ label_constants, label_segments });
+    var first_segment: ?u32 = null;
+    for (labels) |label| {
+        const segment = wasmDataSegmentContaining(section, label) catch |err|
+            return customFailure(allocator, timer, "failed to read the static data module's data segments: {}", .{err});
+        const index = segment orelse return customFailure(allocator, timer, "no data segment holds the label \"{s}\"", .{label});
+        const first = first_segment orelse {
+            first_segment = index;
+            continue;
+        };
+        if (index != first) {
+            return customFailure(allocator, timer, "the label \"{s}\" is in data segment {d} and the first label in segment {d}: static data constants were not merged into one standard output segment", .{ label, index, first });
+        }
     }
     if (std.mem.find(u8, wasm_bytes, unused_marker) != null) {
         return customFailure(allocator, timer, "the module holds a static constant nothing references: the link kept it", .{});
