@@ -68,6 +68,10 @@ pub fn Emit(comptime machine_abi: Abi) type {
             /// materialization.
             pub const TAIL_CALL_TARGET_REG = Registers.GeneralReg.IP1;
             pub const TAIL_CALL_DELTA_REG = Registers.GeneralReg.X15;
+            /// Callee-saved register that holds an entrypoint's result pointer.
+            pub const RESULT_PTR_SAVE_REG = Registers.GeneralReg.X19;
+            /// Callee-saved register that holds the RocOps pointer.
+            pub const ROC_OPS_SAVE_REG = Registers.GeneralReg.X20;
 
             /// Align a stack size to the platform's required alignment.
             pub fn alignStackSize(size: u32) u32 {

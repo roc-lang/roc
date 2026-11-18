@@ -1691,18 +1691,8 @@ pub fn LirCodeGen(comptime machine_abi: Abi) type {
 
             // Save the result pointer to a callee-saved register before
             // generating code that might call procedures (which would clobber it).
-            const result_ptr_save_reg = switch (isa) {
-                .aarch64 => aarch64.GeneralReg.X19,
-                .x86_64 => x86_64.GeneralReg.RBX,
-            };
-
-            const arg0_reg = switch (isa) {
-                .aarch64 => aarch64.GeneralReg.X0,
-                .x86_64 => if (comptime machine_abi.isWindows())
-                    x86_64.GeneralReg.RCX
-                else
-                    x86_64.GeneralReg.RDI,
-            };
+            const result_ptr_save_reg = CC.RESULT_PTR_SAVE_REG;
+            const arg0_reg = CC.PARAM_REGS[0];
 
             try self.emitMovRegReg(widths.word_width, result_ptr_save_reg, arg0_reg);
 
@@ -1716,16 +1706,7 @@ pub fn LirCodeGen(comptime machine_abi: Abi) type {
 
             // Remove roc_ops and result_ptr registers from callee_saved_available
             // so the register allocator never uses them as temporaries.
-            switch (isa) {
-                .aarch64 => {
-                    self.codegen.callee_saved_available &= ~(@as(u32, 1) << @backingInt(aarch64.GeneralReg.X20));
-                    self.codegen.callee_saved_available &= ~(@as(u32, 1) << @backingInt(aarch64.GeneralReg.X19));
-                },
-                .x86_64 => {
-                    self.codegen.callee_saved_available &= ~(@as(u32, 1) << @backingInt(x86_64.GeneralReg.R12));
-                    self.codegen.callee_saved_available &= ~(@as(u32, 1) << @backingInt(x86_64.GeneralReg.RBX));
-                },
-            }
+            self.codegen.callee_saved_available &= ~(generalRegBit(CC.ROC_OPS_SAVE_REG) | generalRegBit(CC.RESULT_PTR_SAVE_REG));
 
             const root_proc = try self.compiledProcForId(root_proc_id);
             const final_result = try self.generateCallToCompiledProc(root_proc, &.{}, &.{}, result_layout);
@@ -1829,45 +1810,20 @@ pub fn LirCodeGen(comptime machine_abi: Abi) type {
 
         /// Reserve argument registers so they don't get allocated for temporaries
         fn reserveArgumentRegisters(self: *Self) void {
-            switch (isa) {
-                .aarch64 => {
-                    // Clear X0 and X1 from the free register mask
-                    // X0 = bit 0, X1 = bit 1
-                    self.codegen.free_general &= ~@as(u32, 0b11);
-                    // Reserve X19 (result pointer) and X20 (RocOps pointer) - both callee-saved
-                    // Must mark as used so they get saved/restored in prologue/epilogue
-                    const x19_bit = @as(u32, 1) << @backingInt(aarch64.GeneralReg.X19);
-                    const x20_bit = @as(u32, 1) << @backingInt(aarch64.GeneralReg.X20);
-                    self.codegen.callee_saved_available &= ~(x19_bit | x20_bit);
-                    self.codegen.callee_saved_used |= @as(u32, 1) << @backingInt(aarch64.GeneralReg.X19);
-                    self.codegen.callee_saved_used |= @as(u32, 1) << @backingInt(aarch64.GeneralReg.X20);
-                },
-                .x86_64 => if (comptime machine_abi.isWindows()) {
-                    // Windows x64: Clear RCX and RDX from the free register mask
-                    const rcx_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.RCX);
-                    const rdx_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.RDX);
-                    self.codegen.free_general &= ~(rcx_bit | rdx_bit);
-                    // Reserve RBX (result pointer) and R12 (RocOps pointer) - both callee-saved
-                    // Must mark as used so they get saved/restored in prologue/epilogue
-                    const rbx_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.RBX);
-                    const r12_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.R12);
-                    self.codegen.callee_saved_available &= ~(rbx_bit | r12_bit);
-                    self.codegen.callee_saved_used |= @as(u16, 1) << @backingInt(x86_64.GeneralReg.RBX);
-                    self.codegen.callee_saved_used |= @as(u16, 1) << @backingInt(x86_64.GeneralReg.R12);
-                } else {
-                    // System V (Linux, macOS): Clear RDI and RSI from the free register mask
-                    const rdi_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.RDI);
-                    const rsi_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.RSI);
-                    self.codegen.free_general &= ~(rdi_bit | rsi_bit);
-                    // Reserve RBX (result pointer) and R12 (RocOps pointer) - both callee-saved
-                    // Must mark as used so they get saved/restored in prologue/epilogue
-                    const rbx_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.RBX);
-                    const r12_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.R12);
-                    self.codegen.callee_saved_available &= ~(rbx_bit | r12_bit);
-                    self.codegen.callee_saved_used |= @as(u16, 1) << @backingInt(x86_64.GeneralReg.RBX);
-                    self.codegen.callee_saved_used |= @as(u16, 1) << @backingInt(x86_64.GeneralReg.R12);
-                },
-            }
+            // The first two argument registers carry the result and RocOps
+            // pointers into the entry code.
+            self.codegen.free_general &= ~(generalRegBit(CC.PARAM_REGS[0]) | generalRegBit(CC.PARAM_REGS[1]));
+            // Reserve the callee-saved result-pointer and RocOps save
+            // registers, and mark them used so the prologue and epilogue save
+            // and restore them.
+            const pinned = generalRegBit(CC.RESULT_PTR_SAVE_REG) | generalRegBit(CC.ROC_OPS_SAVE_REG);
+            self.codegen.callee_saved_available &= ~pinned;
+            self.codegen.callee_saved_used |= @intCast(pinned);
+        }
+
+        /// The bit of `reg` in the code generator's register masks.
+        fn generalRegBit(reg: GeneralReg) u32 {
+            return @as(u32, 1) << @backingInt(reg);
         }
 
         fn localMetadata(self: *Self, local: LocalId) lir.Local {
@@ -19180,19 +19136,9 @@ pub fn LirCodeGen(comptime machine_abi: Abi) type {
             self.current_proc_args = proc.args;
             self.current_stmt_id = null;
 
-            // Reserve R12/X20 for roc_ops exactly like standalone lambda compilation.
-            switch (isa) {
-                .x86_64 => {
-                    const r12_bit = @as(u16, 1) << @backingInt(x86_64.GeneralReg.R12);
-                    self.codegen.callee_saved_used |= r12_bit;
-                    self.codegen.callee_saved_available &= ~(@as(u32, 1) << @backingInt(x86_64.GeneralReg.R12));
-                },
-                .aarch64 => {
-                    const x20_bit = @as(u32, 1) << @backingInt(aarch64.GeneralReg.X20);
-                    self.codegen.callee_saved_used |= x20_bit;
-                    self.codegen.callee_saved_available &= ~(@as(u32, 1) << @backingInt(aarch64.GeneralReg.X20));
-                },
-            }
+            // Reserve the RocOps save register exactly like standalone lambda compilation.
+            self.codegen.callee_saved_used |= @intCast(generalRegBit(CC.ROC_OPS_SAVE_REG));
+            self.codegen.callee_saved_available &= ~generalRegBit(CC.ROC_OPS_SAVE_REG);
 
             // PHASE 1: Generate body first (to determine callee_saved_used)
             // Initialize stack_offset to reserve space for callee-saved area

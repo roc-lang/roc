@@ -74,6 +74,10 @@ pub fn Emit(comptime machine_abi: Abi) type {
             /// The stack-pointer distance to the callee's frame. x86_64's
             /// tail calls do not use it; R10 is free for it like R11.
             pub const TAIL_CALL_DELTA_REG = Registers.GeneralReg.R10;
+            /// Callee-saved register that holds an entrypoint's result pointer.
+            pub const RESULT_PTR_SAVE_REG = Registers.GeneralReg.RBX;
+            /// Callee-saved register that holds the RocOps pointer.
+            pub const ROC_OPS_SAVE_REG = Registers.GeneralReg.R12;
 
             /// Align a stack size to the platform's required alignment.
             pub fn alignStackSize(size: u32) u32 {
