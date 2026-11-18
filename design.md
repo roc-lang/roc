@@ -1157,6 +1157,14 @@ variables, whose template value checking still writes through them; a
 declaration copied from another module is final once its copy returns. No
 other graph outlives its reader.
 
+The graph also carries what projecting a view needs: the formal a template
+root stands for, resolved once per graph, and each root's children in the
+order a projection visits them. A view names its template root by graph node,
+its children are found by position, and each substitution environment indexes
+its views directly by graph node, so projection never looks a variable up.
+This holds for exactly as long as the graph does: a template is unchanged
+while any graph computed from it is in use.
+
 The same graph separately records structural substitution dependencies,
 without the application-ownership dependencies of template-private unknowns.
 Following these dependencies through a view's actual arguments proves when
