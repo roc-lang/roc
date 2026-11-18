@@ -1,8 +1,9 @@
 //! A derived nominal codec reads the arguments its backing uses as data. An
-//! argument nothing ever determines leaves part of the codec's shape
-//! undetermined, so the codec is rejected at the final codec boundary; an
-//! argument the backing never reads, or one a generic definition's uses each
-//! determine, does not block derivation.
+//! argument nothing ever determines leaves part of a parser's shape
+//! undetermined, so the parser is rejected at the final codec boundary. An
+//! encoder is accepted: no value has the part of the shape that carries such
+//! an argument. An argument the backing never reads, or one a generic
+//! definition's uses each determine, blocks neither derivation.
 
 const TestEnv = @import("TestEnv.zig");
 
@@ -57,16 +58,33 @@ test "derived parser rejects a builtin Try outside the codec conventions whose e
     try test_env.assertOneTypeProblemMsgContains("Missing Method", "never resolved to a concrete type");
 }
 
-test "derived encoder rejects a user nominal whose error argument is never determined" {
+test "derived encoder accepts a user nominal whose error argument is never determined" {
     var test_env = try TestEnv.init("Test", my_try ++
         \\value : { x : U64, y : MyTry(U64, _) }
         \\value = { x: 1, y: MyTry.Ok(2) }
+        \\
+        \\top : MyTry(U64, _)
+        \\top = MyTry.Ok(2)
+        \\
+        \\out = Json.to_str(value)
+        \\
+        \\top_out = Json.to_str(top)
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "derived encoder accepts a builtin Try whose error argument is never determined" {
+    var test_env = try TestEnv.init("Test",
+        \\value : { x : U64, y : Try(U64, _) }
+        \\value = { x: 1, y: Try.Ok(2) }
         \\
         \\out = Json.to_str(value)
     );
     defer test_env.deinit();
 
-    try test_env.assertOneTypeProblemMsgContains("Missing Method", "never resolved to a concrete type");
+    try test_env.assertNoErrors();
 }
 
 test "derived codecs accept a user nominal whose arguments are determined" {

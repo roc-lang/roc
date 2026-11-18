@@ -9666,11 +9666,17 @@ an argument the application has not determined. While a later use can still
 determine it, its obligation belongs to that use, and a variable a
 definition's scheme quantifies is determined by each use, which validates
 its own copy of the relation. At the final codec boundary a variable no
-scheme quantifies is never determined, so `MyTry(U64, _)` read through
-`[Ok(ok), Err(err)]` is reported exactly as `List(_)` is; an argument the
-backing never reads (a phantom parameter) is not part of the shape and never
-blocks derivation. Pinned by `src/check/test/derived_codec_undetermined_argument_test.zig`
-and `test/cli/DerivedCodecNominalArguments.roc` (accepted) and
+scheme quantifies is never determined, and the two directions differ. A
+generated parser reads that part of the shape whenever its input names it, so
+`MyTry(U64, _)` parsed through `[Ok(ok), Err(err)]` is reported exactly as
+`List(_)` is. A generated encoder never reaches it: the variable seals to the
+empty tag union, which no value has, so encoding `MyTry.Ok(2)` at
+`MyTry(U64, _)` is accepted and the encoder gives the tag that carries the
+variable no branch (Static Dispatch In Monotype). An argument the backing
+never reads (a phantom parameter) is not part of the shape and blocks neither
+derivation. Pinned by `src/check/test/derived_codec_undetermined_argument_test.zig`,
+`test/cli/DerivedCodecNominalArguments.roc` and
+`test/cli/encoder_for_uninhabited_payload.roc` (accepted) and
 `test/cli/DerivedCodecUndeterminedNominalArgument.roc` (rejected).
 
 `StaticDispatchPlanTable.generated_codec_derivations` stores each parser/encoder

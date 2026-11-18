@@ -1,7 +1,8 @@
 DerivedCodecNominalArguments :: [].{}
 
-# Derived codecs for user nominals whose arguments are all determined, or
-# whose undetermined argument the backing never reads.
+# Derived codecs for user nominals whose arguments are all determined, whose
+# undetermined argument the backing never reads, or whose undetermined
+# argument only an encoder meets.
 
 MyTry(ok, err) := [Ok(ok), Err(err)].{
     encoder_for : _
@@ -33,6 +34,11 @@ bare = Json.parse("{\"x\":1,\"y\":2}")
 value : { x : U64, y : MyTry(U64, [Missing]) }
 value = { x: 1, y: MyTry.Ok(2) }
 
+# Nothing determines the `err` argument, so no value has the `Err` tag and the
+# encoder has no branch for it.
+undetermined : { x : U64, y : MyTry(U64, _) }
+undetermined = { x: 1, y: MyTry.Ok(2) }
+
 tagged : Try(Tagged(_), _)
 tagged = Json.parse("{\"x\":3}")
 
@@ -51,6 +57,7 @@ expect missing.is_err()
 expect present.is_ok()
 expect bare.is_err()
 expect Json.to_str(value) == "{\"x\":1,\"y\":{\"Ok\":2}}"
+expect Json.to_str(undetermined) == "{\"x\":1,\"y\":{\"Ok\":2}}"
 expect tagged.is_ok()
 expect Json.to_str(tagged_value) == "{\"x\":4}"
 expect encode_wrapped("s") == "{\"x\":\"s\"}"
