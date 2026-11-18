@@ -10162,6 +10162,7 @@ const Cloner = struct {
         args: []const Ast.ExprId = &.{},
         source_captures: []const Ast.TypedLocal = &.{},
         change_start: usize = 0,
+        prepared_captures: []Value = &.{},
         arg_values: []Value = &.{},
         prepared_args: []Value = &.{},
         saved_inline_scope: Ast.InlineScopeId = undefined,
@@ -10237,6 +10238,7 @@ const Cloner = struct {
                 }
 
                 task.change_start = self.subst.watermark();
+                task.prepared_captures = try arena.alloc(Value, task.source_captures.len);
                 task.arg_values = try arena.alloc(Value, task.args.len);
                 task.prepared_args = try arena.alloc(Value, task.args.len);
                 frame.cursor = InlineCallableCursor.capture;
@@ -10251,8 +10253,7 @@ const Cloner = struct {
                 .args = input.?.get(.expr_span),
             } } }) }),
             InlineCallableCursor.capture => {
-                const prepared = input.?.get(.value);
-                try self.subst.put(self.pass.program, task.source_captures[frame.index].local, prepared);
+                task.prepared_captures[frame.index] = input.?.get(.value);
                 frame.index += 1;
             },
             InlineCallableCursor.arg => {
@@ -10304,6 +10305,13 @@ const Cloner = struct {
             .known_size = task.exact_call_size,
             .call_expr = task.original_expr,
         });
+        // The callee's capture slots are bound only now, once every argument
+        // is cloned: an argument reads the caller's locals, and a callee that
+        // is a closure of the caller's own lambda has capture slots that are
+        // those same locals.
+        for (task.source_captures, task.prepared_captures) |capture, capture_value| {
+            try self.subst.put(self.pass.program, capture.local, capture_value);
+        }
         for (task.source_args, task.prepared_args) |source_arg, arg_value| {
             try self.subst.put(self.pass.program, source_arg.local, arg_value);
         }

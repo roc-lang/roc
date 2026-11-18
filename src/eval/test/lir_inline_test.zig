@@ -16061,6 +16061,55 @@ test "lambda set generalization: equal sets holding one lambda at instantiations
     , "33", .{ .multi_member_sets = 1, .instance_fns = 3, .instances = 8 });
 }
 
+// `e` is `twice`'s inner closure capturing another closure of the same
+// lambda. SpecConstr inlines `e(3)` through the known callable: the outer call
+// `f(f(x))` reads the caller's `f` in its argument, and the callee's capture
+// slot is that same local, so the argument must be cloned before the callee's
+// captures are bound. Every inline mode and clone-inlining setting applies the
+// increment the same number of times.
+test "a closure inlined into a closure of its own lambda clones its arguments under the caller's captures" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { source: []const u8, dbg: []const u8 }{
+        .{ .source =
+        \\twice = |f| |x| f(f(x))
+        \\
+        \\main : U64
+        \\main = {
+        \\    e = twice(twice(|x| x + 1.U64))
+        \\    r = e(3)
+        \\    dbg r
+        \\    r
+        \\}
+        , .dbg = "7" },
+        .{ .source =
+        \\twice = |f| |x| f(f(x))
+        \\
+        \\main : U64
+        \\main = {
+        \\    e = twice(twice(twice(|x| x * 3.U64)))
+        \\    r = e(1)
+        \\    dbg r
+        \\    r
+        \\}
+        , .dbg = "6561" },
+    };
+    for (cases) |case| {
+        inline for (.{ .none, .procedures, .wrappers, .wrappers_and_source_single_use }) |mode| {
+            inline for (.{ .all_calls, .no_calls }) |clone_inlining| {
+                var lowered = try lowerModuleWithOptions(allocator, case.source, mode, .{ .spec_constr_clone_inlining = clone_inlining });
+                defer lowered.deinit(allocator);
+                var run = try runLoweredWithHostEvents(allocator, &lowered.lowered);
+                defer run.deinit(allocator);
+                try std.testing.expectEqual(@as(usize, 1), run.events.len);
+                switch (run.events[0]) {
+                    .dbg => |msg| try std.testing.expectEqualStrings(case.dbg, msg),
+                    .expect_failed, .crashed, .effect => return error.TestUnexpectedResult,
+                }
+            }
+        }
+    }
+}
+
 /// The number of length tests range proving hoisted to loop entries: each
 /// reads its list's length in a statement the prover made.
 fn hoistedLengthTestCount(lowered: *const lir.CheckedPipeline.LoweredProgram) usize {
