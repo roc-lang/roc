@@ -63,6 +63,7 @@ const Lifted = @import("../monotype_lifted/ast.zig");
 const OwnCaptures = @import("../monotype_lifted/own_captures.zig");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
+const Instances = @import("instances.zig");
 
 const Allocator = std.mem.Allocator;
 const static_dispatch = check.StaticDispatchRegistry;
@@ -364,6 +365,7 @@ fn runWith(
     const counted = diagnostics.isSet(.lambda_solve_stats);
     var solver = try solveProgram(allocator, &program, order, if (counted) &counters else null, timing);
     defer solver.deinit();
+    try Instances.discover(allocator, &program);
     if (counted) {
         var buffer: [2048]u8 = undefined;
         var out = std.Io.Writer.fixed(&buffer);

@@ -5,6 +5,7 @@ const collections = @import("collections");
 const Common = @import("../common.zig");
 const Lifted = @import("../monotype_lifted/ast.zig");
 const Type = @import("type.zig");
+const Instances = @import("instances.zig");
 
 /// Identifier for an expression type entry.
 pub const ExprId = enum(u32) { _ };
@@ -143,9 +144,11 @@ pub const Program = struct {
     /// The lifted program's binding groups, callee-first, in the order the
     /// solver solved them (`Lifted.Program.bindingGroups`).
     binding_groups: Lifted.BindingGroups = .empty,
-    /// Schemes and instantiations; emptied by Lambda Specialize, whose
-    /// output names every function at its one instantiation.
+    /// Schemes and instantiations.
     poly: Polymorphism = .{},
+    /// Which instantiations of each generalized group are one instance
+    /// (`instances.zig`), computed by the solver's last step.
+    instances: Instances.Table = .{},
 
     pub fn init(allocator: std.mem.Allocator, lifted: Lifted.Program) Program {
         return .{
@@ -163,6 +166,7 @@ pub const Program = struct {
     }
 
     pub fn deinit(self: *Program) void {
+        self.instances.deinit(self.allocator);
         self.poly.deinit(self.allocator);
         self.binding_groups.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
@@ -190,6 +194,7 @@ pub const Program = struct {
         self.runtime_schema_requests.clearRetainingCapacity();
         self.poly.deinit(self.allocator);
         self.poly = .{};
+        self.instances.deinit(self.allocator);
     }
 
     pub fn view(self: *const Program) ProgramView {

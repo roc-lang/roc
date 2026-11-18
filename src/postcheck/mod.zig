@@ -28,6 +28,7 @@ pub const LambdaSolved = struct {
     pub const Type = @import("lambda_solved/type.zig");
     pub const Solve = @import("lambda_solved/solve.zig");
     pub const Specialize = @import("lambda_solved/specialize.zig");
+    pub const Instances = @import("lambda_solved/instances.zig");
 };
 /// Lambda Mono types: the function-free runtime type store the direct
 /// solved-to-LIR lowering commits layouts against.
