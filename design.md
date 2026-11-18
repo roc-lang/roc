@@ -1486,6 +1486,61 @@ plans are published, publication records for each root it makes which
 producer completes it: the checked-value writer for a root in value form, an
 evaluator for every other ("Value-Form Roots"). That record changes no type.
 
+#### Values That Hold Functions
+
+A data root's value is stored in `ConstStore`, which stores no function
+(see "Compile-Time Constants and Hoisted Roots": data roots use a
+concreteness purpose that rejects a function anywhere in their type). So an
+expression whose value holds a function is never stored, and selection
+treats it that way: **a closed expression whose checked type holds a
+function is not a data root, covers none of its closed parts, and is not
+the stored value of a binding that names all of it.** Each of its eligible
+parts is then selected in its place, as the parts of any expression that
+takes no root role are (`exprHoistRoles`). In `[1, 2, 3].iter().map(f)` the
+`Iter` values hold step functions, so `[1, 2, 3]` is a root of its own; in
+`List.from_iter(xs.iter())` the `List` holds no function, so the whole call
+is one root, which reads `xs` from its own root. A destructuring binding of
+such a value still has its binders extracted, each a root decided by its
+own type ("callable extraction root" below), but it covers nothing either.
+A tag with no payload computes nothing, whether it is written as a bare
+tag or through its nominal (`Step.End`), so like an empty list or record it
+is no root of its own: the backing of `Step.End` is not selected when
+`Step` holds a function.
+
+A type holds a function when a function type is reachable through record
+fields, tuple items, tag payloads, an alias's args and backing, a
+nominal's args, and the backing of every nominal other than a builtin
+container or number, whose stored parts are exactly its args
+(`varHoldsFunction`). These are the parts the data-constant concreteness walk
+proves free of functions, and one decision (`storedNominalBacking`) serves
+both, so an opaque type is read through its backing exactly as archiving
+copies it. A function-typed expression takes no role at all. A rigid,
+unsolved or erroneous variable holds no function, and a type reached again
+adds nothing. A scan that finds no function records each class it reached
+in the type store (`markFunctionFree`). The store forgets every record as
+soon as a recorded class's content changes, so a later scan stops at a
+recorded class with the answer a full walk would give, and the scans of
+nested expressions, whose types share their parts' types, stay linear in
+nesting depth.
+
+The rule names no function, method or type: a builtin conversion such as
+`List.iter`, `Dict.iter`, `Iter.iter` or `Stream.stream`, and any user
+function or method, are judged by their result types alike.
+
+The checker decides the rule when the expression's own checking finishes,
+from its type as solved then, as it decides whether an expression is a
+function. Solving only adds structure to a type, so a type that holds a
+function then holds one when solving ends. A type that is still a variable
+then and is solved to hold a function only later (by a dispatch that
+resolves after the expression, for instance) lets the expression cover its
+parts; pruning then rejects it as a data root, and its parts are evaluated
+at runtime with it. That outcome never changes what the program computes.
+
+`ROC_HOIST_ROOT_STATS` prints, for each module whose compile-time roots are
+published, how many roots hoisting selected, how many of those an evaluator
+completes and the checked-value writer completes, and how many value-form
+expressions their bodies keep.
+
 ### Every Rejection Is Explicit Recovery
 
 `roc check`, `roc build`, and `roc run` all lower every checked program, so

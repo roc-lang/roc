@@ -1036,13 +1036,10 @@ hoist_frames: std.ArrayListUnmanaged(HoistFrame) = .empty,
 /// Temporary maximal eligible expression roots that may become selected if an
 /// enclosing expression cannot cover them.
 hoist_expr_candidates: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
-/// Last answer from `methodCallPreservesIteratorSourceInput`. The hoist flow
-/// asks the same question about one expression up to five times while
-/// deciding that expression's role (root, cover, binding root, and the two
-/// recorders), and every miss resolves the receiver and looks up a
-/// cross-module method binding. One entry serves those repeats, and it also
-/// keeps the decisions about a single expression consistent with each other.
-hoist_iterator_source_memo: ?struct { expr: CIR.Expr.Idx, preserves: bool } = null,
+/// Last answer from `exprTypeHoldsFunction`.
+hoist_function_holding_memo: ?struct { expr: CIR.Expr.Idx, holds: bool } = null,
+/// Stacks reused by every `varHoldsFunction` scan.
+held_function_scan_scratch: HeldFunctionScan.Eval.Scratch = .{},
 /// Compile-time-known local dependencies and strict destructure validations
 /// waiting for the maximal enclosing root that can own their evaluation.
 hoist_deferred_roots: std.ArrayListUnmanaged(HoistDeferredRoot) = .empty,
@@ -2031,7 +2028,8 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .accepted_nominal_constructor_backings = .settled,
     .hoist_frames = .frame_stack,
     .hoist_expr_candidates = .frame_partitioned,
-    .hoist_iterator_source_memo = .keyed,
+    .hoist_function_holding_memo = .keyed,
+    .held_function_scan_scratch = .scratch,
     .hoist_deferred_roots = .frame_partitioned,
     .hoist_binding_candidates = .lexical,
     .hoist_binding_scope_patterns = .lexical,
@@ -6795,14 +6793,14 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     const top_level_equivalent = semantically_eligible and !frame.has_contextual_dependency;
     const selection_allowed = frame.hoist_position.allowsSelection();
     const roles = if (top_level_equivalent)
-        self.exprHoistRoles(expr, frame.binding_rhs and selection_allowed)
+        try self.exprHoistRoles(expr, frame.binding_rhs and selection_allowed)
     else
         HoistRoles.none;
     const can_be_root = roles.root;
     const can_cover_children = roles.cover;
     const binding_rhs_can_cover_children = frame.binding_rhs and
         selection_allowed and
-        roles.binding_root;
+        roles.binding_value;
     const current_covers_children = (can_cover_children and !frame.binding_rhs) or binding_rhs_can_cover_children;
     // Any eligible binding RHS suppresses smaller expression candidates, but
     // only a pattern that can publish that RHS as a binding root may become a
@@ -7165,7 +7163,7 @@ fn recordHoistBindingCandidate(
     if (builtin.mode == .debug) std.debug.assert(completed.hoist_position == hoist_position);
     if (!completed.hoist_position.allowsSelection() or !completed.top_level_equivalent) return;
     if (!self.patternCanOwnHoistedBindingRoot(pattern)) return;
-    if (!self.exprCanBeHoisted(expr, .binding_root)) return;
+    if (!try self.exprCanBeHoisted(expr, .binding_value)) return;
 
     const entry = try self.hoist_binding_candidates.getOrPut(self.gpa, pattern);
     const had_existing = entry.found_existing;
@@ -7200,7 +7198,7 @@ fn recordHoistPatternProvenance(
     if (completed.expr != expr) return;
     if (builtin.mode == .debug) std.debug.assert(completed.hoist_position == hoist_position);
     if (!completed.hoist_position.allowsSelection() or !completed.top_level_equivalent) return;
-    if (!self.exprCanBeHoisted(expr, .binding_root)) return;
+    if (!try self.exprCanBeHoisted(expr, .binding_root)) return;
 
     switch (self.cir.store.getPattern(pattern)) {
         .assign, .var_assign => {},
@@ -8442,31 +8440,36 @@ fn patternIsTopLevel(self: *Self, pattern: CIR.Pattern.Idx) bool {
 /// with one larger stored data root; this is intentionally stricter than
 /// semantic eligibility, because function/lambda/closure and observable
 /// expression frames may contain closed child work but cannot cover that work
-/// as data roots. `.binding_root`: the right-hand side of a hoisted binding.
-const HoistRole = enum { root, cover, binding_root };
+/// as data roots. `.binding_root`: the right-hand side of a hoisted binding,
+/// whose pattern's binders are extracted from it. `.binding_value`: the
+/// right-hand side as the stored value of a binding naming all of it, which
+/// covers the closed parts it evaluates.
+const HoistRole = enum { root, cover, binding_root, binding_value };
 
-fn exprCanBeHoisted(self: *Self, expr: CIR.Expr.Idx, comptime role: HoistRole) bool {
-    return @field(self.exprHoistRoles(expr, role == .binding_root), @tagName(role));
+fn exprCanBeHoisted(self: *Self, expr: CIR.Expr.Idx, comptime role: HoistRole) Allocator.Error!bool {
+    return @field(try self.exprHoistRoles(expr, role == .binding_root or role == .binding_value), @tagName(role));
 }
 
 /// Which hoist roles an expression can take. A function definition or a
-/// function-typed expression takes none. `binding_root` is computed only when
-/// `want_binding_root` is set; it is false otherwise.
+/// function-typed expression takes none. An expression whose type holds a
+/// function is never stored, so it takes only `binding_root`. `binding_root`
+/// and `binding_value` are read only when `want_binding_root` is set.
 const HoistRoles = struct {
     root: bool,
     cover: bool,
     binding_root: bool,
+    binding_value: bool,
 
-    const none: HoistRoles = .{ .root = false, .cover = false, .binding_root = false };
-    const all: HoistRoles = .{ .root = true, .cover = true, .binding_root = true };
-    const binding_root_only: HoistRoles = .{ .root = false, .cover = false, .binding_root = true };
-    const root_only: HoistRoles = .{ .root = true, .cover = false, .binding_root = false };
+    const none: HoistRoles = .{ .root = false, .cover = false, .binding_root = false, .binding_value = false };
+    const all: HoistRoles = .{ .root = true, .cover = true, .binding_root = true, .binding_value = true };
+    const binding_root_only: HoistRoles = .{ .root = false, .cover = false, .binding_root = true, .binding_value = true };
+    const root_only: HoistRoles = .{ .root = true, .cover = false, .binding_root = false, .binding_value = false };
 };
 
-fn exprHoistRoles(self: *Self, expr: CIR.Expr.Idx, want_binding_root: bool) HoistRoles {
+fn exprHoistRoles(self: *Self, expr: CIR.Expr.Idx, want_binding_root: bool) Allocator.Error!HoistRoles {
     if (self.hoistExprInvalidated(expr)) return .none;
     if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return .none;
-    return switch (self.cir.store.getExpr(expr)) {
+    const roles: HoistRoles = switch (self.cir.store.getExpr(expr)) {
         .e_lookup_local,
         .e_lookup_external,
         .e_lookup_associated_local,
@@ -8497,29 +8500,27 @@ fn exprHoistRoles(self: *Self, expr: CIR.Expr.Idx, want_binding_root: bool) Hois
         .e_num,
         .e_num_from_numeral,
         .e_typed_num_from_numeral,
-        => .{
-            .root = false,
-            .cover = false,
-            .binding_root = want_binding_root and !self.exprHasDedicatedLiteralConversionRoot(expr),
+        => blk: {
+            const binding_root = want_binding_root and !self.exprHasDedicatedLiteralConversionRoot(expr);
+            break :blk .{ .root = false, .cover = false, .binding_root = binding_root, .binding_value = binding_root };
         },
         .e_str => |str| blk: {
             const interpolated = self.stringHasInterpolation(str.span);
-            break :blk .{
-                .root = interpolated,
-                .cover = interpolated,
-                .binding_root = want_binding_root and !self.exprHasDedicatedLiteralConversionRoot(expr),
-            };
+            const binding_root = want_binding_root and !self.exprHasDedicatedLiteralConversionRoot(expr);
+            break :blk .{ .root = interpolated, .cover = interpolated, .binding_root = binding_root, .binding_value = binding_root };
         },
-        .e_method_call => |call| if (self.methodCallPreservesIteratorSourceInput(expr, call)) .none else .all,
-        .e_dispatch_call => |call| if (self.methodCallPreservesIteratorSourceInput(expr, call)) .none else .all,
+        // A tag with no payload is the same value as a zero-argument tag,
+        // which computes nothing and is no root of its own.
+        .e_tag => |tag| if (tag.args.span.len == 0) .binding_root_only else .all,
         .e_list,
+        .e_method_call,
+        .e_dispatch_call,
         .e_tuple,
         .e_block,
         .e_match,
         .e_if,
         .e_call,
         .e_record,
-        .e_tag,
         .e_nominal,
         .e_nominal_external,
         .e_binop,
@@ -8543,68 +8544,27 @@ fn exprHoistRoles(self: *Self, expr: CIR.Expr.Idx, want_binding_root: bool) Hois
         => .root_only,
         .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
+    if (!roles.root and !roles.cover and !(want_binding_root and roles.binding_value)) return roles;
+    if (!try self.exprTypeHoldsFunction(expr)) return roles;
+    // The value holds a function, so it is never stored: no root of it is
+    // kept, and it covers none of its closed parts. A destructuring binding
+    // still extracts its binders, each a root by its own type.
+    return .{ .root = false, .cover = false, .binding_root = roles.binding_root, .binding_value = false };
 }
 
-fn methodCallPreservesIteratorSourceInput(self: *Self, expr: CIR.Expr.Idx, call: anytype) bool {
-    if (self.hoist_iterator_source_memo) |memo| {
-        if (memo.expr == expr) return memo.preserves;
+/// Whether the checked type of `expr` holds a function anywhere a stored
+/// value would (`varHoldsFunction`), as solved when the expression's own
+/// checking finished. The hoist flow asks this about one expression several
+/// times while deciding its roles (its frame, then the binding and pattern
+/// recorders); one entry answers the repeats and keeps those decisions
+/// consistent with each other.
+fn exprTypeHoldsFunction(self: *Self, expr: CIR.Expr.Idx) Allocator.Error!bool {
+    if (self.hoist_function_holding_memo) |memo| {
+        if (memo.expr == expr) return memo.holds;
     }
-    const preserves = self.computeMethodCallPreservesIteratorSourceInput(expr, call);
-    self.hoist_iterator_source_memo = .{ .expr = expr, .preserves = preserves };
-    return preserves;
-}
-
-fn computeMethodCallPreservesIteratorSourceInput(self: *Self, expr: CIR.Expr.Idx, call: anytype) bool {
-    // Every def that can answer true is reachable only through the registry's
-    // hoist-preserving method names: its producer table, the delegating
-    // Dict/Set wrappers, and the FieldNames intrinsic all bind those names,
-    // and a user-defined conversion is recognized by result type under the
-    // same names (`static_dispatch_registry.zig` pins this by comptime
-    // check). Anything else skips receiver resolution and the cross-module
-    // binding lookup.
-    if (!methodNameIsHoistPreservingCandidate(self.cir.getIdentText(call.method_name))) return false;
-    const nominal = self.types.resolveThroughAliases(ModuleEnv.varFrom(call.receiver)).desc.content.unwrapNominalType() orelse return false;
-    const owner_env = self.getNominalOriginEnv(nominal);
-    const method = self.lookupStaticDispatchMethodBinding(
-        owner_env,
-        nominal.sourceDeclOptional(),
-        self.cir,
-        call.method_name,
-    ) orelse return false;
-    if (method.env.module_role == .builtin) {
-        return static_dispatch.procedurePreservesHoistableSourceInputForEnvDef(
-            method.env,
-            method.binding.def_idx,
-        );
-    }
-    // A user-defined conversion has no registry entry, so its result type
-    // decides: an `Iter` holds its step closure by value, and selecting the
-    // conversion itself as a static-data root would bake that closure instead
-    // of the receiver collection it reads.
-    return self.varIsIteratorNominal(ModuleEnv.varFrom(expr));
-}
-
-fn methodNameIsHoistPreservingCandidate(method_text: []const u8) bool {
-    for (static_dispatch.hoist_preserving_method_names) |candidate| {
-        if (Ident.textEql(method_text, candidate)) return true;
-    }
-    return false;
-}
-
-/// Whether this type is the builtin `Iter` nominal, looking through
-/// transparent aliases.
-fn varIsIteratorNominal(self: *Self, var_: Var) bool {
-    const iter_source_decl = self.iteratorNominalSourceDecl() orelse return false;
-    const nominal = self.types.resolveThroughAliases(var_).desc.content.unwrapNominalType() orelse return false;
-    const source_decl = nominal.sourceDeclOptional() orelse return false;
-    return source_decl == iter_source_decl;
-}
-
-fn iteratorNominalSourceDecl(self: *const Self) ?u32 {
-    if (self.builtin_ctx.builtin_indices) |indices| return @backingInt(indices.iter_type);
-    if (self.cir.module_role != .builtin) return null;
-    const iter_stmt_idx = self.findLocalTypeDeclByName(self.cir.idents.builtin_iter) orelse return null;
-    return @backingInt(iter_stmt_idx);
+    const holds = try self.varHoldsFunction(ModuleEnv.varFrom(expr));
+    self.hoist_function_holding_memo = .{ .expr = expr, .holds = holds };
+    return holds;
 }
 
 fn stringHasInterpolation(self: *Self, span: CIR.Expr.Span) bool {
@@ -16861,29 +16821,12 @@ const HoistedConstTypeScan = struct {
                 },
                 .nominal_type => |nominal| {
                     try addVars(items, walk, self.types.sliceNominalArgs(nominal));
-                    const needs_backing = if (self.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional())) |builtin_decl| switch (builtin_decl) {
-                        .list,
-                        .box,
-                        .dict,
-                        .set,
-                        .fields,
-                        .field,
-                        .num,
-                        => false,
-                        .try_type,
-                        .numeral,
-                        => true,
-                    } else true;
-                    if (needs_backing) {
-                        // Non-builtin nominal: inspect the declaration's backing template.
+                    switch (self.storedNominalBacking(nominal)) {
+                        .args_only => {},
                         // Formals in the template stand for the args checked above, so the
-                        // template walk admits rigids. Opacity hides the backing from
-                        // source, not from archiving, which copies it.
-                        if (self.nominalDeclBackingTemplate(nominal)) |template| {
-                            try items.add(.{ .ty = .{ .walk = .decl_template, .var_ = template } });
-                        } else {
-                            try items.add(.{ .decided = false });
-                        }
+                        // template walk admits rigids.
+                        .template => |template| try items.add(.{ .ty = .{ .walk = .decl_template, .var_ = template } }),
+                        .invalid => try items.add(.{ .decided = false }),
                     }
                 },
             },
@@ -16892,6 +16835,127 @@ const HoistedConstTypeScan = struct {
     }
 
     pub fn exit(_: *HoistedConstTypeScan, _: Leaf, _: ?bool) Allocator.Error!void {}
+};
+
+/// Where a stored value of a nominal type keeps its parts beyond the type's
+/// args. A builtin container or number stores exactly what its args say; any
+/// other nominal stores its declaration's backing, whose formals stand for
+/// the args. Opacity hides the backing from source, not from archiving,
+/// which copies it.
+const StoredNominalBacking = union(enum) {
+    args_only,
+    template: Var,
+    /// The declaration is invalid or source-less, so it has no backing.
+    invalid,
+};
+
+fn storedNominalBacking(self: *const Self, nominal: types_mod.NominalType) StoredNominalBacking {
+    if (self.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional())) |builtin_decl| switch (builtin_decl) {
+        .list,
+        .box,
+        .dict,
+        .set,
+        .fields,
+        .field,
+        .num,
+        => return .args_only,
+        .try_type,
+        .numeral,
+        => {},
+    };
+    const template = self.nominalDeclBackingTemplate(nominal) orelse return .invalid;
+    return .{ .template = template };
+}
+
+/// Whether a value of this type holds a function anywhere a stored value
+/// would: through record fields, tuple items, tag payloads, aliases, a
+/// nominal's args and its stored backing (`storedNominalBacking`), the same
+/// parts `HoistedConstTypeScan` proves a data constant free of functions
+/// over. An unsolved, rigid or erroneous variable holds none; a var reached
+/// again adds nothing.
+///
+/// A scan that finds no function records every class it reached in the type
+/// store (`markFunctionFree`), which forgets the records as soon as any
+/// recorded class's content changes, so a later scan stops at a recorded
+/// class with the answer a full walk would give. Nested expressions share
+/// their parts' types, so this keeps the scans of a whole body linear in its
+/// nesting depth.
+fn varHoldsFunction(self: *Self, var_: Var) Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .err, .flex, .rigid, .field_presence => return false,
+        .structure => |flat| switch (flat) {
+            .fn_pure, .fn_effectful, .fn_unbound => return true,
+            .empty_record, .empty_tag_union => return false,
+            .record, .tuple, .tag_union, .nominal_type => {},
+        },
+        .alias => {},
+    }
+    if (self.types.isFunctionFree(resolved.var_)) return false;
+    self.var_set.clearRetainingCapacity();
+    var scan = HeldFunctionScan{ .check = self, .visited = &self.var_set };
+    const holds = try HeldFunctionScan.Eval.runWith(self.gpa, &self.held_function_scan_scratch, &scan, var_);
+    if (!holds) {
+        var visited = self.var_set.keyIterator();
+        while (visited.next()) |reached| try self.types.markFunctionFree(&.{reached.*});
+    }
+    return holds;
+}
+
+const HeldFunctionScan = struct {
+    check: *Self,
+    visited: *collections.DenseMap(Var, void),
+
+    const Eval = collections.AnyAll.Evaluation(Var, HeldFunctionScan);
+
+    pub fn enter(scan: *HeldFunctionScan, items: Eval.Items, var_: Var) Allocator.Error!Eval.Expansion {
+        const self = scan.check;
+        const resolved = self.types.resolveVar(var_);
+        if (scan.visited.contains(resolved.var_)) return .{ .value = false };
+        if (self.types.isFunctionFree(resolved.var_)) return .{ .value = false };
+        try scan.visited.put(resolved.var_, {});
+
+        switch (resolved.desc.content) {
+            .err,
+            .flex,
+            .rigid,
+            .field_presence,
+            => return .{ .value = false },
+            .alias => |alias| {
+                for (self.types.sliceAliasArgs(alias)) |arg| try items.add(arg);
+                try items.add(self.types.getAliasBackingVar(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .empty_record,
+                .empty_tag_union,
+                => return .{ .value = false },
+                .fn_pure, .fn_effectful, .fn_unbound => return .{ .value = true },
+                .record => |record| {
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.presence)) |presence| try items.add(presence.typeVar());
+                    try items.add(record.ext);
+                },
+                .tuple => |tuple| for (self.types.sliceVars(tuple.elems)) |elem| try items.add(elem),
+                .tag_union => |tag_union| {
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |tag_args| {
+                        for (self.types.sliceVars(tag_args)) |arg| try items.add(arg);
+                    }
+                    try items.add(tag_union.ext);
+                },
+                .nominal_type => |nominal| {
+                    for (self.types.sliceNominalArgs(nominal)) |arg| try items.add(arg);
+                    switch (self.storedNominalBacking(nominal)) {
+                        .args_only, .invalid => {},
+                        .template => |template| try items.add(template),
+                    }
+                },
+            },
+        }
+        return .{ .group = .any };
+    }
+
+    pub fn exit(_: *HeldFunctionScan, _: Var, _: ?bool) Allocator.Error!void {}
 };
 
 const HoistedDependencyBindingKind = enum {

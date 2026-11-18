@@ -25966,6 +25966,25 @@ pub const CompileTimeRootTable = struct {
 
         try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, roots.items);
 
+        if (base.dev_diagnostics.isSet(.hoist_root_stats)) {
+            var evaluated: usize = 0;
+            var written: usize = 0;
+            for (roots.items) |published| {
+                if (published.source != .hoisted) continue;
+                switch (published.completion) {
+                    .evaluate => evaluated += 1,
+                    .write_value => written += 1,
+                }
+            }
+            std.debug.print("hoist-roots: {s} selected={d} evaluated={d} written={d} inline={d}\n", .{
+                module_env.module_name,
+                selected_hoisted_roots.len,
+                evaluated,
+                written,
+                inline_literals.items.len,
+            });
+        }
+
         const roots_by_pattern = try patternRootIndex(allocator, roots.items);
         errdefer allocator.free(roots_by_pattern);
         std.mem.sort(CIR.Expr.Idx, inline_literals.items, {}, exprIdLessThan);

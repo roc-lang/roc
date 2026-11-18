@@ -180,65 +180,6 @@ pub fn iteratorOwner(owner: BuiltinOwner) ?IteratorOwner {
     };
 }
 
-/// Every method name a hoist-preserving iterator conversion can be reached
-/// through. The checker uses this as a cheap pre-filter before resolving a
-/// receiver and looking up its binding, and answers from a user-defined
-/// method's result type under these same names, so a producer reachable
-/// through any other name would silently lose its receiver's hoistability.
-/// The comptime block below keeps this in step with the two tables that
-/// decide the answer.
-pub const hoist_preserving_method_names = [_][]const u8{ "iter", "iter_rev", "stream" };
-
-/// Builtin conversions whose eager receiver stays a separate hoist root:
-/// `List.iter` and `List.iter_rev` keep an inline collection available for
-/// static-data hoisting, and the `Iter.iter`/`Stream.stream` identities keep
-/// their step-closure-bearing result from being selected as a static-data
-/// root itself.
-pub const hoist_preserving_producer_names = [_][]const u8{ "Builtin.List.iter", "Builtin.List.iter_rev", "Builtin.Iter.iter", "Builtin.Stream.stream" };
-
-/// Builtin nominals whose iterator conversions delegate to a hoist-preserving
-/// producer (`Dict.iter` calls `List.iter` on its backing entries, and so
-/// on). Their closed receiver stays hoistable exactly like the producer they
-/// delegate to.
-const hoist_preserving_delegating_owners = [_][]const u8{ "Builtin.Dict", "Builtin.Set", "Builtin.Num.Range" };
-
-/// Built from the two rosters above rather than listed separately, so the
-/// delegating names cannot drift from the method names the checker
-/// pre-filters on.
-const hoist_preserving_names = blk: {
-    var entries: [hoist_preserving_producer_names.len + hoist_preserving_delegating_owners.len * hoist_preserving_method_names.len]struct {
-        []const u8,
-    } = undefined;
-    var index: usize = 0;
-    for (hoist_preserving_producer_names) |name| {
-        entries[index] = .{name};
-        index += 1;
-    }
-    for (hoist_preserving_delegating_owners) |owner| {
-        for (hoist_preserving_method_names) |method| {
-            entries[index] = .{owner ++ "." ++ method};
-            index += 1;
-        }
-    }
-    break :blk std.StaticStringMap(void).initComptime(&entries);
-};
-
-/// Whether this exact Builtin procedure needs its eager receiver preserved as
-/// a separate hoist root: the producers and delegating conversions named
-/// above, and the generated FieldNames iterator, an intrinsic with the same
-/// source-lifetime requirement.
-pub fn procedurePreservesHoistableSourceInputForEnvDef(env: *const ModuleEnv, def_idx: CIR.Def.Idx) bool {
-    if (env.module_role != .builtin) return false;
-    const def = env.store.getDef(def_idx);
-    const pattern = env.store.getPattern(def.pattern);
-    if (pattern == .assign and hoist_preserving_names.has(env.getIdent(pattern.assign.ident))) {
-        return true;
-    }
-    const expr = env.store.getExpr(def.expr);
-    if (expr != .e_anno_only) return false;
-    return can.BuiltinLowLevel.intrinsicAnnotation(env, expr.e_anno_only.ident) == .field_names_iter;
-}
-
 /// Public `MethodKey` declaration.
 pub const MethodKey = struct {
     owner: MethodOwner,

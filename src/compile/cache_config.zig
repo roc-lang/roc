@@ -433,7 +433,9 @@ pub const Constants = struct {
     ///      200 entry.
     /// 202: combines the 201 entry with the 200 entry that removes iterator
     ///      representation fields.
-    pub const CACHE_VERSION = 202;
+    /// 203: hoist-root selection judges every closed expression by whether
+    ///      its type holds a function, and a payload-free tag is no root.
+    pub const CACHE_VERSION = 203;
 };
 
 /// Configuration for the Roc cache system.
