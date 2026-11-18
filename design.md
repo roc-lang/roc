@@ -10621,8 +10621,13 @@ record the same continuation proof rather than relying on downstream discovery.
 
 The explicit `InlineMode` controls the optional specialization work:
 
-- `.none` runs only iterator fusion from Monotype Lifted SpecConstr and
-  produces an empty solved inline plan. The interpreter selects this.
+- `.none` runs only iterator fusion from Monotype Lifted SpecConstr, and its
+  solved inline plan substitutes only wrappers of compiler-provided operations
+  with type-only operands (`LowLevel.typeOnlyOperands`). The interpreter
+  selects this. Every mode substitutes those wrappers: a type-only operand has
+  no runtime value, and a wrapper procedure would take it as a runtime
+  argument, keeping it live until the call (`List.map`'s input list would
+  then share the buffer the loop rewrites in place).
 - `.wrappers` runs SpecConstr and produces wrapper and exact-single-use inline
   decisions from Lambda Solved. Size and speed modes select this. A body is
   single-use when the functions the program's roots reach, by direct calls
@@ -10636,7 +10641,7 @@ The explicit `InlineMode` controls the optional specialization work:
   procedures remain eligible for early native-code reuse. The one exception
   is a wrapper whose body the compiler provides: a specialization of a
   Builtin template whose body is its checked provided low-level operation
-  (`FnTemplate.provides_low_level`). Substituting it makes no caller's code
+  (`FnTemplate.provided_low_level`). Substituting it makes no caller's code
   depend on another procedure's source, and leaves its operation visible to
   the LIR rewrites that bound list copying (`while !$done` tests the
   `bool_not` low-level that known-tag jump threading reads). Like `.none`, it
@@ -23916,13 +23921,18 @@ sees.
 
 `list_map_extract_unsafe` is the one operation that reads a value its operand
 types do not describe: `List.map`'s buffer is typed by the output item while
-its unwritten slots hold input items. Its third operand is the map's transform,
-whose parameter is the input item (`list_map_can_reuse` relates that parameter
-to the input list). The operand exists for its type alone
-(`LowLevel.typeOnlyOperands`): Lambda Solved reads it, and both lowerers drop it
-unevaluated, so LIR carries the operation's two runtime operands. Adding the
-item's type to the buffer's instead would give every in-place operation a
-second type parameter for what this operand states directly.
+its unwritten slots hold input items. Its third operand is the input list the
+buffer was retyped from, whose item type is the extracted item's. The operand
+exists for its type alone (`LowLevel.typeOnlyOperands`): Lambda Solved reads
+it, and both lowerers drop it unevaluated, so LIR carries the operation's two
+runtime operands. Adding the item's type to the buffer's instead would give
+every in-place operation a second type parameter for what this operand states
+directly. The map's transform cannot be the operand: its parameter would state
+the item type only while every use of the transform shares one type, and
+SpecConstr specializes `List.map` for a known transform by rebuilding the
+transform at each use, each a reference that instantiates the transform's
+binding group on its own. The extracted item would then take a callable set
+nothing produces, which is empty and cannot be called.
 
 Every lifted function's type is registered before any body is solved.
 Definitions are output in `FnId` order because consumers reach functions only
@@ -24686,7 +24696,6 @@ the explicit allow list of operations whose lowering is layout-only; a new
 operation is not on it until someone adds it after checking its lowering. An
 operation stays off the list when its lowering reads anything but operand and
 result layouts: `list_map_can_reuse` reads its transform's solved function type,
-`list_map_extract_unsafe` takes a function for its type,
 `dict_pseudo_seed` reads the program's seed mode, and operations over fixed
 types gain nothing from the key and are not listed. A template carries its
 operation explicitly: the Builtin low-level transform records the operation
@@ -29339,8 +29348,8 @@ ownership out of the buffer and `list_map_write_unsafe` moves the transform's
 result into the vacated slot. Neither performs RC work: the extracted item is an
 ordinary owned local, so ARC places its release according to the transform's
 solved convention, and the certifier checks the loop like any other code. The
-extract also takes the transform, for its type only: the buffer's type names the
-output item, so the transform's parameter is what tells Lambda Solved which
+extract also takes the input list, for its type only: the buffer's type names the
+output item, so the input list's item type is what tells Lambda Solved which
 callable set the extracted item has (see Lambda Solving).
 `list_move_out_unsafe` is the same move as an operation of its own, for a list
 whose item type does not change: its result is an item of the list's type.

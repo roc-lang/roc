@@ -1989,10 +1989,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         procedure_usage = try postcheck.MonotypeLifted.SpecConstr.collectProcedureUsage(allocator, &solved.lifted);
     }
 
-    var inline_plan_timing_scope = PipelineStageScope.begin(
-        if (target.inline_mode != .none) target.timing else null,
-        .inline_plan,
-    );
+    var inline_plan_timing_scope = PipelineStageScope.begin(target.timing, .inline_plan);
     defer inline_plan_timing_scope.end();
     const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved);
     inline_plan_timing_scope.end();

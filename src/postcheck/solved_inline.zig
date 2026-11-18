@@ -13,9 +13,13 @@ const GuardedList = collections.GuardedList;
 
 /// Post-check inline analysis mode.
 pub const Mode = enum {
+    /// Inline only wrappers of compiler-provided operations with type-only
+    /// operands (`LowLevel.typeOnlyOperands`), as every mode does: such an
+    /// operand has no runtime value, and a wrapper procedure would take it as
+    /// a runtime argument, keeping it live until the call.
     none,
     /// Retain standalone procedures, with iterator fusion in SpecConstr. Only
-    /// wrappers whose bodies the compiler provides (`provides_low_level`) are
+    /// wrappers whose bodies the compiler provides (`provided_low_level`) are
     /// inlined, since substituting them makes no caller's code depend on
     /// another procedure's source.
     procedures,
@@ -126,7 +130,7 @@ pub fn analyze(
     solved: *const Solved.Program,
 ) std.mem.Allocator.Error!OwnedPlan {
     return switch (mode) {
-        .none => OwnedPlan.empty(allocator),
+        .none => try InlineAnalyzer.run(allocator, procedure_usage, solved, .type_only_operands),
         .procedures => try InlineAnalyzer.run(allocator, procedure_usage, solved, .provided_low_level),
         .wrappers => try InlineAnalyzer.run(allocator, procedure_usage, solved, .program),
         .wrappers_and_source_single_use => try InlineAnalyzer.run(allocator, procedure_usage, solved, .source),
@@ -146,8 +150,9 @@ const Candidate = struct {
 
 /// Which bodies are candidates: wrappers and bodies used once by the whole
 /// program's calls or by their module's source, or only wrappers of
-/// compiler-provided low-level templates, which needs no use information.
-const CandidateRule = enum { program, source, provided_low_level };
+/// compiler-provided low-level templates, or only those whose operation has
+/// type-only operands. The last two need no use information.
+const CandidateRule = enum { program, source, provided_low_level, type_only_operands };
 
 const MaterializationState = enum {
     unknown,
@@ -170,7 +175,7 @@ const InlineAnalyzer = struct {
         solved: *const Solved.Program,
         rule: CandidateRule,
     ) std.mem.Allocator.Error!OwnedPlan {
-        if (rule != .provided_low_level and procedure_usage.items.len != solved.lifted.fnCount()) {
+        if (rule != .provided_low_level and rule != .type_only_operands and procedure_usage.items.len != solved.lifted.fnCount()) {
             Common.invariant("optimized inline analysis requires exact use information for every lifted function");
         }
         const decisions = try allocator.alloc(Decision, solved.lifted.fnCount());
@@ -199,7 +204,7 @@ const InlineAnalyzer = struct {
         errdefer inline_bodies.deinit(allocator);
         const kinds = try allocator.alloc(InlineKind, decisions.len);
         errdefer allocator.free(kinds);
-        // The low-level wrapper rule runs without use information, and a
+        // The low-level wrapper rules run without use information, and a
         // wrapper body holds no `return`.
         const returns = try allocator.alloc(bool, if (procedure_usage.items.len == 0) 0 else decisions.len);
         errdefer allocator.free(returns);
@@ -228,8 +233,14 @@ const InlineAnalyzer = struct {
     }
 
     fn inlineCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) std.mem.Allocator.Error!?Candidate {
-        if (self.rule == .provided_low_level) {
-            if (!(self.solved.lifted.getFn(fn_id).source orelse return null).provides_low_level) return null;
+        const source = self.solved.lifted.getFn(fn_id).source;
+        const low_level_rule_admits: ?bool = switch (self.rule) {
+            .provided_low_level => (source orelse return null).provided_low_level != .none,
+            .type_only_operands => (source orelse return null).provided_low_level == .operation_with_type_only_operands,
+            .program, .source => null,
+        };
+        if (low_level_rule_admits) |admits| {
+            if (!admits) return null;
             return if (try self.wrapperCandidate(fn_id)) |body| .{ .body = body, .kind = .wrapper } else null;
         }
         // A pack program inlines a wrapper exactly as any program does.

@@ -3428,13 +3428,13 @@ const Solver = struct {
                 if (transform.args.count() != 1) Common.invariant("list map transform must have one argument");
                 try self.unify(try self.listElem(args[0]), self.program.types.spanItem(transform.args, 0));
             },
-            // The buffer is typed by the output item, so only the transform's
-            // type says that a slot read here holds an input item.
+            // The buffer is typed by the output item, so only the input
+            // list's type says that a slot read here holds one of its items.
+            // The map's transform cannot say it: each reference to a known
+            // transform function instantiates that function's group anew.
             .list_map_extract_unsafe => {
                 expectLowLevelArity(op, args, 3);
-                const transform = try self.functionShape(args[2]);
-                if (transform.args.count() != 1) Common.invariant("list map transform must have one argument");
-                try self.unify(expected, self.program.types.spanItem(transform.args, 0));
+                try self.unify(expected, try self.listElem(args[2]));
             },
             .list_move_out_unsafe => {
                 expectLowLevelArity(op, args, 2);
@@ -7534,8 +7534,8 @@ test "lambda solved reading a retyped list buffer keeps the input callable flow"
     defer solver.deinit();
 
     const scalar = try program.types.add(.{ .primitive = .u64 });
-    var callables: [4]Type.TypeVarId = undefined;
-    var elements: [4]Type.TypeVarId = undefined;
+    var callables: [3]Type.TypeVarId = undefined;
+    var elements: [3]Type.TypeVarId = undefined;
     for (&callables, &elements) |*callable, *element| {
         callable.* = try program.types.add(.unbound);
         element.* = try program.types.add(.{ .func = .{
@@ -7546,19 +7546,12 @@ test "lambda solved reading a retyped list buffer keeps the input callable flow"
     }
     const input_list = try program.types.add(.{ .list = elements[0] });
     const buffer = try program.types.add(.{ .list = elements[1] });
-    const transform = try program.types.add(.{ .func = .{
-        .args = try program.types.addSpan(&.{elements[2]}),
-        .callable = try program.types.add(.unbound),
-        .ret = elements[1],
-    } });
-    const reuse_result = try program.types.add(.{ .primitive = .u8 });
-    try solver.bindLowLevelTypes(.list_map_can_reuse, reuse_result, &.{ input_list, transform });
 
     // The item read from the buffer has the input list's callable set, though
     // the buffer's type names only the output item.
-    try solver.bindLowLevelTypes(.list_map_extract_unsafe, elements[3], &.{ buffer, scalar, transform });
-    try std.testing.expectEqual(program.types.rootCompressed(callables[0]), program.types.rootCompressed(callables[3]));
-    try std.testing.expect(program.types.rootCompressed(callables[3]) != program.types.rootCompressed(callables[1]));
+    try solver.bindLowLevelTypes(.list_map_extract_unsafe, elements[2], &.{ buffer, scalar, input_list });
+    try std.testing.expectEqual(program.types.rootCompressed(callables[0]), program.types.rootCompressed(callables[2]));
+    try std.testing.expect(program.types.rootCompressed(callables[2]) != program.types.rootCompressed(callables[1]));
 }
 
 test "lambda solved moving an item out of a list keeps its callable set" {

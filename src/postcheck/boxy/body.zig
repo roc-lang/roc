@@ -8899,7 +8899,10 @@ pub const Builder = struct {
             const owner = self.program.module(key.module);
             const template = owner.view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
             if (template.provided_low_level) |op| {
-                try self.emitLowLevelCall(op, explicit, ret, arg_types);
+                // The wrapper's body drops its type-only operands, so this
+                // path does too.
+                const runtime_count = explicit.len - op.typeOnlyOperands();
+                try self.emitLowLevelCall(op, explicit[0..runtime_count], ret, arg_types[0..runtime_count]);
                 const value = self.popValue();
                 return try self.pushValue(try self.adaptValue(value, ret, result_ty));
             }
