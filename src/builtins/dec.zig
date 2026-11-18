@@ -325,45 +325,23 @@ pub const RocDec = extern struct {
         }
     }
 
+    /// Rescale the exact product toward zero, returning the signed bound on overflow.
     pub fn mulWithOverflow(self: RocDec, other: RocDec) WithOverflow(RocDec) {
-        const self_i128 = self.num;
-        const other_i128 = other.num;
-        // const answer = 0; //self_i256 * other_i256;
-
-        const is_answer_negative = (self_i128 < 0) != (other_i128 < 0);
-
-        const self_u128 = @abs(self_i128);
-        if (self_u128 > @as(u128, @intCast(std.math.maxInt(i128)))) {
-            if (other_i128 == 0) {
-                return .{ .value = RocDec{ .num = 0 }, .has_overflowed = false };
-            } else if (other_i128 == RocDec.one_point_zero.num) {
-                return .{ .value = self, .has_overflowed = false };
-            } else if (is_answer_negative) {
-                return .{ .value = RocDec.min, .has_overflowed = true };
-            } else {
-                return .{ .value = RocDec.max, .has_overflowed = true };
-            }
+        const negative = (self.num < 0) != (other.num < 0);
+        const magnitude = mul_and_decimalize(@abs(self.num), @abs(other.num));
+        // Bounds apply after rescaling, and the negative range has one extra
+        // representable magnitude. Neither input needs to fit as a positive i128.
+        const limit = @as(u128, std.math.maxInt(i128)) + @intFromBool(negative);
+        if (magnitude.has_overflowed or magnitude.value > limit) {
+            return .{ .value = if (negative) RocDec.min else RocDec.max, .has_overflowed = true };
         }
+        const bits = if (negative) 0 -% magnitude.value else magnitude.value;
+        return .{ .value = .{ .num = @bitCast(bits) }, .has_overflowed = false };
+    }
 
-        const other_u128 = @abs(other_i128);
-        if (other_u128 > @as(u128, @intCast(std.math.maxInt(i128)))) {
-            if (self_i128 == 0) {
-                return .{ .value = RocDec{ .num = 0 }, .has_overflowed = false };
-            } else if (self_i128 == RocDec.one_point_zero.num) {
-                return .{ .value = other, .has_overflowed = false };
-            } else if (is_answer_negative) {
-                return .{ .value = RocDec.min, .has_overflowed = true };
-            } else {
-                return .{ .value = RocDec.max, .has_overflowed = true };
-            }
-        }
-
-        const unsigned_answer = mul_and_decimalize(self_u128, other_u128);
-        if (is_answer_negative) {
-            return .{ .value = RocDec{ .num = -unsigned_answer.value }, .has_overflowed = unsigned_answer.has_overflowed };
-        } else {
-            return .{ .value = RocDec{ .num = unsigned_answer.value }, .has_overflowed = unsigned_answer.has_overflowed };
-        }
+    pub fn mulSaturated(self: RocDec, other: RocDec) RocDec {
+        // mulWithOverflow returns the signed bound on overflow.
+        return self.mulWithOverflow(other).value;
     }
 
     pub fn trunc(
@@ -930,17 +908,19 @@ fn decAtanReduced(value: RocDec) RocDec {
     return RocDec{ .num = z };
 }
 
-fn mul_and_decimalize(a: u128, b: u128) WithOverflow(i128) {
+fn mul_and_decimalize(a: u128, b: u128) WithOverflow(u128) {
     const answer_u256 = mul_u128(a, b);
 
     var lhs_hi = answer_u256.hi;
     var lhs_lo = answer_u256.lo;
 
-    // Divide - or just add 1, multiply by floor(2^315/10^18), then right shift 315 times.
-    // floor(2^315/10^18) is 66749594872528440074844428317798503581334516323645399060845050244444366430645
+    // For P = a*b <= 2^254 and S = 10^18, floor(P/S) equals
+    // floor((P+1)*floor(2^315/S)/2^315). The reciprocal's downward error
+    // is less than (P+1)/2^315 < 1/S, so adding 1 preserves the exact quotient.
+    // This avoids a general wide division without sacrificing any precision.
 
     // Add 1.
-    // This can't overflow because the initial numbers are only 127bit due to removing the sign bit.
+    // Magnitudes are at most 2^127, so the product plus one fits in 256 bits.
     var answer = @addWithOverflow(lhs_lo, 1);
     lhs_lo = answer[0];
     var overflowed = answer[1];
@@ -1053,14 +1033,13 @@ fn mul_and_decimalize(a: u128, b: u128) WithOverflow(i128) {
     // 315 - 256 is 59. So shift c right 59 times.
     // d takes up the higher space above c, so shift it left by (128 - 59 = 69).
 
-    // Since d is being shift left 69 times, all of those 69 bits (+1 for the sign bit)
-    // must be zero. Otherwise, we have an overflow.
-    const d_high_bits = i128h.shr(d, 58);
+    // The upper 69 bits must be zero for the quotient to fit in u128.
+    // The caller checks the sign-dependent i128 bound after rescaling.
+    const d_high_bits = i128h.shr(d, 59);
     const shifted = i128h.shr(c, 59) | i128h.shl(d, 69);
-    const exceeds_i128 = shifted > @as(u128, @intCast(std.math.maxInt(i128)));
-    const has_overflowed = overflowed != 0 or d_high_bits != 0 or exceeds_i128;
+    const has_overflowed = overflowed != 0 or d_high_bits != 0;
     return .{
-        .value = if (has_overflowed) std.math.maxInt(i128) else @as(i128, @intCast(shifted)),
+        .value = shifted,
         .has_overflowed = has_overflowed,
     };
 }
@@ -1257,6 +1236,11 @@ pub fn mulOrPanicC(
     roc_ops: *RocOps,
 ) callconv(.c) RocDec {
     return @call(.always_inline, RocDec.mul, .{ arg1, arg2, roc_ops });
+}
+
+/// C ABI multiplication wrapper that saturates after fixed-point rescaling.
+pub fn mulSaturatedC(arg1: RocDec, arg2: RocDec, _: *RocOps) callconv(.c) RocDec {
+    return arg1.mulSaturated(arg2);
 }
 
 fn expectRocDecConstant(actual: RocDec, expected_text: []const u8) error{ InvalidExpectedDecimal, TestExpectedEqual }!void {
@@ -1637,6 +1621,44 @@ test "sub: 0" {
 
 test "abs: Dec.lowest is out of range" {
     try std.testing.expectError(error.OutOfRange, RocDec.min.abs());
+}
+
+test "mul: exact fixed-point oracle across signs, fractions, and bounds" {
+    const cases = comptime blk: {
+        @setEvalBranchQuota(100_000);
+        const scale = RocDec.one_point_zero_i128;
+        const min = std.math.minInt(i128);
+        const max = std.math.maxInt(i128);
+        const inputs = [_]i128{
+            min,                                     min + 1,                                min + 2,           @divTrunc(min, 2),     @divTrunc(min, 2) - 1,
+            -68056473384187692692500000000000000000, -scale * 5 / 2,                         -scale * 2,        -scale - 1,            -scale,
+            -scale + 1,                              -scale / 2,                             -1,                0,                     1,
+            scale / 2,                               scale - 1,                              scale,             scale + 1,             scale * 2,
+            scale * 5 / 2,                           68056473384187692692500000000000000000, @divTrunc(max, 2), @divTrunc(max, 2) + 1, max - 1,
+            max,
+        };
+        const Case = struct { a: i128, b: i128, value: i128, overflow: bool };
+        var result: [inputs.len * inputs.len]Case = undefined;
+        var index = 0;
+        for (inputs) |a| {
+            for (inputs) |b| {
+                const exact = @divTrunc(@as(i256, a) * @as(i256, b), scale);
+                result[index] = .{
+                    .a = a,
+                    .b = b,
+                    .value = @intCast(std.math.clamp(exact, min, max)),
+                    .overflow = exact < min or exact > max,
+                };
+                index += 1;
+            }
+        }
+        break :blk result;
+    };
+    for (cases) |case| {
+        const actual = RocDec.mulWithOverflow(.{ .num = case.a }, .{ .num = case.b });
+        try std.testing.expectEqual(case.overflow, actual.has_overflowed);
+        if (!case.overflow) try std.testing.expectEqual(case.value, actual.value.num);
+    }
 }
 
 test "mul: by 0" {

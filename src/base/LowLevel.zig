@@ -201,6 +201,8 @@ pub const LowLevel = enum(u16) {
     num_float_sub,
     num_float_mul,
     dec_mul,
+    /// Multiply, rescale toward zero, and clamp to the signed Dec bounds.
+    dec_mul_saturated,
     num_div_by,
     num_div_by_checked,
     num_div_trunc_by,
@@ -1332,6 +1334,7 @@ pub const LowLevel = enum(u16) {
         .num_float_sub = byType(.none()),
         .num_float_mul = byType(.none()),
         .dec_mul = byType(.none()),
+        .dec_mul_saturated = byType(.none()),
         .num_div_by = byType(.none()),
         .num_div_by_checked = byType(.none()),
         .num_div_trunc_by = byType(.none()),
