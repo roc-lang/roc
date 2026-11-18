@@ -8051,6 +8051,11 @@ family as a captured function value; the constructor calls `rename_field`
 through the value it captures, since the names tuple that holds the values for
 every other piece is what the constructor builds.
 
+Restoring a stored function replays each lexical scope's dispatch relations
+with that scope's retained evidence frame as the head. Scope labels alone
+cannot select evidence: depth/index references are relative to their owning
+frame, not to the innermost frame of the restored closure.
+
 A block-local value binding whose own binders are referenced inside its
 expression is a recursive value. Canonicalization rejects an eager
 self-reference, so every such reference is delayed through a function in the
@@ -18538,8 +18543,7 @@ ends, unwrapping its `Try` as an in-place conversion does.
 A root exists once the literal's own type is closed, which says nothing about
 the other types at its edge: `inner({ w: y }, 0)` with `0 : U64` has a root
 while `y` is a variable of the enclosing scheme. The wrapper has no enclosing
-scope, so such a variable seals, and a requirement over it names a type no
-value of the program has and a dictionary only the unentered scope holds. A
+scope, and an unrelated constrained row cannot be sealed there. A
 chain frame therefore composes nothing when it is entered: each dictionary and
 each literal argument is composed at its first read, in the scope holding the
 frame's edge (`Body.frameDictionary`, `frameLiteral`), and an exact procedure
@@ -18548,6 +18552,14 @@ evidence reads through them. A conversion reads the requirements of the
 literal's own closed type, whose evidence names no scope, so a read of an
 unentered scope is a compiler invariant. A frame descriptor is never read: a
 frame's types are its environment.
+
+Literal frames retain checked substitutions rather than runtime call instances.
+Each demanded type reads its variables' actuals through those scoped
+substitutions before ordinary type conversion, including field kinds and
+lexical bindings (`LazySubstitution`). Substitution is lazy, iterative and
+memoized within the frame. Unread actuals are never converted, and the ordinary concrete converter does not perform
+lazy variable lookup. A local procedure that actually reads its declaration
+table demands that complete instance separately.
 
 Forwarding a dictionary through a chain frame still crosses that frame's
 parameter interface. Every frame composes its dictionary through the same
