@@ -757,9 +757,6 @@ const RecordFrame = struct {
     common: FillCommon,
     source_fields: RecordField.SafeMultiList.Range,
     ext: Var,
-    /// Whether the source ext is a flex or rigid with constraints, read when
-    /// the ext is requested (`recordConstrainedRowTailCopy`).
-    ext_constrained: bool = false,
     vars_base: u32,
     field_idx: u32 = 0,
     field_axis: enum { type_var, presence_var } = .type_var,
@@ -771,9 +768,6 @@ const TagUnionFrame = struct {
     common: FillCommon,
     source_tags: Tag.SafeMultiList.Range,
     ext: Var,
-    /// Whether the source ext is a flex or rigid with constraints, read when
-    /// the ext is requested (`recordConstrainedRowTailCopy`).
-    ext_constrained: bool = false,
     tag_idx: u32 = 0,
     /// Base of the current tag's copied payload vars in `Scratch.value_stack`.
     vars_base: u32,
@@ -1535,16 +1529,8 @@ pub const Instantiator = struct {
         initial_var: Var,
         force_root_copy: bool,
     ) std.mem.Allocator.Error!bool {
-        return self.requestResolvedVar(self.store.resolveVarWord(initial_var), force_root_copy);
-    }
-
-    /// `requestVar` for a var its caller has resolved.
-    fn requestResolvedVar(
-        self: *Self,
-        resolved: TypesStore.ResolvedVarWord,
-        force_root_copy: bool,
-    ) std.mem.Allocator.Error!bool {
         const machine = self.scratch();
+        const resolved = self.store.resolveVarWord(initial_var);
         const resolved_var = resolved.var_;
         const desc_idx = resolved.desc_idx;
 
@@ -2282,14 +2268,11 @@ pub const Instantiator = struct {
                     machine.value_stack.items.len = frame.vars_base;
                     frame.stage = .await_ext;
                     self.current_reach = .nested;
-                    const ext = self.store.resolveVarWord(frame.ext);
-                    frame.ext_constrained = self.constrained_row_tail_copies != null and
-                        self.store.variableConstraintsAt(ext.desc_idx).len() != 0;
-                    if (!try self.requestResolvedVar(ext, false)) return false;
+                    if (!try self.requestVar(frame.ext, false)) return false;
                 },
                 .await_ext => {
                     const fresh_ext = machine.value_stack.pop().?;
-                    try self.recordConstrainedRowTailCopy(frame.ext_constrained, fresh_ext);
+                    try self.recordConstrainedRowTailCopy(frame.ext, fresh_ext);
                     try self.finishFrame(frame.common, Content{ .structure = FlatType{ .record = Record{
                         .fields = frame.fields_range,
                         .ext = fresh_ext,
@@ -2301,10 +2284,16 @@ pub const Instantiator = struct {
     }
 
     /// Record `fresh_ext`, the copy of a row's ext, when the source ext is a
-    /// flex or rigid with constraints (`source_constrained`).
-    fn recordConstrainedRowTailCopy(self: *Self, source_constrained: bool, fresh_ext: Var) std.mem.Allocator.Error!void {
+    /// flex or rigid with constraints. The descriptor's word tells its kind,
+    /// so only a variable's constraint range is read.
+    fn recordConstrainedRowTailCopy(self: *Self, source_ext: Var, fresh_ext: Var) std.mem.Allocator.Error!void {
         const sink = self.constrained_row_tail_copies orelse return;
-        if (!source_constrained) return;
+        const source = self.store.resolveVarWord(source_ext);
+        switch (source.word.kind) {
+            .flex, .rigid => {},
+            .alias, .field_presence, .err, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return,
+        }
+        if (self.store.variableConstraintsAt(source.desc_idx).len() == 0) return;
         try sink.put(self.store.resolveVarWord(fresh_ext).var_, {});
     }
 
@@ -2353,10 +2342,7 @@ pub const Instantiator = struct {
                         // The ext is the position a polarity marker occupies,
                         // so it keeps this union's own reach.
                         self.current_reach = frame.saved_reach;
-                        const ext = self.store.resolveVarWord(frame.ext);
-                        frame.ext_constrained = self.constrained_row_tail_copies != null and
-                            self.store.variableConstraintsAt(ext.desc_idx).len() != 0;
-                        if (!try self.requestResolvedVar(ext, false)) return false;
+                        if (!try self.requestVar(frame.ext, false)) return false;
                         continue;
                     }
                     // Indexing through the run's start only happens when the
@@ -2383,7 +2369,7 @@ pub const Instantiator = struct {
                 },
                 .await_ext => {
                     const fresh_ext = machine.value_stack.pop().?;
-                    try self.recordConstrainedRowTailCopy(frame.ext_constrained, fresh_ext);
+                    try self.recordConstrainedRowTailCopy(frame.ext, fresh_ext);
                     // A marker resolved open is this union's ext: hand the
                     // post-body audit the tags it sits next to, so its report
                     // can suggest a listed tag for an unlisted near-miss, and
