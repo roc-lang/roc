@@ -189,6 +189,36 @@ const SettledDescs = struct {
         for (self.list.items) |index| self.bits.unset(index);
         self.list.clearRetainingCapacity();
     }
+
+    /// What a merge of two classes needs to know about this set before it
+    /// writes anything (see `Store.unionRows`).
+    const Merge = struct {
+        before: usize,
+        a_settled: bool,
+        b_settled: bool,
+    };
+
+    /// Note a merge that will give `a`'s and `b`'s vars content `a_kept` or
+    /// `b_kept` says is each side's own. A settled side whose content
+    /// changes clears the set.
+    inline fn beginMerge(self: *SettledDescs, a: DescStore.Idx, b: DescStore.Idx, a_kept: bool) Merge {
+        if (self.list.items.len == 0) return .{ .before = 0, .a_settled = false, .b_settled = false };
+        const merge: Merge = .{ .before = self.list.items.len, .a_settled = self.contains(a), .b_settled = self.contains(b) };
+        if (merge.a_settled and !a_kept) {
+            self.clear();
+            return .{ .before = 0, .a_settled = merge.a_settled, .b_settled = merge.b_settled };
+        }
+        return merge;
+    }
+
+    /// After the merge: when nothing cleared the set and a settled side kept
+    /// its content, the merged class `merged` is settled.
+    inline fn finishMerge(self: *SettledDescs, gpa: Allocator, merge: Merge, merged: DescStore.Idx, a_kept: bool, b_kept: bool) Allocator.Error!void {
+        const nothing_changed = self.list.items.len == merge.before and merge.before != 0;
+        if (nothing_changed and ((merge.a_settled and a_kept) or (merge.b_settled and b_kept))) {
+            try self.insert(gpa, merged);
+        }
+    }
 };
 
 /// Reperents either type data *or* a symlink to another type variable
@@ -966,7 +996,8 @@ pub const Store = struct {
     pub fn rollbackToSavepoint(self: *Self, savepoint: *Savepoint) void {
         self.debugAssertUnsealed();
         self.class_watch.noteRollback();
-        for (self.settledSets()) |set| set.clear();
+        self.settled_descs.clear();
+        self.function_free_descs.clear();
         // Replay journaled in-place writes in reverse so each pre-existing entry
         // lands back on its original value.
         var di = self.desc_trail.items.len;
@@ -1083,9 +1114,8 @@ pub const Store = struct {
                 self.class_watch.noteWrite(desc_idx);
                 // The slot's vars stop resolving to a settled descriptor.
                 if (!self.relinking_compared_classes and !std.meta.eql(val, Slot{ .root = desc_idx })) {
-                    for (self.settledSets()) |set| {
-                        if (set.contains(desc_idx)) set.clear();
-                    }
+                    if (self.settled_descs.contains(desc_idx)) self.settled_descs.clear();
+                    if (self.function_free_descs.contains(desc_idx)) self.function_free_descs.clear();
                 }
             },
             .redirect => {},
@@ -1126,8 +1156,11 @@ pub const Store = struct {
         // generalization pass has marked.
         std.debug.assert(!self.descs.getWord(idx).marked());
         try self.journalDescWrite(idx);
-        for (self.settledSets()) |set| {
-            if (set.contains(idx) and !DescStore.sameContent(self.descs.getRow(idx), row)) set.clear();
+        if ((self.settled_descs.contains(idx) or self.function_free_descs.contains(idx)) and
+            !DescStore.sameContent(self.descs.getRow(idx), row))
+        {
+            if (self.settled_descs.contains(idx)) self.settled_descs.clear();
+            if (self.function_free_descs.contains(idx)) self.function_free_descs.clear();
         }
         self.descs.setRow(idx, row);
     }
@@ -1192,11 +1225,6 @@ pub const Store = struct {
     /// change to a recorded class's observable content forgets every record.
     pub fn isFunctionFree(self: *const Self, var_: Var) bool {
         return self.function_free_descs.contains(self.resolveVar(var_).desc_idx);
-    }
-
-    /// Every set of settled descriptors the store keeps exact.
-    fn settledSets(self: *Self) [2]*SettledDescs {
-        return .{ &self.settled_descs, &self.function_free_descs };
     }
 
     /// In-place equivalence-class root metadata write. See setSlot.
@@ -1287,9 +1315,8 @@ pub const Store = struct {
     fn recycleDesc(self: *Self, desc_idx: DescStore.Idx) void {
         std.debug.assert(!self.savepoint_active);
         const index: u32 = @backingInt(desc_idx);
-        for (self.settledSets()) |set| {
-            if (index < set.bits.bit_length) set.bits.unset(index);
-        }
+        if (index < self.settled_descs.bits.bit_length) self.settled_descs.bits.unset(index);
+        if (index < self.function_free_descs.bits.bit_length) self.function_free_descs.bits.unset(index);
         if (index < self.class_watch.watched.bit_length) self.class_watch.watched.unset(index);
         if (self.descs.getWord(desc_idx).flags().frozen) _ = self.frozen_anchors.remove(desc_idx);
         const plan_slot = self.derivedMapPlanSlot(desc_idx);
@@ -3323,19 +3350,8 @@ pub const Store = struct {
         // over to the merged class; otherwise a settled side has changed.
         const a_kept = DescStore.sameContent(self.descs.getRow(a_data.desc_idx), merged_row);
         const b_kept = DescStore.sameContent(self.descs.getRow(b_data.desc_idx), merged_row);
-        const sets = self.settledSets();
-        var settled_before: [sets.len]usize = undefined;
-        var a_settled: [sets.len]bool = undefined;
-        var b_settled: [sets.len]bool = undefined;
-        for (sets, 0..) |set, i| {
-            settled_before[i] = set.list.items.len;
-            a_settled[i] = set.contains(a_data.desc_idx);
-            b_settled[i] = set.contains(b_data.desc_idx);
-            if (a_settled[i] and !a_kept) {
-                set.clear();
-                settled_before[i] = 0;
-            }
-        }
+        const settled_merge = self.settled_descs.beginMerge(a_data.desc_idx, b_data.desc_idx, a_kept);
+        const function_free_merge = self.function_free_descs.beginMerge(a_data.desc_idx, b_data.desc_idx, a_kept);
 
         // The unifier computes merged content for b's descriptor destination.
         // Keep that destination even when balancing retains a's storage root.
@@ -3344,12 +3360,8 @@ pub const Store = struct {
         defer self.relinking_compared_classes = false;
         try self.linkStorageRoots(a_data, b_data, b_data.desc_idx, b_data.meta.checked_var);
         try self.freeDesc(a_data.desc_idx, a_data.storage_var);
-        for (sets, 0..) |set, i| {
-            const nothing_changed = set.list.items.len == settled_before[i] and settled_before[i] != 0;
-            if (nothing_changed and ((a_settled[i] and a_kept) or (b_settled[i] and b_kept))) {
-                try set.insert(self.gpa, b_data.desc_idx);
-            }
-        }
+        try self.settled_descs.finishMerge(self.gpa, settled_merge, b_data.desc_idx, a_kept, b_kept);
+        try self.function_free_descs.finishMerge(self.gpa, function_free_merge, b_data.desc_idx, a_kept, b_kept);
     }
 
     /// `union_` when either class is frozen. The merged class keeps the frozen
