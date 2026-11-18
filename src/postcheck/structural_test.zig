@@ -545,7 +545,9 @@ test "Monotype gates divergent relations and crash dispatches before type instan
     // Only a statically closed procedure may consult its callable type before
     // the crash gate, because a closed resolution is never a crash dispatch.
     const before_closed_arm = sourceSliceBetween(crash_dispatch, "fn stepDispatchLower(", ".direct_closed => |direct| {");
-    const after_closed_arm = sourceSliceBetween(crash_dispatch, ".direct_parametric => |direct| {", "const expected_ret_ty:");
+    const parametric_arm_index = std.mem.find(u8, crash_dispatch, ".direct_parametric => |direct| {") orelse
+        return error.TestUnexpectedResult;
+    const after_closed_arm = crash_dispatch[parametric_arm_index..];
     try expectNotContains(before_closed_arm, "plan.callable_ty");
     try expectNotContains(after_closed_arm, "plan.callable_ty");
     const closed_procedure_arm = sourceSliceBetween(crash_dispatch, ".procedure => {", ".intrinsic, .graph_participating => {},");
