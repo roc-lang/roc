@@ -1423,6 +1423,8 @@ pub fn parseProgram(
         0,
         .{
             .module_env_storage = .{ .checked_source = main_checked.module_env },
+            // Builtin is the first import, borrowed or published first.
+            .builtin_artifact = .{ .imported = publish_imports[0].key.digest() },
             .io = options.io,
             .imports = publish_imports,
             .available_artifacts = available_artifacts,
@@ -1930,6 +1932,7 @@ fn publishImportArtifacts(
             1,
             .{
                 .module_env_storage = .{ .static_builtin = builtin_module.?.env },
+                .builtin_artifact = .this_module,
                 .hoisted_roots = .none,
                 .io = io,
                 .compile_time_finalizer = CompileTimeFinalization.finalizerWithOptions(ctfe_options),
@@ -1972,6 +1975,8 @@ fn publishImportArtifacts(
                 module_idx,
                 .{
                     .module_env_storage = .{ .checked_source = extra_modules[extra_i].module_env },
+                    // Builtin is published or borrowed before any other module.
+                    .builtin_artifact = .{ .imported = published_keys.items[0].key.digest() },
                     .io = io,
                     .imports = published_keys.items,
                     .available_artifacts = available_artifacts,

@@ -3212,7 +3212,7 @@ pub const Coordinator = struct {
             const artifact = self.checkedArtifactByKey(.{ .bytes = entry.key_ptr.* }).?;
             try appendImportedArtifactViewIfMissing(&available, self.gpa, platform.key, artifact);
         }
-        var paired = try CheckedArtifact.pairCheckedPlatform(self.gpa, platform, app, available.items);
+        var paired = try CheckedArtifact.pairCheckedPlatform(self.gpa, platform, app, available.items, self.builtin_modules.checked_artifact.key.digest());
         var paired_owned = true;
         errdefer if (paired_owned) paired.deinitRetainingModuleEnv(self.gpa);
         const state = try self.gpa.create(messages.PendingEvaluationState);
@@ -8301,6 +8301,7 @@ pub const Coordinator = struct {
             result_alloc,
             env,
             self.builtin_modules.builtin_module.env,
+            self.builtin_modules.checked_artifact.key.digest(),
             task.imported_envs,
             task.imported_artifacts,
             task.available_artifacts,

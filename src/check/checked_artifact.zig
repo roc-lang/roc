@@ -704,9 +704,47 @@ fn moduleViewIsSuperseded(
     return false;
 }
 
+/// The Builtin artifact of a publication. Every consumer of an artifact has
+/// Builtin without its being listed, so publication leaves it out of the
+/// artifact's public API dependencies and lowering visibility exactly as it
+/// leaves out the artifact itself.
+pub const BuiltinArtifact = union(enum) {
+    /// The module being published is Builtin.
+    this_module,
+    /// The key of the Builtin artifact the module was checked against.
+    imported: ModuleId,
+};
+
+/// The one artifact among a publication's inputs with the Builtin role is
+/// the one `builtin_artifact` names.
+fn assertBuiltinArtifact(module_env: *const ModuleEnv, inputs: PublishInputs, builtin_artifact: ModuleId) void {
+    switch (inputs.builtin_artifact) {
+        .this_module => std.debug.assert(module_env.module_role == .builtin),
+        .imported => std.debug.assert(module_env.module_role != .builtin),
+    }
+    var builtin_views: usize = 0;
+    for (inputs.imports) |*import_artifact| {
+        if (import_artifact.view.module_env.module_role != .builtin) continue;
+        std.debug.assert(import_artifact.key.digest().eql(builtin_artifact));
+        builtin_views += 1;
+    }
+    for ([_][]const ImportedModuleView{ inputs.available_artifacts, inputs.relation_artifacts }) |views| {
+        for (views) |*view| {
+            if (view.module_env.module_role != .builtin) continue;
+            std.debug.assert(view.key.digest().eql(builtin_artifact));
+            builtin_views += 1;
+        }
+    }
+    switch (inputs.builtin_artifact) {
+        .this_module => {},
+        .imported => std.debug.assert(builtin_views != 0),
+    }
+}
+
 /// Public `PublishInputs` declaration.
 pub const PublishInputs = struct {
     module_env_storage: ModuleEnvStorage,
+    builtin_artifact: BuiltinArtifact,
     /// Waits on the module's key slots when another thread is computing a key.
     io: std.Io,
     imports: []const PublishImportArtifact = &.{},
@@ -24208,11 +24246,14 @@ pub const PlatformPairing = struct {
 
 /// Instantiate only pairing-owned metadata from already checked modules. Both
 /// lowering strategies consume this view; neither sees a solver or source map.
+/// `builtin_artifact` is the key of the Builtin artifact the platform and app
+/// were checked against.
 pub fn pairCheckedPlatform(
     allocator: Allocator,
     platform: *const CheckedModuleArtifact,
     app: *const CheckedModuleArtifact,
     available_artifacts: []const ImportedModuleView,
+    builtin_artifact: ModuleId,
 ) Allocator.Error!CheckedModuleArtifact {
     std.debug.assert(platform.evaluation_state == .finalized);
     std.debug.assert(platform.checking_context_identity.platform_app_relation == null);
@@ -24453,7 +24494,11 @@ pub fn pairCheckedPlatform(
             .root => {},
         };
     }
-    result.lowering_visibility = try collectLoweringVisibility(session, result.key.digest(), result.direct_import_module_keys.items(), result.public_api_dependencies, &result.checked_types, &result.checked_procedure_templates, &result.callable_eval_templates, &result.entry_wrappers, &result.const_templates, &result.resolved_value_refs, &result.top_level_procedure_bindings, &result.platform_required_bindings, &result.static_dispatch_plans, &result.root_requests, &.{}, available_artifacts, &relations, &result.exported_procedure_templates, &result.exported_procedure_bindings, &result.exported_const_templates);
+    result.lowering_visibility = try collectLoweringVisibility(session, result.key.digest(), builtin_artifact, result.direct_import_module_keys.items(), result.public_api_dependencies, &result.checked_types, &result.checked_procedure_templates, &result.callable_eval_templates, &result.entry_wrappers, &result.const_templates, &result.resolved_value_refs, &result.top_level_procedure_bindings, &result.platform_required_bindings, &result.static_dispatch_plans, &result.root_requests, &.{}, available_artifacts, &relations, .{
+        .procedure_templates = &result.exported_procedure_templates,
+        .procedure_bindings = &result.exported_procedure_bindings,
+        .const_templates = &result.exported_const_templates,
+    });
     result.checked_types.key_names = null;
     return result;
 }
@@ -30122,8 +30167,7 @@ fn collectPublicApiDependencies(
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    builtin_artifact: ModuleId,
     exported_procedure_templates: *const ExportedProcedureTemplateTable,
     exported_procedure_bindings: *const ExportedProcedureBindingTable,
     exported_const_templates: *const ExportedConstTemplateTable,
@@ -30146,8 +30190,7 @@ fn collectPublicApiDependencies(
             checked_types,
             root,
             &visited_types,
-            imports,
-            available_artifacts,
+            builtin_artifact,
             &keys,
             &type_owner_keys,
         );
@@ -30165,8 +30208,7 @@ fn collectPublicApiDependencies(
             checked_types,
             root,
             &visited_types,
-            imports,
-            available_artifacts,
+            builtin_artifact,
             &keys,
             &type_owner_keys,
         );
@@ -30178,8 +30220,7 @@ fn collectPublicApiDependencies(
         artifact_key,
         checked_type_publication,
         checked_types,
-        imports,
-        available_artifacts,
+        builtin_artifact,
         &visited_types,
         &keys,
         &type_owner_keys,
@@ -30204,8 +30245,7 @@ fn collectPublicApiDependencies(
                 checked_types,
                 root,
                 &visited_types,
-                imports,
-                available_artifacts,
+                builtin_artifact,
                 &keys,
                 &type_owner_keys,
             );
@@ -30219,8 +30259,7 @@ fn collectPublicApiDependencies(
         checked_type_publication,
         checked_types,
         platform_required_declarations,
-        imports,
-        available_artifacts,
+        builtin_artifact,
         &visited_types,
         &keys,
         &type_owner_keys,
@@ -30229,8 +30268,7 @@ fn collectPublicApiDependencies(
     var closure_dependencies = PublicApiClosureDependencyCollector.init(
         allocator,
         artifact_key,
-        imports,
-        available_artifacts,
+        builtin_artifact,
         checked_templates,
         callable_eval_templates,
         entry_wrappers,
@@ -30268,8 +30306,7 @@ fn appendExposedTypeDeclarationPublicApiDependencies(
     artifact_key: ModuleId,
     checked_type_publication: *const CheckedTypePublication,
     checked_types: *const CheckedTypeStore,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    builtin_artifact: ModuleId,
     visited_types: *collections.DenseMap(CheckedTypeId, void),
     keys: *ArtifactKeyAccumulator,
     type_owner_keys: *ArtifactKeyAccumulator,
@@ -30320,8 +30357,7 @@ fn appendExposedTypeDeclarationPublicApiDependencies(
             checked_types,
             root,
             visited_types,
-            imports,
-            available_artifacts,
+            builtin_artifact,
             keys,
             type_owner_keys,
         );
@@ -30335,8 +30371,7 @@ fn appendPlatformRequiredDeclarationPublicApiDependencies(
     checked_type_publication: *const CheckedTypePublication,
     checked_types: *const CheckedTypeStore,
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    builtin_artifact: ModuleId,
     visited_types: *collections.DenseMap(CheckedTypeId, void),
     keys: *ArtifactKeyAccumulator,
     type_owner_keys: *ArtifactKeyAccumulator,
@@ -30349,8 +30384,7 @@ fn appendPlatformRequiredDeclarationPublicApiDependencies(
             checked_types,
             root,
             visited_types,
-            imports,
-            available_artifacts,
+            builtin_artifact,
             keys,
             type_owner_keys,
         );
@@ -30366,8 +30400,7 @@ fn appendPublicApiTypeDependencies(
     checked_types: *const CheckedTypeStore,
     root: CheckedTypeId,
     visited: *collections.DenseMap(CheckedTypeId, void),
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    builtin_artifact: ModuleId,
     keys: *ArtifactKeyAccumulator,
     type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
@@ -30391,8 +30424,7 @@ fn appendPublicApiTypeDependencies(
                     allocator,
                     artifact_key,
                     alias.owner_module.*,
-                    imports,
-                    available_artifacts,
+                    builtin_artifact,
                     keys,
                     type_owner_keys,
                 );
@@ -30404,8 +30436,7 @@ fn appendPublicApiTypeDependencies(
                     allocator,
                     artifact_key,
                     nominal.owner_module.*,
-                    imports,
-                    available_artifacts,
+                    builtin_artifact,
                     keys,
                     type_owner_keys,
                 );
@@ -30442,14 +30473,12 @@ fn appendPublicApiOwnerDependency(
     allocator: Allocator,
     artifact_key: ModuleId,
     owner_key: ModuleId,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    builtin_artifact: ModuleId,
     keys: *ArtifactKeyAccumulator,
     type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
-    if (ModuleId.eql(owner_key, artifact_key)) return;
+    if (ModuleId.eql(owner_key, artifact_key) or ModuleId.eql(owner_key, builtin_artifact)) return;
     if (keys.contains(owner_key) and type_owner_keys.contains(owner_key)) return;
-    if (publicApiDependencyKeyIsKnownBuiltin(owner_key, imports, available_artifacts)) return;
     _ = try keys.append(allocator, owner_key);
     _ = try type_owner_keys.append(allocator, owner_key);
 }
@@ -30461,26 +30490,13 @@ fn importedViewIdentityMatches(view: *const ImportedModuleView, origin_hash: *co
 fn appendPublicApiClosureDependencyKey(
     allocator: Allocator,
     artifact_key: ModuleId,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    builtin_artifact: ModuleId,
     keys: *ArtifactKeyAccumulator,
     key: ModuleId,
 ) Allocator.Error!void {
-    if (ModuleId.eql(key, artifact_key)) return;
+    if (ModuleId.eql(key, artifact_key) or ModuleId.eql(key, builtin_artifact)) return;
     if (keys.contains(key)) return;
-    if (publicApiDependencyKeyIsKnownBuiltin(key, imports, available_artifacts)) return;
     _ = try keys.append(allocator, key);
-}
-
-fn publicApiDependencyKeyIsKnownBuiltin(
-    key: ModuleId,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
-) bool {
-    if (dependencyViewByKey(key, imports, available_artifacts, &.{})) |view| {
-        return view.module_env.module_role == .builtin;
-    }
-    return false;
 }
 
 /// Walks the templates a module's public API reaches, following each one's
@@ -30489,8 +30505,7 @@ fn publicApiDependencyKeyIsKnownBuiltin(
 const PublicApiClosureDependencyCollector = struct {
     allocator: Allocator,
     artifact_key: ModuleId,
-    imports: []const PublishImportArtifact,
-    available_artifacts: []const ImportedModuleView,
+    builtin_artifact: ModuleId,
     checked_templates: *const CheckedProcedureTemplateTable,
     callable_eval_templates: *const CallableEvalTemplateTable,
     entry_wrappers: *const EntryWrapperTable,
@@ -30509,8 +30524,7 @@ const PublicApiClosureDependencyCollector = struct {
     fn init(
         allocator: Allocator,
         artifact_key: ModuleId,
-        imports: []const PublishImportArtifact,
-        available_artifacts: []const ImportedModuleView,
+        builtin_artifact: ModuleId,
         checked_templates: *const CheckedProcedureTemplateTable,
         callable_eval_templates: *const CallableEvalTemplateTable,
         entry_wrappers: *const EntryWrapperTable,
@@ -30525,8 +30539,7 @@ const PublicApiClosureDependencyCollector = struct {
         return .{
             .allocator = allocator,
             .artifact_key = artifact_key,
-            .imports = imports,
-            .available_artifacts = available_artifacts,
+            .builtin_artifact = builtin_artifact,
             .checked_templates = checked_templates,
             .callable_eval_templates = callable_eval_templates,
             .entry_wrappers = entry_wrappers,
@@ -30835,8 +30848,7 @@ const PublicApiClosureDependencyCollector = struct {
         try appendPublicApiClosureDependencyKey(
             self.allocator,
             self.artifact_key,
-            self.imports,
-            self.available_artifacts,
+            self.builtin_artifact,
             self.keys,
             key,
         );
@@ -30849,8 +30861,7 @@ const PublicApiClosureDependencyCollector = struct {
         try appendPublicApiClosureDependencyKey(
             self.allocator,
             self.artifact_key,
-            self.imports,
-            self.available_artifacts,
+            self.builtin_artifact,
             self.type_owner_keys,
             key,
         );
@@ -30865,6 +30876,7 @@ const LoweringVisibilityTypeVisit = struct {
 const LoweringVisibilityBuilder = struct {
     allocator: Allocator,
     artifact_key: ModuleId,
+    builtin_artifact: ModuleId,
     checked_types: *const CheckedTypeStore,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
@@ -30880,6 +30892,7 @@ const LoweringVisibilityBuilder = struct {
     fn init(
         allocator: Allocator,
         artifact_key: ModuleId,
+        builtin_artifact: ModuleId,
         checked_types: *const CheckedTypeStore,
         imports: []const PublishImportArtifact,
         available_artifacts: []const ImportedModuleView,
@@ -30888,6 +30901,7 @@ const LoweringVisibilityBuilder = struct {
         return .{
             .allocator = allocator,
             .artifact_key = artifact_key,
+            .builtin_artifact = builtin_artifact,
             .checked_types = checked_types,
             .imports = imports,
             .available_artifacts = available_artifacts,
@@ -30918,12 +30932,9 @@ const LoweringVisibilityBuilder = struct {
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, key);
         while (pending.pop()) |next| {
-            if (ModuleId.eql(next, self.artifact_key)) continue;
+            if (ModuleId.eql(next, self.artifact_key) or ModuleId.eql(next, self.builtin_artifact)) continue;
             const settled = try self.settled_keys.getOrPut(self.allocator, next);
             if (settled.found_existing) continue;
-            if (self.viewByKey(next)) |view| {
-                if (view.module_env.module_role == .builtin) continue;
-            }
             _ = try self.keys.append(self.allocator, next);
             try self.pushPublicApiDependencies(next, &pending);
         }
@@ -31037,9 +31048,28 @@ const LoweringVisibilityBuilder = struct {
     }
 };
 
+/// The export tables whose closures a lowering-visibility walk follows.
+const ExportedClosureTables = struct {
+    procedure_templates: *const ExportedProcedureTemplateTable,
+    procedure_bindings: *const ExportedProcedureBindingTable,
+    const_templates: *const ExportedConstTemplateTable,
+};
+
+/// The artifacts lowering may read: every direct import, every public API
+/// dependency, the owners of the root requests' types and every module their
+/// procedures and platform relations reach, and, transitively, the public API
+/// dependencies of each of those.
+///
+/// `exported_closures` is null when `public_api_dependencies` was collected
+/// from this artifact's own export tables (`collectPublicApiDependencies`):
+/// that walk follows the same closures with the same exclusions, so every key
+/// they name is already in its lists, which are appended here. A paired
+/// platform borrows the platform's lists but has export tables and bindings of
+/// its own, so it passes its tables to be walked.
 fn collectLoweringVisibility(
     allocator: Allocator,
     artifact_key: ModuleId,
+    builtin_artifact: ModuleId,
     direct_import_module_keys: []const CheckedModuleArtifactKey,
     public_api_dependencies: PublicApiDependencies,
     checked_types: *const CheckedTypeStore,
@@ -31055,13 +31085,12 @@ fn collectLoweringVisibility(
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
     relation_artifacts: []const ImportedModuleView,
-    exported_procedure_templates: *const ExportedProcedureTemplateTable,
-    exported_procedure_bindings: *const ExportedProcedureBindingTable,
-    exported_const_templates: *const ExportedConstTemplateTable,
+    exported_closures: ?ExportedClosureTables,
 ) Allocator.Error!LoweringVisibility {
     var builder = LoweringVisibilityBuilder.init(
         allocator,
         artifact_key,
+        builtin_artifact,
         checked_types,
         imports,
         available_artifacts,
@@ -31077,8 +31106,7 @@ fn collectLoweringVisibility(
     var closure_dependencies = PublicApiClosureDependencyCollector.init(
         allocator,
         artifact_key,
-        imports,
-        available_artifacts,
+        builtin_artifact,
         checked_templates,
         callable_eval_templates,
         entry_wrappers,
@@ -31101,12 +31129,14 @@ fn collectLoweringVisibility(
         if (request.procedure_use) |procedure| try closure_dependencies.appendProcedureUse(procedure);
     }
 
-    try closure_dependencies.appendExportedProcedureTemplates(exported_procedure_templates);
-    for (exported_procedure_bindings.bindings.items()) |binding| {
-        try closure_dependencies.appendClosure(exported_procedure_bindings.rowClosure(binding));
-    }
-    for (exported_const_templates.templates.items()) |template| {
-        try closure_dependencies.appendClosure(exported_const_templates.rowClosure(template));
+    if (exported_closures) |tables| {
+        try closure_dependencies.appendExportedProcedureTemplates(tables.procedure_templates);
+        for (tables.procedure_bindings.bindings.items()) |binding| {
+            try closure_dependencies.appendClosure(tables.procedure_bindings.rowClosure(binding));
+        }
+        for (tables.const_templates.templates.items()) |template| {
+            try closure_dependencies.appendClosure(tables.const_templates.rowClosure(template));
+        }
     }
 
     for (platform_required_bindings.bindings.items()) |binding| {
@@ -36693,6 +36723,11 @@ pub fn publishFromTypedModule(
     errdefer allocator.free(provides);
 
     const owner_artifact = artifact_key.digest();
+    const builtin_artifact: ModuleId = switch (inputs.builtin_artifact) {
+        .this_module => owner_artifact,
+        .imported => |key| key,
+    };
+    if (std.debug.runtime_safety) assertBuiltinArtifact(module_env, inputs, builtin_artifact);
     clock.lap(.identity);
 
     const promoted_local_procedures = module_env.promoted_local_procedures.items();
@@ -37327,8 +37362,7 @@ pub fn publishFromTypedModule(
         &platform_required_declarations,
         &platform_required_bindings,
         &static_dispatch_plans,
-        inputs.imports,
-        inputs.available_artifacts,
+        builtin_artifact,
         &exported_procedure_templates,
         &exported_procedure_bindings,
         &exported_const_templates,
@@ -37343,6 +37377,7 @@ pub fn publishFromTypedModule(
     var lowering_visibility = try collectLoweringVisibility(
         allocator,
         artifact_key.digest(),
+        builtin_artifact,
         direct_import_module_keys,
         public_api_dependencies,
         checked_types,
@@ -37358,9 +37393,11 @@ pub fn publishFromTypedModule(
         inputs.imports,
         inputs.available_artifacts,
         inputs.relation_artifacts,
-        &exported_procedure_templates,
-        &exported_procedure_bindings,
-        &exported_const_templates,
+        .{
+            .procedure_templates = &exported_procedure_templates,
+            .procedure_bindings = &exported_procedure_bindings,
+            .const_templates = &exported_const_templates,
+        },
     );
     errdefer lowering_visibility.deinit(allocator);
     clock.lap(.lowering_visibility);
@@ -37494,6 +37531,7 @@ fn expectProvidedExportKind(
     var artifact = try publishFromTypedModule(allocator, &modules, 1, .{
         .io = std.testing.io,
         .module_env_storage = .{ .checked_source = test_env.module_env },
+        .builtin_artifact = .{ .imported = builtin_artifact.key.digest() },
         .hoisted_roots = .none,
         .imports = &imports,
         .compile_time_finalizer = .{ .finalize = &NoFinalization.finalize },
@@ -38545,18 +38583,13 @@ test "lowering visibility follows recursive public API and type-owner dependenci
     defer platform_required_bindings.deinit(gpa);
     var root_requests = RootRequestTable{};
     defer root_requests.deinit(gpa);
-    var exported_procedure_templates = ExportedProcedureTemplateTable{};
-    defer exported_procedure_templates.deinit(gpa);
-    var exported_procedure_bindings = ExportedProcedureBindingTable{};
-    defer exported_procedure_bindings.deinit(gpa);
-    var exported_const_templates = ExportedConstTemplateTable{};
-    defer exported_const_templates.deinit(gpa);
 
     const direct_imports = [_]CheckedModuleArtifactKey{ key_d, key_a, key_a, key_builtin };
     const static_dispatch_plans = static_dispatch.StaticDispatchPlanTable{};
     var visibility = try collectLoweringVisibility(
         gpa,
         root_key.digest(),
+        key_builtin.digest(),
         &direct_imports,
         root_deps,
         &checked_types,
@@ -38572,9 +38605,7 @@ test "lowering visibility follows recursive public API and type-owner dependenci
         &.{},
         &views,
         &.{},
-        &exported_procedure_templates,
-        &exported_procedure_bindings,
-        &exported_const_templates,
+        null,
     );
     defer visibility.deinit(gpa);
 
@@ -39458,6 +39489,7 @@ test "publishing a module releases each resource exactly once under allocation f
             var artifact = try publishFromTypedModule(failing, typed_modules, 1, .{
                 .io = std.testing.io,
                 .module_env_storage = .{ .checked_source = module_env },
+                .builtin_artifact = .{ .imported = direct[0].key.digest() },
                 .hoisted_roots = .none,
                 .imports = direct,
                 .available_artifacts = views,
