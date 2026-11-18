@@ -4682,6 +4682,8 @@ const ReturnConstraintFrame = struct {
     body_result: Var,
     /// The result supplied by an annotation or another explicit function expectation.
     expected_result: ?Var,
+    /// Construction guidance from a callback slot, never an annotated return relation.
+    contextual_result: ?Var = null,
 };
 
 /// Context for type checking: module identity, builtin type references, and the Builtin module itself.
@@ -21303,7 +21305,58 @@ fn checkProvidesEntryHostBoundary(
     const def = self.cir.store.getDef(def_idx);
     const def_var = ModuleEnv.varFrom(def_idx);
 
+    if (self.erroneous_value_patterns.contains(def.pattern)) return;
+    const problems_before = self.problems.problems.items.len;
     try self.checkHostBoundaryType(def_var, self.cir.store.getPatternRegion(def.pattern));
+    // Prefer the specific boundary diagnostic (for example an open row) over
+    // also reporting its polymorphism. Generalization already classified each
+    // binding, including inferred types and aliases, so clean exports need no
+    // additional type walk.
+    if (self.problems.problems.items.len != problems_before or !self.isBindingSchemeVar(def_var)) return;
+
+    // A rejected annotation or nominal declaration can leave generalized
+    // recovery variables. Its original diagnostic already explains the error.
+    var errors = ErroneousTypeMemo.init(self);
+    defer errors.deinit();
+    if (try errors.contains(def_var)) return;
+
+    var data: problem.PolymorphicProvidedFunction = .{
+        .region = self.cir.store.getPatternRegion(def.pattern),
+        .snapshot = try self.snapshotVarForError(def_var),
+        .suggestion = null,
+    };
+    if (self.cir.for_clause_aliases.len() != 0) {
+        var variables = collections.DenseMap(Var, void).init(self.gpa);
+        defer variables.deinit();
+        try self.collectTypeVariablesOf(def_var, &variables);
+        aliases: for (self.cir.for_clause_aliases.items()) |alias| {
+            var iter = variables.constKeyIterator();
+            while (iter.next()) |variable| {
+                const desc = self.types.resolveVar(variable).desc;
+                if (desc.rank != .generalized) continue;
+                const name = switch (desc.content) {
+                    .rigid => |rigid| rigid.name,
+                    .flex => |flex| flex.name orelse continue,
+                    .alias, .field_presence, .structure, .err => continue,
+                };
+                if (name.eql(alias.rigid_name)) {
+                    data.suggestion = .{ .variable = name, .alias = alias.alias_name };
+                    break :aliases;
+                }
+            }
+        }
+    }
+    _ = try self.problems.appendProblem(.{ .polymorphic_provided_function = data });
+    // There is no host ABI for this scheme. Poison its definition type as
+    // well as retiring the value, so publication emits a checked-error export
+    // rather than a host root for an uninstantiable function.
+    try self.markErroneous(def_var);
+    try self.markErroneousValuePattern(def.pattern);
+    try self.markErroneousValueExpr(def.expr);
+    const diagnostic = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+        .region = self.cir.store.getExprRegion(def.expr),
+    } });
+    try self.replaceExprWithRuntimeError(def.expr, diagnostic);
 }
 
 fn checkHostBoundaryType(self: *Self, var_: Var, region: Region) std.mem.Allocator.Error!void {
@@ -31608,6 +31661,19 @@ fn projectExpectedAggregateShape(
     return true;
 }
 
+/// Expected Shape Context: a call's result constrains shared formal slots
+/// before argument constructors meet. The owning result relation still
+/// validates the complete expected type and owns any mismatch.
+fn seedCallResultFromContext(self: *Self, expected: Expected, result_var: Var, env: *Env) Allocator.Error!void {
+    const context = expected.aggregateType() orelse return;
+    // A standalone unknown/rigid leaf copies to a fresh unconstrained flex,
+    // which supplies no shape. Projected cells instead carry shared equality
+    // with their enclosing construction and must retain the relation.
+    if (context.record_field == null and !context.projected_cell and
+        !self.varResolvesToKnownType(context.var_)) return;
+    _ = try self.projectExpectedAggregateShape(expected, result_var, env);
+}
+
 /// Commit a stored value's relation to a successfully projected aggregate
 /// slot without taking ownership of a mismatch diagnostic. The enclosing
 /// aggregate's ordinary relation owns any rejection and has the full
@@ -32522,6 +32588,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                 .fields = try self.types.appendRecordFields(&.{}),
                 .ext = try self.freshUncommittedTail(env, expr_region),
             } } }, env);
+            _ = try self.projectExpectedAggregateShape(frame.nested_expected, expr_var, env);
         },
         // tags //
         .e_zero_argument_tag => |e| {
@@ -33347,6 +33414,8 @@ const AggregateCheck = struct {
     scratch: enum { vars, record_fields },
     started: bool = false,
     projected: ?Var.SafeList.Range = null,
+    /// The record constructor owns the projected row, including omitted slots.
+    projected_record: ?Var = null,
     /// Scratch position of this construction's collected child vars or
     /// fields; everything above it belongs to this construction until done.
     scratch_top: u32 = 0,
@@ -33683,6 +33752,7 @@ fn resumeRecordCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: 
             if (!try self.projectExpectedAggregateShape(nested_expected, projected_record, env)) {
                 break :projected null;
             }
+            state.projected_record = projected_record;
             break :projected projected_values;
         };
 
@@ -33774,6 +33844,9 @@ fn resumeRecordCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: 
         .fields = record_fields_range,
         .ext = ext_var,
     } } }, env);
+    if (state.projected_record) |projected_record| {
+        _ = try self.commitProjectedStoredValue(projected_record, expr_var, env);
+    }
     return .done;
 }
 
@@ -34410,8 +34483,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
         .s_return => |ret| {
             self.markCurrentHoistObservableEffect();
             // Type check the return expression
-            const expected_return = self.expectedReturnResultFor(ret.lambda);
-            return .{ .expr = ret.expr, .expected = block_state.expected.forReturnValue(expected_return) };
+            return .{ .expr = ret.expr, .expected = self.returnValueExpected(block_state.expected, ret.lambda) };
         },
         .s_nominal_decl, .s_alias_decl, .s_where_alias_decl, .s_type_anno => {
             // Local type declarations are preprocessed before type checking.
@@ -35205,9 +35277,10 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
     // argument, or a stored value's aggregate slot) gets its parameters
     // seeded from that type before the body is checked, so dispatch on a
     // parameter resolves inside the body.
+    var contextual_result: ?Var = null;
     if (state.mb_anno_func == null) {
         if (nested_expected.contextual_type) |contextual| {
-            try self.seedLambdaParamsFromContext(lambda.args, contextual, env, expr_region);
+            contextual_result = try self.seedLambdaParamsFromContext(lambda.args, contextual, env, expr_region);
         }
     }
 
@@ -35297,9 +35370,16 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
     state.body_is_delayed_dependency = !frame.is_immediate_callee;
     if (state.body_is_delayed_dependency) self.delayed_dependency_depth += 1;
 
-    const lambda_body_expected = Expected.none().withHoistPosition(nested_expected.hoist_position);
+    var lambda_body_expected = Expected.none().withHoistPosition(nested_expected.hoist_position);
+    if (contextual_result) |result| {
+        lambda_body_expected = lambda_body_expected.withContextualType(.{
+            .var_ = result,
+            .context = nested_expected.contextual_type.?.context,
+        });
+    }
     const expected_result = if (state.mb_anno_func) |expected_func| expected_func.ret else null;
     try self.pushReturnConstraintFrame(expr_idx, body_var, expected_result);
+    self.return_constraint_frames.items[self.innermostReturnFrameIndex(expr_idx)].contextual_result = contextual_result;
     state.return_frame_pushed = true;
 
     const effect_dependencies_start = self.pending_function_effect_dependencies.items.len;
@@ -35595,6 +35675,9 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
                     call_shape_context,
                     .exact,
                 );
+            }
+            if (state.shape_result.isEstablished() and call_arg_expr_idxs.len != 0) {
+                try self.seedCallResultFromContext(frame.nested_expected, state.shape_func.ret, env);
             }
             state.phase = .args;
         },
@@ -36134,6 +36217,9 @@ fn resumeMethodCallCheck(self: *Self, task: *ExprTask, state: *MethodCallCheck, 
                 );
                 try self.checkStaticDispatchConstraints(env, false);
                 state.eager_constraint_fn_var = constraint_fn_var;
+                if (arg_expr_idxs.len != 0 and self.cir.store.getExpr(expr_idx) != .e_runtime_error) {
+                    try self.seedCallResultFromContext(frame.nested_expected, state.result_var, env);
+                }
             }
             state.phase = .args;
         },
@@ -36447,7 +36533,7 @@ fn resumeReturnCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env
     if (!state.started) {
         state.started = true;
         self.markCurrentHoistObservableEffect();
-        return .{ .child = .{ .expr = ret.expr, .expected = frame.nested_expected.forReturnValue(expected_return) } };
+        return .{ .child = .{ .expr = ret.expr, .expected = self.returnValueExpected(frame.nested_expected, ret.lambda) } };
     }
 
     const return_kind: ReturnConstraintKind = switch (ret.context) {
@@ -39878,25 +39964,25 @@ fn seedLambdaParamsFromContext(
     contextual: Expected.ExpectedType,
     env: *Env,
     region: Region,
-) std.mem.Allocator.Error!void {
-    if (contextual.context != .fn_call_arg and !contextual.projected_cell and contextual.record_field == null) return;
-    if (contextual.record_field == null and !self.varResolvesToKnownType(contextual.var_)) return;
+) std.mem.Allocator.Error!?Var {
+    if (contextual.context != .fn_call_arg and !contextual.projected_cell and contextual.record_field == null) return null;
+    if (contextual.record_field == null and !self.varResolvesToKnownType(contextual.var_)) return null;
 
     var commit_probe = try self.beginCommitProbe(env);
     var committed = false;
     defer if (!committed) commit_probe.rollback();
 
     const source = if (contextual.record_field) |name|
-        try self.borrowExpectedRecordField(contextual.var_, name, env) orelse return
+        try self.borrowExpectedRecordField(contextual.var_, name, env) orelse return null
     else
         contextual.var_;
-    if (contextual.record_field != null and !self.varResolvesToKnownType(source)) return;
+    if (contextual.record_field != null and !self.varResolvesToKnownType(source)) return null;
     // Error context is diagnostic recovery, never construction evidence.
     if ((contextual.projected_cell or contextual.record_field != null) and self.types.mayContainErrorState()) {
         self.var_set.clearRetainingCapacity();
         const source_contains_error = try self.varContainsError(source, &self.var_set);
         self.var_set.clearRetainingCapacity();
-        if (source_contains_error) return;
+        if (source_contains_error) return null;
     }
     const expected_fn = if (contextual.record_field != null) try self.copyExpectedShape(source, env) else source;
 
@@ -39912,9 +39998,10 @@ fn seedLambdaParamsFromContext(
     } } }, env, region);
 
     const result = try commit_probe.unifyInContext(expected_fn, seed_fn_var, contextual.context);
-    if (!result.isEstablished()) return;
+    if (!result.isEstablished()) return null;
     committed = true;
     try commit_probe.commit();
+    return seed_ret;
 }
 
 /// Whether a var already resolves to a type constructor (through aliases), so
@@ -48929,6 +49016,15 @@ fn expectedReturnResultFor(self: *const Self, lambda_idx: CIR.Expr.Idx) ?Var {
     return self.return_constraint_frames.items[self.innermostReturnFrameIndex(lambda_idx)].expected_result;
 }
 
+fn returnValueExpected(self: *const Self, expected: Expected, lambda_idx: CIR.Expr.Idx) Expected {
+    const frame = self.return_constraint_frames.items[self.innermostReturnFrameIndex(lambda_idx)];
+    const result = expected.forReturnValue(frame.expected_result);
+    return if (frame.contextual_result) |context|
+        result.withContextualType(.{ .var_ = context, .context = .none })
+    else
+        result;
+}
+
 fn discardReturnConstraintFrame(self: *Self, lambda_idx: CIR.Expr.Idx) void {
     const frame_idx = self.innermostReturnFrameIndex(lambda_idx);
     const frame = self.return_constraint_frames.items[frame_idx];
@@ -57413,7 +57509,7 @@ fn expandDerivedParseQuery(
                         return .supported;
                     }
                 }
-                return .unsupported;
+                return if ((try self.missingTryInfoFromNominal(nominal)) != null) .unsupported else .supported;
             }
             return if (nominal.originIsBuiltin()) .unsupported else .supported;
         },
@@ -58303,7 +58399,7 @@ fn expandDerivedEncodeQuery(
                 return .supported;
             }
             if (self.nominalIsBuiltinDecl(nominal, .try_type)) {
-                return if ((try self.nullTryInfoFromNominal(nominal)) != null) .supported else .unsupported;
+                return if ((try self.missingTryInfoFromNominal(nominal)) != null) .unsupported else .supported;
             }
             if (nominal.originIsBuiltin()) return .unsupported;
             return .supported;
@@ -59146,17 +59242,18 @@ test "literal dispatch finalization rejects a strict value cycle through from_nu
     try std.testing.expect(test_env.module_env.hasTopLevelDemandDependency(cycle_defs[1], cycle_defs[0]));
 }
 
-test "top-level destructure bound through its own name is a circular value definition" {
+test "top-level destructure bound through its own name reads its own unfinished binding" {
     const TestEnv = @import("test/TestEnv.zig");
-    // `{x}` on the right is a block returning `x`, so `x` is computed from
-    // itself through the destructure.
+    // `{x}` on the right is a block returning `x`, so the initializer reads
+    // `x` before the destructure that binds it has finished.
     const source =
         \\{x} = {x}
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("Circular Value Definition");
+    try test_env.assertOneCanError("Invalid Assignment To Itself");
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.problems.problems.items.len);
 }
 
 /// Assert that checking reported exactly one circular value definition for
@@ -62630,26 +62727,22 @@ fn validateEncodeFormatMethod(
     return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, subject_var);
 }
 
-/// The dict protocol, mirroring the list one: `parse_dict_start` may declare
-/// the entry count, `parse_dict_next` reports whether an entry follows,
-/// `parse_dict_after_key` consumes whatever sits between a key and its value,
-/// and `parse_dict_after_entry` reports whether more entries follow.
-fn validateEncodeDictProtocolMethod(
+/// A composite-key gate depends on the codec boundary, not the key shape.
+/// Retain one checked role before any repeated method/type instantiation.
+fn validateEncodeKeyStartMethod(
     self: *Self,
-    subject_var: Var,
-    encoding_var: Var,
-    state_var: Var,
-    comptime method_text: []const u8,
-    expected_ret: Var,
-    constraint: StaticDispatchConstraint,
-    env: *Env,
-    region: Region,
-    failure_expr: ?CIR.Expr.Idx,
+    inputs: DerivedCodecInputs,
 ) Allocator.Error!DerivedParseValidation {
-    const method_name = try self.protocolMethodName(method_text);
+    if (inputs.walk.encode_key_start_call != null) return .ok;
+    const encoding_var = inputs.encoding_var;
+    const state_var = inputs.state_var;
+    const env = inputs.env;
+    const region = inputs.region;
+    const method_name = try self.protocolMethodName("encode_key_start");
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
-        return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
+        return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, inputs.constraint, env, inputs.failure_expr);
     };
+    const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, inputs.err_var), env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
@@ -62659,7 +62752,10 @@ fn validateEncodeDictProtocolMethod(
         },
     });
     if (!result.isEstablished()) return .reported_error;
-    return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, subject_var);
+    const call_index = self.scratch_generated_codec_calls.items.len;
+    try self.recordGeneratedCodecCall(method_name, encoding_var, expected_fn, method.var_, null);
+    inputs.walk.encode_key_start_call = call_index;
+    return .ok;
 }
 
 fn beginParseDictProtocolMethod(
@@ -63061,6 +63157,8 @@ const DerivedCodecWalk = struct {
     /// nominal codecs temporarily move this boundary so reusable format calls
     /// are shared only within the body that owns them.
     generated_calls_start: usize,
+    /// The current derivation's successful subject-free key-gate role.
+    encode_key_start_call: ?usize = null,
     /// The pending pairs and assumed-equal pairs of one `derivedCodecVarsEql`.
     eql_pending: std.ArrayListUnmanaged(DerivedCodecVarPair) = .empty,
     eql_assumed: std.AutoHashMapUnmanaged(DerivedCodecVarPair, void) = .empty,
@@ -63102,6 +63200,7 @@ const DerivedCodecWalk = struct {
         self.walked_app_args.clearRetainingCapacity();
         self.nominal_backing_depth = 0;
         self.generated_calls_start = generated_calls_start;
+        self.encode_key_start_call = null;
         self.eql_pending.clearRetainingCapacity();
         self.eql_assumed.clearRetainingCapacity();
     }
@@ -63372,8 +63471,14 @@ fn takeDerivedCodecBackingWalk(
 ) Allocator.Error!DerivedCodecBackingWalk {
     // Builtin codecs are the format protocol itself, validated against the
     // format's own methods rather than by walking a backing shape. Monotype
-    // draws the same line when it looks for a custom codec target.
-    if (nominal.originIsBuiltin()) return .builtin;
+    // draws the same line when it looks for a custom codec target. A builtin
+    // `Try` outside the format's `[Null]` and `[Missing]` conventions is an
+    // ordinary tag union whose declared codec is derived from its backing.
+    if (nominal.originIsBuiltin()) {
+        if (!self.nominalIsBuiltinDecl(nominal, .try_type)) return .builtin;
+        if ((try self.nullTryInfoFromNominal(nominal)) != null) return .builtin;
+        if ((try self.missingTryInfoFromNominal(nominal)) != null) return .builtin;
+    }
     const decl_idx = self.types.lookupNominalDecl(nominal) orelse return .walk_backing;
     // The comparison and the walk compare resolved arguments.
     const args_top = self.scratch_vars.top();
@@ -63541,6 +63646,7 @@ const NominalCodecFrame = struct {
         var_: Var,
         nested_calls_start: usize,
         parent_generated_calls_start: usize,
+        parent_encode_key_start_call: ?usize,
     } = null,
     /// The dictionary value to validate once the key is validated.
     dict_value: Var = undefined,
@@ -63704,14 +63810,17 @@ fn enterDerivedCodecBacking(self: *Self, inputs: DerivedCodecInputs, nominal: *N
         .var_ = backing_var,
         .nested_calls_start = nested_calls_start,
         .parent_generated_calls_start = walk.generated_calls_start,
+        .parent_encode_key_start_call = walk.encode_key_start_call,
     };
     walk.generated_calls_start = nested_calls_start;
+    walk.encode_key_start_call = null;
 }
 
 fn leaveDerivedCodecBacking(self: *Self, inputs: DerivedCodecInputs, nominal: *NominalCodecFrame) void {
     const backing = nominal.backing orelse return;
     const walk = inputs.walk;
     walk.generated_calls_start = backing.parent_generated_calls_start;
+    walk.encode_key_start_call = backing.parent_encode_key_start_call;
     self.scratch_generated_codec_calls.shrinkRetainingCapacity(backing.nested_calls_start);
     walk.nominal_backing_depth -= 1;
     nominal.backing = null;
@@ -64128,12 +64237,13 @@ fn stepDerivedParseNominal(
             if (context != .record_field) return .{ .done = .unsupported };
             return shape(info.ok_var);
         }
-        const info = try self.nullTryInfoFromNominal(nominal) orelse return .{ .done = .unsupported };
-        frame.then_var = info.ok_var;
-        frame.stage = .checked_payload;
-        return try self.startParseMethodChecks(frame, &.{
-            .{ .format = .{ .shape_var = state_var, .spec_decl = .null } },
-        });
+        if (try self.nullTryInfoFromNominal(nominal)) |info| {
+            frame.then_var = info.ok_var;
+            frame.stage = .checked_payload;
+            return try self.startParseMethodChecks(frame, &.{
+                .{ .format = .{ .shape_var = state_var, .spec_decl = .null } },
+            });
+        }
     }
 
     const original_env, _ = self.ownerEnvForOriginModule(
@@ -64772,7 +64882,7 @@ fn stepDerivedEncodeNominal(
         } else {
             // Mirrors the parse side: `encode_key_start` is what admits a key
             // the format cannot render as a key string.
-            if (derivedCodecFailed(try self.validateEncodeDictProtocolMethod(args.key, encoding_var, state_var, "encode_key_start", try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region), constraint, env, region, null))) |result| return .{ .done = result };
+            if (derivedCodecFailed(try self.validateEncodeKeyStartMethod(inputs))) |result| return .{ .done = result };
             try frame.vars.append(self.gpa, args.key);
             frame.nominal.dict_value = args.value;
             frame.stage = .dict_key;
@@ -64781,11 +64891,11 @@ fn stepDerivedEncodeNominal(
         if (derivedCodecFailed(try self.validateDictToListMethod(nominal_var, nominal, args.key, args.value, constraint, env, region))) |result| return .{ .done = result };
         return component(args.value);
     }
-    if (self.nominalIsBuiltinDecl(nominal, .try_type)) {
-        const info = try self.nullTryInfoFromNominal(nominal) orelse return .{ .done = .unsupported };
+    if (try self.nullTryInfoFromNominal(nominal)) |info| {
         if (derivedCodecFailed(try self.validateEncodeFormatMethod(encoding_var, state_var, state_var, .null, err_var, constraint, env, region))) |result| return .{ .done = result };
         return component(info.ok_var);
     }
+    if ((try self.missingTryInfoFromNominal(nominal)) != null) return .{ .done = .unsupported };
 
     const original_env, _ = self.ownerEnvForOriginModule(
         nominal.origin_module,

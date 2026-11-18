@@ -9,7 +9,7 @@ platform ""
 		requires {
 			[Model : model] for main : {
 				init : model,
-				update : Box((model, I64 -> Model)),
+				update : Box((model, I64 -> model)),
 				render : Box((model -> I64))
 			}
 		}
@@ -30,7 +30,7 @@ KwPlatform,StringStart,StringPart,StringEnd,
 KwRequires,OpenCurly,
 OpenSquare,UpperIdent,OpColon,LowerIdent,CloseSquare,KwFor,LowerIdent,OpColon,OpenCurly,
 LowerIdent,OpColon,LowerIdent,Comma,
-LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,NoSpaceOpenRound,LowerIdent,Comma,UpperIdent,OpArrow,UpperIdent,CloseRound,CloseRound,Comma,
+LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,NoSpaceOpenRound,LowerIdent,Comma,UpperIdent,OpArrow,LowerIdent,CloseRound,CloseRound,Comma,
 LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,NoSpaceOpenRound,LowerIdent,OpArrow,UpperIdent,CloseRound,CloseRound,
 CloseCurly,
 CloseCurly,
@@ -59,7 +59,7 @@ EndOfFile,
 							(ty-fn
 								(ty-var (raw "model"))
 								(ty (name "I64"))
-								(ty (name "Model")))))
+								(ty-var (raw "model")))))
 					(anno-record-field (name "render")
 						(ty-apply
 							(ty (name "Box"))
@@ -100,7 +100,7 @@ EndOfFile,
 ~~~roc
 platform ""
 	requires {
-		[Model : model] for main : { init : model, update : Box((model, I64 -> Model)), render : Box((model -> I64)) }
+		[Model : model] for main : { init : model, update : Box((model, I64 -> model)), render : Box((model -> I64)) }
 	}
 	exposes []
 	packages {}

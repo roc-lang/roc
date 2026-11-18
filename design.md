@@ -4139,6 +4139,23 @@ The recommended migration order is:
 8. Verify with focused canonicalization tests, `zig build minici`, and
    parser/canonicalization benchmarks.
 
+### Unfinished Value Bindings
+
+An eager initializer cannot read any binding whose initialization encloses
+that read. Blocks, match guards and branches, and loops do not end the
+enclosing initialization. A nested initializer adds its own fresh binders
+without hiding the enclosing ones. Existing mutable reassignment targets
+remain readable at their old values.
+
+Canonicalization tracks canonical pattern identities, not identifier
+spellings, so qualified and unqualified references obey the same rule.
+Tracking is local to the active eager initialization context; entering a
+deferred lambda body suspends the enclosing context and leaving restores it.
+Only initializer completion removes its binders. Ordinary scope boundaries
+neither clear the active context nor release an enclosing initializer's
+storage. Membership and rollback storage follow active initializers, not
+the size of the module or the number of resolved references.
+
 ## Canonicalization Policy Ownership
 
 Canonicalization owns source-name scope policy before checking. Any rule that
@@ -7484,6 +7501,13 @@ platform module. Header validation inspects all declarations, while the
 provided-exports view contains only entries with non-null `local_def`. Rejected
 declarations also produce source diagnostics.
 
+A provided entrypoint cannot quantify type variables: the host supplies no
+Roc instantiation. Checking rejects both annotated and inferred polymorphism,
+using the definition's existing binding-scheme classification, and retires the
+definition and its ABI type as explicit checked-error recovery. A platform's
+shared abstract identities are not quantified by an entrypoint and remain
+valid in its type.
+
 A platform requirement's for-clause alias names an abstract type inside the
 platform; its actual type is inferred from the app's required values. An app
 declaration with the same name has no special meaning. The platform checks
@@ -7496,6 +7520,12 @@ The solved identity slots carry the inferred types into the pairing; no copied
 platform-owned alias enters the solved app graph. Nothing in the app's checked
 module needs a pairing as a type owner, so the app is checked against the
 platform's sealed requirement surface and nothing else.
+
+In `[Model : model] for program : ...`, the declaring signature uses `model`,
+not `Model`. The alias enters module scope after that signature, for platform
+definitions and subsequent requirements. A lowercase `model` in a separate
+function annotation introduces a fresh variable; it does not name that
+platform identity.
 
 The platform root's checked module is the same whether or not an app pairs
 with it: checking it never depends on an app, and its cache entry is keyed by
@@ -9858,6 +9888,15 @@ proof-equivalent to the role's first call under the specialization identity's
 equality, with types compared modulo transparent aliases like the role itself;
 each occurrence's evidence nodes are distinct allocations with equal content.
 
+The encoder's `encode_key_start` gate has no key-type argument: its checked
+role depends only on the owning derivation's encoding, state, and error
+context. Each derivation validates and records one subject-free gate role,
+reused for every composite key shape in that body. Nested generated nominal
+derivations own separate roles. Reuse happens before method instantiation or
+expected-type allocation, and preparation and emission consume the same
+subject-free identity. Runtime execution still calls the gate for every key,
+propagates its error, and passes its successful state to that key's encoder.
+
 Monotype instantiates a generated-codec contract once at the codec boundary.
 A contract (or structural-evidence) instantiation context instantiates each
 closed checked type as an unread leaf of the Monotype it denotes. The graph
@@ -10371,7 +10410,11 @@ through field or value types that request them, such as `Try(Str, [Null])` or
 `Try(a, [Null])` is the nullable JSON value shape: explicit `null` parses as
 `Err(Null)`. `Try(a, [Missing])` is the record-field-only optional shape: a
 missing field parses as `Err(Missing)`, and encoding `Err(Missing)` omits the
-field. Missing fields and `Null` are never conflated.
+field. Missing fields and `Null` are never conflated. These two shapes are
+format protocol: checking validates them against the format's methods without
+walking the `Try` backing, and Monotype and Boxy write only the `Ok` payload
+plus the format's null or missing-field condition. Any other `Try` is an
+ordinary tag union whose declared codec is derived from its backing.
 
 JSON arrays are used for lists, tuples, and sets. Tuples parse with exact arity.
 Sets preserve `Set` insertion order and parse by inserting the array items.
@@ -12419,6 +12462,26 @@ ambiguity, or evidence worklists. The copy and its projected relation belong to
 one commit-probe, so a rejected aggregate relation retains neither the copy nor any
 partial unification. Rejection is diagnosed by the owning full-shape relation.
 
+Record constructions retain the complete accepted projected row, not just
+their supplied payload slots. The finished literal relates to that row before
+its uncommitted tail can close at an enclosing function boundary; empty
+record literals follow the same rule. This preserves the explicit nominal
+and omitted-default decisions on the constructor that must realize them.
+
+A call with a checked callable shape projects its expected result onto the
+instantiated return slot before checking its arguments. Shared formal variables
+therefore carry result context into argument constructions, including implicit
+nominal records with defaults. This is structural guidance, not a new scheme
+use or a replacement for the owning result relation. A rejected projection
+rolls back without poisoning the callee or reporting an argument error.
+Calls without result context allocate no copy or probe; existing projected
+cells are reused, and successful relations are retained. An unprojected
+unknown or rigid leaf supplies no structural guidance: its shape-only copy
+would be an unconstrained flex. Such leaves allocate no copy or probe;
+projected cells still relate to preserve the enclosing shape's equalities.
+Calls with no
+arguments and closed monomorphic method targets need no such guidance.
+
 A record update carries its base variable and supplied field identity as
 borrowed context. A consuming aggregate reads the current row on demand,
 including aliases and extensions; a nominal base requires the same opacity
@@ -12484,6 +12547,16 @@ polymorphism a program could use. The rule reads only explicit context:
   fit (a different arity, or erroneous context) is rolled back with its copy,
   and the owning relation reports the mismatch exactly as without the seed.
 - An annotated lambda is checked against its annotation and is not seeded.
+
+The successful skeleton relation also retains its return slot as structural
+context for the body and explicit returns. That slot is not an annotation:
+inferred return composition and the enclosing argument relation still own
+their checks. Only constructors consume this guidance; the contextual result
+is never unified directly with the body's returned value. Doing that would
+feed a callback's composed error row back into a tail-called function's result.
+Otherwise early result guidance through a call such as
+`List.map` would constrain the callback's signature without guiding the
+record constructions that must supply its defaulted result.
 
 Pinned by `src/check/test/issue_13006_test.zig`. Accepted: a lambda in an
 annotated record field, tuple item, list item, tag payload, and record
@@ -17158,6 +17231,10 @@ Other solved-graph mutations:
   the original type. Only successful ordinary unification with the aggregate
   skeleton commits the expected-shape relation; the owning relation still checks the actual
   value against the complete expected type.
+- `seedCallResultFromContext`—policy: Expected Shape Context (above). Projects
+  result context onto an instantiated call's return slot before argument
+  construction, using the same commit-probe and copy policy as aggregates.
+  The ordinary owning result relation remains authoritative.
 - `relateSameMethodRequirementsAtBoundary` (`relateSameMethodRequirements`
   committed probe)—policy: one requirement per method on a type about to be
   generalized, as declared in Static Dispatch At The Checked Boundary
@@ -21851,6 +21928,22 @@ lower arguments and body through that context
 emit a closed Monotype definition
 ```
 
+Closed checked callables do not necessarily have fixed runtime
+representations. Iterator and codec interfaces can acquire producer-authored
+private representations, including inside containers, nominal backings,
+and function arguments/results. Closed-call lowering summarizes argument
+and result dependence separately, on demand during `.lss` lowering, and
+memoizes that immutable fact by checked callable identity. It adds no
+checker pass or per-type cache column.
+
+A checked-type-only call and specialization cache key require both halves
+to be representation-independent. A result-only query can use a fixed
+result without constructing the call's argument graph; emission still uses
+the representation-aware path when the arguments depend on their producers.
+Both consumers use the same summary. Representation-aware calls retain
+producer evidence in their requests until relation sealing; a closed public
+type is not permission to snapshot a changing representation.
+
 Calls do not mutate the callee's checked module. A closed call creates or reuses
 a callee specialization by constraining a fresh callee instantiation from the
 caller's instantiated argument and result types. An open call remains a
@@ -24826,9 +24919,17 @@ a single fixed order, so the declared order is not recoverable from the lowered
 record itself. Canonicalization preserves it—a nominal declaration's record
 annotation keeps its fields in source order—and checking records it as
 explicit checked data distinct from the (lexicographic) backing row,
-so later stages never rescan declarations. Monotype lowering preserves this
-metadata for `.lss`, and `.boxy` reads it from the checked declaration. LSS and
-boxy use the presence of explicit checked padding types to select the
+so later stages never rescan declarations. Post-check types carry this order
+only when the checked declaration has an unnamed field, including a
+zero-sized one. Without that marker their declared-order span is empty:
+the complete source declaration remains checked data, but copying its
+irrelevant order through every runtime type would add hashing, comparison,
+serialization and specialization work. Monotype and both constant-type
+producers obey this same contract. Nominal identity remains independent of
+layout policy, and exact type equality continues to compare all retained
+metadata.
+
+LSS and boxy use the presence of explicit checked padding types to select the
 declared-order layout policy; otherwise their runtime layout path reuses the
 structural backing row. The layout graph records the selected policy on the
 struct span, and the store commits it without probing or reconstructing intent.

@@ -6,7 +6,7 @@ type=file
 # SOURCE
 ~~~roc
 platform "pf"
-	requires { [R1 : r1, R2 : r2] for main : R1 -> R2 }
+	requires { [R1 : r1, R2 : r2] for main : r1 -> r2 }
 	exposes [E1, E2]
 	packages { pa1: "pa1", pa2: "pa2" }
 	provides { "roc_not implemented": pr1, "roc_not implemented": pr2 }
@@ -87,7 +87,7 @@ INVALID HOSTED SECTION - :0:0:0:0
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,
-KwRequires,OpenCurly,OpenSquare,UpperIdent,OpColon,LowerIdent,Comma,UpperIdent,OpColon,LowerIdent,CloseSquare,KwFor,LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,CloseCurly,
+KwRequires,OpenCurly,OpenSquare,UpperIdent,OpColon,LowerIdent,Comma,UpperIdent,OpColon,LowerIdent,CloseSquare,KwFor,LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,CloseCurly,
 KwExposes,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,
 KwPackages,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,
 KwProvides,OpenCurly,StringStart,StringPart,StringEnd,OpColon,LowerIdent,Comma,StringStart,StringPart,StringEnd,OpColon,LowerIdent,CloseCurly,
@@ -104,8 +104,8 @@ EndOfFile,
 					(alias (name "R2") (rigid "r2")))
 				(entrypoint "main")
 				(ty-fn
-					(ty (name "R1"))
-					(ty (name "R2")))))
+					(ty-var (raw "r1"))
+					(ty-var (raw "r2")))))
 		(exposes
 			(exposed-upper-ident (text "E1"))
 			(exposed-upper-ident (text "E2")))
@@ -125,7 +125,7 @@ EndOfFile,
 ~~~roc
 platform "pf"
 	requires {
-		[R1 : r1, R2 : r2] for main : R1 -> R2
+		[R1 : r1, R2 : r2] for main : r1 -> r2
 	}
 	exposes [E1, E2]
 	packages { pa1: "pa1", pa2: "pa2" }

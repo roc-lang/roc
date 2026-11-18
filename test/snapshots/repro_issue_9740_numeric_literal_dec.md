@@ -242,10 +242,10 @@ main! = |_| {
 																	(p-assign (ident "x"))))))))
 											(if-else
 												(e-block
-													(e-call (constraint-fn-var 338)
+													(e-call (constraint-fn-var 340)
 														(e-lookup-external
 															(builtin))
-														(e-call (constraint-fn-var 337)
+														(e-call (constraint-fn-var 339)
 															(e-lookup-local
 																(p-assign (ident "slice")))
 															(e-lookup-local

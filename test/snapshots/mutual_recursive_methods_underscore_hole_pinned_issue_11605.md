@@ -283,12 +283,12 @@ run = |sql| {
 					(p-assign (ident "pinned"))
 					(e-lookup-local
 						(p-assign (ident "items"))))
-				(e-call (constraint-fn-var 470)
+				(e-call (constraint-fn-var 472)
 					(e-lookup-local
 						(p-assign (ident "mutual_recursive_methods_underscore_hole_pinned_issue_11605.Client.first")))
 					(e-lookup-local
 						(p-assign (ident "client")))
-					(e-call (constraint-fn-var 469)
+					(e-call (constraint-fn-var 471)
 						(e-lookup-external
 							(builtin))
 						(e-lookup-local
@@ -332,7 +332,7 @@ run = |sql| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 502)
+								(e-call (constraint-fn-var 504)
 									(e-lookup-local
 										(p-assign (ident "mutual_recursive_methods_underscore_hole_pinned_issue_11605.Client.first")))
 									(e-lookup-local

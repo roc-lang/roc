@@ -10527,7 +10527,7 @@ fn writeAliasByNameRequirementFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.
     });
 }
 
-test "requires signature naming a for-clause alias infers the app type and publishes once" {
+test "issue 13113 requires signature rejects its own for-clause alias when checking an app" {
     const allocator = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -10536,57 +10536,11 @@ test "requires signature naming a for-clause alias infers the app type and publi
     const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "app/main.roc", allocator);
     defer allocator.free(app_path);
 
-    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
-    const builtin_modules = try sharedBuiltinModules();
-
-    var coord = try Coordinator.init(
-        allocator,
-        .single_threaded,
-        1,
-        roc_target.RocTarget.detectNative(),
-        builtin_modules,
-        build_options.compiler_compatibility_id,
-        null,
-        roc_ctx,
-        .lss,
-    );
-    defer coord.deinit();
-    coord.enable_hosted_transform = true;
-
-    var arena_impl = base.SingleThreadArena.init(allocator);
-    defer arena_impl.deinit();
-    const arena = arena_impl.allocator();
-
-    try coord.start();
-    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
-    try coord.coordinatorLoop();
-    try std.testing.expect(!coord.hasUserErrors());
-
-    // The requirement signature uses the for-clause alias `Model` by name.
-    // Inference resolves those occurrences to the app's annotated type,
-    // so the app's recorded solution references app-owned types only and the
-    // platform root defers its publication like any other app build.
-    const app_artifact = coord.appRootCheckedArtifact();
-    const table = &app_artifact.platform_requirement_solutions;
-    try std.testing.expectEqual(@as(usize, 1), table.solutions.items().len);
-    const solution = table.solutions.items()[0];
-    try std.testing.expectEqual(@as(u32, 1), solution.identity_len);
-    const identity_payload = app_artifact.checked_types.payload(table.identitySlice(solution)[0]);
-    try std.testing.expect(identity_payload == .alias);
-    try std.testing.expectEqualStrings(
-        "Model",
-        app_artifact.canonical_names.typeNameText(identity_payload.alias.name),
-    );
-    try std.testing.expect(identity_payload.alias.owner_module.eql(app_artifact.key.digest()));
-
-    try coord.finishCheckedProgram(.executable_artifacts);
-    try std.testing.expect(!coord.hasUserErrors());
-    try std.testing.expectEqual(@as(u32, 1), coord.platform_root_publish_count);
-
-    const platform_artifact = coord.executableRootCheckedArtifact();
-    const relations = platform_artifact.platform_requirement_relations.relations.items();
-    try std.testing.expectEqual(@as(usize, 1), relations.len);
-    try std.testing.expect(platform_artifact.checked_types.payload(relations[0].requested_source_ty_payload) != .pending);
+    var result = try compileAppFacts(allocator, null, app_path);
+    defer result.deinit(allocator);
+    try std.testing.expect(result.has_errors);
+    try std.testing.expect(std.mem.find(u8, result.reports, "Undeclared Type") != null);
+    try std.testing.expect(std.mem.find(u8, result.reports, "in the requirement that introduces it") != null);
 }
 
 test "issue 13138 platform aliases infer nested stores and ignore app type names across cached pairings" {

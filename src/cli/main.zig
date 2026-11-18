@@ -22354,13 +22354,19 @@ fn writeDocsSite(
     };
 
     if (broken_links.items.len > 0) {
-        std.debug.print("Error: {d} doc reference(s) point at non-existent anchors:\n", .{broken_links.items.len});
+        // Report while the link data is alive, through the writer the CLI
+        // tracks when deciding whether a returned error has been explained.
+        const stderr = ctx.io.stderr();
+        const report_config = ctx.reportConfig(.stderr);
+        try stderr.print("Error: {d} doc reference(s) point at non-existent anchors:\n", .{broken_links.items.len});
         for (broken_links.items) |bl| {
             const path = if (bl.source_path.len > 0) bl.source_path else bl.source_module;
+            const display_path = try reporting.displayPath(ctx.gpa, path, report_config.source_path_base);
+            defer ctx.gpa.free(display_path);
             if (bl.source_line > 0) {
-                std.debug.print("  {s}:{d}: [{s}] -> #{s}\n", .{ path, bl.source_line, bl.label, bl.resolved_anchor });
+                try stderr.print("  {s}:{d}: [{s}] -> #{s}\n", .{ display_path, bl.source_line, bl.label, bl.resolved_anchor });
             } else {
-                std.debug.print("  {s}: [{s}] -> #{s}\n", .{ path, bl.label, bl.resolved_anchor });
+                try stderr.print("  {s}: [{s}] -> #{s}\n", .{ display_path, bl.label, bl.resolved_anchor });
             }
         }
         return error.BrokenDocLinks;
