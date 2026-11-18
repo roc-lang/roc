@@ -19528,7 +19528,7 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]p
     };
 }
 
-fn solvedLirParallelCounters(parallel: lir.CheckedPipeline.SolvedLirParallelMetrics) [14]progress.Counter {
+fn solvedLirParallelCounters(parallel: lir.CheckedPipeline.SolvedLirParallelMetrics) [15]progress.Counter {
     return .{
         .{ .name = "Tasks submitted", .count = parallel.tasks_submitted },
         .{ .name = "Tasks committed", .count = parallel.tasks_committed },
@@ -19544,6 +19544,7 @@ fn solvedLirParallelCounters(parallel: lir.CheckedPipeline.SolvedLirParallelMetr
         .{ .name = "Worker match tasks committed", .count = parallel.worker_match_tasks_committed },
         .{ .name = "Worker literal tasks committed", .count = parallel.worker_literal_tasks_committed },
         .{ .name = "Worker loop tasks committed", .count = parallel.worker_loop_tasks_committed },
+        .{ .name = "Worker further-instance tasks committed", .count = parallel.worker_instance_tasks_committed },
     };
 }
 
@@ -19814,6 +19815,7 @@ test "post-check diagnostics preserve labeled Solved-LIR counts" {
         .worker_match_tasks_committed = 12,
         .worker_literal_tasks_committed = 13,
         .worker_loop_tasks_committed = 14,
+        .worker_instance_tasks_committed = 15,
     });
     const names = [_][]const u8{
         "Tasks submitted",
@@ -19830,6 +19832,7 @@ test "post-check diagnostics preserve labeled Solved-LIR counts" {
         "Worker match tasks committed",
         "Worker literal tasks committed",
         "Worker loop tasks committed",
+        "Worker further-instance tasks committed",
     };
     try std.testing.expectEqual(@typeInfo(lir.CheckedPipeline.SolvedLirParallelMetrics).@"struct".field_names.len, rows.len);
     for (rows, names, 1..) |row, name, count| {

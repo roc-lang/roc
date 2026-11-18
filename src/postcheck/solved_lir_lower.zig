@@ -181,6 +181,9 @@ pub const ParallelMetrics = struct {
     worker_match_tasks_committed: u64 = 0,
     worker_literal_tasks_committed: u64 = 0,
     worker_loop_tasks_committed: u64 = 0,
+    /// Bodies of functions lowered at a further lambda-set instance of their
+    /// group (design.md "Lambda Set Instances").
+    worker_instance_tasks_committed: u64 = 0,
 };
 
 /// Lower Lambda Solved directly into LIR, consuming the solved program.
@@ -2772,6 +2775,7 @@ const Lowerer = struct {
             metrics.worker_match_tasks_committed +|= @intFromBool(shard.features.match_);
             metrics.worker_literal_tasks_committed +|= @intFromBool(shard.features.literal);
             metrics.worker_loop_tasks_committed +|= @intFromBool(shard.features.loop);
+            metrics.worker_instance_tasks_committed +|= @intFromBool(self.fn_specs.items[@backingInt(shard.fn_id)].env != .global);
         }
         try self.erased_owner_states.ensureUnusedCapacity(self.allocator, body_local_count);
         const appended = self.result.store.appendBodyShard(

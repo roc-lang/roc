@@ -913,6 +913,38 @@ pub fn expectSolvedLirCapturingBodyParallelismDeterministicLir() LowerToLirHarne
     }
 }
 
+/// Lower `app_body`, whose generalized functions have further lambda-set
+/// instances, serially and with two and four workers in both completion
+/// orders, and compare the complete LIR. Every parallel run must commit a
+/// further instance's body on a worker, so the worker preparation of syntax
+/// read under an instance is exercised.
+pub fn expectSolvedLirInstanceParallelismDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void {
+    const gpa = std.testing.allocator;
+    const cap = 1 << 22;
+    const reference = try gpa.alloc(u8, cap);
+    defer gpa.free(reference);
+    var reference_writer = std.Io.Writer.fixed(reference);
+    try runToLir(app_body, &reference_writer, .{ .specialization_workers = 1 }, null);
+
+    for ([_]usize{ 2, 4 }) |specialization_workers| {
+        for ([_]bool{ false, true }) |reverse_post_check_completions| {
+            const candidate = try gpa.alloc(u8, cap);
+            defer gpa.free(candidate);
+            var candidate_writer = std.Io.Writer.fixed(candidate);
+            var metrics: lir.CheckedPipeline.SolvedLirParallelMetrics = .{};
+            try runToLir(app_body, &candidate_writer, .{
+                .specialization_workers = specialization_workers,
+                .reverse_post_check_completions = reverse_post_check_completions,
+                .solved_lir_parallel_metrics_out = &metrics,
+            }, null);
+
+            try std.testing.expectEqualStrings(reference_writer.buffered(), candidate_writer.buffered());
+            try std.testing.expectEqual(metrics.tasks_submitted, metrics.tasks_committed);
+            try std.testing.expect(metrics.worker_instance_tasks_committed > 0);
+        }
+    }
+}
+
 fn expectNamedWorkerLocalCommitted(
     store: *const lir.LirStore,
     _: *const layout.Store,
