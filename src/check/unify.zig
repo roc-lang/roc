@@ -2605,8 +2605,8 @@ const Unifier = struct {
     }
 
     /// Append the merged row's tags in name order: the shared tags, and when
-    /// both sides extend, each side's own tags among them in the order the
-    /// partition found them.
+    /// both sides extend, each side's own tags merged among them. The
+    /// partition left each of the three groups in name order.
     fn processSharedTagsAfterChildren(self: *Self, post: SharedTagsAfterChildren) Error!void {
         const range_start: u32 = @intCast(self.types_store.tags.len());
         const shared = self.scratch.in_both_tags.sliceRange(post.shared_tags_range);
@@ -2617,8 +2617,23 @@ const Unifier = struct {
             var shared_i: usize = 0;
             var a_i: usize = 0;
             var b_i: usize = 0;
-            for (self.scratch.tag_partition_order.sliceRange(extended.order)) |source| {
-                switch (source) {
+            while (true) {
+                // The least name still to write. A name both rows hold is
+                // written before a repeat of it that only one side holds.
+                var group: ?enum { in_both, only_in_a, only_in_b } = null;
+                var least: Tag = undefined;
+                if (shared_i < shared.len) {
+                    group = .in_both;
+                    least = shared[shared_i].b;
+                }
+                if (a_i < only_in_a.len and (group == null or Tag.orderByName(self.ident_store, only_in_a[a_i], least) == .lt)) {
+                    group = .only_in_a;
+                    least = only_in_a[a_i];
+                }
+                if (b_i < only_in_b.len and (group == null or Tag.orderByName(self.ident_store, only_in_b[b_i], least) == .lt)) {
+                    group = .only_in_b;
+                }
+                switch (group orelse break) {
                     .in_both => {
                         try self.appendSharedTag(shared[shared_i]);
                         shared_i += 1;
@@ -2633,7 +2648,6 @@ const Unifier = struct {
                     },
                 }
             }
-            std.debug.assert(shared_i == shared.len and a_i == only_in_a.len and b_i == only_in_b.len);
         } else {
             for (shared) |tags| try self.appendSharedTag(tags);
         }
@@ -3865,9 +3879,6 @@ const Unifier = struct {
             only_in_a: kind.Entry().SafeList.Range,
             only_in_b: kind.Entry().SafeList.Range,
             in_both: MkSafeList(kind.Two()).Range,
-            /// For tags, the group each name comes from, in name order, over
-            /// all three groups (`Scratch.tag_partition_order`).
-            order: PartitionSource.SafeList.Range,
         };
     }
 
@@ -3905,8 +3916,6 @@ const Unifier = struct {
         const a_start: u32 = @intCast(only_in_a.len());
         const b_start: u32 = @intCast(only_in_b.len());
         const both_start: u32 = @intCast(in_both.len());
-        const partition_order = &scratch.tag_partition_order;
-        const order_start: u32 = @intCast(partition_order.len());
 
         // Two rows that hold the same names in the same positions are in the
         // same order, which is `a`'s sorted order, and share every entry. An
@@ -3921,7 +3930,6 @@ const Unifier = struct {
                 .only_in_a = only_in_a.rangeToEnd(a_start),
                 .only_in_b = only_in_b.rangeToEnd(b_start),
                 .in_both = in_both.rangeToEnd(both_start),
-                .order = .empty(),
             };
         }
         self.sortRowByName(Entry, b_entries);
@@ -3939,18 +3947,15 @@ const Unifier = struct {
             switch (order) {
                 .eq => {
                     _ = try in_both.append(scratch.gpa, .{ .a = a_next, .b = b_next });
-                    if (kind == .tag_union) _ = try partition_order.append(scratch.gpa, .in_both);
                     a_i += 1;
                     b_i += 1;
                 },
                 .lt => {
                     _ = try only_in_a.append(scratch.gpa, a_next);
-                    if (kind == .tag_union) _ = try partition_order.append(scratch.gpa, .only_in_a);
                     a_i += 1;
                 },
                 .gt => {
                     _ = try only_in_b.append(scratch.gpa, b_next);
-                    if (kind == .tag_union) _ = try partition_order.append(scratch.gpa, .only_in_b);
                     b_i += 1;
                 },
             }
@@ -3959,13 +3964,11 @@ const Unifier = struct {
         // If b was shorter, add the extra a elems
         while (a_i < a_entries.len) : (a_i += 1) {
             _ = try only_in_a.append(scratch.gpa, a_entries[a_i]);
-            if (kind == .tag_union) _ = try partition_order.append(scratch.gpa, .only_in_a);
         }
 
         // If a was shorter, add the extra b elems
         while (b_i < b_entries.len) : (b_i += 1) {
             _ = try only_in_b.append(scratch.gpa, b_entries[b_i]);
-            if (kind == .tag_union) _ = try partition_order.append(scratch.gpa, .only_in_b);
         }
 
         // Return the ranges
@@ -3973,7 +3976,6 @@ const Unifier = struct {
             .only_in_a = only_in_a.rangeToEnd(a_start),
             .only_in_b = only_in_b.rangeToEnd(b_start),
             .in_both = in_both.rangeToEnd(both_start),
-            .order = partition_order.rangeToEnd(order_start),
         };
     }
 
@@ -4441,7 +4443,6 @@ const Unifier = struct {
                     .{
                         .only_in_a = partitioned.only_in_a,
                         .only_in_b = partitioned.only_in_b,
-                        .order = partitioned.order,
                     },
                     new_ext_var,
                 );
@@ -5135,21 +5136,11 @@ const SharedFieldsAfterChildren = struct {
     did_field_error_flag: u32,
 };
 
-/// The tags only one side of a both-extending tag relation holds, and the
-/// name order of all three partition groups (`Unifier.PartitionedRow`).
+/// The tags only one side of a both-extending tag relation holds, each side's
+/// in name order (`Unifier.PartitionedRow`).
 const BothExtendedTags = struct {
     only_in_a: Tag.SafeList.Range,
     only_in_b: Tag.SafeList.Range,
-    order: PartitionSource.SafeList.Range,
-};
-
-/// The partition group a name of a tag relation falls in.
-const PartitionSource = enum(u8) {
-    in_both,
-    only_in_a,
-    only_in_b,
-
-    pub const SafeList = MkSafeList(@This());
 };
 
 const SharedTagsAfterChildren = struct {
@@ -5445,8 +5436,6 @@ pub const Scratch = struct {
     only_in_a_tags: TagSafeList,
     only_in_b_tags: TagSafeList,
     in_both_tags: TwoTagsSafeList,
-    /// For each tag partition, the group of each name in name order.
-    tag_partition_order: PartitionSource.SafeList,
 
     // constraints
     deferred_constraints: DeferredConstraintCheck.SafeList,
@@ -5630,7 +5619,6 @@ pub const Scratch = struct {
             .only_in_a_tags = try TagSafeList.initCapacity(gpa, 32),
             .only_in_b_tags = try TagSafeList.initCapacity(gpa, 32),
             .in_both_tags = try TwoTagsSafeList.initCapacity(gpa, 32),
-            .tag_partition_order = try PartitionSource.SafeList.initCapacity(gpa, 32),
             .deferred_constraints = try DeferredConstraintCheck.SafeList.initCapacity(gpa, 32),
             .only_in_a_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
             .only_in_b_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
@@ -5670,7 +5658,6 @@ pub const Scratch = struct {
         self.only_in_a_tags.deinit(self.gpa);
         self.only_in_b_tags.deinit(self.gpa);
         self.in_both_tags.deinit(self.gpa);
-        self.tag_partition_order.deinit(self.gpa);
         self.deferred_constraints.deinit(self.gpa);
         self.only_in_a_static_dispatch_constraints.deinit(self.gpa);
         self.only_in_b_static_dispatch_constraints.deinit(self.gpa);
@@ -5715,7 +5702,6 @@ pub const Scratch = struct {
         self.only_in_a_tags.clearRetainingCapacity();
         self.only_in_b_tags.clearRetainingCapacity();
         self.in_both_tags.clearRetainingCapacity();
-        self.tag_partition_order.clearRetainingCapacity();
         self.deferred_constraints.clearRetainingCapacity();
         self.determined_literals.clearRetainingCapacity();
         self.only_in_a_static_dispatch_constraints.clearRetainingCapacity();
