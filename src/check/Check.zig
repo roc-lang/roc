@@ -21260,7 +21260,58 @@ fn checkProvidesEntryHostBoundary(
     const def = self.cir.store.getDef(def_idx);
     const def_var = ModuleEnv.varFrom(def_idx);
 
+    if (self.erroneous_value_patterns.contains(def.pattern)) return;
+    const problems_before = self.problems.problems.items.len;
     try self.checkHostBoundaryType(def_var, self.cir.store.getPatternRegion(def.pattern));
+    // Prefer the specific boundary diagnostic (for example an open row) over
+    // also reporting its polymorphism. Generalization already classified each
+    // binding, including inferred types and aliases, so clean exports need no
+    // additional type walk.
+    if (self.problems.problems.items.len != problems_before or !self.isBindingSchemeVar(def_var)) return;
+
+    // A rejected annotation or nominal declaration can leave generalized
+    // recovery variables. Its original diagnostic already explains the error.
+    var errors = ErroneousTypeMemo.init(self);
+    defer errors.deinit();
+    if (try errors.contains(def_var)) return;
+
+    var data: problem.PolymorphicProvidedFunction = .{
+        .region = self.cir.store.getPatternRegion(def.pattern),
+        .snapshot = try self.snapshotVarForError(def_var),
+        .suggestion = null,
+    };
+    if (self.cir.for_clause_aliases.len() != 0) {
+        var variables = collections.DenseMap(Var, void).init(self.gpa);
+        defer variables.deinit();
+        try self.collectTypeVariablesOf(def_var, &variables);
+        aliases: for (self.cir.for_clause_aliases.items()) |alias| {
+            var iter = variables.constKeyIterator();
+            while (iter.next()) |variable| {
+                const desc = self.types.resolveVar(variable).desc;
+                if (desc.rank != .generalized) continue;
+                const name = switch (desc.content) {
+                    .rigid => |rigid| rigid.name,
+                    .flex => |flex| flex.name orelse continue,
+                    .alias, .field_presence, .structure, .err => continue,
+                };
+                if (name.eql(alias.rigid_name)) {
+                    data.suggestion = .{ .variable = name, .alias = alias.alias_name };
+                    break :aliases;
+                }
+            }
+        }
+    }
+    _ = try self.problems.appendProblem(.{ .polymorphic_provided_function = data });
+    // There is no host ABI for this scheme. Poison its definition type as
+    // well as retiring the value, so publication emits a checked-error export
+    // rather than a host root for an uninstantiable function.
+    try self.markErroneous(def_var);
+    try self.markErroneousValuePattern(def.pattern);
+    try self.markErroneousValueExpr(def.expr);
+    const diagnostic = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+        .region = self.cir.store.getExprRegion(def.expr),
+    } });
+    try self.replaceExprWithRuntimeError(def.expr, diagnostic);
 }
 
 fn checkHostBoundaryType(self: *Self, var_: Var, region: Region) std.mem.Allocator.Error!void {

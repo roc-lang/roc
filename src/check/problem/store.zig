@@ -232,6 +232,7 @@ pub const Store = struct {
                     .hosted_type_variable_not_boxed,
                     .host_boundary_open_row,
                     .host_boundary_optional_field,
+                    .polymorphic_provided_function,
                     .platform_def_not_found,
                     .platform_hosted_section,
                     .comptime_crash,
