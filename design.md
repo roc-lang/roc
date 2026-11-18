@@ -6839,10 +6839,17 @@ to name its class's storage root directly; every variable a descriptor, a type
 argument or record field pool, or a nominal declaration holds becomes its
 class's checked representative; and every record and tag union row absorbs the
 rows its extension chain reaches, so a sealed row is flat and its extension is
-never itself a row. A static-dispatch constraint keeps the function variable
-checking recorded for it, because that variable identifies the constraint; a
-reader resolves it with one slot read. The checked type id of a source type is
-its checked representative's bit pattern, so a rendered payload's children
+never itself a row. Canonicalization walks the slots once, the variable and
+field pools once, and the live descriptors once. The descriptor pass reads
+each descriptor's kind and goes further only for a function, a record or a tag
+union, the kinds that hold a variable inline: it replaces a function's return
+or a row's extension by its representative, and resolving an extension also
+tells whether the extension is itself a row, so a row that must absorb its
+chain is found and flattened in that same step. A static-dispatch constraint
+keeps the function variable checking recorded for it, because that variable
+identifies the constraint; a reader resolves it with one slot read. The
+checked type id of a source type is its checked representative's bit pattern,
+so a rendered payload's children
 alias the store's own variable pools and every reader receives
 representatives. Five columns beside the module's synthesized-type store
 complete what a reader needs: the name each identifier the store's types use
