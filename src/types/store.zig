@@ -1587,6 +1587,23 @@ pub const Store = struct {
         }));
     }
 
+    /// A variable minted as an unbound flex to stand for content that is not
+    /// complete yet, together with the descriptor its content is written to
+    /// (`fillFreshPlaceholder`).
+    pub const Placeholder = struct {
+        var_: Var,
+        desc_idx: DescStore.Idx,
+    };
+
+    /// Create an unbound flex variable of rank `rank` without a name, as a
+    /// placeholder for content written later by `fillFreshPlaceholder`.
+    pub fn freshPlaceholder(self: *Self, rank: Rank) std.mem.Allocator.Error!Placeholder {
+        return self.registerRowAt(self.encodeDescWithoutIdentity(.{
+            .content = .{ .flex = Flex.init() },
+            .rank = rank,
+        }));
+    }
+
     /// Create a new variable with the provided desc
     /// Used in tests
     /// TODO: Can we remove this function? It hardcodes rank, which is fine for
@@ -1648,6 +1665,11 @@ pub const Store = struct {
 
     /// `register` for a descriptor already encoded.
     fn registerRow(self: *Self, row: Desc.Row) std.mem.Allocator.Error!Var {
+        return (try self.registerRowAt(row)).var_;
+    }
+
+    /// `registerRow`, giving the new variable's descriptor too.
+    inline fn registerRowAt(self: *Self, row: Desc.Row) std.mem.Allocator.Error!Placeholder {
         self.debugAssertUnsealed();
         try self.slots.ensureUnusedCapacity(self.gpa, 1);
         try self.union_ranks.ensureUnusedCapacity(self.gpa, 1);
@@ -1658,7 +1680,7 @@ pub const Store = struct {
         const rank_idx = self.union_ranks.appendAssumeCapacity(0);
         std.debug.assert(inserted_slot_idx == slot_idx);
         std.debug.assert(@backingInt(rank_idx) == @backingInt(slot_idx));
-        return Self.slotIdxToVar(slot_idx);
+        return .{ .var_ = checked_var, .desc_idx = desc_idx };
     }
 
     /// Create a new variable with the provided content assuming there is capacity
@@ -1810,33 +1832,26 @@ pub const Store = struct {
         try self.setDesc(resolved.desc_idx, desc);
     }
 
-    /// Give `fresh_var` its descriptor: a variable this store minted as an
-    /// unbound flex placeholder that nothing has unified, written once the
-    /// content it stands for is complete. Construction, not a rewrite of the
-    /// solved graph: the placeholder is its own unfrozen root, so the write
-    /// reaches exactly its descriptor, as `dangerousSetVarDesc` would.
-    pub inline fn fillFreshPlaceholder(self: *Self, fresh_var: Var, desc: Desc) Allocator.Error!void {
+    /// Give `placeholder` its descriptor: a variable this store minted as an
+    /// unbound flex placeholder (`freshPlaceholder`) that nothing has
+    /// unified, written once the content it stands for is complete.
+    /// Construction, not a rewrite of the solved graph: the placeholder is its
+    /// own unfrozen root, so the write reaches exactly its descriptor, as
+    /// `dangerousSetVarDesc` would.
+    pub inline fn fillFreshPlaceholder(self: *Self, placeholder: Placeholder, desc: Desc) Allocator.Error!void {
         self.debugAssertUnsealed();
-        const desc_idx = self.resolveDescIdx(fresh_var);
-        if (std.debug.runtime_safety) {
-            const word = self.descs.getWord(desc_idx);
-            std.debug.assert(word.kind == .flex and !word.flags().frozen);
-            std.debug.assert(self.getRootMeta(desc_idx).checked_var == fresh_var);
-        }
-        try self.setDesc(desc_idx, desc);
+        if (std.debug.runtime_safety) self.debugAssertUnfilledPlaceholder(placeholder);
+        try self.setDesc(placeholder.desc_idx, desc);
     }
 
     /// `fillFreshPlaceholder` for a nominal type or alias whose identity is
     /// row `identity` of this store, as the descriptor it was copied from
     /// names it. Identity rows are unique (`internIdentity`), so `identity`
     /// is the row interning `desc`'s identity finds.
-    pub inline fn fillFreshPlaceholderWithIdentity(self: *Self, fresh_var: Var, desc: Desc, identity: u32) Allocator.Error!void {
+    pub inline fn fillFreshPlaceholderWithIdentity(self: *Self, placeholder: Placeholder, desc: Desc, identity: u32) Allocator.Error!void {
         self.debugAssertUnsealed();
-        const desc_idx = self.resolveDescIdx(fresh_var);
         if (std.debug.runtime_safety) {
-            const word = self.descs.getWord(desc_idx);
-            std.debug.assert(word.kind == .flex and !word.flags().frozen);
-            std.debug.assert(self.getRootMeta(desc_idx).checked_var == fresh_var);
+            self.debugAssertUnfilledPlaceholder(placeholder);
             switch (desc.content) {
                 .alias => |alias| std.debug.assert(std.meta.eql(self.aliasIdentity(identity), AliasIdentity.of(alias))),
                 .structure => |flat| switch (flat) {
@@ -1846,7 +1861,15 @@ pub const Store = struct {
                 .flex, .rigid, .field_presence, .err => unreachable, // only a nominal type or alias names an identity
             }
         }
-        try self.setDescRow(desc_idx, desc.encode(identity, self));
+        try self.setDescRow(placeholder.desc_idx, desc.encode(identity, self));
+    }
+
+    /// `placeholder` is still the unbound, unfrozen flex root it was minted as.
+    fn debugAssertUnfilledPlaceholder(self: *const Self, placeholder: Placeholder) void {
+        std.debug.assert(self.resolveDescIdx(placeholder.var_) == placeholder.desc_idx);
+        const word = self.descs.getWord(placeholder.desc_idx);
+        std.debug.assert(word.kind == .flex and !word.flags().frozen);
+        std.debug.assert(self.getRootMeta(placeholder.desc_idx).checked_var == placeholder.var_);
     }
 
     /// Show `target_var`'s whole class with `content` until the active

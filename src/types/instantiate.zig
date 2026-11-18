@@ -664,7 +664,7 @@ const Frame = union(enum) {
 /// State shared by every frame: the placeholder to fill and the descriptor
 /// flag carried over from the source var.
 const FillCommon = struct {
-    fresh_var: Var,
+    placeholder: TypesStore.Placeholder,
     flags: types_mod.DescriptorFlags,
 };
 
@@ -1708,12 +1708,12 @@ pub const Instantiator = struct {
 
                 // Remember this substitution for recursive references
                 // IMPORTANT: This has to be registered _before_ any child copy runs
-                const fresh_var = try self.store.freshFromContentWithRank(.{ .flex = Flex.init() }, self.current_rank);
-                try self.var_map.put(resolved_var, fresh_var);
+                const placeholder = try self.store.freshPlaceholder(self.current_rank);
+                try self.var_map.put(resolved_var, placeholder.var_);
 
                 try machine.frames.append(self.store.gpa, .{ .flex_like = .{
                     .common = .{
-                        .fresh_var = fresh_var,
+                        .placeholder = placeholder,
                         .flags = flags,
                     },
                     .result = switch (fresh_type) {
@@ -1739,12 +1739,12 @@ pub const Instantiator = struct {
 
                 // Remember this substitution for recursive references
                 // IMPORTANT: This has to be registered _before_ any child copy runs
-                const fresh_var = try self.store.fresh();
-                try self.var_map.put(resolved_var, fresh_var);
+                const placeholder = try self.store.freshPlaceholder(Rank.outermost);
+                try self.var_map.put(resolved_var, placeholder.var_);
 
                 try machine.frames.append(self.store.gpa, .{ .flex_like = .{
                     .common = .{
-                        .fresh_var = fresh_var,
+                        .placeholder = placeholder,
                         .flags = flags,
                     },
                     .result = .flex,
@@ -1757,14 +1757,14 @@ pub const Instantiator = struct {
             },
             .alias => {
                 const alias = self.store.aliasAt(desc_idx);
-                const fresh_var = try self.store.fresh();
-                try self.var_map.put(resolved_var, fresh_var);
+                const placeholder = try self.store.freshPlaceholder(Rank.outermost);
+                try self.var_map.put(resolved_var, placeholder.var_);
 
                 var arg_span = alias.vars.nonempty;
                 arg_span.dropFirstElem();
                 try machine.frames.append(self.store.gpa, .{ .alias = .{
                     .common = .{
-                        .fresh_var = fresh_var,
+                        .placeholder = placeholder,
                         .flags = flags,
                     },
                     .alias = alias,
@@ -1786,8 +1786,8 @@ pub const Instantiator = struct {
             .empty_record => return self.pushLeafCopy(resolved_var, Content{ .structure = FlatType.empty_record }, flags),
             .empty_tag_union => return self.pushLeafCopy(resolved_var, Content{ .structure = FlatType.empty_tag_union }, flags),
             .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union => {
-                const fresh_var = try self.store.fresh();
-                try self.var_map.put(resolved_var, fresh_var);
+                const placeholder = try self.store.freshPlaceholder(Rank.outermost);
+                try self.var_map.put(resolved_var, placeholder.var_);
 
                 switch (resolved.word.kind) {
                     .flex, .rigid, .alias, .field_presence, .err, .empty_record, .empty_tag_union => unreachable, // the outer switch takes these kinds
@@ -1795,7 +1795,7 @@ pub const Instantiator = struct {
                         const tuple = self.store.tupleAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .tuple = .{
                             .common = .{
-                                .fresh_var = fresh_var,
+                                .placeholder = placeholder,
                                 .flags = flags,
                             },
                             .elems_start = @backingInt(tuple.elems.start),
@@ -1814,7 +1814,7 @@ pub const Instantiator = struct {
                         const arg_span = TypesStore.getNominalArgsRange(nominal);
                         try machine.frames.append(self.store.gpa, .{ .nominal = .{
                             .common = .{
-                                .fresh_var = fresh_var,
+                                .placeholder = placeholder,
                                 .flags = flags,
                             },
                             .nominal = nominal,
@@ -1832,7 +1832,7 @@ pub const Instantiator = struct {
                         const func = self.store.funcAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .func = .{
                             .common = .{
-                                .fresh_var = fresh_var,
+                                .placeholder = placeholder,
                                 .flags = flags,
                             },
                             .func = func,
@@ -1847,7 +1847,7 @@ pub const Instantiator = struct {
                         const func = self.store.funcAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .func = .{
                             .common = .{
-                                .fresh_var = fresh_var,
+                                .placeholder = placeholder,
                                 .flags = flags,
                             },
                             .func = func,
@@ -1862,7 +1862,7 @@ pub const Instantiator = struct {
                         const func = self.store.funcAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .func = .{
                             .common = .{
-                                .fresh_var = fresh_var,
+                                .placeholder = placeholder,
                                 .flags = flags,
                             },
                             .func = func,
@@ -1877,7 +1877,7 @@ pub const Instantiator = struct {
                         const record = self.store.recordAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .record = .{
                             .common = .{
-                                .fresh_var = fresh_var,
+                                .placeholder = placeholder,
                                 .flags = flags,
                             },
                             .source_fields = record.fields,
@@ -1890,7 +1890,7 @@ pub const Instantiator = struct {
                         const tag_union = self.store.tagUnionAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .tag_union = .{
                             .common = .{
-                                .fresh_var = fresh_var,
+                                .placeholder = placeholder,
                                 .flags = flags,
                             },
                             .source_tags = tag_union.tags,
@@ -1928,11 +1928,11 @@ pub const Instantiator = struct {
     /// Update the placeholder fresh var with its real content.
     inline fn fillPlaceholder(
         self: *Self,
-        fresh_var: Var,
+        placeholder: TypesStore.Placeholder,
         content: Content,
         flags: types_mod.DescriptorFlags,
     ) std.mem.Allocator.Error!void {
-        try self.store.fillFreshPlaceholder(fresh_var, .{
+        try self.store.fillFreshPlaceholder(placeholder, .{
             .content = content,
             .rank = self.current_rank,
             .flags = flags,
@@ -1945,8 +1945,8 @@ pub const Instantiator = struct {
         common: FillCommon,
         content: Content,
     ) std.mem.Allocator.Error!void {
-        try self.fillPlaceholder(common.fresh_var, content, common.flags);
-        try self.scratch().value_stack.append(self.store.gpa, common.fresh_var);
+        try self.fillPlaceholder(common.placeholder, content, common.flags);
+        try self.scratch().value_stack.append(self.store.gpa, common.placeholder.var_);
     }
 
     /// `finishFrame` for a copied nominal type or alias, whose identity is
@@ -1957,12 +1957,12 @@ pub const Instantiator = struct {
         content: Content,
         identity: u32,
     ) std.mem.Allocator.Error!void {
-        try self.store.fillFreshPlaceholderWithIdentity(common.fresh_var, .{
+        try self.store.fillFreshPlaceholderWithIdentity(common.placeholder, .{
             .content = content,
             .rank = self.current_rank,
             .flags = common.flags,
         }, identity);
-        try self.scratch().value_stack.append(self.store.gpa, common.fresh_var);
+        try self.scratch().value_stack.append(self.store.gpa, common.placeholder.var_);
     }
 
     // IMPORTANT for every step function below: source runs (vars, record
@@ -2394,7 +2394,7 @@ pub const Instantiator = struct {
                         for (sink.items) |*opened| {
                             if (opened.ext == fresh_ext and opened.listed_tags == null) {
                                 opened.listed_tags = frame.tags_range;
-                                opened.union_var = frame.common.fresh_var;
+                                opened.union_var = frame.common.placeholder.var_;
                                 break;
                             }
                         }
