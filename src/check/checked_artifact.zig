@@ -2210,19 +2210,13 @@ const NonConcreteRootScan = struct {
                         .primitive,
                         .list,
                         .box,
-                        .dict,
-                        .set,
                         .parse_tag_union_spec,
                         .fields,
                         .field,
                         => false,
                         .bool_tag_union,
                         .try_nominal,
-                        .iterator,
-                        .crypto_sha256_digest,
-                        .crypto_sha256_hasher,
-                        .crypto_blake3_digest,
-                        .crypto_blake3_hasher,
+                        .declared_backing,
                         => true,
                     },
                     .opaque_without_backing => false,
@@ -3377,16 +3371,13 @@ pub const CheckedBuiltinRuntimeEncoding = union(enum) {
     try_nominal,
     list,
     box,
-    dict,
-    set,
-    iterator,
+    /// A builtin whose value is its checked declaration's backing, read
+    /// like any nominal type's: nothing about its representation is
+    /// builtin.
+    declared_backing,
     parse_tag_union_spec,
     fields,
     field,
-    crypto_sha256_digest,
-    crypto_sha256_hasher,
-    crypto_blake3_digest,
-    crypto_blake3_hasher,
 };
 
 /// Public `builtinRuntimeEncoding` function.
@@ -3418,16 +3409,10 @@ pub fn builtinRuntimeEncoding(builtin_nominal: CheckedBuiltinNominal) CheckedBui
         .i64x2 => .{ .primitive = .i64x2 },
         .list => .list,
         .box => .box,
-        .dict => .dict,
-        .set => .set,
-        .iter, .stream => .iterator,
+        .dict, .set, .iter, .stream, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => .declared_backing,
         .parse_tag_union_spec => .parse_tag_union_spec,
         .fields => .fields,
         .field => .field,
-        .crypto_sha256_digest => .crypto_sha256_digest,
-        .crypto_sha256_hasher => .crypto_sha256_hasher,
-        .crypto_blake3_digest => .crypto_blake3_digest,
-        .crypto_blake3_hasher => .crypto_blake3_hasher,
     };
 }
 
@@ -3580,15 +3565,9 @@ pub fn builtinNominalHasDeclarationBacking(builtin_nominal: CheckedBuiltinNomina
         .fields,
         .field,
         => false,
-        .dict,
-        .set,
         .bool_tag_union,
         .try_nominal,
-        .iterator,
-        .crypto_sha256_digest,
-        .crypto_sha256_hasher,
-        .crypto_blake3_digest,
-        .crypto_blake3_hasher,
+        .declared_backing,
         => true,
     };
 }
@@ -23153,10 +23132,10 @@ fn checkedTypeHoldsFunction(
                 switch (nominal.representation) {
                     .builtin => |builtin_nominal| switch (builtinRuntimeEncoding(builtin_nominal)) {
                         .parse_tag_union_spec => return true,
-                        .primitive, .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
-                        .iterator => {
+                        .primitive, .bool_tag_union, .try_nominal, .list, .box, .fields, .field => {},
+                        .declared_backing => {
                             const declaration = item.types.builtinNominalDeclaration(builtin_nominal) orelse
-                                checkedArtifactInvariant("a module has no declaration for the builtin iterator", .{});
+                                checkedArtifactInvariant("a module has no declaration for a builtin with a declared backing", .{});
                             try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = declaration.backing });
                         },
                     },

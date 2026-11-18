@@ -10902,8 +10902,8 @@ const Builder = struct {
         // in its own specialization graph. A checked recursive reference to it
         // reuses that exact function instead of deferring a sibling body:
         // doing so keeps recursion within one Monotype instantiation context
-        // and lets recursive representation evidence (notably forced-dynamic
-        // iterator flow) reach the root before its single seal.
+        // and lets recursive representation evidence reach the root before
+        // its single seal.
         if (self.active_template_root) |active_root| {
             if (active_root.graph == source_ctx.graph and
                 active_root.family.sameRecursiveCallable(family) and
@@ -11931,16 +11931,10 @@ const Builder = struct {
                         },
                         .bool_tag_union,
                         .try_nominal,
-                        .iterator,
+                        .declared_backing,
                         .parse_tag_union_spec,
                         .fields,
                         .field,
-                        .dict,
-                        .set,
-                        .crypto_sha256_digest,
-                        .crypto_sha256_hasher,
-                        .crypto_blake3_digest,
-                        .crypto_blake3_hasher,
                         => {},
                     },
                     .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
@@ -11983,16 +11977,10 @@ const Builder = struct {
                         .box => break :blk .{ .box = results[0] },
                         .bool_tag_union,
                         .try_nominal,
-                        .iterator,
+                        .declared_backing,
                         .parse_tag_union_spec,
                         .fields,
                         .field,
-                        .dict,
-                        .set,
-                        .crypto_sha256_digest,
-                        .crypto_sha256_hasher,
-                        .crypto_blake3_digest,
-                        .crypto_blake3_hasher,
                         => {},
                     },
                     .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
@@ -28660,7 +28648,7 @@ const BodyContext = struct {
                             task.next = if (checked.builtinRuntimeEncoding(nominal.representation.builtin) == .list) .list_elem else .box_elem;
                             return instNodeStep(nominal.args[0]);
                         },
-                        .bool_tag_union, .try_nominal, .iterator, .parse_tag_union_spec, .fields, .field, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
+                        .bool_tag_union, .try_nominal, .declared_backing, .parse_tag_union_spec, .fields, .field => {},
                     };
                     task.next = .nominal;
                     return .{ .call = .{ .nominal = try self.boxInstTask(InstNominalTask, .{ .checked_ty = task.checked_ty, .nominal = nominal }) } };
@@ -28906,16 +28894,10 @@ const BodyContext = struct {
                         .primitive, .list, .box => Common.invariant("simple builtin reached nominal instantiation frame"),
                         .bool_tag_union => {},
                         .try_nominal,
-                        .iterator,
+                        .declared_backing,
                         .parse_tag_union_spec,
                         .fields,
                         .field,
-                        .dict,
-                        .set,
-                        .crypto_sha256_digest,
-                        .crypto_sha256_hasher,
-                        .crypto_blake3_digest,
-                        .crypto_blake3_hasher,
                         => {},
                     },
                     .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
@@ -46335,10 +46317,10 @@ const BodyContext = struct {
 
     /// Unify a callee formal with the caller's checked argument type. The
     /// checked type's cached cell may already carry a generated-private
-    /// producer representation (e.g. a list literal of minted iterators), and
-    /// private content never enters ordinary public unification: the formal
-    /// gets a fresh public interface related opaquely, and the private node
-    /// itself becomes the request argument.
+    /// producer representation (a codec's, say), and private content never
+    /// enters ordinary public unification: the formal gets a fresh public
+    /// interface related opaquely, and the private node itself becomes the
+    /// request argument.
     fn unifyFormalWithCallerArgNode(
         self: *BodyContext,
         caller: *BodyContext,
@@ -46497,14 +46479,14 @@ const BodyContext = struct {
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => {},
             }
             if ((try self.currentLocalForResolvedValue(ref_id)) == null) break :local;
-            // A generated-private evidence node (e.g. a minted iterator) may
+            // A generated-private evidence node (a codec's, say) may
             // still carry unresolved leaves whose defaults apply at final
             // sealing, so it stays a graph node instead of forcing an eager
             // resolved view.
             if (try self.localCallArgumentEvidenceNode(checked_ty, ref_id, expected_ty)) |node| return node;
             return if (expected_ty) |ty| try self.activeNodeFromType(ty) else null;
         }
-        // A stored const's minted iterator representation lives in its
+        // A stored const's generated-private representation lives in its
         // ConstStore type rather than in any lowered local, so const operands
         // derive their generated evidence from the stored root directly,
         // mirroring `lookupExprTypeNode`'s const arms.
@@ -46742,9 +46724,7 @@ const BodyContext = struct {
     /// `DirectCallRequest`). A later read that carries an expected result
     /// cell relates it to the shared request exactly as a fresh
     /// instantiation would. Requests whose interface depends on the read
-    /// itself are never shared: an iterator procedure's request may be
-    /// replaced by a generated private interface chosen from the argument
-    /// evidence, and an expected cell carrying generated-private
+    /// itself are never shared: an expected cell carrying generated-private
     /// evidence becomes the request's own result.
     fn directCallRequestNode(
         self: *BodyContext,
@@ -53735,10 +53715,9 @@ const BodyContext = struct {
     /// Consume a CheckedModule-proved closed direct call without constructing a
     /// dispatch graph. The producer's runtime category is authoritative:
     /// exact low-level operations and ordinary procedures with ordinary result
-    /// types have a sealed checked callable interface. Ordinary procedures
-    /// returning a public iterator may complete private result evidence in
-    /// their bodies, so those continue through the relation path below along
-    /// with graph-participating and parametric/local/evidence-dependent calls.
+    /// types have a sealed checked callable interface. Intrinsics, and
+    /// pending, parametric, local, structural and evidence-dependent calls,
+    /// continue through the relation path below.
     fn closedDirectGraphFreeResultNode(
         self: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
