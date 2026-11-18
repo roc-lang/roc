@@ -2350,7 +2350,7 @@ fn valueFormReaderOrder(allocator: Allocator, module: *const checked.CheckedModu
     // Each reader's position, by root.
     var reader_positions = try ReaderPositionColumn.initFilled(allocator, module.compile_time_roots.roots.items().len);
     defer reader_positions.deinit(allocator);
-    for (readers, 0..) |request, position| reader_positions.set(@backingInt(compileTimeRootForRequest(module, request)), @enumFromInt(position));
+    for (readers, 0..) |request, position| reader_positions.set(@backingInt(compileTimeRootForRequest(module, request)), @fromBackingInt(@intCast(position)));
     // The readers each reader reads, as a run of `reads` per reader.
     var reads = std.ArrayList(u32).empty;
     defer reads.deinit(allocator);
