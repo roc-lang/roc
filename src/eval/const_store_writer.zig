@@ -1571,20 +1571,25 @@ pub const Writer = struct {
             },
         };
 
-        const byte_len = std.math.mul(usize, roc_list.len(), element.byteWidth()) catch
+        const width: usize = element.byteWidth();
+        if (builtin.mode == .debug) std.debug.assert(self.program.layouts.layoutSize(self.program.layouts.getLayout(elem_layout)) == width);
+        const byte_len = std.math.mul(usize, roc_list.len(), width) catch
             writerInvariant("packed list byte length overflowed");
         if (roc_list.bytes == null and roc_list.len() != 0) {
             writerInvariant("non-empty packed list had null element pointer");
         }
-        const bytes = try self.store.reserveBlobData(byte_len);
-        if (roc_list.bytes) |source| {
-            const width: usize = element.byteWidth();
-            for (0..roc_list.len()) |index| {
-                const scalar = self.storeScalar(elem_layout, .{ .ptr = source + index * width });
-                writePackedScalar(bytes[index * width ..][0..width], element, scalar);
+        const data = if (memoryIsPackedScalars(element))
+            try self.store.addBlobData(if (roc_list.bytes) |source| source[0..byte_len] else &.{})
+        else blk: {
+            const bytes = try self.store.reserveBlobData(byte_len);
+            if (roc_list.bytes) |source| {
+                for (0..roc_list.len()) |index| {
+                    const scalar = self.storeScalar(elem_layout, .{ .ptr = source + index * width });
+                    writePackedScalar(bytes[index * width ..][0..width], element, scalar);
+                }
             }
-        }
-        const data = try self.store.commitBlobData(byte_len);
+            break :blk try self.store.commitBlobData(byte_len);
+        };
         self.store.fill(target_node, .{ .list = .{ .items = .{ .packed_bytes = .{
             .bytes = data,
             .len = try checkedU32(roc_list.len()),
@@ -1781,6 +1786,22 @@ fn interpreterErasedCallable(_: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError
     return .{
         .proc = Interpreter.erasedCallableInterpreterProcId(data_ptr),
         .capture_ptr = Interpreter.erasedCallableInterpreterCaptureValuePtr(data_ptr),
+    };
+}
+
+/// Whether a list of `element` scalars in this program's memory already is
+/// its packed encoding (`writePackedScalar`), so the list's bytes are stored
+/// as they are. An integer, `Dec` or vector is packed as its little-endian
+/// bytes, which a little-endian program's memory holds, and a big-endian
+/// program's does not. A float is packed with every NaN as Roc's one NaN,
+/// so each item is stored on its own.
+fn memoryIsPackedScalars(element: const_store.ConstPackedScalar) bool {
+    return switch (builtin.cpu.arch.endian()) {
+        .little => switch (element) {
+            .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => true,
+            .f32, .f64 => false,
+        },
+        .big => false,
     };
 }
 
