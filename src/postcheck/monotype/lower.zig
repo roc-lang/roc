@@ -6215,6 +6215,13 @@ const LiteralArgumentRootIndex = struct {
 /// lowering module id names a row of one program's own module table.
 const LoweringModuleIds = std.AutoHashMap([32]u8, Common.LoweringModuleId);
 
+/// A result query needs only the result half; a checked-type-only call needs
+/// both halves fixed. This is checked interface data, not a graph snapshot.
+const ClosedCallRepresentation = struct {
+    arguments_depend: ?bool = null,
+    result_depends: bool,
+};
+
 const Builder = struct {
     resolution_profile: ResolutionProfile = .{},
     /// `appModuleIdentity` of this lowering's modules.
@@ -6403,6 +6410,9 @@ const Builder = struct {
     /// Whether each checked type is representation-fixed (see
     /// `checkedTypeRepresentationFixed`).
     checked_type_representation_fixed: CheckedTypeMemo(bool) = .empty,
+    /// Only demanded closed callables, not a column for every checked type.
+    /// The compound module/type key is independent of workspace type ids.
+    closed_call_representations: std.AutoHashMapUnmanaged(CheckedTypeAddress, ClosedCallRepresentation) = .empty,
     /// Each scheme's quantified variables by slot, keyed by the scheme's
     /// variable list, for resolving an enclosing variable to its evidence
     /// frame's substitution.
@@ -6834,6 +6844,7 @@ const Builder = struct {
         self.checked_type_contains_error.deinit(self.allocator);
         self.request_determined_result_rows.deinit(self.allocator);
         self.checked_type_representation_fixed.deinit(self.allocator);
+        self.closed_call_representations.deinit(self.allocator);
         var scheme_var_slots = self.scheme_var_slots.valueIterator();
         while (scheme_var_slots.next()) |slots| slots.deinit(self.allocator);
         self.scheme_var_slots.deinit(self.allocator);
@@ -12811,17 +12822,18 @@ const Builder = struct {
         return assumed;
     }
 
-    /// The declared fields of a nominal/opaque record backing, from explicit
-    /// checked metadata, or null when it has none. LSS consumes it as layout
-    /// order only when it contains padding. The lowered backing row remains lexicographic.
+    /// The explicit layout order of a padded nominal/opaque record, or null
+    /// for structural order. Source-only order never enters a runtime type.
     fn declaredOrderOps(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!?[]DeclaredOrderOp {
         if (nominal.declared_fields.len != 0) {
+            if (nominal.padding_field_types.len == 0) return null;
             return try self.checkedDeclaredOrderOps(view, nominal.declared_fields, view, nominal.padding_field_types);
         }
         const lookup = self.nominalDeclarationFor(view, nominal) orelse {
             if (!nominalHasDeclarationBacking(nominal)) return null;
             Common.invariant("declaration-backed nominal reached Monotype lowering without declaration data");
         };
+        if (lookup.padding_field_tys.len == 0) return null;
         const declared_fields = lookup.declaration.declaredFields(lookup.view.types);
         if (declared_fields.len != 0) {
             return try self.checkedDeclaredOrderOps(
@@ -29182,7 +29194,9 @@ const BodyContext = struct {
             };
             const fields = task.lookup.declaration.declaredRecordFields(task.lookup.view.types);
             if (fields.len == 0) return .{ .ret = .{ .declared_order = &.{} } };
-            if (task.lookup.padding_field_tys.len == 0) return .{ .ret = .{ .declared_order = try self.instDeclaredOrderEntries(task, &.{}) } };
+            // Only an explicit unnamed field opts into declared-order layout.
+            // Source field order stays in the checked declaration otherwise.
+            if (task.lookup.padding_field_tys.len == 0) return .{ .ret = .{ .declared_order = &.{} } };
             const padding_tys = task.lookup.padding_field_tys;
             const module_bytes = task.lookup.view.key.bytes;
             const declaration_id: u32 = @backingInt(task.lookup.declaration.id);
@@ -38513,14 +38527,17 @@ const BodyContext = struct {
                             } });
                         },
                         .procedure => {
-                            frame.cursor = 4;
-                            return requestLowerTask(self, .{ .closed_procedure = .{
-                                .checked_ret_ty = checked_ret_ty,
-                                .plan = plan,
-                                .evidence_id = direct.evidence,
-                                .procedure = procedure,
-                                .expected_ret_cell = expected_ret_cell,
-                            } });
+                            const representation = try self.closedCallRepresentation(plan.callable_ty, true);
+                            if (!representation.result_depends and !representation.arguments_depend.?) {
+                                frame.cursor = 4;
+                                return requestLowerTask(self, .{ .closed_procedure = .{
+                                    .checked_ret_ty = checked_ret_ty,
+                                    .plan = plan,
+                                    .evidence_id = direct.evidence,
+                                    .procedure = procedure,
+                                    .expected_ret_cell = expected_ret_cell,
+                                } });
+                            }
                         },
                         .intrinsic, .graph_participating => {},
                     },
@@ -54856,6 +54873,39 @@ const BodyContext = struct {
         return ret_node;
     }
 
+    /// Classify a closed callable once, without adding a checker pass, a live
+    /// instantiation graph, or another cache column to every Monotype node.
+    fn closedCallRepresentation(
+        self: *BodyContext,
+        checked_fn: checked.CheckedTypeId,
+        comptime need_arguments: bool,
+    ) Allocator.Error!ClosedCallRepresentation {
+        const key = checkedTypeAddress(self.view, try self.view.types.canonicalId(checked_fn));
+        const memo = &self.builder.closed_call_representations;
+        const known = memo.get(key);
+        if (known) |cached| {
+            if (!need_arguments or cached.result_depends or cached.arguments_depend != null) return cached;
+        }
+        const callable_ty = try self.lowerType(checked_fn);
+        const store = self.typeStore();
+        const function = functionShape(store, callable_ty, "closed call representation query requires a callable");
+        var result: ClosedCallRepresentation = known orelse .{
+            .result_depends = try store.containsProducerInterface(function.ret),
+        };
+        if (need_arguments and !result.result_depends) {
+            const args = store.span(function.args);
+            result.arguments_depend = false;
+            for (0..args.len) |index| {
+                if (try store.containsProducerInterface(GuardedList.at(args, index))) {
+                    result.arguments_depend = true;
+                    break;
+                }
+            }
+        }
+        try memo.put(self.builder.allocator, key, result);
+        return result;
+    }
+
     /// Return the sealed result type stored in a closed direct call's
     /// producer-authored callable type. No specialization graph node is
     /// created here.
@@ -54893,7 +54943,7 @@ const BodyContext = struct {
         );
         return switch (runtime_target) {
             .low_level => function.ret,
-            .procedure => if (try self.typeStore().containsIteratorInterface(function.ret))
+            .procedure => if ((try self.closedCallRepresentation(plan.callable_ty, false)).result_depends)
                 null
             else
                 function.ret,

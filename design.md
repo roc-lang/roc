@@ -4074,6 +4074,23 @@ The recommended migration order is:
 8. Verify with focused canonicalization tests, `zig build minici`, and
    parser/canonicalization benchmarks.
 
+### Unfinished Value Bindings
+
+An eager initializer cannot read any binding whose initialization encloses
+that read. Blocks, match guards and branches, and loops do not end the
+enclosing initialization. A nested initializer adds its own fresh binders
+without hiding the enclosing ones. Existing mutable reassignment targets
+remain readable at their old values.
+
+Canonicalization tracks canonical pattern identities, not identifier
+spellings, so qualified and unqualified references obey the same rule.
+Tracking is local to the active eager initialization context; entering a
+deferred lambda body suspends the enclosing context and leaving restores it.
+Only initializer completion removes its binders. Ordinary scope boundaries
+neither clear the active context nor release an enclosing initializer's
+storage. Membership and rollback storage follow active initializers, not
+the size of the module or the number of resolved references.
+
 ## Canonicalization Policy Ownership
 
 Canonicalization owns source-name scope policy before checking. Any rule that
@@ -21799,6 +21816,22 @@ lower arguments and body through that context
 emit a closed Monotype definition
 ```
 
+Closed checked callables do not necessarily have fixed runtime
+representations. Iterator and codec interfaces can acquire producer-authored
+private representations, including inside containers, nominal backings,
+and function arguments/results. Closed-call lowering summarizes argument
+and result dependence separately, on demand during `.lss` lowering, and
+memoizes that immutable fact by checked callable identity. It adds no
+checker pass or per-type cache column.
+
+A checked-type-only call and specialization cache key require both halves
+to be representation-independent. A result-only query can use a fixed
+result without constructing the call's argument graph; emission still uses
+the representation-aware path when the arguments depend on their producers.
+Both consumers use the same summary. Representation-aware calls retain
+producer evidence in their requests until relation sealing; a closed public
+type is not permission to snapshot a changing representation.
+
 Calls do not mutate the callee's checked module. A closed call creates or reuses
 a callee specialization by constraining a fresh callee instantiation from the
 caller's instantiated argument and result types. An open call remains a
@@ -24774,9 +24807,17 @@ a single fixed order, so the declared order is not recoverable from the lowered
 record itself. Canonicalization preserves it—a nominal declaration's record
 annotation keeps its fields in source order—and checking records it as
 explicit checked data distinct from the (lexicographic) backing row,
-so later stages never rescan declarations. Monotype lowering preserves this
-metadata for `.lss`, and `.boxy` reads it from the checked declaration. LSS and
-boxy use the presence of explicit checked padding types to select the
+so later stages never rescan declarations. Post-check types carry this order
+only when the checked declaration has an unnamed field, including a
+zero-sized one. Without that marker their declared-order span is empty:
+the complete source declaration remains checked data, but copying its
+irrelevant order through every runtime type would add hashing, comparison,
+serialization and specialization work. Monotype and both constant-type
+producers obey this same contract. Nominal identity remains independent of
+layout policy, and exact type equality continues to compare all retained
+metadata.
+
+LSS and boxy use the presence of explicit checked padding types to select the
 declared-order layout policy; otherwise their runtime layout path reuses the
 structural backing row. The layout graph records the selected policy on the
 struct span, and the store commits it without probing or reconstructing intent.

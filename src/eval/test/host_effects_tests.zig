@@ -73,6 +73,67 @@ fn moduleTestWithLiveAllocations(
 
 /// Public value `tests`.
 pub const tests = [_]TestCase{
+    // https://github.com/roc-lang/roc/issues/13101
+    moduleTestWithLiveAllocations(
+        "issue 13101: a dispatched method returns a custom stream with replaced state",
+        \\Counter := {}.{
+        \\    restart : Counter, Stream(U8) -> Stream(U8)
+        \\    restart = |_c, source| Stream.custom(source, (0.U64).range_len_if_known(0, 1, Inclusive), |s| step!(s))
+        \\}
+        \\
+        \\step! : Stream(U8) => Try((U8, Stream(U8)), [NoMore])
+        \\step! = |s|
+        \\    match s.next!() {
+        \\        One({ item, rest: _ }) => Ok((item, Stream.from_iter([].iter())))
+        \\        _ => Err(NoMore)
+        \\    }
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    n = Counter.{}.restart(Stream.from_iter([1].iter())).collect!().len()
+        \\    dbg n
+        \\    {}
+        \\}
+    ,
+        &.{dbg("1")},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "issue 13101: a closed method consumes a private stream and returns a fixed scalar",
+        \\Counter := {}.{
+        \\    count! : Counter, Stream(U8) => U64
+        \\    count! = |_c, source| source.collect!().len()
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    dbg Counter.{}.count!(Stream.from_iter([1, 2, 3].iter()))
+        \\    {}
+        \\}
+    ,
+        &.{dbg("3")},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "issue 13101: a closed method preserves a stream nested inside a record",
+        \\Counter := {}.{
+        \\    pass : Counter, { source : Stream(U8) } -> { source : Stream(U8) }
+        \\    pass = |_c, wrapped| wrapped
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    wrapped = Counter.{}.pass({ source: Stream.from_iter([1, 2].iter()) })
+        \\    dbg wrapped.source.collect!().len()
+        \\    {}
+        \\}
+    ,
+        &.{dbg("2")},
+        .returned,
+        0,
+    ),
     moduleTestWithLiveAllocations(
         "issue 12887: shared boxed streams step and release their captured state",
         \\main : () => {}
