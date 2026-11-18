@@ -3273,6 +3273,21 @@ destination `Type.Store`: coordinator and specialization workspaces own separate
 maps. Only committed destination ids enter it. Mutable lambda-set row occurrences
 continue to follow the Row Joins contract.
 
+Storing copies a stored type out of the evaluating program's type table into
+the module's `ConstStore` type table, translating each name it uses from the
+program's name store into the module's. A store writer serves one program and
+one module's store, and keeps what it has copied so far
+(`ConstTypeStore.Translation`): for each of the program's types and each of
+those names, by the program's own id, its copy in the module. Every later
+reference to a copied type or name, from another root, a capture, or a type
+nested in another stored type, reads the copy, so the module's table holds one
+copy of each program type per writer however many stored values share it.
+Both tables only grow while a writer lives, so nothing it has recorded goes
+stale, and the table is the writer's own: nothing is shared between writers
+or threads. Stored types are immutable, so sharing a copy changes no type any
+reader sees; a debug build checks each stored type against a copy made on its
+own.
+
 A stored named type names its declaring module, its declaration and its
 argument types, exactly as a Monotype named type does ("Named Type
 Identity"); restoring it into Monotype copies those parts and re-enters no
