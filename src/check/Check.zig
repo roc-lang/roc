@@ -63429,7 +63429,11 @@ fn takeDerivedCodecBackingWalk(
     // draws the same line when it looks for a custom codec target. A builtin
     // `Try` outside the format's `[Null]` and `[Missing]` conventions is an
     // ordinary tag union whose declared codec is derived from its backing.
-    if (nominal.originIsBuiltin() and !self.nominalIsBuiltinDecl(nominal, .try_type)) return .builtin;
+    if (nominal.originIsBuiltin()) {
+        if (!self.nominalIsBuiltinDecl(nominal, .try_type)) return .builtin;
+        if ((try self.nullTryInfoFromNominal(nominal)) != null) return .builtin;
+        if ((try self.missingTryInfoFromNominal(nominal)) != null) return .builtin;
+    }
     const decl_idx = self.types.lookupNominalDecl(nominal) orelse return .walk_backing;
     // The comparison and the walk compare resolved arguments.
     const args_top = self.scratch_vars.top();
