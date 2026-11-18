@@ -61200,6 +61200,7 @@ fn finishImplicitParse(self: *Self, run: *ImplicitParseRun, validation: DerivedP
             try self.markStaticDispatchRejected(request.constraint);
         },
         .unsupported => try self.reportConstraintErrorAt(request.dispatcher_var, request.constraint, .not_nominal, env, request.failure_expr.get(), request.failure_expr.get()),
+        .undetermined => try self.reportUndeterminedCodecType(request.dispatcher_var, request.constraint, env, request.failure_expr.get()),
     }
     try self.finishCodecDerivationFrame(run.codec_frame, validation == .ok);
 }
@@ -61354,6 +61355,7 @@ fn satisfyImplicitEncoderForConstraint(
             try self.markStaticDispatchRejected(constraint);
         },
         .unsupported => try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, owner_expr),
+        .undetermined => try self.reportUndeterminedCodecType(dispatcher_var, constraint, env, owner_expr),
     }
 }
 
@@ -62032,6 +62034,9 @@ const DerivedParseContext = enum {
 const DerivedParseValidation = enum {
     ok,
     unsupported,
+    /// A part of the shape never resolved to a concrete type
+    /// (`derivedCodecBackingVariable`).
+    undetermined,
     reported_error,
 };
 
@@ -63145,9 +63150,8 @@ fn validateRenameFieldMethod(
 ///
 /// `nominal_backing_depth` counts how many of those backings the walk is
 /// currently inside. Within one, a component that is still a type variable is
-/// a formal standing for whatever an application substitutes, so its
-/// obligation belongs to that application and is discharged where the
-/// application is concrete.
+/// an argument the application has not determined
+/// (`derivedCodecBackingVariable`).
 const DerivedCodecWalk = struct {
     visited: collections.DenseMap(Var, void),
     walked_apps: std.ArrayList(WalkedApp),
@@ -63831,7 +63835,7 @@ fn derivedCodecFailed(input: ?DerivedParseValidation) ?DerivedParseValidation {
     const validation = input orelse return null;
     return switch (validation) {
         .ok => null,
-        .unsupported, .reported_error => validation,
+        .unsupported, .undetermined, .reported_error => validation,
     };
 }
 
@@ -63869,12 +63873,11 @@ fn stepDerivedParse(
                 },
                 .alias => |alias| .{ .tail = .{ .var_ = .{ .var_ = self.types.getAliasBackingVar(alias), .context = task.context } } },
                 .err => .{ .done = .ok },
-                // Inside a derived codec's backing shape a type variable is a formal
-                // standing for whatever an application substitutes, so the obligation
-                // on it belongs to that application and is discharged where the
-                // application is concrete. Anywhere else the shape gate has already
-                // decided such a variable, so reaching one here is unsupported.
-                .flex => .{ .done = if (walk.nominal_backing_depth > 0) .ok else .unsupported },
+                // Inside a derived codec's backing shape a type variable stands
+                // for an application's argument (`derivedCodecBackingVariable`).
+                // Anywhere else the shape gate has already decided such a
+                // variable, so reaching one here is unsupported.
+                .flex => .{ .done = if (walk.nominal_backing_depth > 0) self.derivedCodecBackingVariable(resolved.var_) else .unsupported },
                 // Outside a backing, a type variable the enclosing definition
                 // constrains is read through its declared `parser_for`.
                 .rigid => .{
@@ -64355,6 +64358,22 @@ fn validateDerivedCodecVariable(
     return .ok;
 }
 
+/// The answer for a type variable `var_` a derived codec's walk meets inside
+/// a nominal's backing shape. Opening the backing substituted the
+/// application's arguments for the declaration's formals, so the variable is
+/// (part of) an argument the application has not determined. While a later
+/// event can still determine it, the obligation on it belongs to whatever
+/// type it becomes: a variable a definition's scheme quantifies is
+/// substituted by each use, which validates its own copy of the relation.
+/// At the final codec boundary a variable no scheme quantifies is never
+/// determined again, so the codec has a part that never resolved to a
+/// concrete type and cannot be derived.
+fn derivedCodecBackingVariable(self: *Self, var_: Var) DerivedParseValidation {
+    if (!self.checking_final_codec_dispatch_constraints) return .ok;
+    if (self.types.resolveVar(self.codecInstanceSource(var_)).desc.rank == .generalized) return .ok;
+    return .undetermined;
+}
+
 /// The template variable a private codec instance's copy `var_` stands for
 /// (`finalCodecRelationInstance`), or `var_` outside such an instance.
 fn codecInstanceSource(self: *Self, var_: Var) Var {
@@ -64697,9 +64716,8 @@ fn stepDerivedEncode(
                 .alias => |alias| .{ .tail = .{ .var_ = self.types.getAliasBackingVar(alias) } },
                 .err => .{ .done = .ok },
                 // See `stepDerivedParse`: a variable inside a derived codec's
-                // backing shape is a formal whose obligation belongs to the
-                // application that substitutes for it.
-                .flex => .{ .done = if (walk.nominal_backing_depth > 0) .ok else .unsupported },
+                // backing shape stands for an application's argument.
+                .flex => .{ .done = if (walk.nominal_backing_depth > 0) self.derivedCodecBackingVariable(resolved.var_) else .unsupported },
                 .rigid => .{
                     .done = if (walk.nominal_backing_depth > 0) .ok else blk: {
                         // Every occurrence of the variable is written by the one

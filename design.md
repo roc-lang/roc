@@ -9659,7 +9659,19 @@ Derivation needs every part of the receiver: a receiver that is still
 undetermined after numeric defaulting waits for the final codec boundary, and
 one that is undetermined there is reported as a missing method on a part of
 the type that never resolved to a concrete type, and its call becomes a
-checked runtime error.
+checked runtime error. A nominal whose codec is derived from its backing
+reaches its arguments through that backing: opening the backing substitutes
+the application's arguments, so a type variable the walk meets inside it is
+an argument the application has not determined. While a later use can still
+determine it, its obligation belongs to that use, and a variable a
+definition's scheme quantifies is determined by each use, which validates
+its own copy of the relation. At the final codec boundary a variable no
+scheme quantifies is never determined, so `MyTry(U64, _)` read through
+`[Ok(ok), Err(err)]` is reported exactly as `List(_)` is; an argument the
+backing never reads (a phantom parameter) is not part of the shape and never
+blocks derivation. Pinned by `src/check/test/derived_codec_undetermined_argument_test.zig`
+and `test/cli/DerivedCodecNominalArguments.roc` (accepted) and
+`test/cli/DerivedCodecUndeterminedNominalArgument.roc` (rejected).
 
 `StaticDispatchPlanTable.generated_codec_derivations` stores each parser/encoder
 derivation as an explicit generated-codec contract. It records every generated

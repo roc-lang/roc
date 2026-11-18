@@ -60940,8 +60940,12 @@ const BodyContext = struct {
         };
     }
 
+    /// The parts of a builtin `Try(ok, [Missing])`, the optional record field
+    /// form. Any other nominal, however its backing is shaped, is an ordinary
+    /// tag union to its codec.
     fn missingTryInfo(self: *BodyContext, try_ty: Type.TypeId) Allocator.Error!?TryInfo {
         if (self.frozenCustomCodecCallForShape(.parser, try_ty) != null) return null;
+        if (!self.typeIsBuiltinTry(try_ty)) return null;
         const info = self.tryInfoOptional(try_ty) orelse return null;
         return if (self.typeIsExactUnitTagUnion(info.err_ty, "Missing")) info else null;
     }
@@ -62796,6 +62800,13 @@ const BodyContext = struct {
             },
             .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return false,
         }
+    }
+
+    fn typeIsBuiltinTry(self: *BodyContext, ty: Type.TypeId) bool {
+        return switch (self.typeStore().get(ty)) {
+            .named => |named| self.builder.isBuiltinTryDef(self.nameStore(), named.def),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => false,
+        };
     }
 
     fn graphNodeIsBuiltinTry(self: *BodyContext, node: NodeId) Allocator.Error!bool {
