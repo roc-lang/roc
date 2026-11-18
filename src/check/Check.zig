@@ -57413,7 +57413,7 @@ fn expandDerivedParseQuery(
                         return .supported;
                     }
                 }
-                return .unsupported;
+                return if ((try self.missingTryInfoFromNominal(nominal)) != null) .unsupported else .supported;
             }
             return if (nominal.originIsBuiltin()) .unsupported else .supported;
         },
@@ -58303,7 +58303,7 @@ fn expandDerivedEncodeQuery(
                 return .supported;
             }
             if (self.nominalIsBuiltinDecl(nominal, .try_type)) {
-                return if ((try self.nullTryInfoFromNominal(nominal)) != null) .supported else .unsupported;
+                return if ((try self.missingTryInfoFromNominal(nominal)) != null) .unsupported else .supported;
             }
             if (nominal.originIsBuiltin()) return .unsupported;
             return .supported;
@@ -63374,8 +63374,10 @@ fn takeDerivedCodecBackingWalk(
 ) Allocator.Error!DerivedCodecBackingWalk {
     // Builtin codecs are the format protocol itself, validated against the
     // format's own methods rather than by walking a backing shape. Monotype
-    // draws the same line when it looks for a custom codec target.
-    if (nominal.originIsBuiltin()) return .builtin;
+    // draws the same line when it looks for a custom codec target. A builtin
+    // `Try` outside the format's `[Null]` and `[Missing]` conventions is an
+    // ordinary tag union whose declared codec is derived from its backing.
+    if (nominal.originIsBuiltin() and !self.nominalIsBuiltinDecl(nominal, .try_type)) return .builtin;
     const decl_idx = self.types.lookupNominalDecl(nominal) orelse return .walk_backing;
     // The comparison and the walk compare resolved arguments.
     const args_top = self.scratch_vars.top();
@@ -64134,12 +64136,13 @@ fn stepDerivedParseNominal(
             if (context != .record_field) return .{ .done = .unsupported };
             return shape(info.ok_var);
         }
-        const info = try self.nullTryInfoFromNominal(nominal) orelse return .{ .done = .unsupported };
-        frame.then_var = info.ok_var;
-        frame.stage = .checked_payload;
-        return try self.startParseMethodChecks(frame, &.{
-            .{ .format = .{ .shape_var = state_var, .spec_decl = .null } },
-        });
+        if (try self.nullTryInfoFromNominal(nominal)) |info| {
+            frame.then_var = info.ok_var;
+            frame.stage = .checked_payload;
+            return try self.startParseMethodChecks(frame, &.{
+                .{ .format = .{ .shape_var = state_var, .spec_decl = .null } },
+            });
+        }
     }
 
     const original_env, _ = self.ownerEnvForOriginModule(
@@ -64787,11 +64790,11 @@ fn stepDerivedEncodeNominal(
         if (derivedCodecFailed(try self.validateDictToListMethod(nominal_var, nominal, args.key, args.value, constraint, env, region))) |result| return .{ .done = result };
         return component(args.value);
     }
-    if (self.nominalIsBuiltinDecl(nominal, .try_type)) {
-        const info = try self.nullTryInfoFromNominal(nominal) orelse return .{ .done = .unsupported };
+    if (try self.nullTryInfoFromNominal(nominal)) |info| {
         if (derivedCodecFailed(try self.validateEncodeFormatMethod(encoding_var, state_var, state_var, .null, err_var, constraint, env, region))) |result| return .{ .done = result };
         return component(info.ok_var);
     }
+    if ((try self.missingTryInfoFromNominal(nominal)) != null) return .{ .done = .unsupported };
 
     const original_env, _ = self.ownerEnvForOriginModule(
         nominal.origin_module,

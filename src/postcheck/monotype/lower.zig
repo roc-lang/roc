@@ -62862,9 +62862,8 @@ const BodyContext = struct {
             const seen_entry = try seen.getOrPut(node);
             if (seen_entry.found_existing) continue;
 
-            if ((try self.graphNodeIsBuiltinTry(node))) {
-                const payloads = try self.graphTryPayloads(node);
-                try pending.append(self.allocator, .{ .node = payloads.ok });
+            if (try self.graphCodecConventionTryOkNode(node)) |ok_node| {
+                try pending.append(self.allocator, .{ .node = ok_node });
                 continue;
             }
             if ((try self.generatedCodecBoundaryCall(.parser, node))) |codec_call| {
@@ -63259,6 +63258,18 @@ const BodyContext = struct {
         if (!(try self.graphNodeIsBuiltinTry(node))) return null;
         const payloads = try self.graphTryPayloads(node);
         return if (try self.graphErrorIsExactUnitTag(payloads.err, "Missing")) payloads.ok else null;
+    }
+
+    /// The ok payload of a builtin `Try` whose error is the format's `[Null]`
+    /// or the optional-field `[Missing]` marker. Codecs read and write only
+    /// that payload; any other `Try` is an ordinary tag union whose declared
+    /// codec walks its backing.
+    fn graphCodecConventionTryOkNode(self: *BodyContext, node: NodeId) Allocator.Error!?NodeId {
+        if (!(try self.graphNodeIsBuiltinTry(node))) return null;
+        const payloads = try self.graphTryPayloads(node);
+        if (try self.graphErrorIsExactUnitTag(payloads.err, "Null")) return payloads.ok;
+        if (try self.graphErrorIsExactUnitTag(payloads.err, "Missing")) return payloads.ok;
+        return null;
     }
 
     fn graphNodeHasJsonScalarParser(self: *BodyContext, node: NodeId) Allocator.Error!bool {
@@ -64037,7 +64048,7 @@ const BodyContext = struct {
             return try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, backing_node, boundary_callable_node, seen);
         }
 
-        if ((try self.graphNodeIsBuiltinTry(shape_node))) {
+        if (try self.graphCodecConventionTryOkNode(shape_node)) |ok_node| {
             const payloads = try self.graphTryPayloads(shape_node);
             var added = false;
             if (try self.graphErrorIsExactUnitTag(payloads.err, "Null")) {
@@ -64060,7 +64071,7 @@ const BodyContext = struct {
             return try self.prepareCustomCodecCallsAtNode(
                 boundary_expr,
                 kind,
-                payloads.ok,
+                ok_node,
                 boundary_callable_node,
                 seen,
             ) or added;
