@@ -1479,11 +1479,16 @@ from compile-time evaluation.
 Selection decides which expressions are roots, in two steps. The checker
 traversal above selects candidates: every maximal eligible expression and
 every binding a candidate or runtime code reads. Publication then makes each
-candidate a root except a data constant in value form ("Value-Form Roots")
-that binds no top-level name and whose binding no kept candidate reads
-(`SelectedHoistedRoot.read_by_root`, which pruning records as it keeps the
-reading candidate): such an expression computes nothing, so its body keeps it
-("Value-Form Expressions Stay In Their Bodies"). This is the selection rule,
+candidate a root except a data constant in value form ("Value-Form Roots"),
+or one that only reads a stored constant or another kept candidate's
+binding, that binds no top-level name and whose binding no kept candidate
+reads (`SelectedHoistedRoot.read_by_root`, which pruning records as it keeps
+the reading candidate): such an expression computes nothing, so its body
+keeps it ("Value-Form Expressions Stay In Their Bodies"). A kept candidate
+that only reads another's binding records that read only once it is known
+to stay a root itself, because a kept candidate reads its binding or it
+binds a top-level name; pruning settles these after keeping every
+candidate, readers before what they read. This is the selection rule,
 not a demotion: value form is a fact of the checked expression, decided
 before any evaluation and never after one fails. Once the module's dispatch
 plans are published, publication records for each root it makes which
@@ -2337,6 +2342,11 @@ CIR kinds (as the checked body reader presents them) and checked types:
   value is that expression's, so `if n == 0 { [] } else { ["a", "b"] }`
   has two value-form branches (`valueFormValueExpr` names the expression a
   writer reads the value from);
+- for a root, a lookup of a constant the checked-value writer completes: a
+  requested `constant` or `hoisted_constant` root, of the root's own module
+  or of a module it imports, whose own completion is the writer's
+  (`config = { port: default_port }`, `x = other_constant`,
+  `[Consts.a, Consts.b]`), and which checking recorded no error at;
 
 and no part other than the root itself is read at a row other than its own
 (`CheckedBodies.rowCoercion`). The root's own coercion belongs to the site
@@ -2349,6 +2359,18 @@ form, and a literal with a conversion root always has such a plan, so the
 conversion roots published later decide nothing. Deciding reads the checked
 types and changes none.
 
+A lookup is decided last, once every root of the module exists with its
+request eligibility: publication resolves it from checked CIR to the root it
+reads (the module's own roots by the pattern they bind, an imported
+module's from the roots that module published), since value references are
+published after the roots. A root reading constants of its own module joins
+the writer only after each root it reads has: a read of a root an evaluator
+completes keeps the reader with the evaluator, and so does a cycle of reads,
+which no valid program has. Publication marks every root that reads other
+constants (`CompileTimeRoot.reads_constants`). The value-form expressions a
+body keeps (next section) are only those that read no constant: a read
+inside a body is the runtime read of the stored value, never a literal.
+
 Everything else stays with the evaluator, deliberately:
 
 - A literal converted by a custom `from_numeral` or `from_quote`, a literal
@@ -2360,19 +2382,17 @@ Everything else stays with the evaluator, deliberately:
   finishes: its target is not a builtin scalar the checker fixed.
 - String interpolation, a record update, a record whose type stores a field
   by its presence or fills it from a default, a call, a dispatch, an
-  operator (unary minus included), a lookup of any definition, a field or
-  tuple access, a block with a statement, a branch, `dbg`, `expect`, and
-  `crash`.
-- A reference to another root's completed value. Its value is complete when
-  the root runs, but writing it would copy or share another root's nodes,
-  which this rule leaves to a later step.
+  operator (unary minus included), a lookup of a procedure, a local
+  binding, a platform requirement, or a constant an evaluator completes or
+  whose value is not stored (a polymorphic one), a field or tuple access, a
+  block with a statement, a branch, `dbg`, `expect`, and `crash`.
 
 Nothing reported during evaluation can arise for a value-form root: it calls
 nothing, so it cannot crash, fail an `expect`, print with `dbg`, or reach an
 exhaustiveness failure; its literals convert by the builtin conversion and
-fit their types, so none is rejected; and it reads no value, so it fails by
-no read of a failed root. A root for which any of these could happen is not
-in value form.
+fit their types, so none is rejected; and it reads only roots the writer
+completes, which cannot fail either, so it fails by no read of a failed
+root. A root for which any of these could happen is not in value form.
 
 The writer stores the root under the plan, layout and stored type the
 `.boxy` compile-time evaluator stores it under, computed from the root's
@@ -2384,21 +2404,38 @@ representation either strategy stores such a root in. One store writer
 serves both producers (`eval/const_store_writer.zig`): the plan-directed walk,
 the node shapes it fills, the field and variant order, packed scalar and
 product lists, nominal wrapping, and the stored type are shared, and only
-where a value's parts come from differs: an evaluator's result memory, or the
-checked expression's parts. A numeral's bytes are the bytes lowering gives
-the literal (`exact_numeral.encodeBits`), and a literal list or string has
-no capacity beyond its items (Static Lists And Strings Keep Their Capacity).
+where a value's parts come from differs: an evaluator's result memory, the
+checked expression's parts, or the stored value of a constant the expression
+reads. A numeral's bytes are the bytes lowering gives the literal
+(`exact_numeral.encodeBits`), and a literal list or string has no capacity
+beyond its items (Static Lists And Strings Keep Their Capacity). A read of a
+constant is the constant's stored value, capacity included: the writer
+copies the read root's nodes into the reading root's store under the
+reading root's own plan, choosing each tag's variant by name, so a read at a
+wider tag row stores the same value, and copying a packed list's bytes as
+they are, since a list of one item type packs one way. It reads a root of
+the module being written from the store being written, since every artifact
+of one checked identity owns its own store, and an imported root from the
+schema's view of its module.
 Every part of a value-form root is a node of its own: the writer shares no
-node between two parts, equal or not. Sharing is an evaluator's record that
-two parts were one allocation, and a checked expression has no allocations
-to record. Equal string and packed list bytes are still stored once, because
-the store interns blob data by content.
+node between two parts, equal or not, nor with the root it reads. Sharing is
+an evaluator's record that two parts were one allocation, and a checked
+expression has no allocations to record. Equal string and packed list bytes
+are still stored once, because the store interns blob data by content.
 
-A value-form root reads nothing, so finalization completes every pending
-one before any evaluator starts: the evaluators' dependency graph never
-names them, no program is built for them, and a module whose pending roots
-are all in value form builds no program and is complete for its unit
-scheduler at once. The checked artifact still carries each such root's
+A value-form root reads only roots the writer completes, so finalization
+completes every pending one before any evaluator starts: the evaluators'
+dependency graph never names them, no program is built for them, and a
+module whose pending roots are all in value form builds no program and is
+complete for its unit scheduler at once. Within a module the writer
+completes the roots that read no constant first, then the readers, each
+after the readers it reads (`valueFormReaderOrder`); across modules it
+completes a module after its imports, whose roots finalization completes
+first in either order it runs modules in (a module's evaluation during
+checking starts once its imports are complete, and a program's finalization
+takes its modules in dependency order). A read records no root read
+(`CompileTimeRootReadTable`), as no `.boxy` evaluation of a root does: the
+read root is complete whenever the reader is. The checked artifact still carries each such root's
 request, entry wrapper template, and const template: the root graph walks no
 wrapper of a completed root, but a module's object defines each completed
 root's wrapper for the other objects of a link, and runtime reads restore
@@ -2417,6 +2454,27 @@ lists these expressions instead, ascending
 (`CompileTimeRootTable.inline_literals`), and their bodies keep them. A
 binding whose right-hand side is listed is an ordinary local binding: its
 declaration stays in the body and its uses read the local.
+
+A selected data constant that is only a lookup, through blocks with no
+statements, of another constant, such as `start = Tables.min_match_len` or
+`var $i = min_match_len` in a function body, is no root under the same
+conditions, and nothing lists it: the lookup is the read of a value
+compile-time evaluation stores already, so its body keeps the lookup, and
+running it restores that value, exactly as a read of the root would have.
+The read constant must be one whose value is stored: a requested `constant`
+or `hoisted_constant` root, of the module or of one it imports, that is not
+guarded, whose evaluation failing would leave its value to runtime
+lowering. A lookup of any other constant (a polymorphic one, whose value
+runtime code computes at each instantiation, or a guarded one) stays a
+root, and so does a lookup checking recorded an error at. A selected data
+constant that is only a lookup of another selected root's binding, such as
+the branch `{ start }` reading that `start`, is no root under the same
+conditions, whatever that binding is: its body reads the binding, which is
+the root's value or, when that is no root either, the local the body
+keeps. Checking does not count such a read as the binding's
+(`read_by_root`) unless the reader stays a root ("Root Selection During
+Checking"), so `start` and every read of it like `{ start }` stay out of
+the root table together.
 
 The rule applies at every position. A value-form part of a larger selected
 expression that is not in value form, such as `[1, 2]` in
