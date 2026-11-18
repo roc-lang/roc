@@ -54,7 +54,7 @@ test "issue 12953: functions are accepted anywhere a host only holds them" {
         // Still rejected: a directly boxed function is called by the host.
         .{ .ty = "Box((U64 -> U64) -> U64)", .valid = false },
         .{ .ty = "Box(U64 -> State)", .valid = false },
-        // Still rejected: an unboxed sequence holds its step function.
+        // Still rejected: an unboxed `Iter` or `Stream` holds its step function.
         .{ .ty = "Iter(U8)", .valid = false },
         .{ .ty = "{ items : Stream(U8) }", .valid = false },
     };

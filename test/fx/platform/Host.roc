@@ -43,7 +43,8 @@ Host :: {
     ## Release the boxed function currently stored by the host.
     release_stored_boxed! : () => {}
 
-    ## Release a boxed sequence: its box, and the step callable it holds.
+    ## Release a boxed iterator or stream: its box, and the step callable its
+    ## backing record holds.
     release_boxed_iter! : Box(Iter(U8)) => {}
     release_boxed_stream! : Box(Stream(U8)) => {}
 

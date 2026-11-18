@@ -870,9 +870,7 @@ pub const InterfaceConstraints = struct {
     /// with one member relates nothing within the interface and is dropped,
     /// and an open node whose content is settled and carries no other
     /// evidence is that settled leaf, whichever form its capture chose.
-    /// Recursive-slot and forced-dynamic membership only decide iterator
-    /// representations, so they are no evidence on a class that settles as a
-    /// type containing no iterator interface. A finished-type witness records
+    /// A finished-type witness records
     /// which history reached a class, so it is no evidence either: a replayed
     /// unchanged summary relates nothing back, while a fresh expansion relates
     /// witnessed copies of its settled leaves.
@@ -2245,8 +2243,7 @@ pub const InstGraph = struct {
     /// current class root; unions therefore never move or reindex snapshots.
     node_snapshots: collections.DenseMap(NodeId, std.ArrayList(Type.TypeId)),
     /// Emptied lists of the per-node list maps (`node_snapshots`,
-    /// `leaf_alias_origins`, `nominal_backings_by_root`,
-    /// `generated_iterators_by_root`, and the containment cache's
+    /// `leaf_alias_origins`, `nominal_backings_by_root`, and the containment cache's
     /// dependencies), reused across graph resets.
     list_pools: InstGraphListPools = .{},
     /// Latest immutable snapshot for a root. Any relation mutation clears this

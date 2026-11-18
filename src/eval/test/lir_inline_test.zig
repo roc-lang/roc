@@ -8004,7 +8004,7 @@ test "Dict and Set iteration inherit the minted list representation" {
     }
 }
 
-test "closed Dict and Set receivers keep minted iteration" {
+test "closed Dict and Set receivers stay hoist roots and their loops call no iterator step" {
     const allocator = std.testing.allocator;
     // The receivers are fully closed, so the checker's static-data hoisting
     // applies. The delegating `.iter()`/`.iter_rev()` dispatch must leave the
@@ -9272,10 +9272,7 @@ test "iterdiff: if-chosen iterator chains consumed by one loop agree across inli
 test "iterdiff: branch-chosen append search with early return agrees across inline modes" {
     // Rocci's `on_screen_collided!` shape exactly: a zero-accumulator `for` over
     // a branch-chosen append chain of record elements that returns early on the
-    // first match. The branch-append peel factors the shared base iteration out
-    // and replays the per-element check over each arm's appended items (binding
-    // each appended record's fields directly); the returned first-match value
-    // pins the exact pull order (base elements, then appended items in append
+    // first match. The returned first-match value pins the exact pull order (base elements, then appended items in append
     // order, with the early return short-circuiting). Both lowerings must return
     // the same value for every `(selector, target)` probe.
     try expectSameObservationsAcrossInlineModes(

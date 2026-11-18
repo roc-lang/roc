@@ -9084,14 +9084,8 @@ only calls whose target itself comes from an enclosing specialization.
 
 The runtime target category is producer-authored. Canonicalization records the
 exact low-level operation when it replaces a provided definition; the checker
-records ordinary procedure targets, annotation-only compiler intrinsics whose
-monomorphic implementation is emitted at the checked call site, and operations
-whose runtime representation must participate in a Monotype graph. Graph participation
-covers both producers and representation-sensitive consumers: for example, an
-`Iter` method that consumes a generated-private iterator must preserve that
-representation even when it returns an ordinary value. An optional exact graph
-protocol identifies operations that construct or directly interpret a compiler
-representation; other graph-sensitive procedures carry no protocol. No
+records ordinary procedure targets and annotation-only compiler intrinsics whose
+monomorphic implementation is emitted at the checked call site. No
 consumer may inspect a procedure body, builtin name, owner type, or result shape
 to reconstruct this category.
 
@@ -10570,8 +10564,8 @@ function-reference/direct-call operands. A call whose function is a function
 definition written as its callee, such as `x |> (|a| a + n)`, is lifted as a
 direct call to that function with the definition's capture values as its
 capture operands, evaluated before the arguments; it constructs no function
-value. The iterator-only pass used by `.none` and `.procedures` preserves
-this ownership boundary: the pipeline must not repeat capture analysis.
+value. `.none` and `.procedures` run no SpecConstr, so Lambda Solved consumes
+those capture slots directly: the pipeline must not repeat capture analysis.
 SpecConstr can change free-variable use while cloning and rewriting function
 bodies, so SpecConstr owns one exact capture finalization before it returns its
 Monotype Lifted output. No later pipeline stage repeats that finalization. A
@@ -10741,10 +10735,8 @@ absolute step with another value of `num`; it does not compose or multiply
 steps. `Range.len_if_known` returns the stored exact count when that count fits in
 `U64`, otherwise `Err(Unknown)`. `Range.iter` delegates to `num.range_iter` and
 propagates that hint into the resulting iterator. `Range.iter` and the numeric
-`range_iter` implementations are iterator producers that mint no
-representation of their own: the result is exactly the `Iter.custom` chain the
-numeric implementation builds, so a range iterator and each of its successors
-share one representation.
+`range_iter` implementations are ordinary Roc procedures: the result is exactly
+the `Iter.custom` chain the numeric implementation builds.
 
 Reverse iteration is an explicit numeric capability. `Range.iter_rev`
 reconstructs the opposite direction through `num.range_exclusive_from` or
@@ -11076,9 +11068,8 @@ later position reads (SpecConstr creates no types, so a run's function
 returns that local's type); a statement that starts no such segment stays,
 as does a run of a single wrapper-shaped statement (`wrapper_body.zig`),
 which costs less than a call. Optional productive inlines and call-pattern
-workers count as copies of their callee (iterator-protocol, wrapper and
-foreign-capture inlines do not, and functions that call or produce iterators
-are never split). The copy that leaves two copies of a body in the program
+workers count as copies of their callee (required inlines, such as wrapper
+and foreign-capture inlines, do not). The copy that leaves two copies of a body in the program
 (a second copy, or a first copy of a function the source names at two or
 more places or that is a root) splits it at that serial point: each run moves
 into a prefix function, reserved then and written like a worker in the
@@ -11247,8 +11238,8 @@ source evaluation position before allowing the value skeleton to flow.
 
 SpecConstr collects call patterns from exact direct-call and callable
 identities, then performs one value-aware normalization clone of every original
-body. This complete traversal replaces the former routing scans that guessed
-which bodies contained shape demand, recursive workers, or iterator loops.
+body. This complete traversal needs no routing scan to guess which bodies
+contain shape demand, recursive workers, or loops.
 Known loop state is handled by the loop clone's explicit fixed-point shapes.
 The pass does not scan
 whole bodies to classify branch-chosen loops, count construction-call depth,
@@ -11390,9 +11381,9 @@ guesses or syntax-driven constructor recognition; Roc has checked procedure
 identities, solved representations, explicit keyed captures, and typed
 exhaustion results available directly.
 
-SpecConstr is not responsible for making bounded iterator representation
-allocation-free. Per-chain minting removes the recursive layout edge in every
-mode. SpecConstr improves optimized loop and call shape so later lowering and
+SpecConstr is not responsible for making a bounded iterator chain
+allocation-free. Lambda-set instances give such a chain a finite lambda set per
+adapter instance in every mode ("Iterator Representation"). SpecConstr improves optimized loop and call shape so later lowering and
 LLVM see scalar state and direct operations.
 
 SpecConstr preserves shared control explicitly. When a rewrite would move one
@@ -13471,15 +13462,9 @@ Since a payload's representation is taken from the REQUEST rather than from
 the declared type, a polymorphic implementation's rigid payloads are correct
 by construction: the declared row supplies only the set of labels.
 
-A generated-private `next` request (`Iter.next`, `Stream.next!`) takes the
-same rule without merging rows. Its result is the iterator's step row, a
-closed row inside the private backing whose payloads hold the private
-iterator, so widening it in place would merge those payloads into the
-public request's. When the public interface's result row includes the step
-row and more tags, the private result is instead a new row at the
-interface's labels, with the step row's own tags and payloads
-(`InstGraph.closedTagRowAtWiderLabels`). The step function is a call through
-a function value, so its row stays its own, and the template body's row
+`Iter.next` and `Stream.next!` declare a closed result row, so they take the
+wider row like any such template. Their step function is a call through a
+function value, so its row stays its own, and the template body's row
 coercion joins it into the result in Lambda Solved (Row Joins).
 `test/cli/IterNextWidenedMatch.roc` and `test/cli/StreamNextWidenedMatch.roc`
 match the result with an extra tag.
@@ -15144,8 +15129,7 @@ deferred at lowering; the checked module and lowering are both complete):
   (`InstVariableOrigin.field_slot`): it holds no representation until its
   kind commits, so joining it to a class is a binding, never a merge of two
   representations. A producer can select a generated-private representation
-  for the source-value cell before the kind commits (a method call on a list
-  literal, lowered as the field's value, does). Committing `required` then
+  for the source-value cell before the kind commits. Committing `required` then
   makes the slot that private class, and a row unification relates the slot
   to a matching field's already-private slot, both by ordinary unification.
   The record ends up exactly as one whose kind was `required` from the
@@ -20031,11 +20015,8 @@ loser. An index slot holds just an instance's hash and id: the key lives in the
 instance table, and an instance's arguments change only while it is out of the
 index, so every resident hash is the hash of its instance's current key.
 Generated identity hashes a snapshot of the current graph representation after
-joins, under the equality digest: `typeEql` compares the stamped identity, so
-requests that are equal under `typeEql` mint equal iterator types. An imported request's
-retained type remains its original witness and
-cannot supply the identity of a graph-owned producer that replaced it.
-Joining distinct iterator representations invalidates current snapshots and
+joins, under the equality digest, so requests that are equal under `typeEql`
+get equal generated types. Joining distinct representations invalidates current snapshots and
 durable views, including snapshots of parents that reach the joined class.
 The losing representation's cached view cannot become the winner's view.
 
@@ -20145,8 +20126,7 @@ but its expansion instantiates only the root, and a deferred request replays
 nothing. A caller's specialization work therefore never grows with the bodies
 of its closed callees, and transitive replay is bounded by the open templates
 it actually reaches. A request that lowers the callee body in the caller's own
-draft (a caller-owned lexical specialization or an eager iterator completion)
-still replays them, because that replay is the body's own relation production.
+draft (a caller-owned lexical specialization) still replays them, because that replay is the body's own relation production.
 
 Repeated dependency requests are memoized by the procedure family (template),
 exact evidence topology, and the complete open input
@@ -21742,8 +21722,8 @@ record becomes the tuple of its fields in their row order, and a nominal type
 its backing's representative. Scalars, `Str`, and the builtins with fixed
 layouts are their own representatives, and lists, boxes, and tuples keep
 their structure with representative components. A type holding a function or
-a tag row, a recursive type, an iterator, and a nominal record that declares
-its own field order have no representative; such a slot keeps its type.
+a tag row, a recursive type, a nominal type with no runtime backing, and a
+nominal record that declares its own field order have no representative; such a slot keeps its type.
 
 Every call to a shaped specialization records it (`CallProc.demand_shaped`).
 Its arguments and result keep the call's types, while the callee's parameters
@@ -21870,7 +21850,7 @@ alias's scope with the call's use-site evidence and substitution, and requests
 the lookup's own callee there, so the call reaches the aliased procedure's specialization with
 the evidence the alias's scope composes and keeps that procedure's
 representation; no alias function exists at runtime. The callee's compiler-owned
-roles (call-site intrinsics, iterator procedures, `Str.inspect`, hosted `Try`
+roles (call-site intrinsics, `Str.inspect`, hosted `Try`
 adapters) follow the forward to the final procedure.
 
 A use of an alias instantiates the alias's scheme, never the procedure's: the
@@ -22251,9 +22231,7 @@ template body names none of them, and each local procedure it reaches installs
 its own declaration context's captured binders. The lexical context identity
 digests exactly that inherited context, so the recursive calls of a
 caller-owned body (whose inherited context equals its caller's) reuse it
-rather than lowering a new body per call site. Graph-participating targets
-consume their producer-authored graph protocol instead of taking this
-sealed-interface path.
+rather than lowering a new body per call site.
 
 Nothing else exists. Absent an explicit checker-authored callable path,
 Monotype lowering never derives a method owner from type content, never
@@ -22274,10 +22252,8 @@ selection, and the callee is selected and drafted against the request at the
 first read that needs the completed result, so the type a read seals is the
 type the lowered call produces. A read that carries an expected result cell
 relates it to the shared request the way a fresh instantiation would. Requests
-whose interface depends on the read itself are never shared: an iterator
-procedure's request may be replaced by a generated private interface chosen
-from its argument evidence, and an expected cell carrying generated-private
-evidence becomes the request's own result.
+whose interface depends on the read itself are never shared: an expected cell
+carrying generated-private evidence becomes the request's own result.
 
 Every expression's result type is likewise instantiated once per lowered body
 for every result-type read that carries no expected cell: an enclosing
@@ -23209,23 +23185,13 @@ unary functions unless the source type explicitly returns another function.
 Lambda-set solving, erased callable ABI solving, and specialization identity all
 use the full ordered argument list plus the result type.
 
-Monotype records whether a function signature's argument and result positions
-are independent roots or one exact producer-authored graph. The generated
-`Iter.fromStep` boundary uses the exact-graph relation because its result
-iterator intentionally retains the step function argument's runtime callable
-representation. Every other function signature, nested lambdas included, uses
-independent roots: a nested lambda's argument and result are as independent
-as any other function's, so two occurrences of one Monotype in its signature
-get their own callable slots. Monotype
-Lifted retains an exact graph only while that ABI is unchanged. Lambda Solved
-then imports it from a single signature root, preserving recursive edges and
-intentional sharing between an argument and a nested result slot, and relates
-the lifted argument locals and callable member to those exact slots. A
-transformation that synthesizes a different function ABI clears the producer
-signature and provides its new argument and result slots explicitly. Consumers
-never infer signature relationships by comparing `TypeId`s from independently
-imported roots: equal type ids describe equal Monotype shapes, not runtime
-value flow.
+A function signature's argument and result positions are independent roots,
+nested lambdas included: a nested lambda's argument and result are as
+independent as any other function's, so two occurrences of one Monotype in its
+signature get their own callable slots; the body's expressions relate the
+value flow between them. Consumers never infer signature relationships by
+comparing `TypeId`s from independently imported roots: equal type ids describe
+equal Monotype shapes, not runtime value flow.
 
 ### Lambda Solving
 
@@ -24479,7 +24445,7 @@ regression fails loudly instead of shipping.
 
 ### Procedure-Local LIR Rewrites
 
-TRMC, forwarding-join inlining, tag-case fusion and known-tag jump threading,
+TRMC, tag-case fusion and known-tag jump threading,
 join scalarization, loop append promotion, range proving, and box reuse
 preserve their pipeline order and existing procedure eligibility. Within one phase, procedure bodies own disjoint
 writable rows: the rows of their body chunks ("Statement Storage"). A rewrite
@@ -24498,9 +24464,8 @@ partially rewritten bodies.
 A phase visits only the procedures whose recorded shapes admit it.
 `LirProcSpec.shapes` is a superset of what a body contains: the store records
 each statement-level shape as the statement is appended, lowering and TRMC
-record the loops they build, a rewrite's commit merges the shapes of
-everything it appended, and single-use inlining gives the caller the shapes of
-the body it receives. A phase's admission names every shape one of its
+record the loops they build, and a rewrite's commit merges the shapes of
+everything it appended. A phase's admission names every shape one of its
 rewrites can start from, not only the shape the phase exists for. Range
 proving decides a switch or a checked-arithmetic operation, and equally a
 comparison of unsigned integers with no branch beside it and the count of a
@@ -24512,8 +24477,8 @@ exclude is checked on every procedure no earlier phase of the segment changed.
 Phases run in segments. Consecutive phases that read no other procedure's
 body, allocate no fresh join identities, and prepare no layouts from an earlier
 phase's output (branch expectation, TRMC, join scalarization and join-parameter
-pruning, `ProcPasses.fusible`) form one segment; every other phase, and every
-whole-program step such as single-use inlining, is a segment boundary. A
+pruning, `ProcPasses.fusible`) form one segment; every other phase is a
+segment boundary. A
 segment clones each procedure once, runs each of its phases the procedure's
 shapes admit on that one shard, checking admission against the shapes the
 shard has gained, and commits once: each phase therefore reads exactly what

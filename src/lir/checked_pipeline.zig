@@ -2275,8 +2275,7 @@ fn finishLoweredOutput(
     defer if (proc_pass_detail) |*detail| target.timing.?.addProcPasses(detail);
     const pass_timing: ?*ProcPasses.Timing = if (proc_pass_detail) |*detail| detail else null;
     // Consecutive fusible phases share one task per procedure
-    // (`PendingSegment`); each other phase, and each whole-program step,
-    // ends the segment before it.
+    // (`PendingSegment`); each other phase ends the segment before it.
     var segment: PendingSegment = .{};
     // Branch expectations are read off the lowered switches before any
     // rewrite reshapes them.

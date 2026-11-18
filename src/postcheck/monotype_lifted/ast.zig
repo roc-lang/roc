@@ -2583,7 +2583,7 @@ fn testSourceDigestKey(comptime byte: u8) names.TypeDigest {
 }
 
 /// One lifted function carrying `source`, with no body of its own: the source
-/// digest reads the template, the clone pattern, and the fusion scope only.
+/// digest reads the template and the clone pattern only.
 fn addSourceDigestFn(
     program: *Program,
     symbols: *Common.SymbolGen,

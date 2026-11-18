@@ -426,11 +426,11 @@ pub const Constants = struct {
     ///      and generalized local scopes record whether their scheme holds an
     ///      uncommitted tag tail.
     /// 199: combines the 198 entry with the 194 entry above.
-    /// 200: checked bindings and stored constant types carry no iterator
-    ///      representation fields.
-    /// 200: combines the two independent 199 entries.
-    /// 201: unary `!` canonicalizes to a call to `Bool.not`, combined with the
-    ///      200 entry.
+    /// 200: two independent entries. Checked bindings and stored constant
+    ///      types carry no iterator representation fields; and, separately,
+    ///      a combination of the two independent 199 entries.
+    /// 201: unary `!` canonicalizes to a call to `Bool.not`, on top of the 200
+    ///      entry that combines the 199 entries.
     /// 202: combines the 201 entry with the 200 entry that removes iterator
     ///      representation fields.
     /// 203: hoist-root selection judges every closed expression by whether

@@ -107,8 +107,8 @@ pub const tests = [_]TestCase{
         .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 0 } },
     },
     .{
-        // concat over a `single` combines two differently-typed minted iterators
-        // by value; `single`'s successor and concat's exhausted first must each
+        // concat over a `single` combines two differently-typed iterators by
+        // value; `single`'s successor and concat's exhausted first must each
         // keep one monomorphic type, else the chain is un-representable flat.
         .name = "iter alloc: range concat single fold is zero-alloc",
         .source = "if Iter.fold(Iter.concat((0.U64..<3).iter(), Iter.single(9)), 0.U64, |a, b| a + b) == 12 { \"ok\" } else { \"bad\" }",
@@ -120,12 +120,11 @@ pub const tests = [_]TestCase{
         .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 0 } },
     },
 
-    // --- `for`-loop driver over a minted chain. A `for` sinks the consuming
-    // loop into the chain and rebases the step's inline captures; the append
-    // step re-feeds its own inner-iterator capture slot with the destructured
-    // successor `rest`, so a driver that drops that operand freezes the inner
-    // iterator at its head and the loop never terminates. `fold` does not
-    // exercise this path, so these `for` cases are the gate for it. ---
+    // --- `for` loop over an adapter chain. The append step re-feeds its own
+    // inner-iterator capture slot with the destructured successor `rest`, so
+    // a loop that drops that operand freezes the inner iterator at its head
+    // and never terminates. `fold` does not exercise this path, so these
+    // `for` cases are the gate for it. ---
     .{
         .name = "iter alloc: range append for-loop is zero-alloc",
         .source =

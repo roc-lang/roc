@@ -406,7 +406,7 @@ test "a payload-free tag of a function-holding nominal is no root of its own" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "non-iterator methods sharing iterator producer names remain hoistable" {
+test "a closed method call whose result holds no function is hoistable whatever the method is named" {
     const cases = [_]struct {
         source: []const u8,
         method_name: []const u8,
