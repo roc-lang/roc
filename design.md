@@ -4720,18 +4720,24 @@ structural payload and a nominal payload side by side in one backing, and
 pass a structural value through a forwarding parameter that feeds it.
 
 Unification opens a backing through the openings its type store has recorded
-(`instantiate.BackingOpenings`). A backing template is never unified against,
-an opening substitutes the application's args without reading them, and every
-variable it mints takes the same rank, so an opening whose minted variables
-hold structure alone and name nothing but each other and the args is a fixed
-run of writes: descriptors minted in order, with these marks, and runs of
-vars-pool entries, record fields and tags. The first such opening of a
-declaration is recorded with each variable named by its place among the
-minted variables or the args; every later opening of the declaration replays
-the record under the new names instead of walking the template again, and
-writes exactly what the walk would write, in the same order. Checked builds
-confirm at each replay that every template variable the recorded walk read
-still holds the descriptor it read.
+(`instantiate.BackingOpenings`). An opening substitutes the application's args
+without reading them, and every variable it mints takes the same rank, so an
+opening whose minted variables hold structure alone and name nothing but each
+other and the args is a fixed run of writes: descriptors minted in order, with
+these marks, and runs of vars-pool entries, record fields and tags. Such an
+opening of a declaration is recorded with each variable named by its place
+among the minted variables or the args, together with every template variable
+the walk read and the descriptor it held. A later opening of the declaration
+replays the record under the new names instead of walking the template again,
+and writes exactly what the walk would write, in the same order, as long as
+each of those template variables is still the root of its class and holds the
+descriptor the walk read. A template is not fixed for the life of the store:
+its variable-free classes are shared with other uses of the declarations they
+apply (every annotation naming `Top` in a module can be one class), so
+unification can merge such a class with an equal one after an opening was
+recorded, giving it another root or a descriptor whose args range is stored
+elsewhere. When any template variable changed, the opening walks the template
+as it now is and its walk replaces the record.
 
 ### Settled-State Re-Decision
 

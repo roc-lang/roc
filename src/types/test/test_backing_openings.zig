@@ -250,3 +250,44 @@ test "an opening that shares a template variable is walked every time" {
     try std.testing.expect(!fixture.replayed.backing_openings.recordings.get(fixture.decl_idx).?.replayable);
     try fixture.open(@fromBackingInt(@intCast(2)), .fresh);
 }
+
+/// Merge two classes of the declaration's template with equal classes,
+/// keeping the other class's descriptor, as unification merges equal
+/// variable-free classes: `Box(x)` with an application of `Box` to the same
+/// `x` whose args are stored elsewhere, and the record's closed extension
+/// with an empty record that carries a flag an opening copies.
+fn mergeTemplateClasses(store: *Store, idents: *Ident.Store, decl_idx: NominalDecl.Idx) std.mem.Allocator.Error!void {
+    const decl = store.getNominalDecl(decl_idx);
+    const x = store.sliceVars(decl.formals)[0];
+    const record = store.resolveVar(decl.backing).desc.content.structure.record;
+    const template_box = store.getRecordFieldAt(record.fields, 0).presence.var_;
+    const other_box = try store.freshFromContentWithRank(try store.mkNominalWithSourceDeclAndBuiltinOrigin(
+        .{ .ident_idx = try idents.insert(store.gpa, Ident.for_text("Box")) },
+        &.{x},
+        origin,
+        null,
+        false,
+        false,
+    ), .generalized);
+    try store.unionKeepingContent(template_box, other_box, .b, .generalized);
+
+    const other_ext = try store.freshFromContentWithRank(.{ .structure = .empty_record }, .generalized);
+    try store.markComparedPlain(other_ext);
+    try store.unionKeepingContent(record.ext, other_ext, .b, .generalized);
+}
+
+test "an opening after template classes merged walks the template as it now is" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    try fixture.init(gpa, false);
+    defer fixture.deinit(gpa);
+
+    try fixture.open(.outermost, .fresh);
+    try std.testing.expect(fixture.replayed.backing_openings.recordings.get(fixture.decl_idx).?.replayable);
+    try mergeTemplateClasses(&fixture.walked, &fixture.idents, fixture.decl_idx);
+    try mergeTemplateClasses(&fixture.replayed, &fixture.idents, fixture.decl_idx);
+    try expectSameStores(&fixture.walked, &fixture.replayed);
+    try fixture.open(@fromBackingInt(@intCast(2)), .fresh);
+    try std.testing.expect(fixture.replayed.backing_openings.recordings.get(fixture.decl_idx).?.replayable);
+    try fixture.open(.outermost, .fresh);
+}

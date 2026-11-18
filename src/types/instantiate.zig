@@ -184,7 +184,7 @@ pub fn openNominalBackingRecorded(
     const args = openings.args.items;
     const known = openings.recordings.get(decl_idx);
     if (known) |recording| {
-        if (recording.replayable and recording.recordsDecl(decl)) {
+        if (recording.replayable and recording.recordsDecl(decl) and openings.templateUnchanged(store, recording)) {
             return .{ .opened = try openings.replay(store, recording, args, current_rank), .structure_only = true };
         }
     }
@@ -194,7 +194,7 @@ pub fn openNominalBackingRecorded(
     const walk = try walkNominalBacking(store, idents, var_map, decl, args, current_rank, .instantiation);
     const structure_only = structureOnly(store, start.vars);
     if (known) |recording| {
-        if (recording.recordsDecl(decl)) return .{ .opened = walk.opened, .structure_only = structure_only };
+        if (!recording.replayable and recording.recordsDecl(decl)) return .{ .opened = walk.opened, .structure_only = structure_only };
     }
     try openings.record(store, var_map, decl_idx, decl, args, walk, structure_only, start, store.groundEpoch() -% ground_epoch);
     return .{ .opened = walk.opened, .structure_only = structure_only };
@@ -216,19 +216,25 @@ fn structureOnly(store: *const TypesStore, minted_start: u32) bool {
 /// The openings of nominal declaration backings a type store has recorded
 /// for replay (`openNominalBackingRecorded`).
 ///
-/// An opening walks a declaration's backing template, which is never
-/// unified against, substituting the application's args for the
-/// declaration's formals without reading them, and gives every variable it
-/// mints the same rank. When the variables an opening mints hold structure
-/// alone and name nothing but each other and the args, the opening is a
-/// fixed run of writes to the store: descriptors minted in order, and runs
-/// of vars-pool entries, record fields and tags. Every opening of the same
-/// declaration makes that run with the minted variables, pool positions,
-/// args and rank renamed. The first such opening of a declaration is
-/// recorded with every variable named by its place among the minted
-/// variables or the args and every pool range by its place in the run; each
-/// later opening replays the record, writing what the walk would write, in
-/// the order it would write it.
+/// An opening walks a declaration's backing template, substituting the
+/// application's args for the declaration's formals without reading them,
+/// and gives every variable it mints the same rank. When the variables an
+/// opening mints hold structure alone and name nothing but each other and
+/// the args, the opening is a fixed run of writes to the store: descriptors
+/// minted in order, and runs of vars-pool entries, record fields and tags.
+/// Every opening of the same declaration makes that run with the minted
+/// variables, pool positions, args and rank renamed, as long as every
+/// template variable the walk read still has the root and descriptor it
+/// read. A template's variable-free classes are shared with the uses of the
+/// declarations they apply, so unification can merge one with an equal
+/// class after an opening was recorded, which changes what a walk reads.
+/// Such an opening of a declaration is recorded with every variable named
+/// by its place among the minted variables or the args and every pool range
+/// by its place in the run, together with the template variables it read
+/// and their descriptors; each later opening replays the record, writing
+/// what the walk would write, in the order it would write it, while those
+/// template variables are unchanged, and otherwise walks the template and
+/// records that walk in its place.
 pub const BackingOpenings = struct {
     recordings: std.AutoHashMapUnmanaged(types_mod.NominalDecl.Idx, Recording) = .empty,
     /// Every recording's minted descriptors, in minting order.
@@ -237,8 +243,9 @@ pub const BackingOpenings = struct {
     pool: std.ArrayListUnmanaged(Var) = .empty,
     fields: std.ArrayListUnmanaged(RecordField) = .empty,
     tags: std.ArrayListUnmanaged(Tag) = .empty,
-    /// Checked builds only: each recording's template variables and the rows
-    /// they held when it was made, which every replay checks are unchanged.
+    /// Each recording's template variables and the rows they held when it
+    /// was made: a recording is replayed only while all of them are
+    /// unchanged.
     pinned: std.ArrayListUnmanaged(Pinned) = .empty,
     /// One replay's renamed runs, before they are appended to the store.
     replay_pool: std.ArrayListUnmanaged(Var) = .empty,
@@ -386,16 +393,26 @@ pub const BackingOpenings = struct {
             tag.args.start = @fromBackingInt(renamer.poolOffset(@backingInt(tag.args.start)));
             self.tags.appendAssumeCapacity(tag);
         }
-        if (std.debug.runtime_safety) {
-            recording.pinned_start = @intCast(self.pinned.items.len);
-            var mapped = var_map.iterator();
-            while (mapped.next()) |entry| {
-                const resolved = store.resolveVar(entry.key_ptr.*);
-                try self.pinned.append(gpa, .{ .var_ = resolved.var_, .row = store.rowAt(resolved.desc_idx) });
-            }
-            recording.pinned_len = @as(u32, @intCast(self.pinned.items.len)) - recording.pinned_start;
+        recording.pinned_start = @intCast(self.pinned.items.len);
+        try self.pinned.ensureUnusedCapacity(gpa, var_map.count());
+        var mapped = var_map.iterator();
+        while (mapped.next()) |entry| {
+            const resolved = store.resolveVar(entry.key_ptr.*);
+            self.pinned.appendAssumeCapacity(.{ .var_ = resolved.var_, .row = store.rowAt(resolved.desc_idx) });
         }
+        recording.pinned_len = @as(u32, @intCast(self.pinned.items.len)) - recording.pinned_start;
         try self.recordings.put(gpa, decl_idx, recording);
+    }
+
+    /// Whether every template variable `recording`'s walk read is still the
+    /// root of its class and holds the descriptor the walk read, so a walk
+    /// would make the run the recording records.
+    fn templateUnchanged(self: *const BackingOpenings, store: *const TypesStore, recording: Recording) bool {
+        for (self.pinned.items[recording.pinned_start..][0..recording.pinned_len]) |pinned| {
+            const resolved = store.resolveVar(pinned.var_);
+            if (resolved.var_ != pinned.var_ or !std.meta.eql(store.rowAt(resolved.desc_idx), pinned.row)) return false;
+        }
+        return true;
     }
 
     /// Make the opening `recording` records for args `args` at rank `rank`.
@@ -407,14 +424,6 @@ pub const BackingOpenings = struct {
         rank: Rank,
     ) std.mem.Allocator.Error!Var {
         const gpa = store.gpa;
-        if (std.debug.runtime_safety) {
-            for (self.pinned.items[recording.pinned_start..][0..recording.pinned_len]) |pinned| {
-                const resolved = store.resolveVar(pinned.var_);
-                if (resolved.var_ != pinned.var_ or !std.meta.eql(store.rowAt(resolved.desc_idx), pinned.row)) {
-                    base.invariant("a nominal declaration's backing template changed after an opening of it was recorded", .{});
-                }
-            }
-        }
         const start = PoolLens.of(store);
         const renamer: Renamer = .{ .start = start, .end = undefined, .args = args };
 
