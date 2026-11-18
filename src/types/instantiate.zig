@@ -703,6 +703,8 @@ const FlexLikeFrame = struct {
 const AliasFrame = struct {
     common: FillCommon,
     alias: Alias,
+    /// The identity row the source alias names, which its copy names too.
+    identity_row: u32,
     /// Raw base index of the alias's arg run (backing var excluded).
     args_start: u32,
     args_count: u32,
@@ -724,6 +726,9 @@ const NominalFrame = struct {
     saved_polarity: Polarity,
     common: FillCommon,
     nominal: NominalType,
+    /// The identity row the source application names, which its copy names
+    /// too.
+    identity_row: u32,
     args_start: u32,
     args_count: u32,
     vars_base: u32,
@@ -1749,6 +1754,7 @@ pub const Instantiator = struct {
                         .flags = flags,
                     },
                     .alias = alias,
+                    .identity_row = self.store.aliasIdentityRowAt(desc_idx),
                     .args_start = @backingInt(arg_span.start),
                     .args_count = arg_span.count,
                     .vars_base = @intCast(machine.value_stack.items.len),
@@ -1798,6 +1804,7 @@ pub const Instantiator = struct {
                                 .flags = flags,
                             },
                             .nominal = nominal,
+                            .identity_row = self.store.nominalIdentityRowAt(desc_idx),
                             .args_start = @backingInt(arg_span.start),
                             .args_count = arg_span.count,
                             .vars_base = @intCast(machine.value_stack.items.len),
@@ -1925,6 +1932,22 @@ pub const Instantiator = struct {
         content: Content,
     ) std.mem.Allocator.Error!void {
         try self.fillPlaceholder(common.fresh_var, content, common.flags);
+        try self.scratch().value_stack.append(self.store.gpa, common.fresh_var);
+    }
+
+    /// `finishFrame` for a copied nominal type or alias, whose identity is
+    /// row `identity` of the store, the row its source names.
+    inline fn finishFrameWithIdentity(
+        self: *Self,
+        common: FillCommon,
+        content: Content,
+        identity: u32,
+    ) std.mem.Allocator.Error!void {
+        try self.store.fillFreshPlaceholderWithIdentity(common.fresh_var, .{
+            .content = content,
+            .rank = self.current_rank,
+            .flags = common.flags,
+        }, identity);
         try self.scratch().value_stack.append(self.store.gpa, common.fresh_var);
     }
 
@@ -2088,17 +2111,16 @@ pub const Instantiator = struct {
             const values = machine.value_stack.items;
             const fresh_backing_var = values[frame.vars_base];
             const fresh_args = values[frame.vars_base + 1 ..][0..frame.args_count];
-            const fresh_content = try self.store.mkAliasWithSourceDeclAndBuiltinOrigin(
+            const fresh_content = try self.store.mkAliasWithPackedSourceDecl(
                 frame.alias.ident,
                 fresh_backing_var,
                 fresh_args,
                 frame.alias.source_arg_count,
                 frame.alias.origin_module,
-                frame.alias.source_decl.toOptional(),
-                frame.alias.source_decl.originIsBuiltin(),
+                frame.alias.source_decl,
             );
             machine.value_stack.items.len = frame.vars_base;
-            try self.finishFrame(frame.common, fresh_content);
+            try self.finishFrameWithIdentity(frame.common, fresh_content, frame.identity_row);
             return true;
         }
     }
@@ -2150,16 +2172,10 @@ pub const Instantiator = struct {
                 continue;
             }
             self.current_polarity = frame.saved_polarity;
-            const fresh_content = try self.store.mkNominalWithSourceDeclAndBuiltinOrigin(
-                frame.nominal.ident,
-                machine.value_stack.items[frame.vars_base..][0..frame.args_count],
-                frame.nominal.origin_module,
-                frame.nominal.sourceDeclOptional(),
-                frame.nominal.isOpaque(),
-                frame.nominal.originIsBuiltin(),
-            );
+            var fresh_nominal = frame.nominal;
+            fresh_nominal.args = try self.store.appendVars(machine.value_stack.items[frame.vars_base..][0..frame.args_count]);
             machine.value_stack.items.len = frame.vars_base;
-            try self.finishFrame(frame.common, fresh_content);
+            try self.finishFrameWithIdentity(frame.common, .{ .structure = .{ .nominal_type = fresh_nominal } }, frame.identity_row);
             return true;
         }
     }
