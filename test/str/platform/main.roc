@@ -34,14 +34,17 @@ import Utils
 
 # No host calls these roots. They are here to be lowered: a provided root that
 # is an alias of a generic procedure takes that procedure's dictionaries from
-# the root's own evidence, and without an annotation the alias's scope keeps the
-# requirement, which the root's evidence then fills.
+# the root's own evidence, and an unannotated alias between them keeps the
+# requirement in its scope, which the root's evidence then fills.
 trim_any = |value| value.trim()
+
+trim_again = trim_any
 
 trimmed_string_for_host : Str -> Str
 trimmed_string_for_host = trim_any
 
-any_string_for_host = trim_any
+any_string_for_host : Str -> Str
+any_string_for_host = trim_again
 
 direct_string_for_host : Str -> Str
 direct_string_for_host = |input| process_string(input)
