@@ -72,7 +72,6 @@ fn builtinIdents(f: *Fixture, cache: *exhaustive.NominalOpenCache) (std.mem.Allo
     inline for (base.structFields(exhaustive.BuiltinIdents)) |field| {
         if (field.type == base.Ident.Idx) @field(result, field.name) = sentinel;
     }
-    result.number_decls = @splat(std.math.maxInt(u32));
     result.idents = &f.idents;
     result.open_cache = cache;
     return result;

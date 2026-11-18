@@ -7101,7 +7101,7 @@ Builtin :: [].{
 			}
 		}
 
-		U8 :: [].{
+		U8 :: [ProvidedByCompiler].{
 			parser_for : _
 			encoder_for : _
 
@@ -7833,7 +7833,7 @@ Builtin :: [].{
 			}
 		}
 
-		I8 :: [].{
+		I8 :: [ProvidedByCompiler].{
 			parser_for : _
 			encoder_for : _
 
@@ -8754,7 +8754,7 @@ Builtin :: [].{
 			}
 		}
 
-		U16 :: [].{
+		U16 :: [ProvidedByCompiler].{
 			parser_for : _
 			encoder_for : _
 
@@ -9543,7 +9543,7 @@ Builtin :: [].{
 			}
 		}
 
-		I16 :: [].{
+		I16 :: [ProvidedByCompiler].{
 			parser_for : _
 			encoder_for : _
 
@@ -10503,7 +10503,7 @@ Builtin :: [].{
 			}
 		}
 
-		U32 :: [].{
+		U32 :: [ProvidedByCompiler].{
 			parser_for : _
 			encoder_for : _
 
@@ -11326,7 +11326,7 @@ Builtin :: [].{
 			}
 		}
 
-		I32 :: [].{
+		I32 :: [ProvidedByCompiler].{
 			parser_for : _
 			encoder_for : _
 
@@ -12303,7 +12303,7 @@ Builtin :: [].{
 			}
 		}
 
-		U64 :: [].{
+		U64 :: [ProvidedByCompiler].{
 			parser_for : _
 			encoder_for : _
 
@@ -13189,7 +13189,7 @@ Builtin :: [].{
 			}
 		}
 
-		I64 :: [].{
+		I64 :: [ProvidedByCompiler].{
 			parser_for : _
 			encoder_for : _
 
@@ -14192,7 +14192,7 @@ Builtin :: [].{
 			}
 		}
 
-		U128 :: [].{
+		U128 :: [ProvidedByCompiler].{
 			parser_for : _
 			encoder_for : _
 
@@ -15093,7 +15093,7 @@ Builtin :: [].{
 			}
 		}
 
-		I128 :: [].{
+		I128 :: [ProvidedByCompiler].{
 			parser_for : _
 			encoder_for : _
 
@@ -16126,7 +16126,7 @@ Builtin :: [].{
 			}
 		}
 
-		Dec :: [].{
+		Dec :: [ProvidedByCompiler].{
 			parser_for : _
 			encoder_for : _
 
@@ -17377,7 +17377,7 @@ Builtin :: [].{
 			}
 		}
 
-		F32 :: [].{
+		F32 :: [ProvidedByCompiler].{
 			parser_for : _
 			encoder_for : _
 
@@ -18392,7 +18392,7 @@ Builtin :: [].{
 			}
 		}
 
-		F64 :: [].{
+		F64 :: [ProvidedByCompiler].{
 			parser_for : _
 			encoder_for : _
 

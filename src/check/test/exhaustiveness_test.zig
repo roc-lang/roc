@@ -1287,9 +1287,9 @@ test "non-exhaustive - missing tuple reports the uncovered value of each element
     );
 }
 
-// Builtin number identity: only the Builtin module's own number declarations
-// are inhabited despite their `[]` backings. A user type that shares a
-// number's name is an ordinary type.
+// Builtin inhabitedness: a builtin type has values exactly when its declared
+// backing does, like any other nominal type. A user type that shares a
+// builtin's name is an ordinary type.
 
 /// Checks `source`, expecting only builtin-shadowing warnings and no type problems.
 fn expectShadowingOnlyAndNoTypeProblems(source: []const u8) TestEnv.TestEnvError!void {
@@ -1363,4 +1363,46 @@ test "non-exhaustive - a builtin number reached through a user alias requires Er
     defer test_env.deinit();
 
     try test_env.assertOneTypeError("Non Exhaustive Match");
+}
+
+/// Checks that a `match` with only an `Ok` branch on `Try(Str, <error_type>)`
+/// is rejected for its missing `Err` branch, which is what an error type that
+/// has values requires.
+fn expectErrBranchRequired(comptime error_type: []const u8) TestEnv.TestEnvError!void {
+    const body =
+        \\f = |t| match t {
+        \\    Ok(s) => s
+        \\}
+    ;
+    const source = "f : Try(Str, " ++ error_type ++ ") -> Str\n" ++ body;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Non Exhaustive Match");
+}
+
+test "non-exhaustive - every builtin number error payload requires Err" {
+    inline for (.{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "F32", "F64", "Dec" }) |number| {
+        try expectErrBranchRequired(number);
+    }
+}
+
+test "non-exhaustive - a builtin number inside a structure requires Err" {
+    try expectErrBranchRequired("{ code : U16, message : Str }");
+    try expectErrBranchRequired("(I64, F64)");
+    try expectErrBranchRequired("[Code(U8)]");
+}
+
+test "non-exhaustive - a compiler-provided builtin error payload requires Err" {
+    try expectErrBranchRequired("Str");
+    try expectErrBranchRequired("U8x16");
+    try expectErrBranchRequired("Box(U8)");
+}
+
+test "non-exhaustive - a collection of an empty type requires Err because the empty collection exists" {
+    try expectErrBranchRequired("List([])");
+    try expectErrBranchRequired("Set([])");
+    try expectErrBranchRequired("Dict([], Str)");
+    try expectErrBranchRequired("Dict(Str, [])");
+    try expectErrBranchRequired("Iter([])");
 }
