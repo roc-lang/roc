@@ -1606,6 +1606,12 @@ plain_decisions_waiting: bool = false,
 /// The walk `waitsForPlainDecision` runs over a compared value's data.
 plain_wait_pending: std.ArrayListUnmanaged(Var) = .empty,
 plain_wait_seen: collections.DenseMapUnmanaged(Var, void) = .empty,
+/// The variables `collectReachableVarsExcluding` has yet to visit.
+reachable_pending: std.ArrayListUnmanaged(Var) = .empty,
+/// The variables a frozen scheme's relation reaches
+/// (`collectFrozenRelationEnclosingVars`), and those an enclosing variable
+/// reaches once its rank is given back (`restoreEnclosingVarRanks`).
+frozen_relation_reachable: collections.DenseMap(Var, void),
 /// The expression that fails when a requirement a row variable holds fails,
 /// keyed by the requirement's callable var: the first one it was held with,
 /// which for a requirement copied from a scheme is the use that instantiated
@@ -2219,6 +2225,8 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .plain_decisions_waiting = .settled,
     .plain_wait_pending = .scratch,
     .plain_wait_seen = .scratch,
+    .reachable_pending = .scratch,
+    .frozen_relation_reachable = .scratch,
     .open_row_failure_exprs = .keyed,
     .interpolation_dispatchers = .keyed,
     .interpolation_part_numerals = .keyed,
@@ -5010,6 +5018,7 @@ fn initAssumePrepared(
         .reach_free_schemes = collections.DenseMap(Var, void).init(gpa),
         .link_var_map = collections.DenseMap(Var, Var).init(gpa),
         .scratch_deferred_placeholders = collections.DenseMap(Var, Var).init(gpa),
+        .frozen_relation_reachable = collections.DenseMap(Var, void).init(gpa),
         .reported_dispatch_vars = collections.DenseMap(Var, void).init(gpa),
         .ambiguity_verdict_vars = collections.DenseMap(Var, void).init(gpa),
         .external_pinnable = collections.DenseMap(Var, void).init(gpa),
@@ -20434,8 +20443,8 @@ fn collectReachableVarsExcluding(
     excluded_root: ?Var,
     out: *collections.DenseMap(Var, void),
 ) std.mem.Allocator.Error!void {
-    var pending: std.ArrayList(Var) = .empty;
-    defer pending.deinit(self.gpa);
+    const pending = &self.reachable_pending;
+    pending.clearRetainingCapacity();
     try pending.append(self.gpa, root);
     while (pending.pop()) |var_| {
         const resolved = self.types.resolveVar(var_);
@@ -55363,17 +55372,17 @@ fn collectFrozenRelationEnclosingVars(
     entry: DeferredConstraintCheck,
     out: *std.ArrayList(EnclosingVarRank),
 ) Allocator.Error!void {
-    var reachable = collections.DenseMap(Var, void).init(self.gpa);
-    defer reachable.deinit();
+    const reachable = &self.frozen_relation_reachable;
+    reachable.clearRetainingCapacity();
     const constraints_start: usize = @backingInt(entry.constraints.start);
     for (0..entry.constraints.len()) |offset| {
         const constraint = self.types.static_dispatch_constraints.items()[constraints_start + offset];
         const owner = (self.dispatch_relation_owners.get(constraint.fn_var) orelse continue).get() orelse continue;
         if (!self.captured_scheme_owners.contains(owner)) continue;
-        try self.collectReachableVars(constraint.fn_var, &reachable);
+        try self.collectReachableVars(constraint.fn_var, reachable);
     }
     if (reachable.count() == 0) return;
-    try self.collectReachableVars(entry.var_, &reachable);
+    try self.collectReachableVars(entry.var_, reachable);
     var iter = reachable.iterator();
     while (iter.next()) |reached| {
         const rank = self.types.resolveVar(reached.key_ptr.*).desc.rank;
@@ -55392,12 +55401,11 @@ fn restoreEnclosingVarRanks(
     enclosing: []const EnclosingVarRank,
     env: *Env,
 ) Allocator.Error!void {
-    var reachable = collections.DenseMap(Var, void).init(self.gpa);
-    defer reachable.deinit();
+    const reachable = &self.frozen_relation_reachable;
     for (enclosing) |entry| {
         if (self.types.resolveVar(entry.var_).desc.rank != .generalized) continue;
         reachable.clearRetainingCapacity();
-        try self.collectReachableVars(entry.var_, &reachable);
+        try self.collectReachableVars(entry.var_, reachable);
         var iter = reachable.iterator();
         while (iter.next()) |reached| {
             const resolved = self.types.resolveVar(reached.key_ptr.*);
