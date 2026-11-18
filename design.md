@@ -10316,7 +10316,11 @@ through field or value types that request them, such as `Try(Str, [Null])` or
 `Try(a, [Null])` is the nullable JSON value shape: explicit `null` parses as
 `Err(Null)`. `Try(a, [Missing])` is the record-field-only optional shape: a
 missing field parses as `Err(Missing)`, and encoding `Err(Missing)` omits the
-field. Missing fields and `Null` are never conflated.
+field. Missing fields and `Null` are never conflated. These two shapes are
+format protocol: checking validates them against the format's methods without
+walking the `Try` backing, and Monotype and Boxy write only the `Ok` payload
+plus the format's null or missing-field condition. Any other `Try` is an
+ordinary tag union whose declared codec is derived from its backing.
 
 JSON arrays are used for lists, tuples, and sets. Tuples parse with exact arity.
 Sets preserve `Set` insertion order and parse by inserting the array items.
