@@ -37393,11 +37393,8 @@ pub fn publishFromTypedModule(
         inputs.imports,
         inputs.available_artifacts,
         inputs.relation_artifacts,
-        .{
-            .procedure_templates = &exported_procedure_templates,
-            .procedure_bindings = &exported_procedure_bindings,
-            .const_templates = &exported_const_templates,
-        },
+        // `public_api_dependencies` was collected from these export tables.
+        null,
     );
     errdefer lowering_visibility.deinit(allocator);
     clock.lap(.lowering_visibility);
