@@ -10065,14 +10065,14 @@ test "checked and source keys agree on recursive types however they are unrolled
         fn tagUnion(store: *types.Store, nil: Ident.Idx, cons: Ident.Idx, cons_args: []const Var) Allocator.Error!types.Content {
             return .{ .structure = .{ .tag_union = .{
                 .tags = try store.appendTags(&.{
-                    .{ .name = nil, .args = try store.appendVars(&.{}) },
                     .{ .name = cons, .args = try store.appendVars(cons_args) },
+                    .{ .name = nil, .args = try store.appendVars(&.{}) },
                 }),
                 .ext = try store.freshFromContent(.{ .structure = .empty_tag_union }),
             } } };
         }
     };
-    // rolled = [Nil, Cons(a, rolled)], and the same type unrolled once.
+    // rolled = [Cons(a, rolled), Nil], and the same type unrolled once.
     const rolled = try types_store.fresh();
     try types_store.setVarContent(rolled, try Build.tagUnion(types_store, nil_name, cons_name, &.{ elem, rolled }));
     const once = try types_store.freshFromContent(try Build.tagUnion(types_store, nil_name, cons_name, &.{ elem, rolled }));

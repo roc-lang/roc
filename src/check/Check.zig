@@ -4814,6 +4814,7 @@ fn initAssumePrepared(
     // checking entry point (tests, snapshot tool, playground, builtin bake)
     // with the same inputs: the resolved direct imports.
     try cir.ensureContentIdentity(imported_modules);
+    if (std.debug.runtime_safety) types.debug_idents = cir.getIdentStoreConst();
 
     var owner_envs_by_identity: std.AutoHashMapUnmanaged(base.ModuleIdentity.Hash, OwnerEnvCandidate) = .empty;
     errdefer owner_envs_by_identity.deinit(gpa);
@@ -5046,6 +5047,7 @@ const deinit_exempt_types = [_]type{ std.mem.Allocator, BuiltinContext, Exhausti
 /// first; then every field whose type declares `deinit` releases itself. Each
 /// such field owns only its own allocations, so their order does not matter.
 pub fn deinit(self: *Self) void {
+    if (std.debug.runtime_safety) self.types.debug_idents = null;
     if (self.check_order) |*order| order.deinit();
     for (self.type_schemes.items) |*scheme| {
         scheme.indexed_vars.deinit(self.gpa);
@@ -26178,6 +26180,9 @@ fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allo
     // payload's own copy was built before this row's (`widenedReachCopy`).
     const tags = try self.gpa.dupe(types_mod.Tag, self.widened_use_tags.items[tags_start..]);
     defer self.gpa.free(tags);
+    // The row's parts are gathered in chain order; a tag row's own tags are
+    // stored in name order.
+    std.mem.sort(types_mod.Tag, tags, self.cir.getIdentStoreConst(), comptime types_mod.Tag.sortByNameAsc);
     var payload_widened = false;
     for (tags) |*tag| {
         const args = try self.gpa.dupe(Var, self.types.sliceVars(tag.args));
@@ -49487,6 +49492,8 @@ fn projectTryReturnRow(self: *Self, tail: Var, env: *Env, region: Region) Alloca
             for (tags[0..index]) |earlier| std.debug.assert(!tag.name.eql(earlier.name));
         }
     }
+    // A tag row's own tags are stored in name order.
+    std.mem.sort(types_mod.Tag, self.try_return_rows.tags.items, self.cir.getIdentStoreConst(), comptime types_mod.Tag.sortByNameAsc);
     const ext = try self.fresh(env, region);
     const content = try self.types.mkTagUnion(self.try_return_rows.tags.items, ext);
     return .{ .row = try self.freshFromContent(content, env, region), .tail = tail };
@@ -60805,6 +60812,8 @@ fn mappedStructuralTagUnion(
         }
         try self.scratch_tags.append(.{ .name = tag.name, .args = try self.types.appendVars(args) });
     }
+    // A tag row's own tags are stored in name order.
+    std.mem.sort(types_mod.Tag, self.scratch_tags.sliceFromStart(tags_top), self.cir.getIdentStoreConst(), comptime types_mod.Tag.sortByNameAsc);
     const ext = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
     return try self.freshFromContent(try self.types.mkTagUnion(self.scratch_tags.sliceFromStart(tags_top), ext), env, region);
 }
@@ -61899,10 +61908,14 @@ fn freshClosedRecordVar(self: *Self, fields: []const types_mod.RecordField, env:
     return try self.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_range, .ext = ext_var } } }, env, region);
 }
 
-/// A closed tag union with exactly `tags`.
+/// A closed tag union with exactly `tags`, stored in name order.
 fn freshClosedTagUnionVar(self: *Self, tags: []const types_mod.Tag, env: *Env, region: Region) Allocator.Error!Var {
+    var ordered: [8]types_mod.Tag = undefined;
+    std.debug.assert(tags.len <= ordered.len);
+    @memcpy(ordered[0..tags.len], tags);
+    std.mem.sort(types_mod.Tag, ordered[0..tags.len], self.cir.getIdentStoreConst(), comptime types_mod.Tag.sortByNameAsc);
     const ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
-    return try self.freshFromContent(try self.types.mkTagUnion(tags, ext_var), env, region);
+    return try self.freshFromContent(try self.types.mkTagUnion(ordered[0..tags.len], ext_var), env, region);
 }
 
 /// The `parse_record_field` event row. `graphParseRecordEvent` in

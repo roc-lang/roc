@@ -233,6 +233,11 @@ pub const Store = struct {
 
     gpa: Allocator,
 
+    /// In builds with runtime safety, the identifiers this store's tag names
+    /// index while a checker writes to it, so every tag-union descriptor
+    /// written can be asserted to hold its own tags in name order.
+    debug_idents: if (std.debug.runtime_safety) ?*const base.Ident.Store else void = if (std.debug.runtime_safety) null else {},
+
     /// Type variable storage
     slots: SlotStore,
     descs: DescStore,
@@ -246,6 +251,8 @@ pub const Store = struct {
     /// Storage for compound type parts
     vars: VarSafeList,
     record_fields: RecordFieldSafeMultiList,
+    /// Every tag-union descriptor's own range is in name order
+    /// (`debugAssertTagsInNameOrder`).
     tags: TagSafeMultiList,
     interpolation_parts: InterpolationPartMetadata.SafeList,
     numeral_infos: NumeralInfo.SafeList,
@@ -1458,6 +1465,23 @@ pub const Store = struct {
         const row = self.descs.getRow(desc_idx);
         std.debug.assert(row.word.kind == .alias);
         return row.payload[0];
+    }
+
+    /// A tag-union descriptor's own range holds its tags in name order. A
+    /// label may repeat only where a copy flattens a row whose extension chain
+    /// repeats it (design.md "Row Union Normalization"), so equal neighbors
+    /// are in order. Checked where a descriptor is encoded, while
+    /// `debug_idents` is known.
+    pub fn debugAssertTagsInNameOrder(self: *const Self, range: TagSafeMultiList.Range) void {
+        if (!std.debug.runtime_safety) return;
+        const idents = self.debug_idents orelse return;
+        if (range.count < 2) return;
+        const names = self.tags.sliceRange(range).items(.name);
+        for (names[0 .. names.len - 1], names[1..]) |prev, next| {
+            if (base.Ident.textOrder(idents.getText(prev), idents.getText(next)) == .gt) {
+                base.invariant("a tag union's own tags are not in name order: {s} before {s}", .{ idents.getText(prev), idents.getText(next) });
+            }
+        }
     }
 
     /// `desc` as a stored row, interning the identity of a nominal type or
