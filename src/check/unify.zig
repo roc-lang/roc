@@ -2411,22 +2411,24 @@ const Unifier = struct {
         };
 
         const baseline: u32 = @intCast(self.types_store.len());
-        const opened = try instantiate_mod.instantiateNominalBacking(
+        const opening = try instantiate_mod.openNominalBackingRecorded(
             self.types_store,
             self.ident_store,
             &self.scratch.open_var_map,
+            decl_idx,
             decl,
             args,
             Rank.min(vars.a.desc.rank, vars.b.desc.rank),
-            .instantiation,
         );
+        const opened = opening.opened;
 
         // Every var minted by the instantiation needs the caller's post-unify
         // bookkeeping (regions, rank pools), exactly like `fresh()` vars.
         const now: u32 = @intCast(self.types_store.len());
+        try self.scratch.fresh_vars.ensureUnusedCapacity(self.scratch.gpa, now - baseline);
         var fresh_int: u32 = baseline;
         while (fresh_int < now) : (fresh_int += 1) {
-            _ = try self.scratch.fresh_vars.append(self.scratch.gpa, @fromBackingInt(@intCast(fresh_int)));
+            _ = self.scratch.fresh_vars.appendAssumeCapacity(@fromBackingInt(@intCast(fresh_int)));
         }
 
         try self.scratch.opened_nominals.append(self.scratch.gpa, .{
@@ -2437,17 +2439,7 @@ const Unifier = struct {
         // Only an opening made of structure alone may be shared with later
         // calls: a minted variable would carry one call's bindings into the
         // next.
-        var persistable = true;
-        var minted: u32 = baseline;
-        while (minted < now) : (minted += 1) {
-            switch (self.types_store.resolveVar(@fromBackingInt(@intCast(minted))).desc.content) {
-                .flex, .rigid => {
-                    persistable = false;
-                    break;
-                },
-                .alias, .structure, .field_presence, .err => {},
-            }
-        }
+        const persistable = opening.structure_only;
         try self.scratch.opened_nominal_persistable.append(self.scratch.gpa, persistable);
 
         return .{ .opened = opened };

@@ -75,32 +75,119 @@ fn isErased(store: *const LirStore, layouts: *const layout_mod.Store, local: Loc
 /// capture, into the function-valued local `local`.
 const FieldRead = struct { index: u32, local: LocalId };
 
+/// A statement reading, or defining, a local.
+const LocalStmt = struct {
+    local: LocalId,
+    stmt: CFStmtId,
+
+    fn lessThan(_: void, a: LocalStmt, b: LocalStmt) bool {
+        if (a.local != b.local) return @backingInt(a.local) < @backingInt(b.local);
+        return @backingInt(a.stmt) < @backingInt(b.stmt);
+    }
+};
+
+/// Pairs sorted by local, as parallel columns: the statements of one local
+/// are a contiguous run.
+const LocalStmts = struct {
+    locals: []const LocalId = &.{},
+    stmts: []const CFStmtId = &.{},
+
+    /// Sort `pairs` and copy them into `arena`, dropping repeats when
+    /// `dedup` says a statement counts once.
+    fn build(arena: Allocator, pairs: []LocalStmt, dedup: bool) Allocator.Error!LocalStmts {
+        std.mem.sort(LocalStmt, pairs, {}, LocalStmt.lessThan);
+        var count: usize = 0;
+        for (pairs, 0..) |pair, index| {
+            if (dedup and index != 0 and pairs[index - 1].local == pair.local and pairs[index - 1].stmt == pair.stmt) continue;
+            count += 1;
+        }
+        const locals = try arena.alloc(LocalId, count);
+        const stmts = try arena.alloc(CFStmtId, count);
+        var out: usize = 0;
+        for (pairs, 0..) |pair, index| {
+            if (dedup and index != 0 and pairs[index - 1].local == pair.local and pairs[index - 1].stmt == pair.stmt) continue;
+            locals[out] = pair.local;
+            stmts[out] = pair.stmt;
+            out += 1;
+        }
+        return .{ .locals = locals, .stmts = stmts };
+    }
+
+    fn of(self: LocalStmts, local: LocalId) []const CFStmtId {
+        const key = @backingInt(local);
+        var low: usize = 0;
+        var high: usize = self.locals.len;
+        while (low < high) {
+            const mid = (low + high) / 2;
+            if (@backingInt(self.locals[mid]) < key) low = mid + 1 else high = mid;
+        }
+        var end = low;
+        while (end < self.locals.len and self.locals[end] == local) end += 1;
+        return self.stmts[low..end];
+    }
+};
+
 /// The statements of one procedure that read each function-valued local,
 /// each record it builds from a function value, and its capture.
 const ProcUses = struct {
-    map: collections.DenseMapUnmanaged(LocalId, std.ArrayList(CFStmtId)) = .empty,
-    /// How many statements define each record built from a function value.
-    record_defs: collections.DenseMapUnmanaged(LocalId, u32) = .empty,
+    reads: LocalStmts = .{},
+    /// The statements defining each record built from a function value.
+    record_defs: LocalStmts = .{},
     /// The function-valued reads of an erased-callable procedure's capture
     /// fields; null when the procedure has no capture or uses it other than
     /// by reading fields, so every field may escape.
-    fields: ?std.ArrayList(FieldRead) = null,
+    fields: ?[]const FieldRead = null,
 
-    fn deinit(self: *ProcUses, allocator: Allocator) void {
-        var lists = self.map.valueIterator();
-        while (lists.next()) |list| list.deinit(allocator);
-        self.map.deinit(allocator);
-        self.record_defs.deinit(allocator);
-        if (self.fields) |*fields| fields.deinit(allocator);
-    }
-
-    fn recordDefs(self: *const ProcUses, record: LocalId) u32 {
-        return self.record_defs.get(record) orelse 0;
+    fn recordDefs(self: *const ProcUses, record: LocalId) usize {
+        return self.record_defs.of(record).len;
     }
 
     fn of(self: *const ProcUses, local: LocalId) []const CFStmtId {
-        const list = self.map.getPtrConst(local) orelse return &.{};
-        return list.items;
+        return self.reads.of(local);
+    }
+};
+
+/// The most sparse chunks a map keyed by store-wide ids keeps while it is
+/// reused from one procedure to the next. Procedures' ids lie in different
+/// ranges of the store, so a map that kept every chunk would come to span
+/// the whole store; one that spans more is freed instead of cleared.
+const retained_chunks = 64;
+
+/// Storage the pass reuses for every procedure body it reads.
+const Scratch = struct {
+    visited: collections.DenseMapUnmanaged(CFStmtId, void) = .empty,
+    work: std.ArrayList(CFStmtId) = .empty,
+    /// The statements control reaches from the body last walked.
+    stmts: std.ArrayList(CFStmtId) = .empty,
+    extra: collections.DenseMapUnmanaged(LocalId, void) = .empty,
+    containers: std.ArrayList(LocalId) = .empty,
+    reads: std.ArrayList(LocalStmt) = .empty,
+    defs: std.ArrayList(LocalStmt) = .empty,
+    fields: std.ArrayList(FieldRead) = .empty,
+
+    fn deinit(self: *Scratch, allocator: Allocator) void {
+        self.visited.deinit(allocator);
+        self.work.deinit(allocator);
+        self.stmts.deinit(allocator);
+        self.extra.deinit(allocator);
+        self.containers.deinit(allocator);
+        self.reads.deinit(allocator);
+        self.defs.deinit(allocator);
+        self.fields.deinit(allocator);
+    }
+
+    /// Fill `stmts` with the statements control reaches from `body`, each
+    /// once, as `BodyClone.ReachableStmts` visits them.
+    fn walk(self: *Scratch, allocator: Allocator, store: *const LirStore, body: CFStmtId) Allocator.Error!void {
+        self.visited.clearRetainingAtMost(allocator, retained_chunks);
+        self.work.clearRetainingCapacity();
+        self.stmts.clearRetainingCapacity();
+        try self.work.append(allocator, body);
+        while (self.work.pop()) |stmt_id| {
+            if ((try self.visited.getOrPut(allocator, stmt_id)).found_existing) continue;
+            try BodyClone.appendSuccessors(store, &self.work, stmt_id, allocator);
+            try self.stmts.append(allocator, stmt_id);
+        }
     }
 };
 
@@ -108,30 +195,18 @@ const UseCollector = struct {
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     allocator: Allocator,
-    uses: *ProcUses,
-    /// When set, the locals other than function values whose uses are
-    /// collected instead of the function values'.
-    extra: ?*const collections.DenseMapUnmanaged(LocalId, void) = null,
+    out: *std.ArrayList(LocalStmt),
+    /// The locals other than function values whose uses are collected.
+    extra: *const collections.DenseMapUnmanaged(LocalId, void),
     stmt: CFStmtId = undefined,
     failure: ?Allocator.Error = null,
 
     fn note(self: *UseCollector, local: LocalId) void {
         if (self.failure != null) return;
-        if (self.extra) |extra| {
-            if (!extra.contains(local)) return;
-        } else if (!isErased(self.store, self.layouts, local)) return;
-        self.add(local) catch |err| {
+        if (!self.extra.contains(local) and !isErased(self.store, self.layouts, local)) return;
+        self.out.append(self.allocator, .{ .local = local, .stmt = self.stmt }) catch |err| {
             self.failure = err;
         };
-    }
-
-    fn add(self: *UseCollector, local: LocalId) Allocator.Error!void {
-        const entry = try self.uses.map.getOrPut(self.allocator, local);
-        if (!entry.found_existing) entry.value_ptr.* = .empty;
-        const list = entry.value_ptr;
-        // A statement reading a local at several operands is one use.
-        if (list.items.len != 0 and list.items[list.items.len - 1] == self.stmt) return;
-        try list.append(self.allocator, self.stmt);
     }
 };
 
@@ -162,21 +237,23 @@ fn captureContainer(store: *const LirStore, stmt: LIR.CFStmt, capture: LocalId) 
     return stmt.dyn.target orelse frameInvariant("a view with no target");
 }
 
-/// Counts the definitions of the records `collectUses` tracks.
-const DefCounter = struct {
+/// Collects the definitions of the locals in `extra`, and of function
+/// values when `erased` is set.
+const DefCollector = struct {
     allocator: Allocator,
     extra: *const collections.DenseMapUnmanaged(LocalId, void),
-    uses: *ProcUses,
+    out: *std.ArrayList(LocalStmt),
+    erased: ?struct { store: *const LirStore, layouts: *const layout_mod.Store } = null,
+    stmt: CFStmtId = undefined,
     failure: ?Allocator.Error = null,
 
-    fn note(self: *DefCounter, local: LocalId) void {
-        if (self.failure != null or !self.extra.contains(local)) return;
-        const entry = self.uses.record_defs.getOrPut(self.allocator, local) catch |err| {
+    fn note(self: *DefCollector, local: LocalId) void {
+        if (self.failure != null) return;
+        const tracked = self.extra.contains(local) or if (self.erased) |e| isErased(e.store, e.layouts, local) else false;
+        if (!tracked) return;
+        self.out.append(self.allocator, .{ .local = local, .stmt = self.stmt }) catch |err| {
             self.failure = err;
-            return;
         };
-        if (!entry.found_existing) entry.value_ptr.* = 0;
-        entry.value_ptr.* += 1;
     }
 };
 
@@ -200,86 +277,80 @@ fn fieldRead(store: *const LirStore, stmt: LIR.CFStmt, container: LocalId) ?Fiel
 
 /// Record every statement of `spec`'s body that reads a function-valued
 /// local, a record built from one, or the procedure's capture, and the
-/// procedure's reads of its capture fields.
+/// procedure's reads of its capture fields, into `arena`.
 fn collectUses(
     allocator: Allocator,
+    arena: Allocator,
+    scratch: *Scratch,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     spec: *const LIR.LirProcSpec,
     body: CFStmtId,
-    uses: *ProcUses,
-) Allocator.Error!void {
-    var extra = collections.DenseMapUnmanaged(LocalId, void).empty;
-    defer extra.deinit(allocator);
-    var containers = collections.DenseMapUnmanaged(LocalId, void).empty;
-    defer containers.deinit(allocator);
+) Allocator.Error!ProcUses {
+    try scratch.walk(allocator, store, body);
+    scratch.extra.clearRetainingAtMost(allocator, retained_chunks);
+    scratch.containers.clearRetainingCapacity();
+    scratch.reads.clearRetainingCapacity();
+    scratch.defs.clearRetainingCapacity();
     const capture = spec.erased_capture_arg.get();
-    if (capture) |local| try extra.put(allocator, local, {});
-    {
-        var collector: UseCollector = .{ .store = store, .layouts = layouts, .allocator = allocator, .uses = uses };
-        var walk = try BodyClone.ReachableStmts.initWithAllocator(store, body, allocator);
-        defer walk.deinit();
-        while (try walk.next()) |stmt_id| {
-            const stmt = store.getCFStmt(stmt_id);
-            collector.stmt = stmt_id;
-            BodyClone.forEachStmtRead(store, stmt, &collector, UseCollector.note);
-            if (collector.failure) |err| return err;
-            if (builtRecord(store, stmt)) |built| {
-                const fields = store.getLocalSpan(built.fields);
-                for (0..fields.len) |index| {
-                    if (!isErased(store, layouts, GuardedList.at(fields, index))) continue;
-                    try extra.put(allocator, built.record, {});
-                    break;
-                }
-            }
-            if (capture) |local| if (captureContainer(store, stmt, local)) |container| {
-                try extra.put(allocator, container, {});
-                try containers.put(allocator, container, {});
-            };
-        }
-    }
-    if (extra.count() == 0) return;
-
-    var collector: UseCollector = .{ .store = store, .layouts = layouts, .allocator = allocator, .uses = uses, .extra = &extra };
-    var counter: DefCounter = .{ .allocator = allocator, .extra = &extra, .uses = uses };
-    var walk = try BodyClone.ReachableStmts.initWithAllocator(store, body, allocator);
-    defer walk.deinit();
-    while (try walk.next()) |stmt_id| {
+    if (capture) |local| try scratch.extra.put(allocator, local, {});
+    // The records built from function values and the capture's containers,
+    // whose uses are collected beside the function values'.
+    for (scratch.stmts.items) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
-        collector.stmt = stmt_id;
-        BodyClone.forEachStmtRead(store, stmt, &collector, UseCollector.note);
-        if (collector.failure) |err| return err;
-        BodyClone.forEachStmtDef(store, stmt, &counter, DefCounter.note);
-        // A store writes its destination in place.
-        if (BodyClone.writtenLocal(stmt)) |written| if (BodyClone.definedTarget(stmt) == null) counter.note(written);
-        if (counter.failure) |err| return err;
+        if (builtRecord(store, stmt)) |built| {
+            const fields = store.getLocalSpan(built.fields);
+            for (0..fields.len) |index| {
+                if (!isErased(store, layouts, GuardedList.at(fields, index))) continue;
+                try scratch.extra.put(allocator, built.record, {});
+                break;
+            }
+        }
+        if (capture) |local| if (captureContainer(store, stmt, local)) |container| {
+            try scratch.extra.put(allocator, container, {});
+            try scratch.containers.append(allocator, container);
+        };
     }
+    var reads: UseCollector = .{ .store = store, .layouts = layouts, .allocator = allocator, .out = &scratch.reads, .extra = &scratch.extra };
+    var defs: DefCollector = .{ .allocator = allocator, .extra = &scratch.extra, .out = &scratch.defs };
+    const track_defs = scratch.extra.count() != 0;
+    for (scratch.stmts.items) |stmt_id| {
+        const stmt = store.getCFStmt(stmt_id);
+        reads.stmt = stmt_id;
+        BodyClone.forEachStmtRead(store, stmt, &reads, UseCollector.note);
+        if (reads.failure) |err| return err;
+        if (!track_defs) continue;
+        defs.stmt = stmt_id;
+        BodyClone.forEachStmtDef(store, stmt, &defs, DefCollector.note);
+        // A store writes its destination in place.
+        if (BodyClone.writtenLocal(stmt)) |written| if (BodyClone.definedTarget(stmt) == null) defs.note(written);
+        if (defs.failure) |err| return err;
+    }
+    var uses: ProcUses = .{
+        .reads = try LocalStmts.build(arena, scratch.reads.items, true),
+        .record_defs = try LocalStmts.build(arena, scratch.defs.items, false),
+    };
 
-    const capture_local = capture orelse return;
+    const capture_local = capture orelse return uses;
     // The capture is only read into containers, and the containers only
     // have fields read out of them; otherwise any field may escape.
     for (uses.of(capture_local)) |stmt_id| {
-        if (captureContainer(store, store.getCFStmt(stmt_id), capture_local) == null) return;
+        if (captureContainer(store, store.getCFStmt(stmt_id), capture_local) == null) return uses;
     }
-    var fields = std.ArrayList(FieldRead).empty;
-    errdefer fields.deinit(allocator);
-    var keys = containers.constKeyIterator();
-    while (keys.next()) |container| {
+    scratch.fields.clearRetainingCapacity();
+    for (scratch.containers.items) |container| {
         // A dynamic record's load reads its descriptor, which holds no
         // field's value.
         if (store.localLayout(container) == .opaque_ptr and store.localDyn(container) == null) continue;
         for (uses.of(container)) |stmt_id| {
             const stmt = store.getCFStmt(stmt_id);
             if (isRcStmt(stmt)) continue;
-            const read = fieldRead(store, stmt, container);
-            const field = read orelse {
-                fields.deinit(allocator);
-                return;
-            };
-            if (isErased(store, layouts, field.local)) try fields.append(allocator, field);
+            const field = fieldRead(store, stmt, container) orelse return uses;
+            if (isErased(store, layouts, field.local)) try scratch.fields.append(allocator, field);
         }
     }
-    uses.fields = fields;
+    uses.fields = try arena.dupe(FieldRead, scratch.fields.items);
+    return uses;
 }
 
 /// How one statement uses a function value.
@@ -604,25 +675,48 @@ pub fn solveParams(
     var candidates = std.ArrayList(u32).empty;
     defer candidates.deinit(allocator);
     var proc_uses = std.ArrayList(ProcUses).empty;
-    defer {
-        for (proc_uses.items) |*uses| uses.deinit(allocator);
-        proc_uses.deinit(allocator);
-    }
+    defer proc_uses.deinit(allocator);
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    var scratch: Scratch = .{};
+    defer scratch.deinit(allocator);
 
+    // The candidates: every procedure with a function-valued parameter,
+    // and every erased-callable procedure a candidate packs a record built
+    // from a function value with, whose capture fields that record's
+    // escape reads. No other procedure's capture fields are ever read.
+    const queued = try allocator.alloc(bool, proc_count);
+    defer allocator.free(queued);
+    @memset(queued, false);
+    var pending = std.ArrayList(u32).empty;
+    defer pending.deinit(allocator);
     for (0..proc_count) |index| {
-        const proc_id: ProcId = @fromBackingInt(@intCast(index));
-        const spec = store.getProcSpecImmediate(proc_id);
-        const body = spec.body.get() orelse continue;
+        const spec = store.getProcSpecImmediate(@fromBackingInt(@intCast(index)));
+        if (spec.body == .none or candidatePositions(store, layouts, spec) == 0) continue;
+        queued[index] = true;
+        try pending.append(allocator, @intCast(index));
+    }
+    while (pending.pop()) |index| {
+        const spec = store.getProcSpecImmediate(@fromBackingInt(index));
+        const body = spec.body.get() orelse frameInvariant("a queued candidate with no body");
         const mask = candidatePositions(store, layouts, spec);
-        if (mask == 0 and spec.erased_capture_arg.get() == null) continue;
         masks[index] = mask;
         candidate_masks[index] = mask;
-        try candidates.append(allocator, @intCast(index));
-        try proc_uses.append(allocator, .{});
-        const uses = &proc_uses.items[proc_uses.items.len - 1];
-        try collectUses(allocator, store, layouts, spec, body, uses);
+        try candidates.append(allocator, index);
+        const uses = try collectUses(allocator, arena_state.allocator(), &scratch, store, layouts, spec, body);
+        try proc_uses.append(allocator, uses);
         // Every field a body never reads into a function value it keeps.
         if (uses.fields != null) field_masks[index] = ~@as(u64, 0);
+        for (uses.record_defs.locals) |record| {
+            for (uses.of(record)) |stmt_id| {
+                const packing = Packing.of(store, stmt_id) orelse continue;
+                if (packing.capture != record) continue;
+                const lambda = @backingInt(packingProc(store, stmt_id));
+                if (queued[lambda] or store.getProcSpecImmediate(@fromBackingInt(lambda)).body == .none) continue;
+                queued[lambda] = true;
+                try pending.append(allocator, lambda);
+            }
+        }
     }
 
     var solver: ParamSolver = .{
@@ -653,7 +747,7 @@ pub fn solveParams(
                 .erased_callable, .erased_record => true,
                 .roc => false,
             };
-            if (uses.fields) |fields| for (fields.items) |field| {
+            if (uses.fields) |fields| for (fields) |field| {
                 if (field.index >= mask_positions) continue;
                 const bit = @as(u64, 1) << @intCast(field.index);
                 if (field_masks[index] & bit == 0) continue;
@@ -689,7 +783,7 @@ pub fn solveParams(
                     changed = true;
                 }
             }
-            if (uses.fields) |fields| for (fields.items) |field| {
+            if (uses.fields) |fields| for (fields) |field| {
                 if (field.index >= mask_positions) continue;
                 const bit = @as(u64, 1) << @intCast(field.index);
                 if (field_reuse_masks[index] & bit != 0) continue;
@@ -729,8 +823,16 @@ const FlowGraph = struct {
     succs: std.ArrayList(u32) = .empty,
     pred_start: std.ArrayList(u32) = .empty,
     preds: std.ArrayList(u32) = .empty,
+    join_bodies: collections.DenseMapUnmanaged(LIR.JoinPointId, CFStmtId) = .empty,
+    scratch: std.ArrayList(CFStmtId) = .empty,
+    walk: std.ArrayList(CFStmtId) = .empty,
+    pred_counts: std.ArrayList(u32) = .empty,
 
     fn deinit(self: *FlowGraph, allocator: Allocator) void {
+        self.join_bodies.deinit(allocator);
+        self.scratch.deinit(allocator);
+        self.walk.deinit(allocator);
+        self.pred_counts.deinit(allocator);
         self.stmts.deinit(allocator);
         self.index.deinit(allocator);
         self.succ_start.deinit(allocator);
@@ -747,37 +849,40 @@ const FlowGraph = struct {
         return self.preds.items[self.pred_start.items[node]..self.pred_start.items[node + 1]];
     }
 
-    fn build(self: *FlowGraph, allocator: Allocator, store: *const LirStore, body: CFStmtId) Allocator.Error!void {
-        var join_bodies = collections.DenseMapUnmanaged(LIR.JoinPointId, CFStmtId).empty;
-        defer join_bodies.deinit(allocator);
-        {
-            var walk = try BodyClone.ReachableStmts.initWithAllocator(store, body, allocator);
-            defer walk.deinit();
-            while (try walk.next()) |stmt_id| {
-                const stmt = store.getCFStmt(stmt_id);
-                if (stmt == .join) try join_bodies.put(allocator, stmt.join.id, stmt.join.body);
-            }
+    /// Build the graph of `body`, whose reachable statements are
+    /// `reachable`, reusing this graph's storage.
+    fn build(self: *FlowGraph, allocator: Allocator, store: *const LirStore, body: CFStmtId, reachable: []const CFStmtId) Allocator.Error!void {
+        self.stmts.clearRetainingCapacity();
+        self.index.clearRetainingAtMost(allocator, retained_chunks);
+        self.succ_start.clearRetainingCapacity();
+        self.succs.clearRetainingCapacity();
+        self.pred_start.clearRetainingCapacity();
+        self.preds.clearRetainingCapacity();
+        self.join_bodies.clearRetainingAtMost(allocator, retained_chunks);
+        for (reachable) |stmt_id| {
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt == .join) try self.join_bodies.put(allocator, stmt.join.id, stmt.join.body);
         }
-        var scratch = std.ArrayList(CFStmtId).empty;
-        defer scratch.deinit(allocator);
-        var work = std.ArrayList(CFStmtId).empty;
-        defer work.deinit(allocator);
+        const join_bodies = &self.join_bodies;
+        const scratch = &self.scratch;
+        const work = &self.walk;
+        work.clearRetainingCapacity();
         try work.append(allocator, body);
         while (work.pop()) |stmt_id| {
             const entry = try self.index.getOrPut(allocator, stmt_id);
             if (entry.found_existing) continue;
             entry.value_ptr.* = @intCast(self.stmts.items.len);
             try self.stmts.append(allocator, stmt_id);
-            try flowSuccessors(allocator, store, &join_bodies, stmt_id, &scratch);
+            try flowSuccessors(allocator, store, join_bodies, stmt_id, scratch);
             try work.appendSlice(allocator, scratch.items);
         }
         const count = self.stmts.items.len;
-        const pred_counts = try allocator.alloc(u32, count);
-        defer allocator.free(pred_counts);
+        try self.pred_counts.resize(allocator, count);
+        const pred_counts = self.pred_counts.items;
         @memset(pred_counts, 0);
         for (self.stmts.items) |stmt_id| {
             try self.succ_start.append(allocator, @intCast(self.succs.items.len));
-            try flowSuccessors(allocator, store, &join_bodies, stmt_id, &scratch);
+            try flowSuccessors(allocator, store, join_bodies, stmt_id, scratch);
             for (scratch.items) |successor| {
                 const node = self.index.get(successor) orelse frameInvariant("a flow successor outside its procedure's flow graph");
                 try self.succs.append(allocator, node);
@@ -849,46 +954,14 @@ const FrameSite = struct {
 
 /// The facts of one procedure every candidate packing reads.
 const ProcFacts = struct {
+    /// The statements reading each function-valued local.
     uses: ProcUses = .{},
     /// Statements defining each function-valued or capture-record local.
-    defs: collections.DenseMapUnmanaged(LocalId, std.ArrayList(CFStmtId)) = .empty,
-    packs: std.ArrayList(CFStmtId) = .empty,
-
-    fn deinit(self: *ProcFacts, allocator: Allocator) void {
-        self.uses.deinit(allocator);
-        var lists = self.defs.valueIterator();
-        while (lists.next()) |list| list.deinit(allocator);
-        self.defs.deinit(allocator);
-        self.packs.deinit(allocator);
-    }
+    defs: LocalStmts = .{},
+    packs: []const CFStmtId = &.{},
 
     fn defsOf(self: *const ProcFacts, local: LocalId) []const CFStmtId {
-        const list = self.defs.getPtrConst(local) orelse return &.{};
-        return list.items;
-    }
-};
-
-const DefCollector = struct {
-    allocator: Allocator,
-    store: *const LirStore,
-    layouts: *const layout_mod.Store,
-    facts: *ProcFacts,
-    captures: *const collections.DenseMapUnmanaged(LocalId, void),
-    stmt: CFStmtId = undefined,
-    failure: ?Allocator.Error = null,
-
-    fn note(self: *DefCollector, local: LocalId) void {
-        if (self.failure != null) return;
-        if (!isErased(self.store, self.layouts, local) and !self.captures.contains(local)) return;
-        self.add(local) catch |err| {
-            self.failure = err;
-        };
-    }
-
-    fn add(self: *DefCollector, local: LocalId) Allocator.Error!void {
-        const entry = try self.facts.defs.getOrPut(self.allocator, local);
-        if (!entry.found_existing) entry.value_ptr.* = .empty;
-        try entry.value_ptr.append(self.allocator, self.stmt);
+        return self.defs.of(local);
     }
 };
 
@@ -920,43 +993,47 @@ const Packing = struct {
     }
 };
 
-/// Collect the uses, packings and relevant definitions of one body.
+/// Collect the uses, packings and relevant definitions of one body into
+/// `arena`; `scratch.stmts` then holds the body's statements.
 fn collectProcFacts(
     allocator: Allocator,
+    arena: Allocator,
+    scratch: *Scratch,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     body: CFStmtId,
-    facts: *ProcFacts,
-) Allocator.Error!void {
-    var captures = collections.DenseMapUnmanaged(LocalId, void).empty;
-    defer captures.deinit(allocator);
-    var collector: UseCollector = .{ .store = store, .layouts = layouts, .allocator = allocator, .uses = &facts.uses };
-    {
-        var walk = try BodyClone.ReachableStmts.initWithAllocator(store, body, allocator);
-        defer walk.deinit();
-        while (try walk.next()) |stmt_id| {
-            const stmt = store.getCFStmt(stmt_id);
-            if (Packing.of(store, stmt_id)) |packing| {
-                try facts.packs.append(allocator, stmt_id);
-                if (packing.capture) |capture| try captures.put(allocator, capture, {});
-            }
-            collector.stmt = stmt_id;
-            BodyClone.forEachStmtRead(store, stmt, &collector, UseCollector.note);
-            if (collector.failure) |err| return err;
-        }
+) Allocator.Error!ProcFacts {
+    try scratch.walk(allocator, store, body);
+    scratch.extra.clearRetainingAtMost(allocator, retained_chunks);
+    scratch.work.clearRetainingCapacity();
+    for (scratch.stmts.items) |stmt_id| {
+        const packing = Packing.of(store, stmt_id) orelse continue;
+        try scratch.work.append(allocator, stmt_id);
+        if (packing.capture) |capture| try scratch.extra.put(allocator, capture, {});
     }
-    if (facts.packs.items.len == 0) return;
-    var defs: DefCollector = .{ .allocator = allocator, .store = store, .layouts = layouts, .facts = facts, .captures = &captures };
-    var walk = try BodyClone.ReachableStmts.initWithAllocator(store, body, allocator);
-    defer walk.deinit();
-    while (try walk.next()) |stmt_id| {
-        defs.stmt = stmt_id;
+    if (scratch.work.items.len == 0) return .{};
+    const packs = try arena.dupe(CFStmtId, scratch.work.items);
+    scratch.reads.clearRetainingCapacity();
+    scratch.defs.clearRetainingCapacity();
+    const no_extra = collections.DenseMapUnmanaged(LocalId, void).empty;
+    var reads: UseCollector = .{ .store = store, .layouts = layouts, .allocator = allocator, .out = &scratch.reads, .extra = &no_extra };
+    var defs: DefCollector = .{ .allocator = allocator, .extra = &scratch.extra, .out = &scratch.defs, .erased = .{ .store = store, .layouts = layouts } };
+    for (scratch.stmts.items) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
+        reads.stmt = stmt_id;
+        BodyClone.forEachStmtRead(store, stmt, &reads, UseCollector.note);
+        if (reads.failure) |err| return err;
+        defs.stmt = stmt_id;
         BodyClone.forEachStmtDef(store, stmt, &defs, DefCollector.note);
         // A store writes its destination in place.
         if (BodyClone.writtenLocal(stmt)) |written| if (BodyClone.definedTarget(stmt) == null) defs.note(written);
         if (defs.failure) |err| return err;
     }
+    return .{
+        .uses = .{ .reads = try LocalStmts.build(arena, scratch.reads.items, true) },
+        .defs = try LocalStmts.build(arena, scratch.defs.items, false),
+        .packs = packs,
+    };
 }
 
 const SiteSolver = struct {
@@ -1054,9 +1131,9 @@ const SiteSolver = struct {
     }
 };
 
-/// Decide whether `pack` qualifies, and if so its site.
+/// Decide whether `pack`, whose uses qualify (`usesQualify`, which last
+/// filled the solver's group), qualifies, and if so its site.
 fn solveSite(solver: *SiteSolver, arena: Allocator, pack: CFStmtId) Allocator.Error!?FrameSite {
-    if (!(try solver.usesQualify(pack))) return null;
     const store = solver.store;
     const packing = Packing.of(store, pack) orelse frameInvariant("a frame candidate that is not a packing");
     const graph = solver.graph;
@@ -1392,6 +1469,14 @@ fn rewriteSites(allocator: Allocator, store: *LirStore, proc_id: ProcId, sites: 
 /// packings it rewrote.
 pub fn markFrames(allocator: Allocator, store: *LirStore, layouts: *const layout_mod.Store) Allocator.Error!usize {
     var rewritten: usize = 0;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    var scratch: Scratch = .{};
+    defer scratch.deinit(allocator);
+    var graph: FlowGraph = .{};
+    defer graph.deinit(allocator);
+    var solver: SiteSolver = .{ .allocator = allocator, .store = store, .layouts = layouts, .facts = undefined, .graph = &graph };
+    defer solver.deinit();
     for (0..store.procSpecCount()) |index| {
         const proc_id: ProcId = @fromBackingInt(@intCast(index));
         const spec = store.getProcSpecImmediate(proc_id);
@@ -1399,25 +1484,26 @@ pub fn markFrames(allocator: Allocator, store: *LirStore, layouts: *const layout
         const has_packs = spec.shapes.erased_pack;
         if (!has_packs and !std.debug.runtime_safety) continue;
 
-        var arena_state = std.heap.ArenaAllocator.init(allocator);
-        defer arena_state.deinit();
+        _ = arena_state.reset(.retain_capacity);
         const arena = arena_state.allocator();
-        var facts: ProcFacts = .{};
-        defer facts.deinit(allocator);
-        try collectProcFacts(allocator, store, layouts, body, &facts);
+        const facts = try collectProcFacts(allocator, arena, &scratch, store, layouts, body);
         if (!has_packs) {
-            if (facts.packs.items.len != 0) frameInvariant("a procedure whose shapes exclude packings contains one");
+            if (facts.packs.len != 0) frameInvariant("a procedure whose shapes exclude packings contains one");
             continue;
         }
-        if (facts.packs.items.len == 0) continue;
+        if (facts.packs.len == 0) continue;
 
-        var graph: FlowGraph = .{};
-        defer graph.deinit(allocator);
-        try graph.build(allocator, store, body);
-        var solver: SiteSolver = .{ .allocator = allocator, .store = store, .layouts = layouts, .facts = &facts, .graph = &graph };
-        defer solver.deinit();
+        solver.facts = &facts;
+        // The flow graph and liveness serve only packings whose uses
+        // qualify; a procedure with none needs neither.
+        var graph_built = false;
         var sites = std.ArrayList(FrameSite).empty;
-        for (facts.packs.items) |pack| {
+        for (facts.packs) |pack| {
+            if (!(try solver.usesQualify(pack))) continue;
+            if (!graph_built) {
+                try graph.build(allocator, store, body, scratch.stmts.items);
+                graph_built = true;
+            }
             if (try solveSite(&solver, arena, pack)) |site| try sites.append(arena, site);
         }
         if (sites.items.len == 0) continue;
@@ -1436,14 +1522,17 @@ pub fn markFrames(allocator: Allocator, store: *LirStore, layouts: *const layout
 fn verifyFrames(allocator: Allocator, store: *const LirStore, layouts: *const layout_mod.Store) Allocator.Error!void {
     var group = std.ArrayList(LocalId).empty;
     defer group.deinit(allocator);
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    var scratch: Scratch = .{};
+    defer scratch.deinit(allocator);
     for (0..store.procSpecCount()) |index| {
         const spec = store.getProcSpecImmediate(@fromBackingInt(@intCast(index)));
         const body = spec.arcBody() orelse continue;
         if (!spec.shapes.erased_pack) continue;
-        var facts: ProcFacts = .{};
-        defer facts.deinit(allocator);
-        try collectProcFacts(allocator, store, layouts, body, &facts);
-        for (facts.packs.items) |pack| {
+        _ = arena_state.reset(.retain_capacity);
+        const facts = try collectProcFacts(allocator, arena_state.allocator(), &scratch, store, layouts, body);
+        for (facts.packs) |pack| {
             const packing = Packing.of(store, pack) orelse frameInvariant("a collected packing that is not a packing");
             if (!packing.frame) continue;
             if (packing.reuse != null) frameInvariant("a frame packing repacks an allocation");
