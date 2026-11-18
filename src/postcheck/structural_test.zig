@@ -1712,27 +1712,6 @@ test "post-check invariant helper is failure-only" {
     try std.testing.expect(fn_info.return_type.? == noreturn);
 }
 
-test "hoist-preserving iterator producers are reachable through their method names" {
-    // The checker pre-filters hoist classification on
-    // `hoist_preserving_method_names` before resolving a receiver, so every
-    // hoist-preserving producer must be reachable through one of those names;
-    // one that is not would silently stop having its receiver hoisted. This lives here because the type
-    // checker's own sources may not compare strings.
-    const registry = check.StaticDispatchRegistry;
-    for (registry.hoist_preserving_producer_names) |qualified_name| {
-        const start = if (std.mem.findScalarLast(u8, qualified_name, '.')) |dot| dot + 1 else 0;
-        const method = qualified_name[start..];
-        var reachable = false;
-        for (registry.hoist_preserving_method_names) |candidate| {
-            if (std.mem.eql(u8, method, candidate)) reachable = true;
-        }
-        if (!reachable) {
-            std.debug.print("unreachable hoist-preserving producer: {s}\n", .{qualified_name});
-        }
-        try std.testing.expect(reachable);
-    }
-}
-
 test "value rules have one definition site" {
     // Inspection, structural equality and hashing, and `to_inspect` override
     // selection are defined once, in `value_rules/`, for both lowering

@@ -82,6 +82,11 @@ pub const Var = enum {
     /// Print when `roc` starts a program it built and when it has released
     /// the build's state, so the order of the two is visible.
     trace_run_order,
+    /// Print, for every module whose compile-time roots are published, how
+    /// many roots hoisting selected and how publication split them: roots
+    /// an evaluator completes, roots the checked-value writer completes, and
+    /// value-form expressions their bodies keep.
+    hoist_root_stats,
 
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
@@ -109,6 +114,7 @@ pub const Var = enum {
             .perf_map => "ROC_PERF_MAP",
             .range_prove_stats => "ROC_RANGE_PROVE_STATS",
             .trace_run_order => "ROC_TRACE_RUN_ORDER",
+            .hoist_root_stats => "ROC_HOIST_ROOT_STATS",
         };
     }
 };

@@ -261,6 +261,126 @@ test "iterator producer calls leave their closed inputs available for hoisting" 
     try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_list));
 }
 
+test "a closed method call whose result holds a function leaves its receiver as the root" {
+    // `walk` is an arbitrary user method; its `Iter` result holds a step
+    // function, so the call is not stored and its receiver is.
+    var test_env = try TestEnv.init("Test",
+        \\Bag := { items : List(U64) }.{
+        \\    walk : Bag -> Iter(U64)
+        \\    walk = |bag| bag.items.iter()
+        \\}
+        \\
+        \\main = |runtime| {
+        \\    var $sum = runtime
+        \\    for n in Bag.{ items: [1.U64, 2, 3] }.walk() {
+        \\        $sum = $sum + n
+        \\    }
+        \\    $sum
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try expectExprTag(&test_env, roots[0].expr, .e_nominal);
+}
+
+test "a closed call whose result holds a function leaves each closed argument as a root" {
+    // The result is a record with a function field, not an iterator: holding
+    // a function is what keeps the call from being stored.
+    var test_env = try TestEnv.init("Test",
+        \\make_counter : List(U64), U64 -> { step : U64 -> U64, items : List(U64) }
+        \\make_counter = |items, by| { step: |n| n + by, items }
+        \\
+        \\main = |runtime| {
+        \\    counter = make_counter([1.U64, 2, 3], 1.U64 + 1)
+        \\    (counter.step)(runtime) + List.len(counter.items)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_list));
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_dispatch_call));
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), root.pattern.get());
+    }
+}
+
+test "an iterator adapter chain leaves its source collection as the root" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |runtime| {
+        \\    var $sum = runtime
+        \\    for n in [1.U64, 2, 3].iter().map(|x| x * 2).keep_if(|x| x > 2) {
+        \\        $sum = $sum + n
+        \\    }
+        \\    $sum
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try expectExprTag(&test_env, roots[0].expr, .e_list);
+}
+
+test "a closed call whose result holds no function is a root over a function-holding part" {
+    // The `List` built from the iterator holds no function, so its binding
+    // is a root; the `Iter` inside it is not stored, so its receiver is a
+    // root of its own.
+    var test_env = try TestEnv.init("Test",
+        \\Bag := { items : List(U64) }.{
+        \\    walk : Bag -> Iter(U64)
+        \\    walk = |bag| bag.items.iter()
+        \\}
+        \\
+        \\main = |runtime| {
+        \\    items = List.from_iter(Bag.{ items: [1.U64, 2, 3] }.walk())
+        \\    if runtime == 0 { List.len(items) } else { runtime }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    // The receiver, the binding, then the guarded `List.len` root.
+    try std.testing.expectEqual(@as(usize, 3), roots.len);
+    try expectExprTag(&test_env, roots[0].expr, .e_nominal);
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern.get());
+    try expectExprTag(&test_env, roots[1].expr, .e_call);
+    try std.testing.expect(roots[1].pattern != .none);
+    try std.testing.expect(roots[2].guarded);
+}
+
+test "a destructured binding of a function-holding value keeps its binders and closed parts" {
+    var test_env = try TestEnv.init("Test",
+        \\add_one = |n| n + 1.U64
+        \\
+        \\main = |runtime| {
+        \\    (inc, items) = (add_one, [1.U64, 2, 3])
+        \\    inc(runtime) + List.len(items)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    var extraction_count: usize = 0;
+    var callable_count: usize = 0;
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        switch (root.body) {
+            .pattern_extraction => extraction_count += 1,
+            .expr, .pattern_validation, .pattern_error, .valueless_binding => {},
+        }
+        if (root.value_kind == .callable_binding) callable_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), extraction_count);
+    try std.testing.expectEqual(@as(usize, 1), callable_count);
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_list));
+}
+
 test "non-iterator methods sharing iterator producer names remain hoistable" {
     const cases = [_]struct {
         source: []const u8,
