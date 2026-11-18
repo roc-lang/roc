@@ -7750,6 +7750,24 @@ concreteness purpose that rejects a function anywhere in their stored type, so a
 value containing a callable remains one ordinary runtime allocation rather than
 being copied into independently restored callables.
 
+Post-solve pruning answers every concreteness question of one pass over the
+selected roots from one set of shared answers (`HoistedTypeConcreteness`).
+Solving has finished and the pass writes no type, so a type's answer holds for
+the whole pass: each type is inspected once for each purpose and each graph it
+is reached in, and every root that reaches it reads that answer. The graph is
+part of the question because a rigid variable is not concrete in a value type
+and is in a nominal declaration's backing template, where it is one of the
+declaration's formals and stands for an argument the application already
+lists. A type that reaches a non-concrete type has its answer as soon as that
+type is found. A type that reaches none has its answer only once its complete
+recursive component has been inspected, since a type reached again while its
+own inspection is open proves nothing about the rest of that component; the
+members of a completed component then take one answer together
+(`checked_reachability.AnyReachable`). The recursive-dispatch check that asks
+the same question while solving is still changing types scans its type on its
+own at each call, and a debug build compares every shared answer with that
+scan's.
+
 Hoisted-root selection is positional as well as dependency-based, and the
 checker carries that position as explicit checking context while computing
 hoistability in the normal recursive traversal. Eager child expressions inherit
