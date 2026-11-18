@@ -40920,13 +40920,13 @@ fn checkLocalAssociatedLookup(
     if (try self.resolveAssociatedLookup(owner_var, lookup.item_ident)) |resolution| {
         if (resolution.target.is_this_module) {
             const target_node_idx = resolution.target.binding.type_node_idx;
-            const pattern = switch (self.cir.store.nodes.get(target_node_idx).tag) {
-                .def => self.cir.store.getDef(resolution.target.binding.def_idx).pattern,
-                .statement_decl => decl: {
-                    const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(@backingInt(target_node_idx)));
-                    break :decl self.cir.store.getStatement(statement).s_decl.pattern;
-                },
-                else => base.invariant("type checker invariant violated: a local method binding is neither a def nor a declaration statement", .{}),
+            const target_tag = self.cir.store.nodes.get(target_node_idx).tag;
+            const pattern = if (target_tag == .def)
+                self.cir.store.getDef(resolution.target.binding.def_idx).pattern
+            else decl: {
+                std.debug.assert(target_tag == .statement_decl);
+                const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(@backingInt(target_node_idx)));
+                break :decl self.cir.store.getStatement(statement).s_decl.pattern;
             };
             self.cir.store.replaceExprWithLocalLookup(expr_idx, pattern);
             return true;
