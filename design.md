@@ -1196,7 +1196,11 @@ is not a recursive-path assumption.
 Each query defines a finite monotone AND/OR graph: required fields, tuple
 components, and tag payloads are conjunctions; tag alternatives are disjunctions.
 Optional fields require no witness. Functions, recovery types, field-presence
-terms, and builtin numerics retain their existing inhabited leaf behavior.
+terms, and builtin numbers retain their existing inhabited leaf behavior. A
+builtin number is one of the Builtin module's own number declarations,
+identified by its builtin origin and declaring statement, never by name: a
+user type or alias named `U8` is an ordinary type, and an alias is always
+followed to its backing.
 Exact known-empty identities are false. An unconditional witness, such as a
 zero-argument tag, may prune other disjunction dependencies, but a provisional
 cycle answer cannot.

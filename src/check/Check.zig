@@ -381,6 +381,9 @@ table_scratch: collections.ScratchArena,
 /// Whether a check's result still lives in `exhaustiveness_arena`; checks
 /// never nest, so a second one never starts while it is set.
 exhaustiveness_arena_in_use: bool = false,
+/// The Builtin number declarations' statements, found on the first
+/// exhaustiveness check (see `exhaustiveNumberDecls`).
+exhaustive_number_decls: ?exhaustive.BuiltinIdents.NumberDecls = null,
 /// scratch vars used to build up intermediate lists, used for various things
 scratch_vars: base.Scratch(Var),
 /// Each open type application's argument reaches, one run per application
@@ -1879,6 +1882,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .exhaustiveness_arena = .scratch,
     .table_scratch = .scratch,
     .exhaustiveness_arena_in_use = .lexical,
+    .exhaustive_number_decls = .keyed,
     .scratch_vars = .scratch,
     .anno_apply_reaches = .scratch,
     .adapter_reach_visited = .scratch,
@@ -38383,40 +38387,35 @@ fn nominalBackingIsFinal(owner: *const anyopaque, declaration: types_mod.Nominal
     return !self.local_type_context_depths.contains(statement);
 }
 
-fn exhaustiveBuiltinIdents(self: *const Self, open_cache: *exhaustive.NominalOpenCache) exhaustive.BuiltinIdents {
+fn exhaustiveBuiltinIdents(self: *Self, open_cache: *exhaustive.NominalOpenCache) exhaustive.BuiltinIdents {
     return .{
         .idents = self.cir.getIdentStoreConst(),
         .open_cache = open_cache,
         .builtin_module = self.cir.idents.builtin_module,
-        .u8_type = self.cir.idents.u8_type,
-        .i8_type = self.cir.idents.i8_type,
-        .u16_type = self.cir.idents.u16_type,
-        .i16_type = self.cir.idents.i16_type,
-        .u32_type = self.cir.idents.u32_type,
-        .i32_type = self.cir.idents.i32_type,
-        .u64_type = self.cir.idents.u64_type,
-        .i64_type = self.cir.idents.i64_type,
-        .u128_type = self.cir.idents.u128_type,
-        .i128_type = self.cir.idents.i128_type,
-        .f32_type = self.cir.idents.f32_type,
-        .f64_type = self.cir.idents.f64_type,
-        .dec_type = self.cir.idents.dec_type,
-        .u8 = self.cir.idents.u8,
-        .i8 = self.cir.idents.i8,
-        .u16 = self.cir.idents.u16,
-        .i16 = self.cir.idents.i16,
-        .u32 = self.cir.idents.u32,
-        .i32 = self.cir.idents.i32,
-        .u64 = self.cir.idents.u64,
-        .i64 = self.cir.idents.i64,
-        .u128 = self.cir.idents.u128,
-        .i128 = self.cir.idents.i128,
-        .f32 = self.cir.idents.f32,
-        .f64 = self.cir.idents.f64,
-        .dec = self.cir.idents.dec,
+        .number_decls = self.exhaustiveNumberDecls(),
         .list = self.cir.idents.list,
         .builtin_list = self.cir.idents.builtin_list,
     };
+}
+
+/// The Builtin module's statement for each number declaration. Without a
+/// Builtin module no nominal has a builtin origin, so every entry is a value
+/// no statement index takes.
+fn exhaustiveNumberDecls(self: *Self) exhaustive.BuiltinIdents.NumberDecls {
+    if (self.exhaustive_number_decls) |decls| return decls;
+    var decls: exhaustive.BuiltinIdents.NumberDecls = @splat(std.math.maxInt(u32));
+    if (self.isCheckingBuiltinModuleDirectly() or self.builtin_ctx.builtin_indices != null) {
+        var count: usize = 0;
+        inline for (CIR.builtin_type_specs) |spec| {
+            if (spec.num_kind) |num_kind| {
+                decls[count] = self.sourceDeclForBuiltinNominal(.{ .num = num_kind });
+                count += 1;
+            }
+        }
+        std.debug.assert(count == decls.len);
+    }
+    self.exhaustive_number_decls = decls;
+    return decls;
 }
 
 /// Claim the exhaustiveness arena for one check's analysis and result.

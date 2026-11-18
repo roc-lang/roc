@@ -212,34 +212,10 @@ pub const BuiltinIdents = struct {
     open_cache: *NominalOpenCache,
     /// The Builtin module identifier
     builtin_module: Ident.Idx,
-    /// Numeric type identifiers (Builtin.Num.*)
-    u8_type: Ident.Idx,
-    i8_type: Ident.Idx,
-    u16_type: Ident.Idx,
-    i16_type: Ident.Idx,
-    u32_type: Ident.Idx,
-    i32_type: Ident.Idx,
-    u64_type: Ident.Idx,
-    i64_type: Ident.Idx,
-    u128_type: Ident.Idx,
-    i128_type: Ident.Idx,
-    f32_type: Ident.Idx,
-    f64_type: Ident.Idx,
-    dec_type: Ident.Idx,
-    /// Unqualified numeric type identifiers (U8, I8, etc)
-    u8: Ident.Idx,
-    i8: Ident.Idx,
-    u16: Ident.Idx,
-    i16: Ident.Idx,
-    u32: Ident.Idx,
-    i32: Ident.Idx,
-    u64: Ident.Idx,
-    i64: Ident.Idx,
-    u128: Ident.Idx,
-    i128: Ident.Idx,
-    f32: Ident.Idx,
-    f64: Ident.Idx,
-    dec: Ident.Idx,
+    /// The Builtin module's statement index of each number declaration
+    /// (`Builtin.Num.U8` and the rest), which with a builtin origin is the
+    /// declaration's exact identity.
+    number_decls: NumberDecls,
     /// List type identifiers (unqualified and Builtin-qualified)
     list: Ident.Idx,
     builtin_list: Ident.Idx,
@@ -251,42 +227,17 @@ pub const BuiltinIdents = struct {
         return ident.eql(self.list) or ident.eql(self.builtin_list);
     }
 
-    /// Check if a nominal type is a builtin numeric type.
-    /// Numeric types have [] as backing but are inhabited primitives.
-    pub fn isBuiltinNumericType(self: BuiltinIdents, nominal: types.NominalType) bool {
-        return self.isBuiltinNumericIdent(nominal.ident.ident_idx);
-    }
+    pub const number_decl_count = 13;
+    pub const NumberDecls = [number_decl_count]u32;
 
-    /// Check if an ident refers to a builtin numeric type.
-    pub fn isBuiltinNumericIdent(self: BuiltinIdents, ident: Ident.Idx) bool {
-        // Numeric types are builtin and have reserved names; treat them as builtin
-        // regardless of origin module to avoid false "uninhabited" errors.
-        return ident.eql(self.u8_type) or
-            ident.eql(self.i8_type) or
-            ident.eql(self.u16_type) or
-            ident.eql(self.i16_type) or
-            ident.eql(self.u32_type) or
-            ident.eql(self.i32_type) or
-            ident.eql(self.u64_type) or
-            ident.eql(self.i64_type) or
-            ident.eql(self.u128_type) or
-            ident.eql(self.i128_type) or
-            ident.eql(self.f32_type) or
-            ident.eql(self.f64_type) or
-            ident.eql(self.dec_type) or
-            ident.eql(self.u8) or
-            ident.eql(self.i8) or
-            ident.eql(self.u16) or
-            ident.eql(self.i16) or
-            ident.eql(self.u32) or
-            ident.eql(self.i32) or
-            ident.eql(self.u64) or
-            ident.eql(self.i64) or
-            ident.eql(self.u128) or
-            ident.eql(self.i128) or
-            ident.eql(self.f32) or
-            ident.eql(self.f64) or
-            ident.eql(self.dec);
+    /// Whether a nominal type is one of the Builtin module's own number
+    /// declarations. Their `[]` backings are placeholders: each is an
+    /// inhabited primitive.
+    pub fn isBuiltinNumberType(self: BuiltinIdents, nominal: types.NominalType) bool {
+        if (!nominal.originIsBuiltin()) return false;
+        const statement = nominal.sourceDeclOptional() orelse return false;
+        const decls: @Vector(number_decl_count, u32) = self.number_decls;
+        return @reduce(.Or, decls == @as(@Vector(number_decl_count, u32), @splat(statement)));
     }
 };
 
@@ -1625,9 +1576,7 @@ const InhabitedGraph = struct {
                 try self.markFalse(index);
             },
             .field_presence, .err => {},
-            .alias => |alias| if (!self.idents.isBuiltinNumericIdent(alias.ident.ident_idx)) {
-                try self.typeEdge(index, self.store.getAliasBackingVar(alias));
-            },
+            .alias => |alias| try self.typeEdge(index, self.store.getAliasBackingVar(alias)),
             .structure => |flat| switch (flat) {
                 .empty_tag_union => try self.markFalse(index),
                 .empty_record, .fn_pure, .fn_effectful, .fn_unbound => {},
@@ -1642,7 +1591,7 @@ const InhabitedGraph = struct {
                     const row = try self.rowNode(.{ .root = root, .role = .union_row });
                     try self.edge(index, row);
                 },
-                .nominal_type => |nominal| if (!self.idents.isBuiltinNumericType(nominal)) {
+                .nominal_type => |nominal| if (!self.idents.isBuiltinNumberType(nominal)) {
                     if (self.mode == .known_absent) {
                         const row = try self.rowNode(.{ .root = root, .role = .union_shape });
                         try self.edge(index, row);
@@ -1808,7 +1757,6 @@ fn collectCtorPayloadBlockersHelp(
     switch (content) {
         .flex, .rigid, .err, .field_presence => unreachable, // the switch above returns for these contents
         .alias => |alias| {
-            if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) return;
             try collectCtorPayloadBlockersHelp(
                 type_store,
                 builtin_idents,
@@ -1827,7 +1775,7 @@ fn collectCtorPayloadBlockersHelp(
                 seen,
             ),
             .nominal_type => |nominal| {
-                if (builtin_idents.isBuiltinNumericType(nominal)) return;
+                if (builtin_idents.isBuiltinNumberType(nominal)) return;
                 const backing_var = (try openNominalBacking(type_store, builtin_idents, nominal)) orelse return;
                 try collectCtorPayloadBlockersHelp(
                     type_store,
@@ -2013,7 +1961,6 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
     switch (content) {
         .flex, .rigid, .err, .field_presence => unreachable, // the switch above returns for these contents
         .alias => |alias| {
-            if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) return;
             try collectKnownAbsentCtorPayloadBlockersHelp(
                 allocator,
                 type_store,
@@ -2026,7 +1973,7 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
         .structure => |flat_type| switch (flat_type) {
             .empty_tag_union, .empty_record => {},
             .tag_union, .nominal_type => {
-                if (flat_type == .nominal_type and builtin_idents.isBuiltinNumericType(flat_type.nominal_type)) {
+                if (flat_type == .nominal_type and builtin_idents.isBuiltinNumberType(flat_type.nominal_type)) {
                     return;
                 }
 
@@ -4610,6 +4557,7 @@ fn inhabitedGraphDiamondCase(graph_allocator: Allocator, depth: usize, recursive
     inline for (base.structFields(BuiltinIdents)) |field| {
         if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
     }
+    test_idents.number_decls = @splat(std.math.maxInt(u32));
     test_idents.idents = &idents;
     test_idents.open_cache = &cache;
 
@@ -4707,6 +4655,7 @@ fn incrementalInhabitedGraphCase(graph_allocator: Allocator) (Allocator.Error ||
     inline for (base.structFields(BuiltinIdents)) |field| {
         if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
     }
+    test_idents.number_decls = @splat(std.math.maxInt(u32));
     test_idents.idents = &idents;
     test_idents.open_cache = &cache;
 
@@ -4805,6 +4754,7 @@ fn inhabitedWitnessCase(graph_allocator: Allocator) (Allocator.Error || Ident.Er
     inline for (base.structFields(BuiltinIdents)) |field| {
         if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
     }
+    test_idents.number_decls = @splat(std.math.maxInt(u32));
     test_idents.idents = &idents;
     test_idents.open_cache = &cache;
     const closed = try store.freshFromContent(.{ .structure = .empty_tag_union });
@@ -4893,6 +4843,7 @@ test "nominal views inhabitedness modes preserve leaf and row-cycle policies" {
     inline for (base.structFields(BuiltinIdents)) |field| {
         if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
     }
+    test_idents.number_decls = @splat(std.math.maxInt(u32));
     test_idents.idents = &idents;
     test_idents.open_cache = &cache;
     const closed = try store.freshFromContent(.{ .structure = .empty_tag_union });
@@ -4996,6 +4947,7 @@ test "nominal views shared row tails expand once in either traversal order" {
     inline for (base.structFields(BuiltinIdents)) |field| {
         if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
     }
+    test_idents.number_decls = @splat(std.math.maxInt(u32));
     test_idents.idents = &idents;
     test_idents.open_cache = &cache;
     const closed = try store.freshFromContent(.{ .structure = .empty_tag_union });
@@ -5049,6 +5001,7 @@ fn inhabitedRecordRowsCase(graph_allocator: Allocator, depth: usize) (Allocator.
     inline for (base.structFields(BuiltinIdents)) |item| {
         if (item.type == Ident.Idx) @field(test_idents, item.name) = sentinel;
     }
+    test_idents.number_decls = @splat(std.math.maxInt(u32));
     test_idents.idents = &idents;
     test_idents.open_cache = &cache;
     const empty = try store.freshFromContent(.{ .structure = .empty_tag_union });
@@ -5149,6 +5102,7 @@ fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) (Allocato
     inline for (base.structFields(BuiltinIdents)) |item| {
         if (item.type == Ident.Idx) @field(test_idents, item.name) = sentinel;
     }
+    test_idents.number_decls = @splat(std.math.maxInt(u32));
     test_idents.idents = &idents;
     test_idents.open_cache = &cache;
 
@@ -5255,6 +5209,7 @@ test "nominal views inhabitedness graph publishes final recursive answers" {
     inline for (base.structFields(BuiltinIdents)) |field| {
         if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
     }
+    test_idents.number_decls = @splat(std.math.maxInt(u32));
     test_idents.idents = &idents;
     test_idents.open_cache = &cache;
     const empty = try store.freshFromContent(.{ .structure = .empty_tag_union });
@@ -5284,6 +5239,7 @@ test "inhabitedness memo caches complete roots not recursive assumptions" {
     inline for (base.structFields(BuiltinIdents)) |field| {
         if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
     }
+    test_idents.number_decls = @splat(std.math.maxInt(u32));
     test_idents.idents = &idents;
     test_idents.open_cache = &cache;
 
@@ -5315,6 +5271,7 @@ test "inhabitedness memo preserves shared DAG queries and assumption isolation" 
     inline for (base.structFields(BuiltinIdents)) |field| {
         if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
     }
+    test_idents.number_decls = @splat(std.math.maxInt(u32));
     test_idents.idents = &idents;
     test_idents.open_cache = &cache;
 
