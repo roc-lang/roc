@@ -469,11 +469,11 @@ test "procedure identity excludes outer callable sets but retains nested callabl
     const scalar = try types.add(.{ .primitive = .i64 });
     const args = try types.addSpan(&.{ scalar, scalar });
     const singleton = try types.add(.{ .lambda_set = try types.addMembers(&.{
-        .{ .lambda = first, .captures = .empty(), .inst = @fromBackingInt(0) },
+        .{ .lambda = first, .captures = .empty(), .inst = Solved.Polymorphism.identity(0) },
     }) });
     const joined = try types.add(.{ .lambda_set = try types.addMembers(&.{
-        .{ .lambda = first, .captures = .empty(), .inst = @fromBackingInt(0) },
-        .{ .lambda = second, .captures = .empty(), .inst = @fromBackingInt(0) },
+        .{ .lambda = first, .captures = .empty(), .inst = Solved.Polymorphism.identity(0) },
+        .{ .lambda = second, .captures = .empty(), .inst = Solved.Polymorphism.identity(0) },
     }) });
     const alone = try types.add(.{ .func = .{ .args = args, .ret = scalar, .callable = singleton } });
     const beside_lambda = try types.add(.{ .func = .{ .args = args, .ret = scalar, .callable = joined } });
@@ -514,11 +514,11 @@ test "procedure identity excludes outer callable sets but retains nested callabl
     // in it; a procedure that takes one is the same code whichever they are.
     const erased_digest: names.TypeDigest = .{ .bytes = @splat(9) };
     const erased_first = try types.add(.{ .erased = .{ .source_fn_ty = erased_digest, .members = try types.addMembers(&.{
-        .{ .lambda = first, .captures = .empty(), .inst = @fromBackingInt(0) },
+        .{ .lambda = first, .captures = .empty(), .inst = Solved.Polymorphism.identity(0) },
     }), .abi_fn = alone } });
     const erased_both = try types.add(.{ .erased = .{ .source_fn_ty = erased_digest, .members = try types.addMembers(&.{
-        .{ .lambda = first, .captures = .empty(), .inst = @fromBackingInt(0) },
-        .{ .lambda = second, .captures = .empty(), .inst = @fromBackingInt(0) },
+        .{ .lambda = first, .captures = .empty(), .inst = Solved.Polymorphism.identity(0) },
+        .{ .lambda = second, .captures = .empty(), .inst = Solved.Polymorphism.identity(0) },
     }), .abi_fn = alone } });
     const boxed_first = try types.add(.{ .box = try types.add(.{ .func = .{ .args = args, .ret = scalar, .callable = erased_first } }) });
     const boxed_both = try types.add(.{ .box = try types.add(.{ .func = .{ .args = args, .ret = scalar, .callable = erased_both } }) });
