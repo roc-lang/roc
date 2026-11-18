@@ -2161,8 +2161,8 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
     }
 }
 
-/// Replaces an associated lookup whose checked target is a method declared in
-/// a function body with a lookup of that method's local binding.
+/// Replaces an associated lookup whose checked target is a binding of this
+/// module with a lookup of that binding.
 pub fn replaceExprWithLocalLookup(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,

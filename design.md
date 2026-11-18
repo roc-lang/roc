@@ -2111,14 +2111,24 @@ is already known, but it does not interpret an alias annotation to rediscover
 the nominal owner. A lookup through a local or imported alias is explicit CIR
 carrying the alias declaration and requested item. Checking follows the solved
 alias backing to its terminal nominal, resolves that nominal's owner by module
-content identity, and performs the exact owner-and-item method lookup. It then
-replaces the source node with the exact target module identity, type node, and
-definition. A method of a type declared in a function body is a local binding,
-so a lookup selecting one is replaced with the local lookup of that binding,
-exactly what naming the method through its own type canonicalizes to, and is
-checked as one. Alias traversal has no source-text reconstruction or fixed hop
-limit; invalid and cyclic aliases must already resolve to the checker error
-type.
+content identity, and performs the exact owner-and-item method lookup. A
+target in another module replaces the source node with the exact target module
+identity, type node, and definition. A target in this module is a binding of
+this module, whether a top-level def or a method of a type declared in a
+function body, so the lookup is replaced with the local lookup of that
+binding, exactly what naming the method through its own type canonicalizes to,
+and is checked as one. A reference through an alias therefore follows the
+binding's checking status by the same rule a reference by name does (Def
+Checking Order): there is one status-aware same-module reference path, not
+two. Alias traversal has no source-text reconstruction or fixed hop limit;
+invalid and cyclic aliases must already resolve to the checker error type.
+
+A lookup through a local alias that selects a top-level def of this module is
+a name reference to that def, so it contributes an edge to the name-reference
+graph that orders binding groups. Type declarations are generated before the
+check order is computed, so the graph's reference collection asks the checker
+for the lookup's target (`DependencyGraph.AssociatedLocalTargets`) during its
+one walk; the dependency graph never interprets a type declaration itself.
 
 Every other method lookup on a type follows the same rule. An alias
 declaration owns no methods (an alias cannot have an associated block), so a
@@ -5683,8 +5693,9 @@ condensation of the name-reference graph, in deterministic topological order
 (groups ordered by their first member's source position among independent
 groups; members within a group in source order). The graph covers every name
 reference in a def's expression tree—nested lambda bodies and blocks
-included—plus statically-resolvable type-qualified method-call targets. It
-is transient checking input computed from canonicalization output when
+included—plus statically-resolvable type-qualified method-call targets and
+associated values named through a local type alias (Associated Item Lookup
+Through Aliases). It is transient checking input computed from canonicalization output when
 checking starts and freed with the checker; a checked module never stores it.
 
 Because groups are checked in dependency order, a name reference between
@@ -13399,6 +13410,25 @@ The rule is carried by one bit on each tag entry of a row,
   warning, never add one, so copies that rebuild tags field by field
   (instantiation, import, frozen replay copies) leave the copy unmarked.
 
+One tag can be stored as more than one entry, and a producer clears only the
+entry it meets. The unifier rebuilds a related row flat over its chain's tail,
+so a part further along the chain keeps its own entry for each tag the merged
+row now also holds, and stays reachable through every other row that extends
+it. When both rows of a relation hold tags the other lacks, each side's unique
+tags are stored both in the merged row and in the part the other side's
+extension becomes. In both cases a marked tag's two entries are journaled as
+one tag (`Store.pattern_only_tag_copies`: the part that keeps its entry, the
+merged row, and the tag's name), at the merge that makes the copy. A relation
+that copies no marked tag journals nothing, which is every relation of a
+single-part pattern row with the row it matches. The journal is diagnostic
+metadata like the mark, and a savepoint's rollback truncates it with the rest
+of the store.
+
+The judgment reads a tag as pattern-only when the entry its row lists is
+marked and no entry journaled as the same tag, directly or through other
+journaled copies, is unmarked. The entries are grouped once, at judgment, and
+only when some recorded pattern's entry is still marked.
+
 The mark is diagnostic metadata. Unification never reads it to decide a
 relation, and nothing that identifies a type reads it: canonical and sealed
 type keys, digests, snapshot comparison, exhaustiveness, Monotype, and layouts
@@ -13478,7 +13508,9 @@ The rejected side is pinned by
 `test/snapshots/pattern_only_tag_parameter_no_warning.md`,
 `test/snapshots/pattern_only_tag_produced_no_warning.md`, and
 `test/snapshots/pattern_only_tag_derived_parser_no_warning.md`; the merge rule
-by the unifier tests in `src/check/test/unify_test.zig`.
+and the journal of copies by the unifier tests in
+`src/check/test/unify_test.zig`, and a producer met through a shared extension
+by `src/check/test/issue_13105_test.zig`.
 
 ### Hosted Try Question Widening Removed
 
