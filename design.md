@@ -1504,7 +1504,7 @@ such a value still has its binders extracted, each a root decided by its
 own type ("callable extraction root" below), but it covers nothing either.
 
 A type holds a function when a function type is reachable through record
-fields, tuple elements, tag payloads, an alias's args and backing, a
+fields, tuple items, tag payloads, an alias's args and backing, a
 nominal's args, and the backing of every nominal other than a builtin
 container or number, whose stored parts are exactly its args
 (`varHoldsFunction`). These are the parts the data-constant concreteness walk
