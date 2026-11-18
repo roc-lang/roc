@@ -44,8 +44,8 @@ combine_tries = |result1, result2|
     }
 ~~~
 # EXPECTED
-BUILTIN IMPORT CONFLICT - can_import_type_annotations.md:2:12:2:17
-BUILTIN IMPORT CONFLICT - can_import_type_annotations.md:3:13:3:17
+RESERVED TYPE NAME - can_import_type_annotations.md:2:12:2:17
+RESERVED TYPE NAME - can_import_type_annotations.md:3:13:3:17
 UNUSED VARIABLE - can_import_type_annotations.md:6:19:6:22
 MOD NOT FOUND - can_import_type_annotations.md:5:18:5:25
 MOD NOT FOUND - can_import_type_annotations.md:5:29:5:37
@@ -58,7 +58,7 @@ DOES NOT EXIST - can_import_type_annotations.md:15:24:15:36
 (reports
 	(report
 		(severity runtime_error)
-		(title "Builtin Import Conflict")
+		(title "Reserved Type Name")
 		(region (start 2 12) (end 2 17))
 		(headline
 			(text "This import cannot bind ")
@@ -70,7 +70,7 @@ DOES NOT EXIST - can_import_type_annotations.md:15:24:15:36
 			(source-region (file "can_import_type_annotations.md") (start 2 12) (end 2 17) (annotation error) (line-text "import json.Json"))))
 	(report
 		(severity runtime_error)
-		(title "Builtin Import Conflict")
+		(title "Reserved Type Name")
 		(region (start 3 13) (end 3 17))
 		(headline
 			(text "This import cannot bind ")

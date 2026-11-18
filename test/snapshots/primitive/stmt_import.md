@@ -12,7 +12,7 @@ UNEXPECTED STATEMENT - stmt_import.md:1:18:1:19
 UNEXPECTED STATEMENT - stmt_import.md:1:19:1:22
 UNEXPECTED STATEMENT - stmt_import.md:1:22:1:23
 TYPE APPLICATION NEEDS PARENTHESES - stmt_import.md:1:27:1:28
-BUILTIN IMPORT CONFLICT - stmt_import.md:1:12:1:17
+RESERVED TYPE NAME - stmt_import.md:1:12:1:17
 # PROBLEMS
 ~~~clojure
 (reports
@@ -124,7 +124,7 @@ BUILTIN IMPORT CONFLICT - stmt_import.md:1:12:1:17
 			(source-region (file "stmt_import.md") (start 1 27) (end 1 28) (annotation error) (line-text "import json.Json [foo, BAR]"))))
 	(report
 		(severity runtime_error)
-		(title "Builtin Import Conflict")
+		(title "Reserved Type Name")
 		(region (start 1 12) (end 1 17))
 		(headline
 			(text "This import cannot bind ")

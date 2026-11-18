@@ -32,7 +32,7 @@ client = Http.invalidMethod
 parser = Json.Parser.Advanced.NonExistent.create
 ~~~
 # EXPECTED
-BUILTIN IMPORT CONFLICT - can_import_unresolved_qualified.md:1:12:1:17
+RESERVED TYPE NAME - can_import_unresolved_qualified.md:1:12:1:17
 UNUSED VARIABLE - can_import_unresolved_qualified.md:13:19:13:22
 DOES NOT EXIST - can_import_unresolved_qualified.md:19:10:19:28
 MOD NOT FOUND - can_import_unresolved_qualified.md:12:29:12:37
@@ -44,7 +44,7 @@ DOES NOT EXIST - can_import_unresolved_qualified.md:22:10:22:28
 (reports
 	(report
 		(severity runtime_error)
-		(title "Builtin Import Conflict")
+		(title "Reserved Type Name")
 		(region (start 1 12) (end 1 17))
 		(headline
 			(text "This import cannot bind ")

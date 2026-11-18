@@ -40,8 +40,8 @@ main = {
 }
 ~~~
 # EXPECTED
-BUILTIN IMPORT CONFLICT - can_import_comprehensive.md:1:12:1:17
-BUILTIN IMPORT CONFLICT - can_import_comprehensive.md:3:24:3:27
+RESERVED TYPE NAME - can_import_comprehensive.md:1:12:1:17
+RESERVED TYPE NAME - can_import_comprehensive.md:3:24:3:27
 DOES NOT EXIST - can_import_comprehensive.md:6:14:6:22
 DOES NOT EXIST - can_import_comprehensive.md:14:15:14:24
 DOES NOT EXIST - can_import_comprehensive.md:17:15:17:18
@@ -51,7 +51,7 @@ DOES NOT EXIST - can_import_comprehensive.md:18:15:18:19
 (reports
 	(report
 		(severity runtime_error)
-		(title "Builtin Import Conflict")
+		(title "Reserved Type Name")
 		(region (start 1 12) (end 1 17))
 		(headline
 			(text "This import cannot bind ")
@@ -63,7 +63,7 @@ DOES NOT EXIST - can_import_comprehensive.md:18:15:18:19
 			(source-region (file "can_import_comprehensive.md") (start 1 12) (end 1 17) (annotation error) (line-text "import json.Json"))))
 	(report
 		(severity runtime_error)
-		(title "Builtin Import Conflict")
+		(title "Reserved Type Name")
 		(region (start 3 24) (end 3 27))
 		(headline
 			(text "This import cannot bind ")

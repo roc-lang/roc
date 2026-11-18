@@ -59,8 +59,8 @@ combine_tries = |jsonTry, httpStatus|
     }
 ~~~
 # EXPECTED
-BUILTIN IMPORT CONFLICT - can_import_exposing_types.md:1:12:1:17
-BUILTIN IMPORT CONFLICT - can_import_exposing_types.md:3:13:3:17
+RESERVED TYPE NAME - can_import_exposing_types.md:1:12:1:17
+RESERVED TYPE NAME - can_import_exposing_types.md:3:13:3:17
 DOES NOT EXIST - can_import_exposing_types.md:22:5:22:16
 MOD NOT FOUND - can_import_exposing_types.md:6:24:6:29
 MOD NOT FOUND - can_import_exposing_types.md:6:31:6:36
@@ -91,7 +91,7 @@ MOD NOT FOUND - can_import_exposing_types.md:47:60:47:65
 (reports
 	(report
 		(severity runtime_error)
-		(title "Builtin Import Conflict")
+		(title "Reserved Type Name")
 		(region (start 1 12) (end 1 17))
 		(headline
 			(text "This import cannot bind ")
@@ -103,7 +103,7 @@ MOD NOT FOUND - can_import_exposing_types.md:47:60:47:65
 			(source-region (file "can_import_exposing_types.md") (start 1 12) (end 1 17) (annotation error) (line-text "import json.Json exposing [Value, Error, Config]"))))
 	(report
 		(severity runtime_error)
-		(title "Builtin Import Conflict")
+		(title "Reserved Type Name")
 		(region (start 3 13) (end 3 17))
 		(headline
 			(text "This import cannot bind ")

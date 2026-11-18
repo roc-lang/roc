@@ -44,7 +44,7 @@ transform = |result|
     }
 ~~~
 # EXPECTED
-BUILTIN IMPORT CONFLICT - qualified_type_canonicalization.md:1:14:1:18
+RESERVED TYPE NAME - qualified_type_canonicalization.md:1:14:1:18
 MOD NOT IMPORTED - qualified_type_canonicalization.md:15:23:15:38
 UNUSED VARIABLE - qualified_type_canonicalization.md:28:17:28:22
 MOD NOT IMPORTED - qualified_type_canonicalization.md:32:49:32:64
@@ -70,7 +70,7 @@ DOES NOT EXIST - qualified_type_canonicalization.md:36:25:36:38
 (reports
 	(report
 		(severity runtime_error)
-		(title "Builtin Import Conflict")
+		(title "Reserved Type Name")
 		(region (start 1 14) (end 1 18))
 		(headline
 			(text "This import cannot bind ")

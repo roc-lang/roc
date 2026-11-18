@@ -15,7 +15,7 @@ main = {
 }
 ~~~
 # EXPECTED
-BUILTIN IMPORT CONFLICT - import_exposing_basic.md:1:12:1:17
+RESERVED TYPE NAME - import_exposing_basic.md:1:12:1:17
 DOES NOT EXIST - import_exposing_basic.md:5:15:5:21
 DOES NOT EXIST - import_exposing_basic.md:6:15:6:21
 # PROBLEMS
@@ -23,7 +23,7 @@ DOES NOT EXIST - import_exposing_basic.md:6:15:6:21
 (reports
 	(report
 		(severity runtime_error)
-		(title "Builtin Import Conflict")
+		(title "Reserved Type Name")
 		(region (start 1 12) (end 1 17))
 		(headline
 			(text "This import cannot bind ")

@@ -711,7 +711,7 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = try Report.init(allocator, "Builtin Import Conflict", "", .runtime_error);
+        var report = try Report.init(allocator, "Reserved Type Name", "", .runtime_error);
         errdefer report.deinit();
         const owned_name = try report.addOwnedString(type_name);
         try report.headline.addText("This import cannot bind ");

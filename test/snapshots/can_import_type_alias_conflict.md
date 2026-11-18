@@ -13,14 +13,14 @@ JsonValue : U64
 main = 42
 ~~~
 # EXPECTED
-BUILTIN IMPORT CONFLICT - can_import_type_alias_conflict.md:1:12:1:17
+RESERVED TYPE NAME - can_import_type_alias_conflict.md:1:12:1:17
 TYPE REDECLARED - can_import_type_alias_conflict.md:4:1:4:16
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Builtin Import Conflict")
+		(title "Reserved Type Name")
 		(region (start 1 12) (end 1 17))
 		(headline
 			(text "This import cannot bind ")

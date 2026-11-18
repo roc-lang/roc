@@ -10,7 +10,7 @@ zig build roc
 zig build run-test-zig-module-check -Dtest-filter="issue 13106" -- --test-filter "issue 13106"
 ```
 
-The import must report `Builtin Import Conflict`, without a misleading
+The import must report `Reserved Type Name`, without a misleading
 `Bool.show does not exist` or invalid `Yes` tag diagnostic.
 Renaming the exposed binding to `Flag` makes the same program print `yes`
 without errors (the declaration and deprecated-header warnings remain).

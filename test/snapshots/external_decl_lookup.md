@@ -17,14 +17,14 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-BUILTIN IMPORT CONFLICT - external_decl_lookup.md:4:12:4:17
+RESERVED TYPE NAME - external_decl_lookup.md:4:12:4:17
 DOES NOT EXIST - external_decl_lookup.md:9:5:9:17
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Builtin Import Conflict")
+		(title "Reserved Type Name")
 		(region (start 4 12) (end 4 17))
 		(headline
 			(text "This import cannot bind ")
