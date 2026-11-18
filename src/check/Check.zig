@@ -1038,6 +1038,8 @@ hoist_frames: std.ArrayListUnmanaged(HoistFrame) = .empty,
 hoist_expr_candidates: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
 /// Last answer from `exprTypeHoldsFunction`.
 hoist_function_holding_memo: ?struct { expr: CIR.Expr.Idx, holds: bool } = null,
+/// Stacks reused by every `varHoldsFunction` scan.
+held_function_scan_scratch: HeldFunctionScan.Eval.Scratch = .{},
 /// Compile-time-known local dependencies and strict destructure validations
 /// waiting for the maximal enclosing root that can own their evaluation.
 hoist_deferred_roots: std.ArrayListUnmanaged(HoistDeferredRoot) = .empty,
@@ -2027,6 +2029,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .hoist_frames = .frame_stack,
     .hoist_expr_candidates = .frame_partitioned,
     .hoist_function_holding_memo = .keyed,
+    .held_function_scan_scratch = .scratch,
     .hoist_deferred_roots = .frame_partitioned,
     .hoist_binding_candidates = .lexical,
     .hoist_binding_scope_patterns = .lexical,
@@ -8506,6 +8509,9 @@ fn exprHoistRoles(self: *Self, expr: CIR.Expr.Idx, want_binding_root: bool) Allo
             const binding_root = want_binding_root and !self.exprHasDedicatedLiteralConversionRoot(expr);
             break :blk .{ .root = interpolated, .cover = interpolated, .binding_root = binding_root, .binding_value = binding_root };
         },
+        // A tag with no payload is the same value as a zero-argument tag,
+        // which computes nothing and is no root of its own.
+        .e_tag => |tag| if (tag.args.span.len == 0) .binding_root_only else .all,
         .e_list,
         .e_method_call,
         .e_dispatch_call,
@@ -8515,7 +8521,6 @@ fn exprHoistRoles(self: *Self, expr: CIR.Expr.Idx, want_binding_root: bool) Allo
         .e_if,
         .e_call,
         .e_record,
-        .e_tag,
         .e_nominal,
         .e_nominal_external,
         .e_binop,
@@ -16863,7 +16868,7 @@ fn storedNominalBacking(self: *const Self, nominal: types_mod.NominalType) Store
 }
 
 /// Whether a value of this type holds a function anywhere a stored value
-/// would: through record fields, tuple elements, tag payloads, aliases, a
+/// would: through record fields, tuple items, tag payloads, aliases, a
 /// nominal's args and its stored backing (`storedNominalBacking`), the same
 /// parts `HoistedConstTypeScan` proves a data constant free of functions
 /// over. An unsolved, rigid or erroneous variable holds none; a var reached
@@ -16876,9 +16881,20 @@ fn storedNominalBacking(self: *const Self, nominal: types_mod.NominalType) Store
 /// their parts' types, so this keeps the scans of a whole body linear in its
 /// nesting depth.
 fn varHoldsFunction(self: *Self, var_: Var) Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .err, .flex, .rigid, .field_presence => return false,
+        .structure => |flat| switch (flat) {
+            .fn_pure, .fn_effectful, .fn_unbound => return true,
+            .empty_record, .empty_tag_union => return false,
+            .record, .tuple, .tag_union, .nominal_type => {},
+        },
+        .alias => {},
+    }
+    if (self.types.isFunctionFree(resolved.var_)) return false;
     self.var_set.clearRetainingCapacity();
     var scan = HeldFunctionScan{ .check = self, .visited = &self.var_set };
-    const holds = try HeldFunctionScan.Eval.run(self.gpa, &scan, var_);
+    const holds = try HeldFunctionScan.Eval.runWith(self.gpa, &self.held_function_scan_scratch, &scan, var_);
     if (!holds) {
         var visited = self.var_set.keyIterator();
         while (visited.next()) |reached| try self.types.markFunctionFree(&.{reached.*});

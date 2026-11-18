@@ -1502,6 +1502,10 @@ takes no root role are (`exprHoistRoles`). In `[1, 2, 3].iter().map(f)` the
 is one root, which reads `xs` from its own root. A destructuring binding of
 such a value still has its binders extracted, each a root decided by its
 own type ("callable extraction root" below), but it covers nothing either.
+A tag with no payload computes nothing, whether it is written as a bare
+tag or through its nominal (`Step.End`), so like an empty list or record it
+is no root of its own: the backing of `Step.End` is not selected when
+`Step` holds a function.
 
 A type holds a function when a function type is reachable through record
 fields, tuple items, tag payloads, an alias's args and backing, a

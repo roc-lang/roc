@@ -381,6 +381,31 @@ test "a destructured binding of a function-holding value keeps its binders and c
     try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_list));
 }
 
+test "a payload-free tag of a function-holding nominal is no root of its own" {
+    // `Step` holds a function, so `Step.End` is not stored; its backing tag
+    // carries no payload, so like any zero-argument tag it computes nothing
+    // and is no root either.
+    var test_env = try TestEnv.init("Test",
+        \\Machine := [Machine(Box(U64 -> Step))]
+        \\Step := [End, Emit({ machine : Machine, observed : U64 })]
+        \\
+        \\from_state : U64 -> Machine
+        \\from_state = |remaining|
+        \\    Machine.Machine(
+        \\        Box.box(|wake|
+        \\            if remaining == 0 {
+        \\                Step.End
+        \\            } else {
+        \\                Step.Emit({ machine: from_state(remaining - 1), observed: remaining + wake })
+        \\            }),
+        \\    )
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
 test "non-iterator methods sharing iterator producer names remain hoistable" {
     const cases = [_]struct {
         source: []const u8,
