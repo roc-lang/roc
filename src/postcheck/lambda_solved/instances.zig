@@ -27,6 +27,7 @@ const diagnostics = @import("base").dev_diagnostics;
 
 const Common = @import("../common.zig");
 const Lifted = @import("../monotype_lifted/ast.zig");
+const SpecConstr = @import("../monotype_lifted/spec_constr.zig");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 
@@ -321,17 +322,20 @@ pub fn canonicalMembers(
     out: *std.ArrayList(ResolvedMember),
 ) Allocator.Error!void {
     const table = &program.instances;
+    // Without a further instance, every member names its function at its
+    // first instance.
+    const further = table.hasFurtherInstances();
     out.clearRetainingCapacity();
     try out.ensureTotalCapacity(allocator, members.count());
     for (0..members.count()) |index| {
         const member = program.types.memberItem(members, index);
         const source = table.fn_by_symbol.get(member.lambda) orelse
             Common.invariant("a lambda-set member named no lifted function");
-        const member_env = memberEnv(program, member, env);
+        const member_env: Env = if (further) memberEnv(program, member, env) else .global;
         out.appendAssumeCapacity(.{
             .source = source,
             .env = member_env,
-            .symbol = table.symbolOf(program, source, member_env),
+            .symbol = if (member_env == .global) member.lambda else table.symbolOf(program, source, member_env),
             .captures = member.captures,
             .captures_env = env,
         });
@@ -349,6 +353,107 @@ pub fn canonicalMembers(
         kept += 1;
     }
     out.shrinkRetainingCapacity(kept);
+}
+
+/// Use information for one function at one instance
+/// (`SpecConstr.ProcedureUse`, counted per spec function).
+pub const ProcedureUse = struct {
+    external_calls: usize = 0,
+    external_call_expr: ?Lifted.ExprId = null,
+    external_call_owner: ?SpecFnId = null,
+    value_refs: usize = 0,
+    contains_return: bool = false,
+};
+
+/// The use of every spec function, counted as SpecConstr counts uses of
+/// lifted functions (`SpecConstr.collectProcedureUsage`): in the functions the
+/// roots reach, following each direct call and function reference to the
+/// instance it names. `lifted` is SpecConstr's inventory for the lifted
+/// functions, which is the answer when no group has a further instance; an
+/// empty one means no use information was collected.
+pub fn procedureUsage(
+    allocator: Allocator,
+    program: *const Ast.Program,
+    lifted: []const SpecConstr.ProcedureUse,
+) Allocator.Error![]ProcedureUse {
+    if (lifted.len == 0) return &.{};
+    const table = &program.instances;
+    const uses = try allocator.alloc(ProcedureUse, table.specFnCount());
+    errdefer allocator.free(uses);
+    if (!table.hasFurtherInstances()) {
+        for (lifted, uses) |use, *out| out.* = .{
+            .external_calls = use.external_calls,
+            .external_call_expr = use.external_call_expr,
+            .external_call_owner = if (use.external_call_owner) |owner| @fromBackingInt(@backingInt(owner)) else null,
+            .value_refs = use.value_refs,
+            .contains_return = use.contains_return,
+        };
+        return uses;
+    }
+    @memset(uses, .{});
+    const program_lifted = &program.lifted;
+    for (uses, 0..) |*use, index| {
+        const fn_ = program_lifted.getFn(table.specFnSource(@fromBackingInt(@as(u32, @intCast(index)))));
+        use.contains_return = switch (fn_.body) {
+            .roc => fn_.shapes.contains_return,
+            .hosted => false,
+        };
+    }
+
+    var reached = try std.DynamicBitSetUnmanaged.initEmpty(allocator, uses.len);
+    defer reached.deinit(allocator);
+    var pending: std.ArrayList(SpecFnId) = .empty;
+    defer pending.deinit(allocator);
+    for (program_lifted.rootsView()) |root| try reachSpecFn(allocator, @fromBackingInt(@backingInt(root.fn_id)), &reached, &pending);
+    for (program_lifted.literalRootsView()) |root| try reachSpecFn(allocator, @fromBackingInt(@backingInt(root.fn_id)), &reached, &pending);
+    for (program.layout_requests.items) |request| {
+        if (request.fn_id) |fn_id| try reachSpecFn(allocator, @fromBackingInt(@backingInt(fn_id)), &reached, &pending);
+    }
+    var stack: std.ArrayList(Lifted.ExprChild) = .empty;
+    defer stack.deinit(allocator);
+    while (pending.pop()) |owner| {
+        const env = table.specFnEnv(owner);
+        const body = switch (program_lifted.getFn(table.specFnSource(owner)).body) {
+            .roc => |body| body,
+            .hosted => continue,
+        };
+        stack.clearRetainingCapacity();
+        try stack.append(allocator, .{ .expr = body });
+        while (stack.pop()) |child| switch (child) {
+            .stmt => |stmt_id| try Lifted.appendStmtChildren(allocator, program_lifted, stmt_id, &stack),
+            .expr => |id| {
+                switch (program_lifted.getExpr(id).data) {
+                    .fn_ref => |fn_ref| {
+                        const target = table.specFn(fn_ref.fn_id, referenceEnv(program, id, fn_ref.fn_id, env));
+                        uses[@backingInt(target)].value_refs += 1;
+                        try reachSpecFn(allocator, target, &reached, &pending);
+                    },
+                    .call_proc => |call| if (Lifted.localDirectCallee(call)) |callee| {
+                        const target = table.specFn(callee, referenceEnv(program, id, callee, env));
+                        try reachSpecFn(allocator, target, &reached, &pending);
+                        if (target != owner) {
+                            const use = &uses[@backingInt(target)];
+                            use.external_calls += 1;
+                            use.external_call_expr = id;
+                            use.external_call_owner = owner;
+                        }
+                    },
+                    .lambda, .def_ref, .fn_def => Common.invariant("pre-lift function expression reached procedure use analysis"),
+                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
+                }
+                try Lifted.appendChildren(allocator, program_lifted, id, &stack);
+            },
+        };
+    }
+    for (program_lifted.rootsView()) |root| uses[@backingInt(root.fn_id)].value_refs += 1;
+    return uses;
+}
+
+fn reachSpecFn(allocator: Allocator, id: SpecFnId, reached: *std.DynamicBitSetUnmanaged, pending: *std.ArrayList(SpecFnId)) Allocator.Error!void {
+    const index = @backingInt(id);
+    if (reached.isSet(index)) return;
+    reached.set(index);
+    try pending.append(allocator, id);
 }
 
 /// Compute `program.instances`, and reserve the symbols of every spec

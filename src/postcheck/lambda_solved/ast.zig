@@ -71,7 +71,8 @@ pub const Scheme = struct {
     }
 };
 
-/// The generalization Lambda Solving produced, for Lambda Specialize.
+/// The generalization Lambda Solving produced, which instance discovery
+/// (`instances.zig`) reads.
 pub const Polymorphism = struct {
     /// One scheme per binding group, in group order.
     schemes: std.ArrayList(Scheme) = .empty,

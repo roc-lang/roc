@@ -130,11 +130,14 @@ pub const FnVariantId = enum(u32) { _ };
 /// Own captures belong to `source`; solved captures name their producer span.
 pub const FrozenCallableContext = struct {
     abi: enum { finite, erased },
+    /// The function at its instance (`Instances.SpecFnId`).
     source: u32,
     fn_type: u32,
+    /// The instance `fn_type` reads under.
+    fn_type_env: u32 = 0,
     captures: union(enum) {
         own: u32,
-        solved: struct { start: u32, len: u32 },
+        solved: struct { start: u32, len: u32, env: u32 = 0 },
     },
 };
 
@@ -157,7 +160,7 @@ pub const FnTemplate = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(FnTemplate) == 392);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(FnTemplate) == 400);
 }
 
 /// Capture field copied from a checked binding into a callable payload. `id`
@@ -191,7 +194,7 @@ pub const FnVariant = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(FnVariant) == 424);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(FnVariant) == 432);
 }
 
 /// Runtime tag-union encoding for a finite callable set.
@@ -210,7 +213,7 @@ pub const ErasedFn = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(ErasedFn) == 440);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(ErasedFn) == 448);
 }
 
 /// Runtime encoding for an erased callable value type.

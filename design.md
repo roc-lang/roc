@@ -10234,7 +10234,8 @@ checked pipeline retains that sidecar across Lambda Solved and supplies it to
 the solved inline analyzer; the analyzer does not rescan the whole program or
 reconstruct uses from emitted code. Lambda Solved does not change the lifted
 expression graph, so function ids and use counts remain exact across that
-boundary.
+boundary. When a group has a further instance, uses are counted per function
+at each instance instead ("Lambda Set Instances").
 
 The solved inline plan admits functions with exactly one non-cold external
 direct call and no function-value or root uses. A single call-site proof
@@ -10405,8 +10406,9 @@ An iterator value is its public nominal record: a `len_if_known` and a step
 closure, laid out as the record's backing like any other nominal. Each adapter
 is an ordinary function that builds a new record whose step closure captures
 the iterator it adapts. Lambda Solved generalizes each adapter, so every chain
-in a program instantiates the adapters at its own lambda sets; Lambda
-Specialize then gives each distinct instance its own functions. A chain built
+in a program instantiates the adapters at its own lambda sets, and LIR
+lowering lowers each adapter once per distinct instance ("Lambda Set
+Instances"). A chain built
 once, however deep, has one finite lambda set per adapter instance, and nothing
 is boxed or erased.
 
@@ -22554,12 +22556,12 @@ never relates capture lists; a member that reaches a merge with two different
 spans is a compiler invariant violation. Merges append new members in
 encounter order so a growing set can extend in place at the end of the
 member pool. When solving ends, every lambda set and erased callable is
-rewritten with its members in ascending lambda-and-instantiation order. Lambda
-Specialize then gives every member the lifted function of its instance and
-`InstId.specialized`, and orders every set by lambda symbol with one member
-per lambda, so every consumer keys members by symbol, every lifted function
-has its own symbol, and every consumer that numbers callable variants by
-position sees one order for a given member set.
+rewritten with its members in ascending lambda-and-instantiation order. Every
+consumer reads a set under an instance ("Lambda Set Instances"): each member
+then names its function at one instance, the members are ordered by that
+function's symbol with one member per function and instance, so every
+consumer that numbers callable variants by position sees one order for a
+given member set.
 
 Explicit return boundaries preserve the source value's tag rows and the
 function's destination rows independently. Lambda Solved infers the returned
@@ -22788,8 +22790,8 @@ from the resulting solved representations.
 Lambda Solved follows "Better Defunctionalization through Lambda Set
 Specialization" (Brandon et al., PLDI 2023): a finished binding group is
 generalized over the callable slots its function types own, every reference
-to it from a later group copies those slots, and Lambda Specialize gives each
-distinct copy its own functions. The unit of generalization is the binding
+to it from a later group copies those slots, and LIR lowering lowers each
+function once per distinct copy ("Lambda Set Instances"). The unit of generalization is the binding
 group, as the paper's unit is the strongly connected definition; recursive
 references inside a group use the group's own types, so no group is
 polymorphically recursive.
@@ -22862,56 +22864,71 @@ naming another instantiation whose images the scheme reaches name a copy of
 it. The reference unifies with the image of the function's type, and its
 capture operands with the images of the function's capture types. The
 instantiation is recorded as a row of images (`Ast.Instantiation`), the
-paper's delayed substitution: nothing is substituted into bodies until
-Lambda Specialize.
+paper's delayed substitution: nothing is ever substituted into bodies; LIR
+lowering reads a body's types under the instance it lowers.
 
-### Lambda Specialize
+### Lambda Set Instances
 
-Lambda Specialize (`lambda_solved/specialize.zig`) runs after Lambda Solving
-and before Solved Inline. It consumes the polymorphic program and outputs an
-ordinary monomorphic Lambda Solved program: every reference and every member
-names one lifted function, and every function has one solved type per
-expression, local and pattern. A program without a generalized group costs
-one pass over the member pool.
+Lambda Solving's last step (`lambda_solved/instances.zig`) computes which
+instantiations of each generalized group are one instance, as a table beside
+the unchanged program (`Ast.Program.instances`). No stage copies a body or a
+type for an instance: LIR lowering lowers each function once per instance of
+its group that it reaches, reading the function's own types under that
+instance, its environment (`Instances.Env`).
 
 Generalized groups are visited callers first, so every instantiation of a
-group exists when the group is visited: each was made at a reference in an
-already specialized body, or copied there with a member that names it.
-Instantiations are compared as infinite types: from the images of every
-scheme node, pairs of types are assumed equal while their parts are compared,
-so cycles close. The function types' images alone do not single out an
-instantiation: one set can hold two members of one lambda at two
-instantiations, whose captures a path from the function type cannot tell
-apart. Members compare by lambda and by their instantiations, which compare the same way unless their group is already
-specialized, when they compare by instance. Any difference fails the whole
-comparison, so equality is exact: the assumed pairs are a bisimulation. Equal
-instantiations are one instance, and their images are linked into one class
-pair by pair. The first instance keeps the group's own functions: each scheme
-node is linked to that instance's image, which instantiation built as a copy
-of it and unification then only extended. Every further instance copies the
-group's bodies with fresh locals (each a copy of its source's identity, so
-capture operands still match their slots), join points, function ids and
-symbols. The copy's types substitute the instance's images for scheme nodes
-and copy every body type the group owns that reaches a scheme node, a
-callable naming one of the group's own lambdas, or an instantiation whose
-images are such types; every other type stays shared. Instantiations named
-by the copied bodies and types are copied too, for the groups visited later.
-A generalized group no reference instantiated keeps its own types.
+group is known when the group is visited: each was made at a reference in an
+already visited body, or is an instantiation such a body or its types name,
+read under one of that body's instances. An instantiation read under an
+instance is an occurrence. Occurrences are compared as infinite types: from
+the images of every scheme node, pairs of types are assumed equal while their
+parts are compared, so cycles close. The function types' images alone do not
+single out an instantiation: one set can hold two members of one lambda at
+two instantiations, whose captures a path from the function type cannot tell
+apart. Members compare by lambda and by their occurrences, which compare the
+same way unless their group is already visited, when they compare by
+instance. Any difference fails the whole comparison, so equality is exact:
+the assumed pairs are a bisimulation. Equal occurrences are one instance, and
+each pair of types their comparison related becomes one class.
 
-Once every group is visited, every reference is pointed at the function of
-its instance, and every member at that function's symbol, with captures
-naming the instance's locals. Copies of a function keep its source, so
-procedure identities (`proc_identity.zig`) still name them by content.
-SpecConstr's procedure-use inventory counts uses per function, so when
-specialization copies a function the pipeline counts the specialized
-program's uses afresh (`SpecConstr.collectProcedureUsage`).
+A group's first instance belongs to the global environment, which every type
+outside a further instance reads: there each scheme node reads as that
+instance's image, which instantiation built as a copy of it and unification
+then only extended. Each further instance is an environment of its own. A
+type reads under an environment (`Instances.resolve`) as its root; a scheme
+node of the environment's group reads as the instance's image, under the
+environment its occurrence was read in, and any other scheme node as its
+group's first image; a body type the group owns (or that no link gave an
+owner) that reaches a scheme node, a callable naming one of the group's own
+lambdas, or an instantiation whose images are such types keeps the
+environment, and every other type reads in the global environment; the result
+stands for its class. Members read under an environment
+(`Instances.canonicalMembers`) name their functions at the instances their
+occurrences were assigned. A function at a further instance takes a symbol
+past every lifted symbol, numbered in instance order, and a spec function id
+(`Instances.SpecFnId`) past the lifted function ids; at its first instance it
+keeps both of its own. A generalized group nothing instantiated keeps its own
+types.
+
+LIR lowering keys what it derives from a solved type by the resolved
+reference: lowered types, procedure identities, capture records, and function
+specializations, whose `env` is the instance whose body they lower. A body
+reads its types under its specialization's instance (`Lowerer.type_env`), an
+inlined callee's body under the callee's, and a reference names the instance
+its occurrence was assigned (`Instances.referenceEnv`). A function keeps its
+source at every instance, so procedure identities (`proc_identity.zig`) name
+it by content. Solved Inline decides per spec function. SpecConstr's
+procedure-use inventory counts uses per lifted function, which is the answer
+when no group has a further instance; otherwise `Instances.procedureUsage`
+counts uses per spec function, following each reference to the instance it
+names.
 
 The developer-only `ROC_LAMBDA_SOLVE_STATS` diagnostic reports, per solve,
 generalized groups, scheme nodes, instantiations and the nodes they copied,
-and the groups kept monomorphic for each reason; per specialization, groups,
-generalized groups, instantiated references, distinct instances (sum and
-maximum), and the functions and expressions copied against the program's
-expressions.
+and the groups kept monomorphic for each reason; per instance discovery,
+groups, generalized groups, instantiated references, distinct instances (sum
+and maximum), and the functions and expressions further instances lower
+against the program's expressions.
 
 ### Erased Callable Requirements
 
@@ -23072,8 +23089,8 @@ The release-build direct lowerer owns only the decision data needed to produce
 LIR:
 
 - the function-free Lambda Mono type store
-- queued function specializations keyed by exact lifted function id, solved
-  function type, capture ABI, and capture shape
+- queued function specializations keyed by exact lifted function id, the
+  instance of its group, solved function type, capture ABI, and capture shape
 - callable variants, erased callable entries, capture-record types, and exact
   function targets
 - root, layout, runtime-schema, and const-plan requests rewritten to Lambda Mono

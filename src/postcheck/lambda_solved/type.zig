@@ -71,25 +71,18 @@ comptime {
 
 /// Identifier for one instantiation of a binding group: a row of
 /// `Ast.Polymorphism.instantiations`.
-pub const InstId = enum(u32) {
-    /// What every member names once Lambda Specialize has given each
-    /// instantiation its own lifted functions: the member's lambda symbol
-    /// alone then identifies its function.
-    specialized = std.math.maxInt(u32),
-    _,
-};
+pub const InstId = enum(u32) { _ };
 
 /// Function member of a lambda set: a lambda at one instantiation of its
 /// binding group. Lambda solving gives every member it creates its group's
 /// identity instantiation, and instantiating a generalized group gives each
-/// copied member the reference's instantiation. Lambda Specialize rewrites
-/// each member to the lifted function specialized for its instantiation and
-/// to `InstId.specialized`, so consumers of a specialized program key members
-/// by `lambda` alone.
+/// copied member the reference's instantiation. A consumer reads a member
+/// under an instance (`instances.zig`), which names the member's function at
+/// one instance of its group.
 pub const FnMember = struct {
     lambda: Common.Symbol,
     captures: Span,
-    inst: InstId = .specialized,
+    inst: InstId,
 };
 
 /// The owner of a type variable class: the binding group whose solving
@@ -682,7 +675,7 @@ test "lambda solved empty spans use shared empty descriptor" {
     const nonempty_fields = try store.addFields(&.{.{ .name = @fromBackingInt(@intCast(1)), .ty = unit, .default = .none }});
     const nonempty_tags = try store.addTags(&.{.{ .name = @fromBackingInt(@intCast(2)), .checked_name = @fromBackingInt(@intCast(2)), .payloads = nonempty_span }});
     const nonempty_captures = try store.addCaptures(&.{.{ .local = @fromBackingInt(@intCast(3)), .symbol = @fromBackingInt(@intCast(4)), .binder = .none, .ty = unit }});
-    const nonempty_members = try store.addMembers(&.{.{ .lambda = @fromBackingInt(@intCast(5)), .captures = nonempty_captures }});
+    const nonempty_members = try store.addMembers(&.{.{ .lambda = @fromBackingInt(@intCast(5)), .captures = nonempty_captures, .inst = @fromBackingInt(0) }});
     try std.testing.expect(nonempty_span.len == 1);
     try std.testing.expect(nonempty_fields.len == 1);
     try std.testing.expect(nonempty_tags.len == 1);

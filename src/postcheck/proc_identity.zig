@@ -43,6 +43,9 @@ const Common = @import("common.zig");
 const MonoType = @import("monotype/type.zig");
 const Lifted = @import("monotype_lifted/ast.zig");
 const SolvedType = @import("lambda_solved/type.zig");
+const Solved = @import("lambda_solved/ast.zig");
+const Instances = @import("lambda_solved/instances.zig");
+const Ref = Instances.Ref;
 const names = check.CheckedNames;
 const TypeDigestHasher = base.TypeDigestHasher;
 const recursive_digest = base.recursive_digest;
@@ -56,8 +59,11 @@ const domain = "roc.proc.identity.v4";
 /// Everything one solved program has rendered so far, shared by every
 /// identity rendered over it.
 pub const Memo = struct {
-    /// Digest of every type rendered so far, keyed by its root variable.
+    allocator: Allocator,
+    /// Digest of every type rendered so far, keyed by its resolved
+    /// reference: read in the global environment, by its root alone.
     digests: collections.DenseMap(SolvedType.TypeVarId, Identity),
+    instance_digests: std.AutoHashMapUnmanaged(Ref, Identity) = .empty,
     /// Every recursive group rendered so far.
     settled: recursive_digest.Settled,
     /// Reduction scratch kept across reductions.
@@ -69,6 +75,7 @@ pub const Memo = struct {
 
     pub fn init(allocator: Allocator) Memo {
         return .{
+            .allocator = allocator,
             .digests = collections.DenseMap(SolvedType.TypeVarId, Identity).init(allocator),
             .settled = recursive_digest.Settled.init(allocator, domain),
             .graph = recursive_digest.Graph.init(allocator),
@@ -77,6 +84,7 @@ pub const Memo = struct {
     }
 
     pub fn deinit(self: *Memo) void {
+        self.instance_digests.deinit(self.allocator);
         self.digests.deinit();
         self.settled.deinit();
         self.graph.deinit();
@@ -84,29 +92,28 @@ pub const Memo = struct {
     }
 };
 
-/// Renders specialization identities over one solved program.
+/// Renders specialization identities over one solved program, whose types
+/// it reads under the instance each reference names.
 pub const Renderer = struct {
     allocator: Allocator,
-    types: SolvedType.Store.View,
+    program: *const Solved.Program,
     names: *const names.NameStore,
-    /// Solved function type of every lifted function, indexed by `Lifted.FnId`.
-    fn_tys: []const SolvedType.TypeVarId,
     /// `Lifted.Program.fnSourceDigest` of every lifted function that has a
     /// checked source, indexed by `Lifted.FnId`.
     source_digests: []const ?Identity,
-    fn_by_symbol: *const std.AutoHashMap(Common.Symbol, Lifted.FnId),
     memo: *Memo,
 
     /// Identity of the specialization of `source` at `solved_fn_ty` with the
-    /// given captures and Lambda Mono ABI choices. Two specializations with
-    /// the same identity are one procedure: everything that determines the
-    /// procedure's code is rendered here, so Direct LIR lowers one proc per
-    /// identity.
+    /// given captures, read under `captures_env`, and Lambda Mono ABI
+    /// choices. Two specializations with the same identity are one
+    /// procedure: everything that determines the procedure's code is
+    /// rendered here, so Direct LIR lowers one proc per identity.
     pub fn specIdentity(
         self: *const Renderer,
         source: Lifted.FnId,
-        solved_fn_ty: SolvedType.TypeVarId,
+        solved_fn_ty: Ref,
         captures: []const SolvedType.Capture,
+        captures_env: Instances.Env,
         capture_abi: []const u8,
         return_reuse: []const u8,
     ) Allocator.Error!Identity {
@@ -115,20 +122,25 @@ pub const Renderer = struct {
         hasher.update(&self.sourceDigest(source));
         writeBytes(&hasher, capture_abi);
         writeBytes(&hasher, return_reuse);
-        const signature = switch (self.types.get(self.renderedRoot(solved_fn_ty))) {
+        const fn_ref = self.renderedRef(solved_fn_ty);
+        const signature = switch (self.types().get(fn_ref.ty)) {
             .func => |func| func,
             .link, .unbound, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .lambda_set, .erased, .zst, .hole, .mono => Common.invariant("procedure identity requires a solved function signature"),
         };
         writeBytes(&hasher, "args");
-        const args = self.types.span(signature.args);
+        const args = self.types().span(signature.args);
         writeU32(&hasher, @intCast(args.len));
-        for (args) |arg| hasher.update(&try self.typeDigest(arg));
+        for (args) |arg| hasher.update(&try self.typeDigest(.{ .ty = arg, .env = fn_ref.env }));
         writeBytes(&hasher, "ret");
-        hasher.update(&try self.typeDigest(signature.ret));
+        hasher.update(&try self.typeDigest(.{ .ty = signature.ret, .env = fn_ref.env }));
         writeBytes(&hasher, "captures");
         writeU32(&hasher, @intCast(captures.len));
-        for (captures) |capture| hasher.update(&try self.typeDigest(capture.ty));
+        for (captures) |capture| hasher.update(&try self.typeDigest(.{ .ty = capture.ty, .env = captures_env }));
         return hasher.finalResult();
+    }
+
+    fn types(self: *const Renderer) SolvedType.Store.View {
+        return self.program.types.view();
     }
 
     fn sourceDigest(self: *const Renderer, fn_id: Lifted.FnId) Identity {
@@ -136,25 +148,30 @@ pub const Renderer = struct {
             Common.invariant("lifted function without a checked source template reached procedure identity rendering");
     }
 
-    /// The variable a type renders as: its root, through any transparent
+    /// The reference a type renders as: resolved, through any transparent
     /// aliases, which have no runtime identity of their own.
-    fn renderedRoot(self: *const Renderer, ty: SolvedType.TypeVarId) SolvedType.TypeVarId {
-        var root = self.types.root(ty);
-        var content = self.types.get(root);
+    fn renderedRef(self: *const Renderer, ref: Ref) Ref {
+        var current = Instances.resolve(self.program, ref);
+        var content = self.types().get(current.ty);
         while (transparentAliasBacking(content)) |backing| {
-            root = self.types.root(backing);
-            content = self.types.get(root);
+            current = Instances.resolve(self.program, .{ .ty = backing, .env = current.env });
+            content = self.types().get(current.ty);
         }
-        return root;
+        return current;
     }
 
-    /// Digest of the infinite type `ty` denotes.
-    fn typeDigest(self: *const Renderer, ty: SolvedType.TypeVarId) Allocator.Error!Identity {
-        const root = self.renderedRoot(ty);
-        if (self.memo.digests.get(root)) |digest| return digest;
+    fn memoized(self: *const Renderer, ref: Ref) ?Identity {
+        if (ref.env == .global) return self.memo.digests.get(ref.ty);
+        return self.memo.instance_digests.get(ref);
+    }
+
+    /// Digest of the infinite type `ref` denotes.
+    pub fn typeDigest(self: *const Renderer, ref: Ref) Allocator.Error!Identity {
+        const rendered = self.renderedRef(ref);
+        if (self.memoized(rendered)) |digest| return digest;
         var engine = Engine.init(self);
         defer engine.deinit();
-        return try engine.run(root);
+        return try engine.run(rendered);
     }
 };
 
@@ -165,8 +182,10 @@ const Engine = struct {
     gpa: Allocator,
     graph: *recursive_digest.Graph,
     node_of_ty: collections.DenseMap(SolvedType.TypeVarId, u32),
+    node_of_ref: std.AutoHashMapUnmanaged(Ref, u32) = .empty,
     /// The type of every node of the reduction.
-    tys: std.ArrayList(SolvedType.TypeVarId) = .empty,
+    tys: std.ArrayList(Ref) = .empty,
+    members: std.ArrayList(Instances.ResolvedMember) = .empty,
     /// Nodes discovered but not yet encoded.
     pending: std.ArrayList(u32) = .empty,
     /// Content of the node being encoded.
@@ -185,26 +204,45 @@ const Engine = struct {
     fn deinit(self: *Engine) void {
         self.graph.reset();
         self.renderer.memo.node_maps.release(&self.node_of_ty);
+        self.node_of_ref.deinit(self.gpa);
+        self.members.deinit(self.gpa);
         self.tys.deinit(self.gpa);
         self.pending.deinit(self.gpa);
     }
 
-    fn run(self: *Engine, root: SolvedType.TypeVarId) Allocator.Error!Identity {
+    fn run(self: *Engine, root: Ref) Allocator.Error!Identity {
         const root_node = try self.discover(root);
         while (self.pending.pop()) |node| try self.encode(node);
         const memo = self.renderer.memo;
         try self.graph.resolve(&memo.settled, null);
-        for (self.tys.items, 0..) |ty, node| try memo.digests.put(ty, self.graph.digest(@intCast(node)));
+        for (self.tys.items, 0..) |ref, node| {
+            const digest = self.graph.digest(@intCast(node));
+            if (ref.env == .global) {
+                try memo.digests.put(ref.ty, digest);
+            } else {
+                try memo.instance_digests.put(memo.allocator, ref, digest);
+            }
+        }
         return self.graph.digest(root_node);
     }
 
-    /// The node for `ty`, created and queued for encoding if new.
-    fn discover(self: *Engine, ty: SolvedType.TypeVarId) Allocator.Error!u32 {
-        const gop = try self.node_of_ty.getOrPut(ty);
+    /// The node for `ref`, created and queued for encoding if new.
+    fn discover(self: *Engine, ref: Ref) Allocator.Error!u32 {
+        if (ref.env == .global) {
+            const gop = try self.node_of_ty.getOrPut(ref.ty);
+            if (gop.found_existing) return gop.value_ptr.*;
+            gop.value_ptr.* = try self.addNode(ref);
+            return gop.value_ptr.*;
+        }
+        const gop = try self.node_of_ref.getOrPut(self.gpa, ref);
         if (gop.found_existing) return gop.value_ptr.*;
+        gop.value_ptr.* = try self.addNode(ref);
+        return gop.value_ptr.*;
+    }
+
+    fn addNode(self: *Engine, ref: Ref) Allocator.Error!u32 {
         const node = try self.graph.addNode();
-        gop.value_ptr.* = node;
-        try self.tys.append(self.gpa, ty);
+        try self.tys.append(self.gpa, ref);
         try self.pending.append(self.gpa, node);
         return node;
     }
@@ -219,35 +257,33 @@ const Engine = struct {
 
     /// A child slot: a type the memo holds is a settled digest, any other is
     /// a node of this reduction.
-    fn putChild(self: *Engine, ty: SolvedType.TypeVarId) Allocator.Error!void {
+    fn putChild(self: *Engine, ty: SolvedType.TypeVarId, env: Instances.Env) Allocator.Error!void {
         writeBytes(&self.hasher, "child");
-        const root = self.renderer.renderedRoot(ty);
-        if (self.renderer.memo.digests.get(root)) |digest| {
+        const rendered = self.renderer.renderedRef(.{ .ty = ty, .env = env });
+        if (self.renderer.memoized(rendered)) |digest| {
             try self.graph.putChild(.{ .settled = digest });
         } else {
-            try self.graph.putChild(.{ .node = try self.discover(root) });
+            try self.graph.putChild(.{ .node = try self.discover(rendered) });
         }
     }
 
-    fn putSpan(self: *Engine, span: SolvedType.Span) Allocator.Error!void {
-        const tys = self.renderer.types.span(span);
+    fn putSpan(self: *Engine, span: SolvedType.Span, env: Instances.Env) Allocator.Error!void {
+        const tys = self.renderer.types().span(span);
         try self.putU32(@intCast(tys.len));
-        for (tys) |ty| try self.putChild(ty);
+        for (tys) |ty| try self.putChild(ty, env);
     }
 
-    fn putMembers(self: *Engine, members: SolvedType.Span) Allocator.Error!void {
+    fn putMembers(self: *Engine, members: SolvedType.Span, env: Instances.Env) Allocator.Error!void {
         const renderer = self.renderer;
         try self.putBytes("lambda_set");
-        const member_slice = renderer.types.memberSpan(members);
-        try self.putU32(@intCast(member_slice.len));
-        for (member_slice) |member| {
-            const fn_id = renderer.fn_by_symbol.get(member.lambda) orelse
-                Common.invariant("lambda-set member referenced a lifted function with no identity");
-            try self.putBytes(&renderer.sourceDigest(fn_id));
-            const captures = renderer.types.captureSpan(member.captures);
+        try Instances.canonicalMembers(self.gpa, renderer.program, members, env, &self.members);
+        try self.putU32(@intCast(self.members.items.len));
+        for (self.members.items) |member| {
+            try self.putBytes(&renderer.sourceDigest(member.source));
+            const captures = renderer.types().captureSpan(member.captures);
             try self.putU32(@intCast(captures.len));
-            for (captures) |capture| try self.putChild(capture.ty);
-            try self.putChild(renderer.fn_tys[@backingInt(fn_id)]);
+            for (captures) |capture| try self.putChild(capture.ty, member.captures_env);
+            try self.putChild(renderer.program.fn_tys.items[@backingInt(member.source)], member.env);
         }
     }
 
@@ -257,7 +293,8 @@ const Engine = struct {
         const renderer = self.renderer;
         self.hasher = TypeDigestHasher.init();
         self.graph.beginNode(node);
-        const content = renderer.types.get(self.tys.items[node]);
+        const env = self.tys.items[node].env;
+        const content = renderer.types().get(self.tys.items[node].ty);
         switch (content) {
             .mono, .link, .unbound => Common.invariant("unresolved Lambda Solved type reached procedure identity rendering"),
             .primitive => |primitive| {
@@ -277,25 +314,25 @@ const Engine = struct {
             },
             .func => |func| {
                 try self.putBytes("func");
-                try self.putSpan(func.args);
-                try self.putChild(func.callable);
-                try self.putChild(func.ret);
+                try self.putSpan(func.args, env);
+                try self.putChild(func.callable, env);
+                try self.putChild(func.ret, env);
             },
             .list => |elem| {
                 try self.putBytes("list");
-                try self.putChild(elem);
+                try self.putChild(elem, env);
             },
             .box => |elem| {
                 try self.putBytes("box");
-                try self.putChild(elem);
+                try self.putChild(elem, env);
             },
             .tuple => |elems| {
                 try self.putBytes("tuple");
-                try self.putSpan(elems);
+                try self.putSpan(elems, env);
             },
             .record => |fields| {
                 try self.putBytes("record");
-                const field_slice = renderer.types.fieldSpan(fields);
+                const field_slice = renderer.types().fieldSpan(fields);
                 try self.putU32(@intCast(field_slice.len));
                 for (field_slice) |field| {
                     try self.putBytes(renderer.names.recordFieldLabelText(field.name));
@@ -304,20 +341,20 @@ const Engine = struct {
                     try self.putBytes(&default_hasher.finalResult());
                     if (field.value_ty.get()) |value_ty| {
                         try self.putBytes("field-optional-value");
-                        try self.putChild(value_ty);
+                        try self.putChild(value_ty, env);
                     } else {
                         try self.putBytes("field-inline-value");
                     }
-                    try self.putChild(field.ty);
+                    try self.putChild(field.ty, env);
                 }
             },
             .tag_union => |tags| {
                 try self.putBytes("tag_union");
-                const tag_slice = renderer.types.tagSpan(tags);
+                const tag_slice = renderer.types().tagSpan(tags);
                 try self.putU32(@intCast(tag_slice.len));
                 for (tag_slice) |tag| {
                     try self.putBytes(renderer.names.tagLabelText(tag.name));
-                    try self.putSpan(tag.payloads);
+                    try self.putSpan(tag.payloads, env);
                 }
             },
             .named => |named| {
@@ -344,19 +381,19 @@ const Engine = struct {
                 } else {
                     try self.putBytes("not-builtin");
                 }
-                try self.putSpan(named.args);
+                try self.putSpan(named.args, env);
                 // A nominal type's representation is its backing, and the
                 // backing can hold lambda sets the arguments never mention,
                 // so the same name at the same arguments can still be two
                 // different procedures' worth of code.
                 if (named.backing.get()) |backing| {
                     try self.putBytes("backing");
-                    try self.putChild(backing.ty);
+                    try self.putChild(backing.ty, env);
                 } else {
                     try self.putBytes("no-backing");
                 }
             },
-            .lambda_set => |members| try self.putMembers(members),
+            .lambda_set => |members| try self.putMembers(members, env),
         }
         self.graph.endNode(node, self.hasher.finalResult());
     }
@@ -370,14 +407,19 @@ fn transparentAliasBacking(content: SolvedType.Content) ?SolvedType.TypeVarId {
 const writeBytes = recursive_digest.writeBytes;
 const writeU32 = recursive_digest.writeU32;
 
+/// A solved program with no lifted functions, whose type store a test
+/// fills.
+fn testProgram(allocator: Allocator) Solved.Program {
+    return Solved.Program.init(allocator, @import("lambda_solved/solve.zig").emptyLiftedProgramForTest(allocator));
+}
+
 test "procedure identity folds partial recursive copies across component boundaries" {
     const a = std.testing.allocator;
-    var types = SolvedType.Store.init(a);
-    defer types.deinit();
+    var program = testProgram(a);
+    defer program.deinit();
+    const types = &program.types;
     var name_store = names.NameStore.init(a);
     defer name_store.deinit();
-    var fn_by_symbol = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(a);
-    defer fn_by_symbol.deinit();
     // A = (A, B), B = List(A). A partial copy C = (C, B) denotes
     // exactly A, but C is a separate strongly connected component.
     const original = try types.add(.unbound);
@@ -394,46 +436,44 @@ test "procedure identity folds partial recursive copies across component boundar
         defer memo.deinit();
         const renderer = Renderer{
             .allocator = a,
-            .types = types.view(),
+            .program = &program,
             .names = &name_store,
-            .fn_tys = &.{},
             .source_digests = &.{},
-            .fn_by_symbol = &fn_by_symbol,
             .memo = &memo,
         };
-        const first = try renderer.typeDigest(if (copy_first) copy else original);
-        const second = try renderer.typeDigest(if (copy_first) original else copy);
+        const first = try renderer.typeDigest(.global(if (copy_first) copy else original));
+        const second = try renderer.typeDigest(.global(if (copy_first) original else copy));
         try std.testing.expectEqual(first, second);
-        try std.testing.expect(!std.mem.eql(u8, &first, &try renderer.typeDigest(different)));
+        try std.testing.expect(!std.mem.eql(u8, &first, &try renderer.typeDigest(.global(different))));
     }
 }
 
 test "procedure identity excludes outer callable sets but retains nested callable sets" {
     const allocator = std.testing.allocator;
-    var types = SolvedType.Store.init(allocator);
-    defer types.deinit();
+    var program = testProgram(allocator);
+    defer program.deinit();
+    const types = &program.types;
     var name_store = names.NameStore.init(allocator);
     defer name_store.deinit();
     var memo = Memo.init(allocator);
     defer memo.deinit();
-    var fn_by_symbol = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator);
-    defer fn_by_symbol.deinit();
+    const fn_by_symbol = &program.instances.fn_by_symbol;
     var symbols = Common.SymbolGen{};
     const first = symbols.fresh();
     const second = symbols.fresh();
     // Renderer function arrays use the dense IDs assigned by this symbol table.
     const first_fn: Lifted.FnId = @fromBackingInt(@intCast(fn_by_symbol.count()));
-    try fn_by_symbol.put(first, first_fn);
+    try fn_by_symbol.put(allocator, first, first_fn);
     const second_fn: Lifted.FnId = @fromBackingInt(@intCast(fn_by_symbol.count()));
-    try fn_by_symbol.put(second, second_fn);
+    try fn_by_symbol.put(allocator, second, second_fn);
     const scalar = try types.add(.{ .primitive = .i64 });
     const args = try types.addSpan(&.{ scalar, scalar });
     const singleton = try types.add(.{ .lambda_set = try types.addMembers(&.{
-        .{ .lambda = first, .captures = .empty() },
+        .{ .lambda = first, .captures = .empty(), .inst = @fromBackingInt(0) },
     }) });
     const joined = try types.add(.{ .lambda_set = try types.addMembers(&.{
-        .{ .lambda = first, .captures = .empty() },
-        .{ .lambda = second, .captures = .empty() },
+        .{ .lambda = first, .captures = .empty(), .inst = @fromBackingInt(0) },
+        .{ .lambda = second, .captures = .empty(), .inst = @fromBackingInt(0) },
     }) });
     const alone = try types.add(.{ .func = .{ .args = args, .ret = scalar, .callable = singleton } });
     const beside_lambda = try types.add(.{ .func = .{ .args = args, .ret = scalar, .callable = joined } });
@@ -441,45 +481,44 @@ test "procedure identity excludes outer callable sets but retains nested callabl
     const takes_joined = try types.add(.{ .func = .{ .args = try types.addSpan(&.{beside_lambda}), .ret = scalar, .callable = singleton } });
     const returns_alone = try types.add(.{ .func = .{ .args = args, .ret = alone, .callable = singleton } });
     const returns_joined = try types.add(.{ .func = .{ .args = args, .ret = beside_lambda, .callable = singleton } });
+    try program.fn_tys.appendSlice(allocator, &.{ alone, beside_lambda });
     const renderer = Renderer{
         .allocator = allocator,
-        .types = types.view(),
+        .program = &program,
         .names = &name_store,
-        .fn_tys = &.{ alone, beside_lambda },
         .source_digests = &.{ @splat(1), @splat(2) },
-        .fn_by_symbol = &fn_by_symbol,
         .memo = &memo,
     };
-    const identity = try renderer.specIdentity(first_fn, alone, &.{}, "finite", "none");
-    try std.testing.expectEqual(identity, try renderer.specIdentity(first_fn, beside_lambda, &.{}, "finite", "none"));
+    const identity = try renderer.specIdentity(first_fn, .global(alone), &.{}, .global, "finite", "none");
+    try std.testing.expectEqual(identity, try renderer.specIdentity(first_fn, .global(beside_lambda), &.{}, .global, "finite", "none"));
     // Function values still distinguish the members their dispatch can select.
-    try std.testing.expect(!std.mem.eql(u8, &try renderer.typeDigest(alone), &try renderer.typeDigest(beside_lambda)));
+    try std.testing.expect(!std.mem.eql(u8, &try renderer.typeDigest(.global(alone)), &try renderer.typeDigest(.global(beside_lambda))));
     for ([_][2]SolvedType.TypeVarId{ .{ takes_alone, takes_joined }, .{ returns_alone, returns_joined } }) |pair| {
-        const left = try renderer.specIdentity(first_fn, pair[0], &.{}, "finite", "none");
-        const right = try renderer.specIdentity(first_fn, pair[1], &.{}, "finite", "none");
+        const left = try renderer.specIdentity(first_fn, .global(pair[0]), &.{}, .global, "finite", "none");
+        const right = try renderer.specIdentity(first_fn, .global(pair[1]), &.{}, .global, "finite", "none");
         try std.testing.expect(!std.mem.eql(u8, &left, &right));
     }
     var mono = @import("monotype/ast.zig").ProgramBuilder.init(allocator);
     defer mono.deinit();
     const capture_local = try mono.addLocal(first, try mono.types.add(.{ .primitive = .i64 }));
     var capture = SolvedType.Capture{ .local = capture_local, .symbol = first, .binder = .none, .ty = alone };
-    const captures_alone = try renderer.specIdentity(first_fn, alone, &.{capture}, "finite", "none");
+    const captures_alone = try renderer.specIdentity(first_fn, .global(alone), &.{capture}, .global, "finite", "none");
     capture.ty = beside_lambda;
-    const captures_joined = try renderer.specIdentity(first_fn, alone, &.{capture}, "finite", "none");
+    const captures_joined = try renderer.specIdentity(first_fn, .global(alone), &.{capture}, .global, "finite", "none");
     try std.testing.expect(!std.mem.eql(u8, &captures_alone, &captures_joined));
-    try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(second_fn, alone, &.{}, "finite", "none")));
-    try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(first_fn, alone, &.{}, "erased", "none")));
-    try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(first_fn, alone, &.{}, "finite", "reuse")));
+    try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(second_fn, .global(alone), &.{}, .global, "finite", "none")));
+    try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(first_fn, .global(alone), &.{}, .global, "erased", "none")));
+    try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(first_fn, .global(alone), &.{}, .global, "finite", "reuse")));
 
     // An erased callable's members are whatever closures the program puts
     // in it; a procedure that takes one is the same code whichever they are.
     const erased_digest: names.TypeDigest = .{ .bytes = @splat(9) };
     const erased_first = try types.add(.{ .erased = .{ .source_fn_ty = erased_digest, .members = try types.addMembers(&.{
-        .{ .lambda = first, .captures = .empty() },
+        .{ .lambda = first, .captures = .empty(), .inst = @fromBackingInt(0) },
     }), .abi_fn = alone } });
     const erased_both = try types.add(.{ .erased = .{ .source_fn_ty = erased_digest, .members = try types.addMembers(&.{
-        .{ .lambda = first, .captures = .empty() },
-        .{ .lambda = second, .captures = .empty() },
+        .{ .lambda = first, .captures = .empty(), .inst = @fromBackingInt(0) },
+        .{ .lambda = second, .captures = .empty(), .inst = @fromBackingInt(0) },
     }), .abi_fn = alone } });
     const boxed_first = try types.add(.{ .box = try types.add(.{ .func = .{ .args = args, .ret = scalar, .callable = erased_first } }) });
     const boxed_both = try types.add(.{ .box = try types.add(.{ .func = .{ .args = args, .ret = scalar, .callable = erased_both } }) });
@@ -490,22 +529,20 @@ test "procedure identity excludes outer callable sets but retains nested callabl
     const takes_boxed_other = try types.add(.{ .func = .{ .args = try types.addSpan(&.{boxed_other}), .ret = scalar, .callable = singleton } });
     const erased_renderer = Renderer{
         .allocator = allocator,
-        .types = types.view(),
+        .program = &program,
         .names = &name_store,
-        .fn_tys = &.{ alone, beside_lambda },
         .source_digests = &.{ @splat(1), @splat(2) },
-        .fn_by_symbol = &fn_by_symbol,
         .memo = &memo,
     };
     try std.testing.expectEqual(
-        try erased_renderer.specIdentity(first_fn, takes_boxed_first, &.{}, "finite", "none"),
-        try erased_renderer.specIdentity(first_fn, takes_boxed_both, &.{}, "finite", "none"),
+        try erased_renderer.specIdentity(first_fn, .global(takes_boxed_first), &.{}, .global, "finite", "none"),
+        try erased_renderer.specIdentity(first_fn, .global(takes_boxed_both), &.{}, .global, "finite", "none"),
     );
     // The erased function type is still part of the identity.
     try std.testing.expect(!std.mem.eql(
         u8,
-        &try erased_renderer.specIdentity(first_fn, takes_boxed_first, &.{}, "finite", "none"),
-        &try erased_renderer.specIdentity(first_fn, takes_boxed_other, &.{}, "finite", "none"),
+        &try erased_renderer.specIdentity(first_fn, .global(takes_boxed_first), &.{}, .global, "finite", "none"),
+        &try erased_renderer.specIdentity(first_fn, .global(takes_boxed_other), &.{}, .global, "finite", "none"),
     ));
 }
 
@@ -515,12 +552,11 @@ test "procedure identity digests a knot entangled with a separately tied copy as
     // one program's lambda solving can draw it. Another program draws only
     // `node`. Both must render one identity, whichever is rendered first.
     const allocator = std.testing.allocator;
-    var types = SolvedType.Store.init(allocator);
-    defer types.deinit();
+    var program = testProgram(allocator);
+    defer program.deinit();
+    const types = &program.types;
     var name_store = names.NameStore.init(allocator);
     defer name_store.deinit();
-    var fn_by_symbol = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator);
-    defer fn_by_symbol.deinit();
 
     const node = try types.add(.zst);
     const node_list = try types.add(.{ .list = node });
@@ -535,22 +571,21 @@ test "procedure identity digests a knot entangled with a separately tied copy as
         defer memo.deinit();
         const renderer = Renderer{
             .allocator = allocator,
-            .types = types.view(),
+            .program = &program,
             .names = &name_store,
-            .fn_tys = &.{},
             .source_digests = &.{},
-            .fn_by_symbol = &fn_by_symbol,
             .memo = &memo,
         };
-        out[0] = try renderer.typeDigest(order[0]);
-        out[1] = try renderer.typeDigest(order[1]);
+        out[0] = try renderer.typeDigest(.global(order[0]));
+        out[1] = try renderer.typeDigest(.global(order[1]));
     }
     try std.testing.expectEqual(digests[0][0], digests[0][1]);
     try std.testing.expectEqual(digests[1][0], digests[1][1]);
     try std.testing.expectEqual(digests[0][0], digests[1][0]);
 
-    var alone_types = SolvedType.Store.init(allocator);
-    defer alone_types.deinit();
+    var alone_program = testProgram(allocator);
+    defer alone_program.deinit();
+    const alone_types = &alone_program.types;
     const alone = try alone_types.add(.zst);
     const alone_list = try alone_types.add(.{ .list = alone });
     try alone_types.set(alone, .{ .tuple = try alone_types.addSpan(&.{ alone_list, alone_list }) });
@@ -558,12 +593,10 @@ test "procedure identity digests a knot entangled with a separately tied copy as
     defer memo.deinit();
     const renderer = Renderer{
         .allocator = allocator,
-        .types = alone_types.view(),
+        .program = &alone_program,
         .names = &name_store,
-        .fn_tys = &.{},
         .source_digests = &.{},
-        .fn_by_symbol = &fn_by_symbol,
         .memo = &memo,
     };
-    try std.testing.expectEqual(digests[0][0], try renderer.typeDigest(alone));
+    try std.testing.expectEqual(digests[0][0], try renderer.typeDigest(.global(alone)));
 }

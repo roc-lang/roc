@@ -27,7 +27,6 @@ pub const LambdaSolved = struct {
     pub const Ast = @import("lambda_solved/ast.zig");
     pub const Type = @import("lambda_solved/type.zig");
     pub const Solve = @import("lambda_solved/solve.zig");
-    pub const Specialize = @import("lambda_solved/specialize.zig");
     pub const Instances = @import("lambda_solved/instances.zig");
 };
 /// Lambda Mono types: the function-free runtime type store the direct
@@ -70,7 +69,7 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("monotype_lifted/spec_constr.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/inline_crossing.zig"));
     std.testing.refAllDecls(@import("lambda_solved/ast.zig"));
-    std.testing.refAllDecls(@import("lambda_solved/specialize.zig"));
+    std.testing.refAllDecls(@import("lambda_solved/instances.zig"));
     std.testing.refAllDecls(@import("lambda_solved/type.zig"));
     std.testing.refAllDecls(@import("lambda_solved/solve.zig"));
     std.testing.refAllDecls(@import("lambda_mono/type.zig"));

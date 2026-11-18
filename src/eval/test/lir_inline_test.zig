@@ -1315,23 +1315,23 @@ fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
     lifted_owned = false;
     lifted = undefined;
     defer solved.deinit();
-    if ((try postcheck.LambdaSolved.Specialize.run(allocator, &solved)).cloned_fns != 0) {
-        procedure_usage.deinit();
-        procedure_usage = try postcheck.MonotypeLifted.SpecConstr.collectProcedureUsage(allocator, &solved.lifted);
-    }
+    const spec_usage = try postcheck.LambdaSolved.Instances.procedureUsage(allocator, &solved, procedure_usage.items);
+    defer allocator.free(spec_usage);
 
-    var inline_plan = try postcheck.SolvedInline.analyze(allocator, .wrappers, procedure_usage.view(), &solved);
+    var inline_plan = try postcheck.SolvedInline.analyze(allocator, .wrappers, spec_usage, &solved);
     defer inline_plan.deinit();
     const plan = inline_plan.view();
 
+    // Every instance of the function decides alike.
     var decision: ?bool = null;
-    for (solved.lifted.fnsView(), 0..) |fn_, index| {
+    for (0..solved.instances.specFnCount()) |index| {
+        const spec_fn: postcheck.LambdaSolved.Instances.SpecFnId = @fromBackingInt(@as(u32, @intCast(index)));
+        const fn_ = solved.lifted.getFn(solved.instances.specFnSource(spec_fn));
         const name_id = solved.lifted.procDebugName(fn_.symbol) orelse continue;
         const actual_name = solved.lifted.names.exportNameText(name_id);
         if (!std.mem.eql(u8, actual_name, fn_name)) continue;
 
-        const fn_id: postcheck.MonotypeLifted.Ast.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-        const inlined = plan.bodyForFn(fn_id) != null;
+        const inlined = plan.bodyForFn(spec_fn) != null;
         if (decision) |earlier| try std.testing.expectEqual(earlier, inlined);
         decision = inlined;
     }
@@ -15110,7 +15110,7 @@ fn lambdaSolvedSetCensusInOrder(
     inline_mode: lir.CheckedPipeline.InlineMode,
     order: postcheck.LambdaSolved.Solve.BodyOrder,
     classes: ?*std.ArrayList(u32),
-    specialized: ?*postcheck.LambdaSolved.Specialize.Census,
+    specialized: ?*postcheck.LambdaSolved.Instances.Census,
 ) TestError!LambdaSetCensus {
     const allocator = std.testing.allocator;
     var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
@@ -15157,89 +15157,114 @@ fn lambdaSolvedSetCensusInOrder(
     lifted_owned = false;
     lifted = undefined;
     defer solved.deinit();
-    const specialize_census = try postcheck.LambdaSolved.Specialize.run(allocator, &solved);
-    if (specialized) |out| out.* = specialize_census;
+    if (specialized) |out| out.* = solved.instances.census;
 
+    // The program's types as LIR lowering reads them: each type table read
+    // under the global environment and under every further instance. A type
+    // a further instance does not substitute reads as the global one.
+    const Instances = postcheck.LambdaSolved.Instances;
+    const Ref = Instances.Ref;
     const SolvedType = postcheck.LambdaSolved.Type;
     const types = solved.types.view();
+    const env_count = solved.instances.instances.items.len;
     var census: LambdaSetCensus = .{};
-    var visited = collections.DenseMap(SolvedType.TypeVarId, void).init(allocator);
-    defer visited.deinit();
-    var pending: std.ArrayList(SolvedType.TypeVarId) = .empty;
+    var visited: std.AutoHashMapUnmanaged(Ref, void) = .empty;
+    defer visited.deinit(allocator);
+    var pending: std.ArrayList(Ref) = .empty;
     defer pending.deinit(allocator);
+    var members: std.ArrayList(Instances.ResolvedMember) = .empty;
+    defer members.deinit(allocator);
 
     // Only the classes the program's type tables reach: a class no table
     // reaches is no value's representation.
-    var reached = collections.DenseMap(SolvedType.TypeVarId, void).init(allocator);
-    defer reached.deinit();
-    var sets: std.ArrayList(SolvedType.TypeVarId) = .empty;
+    var reached: std.AutoHashMapUnmanaged(Ref, void) = .empty;
+    defer reached.deinit(allocator);
+    var sets: std.ArrayList(Ref) = .empty;
     defer sets.deinit(allocator);
-    for ([_][]const SolvedType.TypeVarId{ solved.fn_tys.items, solved.local_tys.items, solved.expr_tys.items, solved.pat_tys.items }) |table| {
-        try pending.appendSlice(allocator, table);
+    for (0..env_count) |env_index| {
+        const env: Instances.Env = @fromBackingInt(@as(u32, @intCast(env_index)));
+        for ([_][]const SolvedType.TypeVarId{ solved.fn_tys.items, solved.local_tys.items, solved.expr_tys.items, solved.pat_tys.items }) |table| {
+            for (table) |ty| try pending.append(allocator, .{ .ty = ty, .env = env });
+        }
     }
     while (pending.pop()) |next| {
-        const root = types.root(next);
-        if ((try reached.getOrPut(root)).found_existing) continue;
-        switch (types.get(root)) {
+        const root = Instances.resolve(&solved, next);
+        if ((try reached.getOrPut(allocator, root)).found_existing) continue;
+        const env = root.env;
+        switch (types.get(root.ty)) {
             .record => |fields| for (types.fieldSpan(fields)) |field| {
-                try pending.append(allocator, field.ty);
-                if (field.value_ty.get()) |value_ty| try pending.append(allocator, value_ty);
+                try pending.append(allocator, .{ .ty = field.ty, .env = env });
+                if (field.value_ty.get()) |value_ty| try pending.append(allocator, .{ .ty = value_ty, .env = env });
             },
-            .tuple => |items| try pending.appendSlice(allocator, types.span(items)),
-            .tag_union => |tags| for (types.tagSpan(tags)) |tag| try pending.appendSlice(allocator, types.span(tag.payloads)),
-            .list, .box => |elem| try pending.append(allocator, elem),
+            .tuple => |items| for (types.span(items)) |item| try pending.append(allocator, .{ .ty = item, .env = env }),
+            .tag_union => |tags| for (types.tagSpan(tags)) |tag| {
+                for (types.span(tag.payloads)) |payload| try pending.append(allocator, .{ .ty = payload, .env = env });
+            },
+            .list, .box => |elem| try pending.append(allocator, .{ .ty = elem, .env = env }),
             .named => |named| {
-                try pending.appendSlice(allocator, types.span(named.args));
-                if (named.backing.get()) |backing| try pending.append(allocator, backing.ty);
+                for (types.span(named.args)) |arg| try pending.append(allocator, .{ .ty = arg, .env = env });
+                if (named.backing.get()) |backing| try pending.append(allocator, .{ .ty = backing.ty, .env = env });
             },
             .func => |func| {
-                try pending.appendSlice(allocator, types.span(func.args));
-                try pending.append(allocator, func.callable);
-                try pending.append(allocator, func.ret);
+                for (types.span(func.args)) |arg| try pending.append(allocator, .{ .ty = arg, .env = env });
+                try pending.append(allocator, .{ .ty = func.callable, .env = env });
+                try pending.append(allocator, .{ .ty = func.ret, .env = env });
             },
-            .lambda_set => |members| {
+            .lambda_set => |set_members| {
                 try sets.append(allocator, root);
-                for (types.memberSpan(members)) |member| {
-                    for (types.captureSpan(member.captures)) |capture| try pending.append(allocator, capture.ty);
+                try Instances.canonicalMembers(allocator, &solved, set_members, env, &members);
+                for (members.items) |member| {
+                    for (types.captureSpan(member.captures)) |capture| try pending.append(allocator, .{ .ty = capture.ty, .env = member.captures_env });
                 }
             },
-            .erased => |erased| for (types.memberSpan(erased.members)) |member| {
-                for (types.captureSpan(member.captures)) |capture| try pending.append(allocator, capture.ty);
+            .erased => |erased| {
+                try Instances.canonicalMembers(allocator, &solved, erased.members, env, &members);
+                for (members.items) |member| {
+                    for (types.captureSpan(member.captures)) |capture| try pending.append(allocator, .{ .ty = capture.ty, .env = member.captures_env });
+                }
             },
             .link, .unbound, .primitive, .zst, .hole, .mono => {},
         }
     }
 
-    for (sets.items) |set_ty| {
-        const members = types.get(set_ty).lambda_set;
-        if (members.count() >= 2) census.multi_member_sets += 1;
-        census.max_members = @max(census.max_members, members.count());
+    for (sets.items) |set| {
+        try Instances.canonicalMembers(allocator, &solved, types.get(set.ty).lambda_set, set.env, &members);
+        if (members.items.len >= 2) census.multi_member_sets += 1;
+        census.max_members = @max(census.max_members, members.items.len);
 
         // Walk the runtime values a member's captures hold: a function value
         // holds its callable slot, never its argument or result types, and an
         // erased callable holds its captures behind a pointer.
         visited.clearRetainingCapacity();
         pending.clearRetainingCapacity();
-        for (types.memberSpan(members)) |member| {
-            for (types.captureSpan(member.captures)) |capture| try pending.append(allocator, capture.ty);
+        for (members.items) |member| {
+            for (types.captureSpan(member.captures)) |capture| try pending.append(allocator, .{ .ty = capture.ty, .env = member.captures_env });
         }
         const contains_itself = while (pending.pop()) |next| {
-            const root = types.root(next);
-            if (root == set_ty) break true;
-            if ((try visited.getOrPut(root)).found_existing) continue;
-            switch (types.get(root)) {
-                .record => |fields| for (types.fieldSpan(fields)) |field| try pending.append(allocator, field.ty),
-                .tuple => |items| try pending.appendSlice(allocator, types.span(items)),
-                .tag_union => |tags| for (types.tagSpan(tags)) |tag| try pending.appendSlice(allocator, types.span(tag.payloads)),
-                .list, .box => |elem| try pending.append(allocator, elem),
-                .named => |named| if (named.backing.get()) |backing| {
-                    try pending.append(allocator, backing.ty);
-                } else {
-                    try pending.appendSlice(allocator, types.span(named.args));
+            const root = Instances.resolve(&solved, next);
+            if (std.meta.eql(root, set)) break true;
+            if ((try visited.getOrPut(allocator, root)).found_existing) continue;
+            const env = root.env;
+            switch (types.get(root.ty)) {
+                .record => |fields| for (types.fieldSpan(fields)) |field| try pending.append(allocator, .{ .ty = field.ty, .env = env }),
+                .tuple => |items| for (types.span(items)) |item| try pending.append(allocator, .{ .ty = item, .env = env }),
+                .tag_union => |tags| for (types.tagSpan(tags)) |tag| {
+                    for (types.span(tag.payloads)) |payload| try pending.append(allocator, .{ .ty = payload, .env = env });
                 },
-                .func => |func| try pending.append(allocator, func.callable),
-                .lambda_set => |inner| for (types.memberSpan(inner)) |member| {
-                    for (types.captureSpan(member.captures)) |capture| try pending.append(allocator, capture.ty);
+                .list, .box => |elem| try pending.append(allocator, .{ .ty = elem, .env = env }),
+                .named => |named| if (named.backing.get()) |backing| {
+                    try pending.append(allocator, .{ .ty = backing.ty, .env = env });
+                } else {
+                    for (types.span(named.args)) |arg| try pending.append(allocator, .{ .ty = arg, .env = env });
+                },
+                .func => |func| try pending.append(allocator, .{ .ty = func.callable, .env = env }),
+                .lambda_set => |inner| {
+                    var inner_members: std.ArrayList(Instances.ResolvedMember) = .empty;
+                    defer inner_members.deinit(allocator);
+                    try Instances.canonicalMembers(allocator, &solved, inner, env, &inner_members);
+                    for (inner_members.items) |member| {
+                        for (types.captureSpan(member.captures)) |capture| try pending.append(allocator, .{ .ty = capture.ty, .env = member.captures_env });
+                    }
                 },
                 .link, .unbound, .primitive, .erased, .zst, .hole, .mono => {},
             }
@@ -15248,68 +15273,75 @@ fn lambdaSolvedSetCensusInOrder(
     }
 
     if (classes) |out| {
-        var class_ids = collections.DenseMap(SolvedType.TypeVarId, u32).init(allocator);
-        defer class_ids.deinit();
-        var walked = collections.DenseMap(SolvedType.TypeVarId, void).init(allocator);
-        defer walked.deinit();
-        var stack: std.ArrayList(SolvedType.TypeVarId) = .empty;
+        var class_ids: std.AutoHashMapUnmanaged(Ref, u32) = .empty;
+        defer class_ids.deinit(allocator);
+        var walked: std.AutoHashMapUnmanaged(Ref, void) = .empty;
+        defer walked.deinit(allocator);
+        var stack: std.ArrayList(Ref) = .empty;
         defer stack.deinit(allocator);
-        var children: std.ArrayList(SolvedType.TypeVarId) = .empty;
+        var children: std.ArrayList(Ref) = .empty;
         defer children.deinit(allocator);
-        for ([_][]const SolvedType.TypeVarId{ solved.fn_tys.items, solved.local_tys.items }) |table| {
-            for (table) |table_ty| {
-                try stack.append(allocator, table_ty);
-                while (stack.pop()) |next| {
-                    const root = types.root(next);
-                    children.clearRetainingCapacity();
-                    switch (types.get(root)) {
-                        .lambda_set => |members| {
-                            const entry = try class_ids.getOrPut(root);
-                            if (entry.found_existing) {
+        for (0..env_count) |env_index| {
+            const table_env: Instances.Env = @fromBackingInt(@as(u32, @intCast(env_index)));
+            for ([_][]const SolvedType.TypeVarId{ solved.fn_tys.items, solved.local_tys.items }) |table| {
+                for (table) |table_ty| {
+                    try stack.append(allocator, .{ .ty = table_ty, .env = table_env });
+                    while (stack.pop()) |next| {
+                        const root = Instances.resolve(&solved, next);
+                        const env = root.env;
+                        children.clearRetainingCapacity();
+                        switch (types.get(root.ty)) {
+                            .lambda_set => |set_members| {
+                                const entry = try class_ids.getOrPut(allocator, root);
+                                if (entry.found_existing) {
+                                    try out.append(allocator, entry.value_ptr.*);
+                                    continue;
+                                }
+                                entry.value_ptr.* = @intCast(class_ids.count() - 1);
                                 try out.append(allocator, entry.value_ptr.*);
-                                continue;
-                            }
-                            entry.value_ptr.* = @intCast(class_ids.count() - 1);
-                            try out.append(allocator, entry.value_ptr.*);
-                            try out.append(allocator, @intCast(members.count()));
-                            for (types.memberSpan(members)) |member| {
-                                try out.append(allocator, @backingInt(member.lambda));
-                                for (types.captureSpan(member.captures)) |capture| try children.append(allocator, capture.ty);
-                            }
-                        },
-                        .record => |fields| {
-                            if ((try walked.getOrPut(root)).found_existing) continue;
-                            for (types.fieldSpan(fields)) |field| try children.append(allocator, field.ty);
-                        },
-                        .tuple => |items| {
-                            if ((try walked.getOrPut(root)).found_existing) continue;
-                            try children.appendSlice(allocator, types.span(items));
-                        },
-                        .tag_union => |tags| {
-                            if ((try walked.getOrPut(root)).found_existing) continue;
-                            for (types.tagSpan(tags)) |tag| try children.appendSlice(allocator, types.span(tag.payloads));
-                        },
-                        .list, .box => |elem| {
-                            if ((try walked.getOrPut(root)).found_existing) continue;
-                            try children.append(allocator, elem);
-                        },
-                        .named => |named| {
-                            if ((try walked.getOrPut(root)).found_existing) continue;
-                            try children.appendSlice(allocator, types.span(named.args));
-                            if (named.backing.get()) |backing| try children.append(allocator, backing.ty);
-                        },
-                        .func => |func| {
-                            if ((try walked.getOrPut(root)).found_existing) continue;
-                            try children.appendSlice(allocator, types.span(func.args));
-                            try children.append(allocator, func.callable);
-                            try children.append(allocator, func.ret);
-                        },
-                        .link, .unbound, .primitive, .erased, .zst, .hole, .mono => {},
-                    }
-                    var index = children.items.len;
-                    while (index > 0) {
-                        index -= 1;
-                        try stack.append(allocator, children.items[index]);
+                                try Instances.canonicalMembers(allocator, &solved, set_members, env, &members);
+                                try out.append(allocator, @intCast(members.items.len));
+                                for (members.items) |member| {
+                                    try out.append(allocator, @backingInt(member.symbol));
+                                    for (types.captureSpan(member.captures)) |capture| try children.append(allocator, .{ .ty = capture.ty, .env = member.captures_env });
+                                }
+                            },
+                            .record => |fields| {
+                                if ((try walked.getOrPut(allocator, root)).found_existing) continue;
+                                for (types.fieldSpan(fields)) |field| try children.append(allocator, .{ .ty = field.ty, .env = env });
+                            },
+                            .tuple => |items| {
+                                if ((try walked.getOrPut(allocator, root)).found_existing) continue;
+                                for (types.span(items)) |item| try children.append(allocator, .{ .ty = item, .env = env });
+                            },
+                            .tag_union => |tags| {
+                                if ((try walked.getOrPut(allocator, root)).found_existing) continue;
+                                for (types.tagSpan(tags)) |tag| {
+                                    for (types.span(tag.payloads)) |payload| try children.append(allocator, .{ .ty = payload, .env = env });
+                                }
+                            },
+                            .list, .box => |elem| {
+                                if ((try walked.getOrPut(allocator, root)).found_existing) continue;
+                                try children.append(allocator, .{ .ty = elem, .env = env });
+                            },
+                            .named => |named| {
+                                if ((try walked.getOrPut(allocator, root)).found_existing) continue;
+                                for (types.span(named.args)) |arg| try children.append(allocator, .{ .ty = arg, .env = env });
+                                if (named.backing.get()) |backing| try children.append(allocator, .{ .ty = backing.ty, .env = env });
+                            },
+                            .func => |func| {
+                                if ((try walked.getOrPut(allocator, root)).found_existing) continue;
+                                for (types.span(func.args)) |arg| try children.append(allocator, .{ .ty = arg, .env = env });
+                                try children.append(allocator, .{ .ty = func.callable, .env = env });
+                                try children.append(allocator, .{ .ty = func.ret, .env = env });
+                            },
+                            .link, .unbound, .primitive, .erased, .zst, .hole, .mono => {},
+                        }
+                        var index = children.items.len;
+                        while (index > 0) {
+                            index -= 1;
+                            try stack.append(allocator, children.items[index]);
+                        }
                     }
                 }
             }
@@ -15644,25 +15676,25 @@ test "MyIter lambda sets: opaque chain" {
 }
 
 // Lambda-set generalization (design.md "Lambda Set Generalization" and
-// "Lambda Specialize"). Each program is solved and specialized at inline mode
-// `.none`, its census is compared, and it is run.
+// "Lambda Set Instances"). Each program is solved at inline mode `.none`, its
+// census under every instance is compared, and it is run.
 
 const PolymorphismExpectation = struct {
     multi_member_sets: usize,
-    /// Lifted functions Lambda Specialize added.
-    cloned_fns: usize,
+    /// Functions lowered at a further instance of their group.
+    instance_fns: usize,
     /// Distinct instances summed over every generalized group, the
     /// program's lambdas and helpers included.
     instances: usize,
 };
 
 fn expectPolymorphism(source: []const u8, expected_dbg: []const u8, expected: PolymorphismExpectation) TestError!void {
-    var specialized: postcheck.LambdaSolved.Specialize.Census = .{};
+    var specialized: postcheck.LambdaSolved.Instances.Census = .{};
     const census = try lambdaSolvedSetCensusInOrder(source, .none, .binding_groups, null, &specialized);
     _ = try lowerAndRunUserIter(source, .none, expected_dbg);
     const observed: PolymorphismExpectation = .{
         .multi_member_sets = census.multi_member_sets,
-        .cloned_fns = specialized.cloned_fns,
+        .instance_fns = specialized.instance_fns,
         .instances = specialized.instances,
     };
     if (std.meta.eql(observed, expected)) return;
@@ -15697,7 +15729,7 @@ test "lambda set generalization: a capturing local helper applied to two closure
         \\    dbg total
         \\    total
         \\}
-    , "10", .{ .multi_member_sets = 0, .cloned_fns = 1, .instances = 4 });
+    , "10", .{ .multi_member_sets = 0, .instance_fns = 1, .instances = 4 });
 }
 
 // A capturing closure inside a capturing closure: each level is its own
@@ -15716,7 +15748,7 @@ test "lambda set generalization: a capturing closure nested two levels deep" {
         \\    dbg total
         \\    total
         \\}
-    , "50", .{ .multi_member_sets = 0, .cloned_fns = 4, .instances = 10 });
+    , "50", .{ .multi_member_sets = 0, .instance_fns = 4, .instances = 10 });
 }
 
 // A recursive capturing closure and a capturing closure inside it that calls
@@ -15738,7 +15770,7 @@ test "lambda set generalization: mutually recursive capturing closures" {
         \\    dbg total
         \\    total
         \\}
-    , "122", .{ .multi_member_sets = 0, .cloned_fns = 2, .instances = 6 });
+    , "122", .{ .multi_member_sets = 0, .instance_fns = 2, .instances = 6 });
 }
 
 // The definer joins the captured local's set with another closure after the
@@ -15757,7 +15789,7 @@ test "lambda set generalization: a capture stays tied to the local its definer j
         \\    dbg total
         \\    total
         \\}
-    , "34", .{ .multi_member_sets = 1, .cloned_fns = 1, .instances = 10 });
+    , "34", .{ .multi_member_sets = 1, .instance_fns = 1, .instances = 10 });
 }
 
 // A closure that captures a callable escapes its definer and is called
@@ -15776,7 +15808,7 @@ test "lambda set generalization: an escaping closure capturing a callable" {
         \\    dbg total
         \\    total
         \\}
-    , "29", .{ .multi_member_sets = 0, .cloned_fns = 2, .instances = 6 });
+    , "29", .{ .multi_member_sets = 0, .instance_fns = 2, .instances = 6 });
 }
 
 // A local helper that captures nothing is its own binding group, so each
@@ -15790,7 +15822,7 @@ test "lambda set generalization: a local helper applied at two sites with differ
         \\    dbg total
         \\    total
         \\}
-    , "12", .{ .multi_member_sets = 0, .cloned_fns = 1, .instances = 4 });
+    , "12", .{ .multi_member_sets = 0, .instance_fns = 1, .instances = 4 });
 }
 
 // A closure returned from a generalized function is instantiated at each
@@ -15810,7 +15842,7 @@ test "lambda set generalization: an escaping closure instantiated remotely" {
         \\    dbg total
         \\    total
         \\}
-    , "33", .{ .multi_member_sets = 0, .cloned_fns = 0, .instances = 2 });
+    , "33", .{ .multi_member_sets = 0, .instance_fns = 0, .instances = 2 });
 }
 
 // Two mutually recursive functions are one binding group with one scheme:
@@ -15829,7 +15861,7 @@ test "lambda set generalization: mutual recursion shares one instantiation" {
         \\    dbg total
         \\    total
         \\}
-    , "1", .{ .multi_member_sets = 0, .cloned_fns = 2, .instances = 4 });
+    , "1", .{ .multi_member_sets = 0, .instance_fns = 2, .instances = 4 });
 }
 
 // A function value inside a `Box` is erased in every instance of a
@@ -15847,7 +15879,7 @@ test "lambda set generalization: a Box boundary inside a generalized function" {
         \\    dbg total
         \\    total
         \\}
-    , "6", .{ .multi_member_sets = 0, .cloned_fns = 3, .instances = 8 });
+    , "6", .{ .multi_member_sets = 0, .instance_fns = 3, .instances = 8 });
 }
 
 // Instantiations equal as types are one instance: three calls at two
@@ -15860,5 +15892,5 @@ test "lambda set generalization: equal instantiations share one copy" {
         \\    dbg total
         \\    total
         \\}
-    , "12", .{ .multi_member_sets = 0, .cloned_fns = 1, .instances = 4 });
+    , "12", .{ .multi_member_sets = 0, .instance_fns = 1, .instances = 4 });
 }

@@ -5,8 +5,9 @@
 //! first (`Lifted.BindingGroups`, stored on the output program). A finished
 //! group is generalized over the callable slots its function types own
 //! (design.md "Lambda Set Generalization"), and every reference to it from a
-//! later group instantiates that scheme (`instantiate`); Lambda Specialize
-//! then gives each instance its own functions. The stage is sound because
+//! later group instantiates that scheme (`instantiate`); its last step
+//! records which instantiations are one instance (`instances.zig`), and LIR
+//! lowering lowers each function once per instance. The stage is sound because
 //! of these properties, each checked where it is consumed:
 //!
 //! - References to a monomorphic group, and references inside the group
@@ -6815,6 +6816,7 @@ test "generated-private evidence traverses a public inspectable named backing" {
     const private_callable = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{
         .lambda = @fromBackingInt(@intCast(1)),
         .captures = .empty(),
+        .inst = @fromBackingInt(0),
     }}) });
     const public_fn = try program.types.add(.{ .func = .{
         .args = .empty(),
@@ -6904,16 +6906,16 @@ test "lambda sets merged in opposite encounter orders publish one member order" 
     // naming that lambda carries.
     const first_captures = try program.types.addCaptures(&.{.{ .local = undefined, .symbol = undefined, .binder = .none, .ty = captured_ty }});
 
-    const forward_first = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = first_lambda, .captures = first_captures }}) });
+    const forward_first = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = first_lambda, .captures = first_captures, .inst = @fromBackingInt(0) }}) });
     const forward_rest = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{
-        .{ .lambda = second_lambda, .captures = .empty() },
-        .{ .lambda = third_lambda, .captures = .empty() },
+        .{ .lambda = second_lambda, .captures = .empty(), .inst = @fromBackingInt(0) },
+        .{ .lambda = third_lambda, .captures = .empty(), .inst = @fromBackingInt(0) },
     }) });
     const backward_rest = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{
-        .{ .lambda = third_lambda, .captures = .empty() },
-        .{ .lambda = second_lambda, .captures = .empty() },
+        .{ .lambda = third_lambda, .captures = .empty(), .inst = @fromBackingInt(0) },
+        .{ .lambda = second_lambda, .captures = .empty(), .inst = @fromBackingInt(0) },
     }) });
-    const backward_first = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = first_lambda, .captures = first_captures }}) });
+    const backward_first = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = first_lambda, .captures = first_captures, .inst = @fromBackingInt(0) }}) });
 
     var solver = try Solver.init(allocator, &program);
     defer solver.deinit();
@@ -6941,10 +6943,10 @@ test "a merge of sets sharing a lambda keeps that lambda's one capture span" {
     const captured_ty = try program.types.add(.zst);
     const shared_captures = try program.types.addCaptures(&.{.{ .local = undefined, .symbol = undefined, .binder = .none, .ty = captured_ty }});
 
-    const left = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = shared_lambda, .captures = shared_captures }}) });
+    const left = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = shared_lambda, .captures = shared_captures, .inst = @fromBackingInt(0) }}) });
     const right = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{
-        .{ .lambda = shared_lambda, .captures = shared_captures },
-        .{ .lambda = other_lambda, .captures = .empty() },
+        .{ .lambda = shared_lambda, .captures = shared_captures, .inst = @fromBackingInt(0) },
+        .{ .lambda = other_lambda, .captures = .empty(), .inst = @fromBackingInt(0) },
     }) });
 
     var solver = try Solver.init(allocator, &program);
@@ -6969,8 +6971,8 @@ fn unifyOneLambdaWithTwoCaptureSpans() Allocator.Error!void {
     const captured_ty = try program.types.add(.zst);
     const left_captures = try program.types.addCaptures(&.{.{ .local = undefined, .symbol = undefined, .binder = .none, .ty = captured_ty }});
     const right_captures = try program.types.addCaptures(&.{.{ .local = undefined, .symbol = undefined, .binder = .none, .ty = captured_ty }});
-    const left = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = lambda, .captures = left_captures }}) });
-    const right = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = lambda, .captures = right_captures }}) });
+    const left = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = lambda, .captures = left_captures, .inst = @fromBackingInt(0) }}) });
+    const right = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = lambda, .captures = right_captures, .inst = @fromBackingInt(0) }}) });
 
     var solver = try Solver.init(allocator, &program);
     defer solver.deinit();
@@ -6989,9 +6991,9 @@ fn canonicalizeLambdaSetWithRepeatedMember() Allocator.Error!void {
     const repeated: Common.Symbol = @fromBackingInt(4);
     const other: Common.Symbol = @fromBackingInt(2);
     _ = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{
-        .{ .lambda = repeated, .captures = .empty() },
-        .{ .lambda = other, .captures = .empty() },
-        .{ .lambda = repeated, .captures = .empty() },
+        .{ .lambda = repeated, .captures = .empty(), .inst = @fromBackingInt(0) },
+        .{ .lambda = other, .captures = .empty(), .inst = @fromBackingInt(0) },
+        .{ .lambda = repeated, .captures = .empty(), .inst = @fromBackingInt(0) },
     }) });
 
     var solver = try Solver.init(allocator, &program);
@@ -7019,10 +7021,12 @@ test "uninhabited types unify structurally and join their callable slots" {
     const left_callable = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{
         .lambda = left_lambda,
         .captures = .empty(),
+        .inst = @fromBackingInt(0),
     }}) });
     const right_callable = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{
         .lambda = right_lambda,
         .captures = .empty(),
+        .inst = @fromBackingInt(0),
     }}) });
     const left_fn = try program.types.add(.{ .func = .{ .args = .empty(), .callable = left_callable, .ret = ret_ty } });
     const right_fn = try program.types.add(.{ .func = .{ .args = .empty(), .callable = right_callable, .ret = ret_ty } });
@@ -7064,6 +7068,7 @@ test "root-slot read unification shares callables without joining a lifted pair"
     const root_callable = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{
         .lambda = @fromBackingInt(@intCast(1)),
         .captures = .empty(),
+        .inst = @fromBackingInt(0),
     }}) });
     const read_fn = try program.types.add(.{ .func = .{
         .args = .empty(),
@@ -7238,7 +7243,9 @@ test "lambda solved list range operations keep their operands' callable sets" {
     try std.testing.expectEqual(program.types.rootCompressed(callables[5]), program.types.rootCompressed(callables[6]));
 }
 
-fn emptyLiftedProgramForTest(allocator: Allocator) Lifted.Program {
+/// A lifted program with nothing in it, for tests that build a solved
+/// program by hand.
+pub fn emptyLiftedProgramForTest(allocator: Allocator) Lifted.Program {
     return Lifted.Program.init(
         allocator,
         names.NameStore.init(allocator),
@@ -7310,9 +7317,9 @@ test "issue 12595 shared recursive row payload compatibility work" {
             const captured_local: Lifted.LocalId = @fromBackingInt(1);
             const captured_symbol: Common.Symbol = @fromBackingInt(4);
             const captures = try types.addCaptures(&.{.{ .local = captured_local, .symbol = captured_symbol, .binder = .none, .ty = value }});
-            const common: Type.FnMember = .{ .lambda = @fromBackingInt(3), .captures = captures };
-            const left_callable = try types.add(.{ .lambda_set = try types.addMembers(&.{ common, .{ .lambda = @fromBackingInt(2), .captures = .empty() } }) });
-            const right_callable = try types.add(.{ .lambda_set = try types.addMembers(&.{ .{ .lambda = @fromBackingInt(1), .captures = .empty() }, common }) });
+            const common: Type.FnMember = .{ .lambda = @fromBackingInt(3), .captures = captures, .inst = @fromBackingInt(0) };
+            const left_callable = try types.add(.{ .lambda_set = try types.addMembers(&.{ common, .{ .lambda = @fromBackingInt(2), .captures = .empty(), .inst = @fromBackingInt(0) } }) });
+            const right_callable = try types.add(.{ .lambda_set = try types.addMembers(&.{ .{ .lambda = @fromBackingInt(1), .captures = .empty(), .inst = @fromBackingInt(0) }, common }) });
             const left_fn = try types.add(.unbound);
             const right_fn = try types.add(.unbound);
             var left = left_fn;
@@ -7464,7 +7471,7 @@ test "issue 12616 completed compatibility retains disjoint proofs and still prop
     const captured_local: Lifted.LocalId = @fromBackingInt(1);
     const captured_symbol: Common.Symbol = @fromBackingInt(2);
     const captures = try types.addCaptures(&.{.{ .local = captured_local, .symbol = captured_symbol, .binder = .none, .ty = number }});
-    const callable = try types.add(.{ .lambda_set = try types.addMembers(&.{.{ .lambda = @fromBackingInt(1), .captures = captures }}) });
+    const callable = try types.add(.{ .lambda_set = try types.addMembers(&.{.{ .lambda = @fromBackingInt(1), .captures = captures, .inst = @fromBackingInt(0) }}) });
     const empty = try types.add(.{ .lambda_set = .empty() });
     const a = try types.add(.{ .func = .{ .args = .empty(), .callable = callable, .ret = number } });
     const b = try types.add(.{ .func = .{ .args = .empty(), .callable = empty, .ret = number } });
@@ -8279,7 +8286,7 @@ test "exact cyclic clone proofs preserve populated callable cells and reject unt
     const tags = (try solver.resolvedContent(root)).tag_union;
     const callback_var = program.types.spanItem(program.types.tagItem(tags, 1).payloads, 0);
     const function = (try solver.resolvedContent(callback_var)).func;
-    const members = try program.types.addMembers(&.{.{ .lambda = @fromBackingInt(1), .captures = .empty() }});
+    const members = try program.types.addMembers(&.{.{ .lambda = @fromBackingInt(1), .captures = .empty(), .inst = @fromBackingInt(0) }});
     try program.types.set(function.callable, .{ .lambda_set = members });
     try std.testing.expect(try solver.exactMonoClone(recursive.ty, root));
     const expansions = counts.expansions;

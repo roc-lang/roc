@@ -5,10 +5,11 @@ const collections = @import("collections");
 
 const Common = @import("common.zig");
 const Lifted = @import("monotype_lifted/ast.zig");
-const SpecConstr = @import("monotype_lifted/spec_constr.zig");
 const WrapperBody = @import("monotype_lifted/wrapper_body.zig");
 const Solved = @import("lambda_solved/ast.zig");
 const SolvedType = @import("lambda_solved/type.zig");
+const Instances = @import("lambda_solved/instances.zig");
+const SpecFnId = Instances.SpecFnId;
 const GuardedList = collections.GuardedList;
 
 /// Post-check inline analysis mode.
@@ -41,7 +42,8 @@ pub const InlineKind = enum(u8) {
     source_single_use,
 };
 
-/// Each lifted function's inline body, when it has one.
+/// Each function's inline body at each instance of its group, when it has
+/// one, by spec function id.
 const InlineBodies = collections.OptionalIndexColumn(Lifted.ExprId);
 
 /// Immutable inline eligibility table consumed by later lowering stages.
@@ -49,18 +51,18 @@ pub const Plan = struct {
     inline_bodies: InlineBodies.View = .{},
     kinds: []const InlineKind = &.{},
 
-    pub fn kind(self: Plan, fn_id: Lifted.FnId) InlineKind {
+    pub fn kind(self: Plan, fn_id: SpecFnId) InlineKind {
         if (self.kinds.len == 0) return .none;
         const index = @backingInt(fn_id);
         if (index >= self.kinds.len) {
-            Common.invariant("inline plan did not contain a lifted function");
+            Common.invariant("inline plan did not contain a spec function");
         }
         return self.kinds[index];
     }
 
     /// The body to inline for a direct call to `callee` lowered while
     /// lowering `owner`'s body, if the plan inlines that call.
-    pub fn bodyForCall(self: Plan, callee: Lifted.FnId, owner: ?Lifted.FnId) ?Lifted.ExprId {
+    pub fn bodyForCall(self: Plan, callee: SpecFnId, owner: ?SpecFnId) ?Lifted.ExprId {
         const body = self.bodyForFn(callee) orelse return null;
         if (self.kind(callee) == .source_single_use) {
             if (owner) |owning_fn| {
@@ -70,12 +72,12 @@ pub const Plan = struct {
         return body;
     }
 
-    pub fn bodyForFn(self: Plan, fn_id: Lifted.FnId) ?Lifted.ExprId {
+    pub fn bodyForFn(self: Plan, fn_id: SpecFnId) ?Lifted.ExprId {
         if (self.inline_bodies.len() == 0) return null;
 
         const index = @backingInt(fn_id);
         if (index >= self.inline_bodies.len()) {
-            Common.invariant("inline plan did not contain a lifted function");
+            Common.invariant("inline plan did not contain a spec function");
         }
         return self.inline_bodies.get(index);
     }
@@ -102,11 +104,13 @@ pub const OwnedPlan = struct {
     }
 };
 
-/// Analyze a Lambda Solved program and produce explicit inline decisions.
+/// Analyze a Lambda Solved program and produce explicit inline decisions for
+/// every function at every instance of its group (`Instances.SpecFnId`).
+/// `procedure_usage` is indexed by spec function.
 pub fn analyze(
     allocator: std.mem.Allocator,
     mode: Mode,
-    procedure_usage: SpecConstr.ProcedureUsage,
+    procedure_usage: []const Instances.ProcedureUse,
     solved: *const Solved.Program,
 ) std.mem.Allocator.Error!OwnedPlan {
     return switch (mode) {
@@ -128,6 +132,10 @@ const Candidate = struct {
     kind: InlineKind,
 };
 
+fn specIndex(id: SpecFnId) usize {
+    return @backingInt(id);
+}
+
 /// Which bodies are candidates: wrappers and bodies used once by the whole
 /// program's calls or by their module's source, or only wrappers of
 /// compiler-provided low-level templates, which needs no use information.
@@ -142,7 +150,7 @@ const MaterializationState = enum {
 
 const InlineAnalyzer = struct {
     allocator: std.mem.Allocator,
-    procedure_usage: SpecConstr.ProcedureUsage,
+    procedure_usage: []const Instances.ProcedureUse,
     solved: *const Solved.Program,
     solved_types: SolvedType.Store.View,
     decisions: []Decision,
@@ -150,14 +158,15 @@ const InlineAnalyzer = struct {
 
     fn run(
         allocator: std.mem.Allocator,
-        procedure_usage: SpecConstr.ProcedureUsage,
+        procedure_usage: []const Instances.ProcedureUse,
         solved: *const Solved.Program,
         rule: CandidateRule,
     ) std.mem.Allocator.Error!OwnedPlan {
-        if (rule != .provided_low_level and procedure_usage.items.len != solved.lifted.fnCount()) {
-            Common.invariant("optimized inline analysis requires exact use information for every lifted function");
+        const spec_fn_count = solved.instances.specFnCount();
+        if (rule != .provided_low_level and procedure_usage.len != spec_fn_count) {
+            Common.invariant("optimized inline analysis requires exact use information for every spec function");
         }
-        const decisions = try allocator.alloc(Decision, solved.lifted.fnCount());
+        const decisions = try allocator.alloc(Decision, spec_fn_count);
         errdefer allocator.free(decisions);
         @memset(decisions, .unknown);
 
@@ -174,8 +183,8 @@ const InlineAnalyzer = struct {
         const materialization_states = try allocator.alloc(MaterializationState, decisions.len);
         defer allocator.free(materialization_states);
         @memset(materialization_states, .unknown);
-        for (0..solved.lifted.fnCount()) |index| {
-            const fn_id: Lifted.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+        for (0..spec_fn_count) |index| {
+            const fn_id: SpecFnId = @fromBackingInt(@as(u32, @intCast(index)));
             try analyzer.resolveSingleUseMaterialization(fn_id, materialization_states);
         }
 
@@ -203,9 +212,17 @@ const InlineAnalyzer = struct {
         };
     }
 
-    fn inlineCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) std.mem.Allocator.Error!?Candidate {
+    fn use(self: *const InlineAnalyzer, fn_id: SpecFnId) Instances.ProcedureUse {
+        return self.procedure_usage[specIndex(fn_id)];
+    }
+
+    fn source(self: *const InlineAnalyzer, fn_id: SpecFnId) Lifted.FnId {
+        return self.solved.instances.specFnSource(fn_id);
+    }
+
+    fn inlineCandidate(self: *const InlineAnalyzer, fn_id: SpecFnId) std.mem.Allocator.Error!?Candidate {
         if (self.rule == .provided_low_level) {
-            if (!(self.solved.lifted.getFn(fn_id).source orelse return null).provides_low_level) return null;
+            if (!(self.solved.lifted.getFn(self.source(fn_id)).source orelse return null).provides_low_level) return null;
             return if (try self.wrapperCandidate(fn_id)) |body| .{ .body = body, .kind = .wrapper } else null;
         }
         // A pack program inlines a wrapper exactly as any program does.
@@ -221,35 +238,35 @@ const InlineAnalyzer = struct {
     /// A body its module's source calls at one site. Every call to it in any
     /// program is that site, lowered in some specialization of the function
     /// containing it, so the decision needs no program-wide count.
-    fn sourceSingleUseCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) ?Lifted.ExprId {
-        const source_fn = self.solved.lifted.getFn(fn_id);
+    fn sourceSingleUseCandidate(self: *const InlineAnalyzer, fn_id: SpecFnId) ?Lifted.ExprId {
+        const source_fn = self.solved.lifted.getFn(self.source(fn_id));
         const template = source_fn.source orelse return null;
         if (!template.single_source_call) return null;
-        if (self.procedure_usage.get(fn_id).contains_return) return null;
+        if (self.use(fn_id).contains_return) return null;
         return switch (source_fn.body) {
             .roc => |body_expr| body_expr,
             .hosted => null,
         };
     }
 
-    fn singleUseCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) ?Lifted.ExprId {
-        const use = self.procedure_usage.get(fn_id);
-        if (use.external_calls != 1 or use.value_refs != 0) return null;
-        if (use.contains_return) return null;
+    fn singleUseCandidate(self: *const InlineAnalyzer, fn_id: SpecFnId) ?Lifted.ExprId {
+        const fn_use = self.use(fn_id);
+        if (fn_use.external_calls != 1 or fn_use.value_refs != 0) return null;
+        if (fn_use.contains_return) return null;
 
-        const call_expr_id = use.external_call_expr orelse
+        const call_expr_id = fn_use.external_call_expr orelse
             Common.invariant("single-use function had no external call expression");
         const call_expr = self.solved.lifted.getExpr(call_expr_id);
         if (call_expr.data != .call_proc) {
             Common.invariant("single-use function external call was not a direct call expression");
         }
         const call = call_expr.data.call_proc;
-        if (Lifted.localDirectCallee(call) != fn_id) {
+        if (Lifted.localDirectCallee(call) != self.source(fn_id)) {
             Common.invariant("single-use function external call changed callee");
         }
         if (call.is_cold) return null;
 
-        const source_fn = self.solved.lifted.getFn(fn_id);
+        const source_fn = self.solved.lifted.getFn(self.source(fn_id));
         const body = switch (source_fn.body) {
             .roc => |body_expr| body_expr,
             .hosted => return null,
@@ -257,6 +274,8 @@ const InlineAnalyzer = struct {
         return body;
     }
 
+    /// How many captures `fn_id`'s own member carries; the same at every
+    /// instance of its group.
     fn solvedCaptureCount(self: *const InlineAnalyzer, fn_id: Lifted.FnId) usize {
         const captures = self.solvedCapturesForFn(fn_id);
         return self.solved_types.captureSpan(captures).len;
@@ -282,7 +301,7 @@ const InlineAnalyzer = struct {
     /// A function whose candidate body is closed, and the range of
     /// `CandidateGraph.callees` its body calls directly.
     const CandidateNode = struct {
-        fn_id: Lifted.FnId,
+        fn_id: SpecFnId,
         candidate: Candidate,
         callees_start: u32,
         callees_end: u32,
@@ -293,8 +312,8 @@ const InlineAnalyzer = struct {
 
     const CandidateGraph = struct {
         nodes: std.ArrayList(CandidateNode) = .empty,
-        callees: std.ArrayList(Lifted.FnId) = .empty,
-        /// Per lifted function, its index in `nodes`.
+        callees: std.ArrayList(SpecFnId) = .empty,
+        /// Per spec function, its index in `nodes`.
         node_of: collections.OptionalIndexColumn(CandidateNodeIndex),
 
         fn deinit(self: *CandidateGraph, allocator: std.mem.Allocator) void {
@@ -303,7 +322,7 @@ const InlineAnalyzer = struct {
             self.node_of.deinit(allocator);
         }
 
-        fn calleeNodes(self: *const CandidateGraph, node: u32) []const Lifted.FnId {
+        fn calleeNodes(self: *const CandidateGraph, node: u32) []const SpecFnId {
             const n = self.nodes.items[node];
             return self.callees.items[n.callees_start..n.callees_end];
         }
@@ -318,18 +337,18 @@ const InlineAnalyzer = struct {
     /// so every program decides it the same way, whatever order its functions
     /// are numbered in.
     fn decideCandidates(self: *InlineAnalyzer) std.mem.Allocator.Error!void {
-        const fn_count = self.solved.lifted.fnCount();
+        const fn_count = self.decisions.len;
         var graph = CandidateGraph{ .node_of = try collections.OptionalIndexColumn(CandidateNodeIndex).initFilled(self.allocator, fn_count) };
         defer graph.deinit(self.allocator);
 
         for (0..fn_count) |index| {
-            const fn_id: Lifted.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+            const fn_id: SpecFnId = @fromBackingInt(@as(u32, @intCast(index)));
             const candidate = try self.inlineCandidate(fn_id) orelse {
                 self.decisions[index] = .never;
                 continue;
             };
             const callees_start: u32 = @intCast(graph.callees.items.len);
-            switch (try self.scanCandidateBody(candidate.body, &graph.callees)) {
+            switch (try self.scanCandidateBody(candidate.body, self.solved.instances.specFnEnv(fn_id), &graph.callees)) {
                 .closed => {},
                 .open => {
                     graph.callees.shrinkRetainingCapacity(callees_start);
@@ -361,9 +380,10 @@ const InlineAnalyzer = struct {
 
     const WalkItem = struct { child: Lifted.ExprChild, loop_depth: usize };
 
-    /// Prove that every break and continue in `body` is owned by a loop
-    /// inside it, appending each procedure it calls directly to `callees`.
-    fn scanCandidateBody(self: *InlineAnalyzer, body: Lifted.ExprId, callees: *std.ArrayList(Lifted.FnId)) std.mem.Allocator.Error!BodyShape {
+    /// Prove that every break and continue in `body`, read under instance
+    /// `env`, is owned by a loop inside it, appending each procedure it calls
+    /// directly to `callees`.
+    fn scanCandidateBody(self: *InlineAnalyzer, body: Lifted.ExprId, env: Instances.Env, callees: *std.ArrayList(SpecFnId)) std.mem.Allocator.Error!BodyShape {
         var walk: std.ArrayList(WalkItem) = .empty;
         defer walk.deinit(self.allocator);
         var children: std.ArrayList(Lifted.ExprChild) = .empty;
@@ -394,7 +414,10 @@ const InlineAnalyzer = struct {
                     .comptime_exhaustiveness_failed,
                     => {},
                     .call_proc => |call| {
-                        if (Lifted.localDirectCallee(call)) |callee| try callees.append(self.allocator, callee);
+                        if (Lifted.localDirectCallee(call)) |callee| {
+                            const callee_env = Instances.referenceEnv(self.solved, expr_id, callee, env);
+                            try callees.append(self.allocator, self.solved.instances.specFn(callee, callee_env));
+                        }
                         try Lifted.appendChildren(self.allocator, &self.solved.lifted, expr_id, &children);
                     },
                     .@"unreachable",
@@ -573,7 +596,7 @@ const InlineAnalyzer = struct {
     /// single-use body safe to inline exactly once.
     fn resolveSingleUseMaterialization(
         self: *InlineAnalyzer,
-        fn_id: Lifted.FnId,
+        fn_id: SpecFnId,
         states: []MaterializationState,
     ) std.mem.Allocator.Error!void {
         _ = try self.runMaterialization(.{ .resolve = fn_id }, states);
@@ -584,8 +607,8 @@ const InlineAnalyzer = struct {
     /// place. Both follow unique call owners outward, so the chain of owners
     /// is held on an explicit stack.
     const MaterializationFrame = union(enum) {
-        resolve: Lifted.FnId,
-        body_once: Lifted.FnId,
+        resolve: SpecFnId,
+        body_once: SpecFnId,
     };
 
     fn runMaterialization(self: *InlineAnalyzer, root: MaterializationFrame, states: []MaterializationState) std.mem.Allocator.Error!bool {
@@ -633,8 +656,7 @@ const InlineAnalyzer = struct {
                         .multiple => Common.invariant("resolved single-use body still had multiple materializations"),
                     }
 
-                    const use = self.procedure_usage.get(fn_id);
-                    const owner = use.external_call_owner orelse
+                    const owner = self.use(fn_id).external_call_owner orelse
                         Common.invariant("single-use function had no external call owner");
                     try frames.append(self.allocator, .{ .body_once = owner });
                 },
@@ -676,20 +698,20 @@ const InlineAnalyzer = struct {
                         },
                     }
 
-                    const use = self.procedure_usage.get(fn_id);
-                    const settled: ?bool = if (use.external_calls == 0)
+                    const fn_use = self.use(fn_id);
+                    const settled: ?bool = if (fn_use.external_calls == 0)
                         true
-                    else if (use.external_calls != 1)
+                    else if (fn_use.external_calls != 1)
                         false
                     else blk: {
-                        const call_expr_id = use.external_call_expr orelse
+                        const call_expr_id = fn_use.external_call_expr orelse
                             Common.invariant("single-call inline owner had no external call expression");
                         const call_expr = self.solved.lifted.getExpr(call_expr_id);
                         if (call_expr.data != .call_proc) {
                             Common.invariant("single-call inline owner use was not a direct call expression");
                         }
                         if (call_expr.data.call_proc.is_cold) break :blk true;
-                        if (use.value_refs != 0) break :blk false;
+                        if (fn_use.value_refs != 0) break :blk false;
                         break :blk null;
                     };
                     if (settled) |once| {
@@ -698,7 +720,7 @@ const InlineAnalyzer = struct {
                         result = once;
                         continue;
                     }
-                    const owner = use.external_call_owner orelse
+                    const owner = fn_use.external_call_owner orelse
                         Common.invariant("single-call inline owner had no external call owner");
                     try frames.append(self.allocator, .{ .body_once = owner });
                 },
@@ -708,8 +730,9 @@ const InlineAnalyzer = struct {
         return result.?;
     }
 
-    fn wrapperCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) std.mem.Allocator.Error!?Lifted.ExprId {
-        if (self.solvedCaptureCount(fn_id) != 0) return null;
-        return WrapperBody.wrapperBody(self.allocator, &self.solved.lifted, fn_id);
+    fn wrapperCandidate(self: *const InlineAnalyzer, fn_id: SpecFnId) std.mem.Allocator.Error!?Lifted.ExprId {
+        const source_fn = self.source(fn_id);
+        if (self.solvedCaptureCount(source_fn) != 0) return null;
+        return WrapperBody.wrapperBody(self.allocator, &self.solved.lifted, source_fn);
     }
 };

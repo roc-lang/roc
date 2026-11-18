@@ -1958,21 +1958,17 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         timing.lss_steps_ns[@backingInt(LssStep.lambda_solve)].add(detail.solve_ns);
     }
     errdefer solved.deinit();
-    const specialized = try postcheck.LambdaSolved.Specialize.run(allocator, &solved);
     lambda_solve_timing_scope.end();
-    // Specialization gives some functions copies; the copies' uses are
-    // counted afresh over the specialized program.
-    if (specialized.cloned_fns != 0 and procedure_usage.items.len != 0) {
-        procedure_usage.deinit();
-        procedure_usage = try postcheck.MonotypeLifted.SpecConstr.collectProcedureUsage(allocator, &solved.lifted);
-    }
 
     var inline_plan_timing_scope = PipelineStageScope.begin(
         if (target.inline_mode != .none) target.timing else null,
         .inline_plan,
     );
     defer inline_plan_timing_scope.end();
-    const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved);
+    // Inline decisions are made per function at each instance of its group.
+    const spec_usage = try postcheck.LambdaSolved.Instances.procedureUsage(allocator, &solved, procedure_usage.items);
+    defer allocator.free(spec_usage);
+    const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, spec_usage, &solved);
     inline_plan_timing_scope.end();
 
     return .{
