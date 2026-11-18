@@ -333,7 +333,7 @@ pub const ProvidedLowLevel = enum(u8) {
     }
 };
 
-/// Facts a specialized function carries about the checked template it comes
+/// Data a specialized function carries about the checked template it comes
 /// from.
 pub const FnTemplate = struct {
     /// Identity in the common frozen Monotype owner, stamped by lifting.
