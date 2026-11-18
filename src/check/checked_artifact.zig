@@ -25778,6 +25778,31 @@ fn valueFormWalk(allocator: Allocator, bodies: CheckedBodies, root: CIR.Expr.Idx
     return if (reads_constants) .reads_constants else .value_form;
 }
 
+/// The lookup `expr` is, through blocks with no statements, or null when it
+/// is anything else.
+fn selectedLookup(env: *const ModuleEnv, expr: CIR.Expr.Idx) ?CIR.Expr.Idx {
+    var current = expr;
+    while (true) switch (env.store.getExpr(current)) {
+        .e_block => |block| {
+            if (env.store.sliceStatements(block.stmts).len != 0) return null;
+            current = block.final_expr;
+        },
+        .e_lookup_local, .e_lookup_external, .e_lookup_associated_resolved => return current,
+        .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
+    };
+}
+
+/// Whether `root` is a constant whose value compile-time evaluation stores,
+/// which a body reading it restores rather than computes: a requested
+/// constant or hoisted constant root that cannot leave its value to runtime
+/// lowering, as a guarded root whose evaluation fails does.
+fn rootStoresItsValue(root: CompileTimeRoot) bool {
+    return switch (root.kind) {
+        .constant, .hoisted_constant => root.request_eligibility == .eligible and !root.guarded,
+        .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => false,
+    };
+}
+
 /// Whether `root` is a constant the checked-value writer stores, which a
 /// value-form expression may therefore read: a requested constant or hoisted
 /// constant root completed by the writer.
@@ -26150,6 +26175,21 @@ pub const CompileTimeRootTable = struct {
             }
         }
 
+        // The roots a lookup may read, which grow with each hoisted root, and
+        // how many of them have their request eligibility published.
+        var scope = ConstLookupScope{ .module = module, .imports = imports, .available_artifacts = available_artifacts };
+        defer scope.deinit(allocator);
+        try scope.addLocalRoots(allocator, roots.items, 0);
+        var eligibility_published: usize = 0;
+        // The bindings of the selected roots: a selected data constant that
+        // only reads one is no root unless needed, as checking decided
+        // when it withheld the read from `read_by_root`.
+        var selected_bindings = collections.DenseMapUnmanaged(CIR.Pattern.Idx, void).empty;
+        defer selected_bindings.deinit(allocator);
+        for (selected_hoisted_roots) |selected| {
+            if (selected.pattern.get()) |pattern| try selected_bindings.put(allocator, pattern, {});
+        }
+
         for (selected_hoisted_roots, 0..) |selected, selected_index| {
             const source_ty = if (selected.pattern.get()) |pattern|
                 ModuleEnv.varFrom(pattern)
@@ -26180,6 +26220,33 @@ pub const CompileTimeRootTable = struct {
                 try inline_literals.append(allocator, reachedRootExpr(module_index, selected.expr));
                 continue;
             }
+            // A data constant that only reads a stored constant or the
+            // binding of another selected root computes nothing either
+            // (design.md "Value-Form Expressions Stay In Their Bodies"): its
+            // body reads the constant or binding itself.
+            if (kind == .hoisted_constant and selected.body == .expr and !selected.top_level and !selected.read_by_root) {
+                const lookup = selectedLookup(module_env, selected.expr);
+                if (lookup) |read| {
+                    const reads_binding = switch (module_env.store.getExpr(read)) {
+                        .e_lookup_local => |local| selected_bindings.contains(local.pattern_idx),
+                        .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_block, .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => false,
+                    };
+                    if (reads_binding) continue;
+                    if (scope.target(read)) |target| {
+                        const read_root = switch (target) {
+                            .local => |index| local: {
+                                if (index >= eligibility_published) {
+                                    try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, roots.items[eligibility_published..]);
+                                    eligibility_published = roots.items.len;
+                                }
+                                break :local roots.items[index];
+                            },
+                            .imported => |imported| imported,
+                        };
+                        if (rootStoresItsValue(read_root) and !bodies.nodeIsErroneous(@backingInt(read))) continue;
+                    }
+                }
+            }
             if (shape == .reads_constants) try constant_readers.append(allocator, @intCast(roots.items.len));
             const checked_root = try selectedHoistedRootBody(allocator, module, checked_types, module_index, selected);
             const hoisted_body = try hoist_roots.cloneBody(allocator, selected.body);
@@ -26199,6 +26266,7 @@ pub const CompileTimeRootTable = struct {
                 .guarded = selected.guarded,
                 .completion = if (value_form) .write_value else .evaluate,
             });
+            try scope.addLocalRoots(allocator, roots.items, roots.items.len - 1);
         }
 
         for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
@@ -26215,11 +26283,7 @@ pub const CompileTimeRootTable = struct {
             );
         }
 
-        try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, roots.items);
-
-        var scope = ConstLookupScope{ .module = module, .imports = imports, .available_artifacts = available_artifacts };
-        defer scope.deinit(allocator);
-        try scope.addLocalRoots(allocator, roots.items, 0);
+        try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, roots.items[eligibility_published..]);
         try completeConstantReadersWithWriter(allocator, bodies, roots.items, constant_readers.items, &scope);
 
         const roots_by_pattern = try patternRootIndex(allocator, roots.items);

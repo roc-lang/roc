@@ -1468,11 +1468,16 @@ from compile-time evaluation.
 Selection decides which expressions are roots, in two steps. The checker
 traversal above selects candidates: every maximal eligible expression and
 every binding a candidate or runtime code reads. Publication then makes each
-candidate a root except a data constant in value form ("Value-Form Roots")
-that binds no top-level name and whose binding no kept candidate reads
-(`SelectedHoistedRoot.read_by_root`, which pruning records as it keeps the
-reading candidate): such an expression computes nothing, so its body keeps it
-("Value-Form Expressions Stay In Their Bodies"). This is the selection rule,
+candidate a root except a data constant in value form ("Value-Form Roots"),
+or one that only reads a stored constant or another kept candidate's
+binding, that binds no top-level name and whose binding no kept candidate
+reads (`SelectedHoistedRoot.read_by_root`, which pruning records as it keeps
+the reading candidate): such an expression computes nothing, so its body
+keeps it ("Value-Form Expressions Stay In Their Bodies"). A kept candidate
+that only reads another's binding records that read only once it is known
+to stay a root itself, because a kept candidate reads its binding or it
+binds a top-level name; pruning settles these after keeping every
+candidate, readers before what they read. This is the selection rule,
 not a demotion: value form is a fact of the checked expression, decided
 before any evaluation and never after one fails. Once the module's dispatch
 plans are published, publication records for each root it makes which
@@ -2438,6 +2443,27 @@ lists these expressions instead, ascending
 (`CompileTimeRootTable.inline_literals`), and their bodies keep them. A
 binding whose right-hand side is listed is an ordinary local binding: its
 declaration stays in the body and its uses read the local.
+
+A selected data constant that is only a lookup, through blocks with no
+statements, of another constant, such as `start = Tables.min_match_len` or
+`var $i = min_match_len` in a function body, is no root under the same
+conditions, and nothing lists it: the lookup is the read of a value
+compile-time evaluation stores already, so its body keeps the lookup, and
+running it restores that value, exactly as a read of the root would have.
+The read constant must be one whose value is stored: a requested `constant`
+or `hoisted_constant` root, of the module or of one it imports, that is not
+guarded, whose evaluation failing would leave its value to runtime
+lowering. A lookup of any other constant (a polymorphic one, whose value
+runtime code computes at each instantiation, or a guarded one) stays a
+root, and so does a lookup checking recorded an error at. A selected data
+constant that is only a lookup of another selected root's binding, such as
+the branch `{ start }` reading that `start`, is no root under the same
+conditions, whatever that binding is: its body reads the binding, which is
+the root's value or, when that is no root either, the local the body
+keeps. Checking does not count such a read as the binding's
+(`read_by_root`) unless the reader stays a root ("Root Selection During
+Checking"), so `start` and every read of it like `{ start }` stay out of
+the root table together.
 
 The rule applies at every position. A value-form part of a larger selected
 expression that is not in value form, such as `[1, 2]` in

@@ -16415,6 +16415,12 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     var stability = HoistedStabilityCache{};
     defer stability.deinit(self.gpa);
 
+    // For each kept root that only reads the binding of another kept root,
+    // that root's index (`selectedRootBindingRead`).
+    const binding_reads = try self.gpa.alloc(?u32, root_count);
+    defer self.gpa.free(binding_reads);
+    @memset(binding_reads, null);
+
     var kept_count: usize = 0;
     var kept_expr_count: u32 = 0;
     var kept_pattern_count: u32 = 0;
@@ -16439,8 +16445,13 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
 
         keep_roots[i] = true;
         // An earlier root whose binding this kept root reads stays a root:
-        // the evaluation reads it by reference.
-        for (reads.items) |read| self.selected_hoisted_roots.items[read].read_by_root = true;
+        // the evaluation reads it by reference. A root that only reads such
+        // a binding is no root unless one is needed (design.md "Value-Form
+        // Expressions Stay In Their Bodies"), so its read keeps the binding
+        // a root only once that is known, below.
+        if (self.selectedRootBindingRead(root.*, &keep_oracle)) |read| {
+            binding_reads[i] = read;
+        } else for (reads.items) |read| self.selected_hoisted_roots.items[read].read_by_root = true;
         kept_count += 1;
         switch (root.body) {
             .expr => kept_expr_count += 1,
@@ -16448,6 +16459,19 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
             .pattern_validation => kept_validation_count += 1,
         }
         if (root.pattern != .none) kept_pattern_count += 1;
+    }
+
+    // A root only reading a binding stays a root when it binds a top-level
+    // name or a kept root reads its own binding, and then reads the binding
+    // it reads by reference. Readers follow what they read, so a reverse
+    // pass settles chains of such reads.
+    var reader_index = root_count;
+    while (reader_index > 0) {
+        reader_index -= 1;
+        const read = binding_reads[reader_index] orelse continue;
+        if (!keep_roots[reader_index]) continue;
+        const reader = self.selected_hoisted_roots.items[reader_index];
+        if (reader.read_by_root or self.selectedHoistedRootIsTopLevel(reader)) self.selected_hoisted_roots.items[read].read_by_root = true;
     }
 
     // A validation keeps its dedicated root until solving has proved that the
@@ -16963,6 +16987,27 @@ const HoistedDependencyContext = struct {
 
 fn hoistSelectionInvariant(comptime message: []const u8) noreturn {
     base.invariant("check invariant violated: " ++ message, .{});
+}
+
+/// The kept selected root whose binding `root` only reads: `root` is a data
+/// constant whose expression, through blocks with no statements, is a
+/// lookup of that binding. Publication makes such a root no root unless a
+/// kept root reads its own binding or it binds a top-level name
+/// (`CompileTimeRootTable.fromModule`); its body reads the binding instead.
+fn selectedRootBindingRead(self: *const Self, root: hoist_roots.SelectedHoistedRoot, oracle: *const HoistedRootKeepOracle) ?u32 {
+    if (root.body != .expr or root.value_kind != .data_constant) return null;
+    var expr = root.expr;
+    while (true) switch (self.cir.store.getExpr(expr)) {
+        .e_block => |block| {
+            if (self.cir.store.sliceStatements(block.stmts).len != 0) return null;
+            expr = block.final_expr;
+        },
+        .e_lookup_local => |local| {
+            const read = oracle.pattern_roots.get(local.pattern_idx) orelse return null;
+            return if (oracle.keep_roots[read]) read else null;
+        },
+        .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
+    };
 }
 
 const HoistedRootKeepOracle = struct {

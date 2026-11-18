@@ -270,7 +270,21 @@ const corpus =
     \\    []
     \\}
     \\
+    \\aliased : U8 -> U8
+    \\aliased = |n| {
+    \\    limit = u8_value
+    \\    if n > limit { limit } else { n }
+    \\}
+    \\
+    \\imported_aliased : U64 -> U64
+    \\imported_aliased = |n| {
+    \\    cap = Consts.limit
+    \\    if n > cap { cap } else { n }
+    \\}
+    \\
     \\main! = |args| {
+    \\    Echo.line!(Str.inspect(aliased(1)))
+    \\    Echo.line!(Str.inspect(imported_aliased(List.len(args))))
     \\    Echo.line!(Str.inspect(parse([])))
     \\    Echo.line!(Str.inspect(measure([])))
     \\    Echo.line!(Str.inspect(branches(List.len(args))))
@@ -484,6 +498,7 @@ const WriterMatchesEvaluatorError = CheckAppError || error{
     TooFewRootsCompletedDirectly,
     WrongInlineLiteralCount,
     InlineLiteralIsRoot,
+    ConstantReadIsRoot,
 };
 
 fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMatchesEvaluatorError!void {
@@ -585,6 +600,27 @@ fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMat
                 std.debug.print("root {d} ({s}) evaluates a value-form expression its body keeps\n", .{ @backingInt(root.id), @tagName(root.kind) });
                 return error.InlineLiteralIsRoot;
             }
+        }
+        // The bindings `limit` and `cap` only read stored constants, so their
+        // bodies read the constants and neither is a root.
+        var selected_reads: usize = 0;
+        for (env.selected_hoisted_roots.items()) |selected| {
+            if (selected.body != .expr or selected.top_level or selected.read_by_root) continue;
+            switch (env.store.getExpr(selected.expr)) {
+                .e_lookup_local, .e_lookup_external => {},
+                .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_block, .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => continue,
+            }
+            selected_reads += 1;
+            for (artifact.compile_time_roots.roots.items()) |root| {
+                if (root.expr.get()) |root_expr| if (root_expr == selected.expr) {
+                    std.debug.print("root {d} only reads a stored constant\n", .{@backingInt(root.id)});
+                    return error.ConstantReadIsRoot;
+                };
+            }
+        }
+        if (selected_reads < 2) {
+            std.debug.print("{d} selected bindings only read a constant\n", .{selected_reads});
+            return error.ConstantReadIsRoot;
         }
     }
 }
