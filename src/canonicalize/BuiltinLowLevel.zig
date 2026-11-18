@@ -838,6 +838,7 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         .{ "f32_acos_unsafe", .num_acos },
         .{ "f32_atan_unsafe", .num_atan },
         .{ "f32_atan2_unsafe", .num_atan2 },
+        .{ "Builtin.Num.Dec.times_saturated", .dec_mul_saturated },
         .{ "dec_sqrt_unsafe", .num_sqrt },
         .{ "dec_pow_unsafe", .num_pow },
         .{ "dec_sin_unsafe", .num_sin },

@@ -7417,6 +7417,76 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(True, True, True, True, True, True, True)" },
     },
     .{
+        // https://github.com/roc-lang/roc/issues/12516
+        .name = "inspect: Dec saturated multiplication accepts fractional factors",
+        .source =
+        \\(
+        \\    Dec.times_saturated(1.0, 0.5), Dec.times_saturated(0.5, 1.0),
+        \\    Dec.times_saturated(-1.0, 0.5), Dec.times_saturated(0.5, -1.0),
+        \\    Dec.times_saturated(1.0, -0.5), Dec.times_saturated(-0.5, 1.0),
+        \\    Dec.times_saturated(-1.0, -0.5), Dec.times_saturated(-0.5, -1.0),
+        \\)
+        ,
+        .expected = .{ .inspect_str = "(0.5, 0.5, -0.5, -0.5, -0.5, -0.5, 0.5, 0.5)" },
+    },
+    .{
+        .name = "inspect: Dec saturated multiplication preserves representable near-bound products",
+        .source =
+        \\(
+        \\    Dec.times_saturated(68056473384187692692.5, 2.5),
+        \\    Dec.times_saturated(2.5, 68056473384187692692.5),
+        \\    Dec.times_saturated(-68056473384187692692.5, 2.5),
+        \\    Dec.times_saturated(2.5, -68056473384187692692.5),
+        \\    Dec.times_saturated(68056473384187692692.5, -2.5),
+        \\    Dec.times_saturated(-2.5, 68056473384187692692.5),
+        \\    Dec.times_saturated(-68056473384187692692.5, -2.5),
+        \\    Dec.times_saturated(-2.5, -68056473384187692692.5),
+        \\)
+        ,
+        .expected = .{ .inspect_str = "(170141183460469231731.25, 170141183460469231731.25, -170141183460469231731.25, -170141183460469231731.25, -170141183460469231731.25, -170141183460469231731.25, 170141183460469231731.25, 170141183460469231731.25)" },
+    },
+    .{
+        .name = "inspect: Dec saturated multiplication handles exact bounds and truncation",
+        .source =
+        \\{
+        \\    check = |a, b, expected| Dec.times_saturated(a, b) == expected and Dec.times_saturated(b, a) == expected
+        \\    (
+        \\        check(Dec.lowest, 0.5, -85070591730234615865.843651857942052864),
+        \\        check(Dec.lowest, -0.5, 85070591730234615865.843651857942052864),
+        \\        check(Dec.highest, 0.5, 85070591730234615865.843651857942052863),
+        \\        check(Dec.highest, -0.5, -85070591730234615865.843651857942052863),
+        \\        check(Dec.lowest, 0.0, 0.0),
+        \\        check(Dec.lowest, 1.0, Dec.lowest),
+        \\        check(Dec.lowest, -1.0, Dec.highest),
+        \\        check(Dec.highest, 1.0, Dec.highest),
+        \\        check(Dec.highest, -1.0, -170141183460469231731.687303715884105727),
+        \\        check(Dec.highest, 2.0, Dec.highest),
+        \\        check(Dec.highest, -2.0, Dec.lowest),
+        \\        check(Dec.lowest, 2.0, Dec.lowest),
+        \\        check(Dec.lowest, -2.0, Dec.highest),
+        \\        check(-85070591730234615865.843651857942052864, 2.0, Dec.lowest),
+        \\        check(85070591730234615865.843651857942052864, 2.0, Dec.highest),
+        \\        check(0.000000000000000001, 0.5, 0.0),
+        \\        check(-0.000000000000000001, 0.5, 0.0),
+        \\        check(0.000000000000000003, -0.5, -0.000000000000000001),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True)" },
+    },
+    .{
+        .name = "inspect: Dec multiplication preserves the full negative range",
+        .source =
+        \\(
+        \\    Dec.lowest * 0.5 == -85070591730234615865.843651857942052864,
+        \\    -0.5 * Dec.lowest == 85070591730234615865.843651857942052864,
+        \\    -85070591730234615865.843651857942052864 * 2.0 == Dec.lowest,
+        \\    Dec.lowest * 1.0 == Dec.lowest,
+        \\)
+        ,
+        .expected = .{ .inspect_str = "(True, True, True, True)" },
+    },
+    .{
         .name = "inspect: Dec try arithmetic returns overflow without crashing or wrapping",
         .source =
         \\(
