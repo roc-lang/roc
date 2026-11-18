@@ -10,6 +10,7 @@ const Counts = struct {
     list_replace: usize = 0,
     prepare_reuse: usize = 0,
     can_reuse: usize = 0,
+    owned_unique: usize = 0,
     extract: usize = 0,
     write: usize = 0,
     list_retain: usize = 0,
@@ -64,6 +65,7 @@ fn countReachableOps(
                 if (op == .list_replace_unsafe) counts.list_replace += 1;
                 if (op == .list_map_prepare_reuse) counts.prepare_reuse += 1;
                 if (op == .list_map_can_reuse) counts.can_reuse += 1;
+                if (op == .list_owned_unique) counts.owned_unique += 1;
                 if (op == .list_move_out_unsafe) counts.extract += 1;
                 if (op == .list_map_write_unsafe) counts.write += 1;
             } else if (stmt == .incref) {
@@ -84,7 +86,7 @@ fn expectUniqueUpdateMovesInnerElement(
     const counts = try countReachableOps(store, layouts, update);
 
     const moves_inner_element = counts.prepare_reuse >= 1 and
-        counts.can_reuse >= 1 and
+        counts.owned_unique >= 1 and
         counts.extract >= 1 and
         counts.write >= 1;
     if (!moves_inner_element) {
@@ -93,7 +95,10 @@ fn expectUniqueUpdateMovesInnerElement(
     try std.testing.expect(moves_inner_element);
 }
 
-fn expectDisabledBoxyUpdateDropsReuseBranch(
+/// `List.update` asks the runtime ownership question rather than the
+/// layout-resolved `list_map_can_reuse`, so its ownership-moving path does not
+/// depend on whether Boxy list transforms are enabled.
+fn expectBoxyUpdateKeepsMovingPath(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
 ) harness.LowerToLirHarnessError!void {
@@ -101,23 +106,11 @@ fn expectDisabledBoxyUpdateDropsReuseBranch(
     const counts = try countReachableOps(store, layouts, update);
 
     try std.testing.expect(counts.prepare_reuse >= 1);
-    try std.testing.expect(counts.list_replace >= 1);
-    try std.testing.expectEqual(@as(usize, 0), counts.can_reuse);
-    try std.testing.expectEqual(@as(usize, 0), counts.extract);
-    try std.testing.expectEqual(@as(usize, 0), counts.write);
-}
-
-fn expectEnabledBoxyUpdateKeepsReuseBranch(
-    store: *const lir.LirStore,
-    layouts: *const layout.Store,
-) harness.LowerToLirHarnessError!void {
-    const update = findNamedProc(store, "Builtin.List.update") orelse return error.TestUnexpectedResult;
-    const counts = try countReachableOps(store, layouts, update);
-
-    try std.testing.expect(counts.prepare_reuse >= 1);
-    try std.testing.expect(counts.list_replace >= 1);
+    try std.testing.expect(counts.owned_unique >= 1);
+    try std.testing.expect(counts.list_set >= 1);
     try std.testing.expect(counts.extract >= 1);
     try std.testing.expect(counts.write >= 1);
+    try std.testing.expectEqual(@as(usize, 0), counts.can_reuse);
 }
 
 const nested_list_update_app =
@@ -135,24 +128,22 @@ test "issue 10849: List.update can move a unique inner list into its updater" {
     // Repro for https://github.com/roc-lang/roc/issues/10849.
     try harness.expectLirInspectionWithOptions(nested_list_update_app, .{
         .list_in_place_map = true,
-        .proc_debug_names = true,
         .prove_ranges = true,
     }, expectUniqueUpdateMovesInnerElement);
 }
 
-test "issue 10849: disabled Boxy list transforms omit the unreachable reuse branch" {
+test "issue 10849: List.update keeps its ownership-moving path under either Boxy list transform setting" {
     try harness.expectLirInspectionWithOptions(
         nested_list_update_app,
         .{
             .specialization_strategy = .boxy,
             .list_in_place_map = true,
-            .proc_debug_names = true,
         },
-        expectEnabledBoxyUpdateKeepsReuseBranch,
+        expectBoxyUpdateKeepsMovingPath,
     );
     try harness.expectLirInspectionWithOptions(
         nested_list_update_app,
-        .{ .specialization_strategy = .boxy, .proc_debug_names = true },
-        expectDisabledBoxyUpdateDropsReuseBranch,
+        .{ .specialization_strategy = .boxy },
+        expectBoxyUpdateKeepsMovingPath,
     );
 }

@@ -121,6 +121,34 @@ pub const ProcIdentity = extern struct {
         }
     };
 
+    /// Identity of the ownership variant of this procedure that a demand
+    /// selects (design.md "Mode Specialization"): its parameter modes
+    /// (`borrowed_params`, bit i set for a borrowed position i), its return
+    /// mode (`ret_mode`, 0 borrowed and 1 owned), the positions it seeds
+    /// born-unique, and then each of its outcome rows, through
+    /// `OwnershipVariantBuilder.outcome`.
+    pub fn ownershipVariant(self: ProcIdentity, borrowed_params: u16, ret_mode: u8, unique_params: u16) OwnershipVariantBuilder {
+        var key = self.deriving("arc-variant");
+        key.update(std.mem.asBytes(&std.mem.nativeToLittle(u16, borrowed_params)));
+        key.update(&[_]u8{ret_mode});
+        key.update(std.mem.asBytes(&std.mem.nativeToLittle(u16, unique_params)));
+        return .{ .key = key };
+    }
+
+    pub const OwnershipVariantBuilder = struct {
+        key: DerivedBuilder,
+
+        /// Add one outcome row, in discriminant order.
+        pub fn outcome(self: *OwnershipVariantBuilder, discriminant: u32, restituted_params: u16) void {
+            self.key.update(std.mem.asBytes(&std.mem.nativeToLittle(u32, discriminant)));
+            self.key.update(std.mem.asBytes(&std.mem.nativeToLittle(u16, restituted_params)));
+        }
+
+        pub fn finish(self: *OwnershipVariantBuilder) ProcIdentity {
+            return self.key.finish();
+        }
+    };
+
     /// Identity of a procedure that exists only within one program and is
     /// never an object-cache entry. `raw` is the program-local symbol.
     pub fn programLocal(role: []const u8, raw: u64) ProcIdentity {
@@ -583,6 +611,14 @@ pub const DynStorage = enum(u32) {
     /// The procedure's own result storage (`LirProcSpec.dyn_result`): the
     /// caller passes its address after the explicit arguments.
     result,
+    /// Frame storage for an erased callable whose capture record `desc`
+    /// describes (design.md "Frame Callables"), placed by `frame_alloc`
+    /// in the dynamic frame region beside the `frame` locals: 16 bytes
+    /// ending in the callable's refcount word, then the erased-callable
+    /// header and the capture, at 16-byte alignment. The local is the
+    /// callable's data pointer; only a `DynOp.closure` naming it as its
+    /// `frame` writes there.
+    frame_callable,
 };
 
 /// Span into flat local-id storage.
@@ -939,6 +975,47 @@ pub const JoinPointSpan = extern struct {
     }
 };
 
+/// A run of consecutive rows of one store column.
+pub const RowRange = extern struct {
+    start: u32 = 0,
+    len: u32 = 0,
+
+    /// The position of row `id` within this range, if the range holds it.
+    pub inline fn offsetOf(self: RowRange, id: u32) ?u32 {
+        const offset = id -% self.start;
+        return if (offset < self.len) offset else null;
+    }
+};
+
+/// The rows one appended run of a procedure's body occupies in each column a
+/// procedure rewrite can write (design.md "Statement Storage"). Lowering
+/// appends a body as one chunk, and each committed rewrite of the procedure
+/// appends one more.
+pub const BodyChunk = extern struct {
+    cf_stmts: RowRange = .{},
+    cf_switch_branches: RowRange = .{},
+    str_match_arms: RowRange = .{},
+    join_points: RowRange = .{},
+
+    /// Whether the chunk holds no row at all.
+    pub fn isEmpty(self: BodyChunk) bool {
+        return self.cf_stmts.len == 0 and self.cf_switch_branches.len == 0 and
+            self.str_match_arms.len == 0 and self.join_points.len == 0;
+    }
+};
+
+/// A procedure's body chunks, in the order they were appended: a span of the
+/// store's chunk list.
+pub const BodyChunkSpan = extern struct {
+    start: u32,
+    len: u32,
+
+    /// Returns an empty chunk span.
+    pub fn empty() BodyChunkSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+};
+
 /// Explicit ARC meaning of a `set_local` write. ARC insertion consumes this
 /// directly; it must not derive the meaning from control-flow shape.
 /// How an RC statement's count update must be performed. `atomic` is always
@@ -990,7 +1067,9 @@ pub const ProcAbi = enum {
 
 /// The unit a procedure is emitted with (design.md "Mode Specialization",
 /// emission units). A direct call demands an ownership variant of its callee
-/// only when the two procedures share a unit; a call across units adapts to
+/// only when the two procedures share a unit, except the outcome-restitution
+/// variant a callee's object publishes (`LirProcSpec.rc_outcomes`), which a
+/// call from any unit may demand; otherwise a call across units adapts to
 /// the callee's solved base signature as a call to an object-cache procedure
 /// does. The specialized lowering puts every procedure in `program`; `.boxy`
 /// gives a module's own workers that module's unit and every worker that is
@@ -1063,6 +1142,12 @@ pub const TailCalls = struct {
     /// The statement the loop begins at, when it is not the body's first:
     /// the statements before it run once per call.
     entry: collections.OptionalId(CFStmtId) = .none,
+    /// The locals the loop carries, one per argument of a self call, when
+    /// they are not the procedure's own arguments: a `.boxy` procedure
+    /// carries a dynamic parameter that its self calls change in a frame
+    /// local its entry copies the parameter into (design.md "Tail Return
+    /// Continuations"). Empty when the loop carries the arguments.
+    params: LocalSpan = .empty(),
 };
 
 /// An optional `TailCalls` at its own size.
@@ -1369,6 +1454,13 @@ pub const PackedErasedFnData = struct {
     /// path when the old allocation is shared.
     reuse: ?LocalId = null,
     reuse_unique: bool = false,
+    /// Set after ARC on a packing whose callable never outlives the frame
+    /// building it (design.md "Frame Callables"): the callable lives in
+    /// storage the procedure reserves for this statement, with the frame
+    /// marker as its reference count, so retains and releases of it do
+    /// nothing. Its capture record stays with the `capture` local, which
+    /// releases it where the callable dies. A frame packing has no `reuse`.
+    frame: bool = false,
 };
 
 /// The byte offset of word `index` of a type table whose words are
@@ -1517,7 +1609,13 @@ pub const DynOp = union(enum) {
     /// ARC proved it) and the record fits its capacity; otherwise the
     /// callable is a fresh allocation and `reuse` is released. Its runtime
     /// value may be null, which transfers nothing.
-    closure: struct { proc: LirProcSpecId, capture: LocalId, reuse: ?LocalId = null, reuse_unique: bool = false },
+    ///
+    /// Set after ARC on a closure whose callable never outlives its frame
+    /// (design.md "Frame Callables"): `frame` is a `frame_callable` local,
+    /// the callable is built in its storage with the frame marker as its
+    /// reference count, and its capture record stays with `capture`, which
+    /// releases it where the callable dies. Such a closure has no `reuse`.
+    closure: struct { proc: LirProcSpecId, capture: LocalId, reuse: ?LocalId = null, reuse_unique: bool = false, frame: ?LocalId = null },
     /// A `view` dynamic target over the bytes at `address` (an `opaque_ptr`
     /// local), which the target's descriptor describes; it borrows from
     /// whatever owns those bytes: `owner`, the local holding an ownership
@@ -1794,7 +1892,10 @@ pub const ComptimeValueRef = struct {
 
 /// What it means for generated code to fail at one statement, beyond
 /// crashing there. Every identity but a literal producer's stays meaningful in
-/// every compilation of the program (`LirStore.failureMeaning`).
+/// every compilation of the program (`LirStore.failureMeaning`): a module is
+/// named by the identity its lowering gives it
+/// (`LirStore.lowering_module_identities`), which a program's table reads back
+/// as a checked key (`Program.Result.meaningByCheckedKey`).
 pub const FailureMeaning = union(enum) {
     /// Code checking rejected and already reported.
     checked_error,
@@ -1875,7 +1976,9 @@ pub const ProcShapes = packed struct(u32) {
     /// An erased call, whose reuse source is resolved once every rewrite
     /// before ARC has run.
     erased_call: bool = false,
-    reserved: u15 = 0,
+    /// A function value packing, which may be built in its frame.
+    erased_pack: bool = false,
+    reserved: u14 = 0,
 
     pub fn merged(self: ProcShapes, other: ProcShapes) ProcShapes {
         return @bitCast(@as(u32, @bitCast(self)) | @as(u32, @bitCast(other)));
@@ -1907,6 +2010,9 @@ pub const LirProcSpec = struct {
     frame_locals: LocalSpan = LocalSpan.empty(),
     join_points: JoinPointSpan = JoinPointSpan.empty(),
     body: collections.OptionalId(CFStmtId) = .none,
+    /// Where the body's rows lie, from lowering until the procedure-local
+    /// rewrites finish (`LirStore.procBodyChunks`); empty otherwise.
+    body_chunks: BodyChunkSpan = BodyChunkSpan.empty(),
     ret_layout: layout.Idx,
     /// Hidden capture-pointer parameter for an erased callable procedure.
     erased_capture_arg: collections.OptionalId(LocalId) = .none,
@@ -1952,6 +2058,13 @@ pub const LirProcSpec = struct {
     /// A procedure this object defines for other objects of the link: its
     /// symbol has global binding and it is a root of reachability and ARC.
     exported: bool = false,
+    /// Set by `.boxy` lowering on a worker another module's object may call:
+    /// an exported worker of a module unit, or a program's worker of the
+    /// kinds a module unit exports. A call from any emission unit may demand
+    /// its outcome-restitution variant (design.md "Outcome-Conditioned
+    /// Argument Restitution", published outcome variants), and an exported
+    /// one's object always emits and exports that variant.
+    outcome_publisher: bool = false,
     /// Exact self-tail sites produced by LIR construction, consumed by TRMC/TCE.
     tail_calls: OptionalTailCalls = .none,
     /// Set by the tail-drive pass on an erased-callable procedure with an
@@ -1997,9 +2110,31 @@ pub const LirProcSpec = struct {
     rc_ret_unique: bool = false,
     rc_ret_unique_fields: u64 = 0,
     rc_ret_conditions: U32Span = U32Span.empty(),
+    /// The outcome table of the outcome-restitution variant this procedure's
+    /// object publishes (design.md "Outcome-Conditioned Argument
+    /// Restitution", emission units), as one discriminant word and one
+    /// restituted-parameter mask word per row, sorted by discriminant; empty
+    /// when it publishes none. ARC sets it on a published exported worker,
+    /// whose object always emits that variant, and a body-less `external`
+    /// proc gets it back from the export record, so a call in any unit may
+    /// demand the variant (`ProcIdentity.ownershipVariant` names it).
+    rc_outcomes: U32Span = U32Span.empty(),
+    /// Bit `i` set: parameter `i` is a function value this procedure never
+    /// lets outlive its call (design.md "Frame Callables"), so a caller may
+    /// pass it a callable built in the caller's own frame. Solved after ARC
+    /// for a procedure with a body (`FrameCallables.solveParams`); a
+    /// body-less `external` proc gets the mask its object published.
+    nonescaping_fn_params: u64 = 0,
+    /// Bit `i` set: some call may hand parameter `i`'s callable over to
+    /// its callee through the erased ABI's reuse channel, whose body then
+    /// finds the captures unshared when the callable dies there. A caller
+    /// keeps a callable whose captures hold reference-counted data on the
+    /// heap for such a parameter, so a capture the body updates is still
+    /// updated in place. Solved and published with `nonescaping_fn_params`.
+    capture_reuse_fn_params: u64 = 0,
 
     comptime {
-        std.debug.assert(@sizeOf(LirProcSpec) == 216);
+        std.debug.assert(@sizeOf(LirProcSpec) == 256);
     }
 
     /// The body ARC analyzes and places reference counts in. A static

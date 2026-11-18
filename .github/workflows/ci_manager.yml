@@ -29,6 +29,12 @@ name: CI Manager
 # scarce runners, so their lanes also wait for `static-checks` to pass and are
 # skipped on draft PRs.
 #
+# `perf` (ci_perf.yml) compares the PR's release roc with its base's on Linux,
+# macOS and Windows and fails on a confirmed slowdown. `perf-build`
+# (ci_perf_build.yml) builds the binaries alongside `bsd-build-hello-world`,
+# whose Linux release build is the head binary. Like the macOS and Windows
+# lanes, both are skipped on draft PRs.
+#
 # Which MiniCI jobs each shard runs is defined in src/build/minici.zig
 # (`shards`); `static-checks` verifies that this file names every shard exactly
 # once through the `minici_shard:` matrix keys.
@@ -96,8 +102,8 @@ jobs:
               .github/workflows/alwayscheck.yml | .github/workflows/markdown_link_check.yml | \
               .github/workflows/nightly_gate.yml | .github/workflows/ci_zig.yml | \
               .github/workflows/ci_zig_nix.yml | .github/workflows/ci_cross_compile.yml | \
-              .github/workflows/ci_zig_benchmarks.yml | .github/workflows/stale.yml | \
-              .github/workflows/zulip_bot_high_p_issues.yml | .github/dependabot.yml | \
+              .github/workflows/stale.yml | .github/workflows/zulip_bot_high_p_issues.yml | \
+              .github/dependabot.yml | \
               .github/FUNDING.yml | .github/actionlint.yaml) return 0 ;;
               *) return 1 ;;
             esac
@@ -126,9 +132,11 @@ jobs:
           echo "heavy=$heavy"
           echo "heavy=$heavy" >> "$GITHUB_OUTPUT"
 
-  # Checks that read only tracked sources run once, here, instead of on every
-  # OS: their result cannot depend on the host. They are quick, so they gate the
-  # scarce macOS and Windows runners.
+  # Checks that read only tracked sources run here instead of on every OS:
+  # their result should not depend on the host. They are quick, so they gate
+  # the scarce macOS and Windows runners. The Windows shards run them again,
+  # with every other MiniCI job, because Windows paths and tools have broken
+  # them there alone (see `Lane.all` in src/build/minici.zig).
   static-checks:
     name: static-checks
     runs-on: ubuntu-24.04
@@ -260,6 +268,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
+      - name: Enlarge swap (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/enlarge-linux-swap
+
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.17.1
@@ -299,6 +311,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
+      - name: Enlarge pagefile (Windows)
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/enlarge-windows-pagefile
+
+      - name: Enlarge swap (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/enlarge-linux-swap
+
       # `use-tool-cache` installs Zig at $RUNNER_TOOL_CACHE/zig/<version>/<arch>,
       # the same path in this build job and in every shard of its OS. Without
       # it Zig lands in a random per-job directory, and Run steps that invoke
@@ -311,15 +331,7 @@ jobs:
           use-cache: false
           use-tool-cache: 'true'
 
-      - name: Install Rust wasm target
-        run: rustup target add wasm32-unknown-unknown
-
-      # RustGlue's glue-runtime contract case compiles a `#![no_std]` host with
-      # `rustc --target <arch>-unknown-linux-musl`, and build.zig derives that
-      # target from the host arch, so install the musl target per runner arch.
-      - name: Install Rust musl target (Linux)
-        if: runner.os == 'Linux'
-        run: rustup target add ${{ runner.arch == 'ARM64' && 'aarch64-unknown-linux-musl' || 'x86_64-unknown-linux-musl' }}
+      - uses: ./.github/actions/setup-rust
 
       - name: Cache Zig dependency packages
         uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
@@ -366,7 +378,7 @@ jobs:
       - name: Build MiniCI binaries
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build build-ci
+          command: zig build build-ci -Dembed-builtin-unit=true
           retry_count: 3
 
       # zstd on all cores, instead of upload-artifact's single-threaded zip
@@ -492,6 +504,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
+      - name: Enlarge pagefile (Windows)
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/enlarge-windows-pagefile
+
+      - name: Enlarge swap (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/enlarge-linux-swap
+
       # Same deterministic Zig path as the build job (see `use-tool-cache` in
       # `minici-build-linux`), so the restored cache hits.
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
@@ -525,15 +545,7 @@ jobs:
         shell: bash
         run: ./zig-out/bin/restamp-zig-cache
 
-      - name: Install Rust wasm target
-        run: rustup target add wasm32-unknown-unknown
-
-      # RustGlue's glue-runtime contract case compiles a `#![no_std]` host with
-      # `rustc --target <arch>-unknown-linux-musl`, and build.zig derives that
-      # target from the host arch, so install the musl target per runner arch.
-      - name: Install Rust musl target (Linux)
-        if: runner.os == 'Linux'
-        run: rustup target add ${{ runner.arch == 'ARM64' && 'aarch64-unknown-linux-musl' || 'x86_64-unknown-linux-musl' }}
+      - uses: ./.github/actions/setup-rust
 
       - name: Install Valgrind
         if: matrix.valgrind
@@ -689,6 +701,8 @@ jobs:
             valgrind: false
     steps: *minici_shard_steps
 
+  # Unlike macOS, Windows runs every MiniCI job, the source and primary-host
+  # ones included, so `zig build minici` stays green on Windows machines.
   minici-windows:
     needs: [check-changes, minici-build-windows]
     if: needs.check-changes.outputs.heavy == 'true'
@@ -726,6 +740,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
+      - name: Enlarge swap (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/enlarge-linux-swap
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
@@ -789,14 +807,20 @@ jobs:
   # them), so the BSD smoke test cross-compiles the builtin platform's hello
   # world on Linux and runs the executables inside BSD VMs below. OpenBSD is
   # absent because the builtin platform cannot cross-link it.
+  #
+  # The release roc it builds is also the Linux head binary of `perf`.
   bsd-build-hello-world:
     needs: check-changes
     if: needs.check-changes.outputs.heavy == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
+      - name: Enlarge swap (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/enlarge-linux-swap
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
@@ -836,6 +860,29 @@ jobs:
           path: bsd-hello-world
           if-no-files-found: error
           retention-days: 1
+
+      - name: Upload release roc for perf
+        uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
+        with:
+          name: roc-head-linux
+          path: zig-out/bin/roc
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  # Builds the release roc binaries `perf` compares, except the Linux head one
+  # from `bsd-build-hello-world`. See ci_perf_build.yml.
+  perf-build:
+    needs: check-changes
+    if: needs.check-changes.outputs.heavy == 'true' && !github.event.pull_request.draft
+    uses: ./.github/workflows/ci_perf_build.yml
+
+  # Fails on a slowdown of the PR's release roc that a second runner confirms.
+  # See ci_perf.yml.
+  perf:
+    needs: [check-changes, bsd-build-hello-world, perf-build]
+    if: needs.check-changes.outputs.heavy == 'true' && !github.event.pull_request.draft
+    uses: ./.github/workflows/ci_perf.yml
 
   # Runs on a Linux runner, where bsd-action boots the VM under QEMU. The
   # `cpa.sh` shell runs a step inside the VM.
@@ -894,13 +941,15 @@ jobs:
       - arm64-linux-hello-world
       - bsd-build-hello-world
       - bsd-hello-world
+      - perf-build
+      - perf
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     if: always()
     steps:
       # Every needed job must end with exactly the expected result, so a
       # cancelled or unexpectedly skipped job fails this check. The macOS and
-      # Windows lanes may be skipped only on a draft PR.
+      # Windows lanes and the perf jobs may be skipped only on a draft PR.
       - name: Check workflow results
         shell: bash
         env:
@@ -918,6 +967,8 @@ jobs:
           ARM64_HELLO_WORLD: ${{ needs.arm64-linux-hello-world.result }}
           BSD_BUILD_HELLO_WORLD: ${{ needs.bsd-build-hello-world.result }}
           BSD_HELLO_WORLD: ${{ needs.bsd-hello-world.result }}
+          PERF_BUILD: ${{ needs.perf-build.result }}
+          PERF: ${{ needs.perf.result }}
         run: |
           set -euo pipefail
           failed=0
@@ -951,6 +1002,8 @@ jobs:
             expect minici-macos "$MINICI_MACOS" "$scarce"
             expect minici-build-windows "$BUILD_WINDOWS" "$scarce"
             expect minici-windows "$MINICI_WINDOWS" "$scarce"
+            expect perf-build "$PERF_BUILD" "$scarce"
+            expect perf "$PERF" "$scarce"
           elif [ "$CHECK_CHANGES" = success ]; then
             echo "Docs-only change: the MiniCI lanes are not required."
           fi

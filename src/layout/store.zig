@@ -117,6 +117,11 @@ pub const Store = struct {
     layouts: collections.SafeList(Layout),
     /// The list layout each layout resolves to through boxes, or `Idx.none`.
     resolved_list_layouts: collections.SafeList(Idx),
+    /// Whether each layout lies on a cycle of the layout graph: a value of
+    /// it can hold, at some depth, another value of the same layout. Every
+    /// such cycle passes through a list or a box, and those are the layouts
+    /// whose teardown is queued (see `rc_helper.Plan`).
+    layouts_on_cycle: collections.SafeList(bool),
     tuple_elems: collections.SafeList(Idx),
     struct_fields: StructField.SafeMultiList,
     /// Each committed struct field's byte offset for both pointer widths,
@@ -198,6 +203,7 @@ pub const Store = struct {
             .allocator = allocator,
             .layouts = .{},
             .resolved_list_layouts = .{},
+            .layouts_on_cycle = .{},
             .tuple_elems = .{},
             .struct_fields = .{},
             .struct_field_offsets = .{},
@@ -356,8 +362,10 @@ pub const Store = struct {
         try self.buildExistingLayoutInternKey(Layout.boolType());
         try self.rememberScratchInternKey(.bool);
         try self.resolved_list_layouts.ensureTotalCapacity(allocator, num_primitives);
+        try self.layouts_on_cycle.ensureTotalCapacity(allocator, num_primitives);
         for (0..num_primitives) |_| {
             _ = self.resolved_list_layouts.appendAssumeCapacity(.none);
+            _ = self.layouts_on_cycle.appendAssumeCapacity(false);
         }
         return self;
     }
@@ -379,6 +387,7 @@ pub const Store = struct {
 
     pub fn deinit(self: *Self) void {
         self.resolved_list_layouts.deinit(self.allocator);
+        self.layouts_on_cycle.deinit(self.allocator);
         self.layouts.deinit(self.allocator);
         self.tuple_elems.deinit(self.allocator);
         self.struct_fields.deinit(self.allocator);
@@ -578,6 +587,10 @@ pub const Store = struct {
         const safe_list_idx = try self.layouts.append(self.allocator, layout);
         const idx: Idx = @fromBackingInt(@intCast(@backingInt(safe_list_idx)));
         _ = try self.resolved_list_layouts.append(self.allocator, self.computeResolvedListLayoutIdx(idx) orelse .none);
+        // A layout reserved outside a graph commit names only finished
+        // layouts, so it closes no cycle. A graph commit marks the cycles
+        // among the layouts it reserved once they are finished.
+        _ = try self.layouts_on_cycle.append(self.allocator, false);
         return idx;
     }
 
@@ -2404,8 +2417,87 @@ pub const Store = struct {
             const idx: Idx = @fromBackingInt(@intCast(i));
             self.resolved_list_layouts.items()[i] = self.computeResolvedListLayoutIdx(idx) orelse .none;
         }
+        try self.markLayoutCycles(scratch, @intCast(layouts_start));
 
         return value_layouts;
+    }
+
+    /// Mark every layout from `first` on that lies on a cycle of the layout
+    /// graph. Only those layouts are walked: an earlier layout was finished
+    /// before any of them existed, so it reaches none of them and lies on no
+    /// cycle with them.
+    fn markLayoutCycles(self: *Self, scratch: Allocator, first: usize) Allocator.Error!void {
+        const count = @as(usize, @intCast(self.layouts.len())) - first;
+        if (count == 0) return;
+        const unvisited = std.math.maxInt(u32);
+        const visit_index = try scratch.alloc(u32, count);
+        const lowlink = try scratch.alloc(u32, count);
+        const on_stack = try scratch.alloc(bool, count);
+        const names_itself = try scratch.alloc(bool, count);
+        @memset(visit_index, unvisited);
+        @memset(on_stack, false);
+        @memset(names_itself, false);
+
+        const Visit = struct { node: u32, children: digest_mod.Digests.Children };
+        var visits = std.ArrayList(Visit).empty;
+        var component_stack = std.ArrayList(u32).empty;
+        var next_index: u32 = 0;
+        const on_cycle = self.layouts_on_cycle.items();
+
+        for (0..count) |root| {
+            if (visit_index[root] != unvisited) continue;
+            try visits.append(scratch, .{ .node = @intCast(root), .children = undefined });
+            var entering = true;
+            while (visits.items.len != 0) {
+                const visit = &visits.items[visits.items.len - 1];
+                const node = visit.node;
+                if (entering) {
+                    visit.children = digest_mod.Digests.Children.init(self, @fromBackingInt(@intCast(first + node)));
+                    visit_index[node] = next_index;
+                    lowlink[node] = next_index;
+                    next_index += 1;
+                    on_stack[node] = true;
+                    try component_stack.append(scratch, node);
+                    entering = false;
+                }
+                if (visit.children.next()) |child_idx| {
+                    const child_raw: usize = @intCast(@backingInt(child_idx));
+                    if (child_raw < first) continue;
+                    const child: u32 = @intCast(child_raw - first);
+                    if (child == node) names_itself[node] = true;
+                    if (visit_index[child] == unvisited) {
+                        try visits.append(scratch, .{ .node = child, .children = undefined });
+                        entering = true;
+                    } else if (on_stack[child]) {
+                        lowlink[node] = @min(lowlink[node], visit_index[child]);
+                    }
+                    continue;
+                }
+                _ = visits.pop();
+                if (visits.items.len != 0) {
+                    const parent = visits.items[visits.items.len - 1].node;
+                    lowlink[parent] = @min(lowlink[parent], lowlink[node]);
+                }
+                if (lowlink[node] != visit_index[node]) continue;
+                // `node` roots a strongly connected component: everything
+                // above it on the component stack, and itself.
+                var component_start = component_stack.items.len - 1;
+                while (component_stack.items[component_start] != node) component_start -= 1;
+                const component = component_stack.items[component_start..];
+                const cyclic = component.len > 1 or names_itself[node];
+                for (component) |member| {
+                    on_stack[member] = false;
+                    on_cycle[first + member] = cyclic;
+                }
+                component_stack.shrinkRetainingCapacity(component_start);
+            }
+        }
+    }
+
+    /// Whether a value of this layout can hold, at some depth, another value
+    /// of the same layout.
+    pub fn layoutOnCycle(self: *const Self, idx: Idx) bool {
+        return self.layouts_on_cycle.items()[@backingInt(idx)];
     }
 
     /// Create a struct layout representing the sequential layout of closure captures.
@@ -4375,6 +4467,104 @@ test "layoutSizeAlign computes finite sizes for a recursive union whose record p
             try testing.expectEqual(commit.root_idx, block_layout.getIdx());
         }
     }
+}
+
+test "issue 12917: lists and boxes on a cycle of their type get queued teardown plans" {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // Statement := [
+    //     Call({ name: Str, args: List(U64) }),
+    //     Loop({ names: List(Str), block: List(Statement) }),
+    //     Boxed(Box(Statement)),
+    // ]
+    var graph = LayoutGraph{};
+    defer graph.deinit(testing.allocator);
+    const union_node = try graph.reserveNode(testing.allocator);
+    const list_stmt_node = try graph.reserveNode(testing.allocator);
+    const box_stmt_node = try graph.reserveNode(testing.allocator);
+    const list_u64_node = try graph.reserveNode(testing.allocator);
+    const list_str_node = try graph.reserveNode(testing.allocator);
+    const call_node = try graph.reserveNode(testing.allocator);
+    const loop_node = try graph.reserveNode(testing.allocator);
+    graph.setNode(list_stmt_node, .{ .list = .{ .local = union_node } });
+    graph.setNode(box_stmt_node, .{ .box = .{ .local = union_node } });
+    graph.setNode(list_u64_node, .{ .list = .{ .canonical = .u64 } });
+    graph.setNode(list_str_node, .{ .list = .{ .canonical = .str } });
+    graph.setNode(call_node, .{ .struct_ = try graph.appendFields(testing.allocator, &[_]graph_mod.Field{
+        .{ .index = 0, .child = .{ .canonical = .str } },
+        .{ .index = 1, .child = .{ .local = list_u64_node } },
+    }) });
+    graph.setNode(loop_node, .{ .struct_ = try graph.appendFields(testing.allocator, &[_]graph_mod.Field{
+        .{ .index = 0, .child = .{ .local = list_str_node } },
+        .{ .index = 1, .child = .{ .local = list_stmt_node } },
+    }) });
+    graph.setNode(union_node, .{ .tag_union = try graph.appendRefs(testing.allocator, &[_]GraphRef{
+        .{ .local = call_node },
+        .{ .local = loop_node },
+        .{ .local = box_stmt_node },
+    }) });
+
+    var commit = try store.commitGraph(&graph, .{ .local = union_node });
+    defer commit.deinit(testing.allocator);
+    const statement = commit.root_idx;
+    const variants = store.getTagUnionInfo(store.getLayout(statement)).variants;
+    const call = variants.get(0).payload_layout;
+    const loop = variants.get(1).payload_layout;
+    const box_stmt = variants.get(2).payload_layout;
+    const loop_fields = store.getStructInfo(store.getLayout(loop)).fields;
+    const list_str = loop_fields.get(0).layout;
+    const list_stmt = loop_fields.get(1).layout;
+    try testing.expectEqual(LayoutTag.list, store.getLayout(list_stmt).tag);
+    try testing.expectEqual(statement, store.getLayout(list_stmt).getIdx());
+    try testing.expectEqual(LayoutTag.box, store.getLayout(box_stmt).tag);
+
+    // Exactly the layouts a value of which can hold another value of the
+    // same layout.
+    for ([_]Idx{ statement, loop, list_stmt, box_stmt }) |on_cycle| try testing.expect(store.layoutOnCycle(on_cycle));
+    for ([_]Idx{ call, list_str, .str, .u64 }) |off_cycle| try testing.expect(!store.layoutOnCycle(off_cycle));
+
+    // The list and the box on the cycle are torn down through a queue, and
+    // their children take it.
+    const queued_child: rc_helper.HelperKey = .{ .op = .decref_queued, .layout_idx = statement };
+    try testing.expectEqual(queued_child, store.rcHelperPlan(.{ .op = .decref, .layout_idx = list_stmt }).list_decref_queued.child);
+    try testing.expectEqual(queued_child, store.rcHelperPlan(.{ .op = .free, .layout_idx = list_stmt }).list_free_queued.child);
+    try testing.expectEqual(queued_child, store.rcHelperPlan(.{ .op = .decref_queued, .layout_idx = list_stmt }).list_decref_queued.child);
+    try testing.expectEqual(queued_child, store.rcHelperPlan(.{ .op = .decref, .layout_idx = box_stmt }).box_decref_queued.child);
+    try testing.expectEqual(queued_child, store.rcHelperPlan(.{ .op = .free, .layout_idx = box_stmt }).box_free_queued.child);
+    try testing.expectEqual(std.meta.Tag(rc_helper.Plan).list_incref, std.meta.activeTag(store.rcHelperPlan(.{ .op = .incref, .layout_idx = list_stmt })));
+
+    // A list on no cycle keeps its plan and its plain child.
+    const list_str_plan = store.rcHelperPlan(.{ .op = .decref, .layout_idx = list_str }).list_decref;
+    try testing.expectEqual(rc_helper.HelperKey{ .op = .decref, .layout_idx = .str }, list_str_plan.child.?);
+
+    // A helper between two queued teardowns passes the queue only to the
+    // children on a cycle.
+    const union_plan = store.rcHelperPlan(.{ .op = .decref, .layout_idx = statement }).tag_union;
+    try testing.expectEqual(rc_helper.HelperKey{ .op = .decref, .layout_idx = call }, store.rcHelperTagUnionVariantPlan(union_plan, 0).?);
+    try testing.expectEqual(rc_helper.HelperKey{ .op = .decref_queued, .layout_idx = loop }, store.rcHelperTagUnionVariantPlan(union_plan, 1).?);
+    try testing.expectEqual(rc_helper.HelperKey{ .op = .decref_queued, .layout_idx = box_stmt }, store.rcHelperTagUnionVariantPlan(union_plan, 2).?);
+    const loop_plan = store.rcHelperPlan(.{ .op = .decref_queued, .layout_idx = loop }).struct_;
+    var queued_fields: usize = 0;
+    var plain_fields: usize = 0;
+    for (0..store.rcHelperStructFieldCount(loop_plan)) |field_index| {
+        const field_plan = store.rcHelperStructFieldPlan(loop_plan, @intCast(field_index)) orelse continue;
+        if (field_plan.child.layout_idx == list_stmt) {
+            try testing.expectEqual(rc_helper.RcOp.decref_queued, field_plan.child.op);
+            queued_fields += 1;
+        } else {
+            try testing.expectEqual(rc_helper.RcOp.decref, field_plan.child.op);
+            plain_fields += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), queued_fields);
+    try testing.expectEqual(@as(usize, 1), plain_fields);
+
+    // An increment reaches only the counts a value holds directly, so its
+    // children never take a queue.
+    const incref_plan = store.rcHelperPlan(.{ .op = .incref, .layout_idx = statement }).tag_union;
+    try testing.expectEqual(rc_helper.HelperKey{ .op = .incref, .layout_idx = loop }, store.rcHelperTagUnionVariantPlan(incref_plan, 1).?);
 }
 
 test "commitGraph resolves an unrolled copy against a committed leaf to the recursive layout (issue 11693)" {

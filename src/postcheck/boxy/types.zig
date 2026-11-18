@@ -229,13 +229,18 @@ pub const Modules = struct {
     }
 
     /// Rebase a checked default from its name store into this program's modules.
-    pub fn fieldDefault(self: *const Modules, module: ModuleIndex, default: checked.CheckedFieldDefault) FieldDefault {
+    pub fn fieldDefault(self: *const Modules, module: ModuleIndex, default: checked.CheckedFieldDefault) Allocator.Error!FieldDefault {
         const origin = default.origin() orelse invariant("a field default has no declaring module");
         const identity = self.get(module).nameStore().moduleIdentityBytes(origin).*;
-        return .{
-            .module = self.by_identity.get(identity) orelse invariant("a field default's declaring module is not in this lowering"),
-            .expr_node = default.expr_node,
-        };
+        const declaring = self.by_identity.get(identity) orelse invariant("a field default's declaring module is not in this lowering");
+        const bodies = self.get(declaring).bodies();
+        try bodies.demandIndex();
+        const ordinal = std.sort.binarySearch(u32, bodies.defaultExprs(), default.expr_node, struct {
+            fn order(target: u32, item: u32) std.math.Order {
+                return std.math.order(target, item);
+            }
+        }.order) orelse invariant("a field default's expression is no default of its module");
+        return .{ .module = declaring, .ordinal = @intCast(ordinal) };
     }
 
     /// The name module `index`'s workers and nominal types are digested
@@ -330,12 +335,15 @@ pub const FieldKind = enum(u8) {
     variable_slot,
 };
 
-/// A `??` default's immutable identity, rebased into this program's modules.
-/// Defaults affect codec semantics, not the field's inline representation.
-pub const FieldDefault = struct { module: ModuleIndex, expr_node: u32 };
+/// A `??` default's immutable identity, rebased into this program's modules:
+/// its declaring module and its place among that module's defaults, which
+/// an edit elsewhere in the module leaves alone (design.md "Caching Under
+/// `.boxy`"). Defaults affect codec semantics, not the field's inline
+/// representation.
+pub const FieldDefault = struct { module: ModuleIndex, ordinal: u32 };
 
 /// An optional `FieldDefault` at its own size.
-pub const OptionalFieldDefault = collections.OptionalStruct(FieldDefault, "expr_node");
+pub const OptionalFieldDefault = collections.OptionalStruct(FieldDefault, "ordinal");
 
 /// One field of a record type: its name, type, and storage kind.
 pub const Field = struct {
@@ -480,6 +488,10 @@ pub const Env = struct {
     /// one (`VarPositions`): a worker's environment carries its scheme's, so
     /// its conversions' lookups do not scan the scheme.
     positions: ?*const VarPositions = null,
+    /// Only literal-chain frames carry a checked substitution. Conversion
+    /// substitutes a demanded root into a concrete environment before entering the
+    /// ordinary converter; ordinary variable lookups remain concrete.
+    lazy_substitution: ?*LazySubstitution = null,
 
     pub const empty_bindings: []const checked.CheckedTypeId = &.{};
 
@@ -490,6 +502,7 @@ pub const Env = struct {
 
     /// The scheme position `id` is bound at, if any.
     pub fn lookupIndex(self: Env, module: ModuleIndex, id: checked.CheckedTypeId) ?usize {
+        std.debug.assert(self.lazy_substitution == null);
         if (module != self.module) return null;
         if (self.positions) |positions| {
             std.debug.assert(positions.vars.ptr == self.vars.ptr and positions.vars.len == self.vars.len);
@@ -502,18 +515,202 @@ pub const Env = struct {
     }
 };
 
+/// A literal frame's checked instantiation, resolved lazily: each actual is
+/// converted only when a demanded type reads its variable. It is not a
+/// runtime call instance, and its unused bindings can mention scopes the
+/// literal root never entered.
+pub const LazySubstitution = struct {
+    module: ModuleIndex,
+    vars: []const checked.CheckedTypeId,
+    actuals: []const checked.CheckedTypeId,
+    source_module: ModuleIndex,
+    source: Env,
+    lexical: Env,
+    memo: std.AutoHashMapUnmanaged(Key, TypeId) = .empty,
+    allocator: Allocator,
+
+    const Key = struct { module: ModuleIndex, ty: checked.CheckedTypeId, seal_kinds: bool };
+    const Query = struct { module: ModuleIndex, ty: checked.CheckedTypeId, env: Env };
+    const Source = union(enum) { query: Query, concrete: TypeId };
+    const Binding = struct { variable: checked.CheckedTypeId, source: Source };
+    const Work = struct {
+        query: Query,
+        bindings: []const Binding,
+        values: []TypeId,
+        next: usize = 0,
+    };
+
+    /// The arena owns the frame, its memo, and the immutable substitution.
+    pub fn init(arena: Allocator, module: ModuleIndex, vars: []const checked.CheckedTypeId, actuals: []const checked.CheckedTypeId, source_module: ModuleIndex, source: Env, lexical: Env) Allocator.Error!Env {
+        if (vars.len != actuals.len) invariant("a literal frame's substitution differs from its scheme");
+        if (vars.len == 0) return lexical;
+        const frame = try arena.create(LazySubstitution);
+        frame.* = .{ .module = module, .vars = vars, .actuals = actuals, .source_module = source_module, .source = source, .lexical = lexical, .allocator = arena };
+        return .{ .module = module, .vars = &.{}, .bound = &.{}, .lazy_substitution = frame };
+    }
+
+    fn binding(converter: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, original: Env) ?struct { source: Source, descend: bool = false } {
+        var env = original;
+        while (env.lazy_substitution) |frame| {
+            if (module == frame.module) {
+                if (std.mem.findScalar(checked.CheckedTypeId, frame.vars, ty)) |index| {
+                    const actual = frame.actuals[index];
+                    return .{ .source = .{ .query = .{ .module = frame.source_module, .ty = actual, .env = frame.source } } };
+                }
+            }
+            env = frame.lexical;
+        }
+        if (env.lookupIndex(module, ty)) |index| return .{
+            .source = .{ .concrete = env.bound[index] },
+            .descend = converter.tailNodeAt(env, index) != null,
+        };
+        return null;
+    }
+
+    /// Discover only the bindings the ordinary conversion will read. Field
+    /// kinds and whole-row bindings count too, not just flex/rigid leaves.
+    fn dependencies(converter: Converter, query: Query, allocator: Allocator) Allocator.Error![]const Binding {
+        var pending: std.ArrayList(Converter.Child) = .empty;
+        defer pending.deinit(allocator);
+        var seen: CheckedTypeMap(void) = .empty;
+        defer seen.deinit(allocator);
+        var bindings: std.ArrayList(Binding) = .empty;
+        errdefer bindings.deinit(allocator);
+        try pending.append(allocator, .{ .module = query.module, .ty = query.ty });
+        const store = converter.modules.get(query.module).types();
+        while (pending.pop()) |child| {
+            const ty = child.ty;
+            if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
+            if (binding(converter, query.module, ty, query.env)) |resolved| {
+                try bindings.append(allocator, .{ .variable = ty, .source = resolved.source });
+                if (!resolved.descend) continue;
+            }
+            switch (store.payload(ty)) {
+                // Use precisely the converter's row flattening and alias
+                // traversal, with the field-kind reads finish performs too.
+                .alias, .record, .tag_union, .tuple, .function, .nominal => {
+                    _ = try converter.appendChildren(&pending, query.module, store.payload(ty), true);
+                },
+                .pending, .err, .flex, .rigid, .field_kind, .empty_record, .empty_tag_union => {},
+            }
+        }
+        return try bindings.toOwnedSlice(allocator);
+    }
+
+    fn known(converter: Converter, query: Query) Allocator.Error!?TypeId {
+        const frame = query.env.lazy_substitution orelse return try converter.convert(query.module, query.ty, query.env);
+        return frame.memo.get(.{ .module = query.module, .ty = query.ty, .seal_kinds = converter.seal_undetermined_kinds });
+    }
+
+    fn push(converter: Converter, stack: *std.ArrayList(Work), query: Query, allocator: Allocator) Allocator.Error!void {
+        const bindings = try dependencies(converter, query, allocator);
+        errdefer allocator.free(bindings);
+        const values = try allocator.alloc(TypeId, bindings.len);
+        errdefer allocator.free(values);
+        try stack.append(allocator, .{ .query = query, .bindings = bindings, .values = values });
+    }
+
+    /// Substitute each demanded type once per frame, using an explicit dependency
+    /// stack. No type conversion or dictionary lookup resolves unused bindings.
+    fn convert(converter: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env) Allocator.Error!TypeId {
+        const allocator = converter.store.allocator;
+        const root: Query = .{ .module = module, .ty = ty, .env = env };
+        if (try known(converter, root)) |value| return value;
+        var stack: std.ArrayList(Work) = .empty;
+        defer {
+            for (stack.items) |work| {
+                allocator.free(work.bindings);
+                allocator.free(work.values);
+            }
+            stack.deinit(allocator);
+        }
+        try push(converter, &stack, root, allocator);
+        while (stack.items.len != 0) {
+            const work = &stack.items[stack.items.len - 1];
+            if (work.next < work.bindings.len) {
+                const child = switch (work.bindings[work.next].source) {
+                    .query => |query| query,
+                    .concrete => |value| {
+                        work.values[work.next] = value;
+                        work.next += 1;
+                        continue;
+                    },
+                };
+                if (try known(converter, child)) |value| {
+                    work.values[work.next] = value;
+                    work.next += 1;
+                } else try push(converter, &stack, child, allocator);
+                continue;
+            }
+            const variables = try allocator.alloc(checked.CheckedTypeId, work.bindings.len);
+            defer allocator.free(variables);
+            for (work.bindings, variables) |entry, *variable| variable.* = entry.variable;
+            const value = try converter.convert(work.query.module, work.query.ty, .{ .module = work.query.module, .vars = variables, .bound = work.values });
+            const owner = work.query.env.lazy_substitution.?;
+            try owner.memo.put(owner.allocator, .{ .module = work.query.module, .ty = work.query.ty, .seal_kinds = converter.seal_undetermined_kinds }, value);
+            allocator.free(work.bindings);
+            allocator.free(work.values);
+            _ = stack.pop();
+        }
+        return (try known(converter, root)).?;
+    }
+};
+
+/// A map keyed by checked type ids. Those live in two ranges, source
+/// variables counting up from zero and synthesized types counting up from
+/// the high bit (`check.CheckedTypeIds`), and a `DenseMap`'s chunk directory
+/// spans every chunk between the lowest and highest key it holds, so one
+/// map holding a key of each range would allocate, clear and free a
+/// directory over half the 32-bit id space. This keeps one map per range.
+pub fn CheckedTypeMap(comptime V: type) type {
+    return struct {
+        const Self = @This();
+        const Range = collections.DenseMapUnmanaged(checked.CheckedTypeId, V);
+
+        source: Range = .empty,
+        synthesized: Range = .empty,
+
+        pub const empty: Self = .{};
+
+        pub fn get(self: *const Self, key: checked.CheckedTypeId) ?V {
+            return if (check.CheckedTypeIds.isSynthesized(key)) self.synthesized.get(key) else self.source.get(key);
+        }
+
+        pub fn getOrPut(self: *Self, gpa: Allocator, key: checked.CheckedTypeId) Allocator.Error!Range.GetOrPutResult {
+            const range = if (check.CheckedTypeIds.isSynthesized(key)) &self.synthesized else &self.source;
+            return range.getOrPut(gpa, key);
+        }
+
+        pub fn count(self: *const Self) usize {
+            return self.source.count() + self.synthesized.count();
+        }
+
+        /// Empty the map, keeping its storage, in time proportional to the
+        /// entries it held.
+        pub fn clearRetainingCapacity(self: *Self) void {
+            self.source.clearRetainingCapacity();
+            self.synthesized.clearRetainingCapacity();
+        }
+
+        pub fn deinit(self: *Self, gpa: Allocator) void {
+            self.source.deinit(gpa);
+            self.synthesized.deinit(gpa);
+            self.* = undefined;
+        }
+    };
+}
+
 /// The position of each variable of a scope's variable list `vars`, for
 /// `Env.lookup`: a variable listed twice (an enclosing scheme's variable that
 /// a generalized local's scheme lists again) is at its first position, where
 /// a scan finds it.
 pub const VarPositions = struct {
     vars: []const checked.CheckedTypeId,
-    map: collections.DenseMapUnmanaged(checked.CheckedTypeId, u32) = .empty,
+    map: CheckedTypeMap(u32) = .empty,
 
     pub fn init(allocator: Allocator, vars: []const checked.CheckedTypeId) Allocator.Error!VarPositions {
         var positions: VarPositions = .{ .vars = vars };
         errdefer positions.deinit(allocator);
-        try positions.map.ensureTotalCapacity(allocator, vars.len);
         for (vars, 0..) |variable, index| {
             const entry = try positions.map.getOrPut(allocator, variable);
             if (!entry.found_existing) entry.value_ptr.* = @intCast(index);
@@ -554,6 +751,21 @@ pub const Store = struct {
     declared_entries: std.ArrayList([]const DeclaredEntry) = .empty,
     span_arena: std.heap.ArenaAllocator,
     interned: std.HashMapUnmanaged(InternKey, TypeId, InternContext, std.hash_map.default_max_load_percentage) = .empty,
+    /// The checked types the current walk over a checked type has visited
+    /// (`beginCheckedWalk`). A fresh dense map per walk would allocate a
+    /// chunk for each id it meets and a directory spanning the ids between,
+    /// and free them all again, though a walk visits only a few types spread
+    /// over the module's whole id range; this one keeps its storage across
+    /// walks, so a walk pays only for the entries it adds.
+    checked_walk: CheckedTypeMap(void) = .empty,
+    /// The node `intern` gave each primitive, the variable of each low index,
+    /// the empty record and the empty tag union, once one was asked for:
+    /// these leaves are asked for far more often than they are new, and
+    /// interned nodes never change.
+    primitive_ids: std.EnumArray(Primitive, ?TypeId) = .initFill(null),
+    variable_ids: std.ArrayList(collections.OptionalId(TypeId)) = .empty,
+    empty_record_id: ?TypeId = null,
+    empty_tag_union_id: ?TypeId = null,
     key_bytes: std.ArrayList(u8) = .empty,
     scratch_key: std.ArrayList(u8) = .empty,
 
@@ -658,6 +870,8 @@ pub const Store = struct {
         self.declared_entries.deinit(self.allocator);
         self.span_arena.deinit();
         self.interned.deinit(self.allocator);
+        self.checked_walk.deinit(self.allocator);
+        self.variable_ids.deinit(self.allocator);
         self.key_bytes.deinit(self.allocator);
         self.scratch_key.deinit(self.allocator);
         self.name_texts.deinit(self.allocator);
@@ -906,7 +1120,7 @@ pub const Store = struct {
                     try self.scratch_key.append(self.allocator, @intFromBool(field.default.get() != null));
                     if (field.default.get()) |default| {
                         try self.keyU32(@backingInt(default.module));
-                        try self.keyU32(default.expr_node);
+                        try self.keyU32(default.ordinal);
                     }
                     closed = closed and self.isClosed(field.ty) and field.kind != .variable_slot;
                 }
@@ -1139,21 +1353,58 @@ pub const Store = struct {
         return .{ .name = name, .ty = ty, .kind = .inline_slot };
     }
 
+    /// Start a walk over checked types, which records the types it visits
+    /// with `visitChecked` and ends with `endCheckedWalk`. Walks do not nest.
+    pub fn beginCheckedWalk(self: *Store) void {
+        std.debug.assert(self.checked_walk.count() == 0);
+    }
+
+    /// Whether the current walk meets `ty` for the first time, recording it.
+    pub fn visitChecked(self: *Store, ty: checked.CheckedTypeId) Allocator.Error!bool {
+        return !(try self.checked_walk.getOrPut(self.allocator, ty)).found_existing;
+    }
+
+    pub fn endCheckedWalk(self: *Store) void {
+        self.checked_walk.clearRetainingCapacity();
+    }
+
     pub fn primitive(self: *Store, value: Primitive) Allocator.Error!TypeId {
-        return self.intern(.{ .primitive = value });
+        const slot = self.primitive_ids.getPtr(value);
+        if (slot.*) |known| return known;
+        const id = try self.intern(.{ .primitive = value });
+        slot.* = id;
+        return id;
     }
 
     pub fn variable(self: *Store, index: u32) Allocator.Error!TypeId {
-        return self.intern(.{ .variable = index });
+        // Scope variables count up from zero; a relation's placeholder
+        // variables sit far above them (`Program.relateThroughRequirements`)
+        // and are interned without a slot here.
+        if (index >= cached_variable_count) return try self.intern(.{ .variable = index });
+        if (index < self.variable_ids.items.len) {
+            if (self.variable_ids.items[index].get()) |known| return known;
+        } else try self.variable_ids.appendNTimes(self.allocator, .none, index + 1 - self.variable_ids.items.len);
+        const id = try self.intern(.{ .variable = index });
+        self.variable_ids.items[index] = .some(id);
+        return id;
     }
 
+    /// How many of the lowest variable indices `variable` keeps a node for.
+    const cached_variable_count = 1 << 12;
+
     pub fn emptyRecord(self: *Store) Allocator.Error!TypeId {
-        return self.intern(.empty_record);
+        if (self.empty_record_id) |known| return known;
+        const id = try self.intern(.empty_record);
+        self.empty_record_id = id;
+        return id;
     }
 
     /// The empty tag union: a type with no values.
     pub fn emptyTagUnion(self: *Store) Allocator.Error!TypeId {
-        return self.intern(.{ .tag_union = .{ .tags = &.{}, .ext = null } });
+        if (self.empty_tag_union_id) |known| return known;
+        const id = try self.intern(.{ .tag_union = .{ .tags = &.{}, .ext = null } });
+        self.empty_tag_union_id = id;
+        return id;
     }
 };
 
@@ -1212,6 +1463,11 @@ pub const Converter = struct {
     const Frame = struct {
         module: ModuleIndex,
         ty: checked.CheckedTypeId,
+        /// The checked payload of `ty`, read once by `leaf`.
+        payload: checked.CheckedTypePayload,
+        /// `rootHasIdentityVariables` of `ty`, as `leaf` found it; null
+        /// when the converter seals undetermined kinds and memoizes nothing.
+        identity_variables: ?bool,
         /// The children converted so far, in `results`.
         results_start: usize,
         /// Children still to convert, in `pending`.
@@ -1227,6 +1483,7 @@ pub const Converter = struct {
     /// A variable `env` does not bind must seal to its row default or its
     /// numeric default; any other unbound variable is an invariant failure.
     pub fn convert(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env) Allocator.Error!TypeId {
+        if (env.lazy_substitution != null) return LazySubstitution.convert(self, module, ty, env);
         const allocator = self.store.allocator;
         var frames: std.ArrayList(Frame) = .empty;
         defer frames.deinit(allocator);
@@ -1245,26 +1502,31 @@ pub const Converter = struct {
         // reaching one is shared only between scopes that name none.
         var shared: ?bool = null;
         var root_reaches = false;
-        if (try self.leaf(module, ty, env, &shared, &root_reaches)) |done| return done;
-        try self.pushFrame(&frames, &pending, results.items.len, module, ty);
+        switch (try self.leaf(module, ty, env, &shared, &root_reaches)) {
+            .done => |done| return done,
+            .composite => |composite| try self.pushFrame(&frames, &pending, results.items.len, module, ty, composite),
+        }
         while (frames.items.len > 0) {
             const top = &frames.items[frames.items.len - 1];
             if (top.pending_next < pending.items.len) {
                 const child = pending.items[top.pending_next];
                 top.pending_next += 1;
                 var child_reaches = false;
-                if (try self.leaf(child.module, child.ty, env, &shared, &child_reaches)) |done| {
-                    try results.append(allocator, done);
-                    try reaches.append(allocator, child_reaches);
-                } else {
-                    if (frames.items.len > 1_000_000) invariant("checked type conversion nested past every finite type");
-                    try self.pushFrame(&frames, &pending, results.items.len, child.module, child.ty);
+                switch (try self.leaf(child.module, child.ty, env, &shared, &child_reaches)) {
+                    .done => |done| {
+                        try results.append(allocator, done);
+                        try reaches.append(allocator, child_reaches);
+                    },
+                    .composite => |composite| {
+                        if (frames.items.len > 1_000_000) invariant("checked type conversion nested past every finite type");
+                        try self.pushFrame(&frames, &pending, results.items.len, child.module, child.ty, composite);
+                    },
                 }
                 continue;
             }
             const frame = frames.pop().?;
             const children = results.items[frame.results_start..];
-            const built = try self.finish(frame.module, frame.ty, children, env);
+            const built = try self.finish(frame.module, frame.ty, frame.payload, children, env);
             const built_reaches = frame.ends_in_uncommitted_tail or std.mem.findScalar(bool, reaches.items[frame.results_start..], true) != null;
             results.shrinkRetainingCapacity(frame.results_start);
             reaches.shrinkRetainingCapacity(frame.results_start);
@@ -1272,7 +1534,7 @@ pub const Converter = struct {
             // A type with no identity variables converts the same under
             // every environment that names no closed row node it reaches.
             const memo: Store.ClosedMemo = .{ .ty = built, .reaches_row_node = built_reaches };
-            if (!self.seal_undetermined_kinds and !try rootHasIdentityVariables(self.modules.get(frame.module), frame.ty) and (!built_reaches or try self.namesNoRow(env, &shared))) {
+            if (frame.identity_variables == false and (!built_reaches or try self.namesNoRow(env, &shared))) {
                 try self.store.closed_memo.put(allocator, .{ .module = frame.module, .ty = frame.ty }, memo);
             } else if (schemeKey(frame.module, frame.ty, env)) |key| {
                 if (!self.seal_undetermined_kinds) try self.store.scheme_memo.put(allocator, key, memo);
@@ -1348,10 +1610,18 @@ pub const Converter = struct {
         return self.tailNodeAt(env, index);
     }
 
+    /// What `leaf` finds for a type: its node, or the checked payload of a
+    /// type whose children convert first, with whether it reaches an
+    /// identity variable (`Frame.identity_variables`).
+    const Leaf = union(enum) {
+        done: TypeId,
+        composite: struct { payload: checked.CheckedTypePayload, identity_variables: ?bool },
+    };
+
     /// The node for `ty` when it needs no children converted first.
     /// `reaches` says whether the node reaches a record or tag union a
     /// scope can name as a closed row node (`ClosedMemo`).
-    fn leaf(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env, shared: *?bool, reaches: *bool) Allocator.Error!?TypeId {
+    fn leaf(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env, shared: *?bool, reaches: *bool) Allocator.Error!Leaf {
         reaches.* = false;
         if (env.lookupIndex(module, ty)) |index| {
             // A closed row node of the scope converts as its own structure.
@@ -1362,16 +1632,17 @@ pub const Converter = struct {
                     .record, .tag_union => true,
                     .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .empty_tag_union, .field_kind => false,
                 };
-                return env.bound[index];
+                return .{ .done = env.bound[index] };
             }
         }
-        if (self.platformIdentity(module, ty)) |solved| return solved;
+        if (self.platformIdentity(module, ty)) |solved| return .{ .done = solved };
         const view = self.modules.get(module);
-        if (!self.seal_undetermined_kinds and !try rootHasIdentityVariables(view, ty)) {
+        const identity_variables: ?bool = if (self.seal_undetermined_kinds) null else try rootHasIdentityVariables(view, ty);
+        if (identity_variables == false) {
             if (self.store.closed_memo.get(.{ .module = module, .ty = ty })) |memo| {
                 if (!memo.reaches_row_node or try self.namesNoRow(env, shared)) {
                     reaches.* = memo.reaches_row_node;
-                    return memo.ty;
+                    return .{ .done = memo.ty };
                 }
             }
         }
@@ -1379,11 +1650,12 @@ pub const Converter = struct {
             if (schemeKey(module, ty, env)) |key| {
                 if (self.store.scheme_memo.get(key)) |memo| {
                     reaches.* = memo.reaches_row_node;
-                    return memo.ty;
+                    return .{ .done = memo.ty };
                 }
             }
         }
-        return switch (view.types().payload(ty)) {
+        const payload = view.types().payload(ty);
+        const node: ?TypeId = switch (payload) {
             .pending => invariant("a pending checked type reached Boxy lowering"),
             .err => invariant("an erroneous checked type reached Boxy lowering"),
             .flex, .rigid => |variable| try self.sealVariable(variable),
@@ -1399,6 +1671,8 @@ pub const Converter = struct {
             .field_kind => |kind| try self.store.committedKind(kind == .optional),
             .alias, .record, .tuple, .function, .tag_union => null,
         };
+        if (node) |done| return .{ .done = done };
+        return .{ .composite = .{ .payload = payload, .identity_variables = identity_variables } };
     }
 
     /// The distinct flex and rigid variables the checked type `root` of
@@ -1409,11 +1683,11 @@ pub const Converter = struct {
         var found: std.ArrayList(checked.CheckedTypeId) = .empty;
         var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
         defer pending.deinit(scratch);
-        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
-        defer seen.deinit(scratch);
+        self.store.beginCheckedWalk();
+        defer self.store.endCheckedWalk();
         try pending.append(scratch, root);
         while (pending.pop()) |ty| {
-            if ((try seen.getOrPut(scratch, ty)).found_existing) continue;
+            if (!try self.store.visitChecked(ty)) continue;
             const start = pending.items.len;
             switch (types.payload(ty)) {
                 .flex, .rigid => try found.append(allocator, ty),
@@ -1472,13 +1746,30 @@ pub const Converter = struct {
         return try self.store.emptyTagUnion();
     }
 
-    fn pushFrame(self: Converter, frames: *std.ArrayList(Frame), pending: *std.ArrayList(Child), results_start: usize, module: ModuleIndex, ty: checked.CheckedTypeId) Allocator.Error!void {
+    fn pushFrame(self: Converter, frames: *std.ArrayList(Frame), pending: *std.ArrayList(Child), results_start: usize, module: ModuleIndex, ty: checked.CheckedTypeId, composite: @FieldType(Leaf, "composite")) Allocator.Error!void {
         const allocator = self.store.allocator;
         const pending_start = pending.items.len;
+        const ends_in_uncommitted_tail = try self.appendChildren(pending, module, composite.payload, false);
+        try frames.append(allocator, .{
+            .module = module,
+            .ty = ty,
+            .payload = composite.payload,
+            .identity_variables = composite.identity_variables,
+            .results_start = results_start,
+            .pending_start = pending_start,
+            .pending_next = pending_start,
+            .ends_in_uncommitted_tail = ends_in_uncommitted_tail,
+        });
+    }
+
+    /// Lazy substitution and conversion must visit the same flattened row children.
+    /// Lazy substitution additionally binds the field kinds that finish reads.
+    fn appendChildren(self: Converter, pending: *std.ArrayList(Child), module: ModuleIndex, payload: checked.CheckedTypePayload, comptime include_field_kinds: bool) Allocator.Error!bool {
+        const allocator = self.store.allocator;
         const view = self.modules.get(module);
         const types = view.types();
         var ends_in_uncommitted_tail = false;
-        switch (types.payload(ty)) {
+        switch (payload) {
             .alias => |alias| try pending.append(allocator, .{ .module = module, .ty = alias.backing }),
             .record => |record| {
                 var current_fields = record.fields;
@@ -1487,6 +1778,8 @@ pub const Converter = struct {
                     for (0..current_fields.len()) |field_index| {
                         const field = current_fields.get(field_index);
                         try pending.append(allocator, .{ .module = module, .ty = field.ty });
+                        if (include_field_kinds and !self.seal_undetermined_kinds)
+                            if (field.kind.undeterminedVariable()) |variable| try pending.append(allocator, .{ .module = module, .ty = variable });
                     }
                     current_fields = .empty;
                     switch (types.payload(current)) {
@@ -1539,22 +1832,15 @@ pub const Converter = struct {
             .nominal => |nominal| for (nominal.args) |arg| try pending.append(allocator, .{ .module = module, .ty = arg }),
             .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => unreachable, // `leaf` answers these
         }
-        try frames.append(allocator, .{
-            .module = module,
-            .ty = ty,
-            .results_start = results_start,
-            .pending_start = pending_start,
-            .pending_next = pending_start,
-            .ends_in_uncommitted_tail = ends_in_uncommitted_tail,
-        });
+        return ends_in_uncommitted_tail;
     }
 
-    fn finish(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, children: []const TypeId, env: Env) Allocator.Error!TypeId {
+    fn finish(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, payload: checked.CheckedTypePayload, children: []const TypeId, env: Env) Allocator.Error!TypeId {
         const allocator = self.store.allocator;
         const view = self.modules.get(module);
         const types = view.types();
         const name_store = view.nameStore();
-        switch (types.payload(ty)) {
+        switch (payload) {
             .alias => return children[0],
             .tuple => return try self.store.intern(.{ .tuple = children }),
             .function => |function| return try self.store.intern(.{ .function = .{
@@ -1572,7 +1858,7 @@ pub const Converter = struct {
                     for (0..current_fields.len()) |field_index| {
                         const field = current_fields.get(field_index);
                         const field_name = try self.store.internName(name_store.recordFieldLabelText(field.name));
-                        try fields.append(allocator, self.convertedField(module, field_name, children[child_index], field.kind, env));
+                        try fields.append(allocator, try self.convertedField(module, field_name, children[child_index], field.kind, env));
                         child_index += 1;
                     }
                     current_fields = .empty;
@@ -1746,10 +2032,10 @@ pub const Converter = struct {
     /// A record field of value type `ty`: an undetermined kind takes the
     /// binding its scheme gives it, and a kind no scope binds commits to
     /// `required`, as it does for every other strategy.
-    fn convertedField(self: Converter, module: ModuleIndex, name: NameId, ty: TypeId, kind: checked.CheckedFieldKind, env: Env) Field {
+    fn convertedField(self: Converter, module: ModuleIndex, name: NameId, ty: TypeId, kind: checked.CheckedFieldKind, env: Env) Allocator.Error!Field {
         return switch (kind.tag) {
             .required => .{ .name = name, .ty = ty, .kind = .inline_slot },
-            .defaulted => .{ .name = name, .ty = ty, .kind = .inline_slot, .default = .some(self.modules.fieldDefault(module, kind.default)) },
+            .defaulted => .{ .name = name, .ty = ty, .kind = .inline_slot, .default = .some(try self.modules.fieldDefault(module, kind.default)) },
             .optional => .{ .name = name, .ty = ty, .kind = .presence_slot },
             .undetermined => {
                 if (!self.seal_undetermined_kinds) {
@@ -1974,6 +2260,7 @@ pub const Converter = struct {
     /// whatever its text (design.md "Name Identity"): the runtime node's id
     /// digests the declaring module's link name and the declaration.
     fn declName(self: Converter, decl: NominalDeclKey, text: []const u8) Allocator.Error!NameId {
+        if (self.store.decl_name_ids.get(decl)) |existing| return existing;
         const view = self.modules.get(decl.module);
         const declaration = view.types().nominalDeclarationById(decl.decl);
         // Declarations sharing a name are told apart by their order, which
@@ -2070,13 +2357,13 @@ test "record interning preserves immutable field default identities" {
     const u8_ty = try store.primitive(.u8);
     var fields = [_]Field{.{ .name = count, .ty = u8_ty, .kind = .inline_slot }};
     const required = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
-    const first_default: FieldDefault = .{ .module = first_module, .expr_node = 10 };
+    const first_default: FieldDefault = .{ .module = first_module, .ordinal = 10 };
     fields[0].default = .some(first_default);
     const first = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
     try std.testing.expectEqual(first, try store.intern(.{ .record = .{ .fields = &fields, .ext = null } }));
-    fields[0].default = .some(.{ .module = first_module, .expr_node = 20 });
+    fields[0].default = .some(.{ .module = first_module, .ordinal = 20 });
     const other_expr = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
-    fields[0].default = .some(.{ .module = second_module, .expr_node = 10 });
+    fields[0].default = .some(.{ .module = second_module, .ordinal = 10 });
     const other_module = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
     try std.testing.expect(required != first);
     try std.testing.expect(first != other_expr);
@@ -2304,6 +2591,112 @@ fn errorTestStore(allocator: Allocator) Allocator.Error!checked.CheckedTypeStore
     var store = checked.CheckedTypeStore{};
     store.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(allocator, std.testing.io, 0));
     return store;
+}
+
+test "Boxy literal substitution visits only demanded substitutions and preserves lexical scope" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var checked_store = try errorTestStore(a);
+    defer checked_store.deinit(a);
+    const record = try checked_store.appendSyntheticPayloadRoot(a, .empty_record);
+    const tags = try checked_store.appendSyntheticPayloadRoot(a, .empty_tag_union);
+    const first = try checked_store.reserveSyntheticTypeRoot(a);
+    try checked_store.declareIdentityInstance(a, first);
+    try checked_store.fillSyntheticTypeRoot(a, first, .{ .flex = .{} });
+    const second = try checked_store.reserveSyntheticTypeRoot(a);
+    try checked_store.declareIdentityInstance(a, second);
+    try checked_store.fillSyntheticTypeRoot(a, second, .{ .flex = .{} });
+    // Converting this unused argument would violate the record-row invariant.
+    const unrelated = try checked_store.appendSyntheticPayloadRoot(a, .{ .record = .{ .fields = &.{}, .ext = tags } });
+    const pair = try checked_store.appendSyntheticPayloadRoot(a, .{ .tuple = try a.dupe(checked.CheckedTypeId, &.{ first, second }) });
+    var modules = Modules{ .allocator = a };
+    defer modules.deinit();
+    const module = try addErrorTestModule(&modules, &checked_store);
+    var store = Store.init(a);
+    defer store.deinit();
+    const converter: Converter = .{ .store = &store, .modules = &modules };
+    const empty: Env = .{ .module = module, .vars = &.{}, .bound = &.{} };
+    const outer = try LazySubstitution.init(arena.allocator(), module, &.{ first, second }, &.{ record, unrelated }, module, empty, empty);
+    try std.testing.expectEqual(try store.emptyRecord(), try converter.convert(module, first, outer));
+    try std.testing.expectEqual(@as(usize, 1), outer.lazy_substitution.?.memo.count());
+    // The local's own second binding shadows the unused outer argument.
+    const inner = try LazySubstitution.init(arena.allocator(), module, &.{second}, &.{tags}, module, empty, outer);
+    const result = try converter.convert(module, pair, inner);
+    const items = store.span(store.get(result).tuple);
+    try std.testing.expectEqualSlices(TypeId, &.{ try store.emptyRecord(), try store.emptyTagUnion() }, items);
+    const count = inner.lazy_substitution.?.memo.count();
+    try std.testing.expectEqual(result, try converter.convert(module, pair, inner));
+    try std.testing.expectEqual(count, inner.lazy_substitution.?.memo.count());
+}
+
+test "Boxy literal substitution shares conversion row flattening and binds field kinds" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var canonical_names = names.CanonicalNameStore.init(a);
+    defer canonical_names.deinit();
+    const label = try canonical_names.internRecordFieldLabel("item");
+    var checked_store = try errorTestStore(a);
+    defer checked_store.deinit(a);
+    const empty_record = try checked_store.appendSyntheticPayloadRoot(a, .empty_record);
+    const optional = try checked_store.appendSyntheticPayloadRoot(a, .{ .field_kind = .optional });
+    const value = try checked_store.reserveSyntheticTypeRoot(a);
+    try checked_store.declareIdentityInstance(a, value);
+    try checked_store.fillSyntheticTypeRoot(a, value, .{ .flex = .{} });
+    const kind = try checked_store.reserveSyntheticTypeRoot(a);
+    try checked_store.declareIdentityInstance(a, kind);
+    try checked_store.fillSyntheticTypeRoot(a, kind, .{ .flex = .{} });
+    const row = try checked_store.appendSyntheticPayloadRoot(a, .{ .record = .{
+        .fields = try a.dupe(checked.CheckedRecordField, &.{.{ .name = label, .ty = value, .kind = .undetermined(kind) }}),
+        .ext = empty_record,
+    } });
+    const whole = try checked_store.appendSyntheticPayloadRoot(a, .{ .record = .{ .fields = &.{}, .ext = row } });
+    var modules = Modules{ .allocator = a };
+    defer modules.deinit();
+    const module = try addErrorTestModule(&modules, &checked_store);
+    modules.views.items[@backingInt(module)].view.canonical_names = &canonical_names;
+    var store = Store.init(a);
+    defer store.deinit();
+    const converter: Converter = .{ .store = &store, .modules = &modules };
+    const empty: Env = .{ .module = module, .vars = &.{}, .bound = &.{} };
+    for ([_]TypeId{ try store.emptyTagUnion(), try store.variable(7) }) |row_value| {
+        const row_binding: Env = .{ .module = module, .vars = &.{row}, .bound = &.{row_value} };
+        const substituted = try LazySubstitution.init(arena.allocator(), module, &.{ value, kind }, &.{ empty_record, optional }, module, empty, row_binding);
+        const concrete: Env = .{
+            .module = module,
+            .vars = &.{ value, kind, row },
+            .bound = &.{ try store.emptyRecord(), try store.committedKind(true), row_value },
+        };
+        // Extensions flatten; a root's row marker still visits its fields,
+        // whereas a root bound to a whole value consumes that value directly.
+        try std.testing.expectEqual(try converter.convert(module, whole, concrete), try converter.convert(module, whole, substituted));
+        try std.testing.expectEqual(try converter.convert(module, row, concrete), try converter.convert(module, row, substituted));
+    }
+}
+
+test "Boxy literal substitution composes deep chains without native recursion" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var checked_store = try errorTestStore(a);
+    defer checked_store.deinit(a);
+    const record = try checked_store.appendSyntheticPayloadRoot(a, .empty_record);
+    const variable = try checked_store.reserveSyntheticTypeRoot(a);
+    try checked_store.declareIdentityInstance(a, variable);
+    try checked_store.fillSyntheticTypeRoot(a, variable, .{ .flex = .{} });
+    var modules = Modules{ .allocator = a };
+    defer modules.deinit();
+    const module = try addErrorTestModule(&modules, &checked_store);
+    var store = Store.init(a);
+    defer store.deinit();
+    const converter: Converter = .{ .store = &store, .modules = &modules };
+    const empty: Env = .{ .module = module, .vars = &.{}, .bound = &.{} };
+    var env = try LazySubstitution.init(arena.allocator(), module, &.{variable}, &.{record}, module, empty, empty);
+    for (0..4096) |_| {
+        env = try LazySubstitution.init(arena.allocator(), module, &.{variable}, &.{variable}, module, env, empty);
+    }
+    try std.testing.expectEqual(try store.emptyRecord(), try converter.convert(module, variable, env));
 }
 
 test "Boxy error reachability separates modules and preserves proofs across append-only publication" {

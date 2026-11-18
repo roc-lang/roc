@@ -24,5 +24,5 @@ test "LIR pass workers deterministically fuse branch-return Try consumers" {
         \\    echo!(Str.inspect(consume(count) + consume(count + 1)))
         \\    Ok({})
         \\}
-    }, .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .no_calls, .proc_debug_names = true, .dump_proc_identities = true }, &.{.tag_fusion});
+    }, .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .no_calls, .dump_proc_identities = true }, &.{.tag_fusion});
 }

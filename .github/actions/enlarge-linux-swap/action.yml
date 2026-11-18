@@ -1,0 +1,96 @@
+name: 'Enlarge Linux swap'
+description: >-
+  Add a swap file on the runner's roomiest filesystem so several large Zig and
+  LLVM compiles peaking at once page out instead of exhausting the runner's
+  RAM, which kills the runner agent along with the build.
+inputs:
+  size_gb:
+    description: 'Size of the added swap file, in GiB, before any reduction for free disk space'
+    required: false
+    default: '32'
+  workspace_free_gb:
+    description: >-
+      Free space, in GiB, to leave on the filesystem holding the workspace if
+      the swap file goes there, for the build's own outputs and caches
+    required: false
+    default: '25'
+  min_size_gb:
+    description: 'Smallest swap file worth adding, in GiB; with less room than this, no swap file is added'
+    required: false
+    default: '4'
+runs:
+  using: 'composite'
+  steps:
+    - name: Enlarge swap
+      shell: bash
+      env:
+        SWAP_SIZE_GB: ${{ inputs.size_gb }}
+        SWAP_WORKSPACE_FREE_GB: ${{ inputs.workspace_free_gb }}
+        SWAP_MIN_SIZE_GB: ${{ inputs.min_size_gb }}
+      run: |
+        set -euo pipefail
+
+        gib=$((1024 * 1024 * 1024))
+        # Room left on a filesystem the build does not write to.
+        other_free_gb=2
+
+        show_memory() {
+          echo "== $1"
+          free -h
+          swapon --show
+        }
+
+        show_memory 'Before'
+        df -h
+
+        # The hosted x64 images mount a separate, mostly empty disk at /mnt;
+        # other images have only the root filesystem. Take whichever
+        # candidate leaves the most room for swap.
+        workspace_dev="$(stat -c %d "$GITHUB_WORKSPACE")"
+        best_dir=''
+        best_room=0
+        for dir in /mnt /; do
+          [ -d "$dir" ] || continue
+          avail_gb=$(( $(df --output=avail -B1 "$dir" | tail -n 1) / gib ))
+          if [ "$(stat -c %d "$dir")" = "$workspace_dev" ]; then
+            reserve_gb="$SWAP_WORKSPACE_FREE_GB"
+          else
+            reserve_gb="$other_free_gb"
+          fi
+          room_gb=$(( avail_gb - reserve_gb ))
+          echo "$dir: ${avail_gb} GiB free, keeping ${reserve_gb} GiB free, room for ${room_gb} GiB of swap"
+          if [ "$room_gb" -gt "$best_room" ]; then
+            best_dir="$dir"
+            best_room="$room_gb"
+          fi
+        done
+
+        size_gb="$SWAP_SIZE_GB"
+        if [ "$best_room" -lt "$size_gb" ]; then
+          size_gb="$best_room"
+        fi
+        if [ "$size_gb" -lt "$SWAP_MIN_SIZE_GB" ]; then
+          echo "::warning title=Swap not enlarged::Only ${best_room} GiB of disk can be spared, below the ${SWAP_MIN_SIZE_GB} GiB minimum; adding no swap file."
+          exit 0
+        fi
+        if [ "$size_gb" -lt "$SWAP_SIZE_GB" ]; then
+          echo "Reducing the swap file from ${SWAP_SIZE_GB} GiB to ${size_gb} GiB to keep disk free for the build."
+        fi
+
+        swapfile="${best_dir%/}/roc-ci.swap"
+        echo "Creating a ${size_gb} GiB swap file at ${swapfile}"
+
+        if ! sudo fallocate -l "${size_gb}G" "$swapfile"; then
+          echo "fallocate is unsupported here; writing the swap file with dd."
+          sudo rm -f "$swapfile"
+          sudo dd if=/dev/zero of="$swapfile" bs=1M count=$(( size_gb * 1024 )) status=none
+        fi
+        sudo chmod 600 "$swapfile"
+        sudo mkswap "$swapfile"
+        if ! sudo swapon "$swapfile"; then
+          echo "::error title=swapon failed::Could not enable the ${size_gb} GiB swap file at ${swapfile}."
+          exit 1
+        fi
+
+        show_memory 'After'
+        df -h "$best_dir"

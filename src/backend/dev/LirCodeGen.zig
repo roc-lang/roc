@@ -123,6 +123,10 @@ fn hostDropInRcStatement() noreturn {
     base.invariant("Dev/codegen invariant violated: RC statement used a host-shaped drop adapter", .{});
 }
 
+fn queuedDropInRcStatement() noreturn {
+    base.invariant("Dev/codegen invariant violated: RC statement used a queued drop helper", .{});
+}
+
 /// Identity of one compiled RC helper: the canonical layout plan plus the
 /// count-update atomicity the helper's own updates use. Atomic and
 /// single-thread helpers are compiled separately, so a helper's body never
@@ -136,10 +140,10 @@ const RcHelperVariant = struct {
     atomicity: RcAtomicity,
 
     /// Pack the variant into a stable integer for the helper caches.
-    /// `RcHelperKey.encode` occupies bits 0..33, so the atomicity bit is
+    /// `RcHelperKey.encode` occupies its low `encoded_bits` bits, so the atomicity bit is
     /// placed above it.
     fn encode(self: RcHelperVariant) u64 {
-        return (@as(u64, @backingInt(self.atomicity)) << 34) | self.key.encode();
+        return (@as(u64, @backingInt(self.atomicity)) << RcHelperKey.encoded_bits) | self.key.encode();
     }
 };
 
@@ -153,8 +157,8 @@ pub fn staticDataRcHelperKey(key: RcHelperKey) u64 {
 /// compiled objects share them.
 pub fn compiledRcHelperSymbolName(allocator: std.mem.Allocator, layout_store: *const layout.Store, cache_key: u64) std.mem.Allocator.Error![]u8 {
     const variant = RcHelperVariant{
-        .key = RcHelperKey.decode(cache_key & 0x3_ffff_ffff),
-        .atomicity = @fromBackingInt(@intCast(@as(u1, @intCast((cache_key >> 34) & 1)))),
+        .key = RcHelperKey.decode(cache_key),
+        .atomicity = @fromBackingInt(@intCast(@as(u1, @intCast((cache_key >> RcHelperKey.encoded_bits) & 1)))),
     };
     return layout.rc_helper.symbolName(allocator, layout_store, variant.key, switch (variant.atomicity) {
         .atomic => .atomic,
@@ -523,6 +527,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Value location (register or stack slot) of every bound local,
         /// direct-indexed by the local's key.
         local_locations: collections.DenseMap(u32, ValueLocation),
+        /// The permanent frame slot of each `ptr_alloca` target and of each
+        /// frame packing's target (design.md "Frame Callables"), reserved by
+        /// the procedure's prescan: statement scratch slots are reused by
+        /// later statements, and these cells outlive their statement.
         stack_alloca_slots: collections.DenseMap(LocalId, i32),
         /// Indexes `ensureStableLocationsForStmtLocals` plans through: borrowed
         /// from the worker running this generator when it lends them (see
@@ -611,10 +619,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Region starts of procedures spliced from object-cache entries, by
         /// identity; a second pack holding the same procedure splices nothing.
         spliced_proc_starts: std.AutoHashMap(lir.ProcIdentity, usize),
-        /// The source location each procedure placed from an excerpt set
-        /// carries (`CodeExcerpt.Excerpt.loc`), in this program's
-        /// source-file domain, by identity.
-        assembled_proc_locs: std.AutoHashMapUnmanaged(lir.ProcIdentity, base.SourceLoc) = .empty,
+        /// The source location and source name each procedure placed from
+        /// an excerpt set carries (`CodeExcerpt.Excerpt.loc` and `.name`),
+        /// by identity. The location is in this program's source-file
+        /// domain and the name is owned here.
+        assembled_proc_sources: std.AutoHashMapUnmanaged(lir.ProcIdentity, AssembledProcSource) = .empty,
 
         /// Each declared join point's pending jumps, chained through
         /// `join_jump_records` in emission order.
@@ -724,6 +733,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Set during deferred-prologue proc compilation, used by moveToReturnRegisterWithLayout
         /// and generateEarlyReturn.
         ret_ptr_slot: ?i32 = null,
+        /// While a `decref_queued` helper's body is generated: the frame slot
+        /// holding the drop queue it received, which it passes to each
+        /// `decref_queued` child and each queued teardown. Null in every
+        /// other body, which passes a null queue.
+        rc_queue_slot: ?i32 = null,
 
         /// The current AArch64 proc reads incoming stack arguments. Its prologue
         /// must initialize `caller_stack_arg_base_reg` to the callee-entry SP.
@@ -1349,7 +1363,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.spliced_helper_offsets.deinit();
             }
             self.spliced_proc_starts.deinit();
-            self.assembled_proc_locs.deinit(self.allocator);
+            self.freeAssembledProcNames();
+            self.assembled_proc_sources.deinit(self.allocator);
             self.pending_message_addrs.deinit(self.allocator);
             self.message_pool_runs.deinit(self.allocator);
             self.message_pool_index.deinit(self.allocator);
@@ -1441,7 +1456,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             "compiled_rc_helpers",          "compiled_rc_helper_log",    "shifted_rc_helpers",         "unwind_functions",
             "rc_helper_worklist",           "rc_helper_scheduled",       "pending_rc_addrs",           "pending_rc_calls",
             "compiling_rc_helpers",         "pending_calls",             "pending_proc_addrs",         "code_regions",
-            "code_refs",                    "spliced_helper_offsets",    "spliced_proc_starts",        "assembled_proc_locs",
+            "code_refs",                    "spliced_helper_offsets",    "spliced_proc_starts",        "assembled_proc_sources",
             "join_point_jumps",             "join_jump_records",         "join_point_params",          "spare_proc_scope",
             "in_proc_scope",                "internal_call_patches",     "internal_addr_patches",      "early_return_patches",
             "tail_exit_patches",            "stmt_states",               "cf_patches",                 "interchangeable_layouts",
@@ -1450,10 +1465,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             "carry_slot",                   "pending_cell_slot",         "early_return_result_slot",   "early_return_ret_layout",
             "current_proc_name",            "current_proc_frame_locals", "current_stmt_id",            "pending_overflow_result_target",
             "precomputed_overflow_results", "ret_ptr_slot",              "uses_caller_stack_arg_base", "message_pool",
-            "message_pool_index",           "message_pool_runs",         "pending_message_addrs",      "message_pool_placed_len",
-            "image_finished",               "fragment_mode",             "fragment_source_mode",       "fragment_context",
-            "assembled_symbolic_refs",      "owned_symbol_names",        "scratch_arg_locs",           "scratch_arg_infos",
-            "scratch_pass_by_ptr",          "scratch_param_num_regs",
+            "rc_queue_slot",                "message_pool_index",        "message_pool_runs",          "pending_message_addrs",
+            "message_pool_placed_len",      "image_finished",            "fragment_mode",              "fragment_source_mode",
+            "fragment_context",             "assembled_symbolic_refs",   "owned_symbol_names",         "scratch_arg_locs",
+            "scratch_arg_infos",            "scratch_pass_by_ptr",       "scratch_param_num_regs",
         };
 
         comptime {
@@ -1488,7 +1503,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.spliced_helper_offsets.clearRetainingCapacity();
             }
             self.spliced_proc_starts.clearRetainingCapacity();
-            self.assembled_proc_locs.clearRetainingCapacity();
+            self.freeAssembledProcNames();
+            self.assembled_proc_sources.clearRetainingCapacity();
             self.stack_alloca_slots.clearRetainingCapacity();
             self.vector_local_by_reg = .initFill(null);
             self.vector_local_mask = 0;
@@ -1513,6 +1529,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.current_proc_frame_locals = LIR.LocalSpan.empty();
             self.current_stmt_id = null;
             self.ret_ptr_slot = null;
+            self.rc_queue_slot = null;
             self.uses_caller_stack_arg_base = false;
         }
 
@@ -8563,11 +8580,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.stack_alloca_slots.put(s.target, self.codegen.allocStackSlot(@max(size, 1)));
                         }
                     },
+                    .assign_packed_erased_fn => |s| {
+                        const assign = self.store.stmtRow(s.data);
+                        if (assign.frame) {
+                            // The 16-byte prefix ending in the refcount word,
+                            // then the payload with any hot-reload header.
+                            const capture_size: u32 = if (assign.capture_layout) |layout_idx| self.getLayoutSize(layout_idx) else 0;
+                            const payload_size = builtins.erased_callable.payloadSize(self.erased_capture_prefix + capture_size);
+                            const size: u32 = @intCast(builtins.erased_callable.payload_alignment + payload_size);
+                            try self.stack_alloca_slots.put(s.target, self.codegen.allocStackSlot(size));
+                        }
+                    },
                     .assign_ref,
                     .assign_literal,
                     .assign_call,
                     .assign_call_erased,
-                    .assign_packed_erased_fn,
                     .assign_list,
                     .assign_struct,
                     .assign_tag,
@@ -12371,58 +12398,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.rc_helper_scheduled.clearRetainingCapacity();
         }
 
-        fn emitCallRcHelperFromStackSlots(
-            self: *Self,
-            helper: RcHelperVariant,
-            ptr_slot: i32,
-            count_slot: ?i32,
-        ) Allocator.Error!void {
-            const arg0 = self.getArgumentRegister(0);
-            try self.emitLoad(.w64, arg0, frame_ptr, ptr_slot);
-
-            switch (helper.key.op) {
-                .incref => {
-                    const arg1 = self.getArgumentRegister(1);
-                    try self.emitLoad(.w64, arg1, frame_ptr, count_slot.?);
-                },
-                .decref, .free => {},
-                .host_drop => hostDropInRcStatement(),
-            }
-
-            try self.emitPendingRcCall(helper);
-            try self.scheduleRcHelper(helper);
-        }
-
+        /// Call `helper` on the value at `[frame + base_offset]`: its address
+        /// goes straight into the first argument register and, for an incref,
+        /// `count` into the second.
         fn emitRcHelperCallAtStackOffset(
             self: *Self,
             helper: RcHelperVariant,
             base_offset: i32,
             count: u32,
         ) Allocator.Error!void {
-            const ptr_slot = self.codegen.allocStackSlot(8);
-            const ptr_reg = try self.allocTempGeneral();
-
-            try self.emitMovRegReg(ptr_reg, frame_ptr);
-            if (base_offset != 0) {
-                try self.emitAddPtrImmAny(ptr_reg, ptr_reg, base_offset);
-            }
-            try self.emitStore(.w64, frame_ptr, ptr_slot, ptr_reg);
-            self.codegen.freeGeneral(ptr_reg);
-
+            try self.emitLeaStack(self.getArgumentRegister(0), base_offset);
             switch (helper.key.op) {
-                .incref => {
-                    const count_slot = self.codegen.allocStackSlot(8);
-                    const count_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(count_reg, count);
-                    try self.emitStore(.w64, frame_ptr, count_slot, count_reg);
-                    self.codegen.freeGeneral(count_reg);
-                    try self.emitCallRcHelperFromStackSlots(helper, ptr_slot, count_slot);
-                },
-                .decref, .free => {
-                    try self.emitCallRcHelperFromStackSlots(helper, ptr_slot, null);
-                },
+                .incref => try self.codegen.emitLoadImm(self.getArgumentRegister(1), count),
+                .decref, .free => {},
+                .decref_queued => queuedDropInRcStatement(),
                 .host_drop => hostDropInRcStatement(),
             }
+            try self.emitPendingRcCall(helper);
+            try self.scheduleRcHelper(helper);
         }
 
         fn emitExplicitRcHelperCallForValue(
@@ -12465,9 +12458,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             ptr_reg: GeneralReg,
             count_slot: ?i32,
         ) Allocator.Error!void {
-            const ptr_slot = self.codegen.allocStackSlot(8);
-            try self.emitStore(.w64, frame_ptr, ptr_slot, ptr_reg);
-            try self.emitCallRcHelperFromStackSlots(helper, ptr_slot, count_slot);
+            const arg0 = self.getArgumentRegister(0);
+            if (ptr_reg != arg0) try self.emitMovRegReg(arg0, ptr_reg);
+            switch (helper.key.op) {
+                .incref => try self.emitLoad(.w64, self.getArgumentRegister(1), frame_ptr, count_slot.?),
+                .decref, .free => {},
+                .decref_queued => {
+                    const arg1 = self.getArgumentRegister(1);
+                    if (self.rc_queue_slot) |queue_slot| {
+                        try self.emitLoad(.w64, arg1, frame_ptr, queue_slot);
+                    } else {
+                        try self.codegen.emitLoadImm(arg1, 0);
+                    }
+                },
+                .host_drop => hostDropInRcStatement(),
+            }
+            try self.emitPendingRcCall(helper);
+            try self.scheduleRcHelper(helper);
         }
 
         /// Layout-keyed element callback addresses for a list builtin.
@@ -12767,6 +12774,81 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, builtin_fn);
         }
 
+        fn queuedDropMode(atomicity: RcAtomicity) builtins.utils.DropMode {
+            return switch (atomicity) {
+                .atomic => .decref_atomic,
+                .single_thread => .decref_single_thread,
+            };
+        }
+
+        /// The queue argument of a queued teardown: the queue this helper
+        /// received, or null in a helper that received none.
+        fn addRcQueueArg(self: *Self, builder: *Builder) Allocator.Error!void {
+            if (self.rc_queue_slot) |queue_slot| {
+                try builder.addMemArg(frame_ptr, queue_slot);
+            } else {
+                try builder.addImmArg(0);
+            }
+        }
+
+        /// Drop a list on a cycle of its type through the queued teardown
+        /// builtin (`builtins.utils.DropQueue`).
+        fn emitBuiltinInternalRcHelperQueuedListDrop(
+            self: *Self,
+            list_plan: layout.RcQueuedListPlan,
+            atomicity: RcAtomicity,
+            mode: builtins.utils.DropMode,
+            ptr_slot: i32,
+        ) Allocator.Error!void {
+            const callback_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(callback_reg);
+            const child = RcHelperVariant{ .key = list_plan.child, .atomicity = atomicity };
+            try self.emitPendingRcAddr(child, callback_reg);
+            try self.scheduleRcHelper(child);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
+            // The builtin takes the list by address, which is the helper's
+            // value pointer.
+            try builder.addMemArg(frame_ptr, ptr_slot);
+            try builder.addImmArg(list_plan.elem_alignment);
+            try builder.addImmArg(@intCast(list_plan.elem_width));
+            try builder.addRegArg(callback_reg);
+            try self.addRcQueueArg(&builder);
+            try builder.addImmArg(@backingInt(mode));
+            try self.callBuiltin(&builder, .list_drop_queued);
+        }
+
+        /// Drop a box on a cycle of its type through the queued teardown
+        /// builtin (`builtins.utils.DropQueue`).
+        fn emitBuiltinInternalRcHelperQueuedBoxDrop(
+            self: *Self,
+            box_plan: layout.RcQueuedBoxPlan,
+            atomicity: RcAtomicity,
+            mode: builtins.utils.DropMode,
+            ptr_slot: i32,
+        ) Allocator.Error!void {
+            const value_ptr_reg, const payload_reg, const callback_reg = try self.allocTempGenerals(3);
+            defer self.codegen.freeGeneral(callback_reg);
+            defer self.codegen.freeGeneral(payload_reg);
+            defer self.codegen.freeGeneral(value_ptr_reg);
+
+            try self.emitLoad(.w64, value_ptr_reg, frame_ptr, ptr_slot);
+            try self.emitLoad(.w64, payload_reg, value_ptr_reg, 0);
+            const child = RcHelperVariant{ .key = box_plan.child, .atomicity = atomicity };
+            try self.emitPendingRcAddr(child, callback_reg);
+            try self.scheduleRcHelper(child);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
+            try builder.addRegArg(payload_reg);
+            try builder.addImmArg(box_plan.elem_alignment);
+            try builder.addRegArg(callback_reg);
+            try self.addRcQueueArg(&builder);
+            try builder.addImmArg(@backingInt(mode));
+            try self.callBuiltin(&builder, .box_drop_queued);
+        }
+
         fn emitBuiltinInternalRcHelperErasedCallableDrop(
             self: *Self,
             builtin_fn: BuiltinFn,
@@ -12841,13 +12923,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     helper.atomicity,
                     ptr_slot,
                 ),
-                // An erased callable's single-thread incref is exactly a data-pointer
-                // incref of its single allocation, so its native entry point is the
-                // data-ptr adapter; the object symbol still names the registry member.
+                .list_decref_queued => |list_plan| try self.emitBuiltinInternalRcHelperQueuedListDrop(list_plan, helper.atomicity, queuedDropMode(helper.atomicity), ptr_slot),
+                .list_free_queued => |list_plan| try self.emitBuiltinInternalRcHelperQueuedListDrop(list_plan, helper.atomicity, .free, ptr_slot),
+                .box_decref_queued => |box_plan| try self.emitBuiltinInternalRcHelperQueuedBoxDrop(box_plan, helper.atomicity, queuedDropMode(helper.atomicity), ptr_slot),
+                .box_free_queued => |box_plan| try self.emitBuiltinInternalRcHelperQueuedBoxDrop(box_plan, helper.atomicity, .free, ptr_slot),
                 .erased_callable_incref => {
                     const rc_fn = LowLevelBuiltins.rcHelper(.erased_callable_incref, rc_atomicity);
-                    const native_addr = if (single_thread) BuiltinFn.incref_data_ptr_single_thread.wrapperAddress() else rc_fn.wrapperAddress();
-                    try self.emitBuiltinInternalRcHelperBoxIncref(rc_fn, native_addr, ptr_slot, count_slot.?);
+                    try self.emitBuiltinInternalRcHelperBoxIncref(rc_fn, rc_fn.wrapperAddress(), ptr_slot, count_slot.?);
                 },
                 .erased_callable_decref => try self.emitBuiltinInternalRcHelperErasedCallableDrop(
                     LowLevelBuiltins.rcHelper(.erased_callable_decref, rc_atomicity),
@@ -13034,7 +13116,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 // A `host_drop` adapter's second argument is the published
                 // on-drop ABI's ops slot, which the generated body ignores.
-                .decref, .free, .host_drop => null,
+                .decref, .free, .host_drop, .decref_queued => null,
+            };
+            const saved_rc_queue_slot = self.rc_queue_slot;
+            defer self.rc_queue_slot = saved_rc_queue_slot;
+            self.rc_queue_slot = switch (payload.key.op) {
+                .decref_queued => blk: {
+                    const slot = self.codegen.allocStackSlot(8);
+                    try self.codegen.emitStoreStack(.w64, slot, self.getArgumentRegister(1));
+                    break :blk slot;
+                },
+                .incref, .decref, .free, .host_drop => null,
             };
 
             const ptr_reg = try self.allocTempGeneral();
@@ -14471,7 +14563,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             on_copy: lir.LIR.ErasedCallableOnDrop,
             reuse: ?LocalId,
             reuse_unique: bool,
+            /// The permanent slot of a frame packing (`stack_alloca_slots`).
+            frame_slot: ?i32,
         ) Allocator.Error!ValueLocation {
+            const frame = frame_slot != null;
             const target_layout_val = self.layout_store.getLayout(target_layout);
             if (builtin.mode == .debug and target_layout_val.tag != .erased_callable) {
                 base.invariant(
@@ -14616,17 +14711,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const payload_size = builtins.erased_callable.payloadSize(base_capture_size);
             const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
 
-            {
+            if (frame_slot) |storage_slot| {
+                // The callable lives in the statement's permanent slot,
+                // 16-byte aligned, whose refcount word is the frame marker.
+                const prefix: i32 = builtins.erased_callable.payload_alignment;
+                const reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(reg, builtins.utils.REFCOUNT_FRAME);
+                try self.emitStore(.w64, frame_ptr, storage_slot + prefix - 8, reg);
+                try self.emitAddPtrImmAny(reg, frame_ptr, storage_slot + prefix);
+                try self.emitStore(.w64, frame_ptr, heap_ptr_slot, reg);
+                self.codegen.freeGeneral(reg);
+            } else {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 defer builder.deinit();
                 try builder.addImmArg(@intCast(payload_size));
                 try builder.addImmArg(builtins.erased_callable.payload_alignment);
                 try builder.addImmArg(if (builtins.erased_callable.allocation_has_refcounted_children) 1 else 0);
                 try self.callBuiltin(&builder, .allocate_with_refcount);
+                try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
             }
-            try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
-            const hot_reload_code_ref_slot: ?i32 = if (self.hotReloadEnabled()) blk: {
+            // A frame callable holds no code reference of its own: it never
+            // outlives the frame that built it, whose code image the
+            // hot-reload entry holds, so its header's code reference is null.
+            const hot_reload_code_ref_slot: ?i32 = if (self.hotReloadEnabled() and !frame) blk: {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 defer builder.deinit();
                 try self.callBuiltin(&builder, .hot_reload_retain_current);
@@ -14654,9 +14762,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitStore(.w64, heap_ptr, @intCast(@sizeOf(usize)), hot_drop_reg);
                 self.codegen.freeGeneral(hot_drop_reg);
 
-                if (hot_reload_code_ref_slot) |slot| {
+                {
                     const code_ref_reg = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, code_ref_reg, frame_ptr, slot);
+                    if (hot_reload_code_ref_slot) |slot|
+                        try self.emitLoad(.w64, code_ref_reg, frame_ptr, slot)
+                    else
+                        try self.codegen.emitLoadImm(code_ref_reg, 0);
                     try self.emitStore(
                         .w64,
                         heap_ptr,
@@ -16296,7 +16407,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
                         .x86_64 => {
                             const stack_offset = self.codegen.allocStackSlot(4);
-                            try self.codegen.emit.movRegImm64(.R11, bits);
+                            try self.codegen.emit.movRegImm(.R11, bits);
                             try self.codegen.emit.movMemReg(.w32, .RBP, stack_offset, .R11);
                             try self.codegen.emit.movssRegMem(reg, .RBP, stack_offset);
                         },
@@ -16326,7 +16437,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             },
                             .x86_64 => {
                                 const stack_offset = self.codegen.allocStackSlot(8);
-                                try self.codegen.emit.movRegImm64(.R11, @bitCast(bits));
+                                try self.codegen.emit.movRegImm(.R11, @bitCast(bits));
                                 try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset, .R11);
                                 try self.codegen.emit.movsdRegMem(reg, .RBP, stack_offset);
                             },
@@ -18006,6 +18117,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (0..locals.len) |i| {
                 const local = GuardedList.at(locals, i);
                 const dyn = self.localDyn(local) orelse continue;
+                if (dyn.storage == .frame_callable) {
+                    // A frame callable's storage: 16-byte aligned, its data
+                    // pointer after the 16-byte prefix ending in its refcount
+                    // word, then the header, any hot-reload header, and the
+                    // capture record.
+                    const prefix = builtins.erased_callable.payload_alignment;
+                    try self.emitLoad(.w64, desc_reg, frame_ptr, self.localSlot(dyn.desc));
+                    try self.emitAddImm(total, total, prefix - 1);
+                    try self.codegen.emitLoadImm(field, -@as(i64, prefix));
+                    try self.codegen.emitAnd(.w64, total, total, field);
+                    try self.emitAddImm(total, total, prefix);
+                    try self.emitStore(.w64, frame_ptr, self.localSlot(local), total);
+                    try self.emitAddImm(total, total, @intCast(builtins.erased_callable.capture_offset + self.erased_capture_prefix));
+                    try self.emitLoad(.w32, field, desc_reg, desc_size_offset);
+                    try self.codegen.emitAdd(.w64, total, total, field);
+                    continue;
+                }
                 if (dyn.storage != .frame) continue;
                 try self.emitLoad(.w64, desc_reg, frame_ptr, self.localSlot(dyn.desc));
                 // total = alignForward(total, alignment); the local's offset.
@@ -18048,7 +18176,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (0..locals.len) |i| {
                 const local = GuardedList.at(locals, i);
                 const dyn = self.localDyn(local) orelse continue;
-                if (dyn.storage != .frame) continue;
+                if (dyn.storage != .frame and dyn.storage != .frame_callable) continue;
                 try self.emitLoad(.w64, field, frame_ptr, self.localSlot(local));
                 try self.codegen.emitAdd(.w64, field, field, total);
                 try self.emitStore(.w64, frame_ptr, self.localSlot(local), field);
@@ -18235,7 +18363,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(reg);
                     try self.bindComponentAddress(dst_local);
                 },
-                .closure => |c| {
+                .closure => |c| if (c.frame) |frame| {
+                    // Built in its frame storage. Under hot reloading it
+                    // carries the hot-reload header with no code reference
+                    // (see `generatePackedErasedFn`).
+                    const fn_slot = self.codegen.allocStackSlot(8);
+                    try self.emitProcAddressToSlot(c.proc, fn_slot);
+                    try builder.addMemArg(frame_ptr, fn_slot);
+                    try self.addBytesArg(&builder, c.capture);
+                    try builder.addMemArg(frame_ptr, self.localSlot(frame));
+                    if (self.hotReloadEnabled()) {
+                        const drop_slot = self.codegen.allocStackSlot(8);
+                        const copy_slot = self.codegen.allocStackSlot(8);
+                        const reg = try self.allocTempGeneral();
+                        try self.emitBuiltinAddress(reg, .hot_reload_erased_callable_drop);
+                        try self.emitStore(.w64, frame_ptr, drop_slot, reg);
+                        try self.emitBuiltinAddress(reg, .hot_reload_erased_callable_copy);
+                        try self.emitStore(.w64, frame_ptr, copy_slot, reg);
+                        self.codegen.freeGeneral(reg);
+                        try builder.addMemArg(frame_ptr, drop_slot);
+                        try builder.addMemArg(frame_ptr, copy_slot);
+                    } else {
+                        try builder.addImmArg(0);
+                        try builder.addImmArg(0);
+                    }
+                    try self.callBoxyRuntime(&builder, "roc_desc_closure_frame");
+                    try self.bindReturnedScalar(dst_local, 8);
+                } else {
                     const fn_slot = self.codegen.allocStackSlot(8);
                     try self.emitProcAddressToSlot(c.proc, fn_slot);
                     var code_ref_slot: ?i32 = null;
@@ -18752,8 +18906,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.generation_mode = .shim_execution;
             defer self.generation_mode = mode;
             _ = try self.compileSingleRcHelper(.{
-                .key = RcHelperKey.decode(key & 0x3_ffff_ffff),
-                .atomicity = @fromBackingInt(@intCast(@as(u1, @intCast((key >> 34) & 1)))),
+                .key = RcHelperKey.decode(key),
+                .atomicity = @fromBackingInt(@intCast(@as(u1, @intCast((key >> RcHelperKey.encoded_bits) & 1)))),
             });
             try self.finishFragment();
         }
@@ -21064,6 +21218,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 assign.on_copy,
                                 assign.reuse,
                                 assign.reuse_unique,
+                                if (assign.frame) self.stack_alloca_slots.get(assign_stmt.target) orelse unreachable // the proc prescan reserves a slot for every frame packing's target
+                                else null,
                             );
                             try self.bindAssignedLocal(assign_stmt.target, value_loc);
                             try work.append(wa, .{ .node = assign_stmt.next });
@@ -23418,18 +23574,32 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (!gop.found_existing) gop.value_ptr.* = entry;
         }
 
-        /// Remember the source location a procedure placed from an excerpt
-        /// set carries; the first placement of an identity wins, as for its
-        /// code.
-        pub fn registerAssembledProcLoc(self: *Self, identity: lir.ProcIdentity, loc: base.SourceLoc) Allocator.Error!void {
-            const gop = try self.assembled_proc_locs.getOrPut(self.allocator, identity);
-            if (!gop.found_existing) gop.value_ptr.* = loc;
+        /// Where a procedure placed from an excerpt set came from in the
+        /// source: its location and its source name, empty when it has none.
+        pub const AssembledProcSource = struct {
+            loc: base.SourceLoc,
+            name: []const u8,
+        };
+
+        /// Remember the source location and name a procedure placed from an
+        /// excerpt set carries; the first placement of an identity wins, as
+        /// for its code. The name is copied.
+        pub fn registerAssembledProcSource(self: *Self, identity: lir.ProcIdentity, loc: base.SourceLoc, name: []const u8) Allocator.Error!void {
+            const gop = try self.assembled_proc_sources.getOrPut(self.allocator, identity);
+            if (gop.found_existing) return;
+            gop.value_ptr.* = .{ .loc = loc, .name = "" };
+            gop.value_ptr.name = try self.allocator.dupe(u8, name);
         }
 
-        /// The source location a procedure placed from an excerpt set
-        /// carries, when one was placed.
-        pub fn assembledProcLoc(self: *const Self, identity: lir.ProcIdentity) ?base.SourceLoc {
-            return self.assembled_proc_locs.get(identity);
+        /// The source location and name a procedure placed from an excerpt
+        /// set carries, when one was placed.
+        pub fn assembledProcSource(self: *const Self, identity: lir.ProcIdentity) ?AssembledProcSource {
+            return self.assembled_proc_sources.get(identity);
+        }
+
+        fn freeAssembledProcNames(self: *Self) void {
+            var sources = self.assembled_proc_sources.valueIterator();
+            while (sources.next()) |source| self.allocator.free(source.name);
         }
 
         /// The queue owns helper names through the generator's symbol table;

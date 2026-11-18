@@ -237,7 +237,7 @@ test "shared compile-time guard owner metadata allocation failure cleanup" {
 fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
-    _ = try program.appendLoweringModule(.{});
+    _ = try program.appendLoweringModule(.{}, @splat(0));
     const record_layout = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const struct_idx = program.layouts.getLayout(record_layout).getStruct().idx;
     const failure_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
@@ -304,7 +304,7 @@ fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || er
         try std.testing.expectEqual(LIR.ProcIdentity.forTest(1), proc.identity);
     }
     try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpecImmediate(unrelated).native_code_revision);
-    var clone = try program.store.cloneForProcRewrite(allocator, owners[0]);
+    var clone = try program.store.cloneForBodyShard(allocator);
     defer clone.deinit();
     try std.testing.expectEqual(@as(u64, 1), clone.getProcSpecImmediate(owners[0]).native_code_revision);
 }
@@ -320,7 +320,7 @@ test "completed compile-time value guards allocation failure cleanup" {
 fn testCompletedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
-    _ = try program.appendLoweringModule(.{});
+    _ = try program.appendLoweringModule(.{}, @splat(0));
     const record_layout = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const struct_idx = program.layouts.getLayout(record_layout).getStruct().idx;
     const failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);

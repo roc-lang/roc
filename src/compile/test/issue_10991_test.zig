@@ -188,7 +188,7 @@ fn expectFoldReadsElementsThroughOneStep(
 test "issue 10991: dev pipeline folds List.fold through the list iterator's step" {
     try harness.expectLirInspectionWithOptions(
         fold_app_body,
-        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .no_calls, .proc_debug_names = true },
+        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .no_calls },
         expectFoldReadsElementsThroughOneStep,
     );
 }
@@ -196,7 +196,7 @@ test "issue 10991: dev pipeline folds List.fold through the list iterator's step
 test "issue 10991: optimized pipeline also collapses List.fold to a call-free index loop" {
     try harness.expectLirInspectionWithOptions(
         fold_app_body,
-        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .all_calls, .proc_debug_names = true },
+        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .all_calls },
         expectFoldCollapsedToCallFreeIndexLoop,
     );
 }

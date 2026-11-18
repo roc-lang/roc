@@ -14,7 +14,9 @@ const core = @import("lir_core");
 const Arc = @import("arc.zig");
 const ImmortalLocals = @import("immortal_locals.zig");
 const TailDrive = @import("tail_drive.zig");
+const FrameCallables = @import("frame_callables.zig");
 const ProcPasses = @import("proc_passes.zig");
+const RangeProve = @import("range_prove.zig");
 const ReturnSlot = @import("return_slot.zig");
 const ErasedOwner = @import("erased_owner.zig");
 const StrAppend = @import("str_append.zig");
@@ -149,6 +151,8 @@ pub const WorkMetrics = struct {
     monotype_runs: u32 = 0,
     solved_runs: u32 = 0,
     lir_continuations: u32 = 0,
+    /// What the range prover's work on the lowered procedures cost.
+    range_prove: RangeProve.WorkStats = .{},
 };
 
 /// Dev keeps standalone procedures eligible for reuse in other programs.
@@ -226,8 +230,6 @@ pub const TargetConfig = struct {
     /// compile-time evaluation leave it off so the in-place branches are
     /// dropped during lowering.
     list_in_place_map: bool = false,
-    /// Preserve source-level procedure names in LIR for runtime diagnostics.
-    proc_debug_names: bool = false,
     /// Record each platform entrypoint's host boundary digest in its root
     /// metadata. Only consumers that compare host interfaces across hot
     /// reload generations ask for it.
@@ -451,6 +453,13 @@ pub const Timing = struct {
     pub fn finishUnitStep(timing: ?*Timing, started_ns: i64, step: UnitStep) void {
         const active = detailOf(timing) orelse return;
         active.unit_steps_ns[@backingInt(step)].add(active.elapsedSince(started_ns));
+    }
+
+    /// Add the time since `started_ns` to codegen step `step` when `timing`
+    /// records detail.
+    pub fn finishCodegenStep(timing: ?*Timing, started_ns: i64, step: CodegenStep) void {
+        const active = detailOf(timing) orelse return;
+        active.codegen_steps_ns[@backingInt(step)].add(active.elapsedSince(started_ns));
     }
 
     /// Fold one lowering's procedure-local phase measures.
@@ -825,9 +834,13 @@ pub const CodegenStep = enum {
     /// Composing the pieces into an object for the unit image.
     composition,
     dwarf,
+    /// Encoding a relocatable object; a unit image is built from its
+    /// composition's object contents with no object encoded.
     object_encoding,
-    /// Reading the composed object back into the unit image.
+    /// Building the unit image from its composition's object contents.
     unit_image,
+    /// Encoding the pieces of a unit whose entry holds them.
+    pieces_encoding,
 };
 
 /// The number of `CodegenStep` members.
@@ -873,6 +886,9 @@ pub const PassStep = enum {
     tag_reachability,
     /// Dropping procedures and data nothing references, before ARC.
     reachable_procs_before_arc,
+    /// Solving which function parameters never outlive their call, and
+    /// building the callables passed only to them in their frames.
+    frame_callables,
     tail_drive,
     /// Dropping procedures and data nothing references, after ARC.
     reachable_procs_after_arc,
@@ -1472,7 +1488,6 @@ pub const LirPolicy = struct {
     consume_dead_boxes: bool,
     zero_dict_seed: bool,
     list_in_place_map: bool,
-    proc_debug_names: bool,
     host_boundary_digests: bool,
     site_code_keys: bool,
     owned_proc_signatures: bool,
@@ -1851,7 +1866,6 @@ pub fn prepareCheckedModulesMonotype(
             modules,
             rootRequests(roots, layout_requests, static_data_requests),
             .{
-                .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled(),
                 .post_check_executor = target.post_check_executor,
                 .comptime_value_reads = target.comptime_value_reads,
                 .demand_driven_comptime_roots = target.demand_driven_comptime_roots,
@@ -2145,7 +2159,6 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .inline_expects = target.inline_expects,
         .list_in_place_map = target.list_in_place_map,
         .dict_seed_mode = if (target.zero_dict_seed) .comptime_zero else .runtime,
-        .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled(),
         .host_boundary_digests = target.host_boundary_digests,
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = prepared.test_plan_metadata,
@@ -2208,6 +2221,7 @@ fn runProcedureSegment(
         target.post_check_executor,
         target.lir_pass_parallel_metrics_out,
         timing,
+        if (target.work_metrics) |metrics| &metrics.range_prove else null,
         guarded_reads,
     );
 }
@@ -2271,15 +2285,14 @@ fn finishLoweredOutput(
     // calls and changes allocation sites, and ARC panics on pre-existing RC
     // statements (see src/lir/trmc.zig).
     segment.add(.trmc);
-    if (target.specialization_strategy == .lss) {
-        // Lowering produces tag-valued joins whose body matches the tag at
-        // once: the checked wrappers substituted at their call sites in
-        // `.wrappers`, whose `Try` results the caller matches immediately,
-        // and every inlined call that returns a tag.
-        if (target.fuse_tag_cases) {
-            try segment.flush(allocator, &lowered.lir_result, pass_target, pass_timing);
-            try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion, pass_timing);
-        }
+    // Every strategy and inline mode produces tag-valued joins whose body
+    // matches the tag at once: the checked wrappers substituted at their call
+    // sites in `.wrappers`, whose `Try` results the caller matches
+    // immediately, every inlined call that returns a tag, and a flag loop's
+    // merge join under either strategy, whose header switches on the flag.
+    if (target.fuse_tag_cases) {
+        try segment.flush(allocator, &lowered.lir_result, pass_target, pass_timing);
+        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion, pass_timing);
     }
     // Every mode: a join parameter nothing reads still keeps its written
     // value alive past any consuming call on the entry path. Scalarization
@@ -2307,6 +2320,9 @@ fn finishLoweredOutput(
     if (target.reuse_boxes) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .box_reuse, pass_timing);
     }
+    // No procedure-local rewrite runs after this, and the steps below append
+    // and replace rows without recording body chunks.
+    lowered.lir_result.store.releaseBodyChunks();
     var return_slot_scope = PassStepScope.begin(target.timing, .return_slot);
     try ReturnSlot.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     return_slot_scope.end();
@@ -2377,6 +2393,9 @@ fn finishLoweredOutput(
             try arc_roots.append(allocator, proc);
         };
     }
+    const store_allocator = lowered.lir_result.store.allocator;
+    var published_variants = std.ArrayList(Arc.PublishedOutcomeVariant).empty;
+    defer published_variants.deinit(store_allocator);
     const arc_result = try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = arc_roots.items,
         .specialize = target.specialize_arc_modes,
@@ -2386,10 +2405,42 @@ fn finishLoweredOutput(
         .post_check_executor = if (target.post_check_executor) |*executor| executor else null,
         .metrics_out = arc_metrics,
         .timing = if (arc_detail) |*detail| detail else null,
+        .published_variants_out = &published_variants,
     });
+    // The only procedures ARC exports are the outcome-restitution variants
+    // it publishes (design.md "Outcome-Conditioned Argument Restitution").
+    // A variant's export record is importer-visible exactly when its
+    // worker's is: an importer demands the variant only through a call of
+    // the worker, which it makes only of a visible worker.
+    if (published_variants.items.len != 0) {
+        const result = &lowered.lir_result;
+        try result.boxy_exports.ensureUnusedCapacity(result.store.allocator, @intCast(published_variants.items.len));
+        for (published_variants.items) |published| {
+            try result.exported_procs.append(result.store.allocator, published.variant);
+            const worker_export = result.boxy_exports.get(result.store.getProcSpec(published.worker).identity) orelse
+                checkedPipelineInvariant("an exported worker publishing an outcome variant has no export record of its unit");
+            result.boxy_exports.putAssumeCapacity(result.store.getProcSpec(published.variant).identity, .{ .visible = worker_export.visible });
+        }
+    }
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
     if (arc_detail) |*detail| target.timing.?.addArc(detail);
     arc_timing_scope.end();
+
+    // Which function parameters never outlive their call, and the callables
+    // built in their caller's frame for them (design.md "Frame Callables").
+    // Both read the deferred and frame-replacing calls ARC emitted, after
+    // the certifier checked ARC's placement, and run before tail drive
+    // stamps where pending calls run; a frame callable's capture release
+    // is a reference-count statement, which a handed-up call may precede.
+    if (target.specialization_strategy == .boxy) {
+        var frame_scope = PassStepScope.begin(target.timing, .frame_callables);
+        defer frame_scope.end();
+        const pairs = try allocator.alloc(FrameCallables.PublishedPair, published_variants.items.len);
+        defer allocator.free(pairs);
+        for (published_variants.items, pairs) |published, *pair| pair.* = .{ .worker = published.worker, .variant = published.variant };
+        try FrameCallables.solveParams(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, pairs);
+        _ = try FrameCallables.markFrames(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts);
+    }
 
     var tail_drive_scope = PassStepScope.begin(target.timing, .tail_drive);
     try TailDrive.run(allocator, &lowered.lir_result.store, &.{entered_from_outside.items}, arc_result.deferred_erased_calls);
@@ -2474,7 +2525,6 @@ pub const PreparedBoxy = struct {
                 .run => .run,
                 .omit => .omit,
             },
-            .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled(),
             .list_in_place_map = target.list_in_place_map,
             .host_boundary_digests = target.host_boundary_digests,
             .compile_time = target.boxy_compile_time,

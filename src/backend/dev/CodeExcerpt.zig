@@ -197,6 +197,10 @@ pub const Excerpt = struct {
     /// location (`LirStore.procLoc`) in the set's source-file domain, the
     /// same wherever the procedure lands. `none` for every other kind.
     loc: base.SourceLoc = .none,
+    /// The source name a procedure's debug entry reports
+    /// (`LirStore.procDebugName`), the same wherever the procedure lands.
+    /// Empty for a compiler-generated procedure and for every other kind.
+    name: []const u8 = "",
 };
 
 /// An ordered set of excerpts covering one code buffer. Order is emission
@@ -617,6 +621,7 @@ fn copyExcerpts(a: Allocator, excerpts: *std.ArrayList(Excerpt), set: *const Set
         };
         excerpt.lines = lines;
         if (file_map) |map| excerpt.loc = rebindLoc(source.loc, map);
+        excerpt.name = try a.dupe(u8, source.name);
         excerpt.failure_sites = try a.dupe(FailureSite, source.failure_sites);
         const relocations = try a.dupe(NamedRelocation, source.relocations);
         for (relocations) |*relocation| relocation.name = try a.dupe(u8, relocation.name);
@@ -1391,6 +1396,19 @@ pub fn extractPrepared(
             for (symbolic_refs.items) |ref| CG.normalizeExcerptRefSite(bytes, ref.site, codeRefForm(ref.form), if (ref.veneer) |offset| offset else null);
             break :code_bytes bytes;
         };
+        // A procedure placed from another set carries the location and name
+        // that set recorded; any other has its own.
+        const source: struct { loc: base.SourceLoc = .none, name: []const u8 = "" } = switch (region.kind) {
+            .proc => |proc_id| if (codegen.assembledProcSource(proc_specs[@backingInt(proc_id)].identity)) |placed|
+                .{ .loc = placed.loc, .name = placed.name }
+            else
+                .{ .loc = codegen.store.procLoc(proc_id), .name = codegen.store.procDebugName(proc_id) orelse "" },
+            .spliced_proc => |identity| if (codegen.assembledProcSource(identity)) |placed|
+                .{ .loc = placed.loc, .name = placed.name }
+            else
+                .{},
+            .rc_helper, .entrypoint, .message_pool_run, .branch_island, .hosted_stub, .spliced_helper => .{},
+        };
         excerpts[index] = .{
             .kind = kind,
             .code = excerpt_code,
@@ -1403,13 +1421,8 @@ pub fn extractPrepared(
             .relocations = try region_relocations.toOwnedSlice(arena_allocator),
             .data = &.{},
             .data_graph = region_graph,
-            .loc = switch (region.kind) {
-                // A procedure placed from another set carries the location
-                // that set recorded; any other has its own.
-                .proc => |proc_id| codegen.assembledProcLoc(proc_specs[@backingInt(proc_id)].identity) orelse codegen.store.procLoc(proc_id),
-                .spliced_proc => |identity| codegen.assembledProcLoc(identity) orelse .none,
-                .rc_helper, .entrypoint, .message_pool_run, .branch_island, .hosted_stub, .spliced_helper => .none,
-            },
+            .loc = source.loc,
+            .name = try arena_allocator.dupe(u8, source.name),
         };
     }
 
@@ -2195,7 +2208,7 @@ fn appendMetadata(comptime CG: type, codegen: *CG, excerpt: Excerpt, start: usiz
     switch (excerpt.kind) {
         .proc => |identity| {
             try codegen.registerAssembledProc(identity, start + excerpt.entry);
-            try codegen.registerAssembledProcLoc(identity, switch (lines) {
+            try codegen.registerAssembledProcSource(identity, switch (lines) {
                 .same_domain => excerpt.loc,
                 .file_map => |file_map| loc: {
                     if (!excerpt.loc.hasLocation()) break :loc excerpt.loc;
@@ -2204,7 +2217,7 @@ fn appendMetadata(comptime CG: type, codegen: *CG, excerpt: Excerpt, start: usiz
                         base.invariant("a spliced procedure's location names a module the program lacks", .{});
                     break :loc bound;
                 },
-            });
+            }, excerpt.name);
         },
         .rc_helper => |name| try codegen.registerSplicedHelper(name, start + excerpt.entry),
         .entrypoint, .message_pool_run, .branch_island => {},
@@ -2775,7 +2788,7 @@ test "excerpt metadata queues unresolved targets, preserves same-offset line ord
         pub fn registerAssembledProc(self: *Self, _: lir.ProcIdentity, entry: usize) Allocator.Error!void {
             self.proc_entry = entry;
         }
-        pub fn registerAssembledProcLoc(_: *Self, _: lir.ProcIdentity, _: base.SourceLoc) Allocator.Error!void {}
+        pub fn registerAssembledProcSource(_: *Self, _: lir.ProcIdentity, _: base.SourceLoc, _: []const u8) Allocator.Error!void {}
         pub fn registerSplicedHelper(_: *Self, _: []const u8, _: usize) Allocator.Error!void {}
         pub fn queueAssembledSymbolicRef(self: *Self, ref: SymbolicReference) Allocator.Error!void {
             self.refs[self.refs_len] = ref;

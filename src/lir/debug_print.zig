@@ -167,6 +167,7 @@ const Printer = struct {
                         try writer.print(" reuse=l{d}", .{@backingInt(reuse)});
                         if (s.reuse_unique) try writer.writeAll(" unique");
                     }
+                    if (s.frame) try writer.writeAll(" frame");
                     try writer.writeByte('\n');
                     current = s_stmt.next;
                 },
@@ -456,6 +457,7 @@ const Printer = struct {
             .closure => |closure| {
                 try writer.print(" p{d}", .{@backingInt(closure.proc)});
                 if (closure.reuse != null and closure.reuse_unique) try writer.writeAll(" reuse_unique");
+                if (closure.frame) |frame| try writer.print(" frame=l{d}", .{@backingInt(frame)});
             },
             .call_erased => |call| {
                 if (call.reuse_closure) try writer.writeAll(" owned");

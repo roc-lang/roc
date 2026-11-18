@@ -590,6 +590,21 @@ fn certifyUniqueArgs(
                 if (dense) |dense_id| {
                     if (uniqueness.born_unique.isSet(@backingInt(dense_id)) and
                         (uniqueness.conds[@backingInt(dense_id)] & ~sig.unique_params) == 0) continue;
+                    // A check that only reads its argument reads the count
+                    // of the value the argument aliases, so the birth may
+                    // hold at the end of its chain of single alias
+                    // definitions.
+                    if ((store.stmtRow(assign.rc_effect).consume_args & bit) == 0) {
+                        var cursor: u32 = @backingInt(dense_id);
+                        var steps: usize = 0;
+                        const viewed_birth = while (uniqueness.read_source[cursor].get()) |source| : (steps += 1) {
+                            if (steps > uniqueness.read_source.len) break false;
+                            cursor = source;
+                            if (uniqueness.born_unique.isSet(cursor) and
+                                (uniqueness.conds[cursor] & ~sig.unique_params) == 0) break true;
+                        } else false;
+                        if (viewed_birth) continue;
+                    }
                 }
                 diag.context_proc = proc_id;
                 diag.context_stmt = current;
@@ -4258,7 +4273,16 @@ const Certifier = struct {
                         }
                     }
                 },
-                .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
+                .jump => |jump_stmt| {
+                    // A jump to a join whose body returns is a restitution
+                    // boundary (`applyOutcomeRestitution`): it hands the
+                    // restituted parameters back exactly as that return
+                    // does, so its region names them.
+                    if (self.join_bodies.get(jump_stmt.target)) |target_body| {
+                        if (self.store.getCFStmtImmediate(target_body).* == .ret) try self.noteRestitutedParams();
+                    }
+                },
+                .runtime_error, .comptime_exhaustiveness_failed => {},
             }
             // Every other statement's successors stay in its region.
             successors.clearRetainingCapacity();
@@ -5815,7 +5839,11 @@ const Certifier = struct {
                     }
                     const closure_value = try self.requireLive(&state, assign.closure);
                     const owner = LIR.erasedCallOwner(assign);
-                    const owner_value = try self.requireLive(&state, owner);
+                    // A deferred call is recorded after everything else the
+                    // frame owns is released, its reuse source's unit
+                    // included, and reads its closure alone. Every other
+                    // call reads its reuse source.
+                    const owner_value = if (assign.deferred) no_value else try self.requireLive(&state, owner);
                     // A deferred call keeps one reference to its closure
                     // until whoever makes the call releases it.
                     if (assign.deferred) try self.consumeUnit(&state, closure_value, assign.closure);
@@ -6848,11 +6876,19 @@ const Certifier = struct {
                 // callee, and a deferred call keeps one reference to its
                 // closure until whoever makes the call transfers or
                 // releases it. Any other call borrows its closure.
+                // A deferred call that transfers nothing is recorded after
+                // everything else the frame owns is released, its reuse
+                // source's unit included, and reads its closure alone.
                 const owner = LIR.erasedCallOwner(call);
-                const owner_value = try self.requireLive(state, owner);
                 if (call.reuse_closure) {
+                    const owner_value = try self.requireLive(state, owner);
                     if (self.isRc(owner)) try self.consumeUnit(state, owner_value, owner);
-                } else if (call.deferred and self.isRc(call.closure)) try self.consumeUnit(state, state.valueOf(call.closure), call.closure);
+                } else if (call.deferred) {
+                    const closure_value = try self.requireLive(state, call.closure);
+                    if (self.isRc(call.closure)) try self.consumeUnit(state, closure_value, call.closure);
+                } else {
+                    _ = try self.requireLive(state, owner);
+                }
                 if (call.args) |args| {
                     if (self.isRc(args)) try self.consumeUnit(state, state.valueOf(args), args);
                 }
@@ -7482,6 +7518,40 @@ test "certify rejects a deferred erased call that transfers its closure" {
     _ = try f.addProc(&.{closure}, body, erased_callable);
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "deferred erased call transferred its closure") != null);
+}
+
+test "certify accepts a deferred erased call recorded after its tag wrapper reuse source is released" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const wrapper = try f.layouts.putTagUnion(&.{erased_callable});
+    const owner = try f.local(wrapper);
+    const closure = try f.local(erased_callable);
+    const result = try f.local(erased_callable);
+    const ret = try f.ret(result);
+    const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
+    // The pending call holds the reference retained through `closure`; the
+    // frame's own unit of the allocation, held by `owner`, ends first.
+    const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = result,
+        .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+            .closure = closure,
+            .args = LIR.LocalSpan.empty(),
+            .arg_plan = arg_plan,
+            .reuse_source = owner,
+            .deferred = true,
+        }),
+        .next = ret,
+    } }, .test_fixture);
+    const release = try f.decrefStmt(owner, wrapper, call);
+    const retain = try f.increfStmt(closure, erased_callable, release);
+    const body = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = closure,
+        .op = .tagPayloadStruct(owner, 0, 0),
+        .next = retain,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{owner}, body, erased_callable);
+    try f.certify();
 }
 
 test "certify keeps a borrowed erased call's closure with its caller" {

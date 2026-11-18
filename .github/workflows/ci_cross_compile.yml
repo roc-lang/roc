@@ -27,6 +27,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
+      - name: Enlarge pagefile (Windows)
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/enlarge-windows-pagefile
+
+      - name: Enlarge swap (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/enlarge-linux-swap
+
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.17.1

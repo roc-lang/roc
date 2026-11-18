@@ -2000,7 +2000,7 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: boolean false", .source = "False", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: unary not true", .source = "!True", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: unary not false", .source = "!False", .expected = .{ .inspect_str = "True" } },
-    .{ .name = "unary not of an inferred generic function on tag literals is a problem", .source = "{ negate = |value| !value\n (negate(True), negate(False)) }", .expected = .problem },
+    .{ .name = "inspect: unary not inferred parameter", .source = "{ negate = |value| !value\n (negate(True), negate(False)) }", .expected = .{ .inspect_str = "(False, True)" } },
     .{
         .name = "inspect: unary not mutable flag in loop issue 11157",
         .source =
@@ -5810,6 +5810,50 @@ const core_tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "4.0" },
+    },
+    .{
+        .name = "inspect: match branch alternatives bind several names from payloads of different layouts",
+        .source_kind = .module,
+        .source =
+        \\Shape : [Pair(Str, U64), Swapped(U64, Str), Boxed({ name : Str, n : U64 }), Single(Str), Nested(Try(Str, Str))]
+        \\describe : Shape -> Str
+        \\describe = |shape| match shape {
+        \\    Pair(name, n) | Swapped(n, name) | Boxed({ name, n }) => "${name}:${n.to_str()}"
+        \\    Single(name) | Nested(Ok(name)) | Nested(Err(name)) => name
+        \\}
+        \\main = [describe(Pair("a", 1)), describe(Swapped(2, "b")), describe(Boxed({ name: "c", n: 3 })), describe(Single("d")), describe(Nested(Err("e")))]
+        ,
+        .expected = .{ .inspect_str = "[\"a:1\", \"b:2\", \"c:3\", \"d\", \"e\"]" },
+    },
+    .{
+        .name = "inspect: match branch alternatives with guards and list rests",
+        .source_kind = .module,
+        .source =
+        \\guarded : [Pair(Str, U64), Swapped(U64, Str), Other] -> Str
+        \\guarded = |shape| match shape {
+        \\    Pair(name, n) | Swapped(n, name) if n > 5 => "big ${name}"
+        \\    Pair(name, _) | Swapped(_, name) => "small ${name}"
+        \\    Other => "other"
+        \\}
+        \\rest_sum : [A(List(U64)), B(Str, List(U64))] -> U64
+        \\rest_sum = |value| match value {
+        \\    A([first, .. as rest]) | B(_, [first, .. as rest]) => first + List.len(rest)
+        \\    A([]) | B(_, []) => 0
+        \\}
+        \\main = (guarded(Swapped(9, "e")), guarded(Pair("f", 1)), rest_sum(B("x", [10, 20, 30])), rest_sum(A([])))
+        ,
+        .expected = .{ .inspect_str = "(\"big e\", \"small f\", 12, 0)" },
+    },
+    .{
+        .name = "inspect: match branch alternatives in a generic function",
+        .source_kind = .module,
+        .source =
+        \\either = |result| match result {
+        \\    Ok(v) | Err(v) => v
+        \\}
+        \\main = (either(if False Ok("g") else Err("h")), either(if True Ok({ n: 1.U8, s: "i" }) else Err({ n: 2.U8, s: "j" })))
+        ,
+        .expected = .{ .inspect_str = "(\"h\", { n: 1, s: \"i\" })" },
     },
     .{ .name = "inspect: match record destructures fields", .source = "match { x: 1, y: 2 } { { x, y } => x + y }", .expected = .{ .inspect_str = "3.0" } },
     .{ .name = "inspect: render Try.Ok literal", .source = "match True { True => Ok(42), False => Err(\"boom\") }", .expected = .{ .inspect_str = "Ok(42.0)" } },

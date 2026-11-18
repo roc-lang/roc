@@ -376,6 +376,27 @@ pub const Solution = struct {
         return (self.unique_conds[index] & ~seeds) == 0;
     }
 
+    /// `isUniqueUnder` for the value a runtime uniqueness check reads through
+    /// `local`. A borrowed pure same-value alias that is only ever read is a
+    /// view: it holds no unit and has no origin of its own, and the count the
+    /// check reads is that of the value it views. The claim therefore holds
+    /// when the local owning the viewed unit is unique under `seeds` and no
+    /// link of the borrowed alias chain down to it adds a holder.
+    pub fn isUniqueThroughViewsUnder(self: *const Solution, local: LIR.LocalId, seeds: arc_sig.ParamMask) bool {
+        var cursor = @backingInt(local);
+        var steps: usize = 0;
+        while (cursor < self.alias_source.len and
+            self.isBorrowed(@fromBackingInt(@intCast(cursor))))
+        {
+            const source = self.alias_source[cursor].get() orelse break;
+            if (cursor >= self.leader.len or self.unique_destroyed.isSet(cursor)) return false;
+            cursor = source;
+            steps += 1;
+            if (steps > self.alias_source.len) solveInvariant("ARC alias-source chain contained a cycle");
+        }
+        return self.isUniqueUnder(@fromBackingInt(@intCast(cursor)), seeds);
+    }
+
     /// True when the proc's signature is pinned by ABI and must never be
     /// weakened or specialized.
     pub fn isPinnedProc(self: *const Solution, proc: LIR.LirProcSpecId) bool {
@@ -558,12 +579,27 @@ pub const Solution = struct {
     /// The outcome span a call from `caller` to `callee` may demand. A stable
     /// procedure's outcome rows follow its current body, which code without
     /// a code key does not change with, so only a caller with one may demand
-    /// them.
+    /// them. A call within the callee's emission unit may demand them, and
+    /// so may every call of a procedure whose object publishes its outcome
+    /// variant (`publishesOutcomeVariant`).
     pub fn outcomeSpanForCall(self: *const Solution, store: *const LirStore, caller: LIR.LirProcSpecId, callee: LIR.LirProcSpecId) arc_sig.OutcomeSpan {
         const index = @backingInt(callee);
         if (index < self.stability_pinned.capacity() and self.stability_pinned.isSet(index) and store.getProcSpec(caller).code_key == null) return .empty;
-        if (!sharesEmissionUnit(store, caller, callee)) return .empty;
+        if (!sharesEmissionUnit(store, caller, callee) and !self.publishesOutcomeVariant(store, callee)) return .empty;
         return self.availableOutcomeSpanOf(callee);
+    }
+
+    /// Whether a call from any emission unit may demand `proc`'s
+    /// outcome-restitution variant (design.md "Outcome-Conditioned Argument
+    /// Restitution", published outcome variants): a publishing worker
+    /// (`LIR.LirProcSpec.outcome_publisher`) this program emits whose solved
+    /// capability is nonempty and whose signature nothing pins, or an
+    /// external procedure whose object published one
+    /// (`LIR.LirProcSpec.rc_outcomes`).
+    pub fn publishesOutcomeVariant(self: *const Solution, store: *const LirStore, proc: LIR.LirProcSpecId) bool {
+        if (self.availableOutcomeSpanOf(proc).isEmpty()) return false;
+        const spec = store.getProcSpec(proc);
+        return spec.external or (spec.outcome_publisher and !self.isPinnedProc(proc));
     }
 
     pub fn availableOutcomeSpanOf(self: *const Solution, proc: LIR.LirProcSpecId) arc_sig.OutcomeSpan {
@@ -1596,8 +1632,14 @@ fn computeOutcomeRestitution(
 
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        if (solution.isPinnedProc(proc_id) and !solution.stability_pinned.isSet(proc_index)) continue;
         const proc = store.getProcSpec(proc_id);
+        if (proc.external) {
+            // Another object defines this procedure and the outcome variant
+            // it publishes; its capability is that variant's outcome table.
+            try appendPublishedOutcomes(allocator, store, proc, &all_outcomes, &solution.available_outcome_spans[proc_index]);
+            continue;
+        }
+        if (solution.isPinnedProc(proc_id) and !solution.stability_pinned.isSet(proc_index)) continue;
         const body = proc.arcBody() orelse continue;
         if (layouts.getLayout(proc.ret_layout).tag != .tag_union) continue;
 
@@ -1990,6 +2032,38 @@ fn computeOutcomeRestitution(
     }
 
     solution.outcomes = try all_outcomes.toOwnedSlice(allocator);
+}
+
+/// Append the outcome table an external procedure's object published with
+/// its outcome-restitution variant (`LIR.LirProcSpec.rc_outcomes`) and
+/// record it as the procedure's available span; a procedure that publishes
+/// none keeps an empty span.
+fn appendPublishedOutcomes(
+    allocator: Allocator,
+    store: *const LirStore,
+    proc: LIR.LirProcSpec,
+    all_outcomes: *std.ArrayList(arc_sig.Outcome),
+    span: *arc_sig.OutcomeSpan,
+) Allocator.Error!void {
+    const words = store.getU32Span(proc.rc_outcomes);
+    const word_count = GuardedList.borrowLen(words);
+    if (word_count == 0) return;
+    if (word_count % 2 != 0) solveInvariant("ARC read a published outcome table with an incomplete row");
+    const start = all_outcomes.items.len;
+    var restituted: arc_sig.ParamMask = 0;
+    var row: usize = 0;
+    while (row < word_count) : (row += 2) {
+        const mask = GuardedList.at(words, row + 1);
+        if (mask > std.math.maxInt(arc_sig.ParamMask)) solveInvariant("ARC read a published outcome row naming an untracked parameter");
+        const outcome: arc_sig.Outcome = .{ .discriminant = GuardedList.at(words, row), .restituted_params = @intCast(mask) };
+        if (all_outcomes.items.len > start and !outcomeLessThan({}, all_outcomes.items[all_outcomes.items.len - 1], outcome)) {
+            solveInvariant("ARC read a published outcome table out of discriminant order");
+        }
+        restituted |= outcome.restituted_params;
+        try all_outcomes.append(allocator, outcome);
+    }
+    if (restituted == 0) solveInvariant("ARC read a published outcome table that restitutes nothing");
+    span.* = .{ .start = @intCast(start), .len = @intCast(all_outcomes.items.len - start) };
 }
 
 /// Allocation demand over the already-lifted occurrence inventory. Each local
@@ -2991,10 +3065,11 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             const assign = store.stmtRow(assign_stmt.data);
             if (assign.reuse_closure) solveInvariant("erased call was marked transferring before ARC");
             try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
-            // A call that can repack its closure's allocation as its result
-            // demands the closure's unit. Any other call transfers the unit
-            // only when it dies there anyway, and otherwise borrows it.
-            if (assign.result_reuse) try solver.binding_facts.append(allocator, .{ .demand = LIR.erasedCallOwner(assign) });
+            // An erased call demands its closure's unit: where the unit dies
+            // at the call, emission moves it into the callee, which reads the
+            // captures out of it unshared and can repack it as its result.
+            // Where it does not die there, the call borrows it.
+            try solver.binding_facts.append(allocator, .{ .demand = LIR.erasedCallOwner(assign) });
             const args = store.getLocalSpan(assign.args);
             for (0..GuardedList.borrowLen(args)) |index| {
                 const arg = GuardedList.at(args, index);
@@ -3327,7 +3402,8 @@ fn liftDynStmtFacts(solver: *Solver, current: LIR.CFStmtId, target: ?LIR.LocalId
             const call = op.call_erased;
             if (call.reuse_closure) solveInvariant("erased call was marked transferring before ARC");
             try solver.binding_facts.append(allocator, .{ .fresh = defined });
-            if (call.result_reuse) try solver.binding_facts.append(allocator, .{ .demand = LIR.erasedCallOwner(call) });
+            // As for `assign_call_erased`: the call demands its closure's unit.
+            try solver.binding_facts.append(allocator, .{ .demand = LIR.erasedCallOwner(call) });
             if (call.args) |args| {
                 try solver.binding_facts.append(allocator, .{ .demand = args });
                 try liftVisibilitySeed(solver, args);
@@ -3893,7 +3969,13 @@ pub const Uniqueness = struct {
     /// Bit set => some statement consumes the local's value (moves its
     /// unit, or would retain to do so).
     consumed: std.bit_set.DynamicBitSetUnmanaged,
+    /// Per local bound by exactly one definition that is a pure same-value
+    /// alias or a read-only view, the local it aliases. A runtime uniqueness
+    /// check that only reads such a local reads the count of that source's
+    /// value.
+    read_source: []OptionalU32,
     pub fn deinit(self: *Uniqueness, allocator: Allocator) void {
+        allocator.free(self.read_source);
         self.born_unique.deinit(allocator);
         self.unique.deinit(allocator);
         self.destroyed.deinit(allocator);
@@ -3916,6 +3998,7 @@ pub const Uniqueness = struct {
                 .conds = try allocator.dupe(arc_sig.ParamMask, self.field_conds.conds),
             },
             .consumed = try self.consumed.clone(allocator),
+            .read_source = try allocator.dupe(OptionalU32, self.read_source),
         };
     }
 };
@@ -6697,7 +6780,20 @@ fn computeUniquenessDetailed(
         if (conds[index] != 0) unique.unset(index);
     }
 
+    // The value a check that only reads `local` reads: the source of the one
+    // pure same-value alias or view definition that binds it.
+    const read_source = try allocator.alloc(OptionalU32, local_count);
+    for (read_source, 0..) |*slot, index| {
+        slot.* = if (def_counts[index] != 1)
+            .none
+        else if (view_source[index] != .none)
+            view_source[index]
+        else
+            alias_source[index];
+    }
+
     const result = Uniqueness{
+        .read_source = read_source,
         .born_unique = born,
         .unique = unique,
         .destroyed = destroyed,
@@ -7789,7 +7885,8 @@ test "ARC shared predicates have one definition across the ARC stage" {
 /// Whether a direct call from `caller` to `callee` may demand an ownership
 /// variant of `callee`: the two share an emission unit (design.md "Mode
 /// Specialization", emission units). A call across units adapts to the
-/// callee's solved base signature.
+/// callee's solved base signature, except that it may demand an outcome
+/// variant the callee's object publishes (`Solution.outcomeSpanForCall`).
 pub fn sharesEmissionUnit(store: *const LirStore, caller: LIR.LirProcSpecId, callee: LIR.LirProcSpecId) bool {
     return LIR.EmissionUnit.shares(store.getProcSpec(caller).emission_unit, store.getProcSpec(callee).emission_unit);
 }

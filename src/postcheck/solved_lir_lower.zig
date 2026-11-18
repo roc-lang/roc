@@ -138,8 +138,6 @@ pub const Options = struct {
     /// Compile-time evaluation must use deterministic seed zero. Runtime
     /// lowering retains the process-randomized seed operation.
     dict_seed_mode: DictSeedMode = .runtime,
-    /// Preserve source-level procedure names in LIR for runtime diagnostics.
-    proc_debug_names: bool = false,
     /// Record each platform entrypoint's host boundary digest.
     host_boundary_digests: bool = false,
     /// Build ConstStore materialization plans for requested layouts.
@@ -871,7 +869,6 @@ const Lowerer = struct {
     dict_seed_mode: DictSeedMode,
     completed_scalar_values: ?*const ComptimeScalarValues.CompletedScalarValues,
     completed_erased_members: ?*const CompletedErasedMembers,
-    proc_debug_names: bool,
     host_boundary_digests: bool,
     site_code_keys: bool,
     owned_proc_signatures: bool,
@@ -962,6 +959,9 @@ const Lowerer = struct {
     /// last.
     value_consumers: std.ArrayList(ValueConsumer),
     current_ret_ty: ?Type.TypeId = null,
+    /// Where a `return` in the inlined body being lowered delivers its value,
+    /// when that body holds one.
+    inline_return: ?InlineReturn = null,
     current_proc_locals: ?*ProcLocalSet = null,
     lane_scratch: LaneScratch,
     current_fn: ?Type.FnId = null,
@@ -1172,6 +1172,9 @@ const Lowerer = struct {
         join_id: LIR.JoinPointId,
         params: LIR.LocalSpan,
         param_tys: []const Type.TypeId,
+        /// The join's remainder is being lowered. Its parameters are in scope
+        /// only in its body, so no argument of a jump lowered now reads them.
+        in_remainder: bool = false,
     };
 
     /// The join that receives a value-position join's result in `target`.
@@ -1188,6 +1191,18 @@ const Lowerer = struct {
     const ValueJoin = struct {
         id: LIR.JoinPointId,
         declared: bool,
+    };
+
+    /// The destination of a `return` inside an inlined call's body: the
+    /// call's result local and the value join its continuation sits behind.
+    const InlineReturn = struct {
+        target: LIR.LocalId,
+        ty: Type.TypeId,
+        join_id: LIR.JoinPointId,
+        /// Whether the call's result was the enclosing procedure's return
+        /// target when the call was entered.
+        forwards_return: bool,
+        repeatable_depth: usize,
     };
 
     fn init(
@@ -1268,7 +1283,6 @@ const Lowerer = struct {
             .dict_seed_mode = options.dict_seed_mode,
             .completed_scalar_values = options.completed_scalar_values,
             .completed_erased_members = options.completed_erased_members,
-            .proc_debug_names = options.proc_debug_names,
             .host_boundary_digests = options.host_boundary_digests,
             .site_code_keys = options.site_code_keys,
             .owned_proc_signatures = options.owned_proc_signatures,
@@ -1934,6 +1948,7 @@ const Lowerer = struct {
         worker.join_stack = workspace.join_stack;
         worker.value_consumers = workspace.value_consumers;
         worker.current_ret_ty = null;
+        worker.inline_return = null;
         worker.current_proc_locals = null;
         worker.current_fn = null;
         worker.current_proc = null;
@@ -2785,6 +2800,7 @@ const Lowerer = struct {
             appended.relocation.tailCalls(shard.prefix, sites)
         else
             null);
+        try self.result.store.addBodyChunk(shard.proc, appended.chunk);
         self.next_join_point = next_join_point;
         try self.folded_map_matches.appendSlice(self.allocator, shard.folded_map_matches);
         self.fn_written.items[@backingInt(shard.fn_id)] = true;
@@ -2834,6 +2850,7 @@ const Lowerer = struct {
         // exact layout in the initializer proc; lower directly into it instead
         // of reconstructing the root layout from the logical type.
         const ret_layout = self.result.store.getProcSpecImmediate(initializer.proc).ret_layout;
+        const body_mark = self.result.store.bodyMark();
         const ret_local = try self.addLocalForLayout(ret_layout);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, where.scaffold());
         const erased_owner_use_start = self.erased_call_owner_uses.items.len;
@@ -2848,6 +2865,7 @@ const Lowerer = struct {
         proc.shapes = proc.shapes.merged(self.result.store.shapes);
         proc.frame_locals = frame_locals;
         proc.stack_probe = self.stackProbeForProc(proc.args, proc.frame_locals, proc.ret_layout);
+        try self.result.store.recordBodyChunk(initializer.proc, body_mark);
     }
 
     fn lowerFnSpec(self: *Lowerer, fn_id: Type.FnId, spec: FnSpec) Common.LowerError!?LoweredFnBody {
@@ -2857,6 +2875,10 @@ const Lowerer = struct {
         self.aggregate_bindings = &aggregates;
         defer self.aggregate_bindings = saved_aggregates;
         const proc_id = try self.procPlaceholder(fn_id);
+        // A body lowered on a worker is a body shard, which its commit
+        // records as one chunk; here the body is the rows appended from
+        // this mark on.
+        const body_mark: ?LirStore.BodyMark = if (self.worker_callback) null else self.result.store.bodyMark();
         // The store accumulates this body's shapes from the statements it
         // appends; a body lowered inside another body keeps its own set.
         const saved_shapes = self.result.store.shapes;
@@ -3006,6 +3028,7 @@ const Lowerer = struct {
                     proc_ptr.stack_probe = lowered_body.?.stack_probe;
                     proc_ptr.tail_calls = .of(lowered_body.?.tail_calls);
                     proc_ptr.shapes = lowered_body.?.shapes;
+                    try self.result.store.recordBodyChunk(proc_id, body_mark.?);
                 }
             },
             .hosted => {
@@ -3196,10 +3219,8 @@ const Lowerer = struct {
             .code_key = code_key,
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         }, proc_loc);
-        if (self.proc_debug_names) {
-            if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
-                try self.result.store.setProcDebugName(proc, self.solved.lifted.names.exportNameText(name));
-            }
+        if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
+            try self.result.store.setProcDebugName(proc, self.solved.lifted.names.exportNameText(name));
         }
         try self.procs_by_identity.putNoClobber(identity, fn_id);
         entry.proc = .some(proc);
@@ -5790,7 +5811,10 @@ const Lowerer = struct {
             .stored => {
                 // Frozen straight from the stored node its request names: no
                 // initializer builds it.
-                const stored_request = self.solved.lifted.static_data_values.get(@backingInt(candidate.static_data));
+                const stored_request = switch (self.solved.lifted.static_data_values.get(@backingInt(candidate.static_data))) {
+                    .stored => |stored| stored,
+                    .inline_literal => Common.invariant("a stored list's static data request named a value-form expression"),
+                };
                 const result_id: LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(self.result.static_data_values.items.len))));
                 try self.result.static_data_values.append(self.allocator, .{
                     .initializer = .none,
@@ -6488,6 +6512,17 @@ const Lowerer = struct {
         /// arguments, as a capture record would be, and bound to the
         /// callee's capture locals instead of being packed into one.
         capture_values: []Lifted.ExprId = &.{},
+        /// The capture record `capture_arg` holds, when the call builds it
+        /// itself, next to the call statement. Every operand of such a
+        /// record is a plain local read (`operandIsPlainLocalRead`), so
+        /// building it after the arguments reads the same values, and the
+        /// record is not live across an argument's branching.
+        capture_record: ?struct {
+            captures: CaptureSpanId,
+            /// Borrowed from the lifted program.
+            operands: []const Lifted.CaptureOperand,
+            ty: Type.TypeId,
+        } = null,
         /// The capture value types, then the argument types.
         arg_tys: []Type.TypeId = &.{},
         lowered: ?LoweredExprLocals = null,
@@ -6515,6 +6550,11 @@ const Lowerer = struct {
         /// The caller's instance, put back once the callee's body is
         /// lowered.
         saved_env: Env = .global,
+        /// The join a body holding a `return` delivers the result through.
+        done: ?ValueJoin = null,
+        consumer_pushed: bool = false,
+        /// The return destination this call's body replaced.
+        saved_inline_return: ?InlineReturn = null,
     };
 
     const CallableCallTask = struct {
@@ -6770,13 +6810,20 @@ const Lowerer = struct {
     fn valueJoinFor(self: *Lowerer, next: LIR.CFStmtId, target: LIR.LocalId) ValueJoin {
         const stmt = self.result.store.getCFStmtImmediate(next);
         if (stmt.* == .jump) {
-            var index = self.value_consumers.items.len;
-            while (index > 0) {
-                index -= 1;
-                const consumer = self.value_consumers.items[index];
-                if (consumer.join_id == stmt.jump.target and consumer.target == target) {
-                    return .{ .id = consumer.join_id, .declared = true };
+            // Each consumer's join is minted after every consumer below it was
+            // pushed, so the stack ascends by join id.
+            const wanted = @backingInt(stmt.jump.target);
+            const consumers = self.value_consumers.items;
+            var low: usize = 0;
+            var high: usize = consumers.len;
+            while (low < high) {
+                const mid = low + (high - low) / 2;
+                const found = @backingInt(consumers[mid].join_id);
+                if (found == wanted) {
+                    if (consumers[mid].target != target) break;
+                    return .{ .id = consumers[mid].join_id, .declared = true };
                 }
+                if (found < wanted) low = mid + 1 else high = mid;
             }
         }
         return .{ .id = self.freshJoinPointId(), .declared = false };
@@ -6806,8 +6853,17 @@ const Lowerer = struct {
     /// pushed; a join an enclosing form declared is already on the stack.
     fn enterValueJoin(self: *Lowerer, done: ValueJoin, target: LIR.LocalId) Common.LowerError!bool {
         if (done.declared) return false;
-        try self.value_consumers.append(self.allocator, .{ .join_id = done.id, .target = target });
+        try self.pushValueConsumer(.{ .join_id = done.id, .target = target });
         return true;
+    }
+
+    fn pushValueConsumer(self: *Lowerer, consumer: ValueConsumer) Common.LowerError!void {
+        if (self.value_consumers.getLastOrNull()) |top| {
+            if (@backingInt(top.join_id) >= @backingInt(consumer.join_id)) {
+                Common.invariant("a value consumer's join was minted before the consumer below it");
+            }
+        }
+        try self.value_consumers.append(self.allocator, consumer);
     }
 
     /// Remove a value form's join from the consumer stack. Idempotent.
@@ -8401,6 +8457,23 @@ const Lowerer = struct {
         task.capture_ty = self.fn_entries.items[@backingInt(task.target_fn)].spec.capture_ty.get() orelse
             Common.invariant("capturing direct call target had no capture record type");
         task.capture_local = try self.addTemp(task.capture_ty);
+        var plain_captures = true;
+        for (task.capture_operands) |operand| {
+            if (!self.operandIsPlainLocalRead(operand.value)) plain_captures = false;
+        }
+        if (plain_captures) {
+            return .{ .tail = .{ .known_call = .{
+                .where = task.where,
+                .target = task.target,
+                .result_ty = task.result_ty,
+                .callee = task.target_fn,
+                .args = args,
+                .capture_arg = task.capture_local,
+                .is_cold = task.is_cold,
+                .next = task.next,
+                .capture_record = .{ .captures = task.captures, .operands = task.capture_operands, .ty = task.capture_ty },
+            } } };
+        }
         frame.cursor = 1;
         return .{ .call = .{ .known_call = .{
             .where = task.where,
@@ -8443,6 +8516,10 @@ const Lowerer = struct {
     }
 
     fn stepKnownCall(self: *Lowerer, frame: *LowerFrame, task: *KnownCallTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        // The capture record is built; the arguments are lowered ahead of it.
+        if (frame.cursor == 2) {
+            return .{ .tail = try self.operandChain(task.where, task.lowered.?, task.arg_tys, null, input.?) };
+        }
         if (frame.cursor == 1) {
             const lowered = task.lowered.?;
             const start = task.substituted_start.?;
@@ -8557,6 +8634,11 @@ const Lowerer = struct {
             }),
             .next = after_call,
         } }, where.source());
+        if (task.capture_record) |record| {
+            const capture_local = task.capture_arg orelse Common.invariant("a call that builds its capture record had no capture argument");
+            frame.cursor = 2;
+            return .{ .call = try self.captureRecordTask(where, capture_local, record.captures, record.operands, record.ty, current) };
+        }
         return .{ .tail = try self.operandChain(where, lowered, task.arg_tys, null, current) };
     }
 
@@ -8564,7 +8646,10 @@ const Lowerer = struct {
         if (frame.cursor == 1) {
             self.restoreInlineCallArgs(task);
             self.type_env = task.saved_env;
-            return .{ .ret = input.? };
+            const done = task.done orelse return .{ .ret = input.? };
+            self.inline_return = task.saved_inline_return;
+            self.leaveValueJoin(&task.consumer_pushed);
+            return .{ .ret = try self.declareValueJoin(task.where, done, task.target, task.next, input.?) };
         }
         const spec = self.fn_specs.items[@backingInt(task.callee)];
         if (spec.abi != .finite) Common.invariant("attempted to inline a non-finite function spec");
@@ -8594,12 +8679,32 @@ const Lowerer = struct {
         // call's scope, whose call site is this call.
         var callee_parent = task.where;
         callee_parent.outer = try self.addKnownCallInlineScope(task.where, source_fn, task.body_expr);
-        callee_parent.owner = self.solved.instances.specFn(spec.source, spec.env);
+        const callee_spec_fn = self.solved.instances.specFn(spec.source, spec.env);
+        callee_parent.owner = callee_spec_fn;
         // The callee's body reads its types under the callee's instance.
         task.saved_env = self.type_env;
         self.type_env = spec.env;
         frame.cursor = 1;
-        return .{ .call = exprTask(callee_parent, task.target, task.body_expr, null, task.next) };
+        if (!self.inline_plan.bodyReturns(callee_spec_fn)) {
+            return .{ .call = exprTask(callee_parent, task.target, task.body_expr, null, task.next) };
+        }
+
+        // Every `return` in the body, and the body's own result, arrive at
+        // one join in front of the call's continuation.
+        const ret_ty = self.fn_entries.items[@backingInt(task.callee)].ret;
+        self.noteErasedOwnerAmbiguous(task.target);
+        const done = self.valueJoinFor(task.next, task.target);
+        task.done = done;
+        task.consumer_pushed = try self.enterValueJoin(done, task.target);
+        task.saved_inline_return = self.inline_return;
+        self.inline_return = .{
+            .target = task.target,
+            .ty = ret_ty,
+            .join_id = done.id,
+            .forwards_return = self.current_return_target == task.target,
+            .repeatable_depth = self.return_forwarding_repeatable_depth,
+        };
+        return .{ .call = try self.valueBranchTask(callee_parent, task.target, task.body_expr, ret_ty, true, done.id, task.next) };
     }
 
     /// Put back the bindings an inlined call's arguments and captures
@@ -9482,6 +9587,19 @@ const Lowerer = struct {
     }
 
     fn returnStep(self: *Lowerer, where: LowerSite, ret: Mono.Return) Common.LowerError!LowerStep {
+        if (self.inline_return) |destination| {
+            const saved_return_target = self.current_return_target;
+            self.current_return_target = if (destination.forwards_return and
+                self.return_forwarding_repeatable_depth == destination.repeatable_depth)
+                destination.target
+            else
+                null;
+            const delivered = try self.valueJoinBranchTask(where, destination.target, ret.value, destination.ty, try self.joinJump(where, destination.join_id));
+            return .{ .tail = .{ .scoped = .{
+                .saved_return_target = saved_return_target,
+                .child = delivered.expr,
+            } } };
+        }
         const ret_ty = self.current_ret_ty orelse Common.invariant("return expression reached LIR lowering outside a function");
         const ret_local = try self.addTemp(ret_ty);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, where.source());
@@ -9691,7 +9809,7 @@ const Lowerer = struct {
                     const consumer = self.valueJoinFor(task.next, task.target);
                     task.consumer = consumer;
                     if (!consumer.declared) {
-                        try self.value_consumers.append(self.allocator, .{ .join_id = consumer.id, .target = task.target });
+                        try self.pushValueConsumer(.{ .join_id = consumer.id, .target = task.target });
                         task.consumer_pushed = true;
                     }
                 }
@@ -9700,6 +9818,9 @@ const Lowerer = struct {
             1 => {
                 task.body_stmt = input.?;
                 frame.cursor = 2;
+                const entered = &self.join_stack.items[self.join_stack.items.len - 1];
+                if (entered.join_id != task.lir_join_id) Common.invariant("a join point's remainder began with another join innermost");
+                entered.in_remainder = true;
                 return .{ .call = try self.joinPointArrivalTask(task, task.join_point.remainder) };
             },
             else => {
@@ -9759,6 +9880,19 @@ const Lowerer = struct {
         const args = self.solved.lifted.exprSpan(jump.args);
         if (self.result.store.getLocalSpan(join_point.params).len != args.len) {
             Common.invariant("jump argument count differed from join-point parameter count during direct LIR lowering");
+        }
+
+        // A jump from the remainder that supplies one tag union builds it in
+        // the parameter itself, the definition form a value join's branches
+        // use, so tag-case fusion sees the edge as a producer of the join.
+        if (args.len == 1 and join_point.in_remainder and jump.loop_params.len == 0) {
+            const param = GuardedList.at(self.result.store.getLocalSpan(join_point.params), 0);
+            const param_layout = self.result.layouts.getLayout(self.result.store.getLocal(param).layout_idx);
+            const arg = GuardedList.at(args, 0);
+            if (param_layout.tag == .tag_union and try self.joinArgNeedsWriteAtType(param, join_point.param_tys[0], arg)) {
+                const direct_jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_point.join_id } }, where.glue());
+                return .{ .tail = exprTask(where, param, arg, join_point.param_tys[0], direct_jump) };
+            }
         }
 
         const locals = try self.lowerExprsToJoinTempsAtTypes(join_point.params, join_point.param_tys, args);

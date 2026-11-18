@@ -132,7 +132,7 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
     defer static_data_exports.deinitStaticData(allocator, producer.static_data);
     for (producer.lir_result.exported_procs.items) |proc| {
         const identity = producer.lir_result.store.getProcSpec(proc).identity;
-        _ = try interfaces.putProc(&producer.lir_result.store, proc, producer.lir_result.boxy_table_needs.get(identity) orelse &.{});
+        _ = try interfaces.putProc(&producer.lir_result.store, proc, producer.lir_result.boxy_table_needs.get(identity) orelse &.{}, producer.lir_result.boxy_exports.get(identity).?);
     }
 
     // Identify the worker from the checked declaration, independently of the
@@ -142,12 +142,12 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
         const name = library.canonical_names.procBase(template.proc_base).export_name.get() orelse continue;
         if (std.mem.eql(u8, library.canonical_names.exportNameText(name), "unrelated")) break template.template_id;
     } else return error.TestUnexpectedResult;
-    const unrelated_identity = lir.CheckedPipeline.boxyTemplateWorkerIdentity(names.of(library_view), unrelated_template);
+    const unrelated_identity = lir.CheckedPipeline.boxyTemplateWorkerIdentity(names.of(library_view), library_view.templateName(unrelated_template));
     const used_template = for (library.checked_procedure_templates.templates.items()) |template| {
         const name = library.canonical_names.procBase(template.proc_base).export_name.get() orelse continue;
         if (std.mem.eql(u8, library.canonical_names.exportNameText(name), "used")) break template.template_id;
     } else return error.TestUnexpectedResult;
-    const used_identity = lir.CheckedPipeline.boxyTemplateWorkerIdentity(names.of(library_view), used_template);
+    const used_identity = lir.CheckedPipeline.boxyTemplateWorkerIdentity(names.of(library_view), library_view.templateName(used_template));
     const roots = library.root_requests.compile_time_requests.items();
     try std.testing.expect(roots.len != 0);
 
@@ -369,7 +369,6 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
             .prove_ranges = false,
             .reuse_boxes = false,
             .thread_confined_rc = false,
-            .proc_debug_names = true,
         },
     };
     try coord.finishCheckedProgram(.executable_artifacts);

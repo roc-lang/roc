@@ -5,37 +5,17 @@
 const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
 
-test "unary not on a tag literal dispatches to not at the builtin Bool" {
+test "unary not resolves to the actual builtin Bool.not definition" {
     var test_env = try TestEnv.init("Test", "result = !True");
     defer test_env.deinit();
     try test_env.assertNoErrors();
-    try test_env.assertDefType("result", "Bool");
-    const call = test_env.module_env.store.getExpr(try test_env.defExpr("result")).e_dispatch_call;
-    try std.testing.expectEqualStrings("not", test_env.module_env.getIdent(call.method_name));
-    try std.testing.expectEqual(.unary_not, std.meta.activeTag(call.surface_origin));
-}
-
-test "a type named Bool does not change the Bool a negated tag literal resolves at" {
-    var test_env = try TestEnv.init("Test",
-        \\Bool := [Other].{
-        \\    not : Bool -> Bool
-        \\    not = |value| value
-        \\}
-        \\
-        \\builtin_negated = !True
-        \\
-        \\other : Bool
-        \\other = Bool.Other
-        \\
-        \\user_negated = !other
-    );
-    defer test_env.deinit();
-
-    const diagnostics = try test_env.module_env.getDiagnostics();
-    defer test_env.gpa.free(diagnostics);
-    try std.testing.expectEqual(@as(usize, 1), diagnostics.len);
-    try std.testing.expectEqual(std.meta.activeTag(diagnostics[0]), .builtin_type_shadowed_warning);
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.problems.problems.items.len);
+    const call = test_env.module_env.store.getExpr(try test_env.defExpr("result")).e_call;
+    const lookup = test_env.module_env.store.getExpr(call.func).e_lookup_associated_resolved;
+    const builtin = test_env.builtin_module.env;
+    const definition = builtin.store.getDef(lookup.target_def_idx);
+    const binding = builtin.store.getPattern(definition.pattern).assign;
+    try std.testing.expectEqualStrings("Builtin.Bool.not", builtin.getIdentText(binding.ident));
+    try std.testing.expectEqual(@backingInt(lookup.target_def_idx), lookup.target_node_idx);
 }
 
 fn expectOneShadowWarningAndNoTypeProblems(src: []const u8) TestEnv.TestEnvError!void {

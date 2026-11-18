@@ -15,7 +15,10 @@
 //!
 //! Images are built from relocatable objects (`build`): x86_64 ELF objects
 //! for Linux, arm64 Mach-O objects for macOS, x86_64 and arm64 COFF objects
-//! for Windows. A COFF object's unwind tables (`.pdata` entries and their
+//! for Windows. An object is first read into the form `buildObjects`
+//! consumes (`Object`), whatever its format; the dev backend's object
+//! writers produce that form directly for a unit's image, without encoding
+//! the object (`ObjectWriter.indexedImageObject`). A COFF object's unwind tables (`.pdata` entries and their
 //! `.xdata`) are kept as regions of their own, which a link places in the
 //! executable's exception directory. The inputs are a unit's
 //! single-unit object, or the compiler's embedded support objects (the
@@ -36,7 +39,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RBXU".*;
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 6;
+pub const format_version: u32 = 7;
 /// Alignment of the code block inside an image, and of every region the
 /// linker places.
 pub const page_size: u32 = 4096;
@@ -559,6 +562,15 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
 
     const parsed = try arena.alloc(Object, objects.len);
     for (objects, parsed) |bytes, *object| object.* = try Object.parse(arena, bytes, options);
+    return buildObjects(allocator, parsed, options);
+}
+
+/// Build one image from `objects`, each in the form an object's bytes read
+/// into (`Object.parse`), exactly as `build` builds it from those bytes.
+pub fn buildObjects(allocator: Allocator, parsed: []const Object, options: BuildOptions) BuildError![]align(alignment.toByteUnits()) u8 {
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
 
     // The symbols read through the global offset table, each owning one
     // slot: a global or undefined symbol by name, a local by its object and
@@ -785,13 +797,16 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
     }
 
     // Relocations: resolve what is position independent inside the block,
-    // keep the rest as sites.
+    // keep the rest as sites. Each symbol is resolved once, on its first
+    // reference.
+    var resolutions = try Resolutions.init(arena, parsed, &definitions, places);
     for (parsed, places, 0..) |object, object_places, object_index| {
         for (object.relocs) |reloc| {
             const site_place = object_places[reloc.section] orelse continue;
             const site_section = object.sections[reloc.section];
             const symbol = object.symbols[reloc.symbol];
-            const target = try resolveTarget(&definitions, object_places, symbol);
+            const resolution = try resolutions.of(@intCast(object_index), reloc.symbol);
+            const target = resolution.target;
             switch (reloc.kind) {
                 .got_load_page21, .got_load_pageoff12 => {
                     // The site reads the slot; what the slot holds is what
@@ -802,16 +817,17 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
                     const key = if (symbol.bind == .local) try std.fmt.allocPrint(arena, "\x00{d}:{d}", .{ object_index, reloc.symbol }) else symbol.name;
                     const slot = got_slots.getIndex(key).?;
                     const slot_definition: Definition = .{ .object = 0, .symbol = 0, .weak = false, .region = .data, .offset = got_offset + slot * 8 };
-                    try sites.noteEdge(site_place, site_offset, target, symbol, targetPoint(target, .abs64, 0, object.x86_64));
-                    try sites.add(site_place, site_offset, kind, slot_definition, "", false, reloc.addend, 0);
+                    try sites.noteEdge(site_place, site_offset, target, symbol, targetPoint(target, .abs64, 0, object.x86_64), &resolution.import);
+                    var slot_import: ?u32 = null;
+                    try sites.add(site_place, site_offset, kind, slot_definition, "", false, reloc.addend, 0, &slot_import);
                 },
                 .abs64, .pc32, .abs32, .abs32s, .branch26, .page21, .pageoff12, .rva32 => {
                     const kind = reloc.kind.siteKind();
                     if (reloc.offset + kindWidth(kind) > site_section.size) return error.InvalidObject;
                     const site_offset = site_place.offset + reloc.offset;
                     const point = targetPoint(target, kind, reloc.addend, object.x86_64);
-                    try sites.noteEdge(site_place, site_offset, target, symbol, point);
-                    try sites.add(site_place, site_offset, kind, target, symbol.name, symbol.bind == .weak, reloc.addend, point);
+                    try sites.noteEdge(site_place, site_offset, target, symbol, point, &resolution.import);
+                    try sites.add(site_place, site_offset, kind, target, symbol.name, symbol.bind == .weak, reloc.addend, point, &resolution.import);
                 },
             }
         }
@@ -821,11 +837,12 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
     for (got_slots.values(), 0..) |ref, slot| {
         const object = parsed[ref.object];
         const symbol = object.symbols[ref.symbol];
-        const target = try resolveTarget(&definitions, places[ref.object], symbol);
+        const resolution = try resolutions.of(ref.object, ref.symbol);
+        const target = resolution.target;
         const site_offset = got_offset + slot * 8;
         const point = targetPoint(target, .abs64, 0, object.x86_64);
-        try sites.noteEdge(slot_place, site_offset, target, symbol, point);
-        try sites.add(slot_place, site_offset, .abs64, target, symbol.name, symbol.bind == .weak, 0, point);
+        try sites.noteEdge(slot_place, site_offset, target, symbol, point, &resolution.import);
+        try sites.add(slot_place, site_offset, .abs64, target, symbol.name, symbol.bind == .weak, 0, point, &resolution.import);
     }
 
     // Imports in name order, each with its sites in the order found.
@@ -1218,6 +1235,43 @@ fn resolveTarget(definitions: *const std.StringArrayHashMapUnmanaged(Definition)
     return .{ .object = 0, .symbol = 0, .weak = false, .region = place.region, .offset = place.offset + symbol.value };
 }
 
+/// What each symbol of the objects resolves to, computed on its first
+/// reference so every further reference costs no name lookup.
+const Resolutions = struct {
+    definitions: *const std.StringArrayHashMapUnmanaged(Definition),
+    places: []const []?Place,
+    objects: []const Object,
+    entries: [][]Entry,
+
+    const Entry = struct {
+        resolved: bool = false,
+        /// The definition the symbol resolves to inside the image, or null
+        /// for an import (`resolveTarget`).
+        target: ?Definition = null,
+        /// The symbol's index among the imports, once a site has named it
+        /// (`Sites.importIndex`).
+        import: ?u32 = null,
+    };
+
+    fn init(arena: Allocator, objects: []const Object, definitions: *const std.StringArrayHashMapUnmanaged(Definition), places: []const []?Place) Allocator.Error!Resolutions {
+        const entries = try arena.alloc([]Entry, objects.len);
+        for (objects, entries) |object, *object_entries| {
+            object_entries.* = try arena.alloc(Entry, object.symbols.len);
+            @memset(object_entries.*, .{});
+        }
+        return .{ .definitions = definitions, .places = places, .objects = objects, .entries = entries };
+    }
+
+    fn of(self: *Resolutions, object: u32, symbol: u32) BuildError!*Entry {
+        const entry = &self.entries[object][symbol];
+        if (!entry.resolved) {
+            entry.target = try resolveTarget(self.definitions, self.places[object], self.objects[object].symbols[symbol]);
+            entry.resolved = true;
+        }
+        return entry;
+    }
+};
+
 const PendingImport = struct { weak: bool };
 const PendingSite = struct { import: u32, site: Site };
 
@@ -1234,6 +1288,16 @@ const Sites = struct {
     root_atoms: std.ArrayList(u32) = .empty,
     ref_entries: std.ArrayList(RefEntry) = .empty,
 
+    /// The index among the imports of the symbol named `name`, which
+    /// `import` caches for that symbol once a site has named it.
+    fn importIndex(self: *Sites, name: []const u8, import: *?u32) Allocator.Error!u32 {
+        if (import.*) |index| return index;
+        const gop = try self.import_index.getOrPut(self.arena, name);
+        if (!gop.found_existing) gop.value_ptr.* = .{ .weak = true };
+        import.* = @intCast(gop.index);
+        return @intCast(gop.index);
+    }
+
     /// The atom holding `point`, a block offset a field reaches.
     fn atomAt(self: *const Sites, point: i64) BuildError!u32 {
         return self.atom_list.of(std.math.cast(u64, point) orelse return error.InvalidObject);
@@ -1244,7 +1308,7 @@ const Sites = struct {
     /// symbol names no symbol whose atom it reaches, so atoms by symbol
     /// admit none from the block. `point` is the block offset the field
     /// reaches when its target is in the block (`targetPoint`).
-    fn noteEdge(self: *Sites, site_place: Place, site_offset: u64, target: ?Definition, symbol: ObjectSymbol, point: i64) BuildError!void {
+    fn noteEdge(self: *Sites, site_place: Place, site_offset: u64, target: ?Definition, symbol: ObjectSymbol, point: i64, import: *?u32) BuildError!void {
         const site_atom: u32 = if (site_place.region == .block) self.atom_list.of(site_offset) else no_atom;
         if (target) |local| {
             if (local.region == .block and self.options.atoms != .whole) {
@@ -1259,9 +1323,7 @@ const Sites = struct {
                 }
             }
         } else if (site_place.region.isAllocated()) {
-            const gop = try self.import_index.getOrPut(self.arena, symbol.name);
-            if (!gop.found_existing) gop.value_ptr.* = .{ .weak = true };
-            const to = edge_import | @as(u32, @intCast(gop.index));
+            const to = edge_import | try self.importIndex(symbol.name, import);
             if (site_place.region == .block) try self.edge_pairs.append(self.arena, .{ .from = site_atom, .to = to }) else try self.root_atoms.append(self.arena, to);
         }
     }
@@ -1286,7 +1348,7 @@ const Sites = struct {
     /// Resolve the field in place when its target is in the block with it,
     /// else record it as a local or import site. `point` is the block
     /// offset the field reaches when its target is in the block.
-    fn add(self: *Sites, site_place: Place, site_offset: u64, kind: SiteKind, target: ?Definition, symbol_name: []const u8, weak_reference: bool, addend: i64, point: i64) BuildError!void {
+    fn add(self: *Sites, site_place: Place, site_offset: u64, kind: SiteKind, target: ?Definition, symbol_name: []const u8, weak_reference: bool, addend: i64, point: i64, import: *?u32) BuildError!void {
         const site_atom: u32 = if (site_place.region == .block) self.atom_list.of(site_offset) else no_atom;
         if (target) |local| {
             const total = addend + @as(i64, @intCast(local.offset));
@@ -1313,10 +1375,9 @@ const Sites = struct {
             return;
         }
         if (!site_place.region.isAllocated()) return error.UnsupportedRelocation;
-        const gop = try self.import_index.getOrPut(self.arena, symbol_name);
-        if (!gop.found_existing) gop.value_ptr.* = .{ .weak = true };
-        if (!weak_reference) gop.value_ptr.weak = false;
-        try self.import_sites.append(self.arena, .{ .import = @intCast(gop.index), .site = .{
+        const index = try self.importIndex(symbol_name, import);
+        if (!weak_reference) self.import_index.values()[index].weak = false;
+        try self.import_sites.append(self.arena, .{ .import = index, .site = .{
             .offset = @intCast(site_offset),
             .target = 0,
             .addend = addend,
@@ -1377,7 +1438,7 @@ const Layout = struct {
 };
 
 /// What a section of an input object is to the image.
-const SectionClass = enum {
+pub const SectionClass = enum {
     skip,
     text,
     rodata,
@@ -1390,7 +1451,7 @@ const SectionClass = enum {
     xdata,
 
     /// Whether the section's bytes are mapped into the executable.
-    fn isAllocated(self: SectionClass) bool {
+    pub fn isAllocated(self: SectionClass) bool {
         return switch (self) {
             .text, .rodata, .data, .bss, .pdata, .xdata => true,
             .skip, .debug_line, .debug_info, .debug_abbrev => false,
@@ -1399,7 +1460,7 @@ const SectionClass = enum {
 };
 
 /// An input object's section, classified.
-const Section = struct {
+pub const Section = struct {
     class: SectionClass,
     /// The section's contents; empty for zero-fill.
     bytes: []const u8,
@@ -1407,12 +1468,14 @@ const Section = struct {
     addralign: u64,
 };
 
-const SymbolBind = enum { local, global, weak };
-const SymbolKind = enum { notype, object, func, section };
+/// How an input object's symbol binds across objects.
+pub const SymbolBind = enum { local, global, weak };
+/// What an input object's symbol names.
+pub const SymbolKind = enum { notype, object, func, section };
 
 /// An input object's symbol, in its symbol table's order so relocations
 /// can index it.
-const ObjectSymbol = struct {
+pub const ObjectSymbol = struct {
     /// The C name: a Mach-O name without its leading underscore.
     name: []const u8,
     /// Offset in the symbol's section.
@@ -1431,7 +1494,7 @@ const ObjectSymbol = struct {
 
 /// How a relocation's field encodes its target: a site kind, or a load
 /// through the global offset table.
-const RelocKind = enum {
+pub const RelocKind = enum {
     abs64,
     pc32,
     abs32,
@@ -1458,7 +1521,8 @@ const RelocKind = enum {
     }
 };
 
-const Reloc = struct {
+/// One relocation of an input object.
+pub const Reloc = struct {
     /// Index of the section the field is in.
     section: u32,
     /// Offset of the field in that section.
@@ -1469,9 +1533,9 @@ const Reloc = struct {
     addend: i64,
 };
 
-/// An input object in the form `build` consumes, whatever format it came
-/// in.
-const Object = struct {
+/// An input object in the form `buildObjects` consumes, whatever format it
+/// came in.
+pub const Object = struct {
     sections: []Section,
     symbols: []ObjectSymbol,
     relocs: []Reloc,
@@ -1618,7 +1682,8 @@ fn parseElf(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildErr
     return .{ .sections = sections, .symbols = symbols, .relocs = relocs.items, .text_section = text_section, .static_data_section = static_data_section, .x86_64 = machine == EM_X86_64 };
 }
 
-fn classifyX86_64Reloc(r_type: u32) BuildError!RelocKind {
+/// The relocation kind of an x86_64 ELF relocation type.
+pub fn classifyX86_64Reloc(r_type: u32) BuildError!RelocKind {
     if (r_type == R_X86_64_64) return .abs64;
     if (r_type == R_X86_64_PC32 or r_type == R_X86_64_PLT32) return .pc32;
     if (r_type == R_X86_64_32) return .abs32;
@@ -1630,7 +1695,7 @@ fn classifyX86_64Reloc(r_type: u32) BuildError!RelocKind {
 /// position-relative words of jump tables and unwind tables, calls and
 /// tail calls, page pairs with an add or a scaled load or store, and loads
 /// through the global offset table.
-fn classifyAarch64Reloc(r_type: u32) BuildError!RelocKind {
+pub fn classifyAarch64Reloc(r_type: u32) BuildError!RelocKind {
     if (r_type == R_AARCH64_ABS64) return .abs64;
     if (r_type == R_AARCH64_ABS32) return .abs32;
     if (r_type == R_AARCH64_PREL32) return .pc32;
@@ -1783,29 +1848,7 @@ fn parseMachO(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildE
     }
     // Mach-O symbols have no size: a symbol runs to the next one in its
     // section, or to the section's end.
-    const by_position = try arena.alloc(u32, nsyms);
-    var positioned: u32 = 0;
-    for (symbols[0..nsyms], 0..) |symbol, index| {
-        if (symbol.skip or symbol.section == null) continue;
-        by_position[positioned] = @intCast(index);
-        positioned += 1;
-    }
-    std.mem.sort(u32, by_position[0..positioned], symbols, struct {
-        fn lessThan(all: []const ObjectSymbol, a: u32, b: u32) bool {
-            if (all[a].section.? != all[b].section.?) return all[a].section.? < all[b].section.?;
-            return all[a].value < all[b].value;
-        }
-    }.lessThan);
-    for (by_position[0..positioned], 0..) |index, position| {
-        const symbol = &symbols[index];
-        const section = symbol.section.?;
-        var end = raw.items[section].size;
-        if (position + 1 < positioned) {
-            const next = symbols[by_position[position + 1]];
-            if (next.section.? == section) end = next.value;
-        }
-        symbol.size = end - symbol.value;
-    }
+    try sizeByPosition(arena, symbols[0..nsyms], sections);
     var relocs: std.ArrayList(Reloc) = .empty;
     for (raw.items, sections, 0..) |section, classified, section_index| {
         if (classified.class == .skip) continue;
@@ -1889,7 +1932,127 @@ fn parseMachO(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildE
         }
         if (pending_addend != null) return error.InvalidObject;
     }
+    try addMachODebugOffsetRelocs(arena, sections, nsyms, &relocs);
     return .{ .sections = sections, .symbols = symbols, .relocs = relocs.items, .text_section = text_section, .static_data_section = static_data_section, .x86_64 = x86_64 };
+}
+
+/// Mach-O DWARF refers from `__debug_info` into `__debug_abbrev` and
+/// `__debug_line` by plain section offsets with no relocation, since a
+/// Mach-O linker leaves debug sections in their object. An image moves those
+/// sections (it joins objects, and a fast dev link joins images), so each
+/// unit's abbreviation offset and `DW_AT_stmt_list` get the relocation an
+/// ELF or COFF object carries, against the target section's symbol:
+/// section `i`'s is symbol `first_section_symbol + i`.
+pub fn addMachODebugOffsetRelocs(arena: Allocator, sections: []const Section, first_section_symbol: u32, relocs: *std.ArrayList(Reloc)) BuildError!void {
+    const info_section = sectionOfClass(sections, .debug_info) orelse return;
+    const abbrev_section = sectionOfClass(sections, .debug_abbrev) orelse return error.InvalidObject;
+    const info = sections[info_section].bytes;
+    const abbrev = sections[abbrev_section].bytes;
+    var unit: usize = 0;
+    while (unit < info.len) {
+        if (info.len - unit < 11) return error.InvalidObject;
+        const length = readU32(info, unit);
+        // 64-bit DWARF's escape and the reserved lengths.
+        if (length >= 0xffff_fff0) return error.UnsupportedSection;
+        if (length > info.len - unit - 4) return error.InvalidObject;
+        const unit_bytes = info[0 .. unit + 4 + length];
+        const version = readU16(info, unit + 4);
+        if (version < 2 or version > 4) return error.UnsupportedSection;
+        const abbrev_offset = readU32(info, unit + 6);
+        try relocs.append(arena, .{ .section = info_section, .offset = unit + 6, .kind = .abs32, .symbol = first_section_symbol + abbrev_section, .addend = abbrev_offset });
+        var at = unit + 11;
+        const code = try readUleb(unit_bytes, &at);
+        if (code != 0) {
+            var spec = try findAbbrev(abbrev, abbrev_offset, code);
+            while (true) {
+                const attribute = try readUleb(abbrev, &spec);
+                const form = try readUleb(abbrev, &spec);
+                if (attribute == 0 and form == 0) break;
+                if (attribute == DW_AT_stmt_list) {
+                    if (form != DW_FORM_sec_offset and form != DW_FORM_data4) return error.UnsupportedSection;
+                    if (unit_bytes.len - at < 4) return error.InvalidObject;
+                    const line_section = sectionOfClass(sections, .debug_line) orelse return error.InvalidObject;
+                    try relocs.append(arena, .{ .section = info_section, .offset = at, .kind = .abs32, .symbol = first_section_symbol + line_section, .addend = readU32(info, at) });
+                    break;
+                }
+                at = try skipForm(unit_bytes, at, form, info[unit + 10]);
+            }
+        }
+        unit = unit_bytes.len;
+    }
+}
+
+const DW_AT_stmt_list = 0x10;
+const DW_FORM_data4 = 0x06;
+const DW_FORM_sec_offset = 0x17;
+
+fn sectionOfClass(sections: []const Section, class: SectionClass) ?u32 {
+    for (sections, 0..) |section, index| {
+        if (section.class == class) return @intCast(index);
+    }
+    return null;
+}
+
+fn readUleb(bytes: []const u8, at: *usize) BuildError!u64 {
+    var value: u64 = 0;
+    var shift: u32 = 0;
+    while (at.* < bytes.len) {
+        const byte = bytes[at.*];
+        at.* += 1;
+        if (shift < 64) value |= @as(u64, byte & 0x7f) << @intCast(shift);
+        if (byte & 0x80 == 0) return value;
+        shift += 7;
+    }
+    return error.InvalidObject;
+}
+
+/// Where the attribute specifications of abbreviation `code` start in the
+/// table at `table_offset`.
+fn findAbbrev(abbrev: []const u8, table_offset: u64, code: u64) BuildError!usize {
+    if (table_offset > abbrev.len) return error.InvalidObject;
+    var at: usize = @intCast(table_offset);
+    while (true) {
+        const entry = try readUleb(abbrev, &at);
+        if (entry == 0) return error.InvalidObject;
+        _ = try readUleb(abbrev, &at); // tag
+        if (at >= abbrev.len) return error.InvalidObject;
+        at += 1; // has children
+        if (entry == code) return at;
+        while (true) {
+            const attribute = try readUleb(abbrev, &at);
+            const form = try readUleb(abbrev, &at);
+            if (attribute == 0 and form == 0) break;
+        }
+    }
+}
+
+/// The offset past an attribute value of `form` at `at`.
+fn skipForm(bytes: []const u8, at: usize, form: u64, address_size: u8) BuildError!usize {
+    var end = at;
+    const size: u64 = switch (form) {
+        0x01 => address_size, // addr
+        0x0b, 0x0c, 0x11 => 1, // data1, flag, ref1
+        0x05, 0x12 => 2, // data2, ref2
+        0x06, 0x0e, 0x13, 0x17 => 4, // data4, strp, ref4, sec_offset
+        0x07, 0x14, 0x20 => 8, // data8, ref8, ref_sig8
+        0x19 => 0, // flag_present
+        0x08 => string: { // string
+            const terminator = std.mem.findScalarPos(u8, bytes, at, 0) orelse return error.InvalidObject;
+            break :string terminator + 1 - at;
+        },
+        0x0d, 0x0f, 0x15 => leb: { // sdata, udata, ref_udata
+            _ = try readUleb(bytes, &end);
+            break :leb 0;
+        },
+        0x0a => if (at < bytes.len) @as(u64, bytes[at]) + 1 else return error.InvalidObject, // block1
+        0x09, 0x18 => block: { // block, exprloc
+            const len = try readUleb(bytes, &end);
+            break :block len;
+        },
+        else => return error.UnsupportedSection,
+    };
+    if (size > bytes.len - end) return error.InvalidObject;
+    return end + @as(usize, @intCast(size));
 }
 
 fn classifyMachO(segname: []const u8, sectname: []const u8, flags: u32, options: BuildOptions) BuildError!SectionClass {
@@ -2090,29 +2253,7 @@ fn parseCoff(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildEr
     }
     // COFF symbols have no size: a symbol runs to the next one in its
     // section, or to the section's end.
-    const by_position = try arena.alloc(u32, symbol_count);
-    var positioned: u32 = 0;
-    for (symbols, 0..) |symbol, symbol_index| {
-        if (symbol.skip or symbol.section == null or symbol.kind == .section) continue;
-        by_position[positioned] = @intCast(symbol_index);
-        positioned += 1;
-    }
-    std.mem.sort(u32, by_position[0..positioned], symbols, struct {
-        fn lessThan(all: []const ObjectSymbol, a: u32, b: u32) bool {
-            if (all[a].section.? != all[b].section.?) return all[a].section.? < all[b].section.?;
-            return all[a].value < all[b].value;
-        }
-    }.lessThan);
-    for (by_position[0..positioned], 0..) |symbol_index, position| {
-        const symbol = &symbols[symbol_index];
-        const section = symbol.section.?;
-        var end = raw[section].size;
-        if (position + 1 < positioned) {
-            const next = symbols[by_position[position + 1]];
-            if (next.section.? == section) end = next.value;
-        }
-        symbol.size = end - symbol.value;
-    }
+    try sizeByPosition(arena, symbols, sections);
 
     var relocs: std.ArrayList(Reloc) = .empty;
     for (raw, sections, 0..) |section, classified, section_index| {
@@ -2139,11 +2280,41 @@ fn parseCoff(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildEr
     return .{ .sections = sections, .symbols = symbols, .relocs = relocs.items, .text_section = text_section, .static_data_section = static_data_section, .x86_64 = !arm64 };
 }
 
-const DecodedCoffReloc = struct { kind: RelocKind, addend: i64, section_relative: bool = false };
+/// Give every defined symbol of `symbols` that is not a section symbol the
+/// size of its run in its section: to the next such symbol in it by offset,
+/// or to the section's end. Mach-O and COFF symbols record no size.
+pub fn sizeByPosition(arena: Allocator, symbols: []ObjectSymbol, sections: []const Section) Allocator.Error!void {
+    const by_position = try arena.alloc(u32, symbols.len);
+    var positioned: u32 = 0;
+    for (symbols, 0..) |symbol, index| {
+        if (symbol.skip or symbol.section == null or symbol.kind == .section) continue;
+        by_position[positioned] = @intCast(index);
+        positioned += 1;
+    }
+    std.mem.sort(u32, by_position[0..positioned], symbols, struct {
+        fn lessThan(all: []const ObjectSymbol, a: u32, b: u32) bool {
+            if (all[a].section.? != all[b].section.?) return all[a].section.? < all[b].section.?;
+            return all[a].value < all[b].value;
+        }
+    }.lessThan);
+    for (by_position[0..positioned], 0..) |index, position| {
+        const symbol = &symbols[index];
+        const section = symbol.section.?;
+        var end = sections[section].size;
+        if (position + 1 < positioned) {
+            const next = symbols[by_position[position + 1]];
+            if (next.section.? == section) end = next.value;
+        }
+        symbol.size = end - symbol.value;
+    }
+}
+
+/// A COFF relocation's kind and addend, read from its type and field.
+pub const DecodedCoffReloc = struct { kind: RelocKind, addend: i64, section_relative: bool = false };
 
 /// The site kind and addend of a COFF relocation: the addend is the
 /// field's contents, which an instruction field keeps in its immediate.
-fn decodeCoffReloc(arm64: bool, reloc_type: u16, section_bytes: []const u8, offset: u32, section_size: u64) BuildError!DecodedCoffReloc {
+pub fn decodeCoffReloc(arm64: bool, reloc_type: u16, section_bytes: []const u8, offset: u32, section_size: u64) BuildError!DecodedCoffReloc {
     const width: u64 = if (!arm64 and reloc_type == IMAGE_REL_AMD64_ADDR64 or arm64 and reloc_type == IMAGE_REL_ARM64_ADDR64) 8 else 4;
     if (@as(u64, offset) + width > section_size) return error.InvalidObject;
     const field = section_bytes[offset..][0..@intCast(width)];
@@ -3444,7 +3615,12 @@ test "an arm64 Mach-O object becomes an image with its C names" {
 test "a Mach-O debug section relocates text addresses by section" {
     const allocator = std.testing.allocator;
     const text = words(&.{ret_instruction});
-    var info: [16]u8 = @splat(0);
+    // A unit header (length, version 4, abbreviation offset, address size)
+    // and a null entry, then an address.
+    var info: [20]u8 = @splat(0);
+    std.mem.writeInt(u32, info[0..4], 16, .little);
+    std.mem.writeInt(u16, info[4..6], 4, .little);
+    info[10] = 8;
     const object = try TestMachObject.encode(allocator, &.{
         .{ .segname = "__TEXT", .sectname = "__text", .bytes = &text, .flags = S_ATTR_PURE_INSTRUCTIONS },
         .{ .segname = "__DWARF", .sectname = "__debug_info", .bytes = &info, .@"align" = 0, .flags = S_ATTR_DEBUG },
@@ -3452,20 +3628,68 @@ test "a Mach-O debug section relocates text addresses by section" {
     }, &.{
         .{ .name = "_f", .section = 1, .value = 0, .external = true },
     }, &.{
-        .{ .section = 2, .offset = 8, .symbol = 1, .external = false, .type = ARM64_RELOC_UNSIGNED, .pcrel = false, .length = 3 },
+        .{ .section = 2, .offset = 12, .symbol = 1, .external = false, .type = ARM64_RELOC_UNSIGNED, .pcrel = false, .length = 3 },
     });
     defer allocator.free(object);
     const image = try build(allocator, &.{object}, .{ .keep_debug = true, .atoms = .whole });
     defer allocator.free(image);
     const view = try View.init(image);
     try std.testing.expectEqualStrings("abbrev", view.debugAbbrev());
-    try std.testing.expectEqual(@as(usize, 1), view.localSites().len);
+    // The address, and the unit's abbreviation offset.
+    try std.testing.expectEqual(@as(usize, 2), view.localSites().len);
     try std.testing.expectEqual(@backingInt(Region.debug_info), view.localSites()[0].region);
     try std.testing.expectEqual(@backingInt(Region.block), view.localSites()[0].target_region);
-    try std.testing.expectEqual(@as(u32, 8), view.localSites()[0].offset);
+    try std.testing.expectEqual(@as(u32, 12), view.localSites()[0].offset);
+    try std.testing.expectEqual(@backingInt(Region.debug_abbrev), view.localSites()[1].target_region);
+    try std.testing.expectEqual(@as(u32, 6), view.localSites()[1].offset);
     const dropped = try build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .whole });
     defer allocator.free(dropped);
     try std.testing.expectEqual(@as(usize, 0), (try View.init(dropped)).debugInfo().len);
+}
+
+test "issue 13145: each Mach-O unit's offsets into the other debug sections are relocated" {
+    const allocator = std.testing.allocator;
+    const text = words(&.{ret_instruction});
+    // Abbreviation 1: a compile unit with a name and a line program.
+    const abbrev = [_]u8{ 1, 0x11, 0, 0x03, 0x08, DW_AT_stmt_list, DW_FORM_sec_offset, 0, 0, 0 };
+    // A unit header, then the unit: abbreviation 1, "a", stmt_list 0.
+    var info: [18]u8 = @splat(0);
+    std.mem.writeInt(u32, info[0..4], 14, .little);
+    std.mem.writeInt(u16, info[4..6], 4, .little);
+    info[10] = 8;
+    info[11] = 1;
+    info[12] = 'a';
+    var objects: [2][]u8 = undefined;
+    for (&objects, [_][]const u8{ "_f", "_g" }, [_][]const u8{ "line 1", "line two" }) |*object, name, line| {
+        object.* = try TestMachObject.encode(allocator, &.{
+            .{ .segname = "__TEXT", .sectname = "__text", .bytes = &text, .flags = S_ATTR_PURE_INSTRUCTIONS },
+            .{ .segname = "__DWARF", .sectname = "__debug_line", .bytes = line, .@"align" = 0, .flags = S_ATTR_DEBUG },
+            .{ .segname = "__DWARF", .sectname = "__debug_abbrev", .bytes = &abbrev, .@"align" = 0, .flags = S_ATTR_DEBUG },
+            .{ .segname = "__DWARF", .sectname = "__debug_info", .bytes = &info, .@"align" = 0, .flags = S_ATTR_DEBUG },
+        }, &.{
+            .{ .name = name, .section = 1, .value = 0, .external = true },
+        }, &.{});
+    }
+    defer for (objects) |object| allocator.free(object);
+    const image = try build(allocator, &objects, .{ .keep_debug = true, .atoms = .whole });
+    defer allocator.free(image);
+    const sites = (try View.init(image)).localSites();
+    // The second unit follows the first in each section: its fields 18
+    // bytes on, pointing past the first unit's 10 abbreviation and 6 line
+    // bytes.
+    const expected = [_]struct { offset: u32, target: Region, addend: i64 }{
+        .{ .offset = 6, .target = .debug_abbrev, .addend = 0 },
+        .{ .offset = 14, .target = .debug_line, .addend = 0 },
+        .{ .offset = 24, .target = .debug_abbrev, .addend = 10 },
+        .{ .offset = 32, .target = .debug_line, .addend = 6 },
+    };
+    try std.testing.expectEqual(expected.len, sites.len);
+    for (expected, sites) |want, site| {
+        try std.testing.expectEqual(@backingInt(Region.debug_info), site.region);
+        try std.testing.expectEqual(want.offset, site.offset);
+        try std.testing.expectEqual(@backingInt(want.target), site.target_region);
+        try std.testing.expectEqual(want.addend, site.addend);
+    }
 }
 
 test "arm64 sites encode branches, pages and scaled offsets" {

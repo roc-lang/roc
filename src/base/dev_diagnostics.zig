@@ -44,6 +44,9 @@ pub const Var = enum {
     ctfe_demand_trace,
     /// Check every object compile against one assembled from its artifacts.
     dev_excerpt_roundtrip,
+    /// Check every unit image built from a composition's object contents
+    /// against the image read back from the encoded object.
+    dev_unit_image_roundtrip,
     /// Append one record to the named file per in-process LLVM object compile.
     test_llvm_object_compile_count_file,
     /// Run the independent ARC certifier in a diagnostics-enabled compiler.
@@ -72,6 +75,10 @@ pub const Var = enum {
     /// readable name a lowering of the process recorded (`notePerfName`),
     /// otherwise by symbol.
     perf_map,
+    /// Print one line of deterministic work counts for every procedure the
+    /// range prover walks: its proof rounds and restarts, its loop guards,
+    /// its loop-invariant assumptions, and its walks and sum refreshes.
+    range_prove_stats,
     /// Print when `roc` starts a program it built and when it has released
     /// the build's state, so the order of the two is visible.
     trace_run_order,
@@ -90,6 +97,7 @@ pub const Var = enum {
             .fresh_type_analysis => "ROC_FRESH_TYPE_ANALYSIS",
             .ctfe_demand_trace => "ROC_CTFE_DEMAND_TRACE",
             .dev_excerpt_roundtrip => "ROC_DEV_EXCERPT_ROUNDTRIP",
+            .dev_unit_image_roundtrip => "ROC_DEV_UNIT_IMAGE_ROUNDTRIP",
             .test_llvm_object_compile_count_file => "ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE",
             .verify_arc => "ROC_VERIFY_ARC",
             .test_command_work => "ROC_TEST_COMMAND_WORK",
@@ -99,6 +107,7 @@ pub const Var = enum {
             .dump_wasm_unit_images => "ROC_DUMP_WASM_UNIT_IMAGES",
             .storage_work => "ROC_STORAGE_WORK",
             .perf_map => "ROC_PERF_MAP",
+            .range_prove_stats => "ROC_RANGE_PROVE_STATS",
             .trace_run_order => "ROC_TRACE_RUN_ORDER",
         };
     }

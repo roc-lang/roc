@@ -215,6 +215,11 @@ pub const CompileOptions = struct {
     /// name). The 64-bit builtin payload links the compression function built
     /// for them.
     sha256_rounds: builtins.sha256.Rounds,
+    /// The UTF-8 validation kernel the target machine's CPU features select
+    /// (`builtins.utf8.Kernel.forCpu` of the CPU that `cpu` and `features`
+    /// name). The 64-bit builtin payload links the validation function built
+    /// for it.
+    utf8_kernel: builtins.utf8.Kernel,
     /// Treat the target as freestanding for LLVM object emission: optimization
     /// cannot assume target library functions.
     no_target_libcalls: bool = false,
@@ -310,6 +315,53 @@ fn selectSha256RoundsBitcode(ptr_width: u8, rounds: builtins.sha256.Rounds) ?[]c
         },
         else => null,
     };
+}
+
+/// The payload defining the builtin bitcode's UTF-8 validation for `kernel`
+/// at `ptr_width`.
+fn selectUtf8KernelBitcode(ptr_width: u8, kernel: builtins.utf8.Kernel) ?[]const u8 {
+    return switch (ptr_width) {
+        64 => switch (kernel) {
+            .dfa => llvm_embedded.utf8_dfa_bc,
+            .x86_ssse3 => llvm_embedded.utf8_x86_ssse3_bc,
+            .aarch64_neon => llvm_embedded.utf8_aarch64_neon_bc,
+            .wasm_simd128 => unreachable, // no 64-bit target has the wasm instruction set
+        },
+        32 => switch (kernel) {
+            .dfa => llvm_embedded.utf8_dfa32_bc,
+            .wasm_simd128 => llvm_embedded.utf8_wasm_simd128_bc,
+            .x86_ssse3, .aarch64_neon => unreachable, // no 32-bit target has these instruction sets
+        },
+        else => null,
+    };
+}
+
+/// Parses `bitcode` and links it into `builtin_module` under `triple`.
+fn linkBuiltinPayload(
+    context: *bindings.Context,
+    builtin_module: *bindings.Module,
+    triple: [*:0]const u8,
+    bitcode: []const u8,
+    name: [*:0]const u8,
+) Error!void {
+    const mem_buf = bindings.MemoryBuffer.createMemoryBufferWithMemoryRange(
+        bitcode.ptr,
+        bitcode.len,
+        name,
+        bindings.Bool.False,
+    );
+    var payload_module: *bindings.Module = undefined;
+    if (context.parseBitcodeInContext2(mem_buf, &payload_module).toBool()) {
+        mem_buf.dispose();
+        return Error.BitcodeParseError;
+    }
+    payload_module.setTargetTriple(triple);
+    payload_module.setDataLayout(builtin_module.getDataLayout());
+    // Linking destroys payload_module; its definitions then prune and merge
+    // with the rest of the builtins.
+    if (builtin_module.link(payload_module).toBool()) {
+        return Error.ModuleLinkFailed;
+    }
 }
 
 fn removeFunctionTargetAttrs(func: *bindings.Value) void {
@@ -571,24 +623,10 @@ fn emitMergedBitcodeModulesToObject(
         }
 
         if (selectSha256RoundsBitcode(options.target_ptr_width_bits, options.sha256_rounds)) |rounds_bitcode| {
-            const rounds_mem_buf = bindings.MemoryBuffer.createMemoryBufferWithMemoryRange(
-                rounds_bitcode.ptr,
-                rounds_bitcode.len,
-                "roc_sha256_rounds",
-                bindings.Bool.False,
-            );
-            var rounds_module: *bindings.Module = undefined;
-            if (context.parseBitcodeInContext2(rounds_mem_buf, &rounds_module).toBool()) {
-                rounds_mem_buf.dispose();
-                return Error.BitcodeParseError;
-            }
-            rounds_module.setTargetTriple(triple);
-            rounds_module.setDataLayout(builtin_module.getDataLayout());
-            // Linking destroys rounds_module; its definition then prunes and
-            // merges with the rest of the builtins.
-            if (builtin_module.link(rounds_module).toBool()) {
-                return Error.ModuleLinkFailed;
-            }
+            try linkBuiltinPayload(context, builtin_module, triple, rounds_bitcode, "roc_sha256_rounds");
+        }
+        if (selectUtf8KernelBitcode(options.target_ptr_width_bits, options.utf8_kernel)) |kernel_bitcode| {
+            try linkBuiltinPayload(context, builtin_module, triple, kernel_bitcode, "roc_utf8_kernel");
         }
         pruneBuiltinModule(builtin_module, &app_decls);
         bindings.runGlobalDCE(builtin_module);
@@ -657,6 +695,10 @@ fn emitMergedBitcodeModulesToObject(
         .lower_memory_intrinsics_to_loops = options.lower_memory_intrinsics_to_loops,
     };
 
+    // In-process objects are for the host, which keeps LLVM's own memory
+    // intrinsic expansion limits. They are process-wide options that another
+    // compile in this process may have set, so every compile sets them.
+    bindings.setMemoryIntrinsicStoreLimit(bindings.memory_intrinsic_target_default);
     var emit_error: [*:0]const u8 = undefined;
     var object_ptr: [*]u8 = undefined;
     var object_len: usize = 0;

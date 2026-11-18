@@ -22,9 +22,13 @@ published: bool = false,
 /// How a proven call to the procedure itself is published: as a self-tail
 /// site that TCE turns into a loop jump, or, like a tail call to any other
 /// procedure, as a call that returns its value directly and so replaces the
-/// frame. A `.boxy` procedure with a dynamic frame region takes the second:
-/// its next call's dynamic arguments live in that region, which a loop
-/// iteration would allocate again while they are still read.
+/// frame. A `.boxy` procedure with a dynamic frame region whose parameters
+/// are not known (`loop_params` is empty) takes the second: its next call's
+/// dynamic arguments may live in that region, which a loop iteration would
+/// write again while they are still read. With its parameters known, a self
+/// call loops only when it passes each dynamic parameter along unchanged,
+/// so it reads no argument from the region, or changes only dynamic loop
+/// parameters its producer carries in frame storage (`keepsLoopParams`).
 self_calls: enum { loop, replace_frame } = .loop,
 /// The parameters of a `.boxy` procedure, and where its trailing parameters
 /// that fix its instantiation (its descriptors, dictionaries, and literal
@@ -165,16 +169,69 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
 }
 
 /// Whether a call to the procedure itself passes its instance parameters
-/// and its dynamic parameters along unchanged (`loop_params`).
+/// and its dynamic parameters along unchanged (`loop_params`). A dynamic
+/// loop parameter in frame storage, which a loop jump can write, may change
+/// to an independent value (`carriesDynamic`).
 fn keepsLoopParams(self: *const Self, store: anytype, args: LIR.LocalSpan) bool {
     if (self.loop_params.len == 0) return true;
     const passed = store.getLocalSpan(args);
     std.debug.assert(collections.GuardedList.borrowLen(passed) == self.loop_params.len);
     for (self.loop_params, 0..) |param, index| {
-        const fixed = index >= self.instance_start or store.getLocal(param).dyn != null;
-        if (fixed and collections.GuardedList.at(passed, index) != param) return false;
+        const arg = collections.GuardedList.at(passed, index);
+        if (arg == param) continue;
+        if (index >= self.instance_start) return false;
+        const dyn = store.getLocal(param).dyn orelse continue;
+        if (dyn.storage != .frame or !self.carriesDynamic(store, arg)) return false;
     }
     return true;
+}
+
+/// Whether a loop jump can write `arg` into a dynamic loop parameter: it is
+/// a frame local of its own, so its bytes overlap no loop parameter's, and it
+/// is no loop parameter, so the jump's writes never form a cycle among
+/// dynamic locals, which a temporary would have to break.
+fn carriesDynamic(self: *const Self, store: anytype, arg: LIR.LocalId) bool {
+    const dyn = store.getLocal(arg).dyn orelse return false;
+    if (dyn.storage != .frame) return false;
+    for (self.loop_params) |param| {
+        if (param == arg) return false;
+    }
+    return true;
+}
+
+/// Mark in `changed`, by position in `loop_params`, each dynamic parameter
+/// that a proven self-tail call passing the instance parameters along
+/// unchanged changes to an independent value (`carriesDynamic`). A `.boxy`
+/// producer carries such a parameter in a frame local instead, so that the
+/// call loops rather than replacing the frame (`keepsLoopParams`). Returns
+/// whether any is marked.
+pub fn changedDynamicParams(self: *Self, store: anytype, changed: []bool) std.mem.Allocator.Error!bool {
+    std.debug.assert(!self.published and changed.len == self.loop_params.len);
+    @memset(changed, false);
+    if (self.loop_params.len == 0 or self.self_calls != .loop) return false;
+    const proc = self.proc.?;
+    var any = false;
+    calls: for (self.calls.items) |id| {
+        const stmt = store.getCFStmt(id);
+        if (stmt != .assign_call) continue;
+        const call = stmt.assign_call;
+        if (call.proc != proc or call.tail_call.isSite()) continue;
+        const returned = try self.returnedLocal(store, call.next) orelse continue;
+        if (returned != call.target) continue;
+        const passed = store.getLocalSpan(call.args);
+        for (self.loop_params, 0..) |param, index| {
+            const arg = collections.GuardedList.at(passed, index);
+            if (arg == param) continue;
+            if (index >= self.instance_start) continue :calls;
+            if (store.getLocal(param).dyn != null and !self.carriesDynamic(store, arg)) continue :calls;
+        }
+        for (self.loop_params, 0..) |param, index| {
+            if (collections.GuardedList.at(passed, index) == param or store.getLocal(param).dyn == null) continue;
+            changed[index] = true;
+            any = true;
+        }
+    }
+    return any;
 }
 
 fn successor(self: *const Self, stmt: LIR.CFStmt) ?LIR.CFStmtId {

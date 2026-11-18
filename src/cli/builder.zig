@@ -75,9 +75,45 @@ pub const LinkedBuiltins = struct {
     /// name). The 64-bit builtin payload links the compression function built
     /// for them.
     sha256_rounds: builtins.sha256.Rounds,
+    /// The UTF-8 validation kernel the target's CPU features select
+    /// (`builtins.utf8.Kernel.forCpu` of the CPU that `cpu` and `features`
+    /// name). The 64-bit builtin payload links the validation function built
+    /// for it.
+    utf8_kernel: builtins.utf8.Kernel,
     /// Link the stack-checked builtins, for a wasm platform that reserves low
     /// memory (`builtins.stack_guard`).
     stack_checked: bool = false,
+};
+
+/// How many stores LLVM's code generator may expand an `llvm.memcpy`,
+/// `llvm.memmove` or `llvm.memset` with a constant length into before it
+/// emits the target's bulk instruction or a library call instead.
+pub const MemoryIntrinsicStores = enum {
+    /// The target's own limits.
+    target_default,
+    /// One store. A size-optimized wasm module with bulk memory uses this:
+    /// `memory.copy` or `memory.fill` with a constant length encodes in about
+    /// as many bytes as one load/store pair and in fewer than any longer
+    /// sequence, while LLVM's WebAssembly limits for size expand up to four.
+    single,
+
+    /// The limit for a compile at `optimization` for `std_target`, the target
+    /// whose CPU and features the compile names.
+    pub fn forCompile(optimization: OptimizationLevel, std_target: std.Target) MemoryIntrinsicStores {
+        return switch (optimization) {
+            .speed => .target_default,
+            .size => if (std_target.cpu.arch.isWasm() and std_target.cpu.has(.wasm, .bulk_memory_opt)) .single else .target_default,
+        };
+    }
+
+    /// The value LLVM's `max-store-memcpy`, `max-store-memmove` and
+    /// `max-store-memset` options take, where 0 means the target's limits.
+    fn llvmOptionValue(self: MemoryIntrinsicStores) c_uint {
+        return switch (self) {
+            .target_default => 0,
+            .single => 1,
+        };
+    }
 };
 
 /// Configuration for compiling LLVM bitcode to object files
@@ -87,6 +123,7 @@ pub const CompileConfig = struct {
     optimization: OptimizationLevel,
     target: target.RocTarget,
     report_config: reporting.ReportingConfig,
+    memory_intrinsic_stores: MemoryIntrinsicStores,
     cpu: []const u8 = "",
     features: []const u8 = "",
     debug: bool = false, // Enable debug info generation in output
@@ -240,6 +277,7 @@ const llvm_externs = if (llvm_available) struct {
         abi_name: ?[*:0]const u8,
         emulated_tls: bool,
     ) ?*anyopaque;
+    extern fn ZigLLVMSetMemoryIntrinsicStoreLimit(limit: c_uint) void;
 
     // LLVM wrapper functions
     extern fn ZigLLVMInitializeAllTargets() void;
@@ -315,6 +353,11 @@ const llvm_embedded = if (llvm_available) @import("llvm_embedded") else struct {
     pub const sha256_portable_bc: []const u8 = "";
     pub const sha256_x86_sha_bc: []const u8 = "";
     pub const sha256_aarch64_sha2_bc: []const u8 = "";
+    pub const utf8_dfa_bc: []const u8 = "";
+    pub const utf8_x86_ssse3_bc: []const u8 = "";
+    pub const utf8_aarch64_neon_bc: []const u8 = "";
+    pub const utf8_dfa32_bc: []const u8 = "";
+    pub const utf8_wasm_simd128_bc: []const u8 = "";
     pub const PrivateRuntime = struct { target: target.RocTarget, bitcode: []const u8 };
     pub const private_runtimes = [_]PrivateRuntime{};
 };
@@ -364,6 +407,25 @@ fn selectSha256RoundsBitcode(ptr_width: u16, rounds: builtins.sha256.Rounds) ?[]
             .portable => llvm_embedded.sha256_portable_bc,
             .x86_sha => llvm_embedded.sha256_x86_sha_bc,
             .aarch64_sha2 => llvm_embedded.sha256_aarch64_sha2_bc,
+        },
+        else => null,
+    };
+}
+
+/// The payload defining the builtin bitcode's UTF-8 validation for `kernel`
+/// at `ptr_width`.
+fn selectUtf8KernelBitcode(ptr_width: u16, kernel: builtins.utf8.Kernel) ?[]const u8 {
+    return switch (ptr_width) {
+        64 => switch (kernel) {
+            .dfa => llvm_embedded.utf8_dfa_bc,
+            .x86_ssse3 => llvm_embedded.utf8_x86_ssse3_bc,
+            .aarch64_neon => llvm_embedded.utf8_aarch64_neon_bc,
+            .wasm_simd128 => unreachable, // no 64-bit target has the wasm instruction set
+        },
+        32 => switch (kernel) {
+            .dfa => llvm_embedded.utf8_dfa32_bc,
+            .wasm_simd128 => llvm_embedded.utf8_wasm_simd128_bc,
+            .x86_ssse3, .aarch64_neon => unreachable, // no 32-bit target has these instruction sets
         },
         else => null,
     };
@@ -705,6 +767,22 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
                     return false;
                 }
             }
+            if (selectUtf8KernelBitcode(config.target.ptrBitWidth(), linked_builtins.utf8_kernel)) |kernel_bc| {
+                const kernel_buf = externs.LLVMCreateMemoryBufferWithMemoryRangeCopy(kernel_bc.ptr, kernel_bc.len, "roc-utf8-kernel-bc");
+                var kernel_module: ?*anyopaque = null;
+                if (externs.LLVMParseBitcode2(kernel_buf, &kernel_module) != 0) {
+                    std.log.err("Failed to parse UTF-8 kernel bitcode", .{});
+                    return false;
+                }
+                externs.LLVMSetTarget(kernel_module, target_triple_z.ptr);
+                externs.LLVMSetDataLayout(kernel_module, externs.LLVMGetDataLayoutStr(module));
+                // Linking destroys kernel_module; its definition then prunes
+                // and merges with the rest of the builtins.
+                if (externs.LLVMLinkModules2(builtins_module, kernel_module) != 0) {
+                    std.log.err("Failed to link UTF-8 kernel bitcode into builtin bitcode", .{});
+                    return false;
+                }
+            }
             if (externs.LLVMGetNamedGlobal(builtins_module, "llvm.used")) |used| {
                 externs.LLVMDeleteGlobal(used);
             }
@@ -973,6 +1051,9 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         .lower_memory_intrinsics_to_loops = config.lower_memory_intrinsics_to_loops,
     };
 
+    // LLVM keeps this limit in process-wide options that code generation
+    // reads, so every compile sets it, to its own value, before it emits.
+    externs.ZigLLVMSetMemoryIntrinsicStoreLimit(config.memory_intrinsic_stores.llvmOptionValue());
     const emit_result = externs.ZigLLVMTargetMachineEmitToFile(
         target_machine,
         module,

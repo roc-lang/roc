@@ -4497,12 +4497,12 @@ Builtin :: [].{
 		update = |list, index, func| {
 			if index < List.len(list) {
 				prepared_list = list_map_prepare_reuse(list)
-				match list_map_can_reuse(prepared_list, func) {
+				match list_owned_unique(prepared_list) {
 					1 => {
 						item = list_move_out_unsafe(prepared_list, index)
-						Ok(list_map_write_unsafe(prepared_list, index, func(item)))
+						Ok(list_move_in_unsafe(prepared_list, index, func(item)))
 					}
-					_ => Ok(list_replace_unsafe(prepared_list, index, func(list_get_unsafe(prepared_list, index))).list)
+					_ => Ok(list_set_unsafe(prepared_list, index, func(list_get_unsafe(prepared_list, index))))
 				}
 			} else {
 				Err(OutOfBounds)
@@ -28341,6 +28341,27 @@ utf16_ascii_chunk = |bytes, index, little_endian| {
 	a.bitwise_or(b).gt_lanes(Num.U16x8.splat(127)).to_bitmask() == 0
 }
 
+# The UTF-8 width of the eight code units at `index` when every surrogate among
+# them is a high surrogate directly followed by a low one in the same block,
+# and otherwise 0. Every other unit is a scalar value of its own, so the width
+# is 8 plus one per unit above 0x7F and one more per unit above 0x7FF, less one
+# per surrogate, since a pair's two units encode as four bytes (the UTF-8
+# length computation of simdutf's UTF-16 kernels).
+utf16_block_utf8_width : List(U8), U64, Bool -> U64
+utf16_block_utf8_width = |bytes, index, little_endian| {
+	units = utf16_load(bytes, index, little_endian)
+	tags = units.bitwise_and(Num.U16x8.splat(0xFC00))
+	highs = tags.eq_lanes(Num.U16x8.splat(0xD800)).to_bitmask()
+	lows = tags.eq_lanes(Num.U16x8.splat(0xDC00)).to_bitmask()
+	if lows != highs.shl_wrap(1) or highs >= 0x80 {
+		0
+	} else {
+		above_7f = units.gt_lanes(Num.U16x8.splat(0x7F)).shr_zf_wrap(15)
+		above_7ff = units.gt_lanes(Num.U16x8.splat(0x7FF)).shr_zf_wrap(15)
+		8 + above_7f.plus_wrap(above_7ff).sum_lanes().to_u64() - highs.bitwise_or(lows).count_one_bits().to_u64()
+	}
+}
+
 utf16_step : List(U8), U64, Bool -> { scalar : U64, bytes : U64, status : U8 }
 utf16_step = |bytes, index, little_endian| {
 	remaining = List.len(bytes) - index
@@ -28369,9 +28390,28 @@ decode_utf16 = |bytes, little_endian, lossy| {
 	var $size = 0.U64
 	var $index = 0.U64
 	while $index < len {
-		if len - $index >= 32 and utf16_read(bytes, $index, little_endian) <= 127 and utf16_ascii_chunk(bytes, $index, little_endian) {
-			$size = $size + 16
-			$index = $index + 32
+		if len - $index >= 16 {
+			if len - $index >= 32 and utf16_read(bytes, $index, little_endian) <= 127 and utf16_ascii_chunk(bytes, $index, little_endian) {
+				$size = $size + 16
+				$index = $index + 32
+			} else {
+				block_width = utf16_block_utf8_width(bytes, $index, little_endian)
+				if block_width != 0 {
+					$size = $size + block_width
+					$index = $index + 16
+				} else {
+					# Surrogates not all paired within the block: size it unit by unit.
+					block_end = $index + 16
+					while $index < block_end {
+						step = utf16_step(bytes, $index, little_endian)
+						if step.status != 0 and !lossy {
+							return { index: $index, status: step.status, string: "" }
+						}
+						$size = $size + utf8_width(step.scalar)
+						$index = $index + step.bytes
+					}
+				}
+			}
 		} else {
 			step = utf16_step(bytes, $index, little_endian)
 			if step.status != 0 and !lossy {

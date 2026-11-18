@@ -2384,6 +2384,8 @@ pub const Coordinator = struct {
     program_finalization_ns: u64 = 0,
     /// Whether per-module compile-time lowering collects fine-grained timings.
     detailed_lowering_timing: bool = false,
+    /// Whether checked-artifact publication times each of its steps.
+    detailed_publication_timing: bool = false,
 
     /// Build statistics
     cache_hits: u32,
@@ -4882,12 +4884,20 @@ pub const Coordinator = struct {
         staged_path: []const u8,
         /// The user's file.
         user_path: []const u8,
+        /// How the staged copy's lines map to the user's file.
+        source_map: base.StagedSourceMap,
     };
 
     /// The path a crash report names for a module at `path`.
     fn crashReportPath(self: *const Coordinator, path: []const u8) []const u8 {
         const staged = self.staged_entry orelse return path;
         return if (std.mem.eql(u8, path, staged.staged_path)) staged.user_path else path;
+    }
+
+    /// The line map of a module at `path` when it is the staged entry.
+    fn stagedSourceMap(self: *const Coordinator, path: []const u8) ?base.StagedSourceMap {
+        const staged = self.staged_entry orelse return null;
+        return if (std.mem.eql(u8, path, staged.staged_path)) staged.source_map else null;
     }
 
     /// Execute a task inline with explicit worker allocators.
@@ -5664,6 +5674,7 @@ pub const Coordinator = struct {
         // Identical modules in different packages share this entry, so the
         // package-qualified name comes from the module being installed.
         cached_env.qualified_module_name = mod.qualified_name;
+        cached_env.staged_source_map = current_env.staged_source_map;
 
         const artifact_serialized: *const check.CheckedArtifact.CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(artifact_buffer.ptr));
         // The envelope establishes completeness and layout compatibility.
@@ -6455,6 +6466,9 @@ pub const Coordinator = struct {
             // The bare `display_module_name_idx` is unchanged, and it keeps
             // any directory segments the logical module name carries.
             env.qualified_module_name = mod.qualified_name;
+            // Like the display name, how a staged entry's lines map back to
+            // the user's file is workspace information, never part of an entry.
+            env.staged_source_map = self.stagedSourceMap(mod.path);
 
             if (can.BuiltinLowLevel.isBuiltinModule(env)) {
                 try can.BuiltinLowLevel.apply(env);
@@ -8299,6 +8313,7 @@ pub const Coordinator = struct {
             .{ .explicit = task.deferred_imports },
             task.missing_public_types,
             task.typing_context,
+            self.detailed_publication_timing,
         );
         defer typecheck_output.deinit();
         // On error the coordinator still owns the input environment. Transfer
@@ -9643,6 +9658,134 @@ fn writeReuseFixture(tmp: *std.testing.TmpDir, app: []const u8) (std.Io.Dir.Crea
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = app });
 }
 
+/// Lower the echo app at `app_path` for runtime, as the staged entry
+/// `staged` when given, and return the lines its statements name in the
+/// app's own file.
+fn stagedEntryRuntimeLines(
+    allocator: Allocator,
+    cache_dir: []const u8,
+    app_path: []const u8,
+    staged: ?Coordinator.StagedEntry,
+    strategy: base.SpecializationStrategy,
+) CheckedModuleCacheRunError![]u32 {
+    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    var cache_manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = cache_dir }, roc_ctx);
+    defer cache_manager.deinit();
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        try sharedBuiltinModules(),
+        build_options.compiler_compatibility_id,
+        &cache_manager,
+        roc_ctx,
+        strategy,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+    coord.staged_entry = staged;
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+    try coord.start();
+    try coord.discoverAppFromPath(arena_impl.allocator(), .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+    const target: lir.CheckedPipeline.TargetConfig = .{ .target_usize = .native };
+    coord.runtime_lowering = .{ .target = target };
+    try coord.finishCheckedProgram(.executable_artifacts);
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const app_env = coord.appRootCheckedArtifact().moduleEnvConst();
+    const expected_map: ?base.StagedSourceMap = if (staged) |entry| entry.source_map else null;
+    try std.testing.expect(std.meta.eql(expected_map, app_env.staged_source_map));
+
+    const session = &coord.program_session.?;
+    var lowered = session.takeRuntime(allocator, session.runtime_roots, target) catch |err| switch (err) {
+        error.HostedFunctionNotBound => return error.TestUnexpectedResult,
+        else => |other| return other,
+    };
+    defer lowered.deinit();
+    const store = &lowered.lir_result.store;
+    var lines = std.ArrayList(u32).empty;
+    errdefer lines.deinit(allocator);
+    for (0..store.cfStmtCount()) |index| {
+        const loc = store.stmtLoc(@fromBackingInt(@as(u32, @intCast(index))));
+        if (!loc.hasLocation()) continue;
+        if (!std.mem.eql(u8, store.sourceFileName(loc.file), app_env.module_name)) continue;
+        try lines.append(allocator, loc.line);
+    }
+    return try lines.toOwnedSlice(allocator);
+}
+
+test "issue 13124: a staged entry's lowered code names the user's lines" {
+    if (is_freestanding) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Staged like the playground's echo runner: a header before the user's
+    // file and the `echo!` wiring after it.
+    const header =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\
+    ;
+    const user =
+        \\shout = |s| Str.concat(s, "!")
+        \\
+        \\main! = |args| {
+        \\    echo!(shout(args.len().to_str()))
+        \\    Ok({})
+        \\}
+        \\
+    ;
+    const footer =
+        \\
+        \\echo! = |msg| Echo.line!(msg)
+        \\
+    ;
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    try tmp.dir.createDirPath(std.testing.io, ".roc_echo_platform");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = ".roc_echo_platform/main.roc", .data = echo_platform_root_source });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = ".roc_echo_platform/Echo.roc", .data = echo_platform_echo_source });
+    // Not `main.roc`: the platform's root is a `main` module too, and the
+    // lines are told apart by module name.
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = header ++ user ++ footer });
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+
+    const staged: Coordinator.StagedEntry = .{
+        .staged_path = app,
+        .user_path = "app.roc",
+        .source_map = .{ .header_lines = 4, .footer_start = header.len + user.len },
+    };
+    const user_lines = std.mem.count(u8, user, "\n");
+    const echo_call_line = 4;
+
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        // Cold, then warm from the checked-module cache the cold build stored.
+        for (0..2) |_| {
+            const lines = try stagedEntryRuntimeLines(allocator, cache, app, staged, strategy);
+            defer allocator.free(lines);
+            // Every line is one of the user's, the header's lines are not
+            // counted, and the wiring after the user's file has no location.
+            for (lines) |line| try std.testing.expect(line >= 1 and line <= user_lines);
+            try std.testing.expect(std.mem.findScalar(u32, lines, echo_call_line) != null);
+        }
+
+        // The same text compiled as itself names its own lines, so it shares
+        // no cached code with the staged entry.
+        const own_lines = try stagedEntryRuntimeLines(allocator, cache, app, null, strategy);
+        defer allocator.free(own_lines);
+        try std.testing.expect(std.mem.findScalar(u32, own_lines, echo_call_line + 4) != null);
+    }
+}
+
 test "imported edits recompute nominal literal results and changed conversions" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -10384,7 +10527,7 @@ fn writeAliasByNameRequirementFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.
     });
 }
 
-test "requires signature naming a for-clause alias resolves to the app declaration and publishes once" {
+test "requires signature naming a for-clause alias infers the app type and publishes once" {
     const allocator = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -10420,7 +10563,7 @@ test "requires signature naming a for-clause alias resolves to the app declarati
     try std.testing.expect(!coord.hasUserErrors());
 
     // The requirement signature uses the for-clause alias `Model` by name.
-    // Instantiation resolves those occurrences to the app's own declaration,
+    // Inference resolves those occurrences to the app's annotated type,
     // so the app's recorded solution references app-owned types only and the
     // platform root defers its publication like any other app build.
     const app_artifact = coord.appRootCheckedArtifact();
@@ -10444,6 +10587,112 @@ test "requires signature naming a for-clause alias resolves to the app declarati
     const relations = platform_artifact.platform_requirement_relations.relations.items();
     try std.testing.expectEqual(@as(usize, 1), relations.len);
     try std.testing.expect(platform_artifact.checked_types.payload(relations[0].requested_source_ty_payload) != .pending);
+}
+
+test "issue 13138 platform aliases infer nested stores and ignore app type names across cached pairings" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Engine.roc", .data =
+        \\Engine := {}.{
+        \\    Program(st) : { initial : st, read : st -> I64 }
+        \\}
+    });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data =
+        \\platform ""
+        \\    requires {
+        \\        [Store : st] for main : Engine.Program(st),
+        \\        update : Store -> Store,
+        \\    }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_entry": entry }
+        \\
+        \\import Engine
+        \\
+        \\Handle : Box(Store)
+        \\hold : Store -> Handle
+        \\hold = |store| Box.box(store)
+        \\release : Handle -> Store
+        \\release = |handle| Box.unbox(handle)
+        \\answer = (main.read)(release(hold(update(main.initial))))
+        \\entry : {} -> I64
+        \\entry = |_| answer
+    });
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+
+    // No alias, an unrelated same-named alias, and an independently named
+    // nominal type must all solve the same platform-local binder from values.
+    const apps = [_][]const u8{
+        \\app [main, update] { pf: platform "./platform.roc" }
+        \\main = { initial: ({ count: 42.I64 }, ("nested", {})), read: |store| store.0.count }
+        \\update = |store| store
+        ,
+        \\app [main, update, Store] { pf: platform "./platform.roc" }
+        \\Store : Str
+        \\main = { initial: ({ count: 42.I64 }, ("nested", {})), read: |store| store.0.count }
+        \\update = |store| store
+        ,
+        \\app [main, update] { pf: platform "./platform.roc" }
+        \\AppState := { count : I64 }
+        \\make : {} -> AppState
+        \\make = |_| { count: 42 }
+        \\read : AppState -> I64
+        \\read = |state| state.count
+        \\main = { initial: make({}), read }
+        \\update : AppState -> AppState
+        \\update = |state| state
+        ,
+    };
+    for (apps) |source| {
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = source });
+        const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+        defer allocator.free(app);
+        var uncached = try compileAppFacts(allocator, null, app);
+        defer uncached.deinit(allocator);
+        if (uncached.has_errors) std.debug.print("{s}\n", .{uncached.reports});
+        try std.testing.expect(!uncached.has_errors);
+        var cold = try compileAppRootIdentityWithConstants(allocator, cache, app, .executable_artifacts, &.{.{ .name = "answer", .value = 42 }});
+        defer cold.deinit(allocator);
+        var warm = try compileAppRootIdentityWithConstants(allocator, cache, app, .executable_artifacts, &.{.{ .name = "answer", .value = 42 }});
+        defer warm.deinit(allocator);
+        try std.testing.expectEqualSlices(u8, cold.app_root_bytes, warm.app_root_bytes);
+        try std.testing.expectEqualSlices(u8, cold.executable_root_bytes, warm.executable_root_bytes);
+        try std.testing.expect(warm.platform_root_publish_count == 0);
+    }
+}
+
+test "issue 13138 inferred platform alias rejects inconsistent sibling requirements" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data =
+        \\platform ""
+        \\    requires {
+        \\        [Store : st] for initial : st,
+        \\        update : Store -> Store,
+        \\    }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_entry": entry }
+        \\entry : {} -> Box(Store)
+        \\entry = |_| Box.box(update(initial))
+    });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data =
+        \\app [initial, update] { pf: platform "./platform.roc" }
+        \\initial = 42.I64
+        \\update : Str -> Str
+        \\update = |value| value
+    });
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+    var result = try compileAppFacts(allocator, null, app);
+    defer result.deinit(allocator);
+    try std.testing.expect(result.has_errors);
+    if (std.mem.find(u8, result.reports, "Type Mismatch") == null) std.debug.print("{s}\n", .{result.reports});
+    try std.testing.expect(std.mem.find(u8, result.reports, "Type Mismatch") != null);
 }
 
 fn writeHostedDistinctnessFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
@@ -14581,6 +14830,270 @@ test "a check-only compilation evaluates during checking and writes the cache en
 test "a multi-threaded check-only compilation evaluates during checking and writes the cache entries a serial evaluation writes" {
     if (is_freestanding or !threads_available) return error.SkipZigTest;
     try expectCheckOnlyRun(.multi_threaded, 4);
+}
+
+/// What one compilation of the `writeEditLoopFixture` app showed: the app's
+/// value, and for `Leaf` and `Mid` whether their objects were restored from
+/// the cache rather than built.
+const EditLoopRun = struct {
+    answer: ?i64,
+    /// Null when the compilation needed no object of the module: nothing
+    /// left to evaluate ran against it.
+    leaf_restored: ?bool,
+    mid_restored: ?bool,
+};
+
+/// An app whose value `Mid` computes by calling `Leaf`: an exposed function
+/// with a private helper, a generic exposed function, an exposed function
+/// whose parameter's ownership an edit can change, a method `Mid`
+/// dispatches to, an exposed constant, and an exposed constant holding a
+/// function value.
+const edit_loop_leaf =
+    \\module [bump, twice, label, limit, handlers, spare, Counter]
+    \\
+    \\helper : I64 -> I64
+    \\helper = |n| n + 1
+    \\
+    \\bump : I64 -> I64
+    \\bump = |n| helper(n) * 10
+    \\
+    \\twice = |f, x| f(f(x))
+    \\
+    \\label : Str -> Str
+    \\label = |s| s
+    \\
+    \\limit : I64
+    \\limit = 5
+    \\
+    \\spare : I64 -> I64
+    \\spare = |n| n - 1
+    \\
+    \\adder : I64 -> (I64 -> I64)
+    \\adder = |n| |x| x + n
+    \\
+    \\handlers : List(I64 -> I64)
+    \\handlers = [adder(100)]
+    \\
+    \\Counter := { n : I64 }.{
+    \\    get : Counter -> I64
+    \\    get = |c| c.n
+    \\
+    \\    tagged : Counter, Str -> I64
+    \\    tagged = |c, s| Str.count_utf8_bytes(s).to_i64_wrap() + c.n
+    \\}
+    \\
+;
+
+fn writeEditLoopFixture(tmp: *std.testing.TmpDir) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
+    try writeReuseFixture(tmp,
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\import Mid
+        \\answer = Mid.run(1)
+    );
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Mid.roc", .data =
+        \\module [run]
+        \\import Leaf
+        \\
+        \\run : I64 -> I64
+        \\run = |n| {
+        \\    c : Leaf.Counter
+        \\    c = { n: n }
+        \\    from_handler = match Leaf.handlers {
+        \\        [f] => f(n)
+        \\        _ => 0
+        \\    }
+        \\    Leaf.bump(n) + Leaf.twice(|x| x * 2, n) + c.get() + c.tagged("ab") + Leaf.limit + from_handler + Str.count_utf8_bytes(Leaf.label("abc")).to_i64_wrap()
+        \\}
+    });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Leaf.roc", .data = edit_loop_leaf });
+}
+
+/// Compile the `writeEditLoopFixture` app at `path` under the cache at
+/// `cache` with `.boxy` objects, evaluating its value from them.
+fn runEditLoop(allocator: Allocator, path: []const u8, cache: []const u8) CheckOnlyError!EditLoopRun {
+    const core = CoreCtx.os(allocator, allocator, std.testing.io);
+    var manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = cache }, core);
+    defer manager.deinit();
+    var coord = try Coordinator.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, core, .boxy);
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+    coord.boxy_object_lowering = .{
+        .target = roc_target.RocTarget.detectNative(),
+        .config = .{
+            .specialization_strategy = .boxy,
+            .erased_capture_prefix = @import("builtins").erased_callable.hot_reload_capture_prefix_size,
+            .owned_proc_signatures = true,
+        },
+        .opt = "dev",
+        .inline_expects = false,
+    };
+    var arena = base.SingleThreadArena.init(allocator);
+    defer arena.deinit();
+    try coord.start();
+    try coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+    try coord.finishCheckedProgram(.executable_artifacts);
+    try std.testing.expect(!coord.hasUserErrors());
+    const objects = &(coord.boxy_objects orelse return error.TestUnexpectedResult);
+    const Named = struct {
+        fn artifact(c: *Coordinator, name: []const u8) error{TestUnexpectedResult}!*CheckedArtifact.CheckedModuleArtifact {
+            var modules = c.checked_artifact_index.valueIterator();
+            while (modules.next()) |location| {
+                const candidate = location.module().checkedArtifact().?;
+                if (std.mem.eql(u8, candidate.moduleEnvConst().module_name, name)) return candidate;
+            }
+            return error.TestUnexpectedResult;
+        }
+        fn restored(o: *const BoxyObjects, a: *const CheckedArtifact.CheckedModuleArtifact) ?bool {
+            const record = o.records.get(a.key.bytes) orelse return null;
+            return record.restored;
+        }
+    };
+    var result: EditLoopRun = .{
+        .answer = null,
+        .leaf_restored = Named.restored(objects, try Named.artifact(&coord, "Leaf")),
+        .mid_restored = Named.restored(objects, try Named.artifact(&coord, "Mid")),
+    };
+    const app = try Named.artifact(&coord, "app");
+    for (app.compile_time_roots.roots.items()) |root| {
+        if (root.payload != .const_node) continue;
+        const node = app.const_store.get(root.payload.const_node);
+        if (node == .scalar and node.scalar == .i64) result.answer = node.scalar.i64;
+    }
+    return result;
+}
+
+/// Replace the only occurrence of `from` in the edit-loop fixture's
+/// `Leaf.roc` with `to`.
+fn editLeaf(allocator: Allocator, tmp: *std.testing.TmpDir, from: []const u8, to: []const u8) (Allocator.Error || std.Io.Dir.ReadFileAllocError || std.Io.Dir.WriteFileError || error{TestUnexpectedResult})!void {
+    const source = try tmp.dir.readFileAlloc(std.testing.io, "Leaf.roc", allocator, .unlimited);
+    defer allocator.free(source);
+    if (std.mem.count(u8, source, from) != 1) return error.TestUnexpectedResult;
+    const edited = try std.mem.replaceOwned(u8, allocator, source, from, to);
+    defer allocator.free(edited);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Leaf.roc", .data = edited });
+}
+
+const EditLoopError = CheckOnlyError || std.Io.Dir.ReadFileAllocError;
+
+/// Apply `from` -> `to` to `Leaf.roc`, compile, and require `Leaf` rebuilt,
+/// `Mid` restored or rebuilt as `mid_restored` says, and the app's value
+/// `answer`.
+fn expectLeafEdit(allocator: Allocator, tmp: *std.testing.TmpDir, path: []const u8, cache: []const u8, from: []const u8, to: []const u8, mid_restored: bool, answer: i64) EditLoopError!void {
+    try editLeaf(allocator, tmp, from, to);
+    const run = try runEditLoop(allocator, path, cache);
+    try std.testing.expectEqual(@as(?bool, false), run.leaf_restored);
+    try std.testing.expectEqual(@as(?bool, mid_restored), run.mid_restored);
+    try std.testing.expectEqual(@as(?i64, answer), run.answer);
+}
+
+test "Boxy edits that leave a module's importer-visible interface alone rebuild only that module" {
+    if (is_freestanding) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeEditLoopFixture(&tmp);
+    const path = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(path);
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    // 20 + 4 + 1 + 3 + 5 + 101 + 3
+    const cold = try runEditLoop(allocator, path, cache);
+    try std.testing.expectEqual(@as(?bool, false), cold.leaf_restored);
+    try std.testing.expectEqual(@as(?bool, false), cold.mid_restored);
+    try std.testing.expectEqual(@as(?i64, 137), cold.answer);
+
+    // A statement added inside a private helper's body.
+    try expectLeafEdit(allocator, &tmp, path, cache, "helper = |n| n + 1", "helper = |n| {\n    m = n + 2\n    m\n}", true, 147);
+    // A new private function above the exposed ones, which moves every
+    // later definition, expression and constant of the module.
+    try expectLeafEdit(allocator, &tmp, path, cache, "helper : I64 -> I64\n", "extra : I64 -> I64\nextra = |s| s * 3\n\nhelper : I64 -> I64\n", true, 147);
+    // An expression added inside an exposed function's body, its type
+    // unchanged.
+    try expectLeafEdit(allocator, &tmp, path, cache, "bump = |n| helper(n) * 10", "bump = |n| {\n    k = helper(n)\n    k * 10 + 1\n}", true, 148);
+    // A lambda added inside a private helper.
+    try expectLeafEdit(allocator, &tmp, path, cache, "extra = |s| s * 3", "extra = |s| List.map([s], |t| t * 3).len().to_i64_wrap()", true, 148);
+    // A body change of the method `Mid` dispatches to.
+    try expectLeafEdit(allocator, &tmp, path, cache, "get = |c| c.n", "get = |c| c.n + 1", true, 149);
+    // The code of a function value an exposed constant holds, which lives
+    // in `Leaf`'s object, not in the value `Mid` restores.
+    try expectLeafEdit(allocator, &tmp, path, cache, "adder = |n| |x| x + n", "adder = |n| |x| x + n + 1", true, 150);
+}
+
+test "Boxy edits to what an importer reads rebuild the importer" {
+    if (is_freestanding) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeEditLoopFixture(&tmp);
+    const path = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(path);
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const cold = try runEditLoop(allocator, path, cache);
+    try std.testing.expectEqual(@as(?i64, 137), cold.answer);
+
+    // An exposed function's parameter's ownership.
+    try expectLeafEdit(allocator, &tmp, path, cache, "label = |s| s", "label = |s| Str.concat(s, \"!\")", false, 138);
+    // An exposed constant's value.
+    try expectLeafEdit(allocator, &tmp, path, cache, "limit = 5", "limit = 6", false, 139);
+    // The ownership of a method `Mid` dispatches to.
+    try expectLeafEdit(allocator, &tmp, path, cache, "Str.count_utf8_bytes(s).to_i64_wrap() + c.n", "Str.count_utf8_bytes(Str.concat(s, \"!\")).to_i64_wrap() + c.n", false, 140);
+    // What a function value an exposed constant holds captures.
+    try expectLeafEdit(allocator, &tmp, path, cache, "handlers = [adder(100)]", "handlers = [adder(200)]", false, 240);
+    // A new private function above the exposed constant holding a function
+    // value leaves the value, and so `Mid`, alone.
+    try expectLeafEdit(allocator, &tmp, path, cache, "helper : I64 -> I64\n", "early : I64 -> I64\nearly = |s| s - 3\n\nhelper : I64 -> I64\n", true, 240);
+    // Renaming an exposed function renames its worker, which every
+    // importer's key covers, whether or not the importer calls it.
+    try editLeaf(allocator, &tmp, "handlers, spare,", "handlers, spared,");
+    try expectLeafEdit(allocator, &tmp, path, cache, "spare : I64 -> I64\nspare = |n|", "spared : I64 -> I64\nspared = |n|", false, 240);
+}
+
+test "Boxy private constants are no part of what importers are keyed on" {
+    if (is_freestanding) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeEditLoopFixture(&tmp);
+    // `bump` reads a private constant, whose value `Leaf`'s object holds.
+    try editLeaf(allocator, &tmp, "bump = |n| helper(n) * 10", "bump = |n| helper(n) * scale\n\nscale : I64\nscale = 10");
+    const path = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(path);
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const cold = try runEditLoop(allocator, path, cache);
+    try std.testing.expectEqual(@as(?i64, 137), cold.answer);
+    // The private constant's value changes: `bump` returns 22.
+    try expectLeafEdit(allocator, &tmp, path, cache, "scale = 10", "scale = 11", true, 139);
+    // A new private constant.
+    try expectLeafEdit(allocator, &tmp, path, cache, "scale : I64\n", "unused_constant : I64\nunused_constant = 3\n\nscale : I64\n", true, 139);
+}
+
+test "Boxy definitions sharing a name are distinct workers" {
+    if (is_freestanding) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeEditLoopFixture(&tmp);
+    // A second `helper`, which canonicalization reports: `bump` calls the
+    // first and `bump2` the second, and both are emitted, so each needs a
+    // worker of its own.
+    try editLeaf(allocator, &tmp, "twice = |f, x|", "helper = |n| n + 1000\n\nbump2 : I64 -> I64\nbump2 = |n| helper(n)\n\ntwice = |f, x|");
+    try editLeaf(allocator, &tmp, "module [bump,", "module [bump, bump2,");
+    const mid = try tmp.dir.readFileAlloc(std.testing.io, "Mid.roc", allocator, .unlimited);
+    defer allocator.free(mid);
+    const both = try std.mem.replaceOwned(u8, allocator, mid, "Leaf.bump(n) +", "Leaf.bump(n) + Leaf.bump2(n) +");
+    defer allocator.free(both);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Mid.roc", .data = both });
+    const path = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(path);
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const cold = try runEditLoop(allocator, path, cache);
+    try std.testing.expectEqual(@as(?i64, 1138), cold.answer);
+    try expectLeafEdit(allocator, &tmp, path, cache, "helper : I64 -> I64\n", "extra : I64 -> I64\nextra = |s| s * 3\n\nhelper : I64 -> I64\n", true, 1138);
 }
 
 test "Boxy object record reservation OOM releases the transferred unit" {

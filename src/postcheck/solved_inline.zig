@@ -50,6 +50,20 @@ const InlineBodies = collections.OptionalIndexColumn(Lifted.ExprId);
 pub const Plan = struct {
     inline_bodies: InlineBodies.View = .{},
     kinds: []const InlineKind = &.{},
+    /// Per spec function, whether its inline body holds a `return`. An
+    /// inlined `return` delivers the call's result; it never leaves the
+    /// caller.
+    returns: []const bool = &.{},
+
+    /// Whether `fn_id`'s inline body holds a `return`.
+    pub fn bodyReturns(self: Plan, fn_id: SpecFnId) bool {
+        if (self.returns.len == 0) return false;
+        const index = @backingInt(fn_id);
+        if (index >= self.returns.len) {
+            Common.invariant("inline plan did not contain a spec function");
+        }
+        return self.returns[index];
+    }
 
     pub fn kind(self: Plan, fn_id: SpecFnId) InlineKind {
         if (self.kinds.len == 0) return .none;
@@ -88,19 +102,21 @@ pub const OwnedPlan = struct {
     allocator: std.mem.Allocator,
     inline_bodies: InlineBodies,
     kinds: []InlineKind,
+    returns: []bool,
 
     pub fn empty(allocator: std.mem.Allocator) OwnedPlan {
-        return .{ .allocator = allocator, .inline_bodies = .{}, .kinds = &.{} };
+        return .{ .allocator = allocator, .inline_bodies = .{}, .kinds = &.{}, .returns = &.{} };
     }
 
     pub fn deinit(self: *OwnedPlan) void {
         self.inline_bodies.deinit(self.allocator);
         if (self.kinds.len != 0) self.allocator.free(self.kinds);
+        if (self.returns.len != 0) self.allocator.free(self.returns);
         self.* = empty(self.allocator);
     }
 
     pub fn view(self: *const OwnedPlan) Plan {
-        return .{ .inline_bodies = self.inline_bodies.view(), .kinds = self.kinds };
+        return .{ .inline_bodies = self.inline_bodies.view(), .kinds = self.kinds, .returns = self.returns };
     }
 };
 
@@ -192,6 +208,13 @@ const InlineAnalyzer = struct {
         errdefer inline_bodies.deinit(allocator);
         const kinds = try allocator.alloc(InlineKind, decisions.len);
         errdefer allocator.free(kinds);
+        // The low-level wrapper rule runs without use information, and a
+        // wrapper body holds no `return`.
+        const returns = try allocator.alloc(bool, if (procedure_usage.len == 0) 0 else decisions.len);
+        errdefer allocator.free(returns);
+        for (returns, 0..) |*body_returns, index| {
+            body_returns.* = decisions[index] == .inline_body and procedure_usage[index].contains_return;
+        }
         for (decisions, kinds, 0..) |decision, *body_kind, index| {
             switch (decision) {
                 .inline_body => |candidate| inline_bodies.set(index, candidate.body),
@@ -209,6 +232,7 @@ const InlineAnalyzer = struct {
             .allocator = allocator,
             .inline_bodies = inline_bodies,
             .kinds = kinds,
+            .returns = returns,
         };
     }
 
@@ -242,7 +266,6 @@ const InlineAnalyzer = struct {
         const source_fn = self.solved.lifted.getFn(self.source(fn_id));
         const template = source_fn.source orelse return null;
         if (!template.single_source_call) return null;
-        if (self.use(fn_id).contains_return) return null;
         return switch (source_fn.body) {
             .roc => |body_expr| body_expr,
             .hosted => null,
@@ -252,7 +275,6 @@ const InlineAnalyzer = struct {
     fn singleUseCandidate(self: *const InlineAnalyzer, fn_id: SpecFnId) ?Lifted.ExprId {
         const fn_use = self.use(fn_id);
         if (fn_use.external_calls != 1 or fn_use.value_refs != 0) return null;
-        if (fn_use.contains_return) return null;
 
         const call_expr_id = fn_use.external_call_expr orelse
             Common.invariant("single-use function had no external call expression");
