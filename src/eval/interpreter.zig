@@ -6140,6 +6140,13 @@ pub const Interpreter = struct {
             .num_float_add => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .add, null),
             .num_float_sub => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .sub, null),
             .num_float_mul, .dec_mul => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul, null),
+            .dec_mul_saturated => blk: {
+                const val = try self.alloc(ll.ret_layout);
+                const a = RocDec{ .num = args[0].read(i128) };
+                const b = RocDec{ .num = args[1].read(i128) };
+                val.write(i128, a.mulSaturated(b).num);
+                break :blk val;
+            },
             .num_div_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div, null),
             .num_div_by_checked => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div, .num_div_by_checked),
             .num_div_trunc_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div_trunc, null),
