@@ -42,7 +42,7 @@ pub const Env = enum(u32) {
 };
 
 /// A solved type read under an instance. A resolved reference (`resolve`)
-/// is canonical: two resolved references denote one type exactly when they
+/// is a unique identity: two resolved references denote one type exactly when they
 /// are equal.
 pub const Ref = struct {
     ty: Type.TypeVarId,
@@ -259,7 +259,7 @@ pub const Table = struct {
 
 /// `ref` resolved: its root, followed through the scheme nodes its
 /// instance substitutes, read under the instance that owns it, and
-/// canonical among the types equal instances showed equal.
+/// the representative of the types equal instances showed equal.
 pub fn resolve(program: *const Ast.Program, ref: Ref) Ref {
     const table = &program.instances;
     const store = &program.types;
