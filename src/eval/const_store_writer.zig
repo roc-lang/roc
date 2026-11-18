@@ -1865,8 +1865,7 @@ fn scalarMemoryBytes(scalar: checked.ConstScalar) [16]u8 {
     var bytes: [16]u8 = @splat(0);
     switch (scalar) {
         inline .i8, .i16, .i32, .i64, .i128, .u8, .u16, .u32, .u64, .u128, .f32_bits, .f64_bits, .dec_bits => |value| {
-            const raw = std.mem.toBytes(value);
-            @memcpy(bytes[0..raw.len], &raw);
+            @memcpy(bytes[0..@sizeOf(@TypeOf(value))], std.mem.asBytes(&value));
         },
     }
     return bytes;

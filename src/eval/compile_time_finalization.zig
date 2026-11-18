@@ -339,6 +339,9 @@ const RequestPositionColumn = collections.OptionalIndexColumn(RequestPosition);
 /// A position in the materialized static-data exports.
 const ExportPosition = enum(u32) { _ };
 const ExportPositionColumn = collections.OptionalIndexColumn(ExportPosition);
+/// A position in the value-form roots that read other constants.
+const ReaderPosition = enum(u32) { _ };
+const ReaderPositionColumn = collections.OptionalIndexColumn(ReaderPosition);
 
 /// A prepared module and its checking-owned diagnostic destination.
 pub const ProgramModule = struct {
@@ -2345,10 +2348,9 @@ fn valueFormReaderOrder(allocator: Allocator, module: *const checked.CheckedModu
     const bodies = module.bodies();
     const digest = module.key.digest();
     // Each reader's position, by root.
-    const positions = try allocator.alloc(?u32, module.compile_time_roots.roots.items().len);
-    defer allocator.free(positions);
-    @memset(positions, null);
-    for (readers, 0..) |request, position| positions[@backingInt(compileTimeRootForRequest(module, request))] = @intCast(position);
+    var reader_positions = try ReaderPositionColumn.initFilled(allocator, module.compile_time_roots.roots.items().len);
+    defer reader_positions.deinit(allocator);
+    for (readers, 0..) |request, position| reader_positions.set(@backingInt(compileTimeRootForRequest(module, request)), @enumFromInt(position));
     // The readers each reader reads, as a run of `reads` per reader.
     var reads = std.ArrayList(u32).empty;
     defer reads.deinit(allocator);
@@ -2370,8 +2372,8 @@ fn valueFormReaderOrder(allocator: Allocator, module: *const checked.CheckedModu
                 .top_level_binding => |top_level| module.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse finalizationInvariant("a constant a value-form root reads has no compile-time root"),
                 .hoisted_root => |hoisted| hoisted.root,
             };
-            const read_position = positions[@backingInt(read_root)] orelse continue;
-            try reads.append(allocator, read_position);
+            const read_position = reader_positions.get(@backingInt(read_root)) orelse continue;
+            try reads.append(allocator, @backingInt(read_position));
             run.len += 1;
         }
     }
