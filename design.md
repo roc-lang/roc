@@ -6657,6 +6657,15 @@ Let's not?"), except that number literals do not generalize either:
   literal rejects second use at different type", below), and a conditional,
   match, or block whose value is a lambda.
 
+A weak top-level value's type may keep a variable that nothing pins, like the
+item type of `empty = []`. The checker rejects such a value with
+`polymorphic_value` ("Polymorphic Value") only when that variable carries a
+static-dispatch requirement (`reportPolymorphicTopLevelValues`), as `expect
+empty == []` gives it one: nothing chooses the type the method comes from.
+Without a requirement the variable is decided (Decided Variables), and every
+use of the value is accepted, whichever function it is passed to:
+`Str.inspect(empty)` renders `[]`.
+
 An expression-position function generalizes only where its consumer
 instantiates it: a binding's right-hand side, or a stored-value construction
 edge. A lambda that is a direct call operand, or that supplies an enclosing
