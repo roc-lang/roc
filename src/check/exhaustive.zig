@@ -83,9 +83,35 @@ pub const NominalOpenCache = struct {
     inhabitedness: InhabitednessMemo = .{},
     payload_inhabitedness: InhabitednessMemo = .{},
     known_absent_inhabitedness: InhabitednessMemo = .{},
+    /// One inhabitedness graph per query mode and assumption set, shared by
+    /// every query of the read (see `InhabitedGraph.query`).
+    inhabited_graphs: InhabitedGraphs = .{},
     views: ?TypeView = null,
     /// Declaration dependency graphs kept across reads, if the caller keeps any.
     shared: ?TypeView.Shared = null,
+
+    const InhabitedGraphs = struct {
+        payload: ?InhabitedGraph = null,
+        known_absent: ?InhabitedGraph = null,
+        /// General-mode graphs, each owning its sorted, unique assumptions.
+        general: std.ArrayListUnmanaged(GeneralGraph) = .empty,
+
+        const GeneralGraph = struct {
+            known_empty: []const Var,
+            graph: InhabitedGraph,
+        };
+
+        fn deinit(self: *InhabitedGraphs, allocator: std.mem.Allocator) void {
+            if (self.payload) |*graph| graph.deinit();
+            if (self.known_absent) |*graph| graph.deinit();
+            for (self.general.items) |*entry| {
+                entry.graph.deinit();
+                allocator.free(entry.known_empty);
+            }
+            self.general.deinit(allocator);
+            self.* = .{};
+        }
+    };
 
     /// Own nothing until analysis starts.
     pub fn init(allocator: std.mem.Allocator) NominalOpenCache {
@@ -99,10 +125,49 @@ pub const NominalOpenCache = struct {
 
     /// Release views and complete-query answers together.
     pub fn deinit(self: *NominalOpenCache) void {
+        self.inhabited_graphs.deinit(self.allocator);
         if (self.views) |*views| views.deinit();
         self.inhabitedness.deinit(self.allocator);
         self.payload_inhabitedness.deinit(self.allocator);
         self.known_absent_inhabitedness.deinit(self.allocator);
+    }
+
+    /// The read's graph for `mode` and the canonical `known_empty` set,
+    /// created with those assumptions on first use. Like the memos, a cache's
+    /// graphs serve one reader.
+    fn inhabitedGraph(
+        self: *NominalOpenCache,
+        store: *TypeStore,
+        idents: BuiltinIdents,
+        mode: InhabitedMode,
+        known_empty: []const Var,
+    ) Allocator.Error!*InhabitedGraph {
+        const slot = switch (mode) {
+            .payload => &self.inhabited_graphs.payload,
+            .known_absent => &self.inhabited_graphs.known_absent,
+            .general => {
+                for (self.inhabited_graphs.general.items) |*entry| {
+                    if (std.mem.eql(Var, entry.known_empty, known_empty)) {
+                        std.debug.assert(entry.graph.store == store);
+                        return &entry.graph;
+                    }
+                }
+                const owned = try self.allocator.dupe(Var, known_empty);
+                errdefer self.allocator.free(owned);
+                const entry = try self.inhabited_graphs.general.addOne(self.allocator);
+                entry.* = .{ .known_empty = owned, .graph = .init(self.allocator, store, idents, mode) };
+                errdefer {
+                    entry.graph.deinit();
+                    _ = self.inhabited_graphs.general.pop();
+                }
+                try entry.graph.assume(owned);
+                return &entry.graph;
+            },
+        };
+        std.debug.assert(known_empty.len == 0);
+        if (slot.* == null) slot.* = .init(self.allocator, store, idents, mode);
+        std.debug.assert(slot.*.?.store == store);
+        return &slot.*.?;
     }
 
     /// One namespace for the complete mutation-free analysis.
@@ -117,6 +182,7 @@ pub const NominalOpenCache = struct {
 
     /// End the frozen phase before the caller applies returned constraints.
     fn finishRead(self: *NominalOpenCache) void {
+        self.inhabited_graphs.deinit(self.allocator);
         if (self.views) |*views| views.deinit();
         self.views = null;
         self.inhabitedness.deinit(self.allocator);
@@ -1215,8 +1281,28 @@ fn isTypeInhabitedWithKnownEmpty(
         .known_empty = assumptions.items,
     };
     if (cache.inhabitedness.get(key)) |answer| return answer;
-    const answer = try computeTypeInhabitedWithKnownEmpty(type_store, builtin_idents, type_var, known_empty_vars);
+    const answer = try queryInhabitedGraph(type_store, builtin_idents, key.root, .general, key.known_empty);
     try cache.inhabitedness.put(cache.allocator, key, answer);
+    return answer;
+}
+
+/// Answer one query on the read's graph for `mode` and the canonical
+/// `known_empty` set. Debug builds check every answer against a from-scratch
+/// solve.
+fn queryInhabitedGraph(
+    store: *TypeStore,
+    idents: BuiltinIdents,
+    root: Var,
+    mode: InhabitedMode,
+    known_empty: []const Var,
+) Allocator.Error!bool {
+    const graph = try idents.open_cache.inhabitedGraph(store, idents, mode, known_empty);
+    const answer = try graph.query(root);
+    if (comptime builtin.mode == .debug) {
+        if (answer != try solveInhabitedGraph(store, idents, root, mode, known_empty)) {
+            exhaustiveInvariant("an incremental inhabitedness answer differs from a from-scratch solve", .{});
+        }
+    }
     return answer;
 }
 
@@ -1244,6 +1330,12 @@ fn recordRowStep(type_store: *TypeStore, content: types.Content) RecordRowStep {
 /// type is expanded once; false facts propagate across each edge at most once.
 /// Payload recursion is coinductive. Row-extension cycles are only row lookup
 /// cycles and are flattened separately, never interpreted as value witnesses.
+///
+/// One graph answers many queries with the same mode and assumptions. A query
+/// expands only types no earlier query reached, then settles. Every earlier
+/// node is fully expanded and settled, and a query adds edges only out of its
+/// own new nodes, so an earlier node gains no child and keeps its value, and
+/// each answer equals a from-scratch solve.
 const InhabitedGraph = struct {
     gpa: Allocator,
     store: *TypeStore,
@@ -1260,6 +1352,12 @@ const InhabitedGraph = struct {
     /// `first_parent`, so recording an edge appends to one list rather than
     /// growing a list per node.
     parent_links: std.ArrayList(ParentLink) = .empty,
+    /// Nodes below this index hold final values: each was expanded and settled
+    /// by an earlier query, and no later edge leaves one.
+    settled: usize = 0,
+    /// Parents of edges into settled false nodes, propagated by the next
+    /// `settle` exactly as a false child's parent links are.
+    settled_false_parents: std.ArrayList(usize) = .empty,
     stats: if (builtin.is_test) Stats else void = if (builtin.is_test) .{} else {},
 
     const Stats = struct { expanded: usize = 0, rows: usize = 0, edges: usize = 0, propagated: usize = 0 };
@@ -1322,6 +1420,7 @@ const InhabitedGraph = struct {
         self.known_empty.deinit();
         self.pending.deinit(self.gpa);
         self.false_nodes.deinit(self.gpa);
+        self.settled_false_parents.deinit(self.gpa);
     }
 
     fn node(self: *InhabitedGraph) Allocator.Error!usize {
@@ -1340,9 +1439,15 @@ const InhabitedGraph = struct {
     }
 
     fn edge(self: *InhabitedGraph, parent: usize, child: usize) Allocator.Error!void {
-        const link: u32 = @intCast(self.parent_links.items.len);
-        try self.parent_links.append(self.gpa, .{ .parent = parent, .next = self.nodes.items[child].first_parent });
-        self.nodes.items[child].first_parent = link;
+        std.debug.assert(parent >= self.settled);
+        if (child < self.settled) {
+            // A settled child's value never changes, so it needs no parent link.
+            if (!self.nodes.items[child].value) try self.settled_false_parents.append(self.gpa, parent);
+        } else {
+            const link: u32 = @intCast(self.parent_links.items.len);
+            try self.parent_links.append(self.gpa, .{ .parent = parent, .next = self.nodes.items[child].first_parent });
+            self.nodes.items[child].first_parent = link;
+        }
         self.nodes.items[parent].remaining += 1;
         if (comptime builtin.is_test) self.stats.edges += 1;
     }
@@ -1353,6 +1458,7 @@ const InhabitedGraph = struct {
     }
 
     fn markFalse(self: *InhabitedGraph, index: usize) Allocator.Error!void {
+        std.debug.assert(index >= self.settled);
         if (!self.nodes.items[index].value) return;
         try self.false_nodes.append(self.gpa, index);
         self.nodes.items[index].value = false;
@@ -1548,9 +1654,20 @@ const InhabitedGraph = struct {
         }
     }
 
-    fn solve(self: *InhabitedGraph, root: Var, assumptions: []const Var) Allocator.Error!bool {
+    /// Fix the known-empty assumptions before the first query.
+    fn assume(self: *InhabitedGraph, assumptions: []const Var) Allocator.Error!void {
         std.debug.assert(self.nodes.items.len == 0);
         for (assumptions) |var_| try self.known_empty.put(resolveRoot(self.store, var_), {});
+    }
+
+    fn solve(self: *InhabitedGraph, root: Var, assumptions: []const Var) Allocator.Error!bool {
+        try self.assume(assumptions);
+        return self.query(root);
+    }
+
+    /// Answer `root`, expanding only the types this graph has not reached.
+    fn query(self: *InhabitedGraph, root: Var) Allocator.Error!bool {
+        std.debug.assert(self.pending.items.len == 0 and self.settled == self.nodes.items.len);
         const result = try self.typeNode(root);
         while (self.pending.pop()) |next| try self.expand(next.root, next.index);
         try self.settle();
@@ -1560,21 +1677,28 @@ const InhabitedGraph = struct {
     /// Pure Boolean propagation; type-reader and mode policies belong solely
     /// to construction. No provisional traversal answer enters this phase.
     fn settle(self: *InhabitedGraph) Allocator.Error!void {
+        while (self.settled_false_parents.pop()) |parent| try self.propagateFalse(parent);
         while (self.false_nodes.pop()) |child| {
             var link = self.nodes.items[child].first_parent;
             while (link != ParentLink.none) {
                 const parent = self.parent_links.items[link].parent;
                 link = self.parent_links.items[link].next;
-                if (comptime builtin.is_test) self.stats.propagated += 1;
-                const state = &self.nodes.items[parent];
-                if (!state.value) continue;
-                if (state.kind == .all) {
-                    try self.markFalse(parent);
-                } else {
-                    state.remaining -= 1;
-                    if (state.remaining == 0) try self.markFalse(parent);
-                }
+                try self.propagateFalse(parent);
             }
+        }
+        self.settled = self.nodes.items.len;
+    }
+
+    /// One false child reaches `parent`.
+    fn propagateFalse(self: *InhabitedGraph, parent: usize) Allocator.Error!void {
+        if (comptime builtin.is_test) self.stats.propagated += 1;
+        const state = &self.nodes.items[parent];
+        if (!state.value) return;
+        if (state.kind == .all) {
+            try self.markFalse(parent);
+        } else {
+            state.remaining -= 1;
+            if (state.remaining == 0) try self.markFalse(parent);
         }
     }
 };
@@ -1590,7 +1714,7 @@ fn memoizedPayloadQuery(store: *TypeStore, idents: BuiltinIdents, root: Var, com
     };
     const key: InhabitednessMemo.Key = .{ .root = resolveRoot(store, root), .known_empty = &.{} };
     if (memo.get(key)) |answer| return answer;
-    const answer = try solveInhabitedGraph(store, idents, root, mode, &.{});
+    const answer = try queryInhabitedGraph(store, idents, key.root, mode, &.{});
     try memo.put(cache.allocator, key, answer);
     return answer;
 }
@@ -1603,15 +1727,6 @@ fn solveInhabitedGraph(store: *TypeStore, idents: BuiltinIdents, root: Var, mode
     var graph: InhabitedGraph = .init(arena.allocator(), store, idents, mode);
     defer graph.deinit();
     return graph.solve(root, assumptions);
-}
-
-fn computeTypeInhabitedWithKnownEmpty(
-    type_store: *TypeStore,
-    builtin_idents: BuiltinIdents,
-    type_var: Var,
-    known_empty_vars: []const Var,
-) error{OutOfMemory}!bool {
-    return solveInhabitedGraph(type_store, builtin_idents, type_var, .general, known_empty_vars);
 }
 
 fn isUnresolvedUnboundFlex(flex: types.Flex) bool {
@@ -4576,6 +4691,100 @@ fn inhabitedGraphDiamondCase(graph_allocator: Allocator, depth: usize, recursive
 /// fixtures have no module environment; the type store only compares module
 /// identities, so any one identity serves.
 const fixture_module: base.ModuleIdentity.Idx = @fromBackingInt(1);
+
+fn incrementalInhabitedGraphCase(graph_allocator: Allocator) (Allocator.Error || Ident.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+    const gpa = std.testing.allocator;
+    var store = try types.Store.initCapacity(gpa, 32, 0);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 4);
+    defer idents.deinit(gpa);
+    const sentinel = try idents.insert(gpa, try Ident.from_bytes("NotNumeric"));
+    const other = try idents.insert(gpa, try Ident.from_bytes("Other"));
+    // The read's graphs and memos allocate from the cache's allocator.
+    var cache = NominalOpenCache.init(graph_allocator);
+    defer cache.deinit();
+    var test_idents: BuiltinIdents = undefined;
+    inline for (base.structFields(BuiltinIdents)) |field| {
+        if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
+    }
+    test_idents.idents = &idents;
+    test_idents.open_cache = &cache;
+
+    const closed = try store.freshFromContent(.{ .structure = .empty_tag_union });
+    const unit = try store.freshFromContent(.{ .structure = .empty_record });
+    const empty_pair = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ closed, unit }) } } });
+    // Reached after `empty_pair` has settled false.
+    const empty_nested = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ empty_pair, unit }) } } });
+    const empty_union = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{.{ .name = other, .args = try store.appendVars(&.{empty_pair}) }}),
+        .ext = closed,
+    } } });
+    const inhabited_union = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{
+            .{ .name = other, .args = try store.appendVars(&.{empty_pair}) },
+            .{ .name = sentinel, .args = try store.appendVars(&.{unit}) },
+        }),
+        .ext = closed,
+    } } });
+    const recursive = try store.fresh();
+    try store.setVarContent(recursive, .{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{.{ .name = other, .args = try store.appendVars(&.{recursive}) }}),
+        .ext = closed,
+    } } });
+    const wrapped_recursive = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ recursive, unit }) } } });
+    const roots = [_]Var{ empty_pair, empty_nested, empty_union, inhabited_union, recursive, wrapped_recursive, unit };
+
+    const reader = cache.reader(&store);
+    try std.testing.expect(!try solveInhabitedGraph(reader, test_idents, empty_nested, .general, &.{}));
+    try std.testing.expect(!try solveInhabitedGraph(reader, test_idents, empty_union, .general, &.{}));
+    try std.testing.expect(try solveInhabitedGraph(reader, test_idents, inhabited_union, .general, &.{}));
+    for ([_]InhabitedMode{ .general, .payload, .known_absent }) |mode| {
+        for ([_][]const Var{ &.{}, &.{unit} }) |assumptions| {
+            for ([_]bool{ false, true }) |reversed| {
+                var graph: InhabitedGraph = .init(graph_allocator, reader, test_idents, mode);
+                defer graph.deinit();
+                try graph.assume(assumptions);
+                for (0..roots.len) |offset| {
+                    const root = roots[if (reversed) roots.len - 1 - offset else offset];
+                    const fresh = try solveInhabitedGraph(reader, test_idents, root, mode, assumptions);
+                    try std.testing.expectEqual(fresh, try graph.query(root));
+                }
+                // Every reached type stays expanded and settled.
+                const expanded = graph.stats.expanded;
+                for (roots) |root| {
+                    const fresh = try solveInhabitedGraph(reader, test_idents, root, mode, assumptions);
+                    try std.testing.expectEqual(fresh, try graph.query(root));
+                }
+                try std.testing.expectEqual(expanded, graph.stats.expanded);
+            }
+        }
+        // The read's own graphs answer through the memoized entry points.
+        for (roots) |root| {
+            const fresh = try solveInhabitedGraph(reader, test_idents, root, mode, &.{});
+            const answer = switch (mode) {
+                .general => try isTypeInhabitedWithKnownEmpty(reader, test_idents, root, &.{}),
+                .payload => try isCtorPayloadTypeInhabited(reader, test_idents, root),
+                .known_absent => try isKnownAbsentCtorPayloadTypeInhabited(graph_allocator, reader, test_idents, root),
+            };
+            try std.testing.expectEqual(fresh, answer);
+        }
+    }
+    for (roots) |root| {
+        const fresh = try solveInhabitedGraph(reader, test_idents, root, .general, &.{unit});
+        try std.testing.expectEqual(fresh, try isTypeInhabitedWithKnownEmpty(reader, test_idents, root, &.{ unit, unit }));
+    }
+}
+
+test "nominal views incremental inhabitedness graphs answer each query as a from-scratch solve" {
+    try incrementalInhabitedGraphCase(std.testing.allocator);
+}
+
+test "nominal views incremental inhabitedness graphs clean up every allocation failure" {
+    // In-place growth under the testing allocator depends on the heap's
+    // layout, so the failure check runs over an allocator that refuses it.
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), incrementalInhabitedGraphCase, .{});
+}
 
 test "nominal views all inhabitedness modes solve recursive diamonds in graph-linear work" {
     try inhabitedGraphDiamondCase(std.testing.allocator, 128, false);

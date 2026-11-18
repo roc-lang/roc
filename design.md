@@ -1174,7 +1174,12 @@ obtained by cutting an active recursive path. Its key includes the resolved
 root and the exact sorted, deduplicated known-empty assumptions; its lifetime is one
 mutation-free analysis. Constructor-payload and known-absent-payload queries,
 which carry no assumptions, keep one memo per query mode with the same
-lifetime. Shared DAG nodes are not recursive cycles. A cyclic
+lifetime. Within one analysis, the queries of one mode and assumption set
+share one graph: a query expands only the types no earlier query reached and
+then settles. Earlier nodes are already expanded and at their fixed point, and
+a query adds edges only out of its own new nodes, so no earlier value changes
+and each answer equals a from-scratch solve, which Debug builds check.
+Shared DAG nodes are not recursive cycles. A cyclic
 query implementation must distinguish those states and establish its fixed-point
 or traversal rule before producing a reusable result. The same restriction
 applies to completion-relation memoization in Monotype: no result outlives the
