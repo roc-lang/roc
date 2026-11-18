@@ -15,33 +15,24 @@ main = {
 }
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - import_exposing_basic.md:1:1:1:43
+RESERVED TYPE NAME - import_exposing_basic.md:1:12:1:17
 DOES NOT EXIST - import_exposing_basic.md:5:15:5:21
 DOES NOT EXIST - import_exposing_basic.md:6:15:6:21
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
-		(severity warning)
-		(title "Duplicate Definition")
-		(region (start 1 1) (end 1 43))
+		(severity runtime_error)
+		(title "Reserved Type Name")
+		(region (start 1 12) (end 1 17))
 		(headline
-			(reflow "The name ")
+			(text "This import cannot bind ")
 			(annotated symbol-unqualified "Json")
-			(reflow " is being redeclared here."))
+			(text " because that name is reserved for a builtin type."))
 		(document
-			(source-region (file "import_exposing_basic.md") (start 1 1) (end 1 43) (annotation error) (line-text "import json.Json exposing [decode, to_str]"))
+			(reflow "Use `as` to give the imported type a different name.")
 			(line-break)
-			(reflow "In this scope, ")
-			(annotated symbol-unqualified "Json")
-			(reflow " was already defined in ")
-			(source-location
-				(file "import_exposing_basic.md")
-				(line 1)
-				(column 1))
-			(reflow ".")
-			(line-break)
-			(source-region (file "import_exposing_basic.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json exposing [decode, to_str]"))))
+			(source-region (file "import_exposing_basic.md") (start 1 12) (end 1 17) (annotation error) (line-text "import json.Json exposing [decode, to_str]"))))
 	(report
 		(severity runtime_error)
 		(title "Does Not Exist")

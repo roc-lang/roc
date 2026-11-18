@@ -334,6 +334,9 @@ builtin_auto_imported_types: collections.DenseMap(Ident.Idx, AutoImportedType),
 /// Auto-imported builtin type names that some type declaration in this
 /// source also declares. Only these can yield to a source declaration.
 builtin_type_names_declared_in_source: collections.DenseMap(Ident.Idx, void),
+/// Whether any import in this module was rejected. Valid modules never need
+/// the lexical recovery-table walk at source lookups.
+has_rejected_import_names: bool = false,
 /// Map from module identifier to Import.Idx for tracking unique imports.
 import_indices: collections.DenseMap(Ident.Idx, Import.Idx),
 /// Canonicalization state for parser-owned type declarations.
@@ -533,6 +536,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .globally_resolvable_patterns = .keyed,
     .builtin_auto_imported_types = .input,
     .builtin_type_names_declared_in_source = .input,
+    .has_rejected_import_names = .keyed,
     .import_indices = .keyed,
     .parser_type_decl_states = .keyed,
     .forward_prepared_type_decls = .keyed,
@@ -1704,6 +1708,17 @@ fn declScopeEnter(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Alloca
 
     std.debug.assert(!self.active_decl_scopes.contains(scope_idx));
     try self.active_decl_scopes.put(scope_idx, active_binding);
+
+    // Whole-scope imports must be rejected before any forward use can select
+    // a builtin with the same spelling. No bindings or imports are resolved here.
+    if (parser_scope.forward_policy == .whole_scope) {
+        for (decl_index.scopeDecls(scope_idx)) |decl_idx| {
+            const decl = decl_index.decls.items[@backingInt(decl_idx)];
+            if (decl.kind != .import) continue;
+            const stmt = self.parse_ir.store.getStatement(@fromBackingInt(@intCast(decl.statement)));
+            if (stmt == .import) try self.rejectReservedImportNames(stmt.import);
+        }
+    }
 
     for (decl_index.scopeNames(scope_idx, .value)) |name| {
         const ident = name.ident;
@@ -6741,6 +6756,9 @@ fn resolveLiteralTypeSuffix(
         .deprecated_builtin => |type_name| return try self.resolveUnqualifiedLiteralTypeSuffix(type_name, region),
         .path => |path| path,
     };
+    if (self.rejectedImportPath(self.parse_ir.store.tokenSlice(path.qualifiers), path.final_token)) |diagnostic| {
+        return .{ .malformed = diagnostic };
+    }
     if (path.qualifiers.span.len == 0) {
         const type_name = self.parse_ir.tokens.resolveIdentifier(path.final_token) orelse unreachable; // parseLiteralTypeSuffix builds suffix paths only from `.Upper` identifier tokens
         return try self.resolveUnqualifiedLiteralTypeSuffix(type_name, region);
@@ -6790,6 +6808,7 @@ fn resolveUnqualifiedLiteralTypeSuffix(
     type_ident: Ident.Idx,
     region: Region,
 ) std.mem.Allocator.Error!LiteralTypeSuffixResolution {
+    if (self.rejectedImportName(type_ident)) |diagnostic| return .{ .malformed = diagnostic };
     const undeclared = LiteralTypeSuffixResolution{ .malformed = .{ .undeclared_type = .{
         .name = type_ident,
         .region = region,
@@ -7628,6 +7647,7 @@ fn deferImportStatement(
     for (self.env.store.sliceExposedItems(exposed_items_span)) |exposed_item_idx| {
         const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
         const local_ident = exposed_item.alias orelse exposed_item.name;
+        if (self.rejectedImportName(local_ident) != null) continue;
         const selects_type = self.isSourceTagIdent(local_ident);
         const failure: ModuleEnv.DeferredRefFailure = if (selects_type) .type_not_exposed else .value_not_exposed;
         const item_ref = try self.pushDeferredRef(.{
@@ -7688,6 +7708,67 @@ fn normalizedImportModuleIdent(
     return try self.env.insertIdent(base.Ident.for_text(self.scratchBytesFrom(scratch_top)));
 }
 
+/// Record rejected import names separately from accepted bindings: recovery
+/// must not turn an invalid import into an implicit reference to a builtin.
+fn rejectImportName(self: *Self, name: Ident.Idx, region: Region) Allocator.Error!void {
+    if (!self.hasBuiltinAutoImportedType(name)) return;
+    const entry = try self.currentScope().rejected_import_names.getOrPut(self.env.gpa, name);
+    if (entry.found_existing) return;
+    entry.value_ptr.* = region;
+    self.has_rejected_import_names = true;
+    try self.env.pushDiagnostic(.{ .builtin_import_conflict = .{ .name = name, .region = region } });
+}
+
+fn rejectReservedImportNames(self: *Self, import_stmt: @TypeOf(@as(AST.Statement, undefined).import)) Allocator.Error!void {
+    const target = import_stmt.target;
+    const alias_tok = import_stmt.alias_tok orelse if (target.hasNestedTypes())
+        target.nested_start_tok.? + target.nested_len - 1
+    else
+        target.module_name_tok;
+    if (self.parse_ir.tokens.resolveIdentifier(alias_tok)) |alias| {
+        if (self.hasBuiltinAutoImportedType(alias)) {
+            const module_name = try self.normalizedImportModuleIdent(import_stmt);
+            // `import Bool` names the builtin itself, not a user binding.
+            if (target.hasNestedTypes() or !module_name.eql(alias)) {
+                try self.rejectImportName(alias, self.parse_ir.tokens.resolve(alias_tok));
+            }
+        }
+    }
+    for (self.parse_ir.store.exposedItemSlice(import_stmt.exposes)) |item_idx| {
+        const item = self.parse_ir.store.getExposedItem(item_idx);
+        const name_tok, const region = switch (item) {
+            .lower_ident => |value| .{ value.as orelse value.ident, value.region },
+            .upper_ident => |value| .{ value.as orelse value.ident, value.region },
+            .upper_ident_star => |value| .{ value.ident, value.region },
+            .malformed => continue,
+        };
+        if (self.parse_ir.tokens.resolveIdentifier(name_tok)) |name| {
+            try self.rejectImportName(name, self.parse_ir.tokenizedRegionToRegion(region));
+        }
+    }
+}
+
+fn rejectedImportName(self: *const Self, name: Ident.Idx) ?Diagnostic {
+    if (!self.has_rejected_import_names) return null;
+    var i = self.scopes.items.len;
+    while (i > 0) {
+        i -= 1;
+        const scope = &self.scopes.items[i];
+        if (scope.rejected_import_names.get(name)) |region| {
+            return .{ .builtin_import_conflict = .{ .name = name, .region = region } };
+        }
+        if (scope.type_bindings.contains(name) or scope.module_aliases.contains(name)) return null;
+    }
+    return null;
+}
+
+fn rejectedImportPath(self: *const Self, qualifiers: []const u32, final_token: ?Token.Idx) ?Diagnostic {
+    if (!self.has_rejected_import_names) return null;
+    const token = if (qualifiers.len > 0) qualifiers[0] else final_token orelse return null;
+    const name = self.parse_ir.tokens.resolveIdentifier(token) orelse return null;
+    return self.rejectedImportName(name);
+}
+
 /// Canonicalize an import statement, handling both top-level file imports and statement imports
 fn canonicalizeImportStatement(
     self: *Self,
@@ -7695,6 +7776,14 @@ fn canonicalizeImportStatement(
 ) std.mem.Allocator.Error!?Statement.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    const scope_idx: ?AST.DeclIndex.ScopeIdx = if (self.decl_scope_stack.items.len > 0)
+        self.decl_scope_stack.items[self.decl_scope_stack.items.len - 1].binding.parser_scope
+    else
+        null;
+    if (scope_idx == null or self.parse_ir.decl_index.scopes.items[@backingInt(scope_idx.?)].forward_policy != .whole_scope) {
+        try self.rejectReservedImportNames(import_stmt);
+    }
 
     // 1. Build the complete module name selected by the parser.
     const default_alias = self.parse_ir.tokens.resolveIdentifier(import_stmt.target.module_name_tok) orelse return null;
@@ -8025,6 +8114,7 @@ fn introduceExposedItems(
     for (exposed_items_slice) |exposed_item_idx| {
         const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
         const local_ident = exposed_item.alias orelse exposed_item.name;
+        if (self.rejectedImportName(local_ident) != null) continue;
         const is_type_name = self.isSourceTagIdent(local_ident);
 
         try self.scopeIntroduceExposedItem(local_ident, Scope.ExposedItemInfo{
@@ -8567,6 +8657,9 @@ fn canonicalizeQualifiedIdentExpr(
     region: Region,
     qualifier_tokens: []const u32,
 ) std.mem.Allocator.Error!?IdentExprResolution {
+    if (self.rejectedImportPath(qualifier_tokens, null)) |diagnostic| {
+        return .{ .expr = try self.canonicalizedRuntimeErrorExpr(diagnostic) };
+    }
     const qualified_ident = try self.joinedQualifiedIdent(qualifier_tokens, ident);
 
     switch (self.scopeLookup(.ident, qualified_ident)) {
@@ -15390,6 +15483,9 @@ fn resolveNominalTypePath(
     type_tok: Token.Idx,
     region: Region,
 ) std.mem.Allocator.Error!NominalTypePathTarget {
+    if (self.rejectedImportPath(self.parse_ir.store.tokenSlice(qualifiers), type_tok)) |diagnostic| {
+        return .{ .malformed = diagnostic };
+    }
     const Target = NominalTypePathTarget;
     const type_region = self.parse_ir.tokens.resolve(type_tok);
     const final_type_ident = self.parse_ir.tokens.resolveIdentifier(type_tok) orelse
@@ -15509,6 +15605,9 @@ fn finishTagExprWithArgs(
     region: base.Region,
     free_vars_start: u32,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
+    if (self.rejectedImportPath(self.parse_ir.store.tokenSlice(e.qualifiers), null)) |diagnostic| {
+        return self.canonicalizedRuntimeErrorExpr(diagnostic);
+    }
     const tag_name = self.parse_ir.tokens.resolveIdentifier(e.token) orelse {
         // Parser should have validated this, but handle gracefully
         const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
@@ -16252,6 +16351,9 @@ fn finishTagPattern(
     tag_name: Ident.Idx,
     tag_pattern_idx: Pattern.Idx,
 ) std.mem.Allocator.Error!Pattern.Idx {
+    if (self.rejectedImportPath(self.parse_ir.store.tokenSlice(qualifiers), null)) |diagnostic| {
+        return self.malformedNominalPattern(tag_pattern_idx, diagnostic);
+    }
     if (qualifiers.span.len == 0) {
         // Tag without a qualifier is an anonymous structural tag
         return tag_pattern_idx;
@@ -16520,7 +16622,10 @@ fn finishNominalBackingPattern(
 /// and stays its source: checking finds those binders there and makes them
 /// erroneous, and every use of them is retired.
 fn malformedNominalPattern(self: *Self, backing_pattern: Pattern.Idx, problem: Diagnostic) std.mem.Allocator.Error!Pattern.Idx {
-    const diagnostic_idx = try self.env.addDiagnostic(problem);
+    const diagnostic_idx = if (problem == .builtin_import_conflict)
+        try self.env.store.addDiagnosticUnregistered(problem)
+    else
+        try self.env.addDiagnostic(problem);
     try self.env.store.replacePatternWithRuntimeError(backing_pattern, diagnostic_idx);
     return backing_pattern;
 }
@@ -19462,6 +19567,10 @@ fn resolveTypePath(
 ) std.mem.Allocator.Error!ResolvedTypePath {
     const qualifier_toks = self.parse_ir.store.tokenSlice(qualifiers);
 
+    if (self.rejectedImportPath(qualifier_toks, token)) |diagnostic| {
+        return .{ .name = diagnostic.builtin_import_conflict.name, .target = .{ .malformed = diagnostic } };
+    }
+
     // Get the type ident
     const type_name_ident = self.parse_ir.tokens.resolveIdentifier(token) orelse
         base.invariant("canonicalization invariant violated: a type name token is not an identifier", .{});
@@ -20915,6 +21024,8 @@ fn scopeIntroduceModuleAliasAt(
     const gpa = self.env.gpa;
 
     const target_scope = &self.scopes.items[scope_idx];
+
+    if (target_scope.rejected_import_names.contains(alias_name)) return .duplicate;
 
     // Check if this alias conflicts with an existing type binding (e.g., auto-imported type or primitive builtin)
     // Primitive builtins (Str, List, Box) are now added to type_bindings in setupAutoImportedBuiltinTypes

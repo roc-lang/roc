@@ -1827,6 +1827,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .type_alias_redeclared,
         .nominal_type_redeclared,
         .builtin_type_shadowed_warning,
+        .builtin_import_conflict,
         .type_parameter_conflict,
         .duplicate_record_field,
         .duplicate_tag,

@@ -40,61 +40,39 @@ main = {
 }
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_import_comprehensive.md:1:1:1:17
-DUPLICATE DEFINITION - can_import_comprehensive.md:3:1:3:27
+RESERVED TYPE NAME - can_import_comprehensive.md:1:12:1:17
+RESERVED TYPE NAME - can_import_comprehensive.md:3:24:3:27
 DOES NOT EXIST - can_import_comprehensive.md:6:14:6:22
-DOES NOT EXIST - can_import_comprehensive.md:7:14:7:23
-DOES NOT EXIST - can_import_comprehensive.md:8:14:8:22
-DOES NOT EXIST - can_import_comprehensive.md:11:15:11:25
 DOES NOT EXIST - can_import_comprehensive.md:14:15:14:24
 DOES NOT EXIST - can_import_comprehensive.md:17:15:17:18
 DOES NOT EXIST - can_import_comprehensive.md:18:15:18:19
-DOES NOT EXIST - can_import_comprehensive.md:21:16:21:26
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
-		(severity warning)
-		(title "Duplicate Definition")
-		(region (start 1 1) (end 1 17))
+		(severity runtime_error)
+		(title "Reserved Type Name")
+		(region (start 1 12) (end 1 17))
 		(headline
-			(reflow "The name ")
+			(text "This import cannot bind ")
 			(annotated symbol-unqualified "Json")
-			(reflow " is being redeclared here."))
+			(text " because that name is reserved for a builtin type."))
 		(document
-			(source-region (file "can_import_comprehensive.md") (start 1 1) (end 1 17) (annotation error) (line-text "import json.Json"))
+			(reflow "Use `as` to give the imported type a different name.")
 			(line-break)
-			(reflow "In this scope, ")
-			(annotated symbol-unqualified "Json")
-			(reflow " was already defined in ")
-			(source-location
-				(file "can_import_comprehensive.md")
-				(line 1)
-				(column 1))
-			(reflow ".")
-			(line-break)
-			(source-region (file "can_import_comprehensive.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json"))))
+			(source-region (file "can_import_comprehensive.md") (start 1 12) (end 1 17) (annotation error) (line-text "import json.Json"))))
 	(report
-		(severity warning)
-		(title "Duplicate Definition")
-		(region (start 3 1) (end 3 27))
+		(severity runtime_error)
+		(title "Reserved Type Name")
+		(region (start 3 24) (end 3 27))
 		(headline
-			(reflow "The name ")
+			(text "This import cannot bind ")
 			(annotated symbol-unqualified "Str")
-			(reflow " is being redeclared here."))
+			(text " because that name is reserved for a builtin type."))
 		(document
-			(source-region (file "can_import_comprehensive.md") (start 3 1) (end 3 27) (annotation error) (line-text "import utils.String as Str"))
+			(reflow "Use `as` to give the imported type a different name.")
 			(line-break)
-			(reflow "In this scope, ")
-			(annotated symbol-unqualified "Str")
-			(reflow " was already defined in ")
-			(source-location
-				(file "can_import_comprehensive.md")
-				(line 1)
-				(column 1))
-			(reflow ".")
-			(line-break)
-			(source-region (file "can_import_comprehensive.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json"))))
+			(source-region (file "can_import_comprehensive.md") (start 3 24) (end 3 27) (annotation error) (line-text "import utils.String as Str"))))
 	(report
 		(severity runtime_error)
 		(title "Does Not Exist")
@@ -104,33 +82,6 @@ DOES NOT EXIST - can_import_comprehensive.md:21:16:21:26
 			(reflow " does not exist."))
 		(document
 			(source-region (file "can_import_comprehensive.md") (start 6 14) (end 6 22) (annotation error) (line-text "    client = Http.get"))))
-	(report
-		(severity runtime_error)
-		(title "Does Not Exist")
-		(region (start 7 14) (end 7 23))
-		(headline
-			(annotated symbol-unqualified "Json.utf8")
-			(reflow " does not exist."))
-		(document
-			(source-region (file "can_import_comprehensive.md") (start 7 14) (end 7 23) (annotation error) (line-text "    parser = Json.utf8"))))
-	(report
-		(severity runtime_error)
-		(title "Does Not Exist")
-		(region (start 8 14) (end 8 22))
-		(headline
-			(annotated symbol-unqualified "Str.trim")
-			(reflow " does not exist."))
-		(document
-			(source-region (file "can_import_comprehensive.md") (start 8 14) (end 8 22) (annotation error) (line-text "    helper = Str.trim"))))
-	(report
-		(severity runtime_error)
-		(title "Does Not Exist")
-		(region (start 11 15) (end 11 25))
-		(headline
-			(annotated symbol-unqualified "Json.parse")
-			(reflow " does not exist."))
-		(document
-			(source-region (file "can_import_comprehensive.md") (start 11 15) (end 11 25) (annotation error) (line-text "    result1 = Json.parse"))))
 	(report
 		(severity runtime_error)
 		(title "Does Not Exist")
@@ -157,16 +108,7 @@ DOES NOT EXIST - can_import_comprehensive.md:21:16:21:26
 			(annotated symbol-unqualified "post")
 			(reflow " does not exist."))
 		(document
-			(source-region (file "can_import_comprehensive.md") (start 18 15) (end 18 19) (annotation error) (line-text "    result4 = post"))))
-	(report
-		(severity runtime_error)
-		(title "Does Not Exist")
-		(region (start 21 16) (end 21 26))
-		(headline
-			(annotated symbol-unqualified "Str.concat")
-			(reflow " does not exist."))
-		(document
-			(source-region (file "can_import_comprehensive.md") (start 21 16) (end 21 26) (annotation error) (line-text "    combined = Str.concat")))))
+			(source-region (file "can_import_comprehensive.md") (start 18 15) (end 18 19) (annotation error) (line-text "    result4 = post")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -289,13 +231,13 @@ main = {
 		(p-assign (ident "main"))
 		(e-block
 			(s-runtime-error (tag "qualified_ident_does_not_exist"))
+			(s-runtime-error (tag "builtin_import_conflict"))
+			(s-runtime-error (tag "builtin_import_conflict"))
+			(s-runtime-error (tag "builtin_import_conflict"))
 			(s-runtime-error (tag "qualified_ident_does_not_exist"))
 			(s-runtime-error (tag "qualified_ident_does_not_exist"))
 			(s-runtime-error (tag "qualified_ident_does_not_exist"))
-			(s-runtime-error (tag "qualified_ident_does_not_exist"))
-			(s-runtime-error (tag "qualified_ident_does_not_exist"))
-			(s-runtime-error (tag "qualified_ident_does_not_exist"))
-			(s-runtime-error (tag "qualified_ident_does_not_exist"))
+			(s-runtime-error (tag "builtin_import_conflict"))
 			(e-runtime-error (tag "erroneous_value_expr"))))
 	(s-import (mod "json.Json")
 		(exposes))

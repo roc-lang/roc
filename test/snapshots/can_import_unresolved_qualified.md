@@ -32,42 +32,28 @@ client = Http.invalidMethod
 parser = Json.Parser.Advanced.NonExistent.create
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_import_unresolved_qualified.md:1:1:1:17
+RESERVED TYPE NAME - can_import_unresolved_qualified.md:1:12:1:17
 UNUSED VARIABLE - can_import_unresolved_qualified.md:13:19:13:22
 DOES NOT EXIST - can_import_unresolved_qualified.md:19:10:19:28
-DOES NOT EXIST - can_import_unresolved_qualified.md:5:8:5:31
-MOD NOT FOUND - can_import_unresolved_qualified.md:8:17:8:29
-DOES NOT EXIST - can_import_unresolved_qualified.md:9:20:9:34
 MOD NOT FOUND - can_import_unresolved_qualified.md:12:29:12:37
 MOD NOT FOUND - can_import_unresolved_qualified.md:12:52:12:61
 DOES NOT EXIST - can_import_unresolved_qualified.md:13:24:13:51
-DOES NOT EXIST - can_import_unresolved_qualified.md:16:10:16:20
 DOES NOT EXIST - can_import_unresolved_qualified.md:22:10:22:28
-DOES NOT EXIST - can_import_unresolved_qualified.md:25:10:25:49
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
-		(severity warning)
-		(title "Duplicate Definition")
-		(region (start 1 1) (end 1 17))
+		(severity runtime_error)
+		(title "Reserved Type Name")
+		(region (start 1 12) (end 1 17))
 		(headline
-			(reflow "The name ")
+			(text "This import cannot bind ")
 			(annotated symbol-unqualified "Json")
-			(reflow " is being redeclared here."))
+			(text " because that name is reserved for a builtin type."))
 		(document
-			(source-region (file "can_import_unresolved_qualified.md") (start 1 1) (end 1 17) (annotation error) (line-text "import json.Json"))
+			(reflow "Use `as` to give the imported type a different name.")
 			(line-break)
-			(reflow "In this scope, ")
-			(annotated symbol-unqualified "Json")
-			(reflow " was already defined in ")
-			(source-location
-				(file "can_import_unresolved_qualified.md")
-				(line 1)
-				(column 1))
-			(reflow ".")
-			(line-break)
-			(source-region (file "can_import_unresolved_qualified.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json"))))
+			(source-region (file "can_import_unresolved_qualified.md") (start 1 12) (end 1 17) (annotation error) (line-text "import json.Json"))))
 	(report
 		(severity warning)
 		(title "Unused Variable")
@@ -91,36 +77,6 @@ DOES NOT EXIST - can_import_unresolved_qualified.md:25:10:25:49
 			(reflow " does not exist."))
 		(document
 			(source-region (file "can_import_unresolved_qualified.md") (start 19 10) (end 19 28) (annotation error) (line-text "config = Unknown.Mod.config"))))
-	(report
-		(severity runtime_error)
-		(title "Does Not Exist")
-		(region (start 5 8) (end 5 31))
-		(headline
-			(annotated symbol-unqualified "Json.NonExistent.method")
-			(reflow " does not exist."))
-		(document
-			(source-region (file "can_import_unresolved_qualified.md") (start 5 8) (end 5 31) (annotation error) (line-text "main = Json.NonExistent.method"))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 8 17) (end 8 29))
-		(headline
-			(text "This ")
-			(annotated code "InvalidType")
-			(reflow " type is declared to be in ")
-			(annotated code "json.Json")
-			(reflow ", which does not exist."))
-		(document
-			(source-region (file "can_import_unresolved_qualified.md") (start 8 17) (end 8 29) (annotation error) (line-text "parseData : Json.InvalidType -> Str"))))
-	(report
-		(severity runtime_error)
-		(title "Does Not Exist")
-		(region (start 9 20) (end 9 34))
-		(headline
-			(annotated symbol-unqualified "Json.stringify")
-			(reflow " does not exist."))
-		(document
-			(source-region (file "can_import_unresolved_qualified.md") (start 9 20) (end 9 34) (annotation error) (line-text "parseData = |data| Json.stringify(data)"))))
 	(report
 		(severity runtime_error)
 		(title "Mod Not Found")
@@ -157,30 +113,12 @@ DOES NOT EXIST - can_import_unresolved_qualified.md:25:10:25:49
 	(report
 		(severity runtime_error)
 		(title "Does Not Exist")
-		(region (start 16 10) (end 16 20))
-		(headline
-			(annotated symbol-unqualified "Json.prase")
-			(reflow " does not exist."))
-		(document
-			(source-region (file "can_import_unresolved_qualified.md") (start 16 10) (end 16 20) (annotation error) (line-text "result = Json.prase(\"test\")"))))
-	(report
-		(severity runtime_error)
-		(title "Does Not Exist")
 		(region (start 22 10) (end 22 28))
 		(headline
 			(annotated symbol-unqualified "Http.invalidMethod")
 			(reflow " does not exist."))
 		(document
-			(source-region (file "can_import_unresolved_qualified.md") (start 22 10) (end 22 28) (annotation error) (line-text "client = Http.invalidMethod"))))
-	(report
-		(severity runtime_error)
-		(title "Does Not Exist")
-		(region (start 25 10) (end 25 49))
-		(headline
-			(annotated symbol-unqualified "Json.Parser.Advanced.NonExistent.create")
-			(reflow " does not exist."))
-		(document
-			(source-region (file "can_import_unresolved_qualified.md") (start 25 10) (end 25 49) (annotation error) (line-text "parser = Json.Parser.Advanced.NonExistent.create")))))
+			(source-region (file "can_import_unresolved_qualified.md") (start 22 10) (end 22 28) (annotation error) (line-text "client = Http.invalidMethod")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -254,7 +192,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "qualified_ident_does_not_exist")))
+		(e-runtime-error (tag "builtin_import_conflict")))
 	(d-let
 		(p-assign (ident "parseData"))
 		(e-runtime-error (tag "erroneous_value_expr"))
@@ -280,7 +218,7 @@ NO CHANGE
 		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(d-let
 		(p-assign (ident "parser"))
-		(e-runtime-error (tag "qualified_ident_does_not_exist")))
+		(e-runtime-error (tag "builtin_import_conflict")))
 	(s-import (mod "json.Json")
 		(exposes))
 	(s-import (mod "http.Client")
