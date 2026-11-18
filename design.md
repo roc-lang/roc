@@ -25424,6 +25424,15 @@ correspondingly offer no `_try`, `_wrap`, or `_saturated` forms on `F32` and
 `F64`. Fast-math flags are the float analogue of no-wraparound assertions; they
 change results and are not enabled.
 
+Decimal multiplication rescales the exact wide product before testing the
+sign-dependent fixed-point bounds. `dec_mul` crashes on overflow;
+`dec_mul_saturated` returns the appropriate bound. Both use the same arithmetic
+kernel, including truncation toward zero and the extra negative magnitude at
+`Dec.lowest`. Saturation is a distinct operation so it computes the wide product
+only once. A division-based operand threshold is not equivalent: the division
+can overflow for fractional factors, and truncating it can reject products
+that fit.
+
 The names state what happens rather than using "checked", which fails to
 distinguish three members that all check. `_overflows` is present tense because
 it asks about a hypothetical addition rather than reporting on one that ran.
@@ -28070,6 +28079,11 @@ because that bind retains through the place. This use
 query follows the explicit borrow-source chain through every alias and payload
 read to the nearest binding made owned by the current ARC variant. Descendants
 of that binding belong to its new place, not its former lender's place.
+Place identity is fixed within one binding-override context, unlike path-local
+unit availability. ARC memoizes that identity and operand-span sharing within
+the context, preserving duplicate operands. Source preparation's base context
+and each emitted variant own separate indexes; neither may change the solved
+borrow links or reuse another context's answers.
 The use
 query is definition-sensitive: a `set_local` that writes the root ends the
 current place definition after its value operand is read. Uses reached through
@@ -28090,7 +28104,9 @@ representation availability distinct from ownership-unit availability. A
 materialized same-layout alias of a shell carries the exact committed-layout
 RC-field indices that are absent in LIR. ARC derives that list directly from the
 path's solved residual mask; it is not reconstructed from nearby retains or
-field reads. A borrowed struct lives only as long as the ownership place it
+field reads. A view's overlap with its container's committed pieces is fixed
+within an emission, so ARC shares that shape across path visits, never the
+resulting absent-slot mask. A borrowed struct lives only as long as the ownership place it
 borrows from, such as a payload copied out of a box that the place stores, so
 once that place's unit has left the path state, the borrowed struct is a shell
 too and its aliases list every refcounted field as absent. Debug evaluators use the list only to avoid interpreting the stale
