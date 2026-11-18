@@ -1,6 +1,6 @@
 platform ""
     requires {
-        [Foo : foo] for bar : {} -> Foo,
+        [Foo : foo] for bar : {} -> foo,
         baz : Foo -> {},
     }
     exposes []

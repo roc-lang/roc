@@ -8,6 +8,7 @@ const std = @import("std");
 const compile = @import("compile");
 const can = @import("can");
 const scope_map = @import("scope_map.zig");
+const source_symbols = @import("source_symbols.zig");
 
 const Allocator = std.mem.Allocator;
 const BuildEnv = compile.BuildEnv;
@@ -28,6 +29,8 @@ pub const BuildEnvHandle = struct {
     /// CIR does not change once its build env holds it, so each map stays
     /// valid until the env is freed.
     scope_maps: std.ArrayList(ScopeMapEntry) = .empty,
+    /// Refactoring indexes are LSP-only and allocated on the first query.
+    symbol_indexes: std.ArrayList(source_symbols.Index) = .empty,
 
     const ScopeMapEntry = struct {
         module_env: *const ModuleEnv,
@@ -92,6 +95,16 @@ pub const BuildEnvHandle = struct {
         return built.bindings.items;
     }
 
+    pub fn sourceSymbols(self: *BuildEnvHandle, module_env: *ModuleEnv, resolve_method: source_symbols.ResolveMethod) Allocator.Error!*const source_symbols.Index {
+        for (self.symbol_indexes.items) |*index| {
+            if (index.env == module_env) return index;
+        }
+        var index = try source_symbols.Index.init(self.allocator, module_env, resolve_method);
+        errdefer index.deinit();
+        try self.symbol_indexes.append(self.allocator, index);
+        return &self.symbol_indexes.items[self.symbol_indexes.items.len - 1];
+    }
+
     /// Retain the handle for an additional owner.
     pub fn retain(self: *BuildEnvHandle, owner: []const u8) void {
         self.ref_count += 1;
@@ -122,6 +135,8 @@ pub const BuildEnvHandle = struct {
             self.owners.deinit(self.allocator);
             for (self.scope_maps.items) |*entry| entry.scope_map.deinit();
             self.scope_maps.deinit(self.allocator);
+            for (self.symbol_indexes.items) |*index| index.deinit();
+            self.symbol_indexes.deinit(self.allocator);
             self.env.deinit();
             self.allocator.free(self.cwd);
             self.allocator.destroy(self);

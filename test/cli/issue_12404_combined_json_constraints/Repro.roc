@@ -11,6 +11,7 @@ bind = |script| {
     _ = Definition.component("", script)
     {}
 }
+repro! : {} -> {}
 repro! = |_| {
     _ = bind({ value: 3.5.F64 })
     _ = bind({ notes: [""] })

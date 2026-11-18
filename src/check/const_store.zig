@@ -167,7 +167,7 @@ pub const TypeTag = struct {
     payloads: ConstRange,
 };
 
-/// Declared field-order entry for stored nominal record type evidence.
+/// Explicit layout-order entry for a stored nominal record with padding.
 pub const TypeDeclaredField = union(enum) {
     named: names.RecordFieldNameId,
     padding: ConstTypeId,

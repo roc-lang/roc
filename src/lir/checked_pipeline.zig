@@ -1974,10 +1974,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     errdefer solved.deinit();
     lambda_solve_timing_scope.end();
 
-    var inline_plan_timing_scope = PipelineStageScope.begin(
-        if (target.inline_mode != .none) target.timing else null,
-        .inline_plan,
-    );
+    var inline_plan_timing_scope = PipelineStageScope.begin(target.timing, .inline_plan);
     defer inline_plan_timing_scope.end();
     // Inline decisions are made per function at each instance of its group.
     const spec_usage = try postcheck.LambdaSolved.Instances.procedureUsage(allocator, &solved, procedure_usage.items);

@@ -16,31 +16,22 @@ main = {
 }
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_import_exposing_conflicts.md:1:1:1:34
+RESERVED TYPE NAME - can_import_exposing_conflicts.md:1:12:1:17
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
-		(severity warning)
-		(title "Duplicate Definition")
-		(region (start 1 1) (end 1 34))
+		(severity runtime_error)
+		(title "Reserved Type Name")
+		(region (start 1 12) (end 1 17))
 		(headline
-			(reflow "The name ")
+			(text "This import cannot bind ")
 			(annotated symbol-unqualified "Json")
-			(reflow " is being redeclared here."))
+			(text " because that name is reserved for a builtin type."))
 		(document
-			(source-region (file "can_import_exposing_conflicts.md") (start 1 1) (end 1 34) (annotation error) (line-text "import json.Json exposing [parse]"))
+			(reflow "Use `as` to give the imported type a different name.")
 			(line-break)
-			(reflow "In this scope, ")
-			(annotated symbol-unqualified "Json")
-			(reflow " was already defined in ")
-			(source-location
-				(file "can_import_exposing_conflicts.md")
-				(line 1)
-				(column 1))
-			(reflow ".")
-			(line-break)
-			(source-region (file "can_import_exposing_conflicts.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json exposing [parse]")))))
+			(source-region (file "can_import_exposing_conflicts.md") (start 1 12) (end 1 17) (annotation error) (line-text "import json.Json exposing [parse]")))))
 ~~~
 # TOKENS
 ~~~zig

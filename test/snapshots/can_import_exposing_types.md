@@ -51,33 +51,27 @@ handleResponse = |response|
     }
 
 # Test mixing exposed and qualified in same expression
-combineTrys : Try(Value, Error), Status -> Try(Response, Error)
-combineTrys = |jsonTry, httpStatus|
+combine_tries : Try(Value, Error), Status -> Try(Response, Error)
+combine_tries = |jsonTry, httpStatus|
     match jsonTry {
         Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })
         Err(error) => Err(error)
     }
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_import_exposing_types.md:1:1:1:49
-DUPLICATE DEFINITION - can_import_exposing_types.md:3:1:3:32
-BUILTIN TYPE SHADOWED - can_import_exposing_types.md:3:1:3:32
+RESERVED TYPE NAME - can_import_exposing_types.md:1:12:1:17
+RESERVED TYPE NAME - can_import_exposing_types.md:3:13:3:17
 DOES NOT EXIST - can_import_exposing_types.md:22:5:22:16
-MOD NOT FOUND - can_import_exposing_types.md:6:20:6:23
 MOD NOT FOUND - can_import_exposing_types.md:6:24:6:29
 MOD NOT FOUND - can_import_exposing_types.md:6:31:6:36
-DOES NOT EXIST - can_import_exposing_types.md:7:21:7:31
 MOD NOT FOUND - can_import_exposing_types.md:10:17:10:24
 MOD NOT FOUND - can_import_exposing_types.md:10:28:10:36
-DOES NOT EXIST - can_import_exposing_types.md:12:14:12:25
 DOES NOT EXIST - can_import_exposing_types.md:14:22:14:29
 DOES NOT EXIST - can_import_exposing_types.md:15:23:15:38
 MOD NOT FOUND - can_import_exposing_types.md:20:15:20:21
 MOD NOT FOUND - can_import_exposing_types.md:20:28:20:33
-MOD NOT FOUND - can_import_exposing_types.md:20:38:20:41
 MOD NOT FOUND - can_import_exposing_types.md:20:47:20:52
 MOD NOT FOUND - can_import_exposing_types.md:20:55:20:60
-DOES NOT EXIST - can_import_exposing_types.md:24:13:24:30
 MOD NOT FOUND - can_import_exposing_types.md:29:18:29:24
 MOD NOT FOUND - can_import_exposing_types.md:30:18:30:24
 MOD NOT FOUND - can_import_exposing_types.md:31:23:31:31
@@ -87,71 +81,38 @@ DOES NOT EXIST - can_import_exposing_types.md:36:25:36:40
 MOD NOT FOUND - can_import_exposing_types.md:39:18:39:26
 DOES NOT EXIST - can_import_exposing_types.md:42:23:42:42
 DOES NOT EXIST - can_import_exposing_types.md:43:23:43:37
-MOD NOT FOUND - can_import_exposing_types.md:47:15:47:18
-MOD NOT FOUND - can_import_exposing_types.md:47:19:47:24
-MOD NOT FOUND - can_import_exposing_types.md:47:26:47:31
-MOD NOT FOUND - can_import_exposing_types.md:47:34:47:40
-MOD NOT FOUND - can_import_exposing_types.md:47:44:47:47
-MOD NOT FOUND - can_import_exposing_types.md:47:48:47:56
-MOD NOT FOUND - can_import_exposing_types.md:47:58:47:63
-DOES NOT EXIST - can_import_exposing_types.md:50:33:50:44
+MOD NOT FOUND - can_import_exposing_types.md:47:21:47:26
+MOD NOT FOUND - can_import_exposing_types.md:47:28:47:33
+MOD NOT FOUND - can_import_exposing_types.md:47:36:47:42
+MOD NOT FOUND - can_import_exposing_types.md:47:50:47:58
+MOD NOT FOUND - can_import_exposing_types.md:47:60:47:65
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
-		(severity warning)
-		(title "Duplicate Definition")
-		(region (start 1 1) (end 1 49))
+		(severity runtime_error)
+		(title "Reserved Type Name")
+		(region (start 1 12) (end 1 17))
 		(headline
-			(reflow "The name ")
+			(text "This import cannot bind ")
 			(annotated symbol-unqualified "Json")
-			(reflow " is being redeclared here."))
+			(text " because that name is reserved for a builtin type."))
 		(document
-			(source-region (file "can_import_exposing_types.md") (start 1 1) (end 1 49) (annotation error) (line-text "import json.Json exposing [Value, Error, Config]"))
+			(reflow "Use `as` to give the imported type a different name.")
 			(line-break)
-			(reflow "In this scope, ")
-			(annotated symbol-unqualified "Json")
-			(reflow " was already defined in ")
-			(source-location
-				(file "can_import_exposing_types.md")
-				(line 1)
-				(column 1))
-			(reflow ".")
-			(line-break)
-			(source-region (file "can_import_exposing_types.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json exposing [Value, Error, Config]"))))
+			(source-region (file "can_import_exposing_types.md") (start 1 12) (end 1 17) (annotation error) (line-text "import json.Json exposing [Value, Error, Config]"))))
 	(report
-		(severity warning)
-		(title "Duplicate Definition")
-		(region (start 3 1) (end 3 32))
+		(severity runtime_error)
+		(title "Reserved Type Name")
+		(region (start 3 13) (end 3 17))
 		(headline
-			(reflow "The name ")
+			(text "This import cannot bind ")
 			(annotated symbol-unqualified "Try")
-			(reflow " is being redeclared here."))
+			(text " because that name is reserved for a builtin type."))
 		(document
-			(source-region (file "can_import_exposing_types.md") (start 3 1) (end 3 32) (annotation error) (line-text "import utils.Try exposing [Try]"))
+			(reflow "Use `as` to give the imported type a different name.")
 			(line-break)
-			(reflow "In this scope, ")
-			(annotated symbol-unqualified "Try")
-			(reflow " was already defined in ")
-			(source-location
-				(file "can_import_exposing_types.md")
-				(line 1)
-				(column 1))
-			(reflow ".")
-			(line-break)
-			(source-region (file "can_import_exposing_types.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json exposing [Value, Error, Config]"))))
-	(report
-		(severity warning)
-		(title "Builtin Type Shadowed")
-		(region (start 3 1) (end 3 32))
-		(headline
-			(text "The type ")
-			(annotated symbol-unqualified "Try")
-			(text " shadows a builtin type."))
-		(document
-			(reflow "This may make the builtin type inaccessible in this scope.")
-			(line-break)
-			(source-region (file "can_import_exposing_types.md") (start 3 1) (end 3 32) (annotation warning) (line-text "import utils.Try exposing [Try]"))))
+			(source-region (file "can_import_exposing_types.md") (start 3 13) (end 3 17) (annotation error) (line-text "import utils.Try exposing [Try]"))))
 	(report
 		(severity runtime_error)
 		(title "Does Not Exist")
@@ -167,18 +128,6 @@ DOES NOT EXIST - can_import_exposing_types.md:50:33:50:44
 			(line-break)
 			(line-break)
 			(source-region (file "can_import_exposing_types.md") (start 22 5) (end 22 16) (annotation error) (line-text "    List.mapTry("))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 6 20) (end 6 23))
-		(headline
-			(text "This ")
-			(annotated code "Try")
-			(reflow " type is declared to be in ")
-			(annotated code "utils.Try")
-			(reflow ", which does not exist."))
-		(document
-			(source-region (file "can_import_exposing_types.md") (start 6 20) (end 6 23) (annotation error) (line-text "parseJson : Str -> Try(Value, Error)"))))
 	(report
 		(severity runtime_error)
 		(title "Mod Not Found")
@@ -205,15 +154,6 @@ DOES NOT EXIST - can_import_exposing_types.md:50:33:50:44
 			(source-region (file "can_import_exposing_types.md") (start 6 31) (end 6 36) (annotation error) (line-text "parseJson : Str -> Try(Value, Error)"))))
 	(report
 		(severity runtime_error)
-		(title "Does Not Exist")
-		(region (start 7 21) (end 7 31))
-		(headline
-			(annotated symbol-unqualified "Json.parse")
-			(reflow " does not exist."))
-		(document
-			(source-region (file "can_import_exposing_types.md") (start 7 21) (end 7 31) (annotation error) (line-text "parseJson = |input| Json.parse(input)"))))
-	(report
-		(severity runtime_error)
 		(title "Mod Not Found")
 		(region (start 10 17) (end 10 24))
 		(headline
@@ -236,15 +176,6 @@ DOES NOT EXIST - can_import_exposing_types.md:50:33:50:44
 			(reflow ", which does not exist."))
 		(document
 			(source-region (file "can_import_exposing_types.md") (start 10 28) (end 10 36) (annotation error) (line-text "handleRequest : Request -> Response"))))
-	(report
-		(severity runtime_error)
-		(title "Does Not Exist")
-		(region (start 12 14) (end 12 25))
-		(headline
-			(annotated symbol-unqualified "Json.decode")
-			(reflow " does not exist."))
-		(document
-			(source-region (file "can_import_exposing_types.md") (start 12 14) (end 12 25) (annotation error) (line-text "    result = Json.decode(req.body)"))))
 	(report
 		(severity runtime_error)
 		(title "Does Not Exist")
@@ -290,18 +221,6 @@ DOES NOT EXIST - can_import_exposing_types.md:50:33:50:44
 	(report
 		(severity runtime_error)
 		(title "Mod Not Found")
-		(region (start 20 38) (end 20 41))
-		(headline
-			(text "This ")
-			(annotated code "Try")
-			(reflow " type is declared to be in ")
-			(annotated code "utils.Try")
-			(reflow ", which does not exist."))
-		(document
-			(source-region (file "can_import_exposing_types.md") (start 20 38) (end 20 41) (annotation error) (line-text "processData : Config, List(Value) -> Try(List(Value), Error)"))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
 		(region (start 20 47) (end 20 52))
 		(headline
 			(text "This ")
@@ -323,15 +242,6 @@ DOES NOT EXIST - can_import_exposing_types.md:50:33:50:44
 			(reflow ", which does not exist."))
 		(document
 			(source-region (file "can_import_exposing_types.md") (start 20 55) (end 20 60) (annotation error) (line-text "processData : Config, List(Value) -> Try(List(Value), Error)"))))
-	(report
-		(severity runtime_error)
-		(title "Does Not Exist")
-		(region (start 24 13) (end 24 30))
-		(headline
-			(annotated symbol-unqualified "Json.validateWith")
-			(reflow " does not exist."))
-		(document
-			(source-region (file "can_import_exposing_types.md") (start 24 13) (end 24 30) (annotation error) (line-text "        |v| Json.validateWith(config, v),"))))
 	(report
 		(severity runtime_error)
 		(title "Mod Not Found")
@@ -440,19 +350,7 @@ DOES NOT EXIST - can_import_exposing_types.md:50:33:50:44
 	(report
 		(severity runtime_error)
 		(title "Mod Not Found")
-		(region (start 47 15) (end 47 18))
-		(headline
-			(text "This ")
-			(annotated code "Try")
-			(reflow " type is declared to be in ")
-			(annotated code "utils.Try")
-			(reflow ", which does not exist."))
-		(document
-			(source-region (file "can_import_exposing_types.md") (start 47 15) (end 47 18) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 47 19) (end 47 24))
+		(region (start 47 21) (end 47 26))
 		(headline
 			(text "This ")
 			(annotated code "Value")
@@ -460,11 +358,11 @@ DOES NOT EXIST - can_import_exposing_types.md:50:33:50:44
 			(annotated code "json.Json")
 			(reflow ", which does not exist."))
 		(document
-			(source-region (file "can_import_exposing_types.md") (start 47 19) (end 47 24) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
+			(source-region (file "can_import_exposing_types.md") (start 47 21) (end 47 26) (annotation error) (line-text "combine_tries : Try(Value, Error), Status -> Try(Response, Error)"))))
 	(report
 		(severity runtime_error)
 		(title "Mod Not Found")
-		(region (start 47 26) (end 47 31))
+		(region (start 47 28) (end 47 33))
 		(headline
 			(text "This ")
 			(annotated code "Error")
@@ -472,11 +370,11 @@ DOES NOT EXIST - can_import_exposing_types.md:50:33:50:44
 			(annotated code "json.Json")
 			(reflow ", which does not exist."))
 		(document
-			(source-region (file "can_import_exposing_types.md") (start 47 26) (end 47 31) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
+			(source-region (file "can_import_exposing_types.md") (start 47 28) (end 47 33) (annotation error) (line-text "combine_tries : Try(Value, Error), Status -> Try(Response, Error)"))))
 	(report
 		(severity runtime_error)
 		(title "Mod Not Found")
-		(region (start 47 34) (end 47 40))
+		(region (start 47 36) (end 47 42))
 		(headline
 			(text "This ")
 			(annotated code "Status")
@@ -484,23 +382,11 @@ DOES NOT EXIST - can_import_exposing_types.md:50:33:50:44
 			(annotated code "http.Client")
 			(reflow ", which does not exist."))
 		(document
-			(source-region (file "can_import_exposing_types.md") (start 47 34) (end 47 40) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
+			(source-region (file "can_import_exposing_types.md") (start 47 36) (end 47 42) (annotation error) (line-text "combine_tries : Try(Value, Error), Status -> Try(Response, Error)"))))
 	(report
 		(severity runtime_error)
 		(title "Mod Not Found")
-		(region (start 47 44) (end 47 47))
-		(headline
-			(text "This ")
-			(annotated code "Try")
-			(reflow " type is declared to be in ")
-			(annotated code "utils.Try")
-			(reflow ", which does not exist."))
-		(document
-			(source-region (file "can_import_exposing_types.md") (start 47 44) (end 47 47) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 47 48) (end 47 56))
+		(region (start 47 50) (end 47 58))
 		(headline
 			(text "This ")
 			(annotated code "Response")
@@ -508,11 +394,11 @@ DOES NOT EXIST - can_import_exposing_types.md:50:33:50:44
 			(annotated code "http.Client")
 			(reflow ", which does not exist."))
 		(document
-			(source-region (file "can_import_exposing_types.md") (start 47 48) (end 47 56) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
+			(source-region (file "can_import_exposing_types.md") (start 47 50) (end 47 58) (annotation error) (line-text "combine_tries : Try(Value, Error), Status -> Try(Response, Error)"))))
 	(report
 		(severity runtime_error)
 		(title "Mod Not Found")
-		(region (start 47 58) (end 47 63))
+		(region (start 47 60) (end 47 65))
 		(headline
 			(text "This ")
 			(annotated code "Error")
@@ -520,16 +406,7 @@ DOES NOT EXIST - can_import_exposing_types.md:50:33:50:44
 			(annotated code "json.Json")
 			(reflow ", which does not exist."))
 		(document
-			(source-region (file "can_import_exposing_types.md") (start 47 58) (end 47 63) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
-	(report
-		(severity runtime_error)
-		(title "Does Not Exist")
-		(region (start 50 33) (end 50 44))
-		(headline
-			(annotated symbol-unqualified "Json.to_str")
-			(reflow " does not exist."))
-		(document
-			(source-region (file "can_import_exposing_types.md") (start 50 33) (end 50 44) (annotation error) (line-text "        Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })")))))
+			(source-region (file "can_import_exposing_types.md") (start 47 60) (end 47 65) (annotation error) (line-text "combine_tries : Try(Value, Error), Status -> Try(Response, Error)")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -717,7 +594,7 @@ EndOfFile,
 							(e-apply
 								(e-ident (raw "Error.toString"))
 								(e-ident (raw "error"))))))))
-		(s-type-anno (name "combineTrys")
+		(s-type-anno (name "combine_tries")
 			(ty-fn
 				(ty-apply
 					(ty (name "Try"))
@@ -729,7 +606,7 @@ EndOfFile,
 					(ty (name "Response"))
 					(ty (name "Error")))))
 		(s-decl
-			(p-ident (raw "combineTrys"))
+			(p-ident (raw "combine_tries"))
 			(e-lambda
 				(args
 					(p-ident (raw "jsonTry"))
@@ -804,8 +681,8 @@ handleResponse = |response|
 	}
 
 # Test mixing exposed and qualified in same expression
-combineTrys : Try(Value, Error), Status -> Try(Response, Error)
-combineTrys = |jsonTry, httpStatus|
+combine_tries : Try(Value, Error), Status -> Try(Response, Error)
+combine_tries = |jsonTry, httpStatus|
 	match jsonTry {
 		Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })
 		Err(error) => Err(error)
@@ -852,7 +729,7 @@ combineTrys = |jsonTry, httpStatus|
 				(ty-malformed)
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
-		(p-assign (ident "combineTrys"))
+		(p-assign (ident "combine_tries"))
 		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)

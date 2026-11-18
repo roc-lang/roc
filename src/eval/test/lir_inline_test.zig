@@ -840,6 +840,36 @@ test "optimized inline expect lowering omits expects and keeps dbg" {
     try std.testing.expectEqual(@as(usize, 0), omitted_counts.expect);
 }
 
+test "nominal record metadata carries only explicit layout order" {
+    const allocator = std.testing.allocator;
+    var lowered = try lowerMonotypeModuleWithOptions(allocator,
+        \\Plain := { z : U8, a : U64 }
+        \\Padded := { z : U8, _ : {}, a : U64 }
+        \\
+        \\main : Plain, Padded -> (Plain, Padded)
+        \\main = |plain, padded| (plain, padded)
+    , .{});
+    defer lowered.deinit(allocator);
+
+    var found_plain = false;
+    var found_padded = false;
+    for (0..lowered.mono.types.types.len()) |index| {
+        const content = lowered.mono.types.get(@fromBackingInt(@intCast(index)));
+        if (content != .named) continue;
+        const named = content.named;
+        const name = lowered.mono.names.typeNameText(named.def.type_name);
+        if (std.mem.eql(u8, name, "Plain")) {
+            found_plain = true;
+            try std.testing.expectEqual(@as(u32, 0), named.declared_order.len);
+        } else if (std.mem.eql(u8, name, "Padded")) {
+            found_padded = true;
+            try std.testing.expectEqual(@as(u32, 3), named.declared_order.len);
+        }
+    }
+    try std.testing.expect(found_plain);
+    try std.testing.expect(found_padded);
+}
+
 test "nominal record lays out fields in declared order" {
     const allocator = std.testing.allocator;
     // The unnamed `_ : {}` field opts this nominal record into declared-order

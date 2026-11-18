@@ -24,8 +24,7 @@ pub const ExternalTypeBinding = struct {
     /// This allows us to emit a more specific diagnostic when the type is used.
     module_not_found: bool,
     /// True when the compiler installed this binding for its own baked
-    /// `Builtin` module, which every module gets without asking. A name a
-    /// module's own `import` brings in takes precedence over it.
+    /// `Builtin` module, which every module gets without asking.
     is_compiler_builtin: bool = false,
     /// True when this binding is an import's own name, which denotes the
     /// declaration the import selects -- a type module's main type, or the
@@ -70,6 +69,9 @@ ident_head: u32,
 alias_head: u32,
 /// Canonical bindings for type names (local, auto-imported, and imported types)
 type_bindings: std.AutoHashMapUnmanaged(Ident.Idx, TypeBinding),
+/// Import names rejected by source policy. Uses become silent error nodes,
+/// rather than resolving to another binding with the same spelling.
+rejected_import_names: std.AutoHashMapUnmanaged(Ident.Idx, Region),
 /// Maps uppercase alias names to type variable aliases (for static dispatch on type vars)
 /// The key is the alias name (e.g., "Thing"), the value contains the type var info
 type_var_aliases: std.AutoHashMapUnmanaged(Ident.Idx, TypeVarAliasBinding),
@@ -90,6 +92,7 @@ pub fn init(is_function_boundary: bool) Scope {
         .ident_head = no_binding,
         .alias_head = no_binding,
         .type_bindings = std.AutoHashMapUnmanaged(Ident.Idx, TypeBinding){},
+        .rejected_import_names = .{},
         .type_var_aliases = std.AutoHashMapUnmanaged(Ident.Idx, TypeVarAliasBinding){},
         .module_aliases = std.AutoHashMapUnmanaged(Ident.Idx, ModuleAliasInfo){},
         .exposed_items = std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo){},
@@ -102,6 +105,7 @@ pub fn init(is_function_boundary: bool) Scope {
 /// Deinitialize the scope
 pub fn deinit(self: *Scope, gpa: std.mem.Allocator) void {
     self.type_bindings.deinit(gpa);
+    self.rejected_import_names.deinit(gpa);
     self.type_var_aliases.deinit(gpa);
     self.module_aliases.deinit(gpa);
     self.exposed_items.deinit(gpa);
@@ -424,10 +428,6 @@ fn currentCollisionDecision(existing: TypeBinding, incoming: TypeBindingInput) T
                 TypeBindingDecision.narrowed_import_alias
             else if (sameExternal(existing_external, incoming_external))
                 .idempotent_current
-            else if (existing_external.is_compiler_builtin and !incoming_external.is_compiler_builtin)
-                // A name this module imports takes precedence over the same
-                // name the compiler auto-imports from its baked `Builtin`.
-                TypeBindingDecision{ .replaced_current_external = existing_external }
             else
                 TypeBindingDecision{ .rejected_current_conflict = existing },
             .local_nominal, .local_alias, .local_where_alias, .associated_nominal => TypeBindingDecision{ .rejected_current_conflict = existing },

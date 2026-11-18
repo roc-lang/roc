@@ -120,9 +120,9 @@ pub const LowLevel = enum(u16) {
     list_map_can_reuse,
     list_map_cast_unsafe,
     /// `list_move_out_unsafe` for a buffer retyped to `List.map`'s output item.
-    /// Its third operand is `typeOnlyOperands`' `transform`: the buffer's type
-    /// does not say what its unwritten slots hold, so this operand tells
-    /// Lambda Solved.
+    /// Its third operand is `typeOnlyOperands`' input list, the list the
+    /// buffer was retyped from: the buffer's type does not say what its
+    /// unwritten slots hold, so this operand tells Lambda Solved.
     list_map_extract_unsafe,
     list_map_write_unsafe,
     /// Moves the item at an index out of a uniquely owned list's buffer. The
@@ -201,6 +201,8 @@ pub const LowLevel = enum(u16) {
     num_float_sub,
     num_float_mul,
     dec_mul,
+    /// Multiply, rescale toward zero, and clamp to the signed Dec bounds.
+    dec_mul_saturated,
     num_div_by,
     num_div_by_checked,
     num_div_trunc_by,
@@ -1167,10 +1169,9 @@ pub const LowLevel = enum(u16) {
 
         // Moves one element's ownership out of a unique list's buffer.
         // The buffer slot keeps stale bytes until `list_map_write_unsafe`
-        // stores the replacement; the op itself performs no RC work.
-        // Its `transform` operand puts a function in every request's type,
-        // and a function's type is program-specific, so it is not layout-keyed.
-        .list_map_extract_unsafe = byType(.none()).elements(&.{ .layout, .none, .none }).typeOnly(1),
+        // stores the replacement; the op itself performs no RC work. Its
+        // input list operand exists for its type, so it reads nothing of it.
+        .list_map_extract_unsafe = byLayout(.none()).elements(&.{ .layout, .none, .none }).typeOnly(1),
 
         // The move `list_map_extract_unsafe` performs, on a list whose item
         // type does not change.
@@ -1326,6 +1327,7 @@ pub const LowLevel = enum(u16) {
         .num_float_sub = byType(.none()),
         .num_float_mul = byType(.none()),
         .dec_mul = byType(.none()),
+        .dec_mul_saturated = byType(.none()),
         .num_div_by = byType(.none()),
         .num_div_by_checked = byType(.none()),
         .num_div_trunc_by = byType(.none()),

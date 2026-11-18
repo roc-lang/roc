@@ -115,6 +115,7 @@ pub const Problem = union(enum) {
     hosted_type_variable_not_boxed: HostedTypeVariableNotBoxed,
     host_boundary_open_row: HostBoundaryOpenRow,
     host_boundary_optional_field: HostBoundaryOptionalField,
+    polymorphic_provided_function: PolymorphicProvidedFunction,
     platform_def_not_found: PlatformDefNotFound,
     platform_hosted_section: PlatformHostedSection,
     comptime_crash: ComptimeCrash,
@@ -217,6 +218,16 @@ pub const HostBoundaryOpenRow = struct {
 /// Host-bound types must not contain runtime-optional (`?:`) record fields.
 pub const HostBoundaryOptionalField = struct {
     region: base.Region,
+};
+
+/// A host cannot choose an instantiation of a Roc-provided entrypoint.
+pub const PolymorphicProvidedFunction = struct {
+    region: base.Region,
+    snapshot: SnapshotContentIdx,
+    suggestion: ?struct {
+        variable: Ident.Idx,
+        alias: Ident.Idx,
+    },
 };
 
 /// A standalone type annotation without an implementation cannot be used as a runtime value.

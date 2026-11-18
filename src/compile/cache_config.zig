@@ -435,7 +435,11 @@ pub const Constants = struct {
     ///      representation fields.
     /// 203: hoist-root selection judges every closed expression by whether
     ///      its type holds a function, and a payload-free tag is no root.
-    pub const CACHE_VERSION = 203;
+    /// 204: combines the 203 entry with checked envelope versions 51 and 52
+    ///      (compile-time roots the checked-value writer completes when they
+    ///      read only constants it completes, and builtin-conflicting import
+    ///      bindings rejected).
+    pub const CACHE_VERSION = 204;
 };
 
 /// Configuration for the Roc cache system.

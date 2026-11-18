@@ -4535,6 +4535,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         LowLevelBuiltins.floatPow(ll.ret_layout == .f32),
                     );
                 },
+                .dec_mul_saturated => {
+                    expectArgCount(ll.op, args, 2);
+                    const lhs_loc, const rhs_loc = try self.emitValueLocals(2, args);
+                    const adj_lhs = if (lhs_loc == .stack) ValueLocation{ .stack_i128 = lhs_loc.stack.offset } else lhs_loc;
+                    const adj_rhs = if (rhs_loc == .stack) ValueLocation{ .stack_i128 = rhs_loc.stack.offset } else rhs_loc;
+                    return self.callDecBinaryMathBuiltin(
+                        adj_lhs,
+                        adj_rhs,
+                        LowLevelBuiltins.decBinaryArith(.dec_mul_saturated),
+                    );
+                },
                 .num_atan2 => {
                     expectArgCount(ll.op, args, 2);
                     const lhs_loc, const rhs_loc = try self.emitValueLocals(2, args);
@@ -18497,6 +18508,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// list operation.
         fn boxyListOp(op: lir.LowLevel) ?BoxyListOp {
             return switch (op) {
+                .dec_mul_saturated => null,
                 .list_capacity => .capacity,
                 .list_slack_unique => .slack_unique,
                 .list_owned_unique => .owned_unique,
@@ -18543,6 +18555,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const extra = self.store.stmtRowOrDefault(assign.extra);
 
             switch (assign.op) {
+                .dec_mul_saturated => {},
                 .list_prefetch => return,
                 .list_len => {
                     const reg = try self.allocTempGeneral();

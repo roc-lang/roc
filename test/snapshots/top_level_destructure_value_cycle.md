@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=A top-level destructure whose right-hand side is a block returning one of its own bound names is a circular value definition, not a compiler stack overflow
+description=A top-level destructure whose right-hand side is a block returning one of its own bound names reads its own unfinished binding, which is an invalid self-reference rather than a compiler stack overflow
 type=file
 ~~~
 # SOURCE
@@ -8,23 +8,23 @@ type=file
 {x}={x}
 ~~~
 # EXPECTED
-CIRCULAR VALUE DEFINITION - top_level_destructure_value_cycle.md:1:2:1:3
+INVALID ASSIGNMENT TO ITSELF - top_level_destructure_value_cycle.md:1:6:1:7
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Circular Value Definition")
-		(region (start 1 2) (end 1 3))
+		(title "Invalid Assignment To Itself")
+		(region (start 1 6) (end 1 7))
 		(headline
 			(reflow "The value ")
 			(annotated symbol-unqualified "x")
-			(reflow " is part of a recursive non-function definition cycle."))
+			(reflow " is assigned to itself, which would cause an infinite loop at runtime."))
 		(document
-			(reflow "Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.")
+			(reflow "Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.")
 			(line-break)
 			(line-break)
-			(source-region (file "top_level_destructure_value_cycle.md") (start 1 2) (end 1 3) (annotation error) (line-text "{x}={x}")))))
+			(source-region (file "top_level_destructure_value_cycle.md") (start 1 6) (end 1 7) (annotation error) (line-text "{x}={x}")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -58,12 +58,13 @@ EndOfFile,
 				(record-destruct (label "x") (ident "x")
 					(required
 						(p-assign (ident "x"))))))
-		(e-runtime-error (tag "circular_value_definition"))))
+		(e-block
+			(e-runtime-error (tag "self_referential_definition")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "{ x: _field }"))))
 ~~~

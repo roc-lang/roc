@@ -74,14 +74,20 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// evidence parameters recording the edge that hands a captured codec
 /// requirement on, an alias-bound dispatch edge's among them, private codec
 /// instances whose copies of a template's variables the ambiguity rule does
-/// not judge, and procedure templates' closed row nodes. It rejects every
-/// earlier format, including the independent version 19 through 49 formats.
+/// not judge, procedure templates' closed row nodes, and compile-time roots
+/// the checked-value writer completes when they read only constants it
+/// completes. It rejects every earlier format, including the independent
+/// version 19 through 51 formats.
+/// Version 52 also excludes artifacts with builtin-conflicting import bindings.
+/// Version 53 combines version 52 with checked bindings and stored constant
+/// types that carry no iterator representation fields.
 /// Platform-pairing entries share it.
-const checked_envelope_version: u32 = 50;
+const checked_envelope_version: u32 = 53;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
-/// body order and alignment.
-const canonicalized_envelope_version: u32 = 4;
+/// body order and alignment. Version 5 rejects builtin-conflicting import
+/// bindings and records their uses as explicit errors.
+const canonicalized_envelope_version: u32 = 5;
 
 /// The running compiler's admission hash for `entry`.
 pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
@@ -176,8 +182,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x03, 0x5E, 0xD1, 0x25, 0x6E, 0x69, 0xD7, 0xFA, 0x54, 0x49, 0xB3, 0x8A, 0x92, 0x4B, 0x57, 0x6C,
-        0x6C, 0x30, 0xE6, 0x95, 0x9B, 0xD3, 0xC4, 0x6F, 0xFF, 0xF7, 0xE2, 0x1F, 0x8B, 0x5D, 0xAE, 0xCA,
+        0x5B, 0x7A, 0xA6, 0x22, 0xFF, 0x4B, 0x14, 0xC9, 0x3F, 0xB1, 0x21, 0xB3, 0x44, 0x7D, 0x04, 0x5B,
+        0x34, 0xD4, 0x74, 0x5A, 0xDE, 0xEC, 0xB0, 0xA7, 0x1D, 0xB5, 0x38, 0xE3, 0xB1, 0x30, 0x22, 0x10,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

@@ -69,6 +69,12 @@ pub const ValueSchema = struct {
         };
     }
 
+    /// The view of module `module` of the schema's modules, whose constants
+    /// a value-form root of another module may read.
+    pub fn moduleView(self: *const ValueSchema, module: checked.ModuleId) *const checked.ImportedModuleView {
+        return &self.program.moduleByKey(module).view;
+    }
+
     /// The plans, layouts and stored types every `Root` names.
     pub fn result(self: *const ValueSchema) *const LirProgram.Result {
         return &self.program.result;
