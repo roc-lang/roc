@@ -4751,6 +4751,9 @@ const Cloner = struct {
     /// The function whose body this clone reads beneath every inline frame
     /// above `result_boundary`.
     crossing_root_fn: ?Ast.FnId = null,
+    /// The source function of the callable worker whose body this clone is
+    /// writing, beneath every inline frame above `result_boundary`.
+    worker_source_fn: ?Ast.FnId = null,
     rewrite_call_patterns: bool,
     /// Pattern discovery and detect-only walks do not own output functions.
     /// Production clones reserve callable workers through the pass-wide table.
@@ -11016,6 +11019,7 @@ const Cloner = struct {
         saved_strip_depth: usize = 0,
         saved_result_boundary: usize = 0,
         saved_root_fn: ?Ast.FnId = null,
+        saved_worker_source_fn: ?Ast.FnId = null,
         outer_shapes: Ast.Program.FnShapesScope = undefined,
     };
 
@@ -11030,6 +11034,7 @@ const Cloner = struct {
                 self.materialize_strip_depth = task.saved_strip_depth;
                 self.result_boundary = task.saved_result_boundary;
                 self.crossing_root_fn = task.saved_root_fn;
+                self.worker_source_fn = task.saved_worker_source_fn;
                 self.pass.program.setFn(task.worker_fn_id, .{
                     .symbol = task.symbol,
                     .source = task.source_fn.source,
@@ -11181,6 +11186,8 @@ const Cloner = struct {
         self.result_boundary = self.inline_stack.items.len;
         task.saved_root_fn = self.crossing_root_fn;
         self.crossing_root_fn = source_fn_id;
+        task.saved_worker_source_fn = self.worker_source_fn;
+        self.worker_source_fn = source_fn_id;
         task.outer_shapes = self.pass.program.beginFnShapes(task.worker_fn_id);
         frame.cursor = 1;
         return .{ .call = try self.withoutReuseTask(.{ .expr = source_body }) };
@@ -11711,11 +11718,6 @@ const Cloner = struct {
         return result;
     }
 
-    /// Whether this clone may inline the direct call `expr_id` to `callee`.
-    /// A wrapper always inlines,
-    /// since its body costs less than the call. A call whose captures this
-    /// context substituted also always inlines; any other call inlines only
-    /// when inlining is productive.
     /// Why a direct call inlines, if it does.
     const DirectInlineAdmission = enum {
         /// The call stays a call.
@@ -11726,12 +11728,26 @@ const Cloner = struct {
         productive,
     };
 
+    /// Whether this clone may inline the direct call `expr_id` to `callee`.
+    /// A wrapper always inlines, since its body costs less than the call. A
+    /// call whose captures this context substituted, and a call in a callable
+    /// worker's body whose callee builds the worker's source function, also
+    /// always inline; any other call inlines only when inlining is productive.
     fn admitsDirectInline(self: *Cloner, expr_id: Ast.ExprId, callee: Ast.FnId, call: Mono.CallProc) Allocator.Error!DirectInlineAdmission {
         // A prefix function holds statements that read no gainable slot;
         // inlining it would copy them again.
         if (self.pass.prefix_fns.contains(callee)) return .residual;
         if (!self.inline_direct_requires_productivity) return .required;
-        if (self.crossingIndex().isWrapper(callee)) return .required;
+        const index = self.crossingIndex();
+        if (index.isWrapper(callee)) return .required;
+        // A callable worker's recursion stays in the worker: a residual call
+        // that builds the worker's source would put the source beside the
+        // worker in one lambda set, while the inlined construction
+        // materializes through the callable-worker table and finds the
+        // worker itself.
+        if (self.worker_source_fn) |source| {
+            if (index.constructs(callee, source)) return .required;
+        }
         // A direct call carries its callee's captures by the callee's own
         // capture locals: the residual call imports those locals into the
         // enclosing function. In a context where a capture operand has been
@@ -17472,6 +17488,110 @@ test "a callable worker's body is a root context for inline productivity" {
     cloner.result_boundary = cloner.inline_stack.items.len;
     cloner.crossing_root_fn = middle;
     try std.testing.expect(!try cloner.crossingIsProductive(make_call, make, make_call_data));
+}
+
+test "a callable worker's body inlines a call that builds the worker's source" {
+    // `step`'s body is `(adapter(), other())`: `adapter` builds `step` and
+    // `other` builds `unrelated`. Neither call is productive and neither
+    // callee is a wrapper (a statement precedes each built value).
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const ty = try program.types.add(.zst);
+
+    const unrelated = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(1),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = try program.addExpr(.{ .ty = ty, .data = .unit }) },
+        .ret = ty,
+    });
+    const step = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(2),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .hosted,
+        .ret = ty,
+    });
+    const builder = struct {
+        fn body(p: *Ast.Program, t: Type.TypeId, built: Ast.FnId) Allocator.Error!Ast.ExprId {
+            const value = try p.addExpr(.{ .ty = t, .data = .{ .fn_ref = .{ .fn_id = built, .captures = .empty() } } });
+            return p.addExpr(.{ .ty = t, .data = .{ .block = .{
+                .statements = try p.addStmtSpan(&.{try p.addStmt(.{ .expr = try p.addExpr(.{ .ty = t, .data = .unit }) })}),
+                .final_expr = value,
+            } } });
+        }
+    };
+    const adapter = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(3),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = try builder.body(&program, ty, step) },
+        .ret = ty,
+    });
+    const other = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(4),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = try builder.body(&program, ty, unrelated) },
+        .ret = ty,
+    });
+    const adapter_call = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{ .callee = .{ .lifted = adapter }, .args = .empty() } } });
+    const other_call = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{ .callee = .{ .lifted = other }, .args = .empty() } } });
+    program.setFn(step, .{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(2),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = try program.addExpr(.{ .ty = ty, .data = .{ .tuple = try program.addExprSpan(&.{ adapter_call, other_call }) } }) },
+        .ret = ty,
+    });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    const index = try pass.buildCrossingIndex();
+    defer index.deinit();
+    var session = try InlineCrossing.Session.init(allocator, index, &program);
+    defer session.deinit();
+    try index.classifyWrappers(&session);
+    pass.crossing_index = index;
+    pass.crossing_session = &session;
+
+    try std.testing.expect(index.constructs(adapter, step));
+    try std.testing.expect(!index.constructs(other, step));
+    try std.testing.expect(!index.isWrapper(adapter));
+    try std.testing.expect(!index.isWrapper(other));
+
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    cloner.inline_direct_requires_productivity = true;
+    cloner.crossing_root_fn = step;
+    const adapter_call_data = program.getExpr(adapter_call).data.call_proc;
+    const other_call_data = program.getExpr(other_call).data.call_proc;
+
+    // `step`'s own body keeps both calls.
+    try std.testing.expectEqual(Cloner.DirectInlineAdmission.residual, try cloner.admitsDirectInline(adapter_call, adapter, adapter_call_data));
+    try std.testing.expectEqual(Cloner.DirectInlineAdmission.residual, try cloner.admitsDirectInline(other_call, other, other_call_data));
+
+    // A callable worker's body cloned from `step` inlines only the call that
+    // builds `step`.
+    cloner.worker_source_fn = step;
+    try std.testing.expectEqual(Cloner.DirectInlineAdmission.required, try cloner.admitsDirectInline(adapter_call, adapter, adapter_call_data));
+    try std.testing.expectEqual(Cloner.DirectInlineAdmission.residual, try cloner.admitsDirectInline(other_call, other, other_call_data));
+
+    const inlined = try cloner.cloneExprValue(adapter_call);
+    try std.testing.expect(inlined.value == .callable);
+
+    // The inline limits still apply: with no growth budget left the call
+    // stays a call.
+    cloner.inline_body_growth = .init(0);
+    const refused = try cloner.cloneExprValue(adapter_call);
+    if (refused.value != .expr) return error.TestUnexpectedResult;
+    try std.testing.expect(program.getExpr(refused.value.expr).data == .call_proc);
 }
 
 test "a known record entering a loop is productive only through the parts the loop consumes" {

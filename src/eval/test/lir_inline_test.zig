@@ -7028,7 +7028,7 @@ test "iter alloc static: runtime-count map wrapping is a self-containing set beh
 
     var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .tag_reachability = true });
     defer optimized.deinit(allocator);
-    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "box_box_count", 5);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "box_box_count", 6);
     try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "erased_call_count", 0);
     try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "packed_erased_fn_count", 0);
 }
@@ -15538,13 +15538,10 @@ const user_iter_chain_main =
     \\}
 ;
 
-// (a) A `map(f).keep_if(g)` chain over a list, consumed at once. Its target
-// is `user_iter_fused` for every case at both modes. With `next`-based
-// adapters, every iterator value of the chain reaches the one `MyIter.next`,
-// so their step closures share one lambda set, which then contains itself
-// through the captured upstream iterator and is boxed. Direct adapters fuse
-// at `.none`; after `.wrappers` call-pattern cloning, three sets hold two
-// members each, though none contains itself.
+// (a) A `map(f).keep_if(g)` chain over a list, consumed at once, fuses at
+// both modes. At `.wrappers` the chain's step closures become callable
+// workers, and each worker's `rest` inlines the adapter that builds the
+// worker's source, so the rest is the worker again and no set holds both.
 test "MyIter lambda sets: map keep_if chain consumed at once" {
     try expectUserIterCases(&.{
         .{
@@ -15552,14 +15549,14 @@ test "MyIter lambda sets: map keep_if chain consumed at once" {
             .source = my_iter_with_next ++ user_iter_chain_main,
             .dbg = "27",
             .none = user_iter_fused,
-            .wrappers = .{ .multi_member_sets = 3, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
+            .wrappers = user_iter_fused,
         },
         .{
             .name = "direct",
             .source = my_iter_direct ++ user_iter_chain_main,
             .dbg = "27",
             .none = user_iter_fused,
-            .wrappers = .{ .multi_member_sets = 3, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
+            .wrappers = user_iter_fused,
         },
     });
 }
@@ -15620,8 +15617,8 @@ const user_iter_callback_main =
 // (c) A callback typed `MyIter(I64) -> MyIter(I64)` that maps its argument.
 // The callback's argument and result are two occurrences of one Monotype in
 // one function type, typed at independent roots, so the result's step set is
-// not the argument's: nothing contains itself and nothing is boxed. After
-// `.wrappers` call-pattern cloning one solved set holds two members.
+// not the argument's: nothing contains itself and nothing is boxed, and it
+// fuses at both modes.
 test "MyIter lambda sets: callback from iterator to iterator" {
     try expectUserIterCases(&.{
         .{
@@ -15629,14 +15626,14 @@ test "MyIter lambda sets: callback from iterator to iterator" {
             .source = my_iter_with_next ++ user_iter_callback_main,
             .dbg = "36",
             .none = user_iter_fused,
-            .wrappers = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
+            .wrappers = user_iter_fused,
         },
         .{
             .name = "direct",
             .source = my_iter_direct ++ user_iter_callback_main,
             .dbg = "36",
             .none = user_iter_fused,
-            .wrappers = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
+            .wrappers = user_iter_fused,
         },
     });
 }
@@ -15644,9 +15641,7 @@ test "MyIter lambda sets: callback from iterator to iterator" {
 // Two chains held in the fields of one record, each consumed by its own
 // code. The fields are two occurrences of one Monotype in one record type,
 // and nothing relates their values, so their step sets stay apart: neither
-// holds the other chain's step closure. Its target is `user_iter_fused` at
-// both modes; after `.wrappers` call-pattern cloning two sets hold two
-// members each, though none contains itself.
+// holds the other chain's step closure, and it fuses at both modes.
 test "MyIter lambda sets: two chains in one record" {
     try expectUserIterCases(&.{.{
         .name = "record fields",
@@ -15677,7 +15672,7 @@ test "MyIter lambda sets: two chains in one record" {
         ,
         .dbg = "27",
         .none = user_iter_fused,
-        .wrappers = .{ .multi_member_sets = 2, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
+        .wrappers = user_iter_fused,
     }});
 }
 
@@ -15710,8 +15705,8 @@ test "MyIter lambda sets: body order does not change the solved classes" {
 
 // (d) A chain that grows by one `map` per loop iteration has no bound on its
 // depth, so its step set genuinely contains itself and is boxed; it must
-// compile and compute the right total. Today's representation is also its
-// target.
+// compile and compute the right total. At `.wrappers` the set holds the
+// `map` step and its callable worker, whose rest is the worker again.
 test "MyIter lambda sets: chain grown in a loop" {
     try expectUserIterCases(&.{.{
         .name = "growing",
@@ -15733,7 +15728,7 @@ test "MyIter lambda sets: chain grown in a loop" {
         ,
         .dbg = "15",
         .none = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 1, .box_box_count = 3 },
-        .wrappers = .{ .multi_member_sets = 1, .max_members = 4, .self_containing_sets = 1, .box_box_count = 6 },
+        .wrappers = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 1, .box_box_count = 8 },
     }});
 }
 
@@ -15746,7 +15741,82 @@ test "MyIter lambda sets: opaque chain" {
         .source = my_iter_opaque_with_next ++ user_iter_chain_main,
         .dbg = "27",
         .none = user_iter_fused,
-        .wrappers = .{ .multi_member_sets = 3, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
+        .wrappers = user_iter_fused,
+    }});
+}
+
+// A callable worker's `rest` inlines only a call whose callee builds the
+// worker's own source. Here `alt_a`'s step builds its rest with `alt_b` and
+// `alt_b`'s with `alt_a`, so the loop's set genuinely holds both steps. No
+// worker's rest call builds its source, so at `.wrappers` those calls stay
+// calls and the alternating steps' workers share sets with the original
+// steps (two sets, the larger with three members). The `from_list_at`
+// worker's rest still closes.
+test "MyIter lambda sets: a worker's rest built by another adapter stays a call" {
+    try expectUserIterCases(&.{.{
+        .name = "alternating adapters",
+        .source = my_iter_direct ++
+            \\alt_a : MyIter(a) -> MyIter(a)
+            \\alt_a = |iterator| MyIter.{ step: || match (iterator.step)() {
+            \\    Done => Done
+            \\    Skip({ rest }) => Skip({ rest: alt_b(rest) })
+            \\    One({ item, rest }) => One({ item, rest: alt_b(rest) })
+            \\} }
+            \\
+            \\alt_b : MyIter(a) -> MyIter(a)
+            \\alt_b = |iterator| MyIter.{ step: || match (iterator.step)() {
+            \\    Done => Done
+            \\    Skip({ rest }) => Skip({ rest: alt_a(rest) })
+            \\    One({ item, rest }) => One({ item, rest: alt_a(rest) })
+            \\} }
+            \\
+            \\main : I64
+            \\main = {
+            \\    total = alt_a(MyIter.from_list([1.I64, 2, 3])).fold(0, |acc, x| acc + x)
+            \\    dbg total
+            \\    total
+            \\}
+        ,
+        .dbg = "6",
+        .none = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
+        .wrappers = .{ .multi_member_sets = 2, .max_members = 3, .self_containing_sets = 0, .box_box_count = 0 },
+    }});
+}
+
+// The inline limits still bound a worker's `rest`. `held_keep_if` puts its
+// iterator in a list, so the step closure becomes a callable worker inside
+// the inlined `held_keep_if`. The worker's rest call to `held_keep_if` would
+// re-enter that active inline with no smaller known argument, so the
+// recursion rule keeps it a call, and the step's set holds the step and its
+// worker.
+test "MyIter lambda sets: a worker's rest call refused by the recursion rule stays a call" {
+    try expectUserIterCases(&.{.{
+        .name = "held adapter",
+        .source = my_iter_direct ++
+            \\held_keep_if : MyIter(a), (a -> Bool) -> MyIter(a)
+            \\held_keep_if = |iterator, predicate| {
+            \\    it = MyIter.{ step: || match (iterator.step)() {
+            \\        Done => Done
+            \\        Skip({ rest }) => Skip({ rest: held_keep_if(rest, predicate) })
+            \\        One({ item, rest }) => if predicate(item) { One({ item, rest: held_keep_if(rest, predicate) }) } else { Skip({ rest: held_keep_if(rest, predicate) }) }
+            \\    } }
+            \\    held = [it]
+            \\    match List.first(held) {
+            \\        Ok(x) => x
+            \\        Err(_) => it
+            \\    }
+            \\}
+            \\
+            \\main : I64
+            \\main = {
+            \\    total = held_keep_if(MyIter.from_list([1.I64, 2, 3]), |x| x > 1).fold(0, |acc, x| acc + x)
+            \\    dbg total
+            \\    total
+            \\}
+        ,
+        .dbg = "5",
+        .none = user_iter_fused,
+        .wrappers = .{ .multi_member_sets = 1, .max_members = 2, .self_containing_sets = 0, .box_box_count = 0 },
     }});
 }
 

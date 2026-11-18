@@ -10970,13 +10970,14 @@ and ordinary value flow expose a known iterator constructor, SpecConstr can:
   loop fixed point.
 
 A clone that admits only productive direct inlines inlines a direct call only
-when the copied body pays for itself. Two kinds of call always qualify: a
+when the copied body pays for itself. Three kinds of call always qualify: a
 wrapper whose body does less work than its
 call (the definition solved inline analysis uses, shared in `wrapper_body.zig`),
 that lies on no cycle of direct calls, where inlining it would only unroll the
 recursion, and that passes none of its own calls a value it builds itself where
-the callee consumes it, and a call whose captures the context substituted,
-which cannot stay residual. A body like `|msg| for_each!(msg, Stdout.line!)`
+the callee consumes it; a call whose captures the context substituted,
+which cannot stay residual; and, in a callable worker's body, a call whose
+callee builds the worker's source function (below). A body like `|msg| for_each!(msg, Stdout.line!)`
 inlines `for_each!` into itself on the function reference it supplies, so its
 clone is a whole loop wherever it lands; it stays one procedure, and copies of
 it at each caller are admitted only where they are productive there.
@@ -11051,8 +11052,9 @@ ever enumerated. Before any clone or discovery task runs, `Index` records, in
 one pass over the source bodies, every use of every expression and local (a
 lifted body may share an expression node between parents, and bodies may share
 nodes with each other, so a node keeps one list of uses per body), each body's
-loops, its single definitions and slots, and the strongly connected components
-of the call graph over direct calls and function values. Slots are keyed by
+loops, its single definitions and slots, the strongly connected components
+of the call graph over direct calls and function values, and the functions
+each body builds a value of with `fn_ref` (`Index.constructs`). Slots are keyed by
 body: a lifted closure's capture slots are the very locals its enclosing body
 binds, so a local reads as a parameter or capture only within the body that
 declares that slot, and a summary memoizes an expression per body that reads
@@ -11101,6 +11103,26 @@ read its result; `Cloner.result_boundary` marks them, so a query in a worker
 body climbs only the frames above it, and the body beneath them is the worker's
 source function (`crossing_root_fn`). A call-pattern worker's root frame, which
 names no call, ends the climb the same way.
+
+A callable worker's recursion stays in the worker. While SpecConstr clones
+the body of a callable worker W made from source function S
+(`Cloner.worker_source_fn`), a direct call whose callee's source body builds
+a value of S with `fn_ref` is admitted like a wrapper, and every inline limit
+still applies: body size, the `return` and loop-control checks, the exact
+result type, the inline-stack recursion rule, and the growth budget. Left a
+call, it would build S, so W's result (an iterator step's `rest`, say) would
+hold S where the first pass held W, and one lambda set would hold both: each
+step would then switch between two arms that run the same code. Inlined, the
+construction materializes through the callable-worker table under W's key
+and finds W itself, so W's rest is W. When a limit refuses the inline, the
+call stays and the set keeps both members; a worker made inside an active
+inline of the very function its rest calls is refused this way by the
+recursion rule. The condition is that the callee builds S, which is what
+puts S beside W. Every call cloned into W's body is reachable from S, so such
+a callee always lies in S's component of the call graph. The converse does
+not hold: a callee in the component may build only another function of it
+(two adapters whose steps build each other's) or nothing at all. Those calls
+stay calls, and for alternating adapters the sets keep their extra members.
 
 The cost of a query is polynomial in the program and the seed, and independent
 of type shape and composition depth. With U uses in the index (one per
