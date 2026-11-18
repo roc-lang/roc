@@ -1578,18 +1578,18 @@ pub const Writer = struct {
         if (roc_list.bytes == null and roc_list.len() != 0) {
             writerInvariant("non-empty packed list had null element pointer");
         }
-        const data = if (memoryIsPackedScalars(element))
-            try self.store.addBlobData(if (roc_list.bytes) |source| source[0..byte_len] else &.{})
-        else blk: {
-            const bytes = try self.store.reserveBlobData(byte_len);
-            if (roc_list.bytes) |source| {
-                for (0..roc_list.len()) |index| {
-                    const scalar = self.storeScalar(elem_layout, .{ .ptr = source + index * width });
-                    writePackedScalar(bytes[index * width ..][0..width], element, scalar);
-                }
-            }
-            break :blk try self.store.commitBlobData(byte_len);
+        const bytes = try self.store.reserveBlobData(byte_len);
+        if (roc_list.bytes) |source| switch (builtin.cpu.arch.endian()) {
+            .little => packMemoryScalars(element, bytes, source[0..byte_len]),
+            // A big-endian program's memory holds no scalar wider than a
+            // byte as its packed little-endian bytes, so each item is
+            // packed on its own.
+            .big => for (0..roc_list.len()) |index| {
+                const scalar = self.storeScalar(elem_layout, .{ .ptr = source + index * width });
+                writePackedScalar(bytes[index * width ..][0..width], element, scalar);
+            },
         };
+        const data = try self.store.commitBlobData(byte_len);
         self.store.fill(target_node, .{ .list = .{ .items = .{ .packed_bytes = .{
             .bytes = data,
             .len = try checkedU32(roc_list.len()),
@@ -1789,20 +1789,17 @@ fn interpreterErasedCallable(_: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError
     };
 }
 
-/// Whether a list of `element` scalars in this program's memory already is
-/// its packed encoding (`writePackedScalar`), so the list's bytes are stored
-/// as they are. An integer, `Dec` or vector is packed as its little-endian
-/// bytes, which a little-endian program's memory holds, and a big-endian
-/// program's does not. A float is packed with every NaN as Roc's one NaN,
-/// so each item is stored on its own.
-fn memoryIsPackedScalars(element: const_store.ConstPackedScalar) bool {
-    return switch (builtin.cpu.arch.endian()) {
-        .little => switch (element) {
-            .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => true,
-            .f32, .f64 => false,
-        },
-        .big => false,
-    };
+/// Pack the scalars of `element` that a little-endian program's memory holds
+/// in `source` into `out`, as `writePackedScalar` packs each one. Every
+/// packed scalar is its little-endian bytes, so the bytes are copied as they
+/// are, a float's with every NaN made Roc's one NaN as it is copied.
+fn packMemoryScalars(element: const_store.ConstPackedScalar, out: []u8, source: []const u8) void {
+    if (builtin.mode == .debug) std.debug.assert(builtin.cpu.arch.endian() == .little and out.len == source.len);
+    switch (element) {
+        .f32 => builtins.float_bits.copyNormalizingF32NanBits(out, source),
+        .f64 => builtins.float_bits.copyNormalizingF64NanBits(out, source),
+        .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => @memcpy(out, source),
+    }
 }
 
 fn writePackedScalar(out: []u8, element: const_store.ConstPackedScalar, scalar: checked.ConstScalar) void {
@@ -2339,4 +2336,38 @@ test "const store writer boxy recipe ownership frees a failed popped frame only 
         try std.testing.expectEqual(freed + "child".len + "parent".len, tracking.freed_bytes);
     }
     try std.testing.expectEqual(tracking.allocated_bytes, tracking.freed_bytes);
+}
+
+test "packing a little-endian float list's memory matches packing each item" {
+    if (builtin.cpu.arch.endian() != .little) return error.SkipZigTest;
+    const f32_items = [_]u32{
+        0x7f80_0001, 0x7fa1_2345, 0x7fc0_0000, 0xff80_0001, 0xffc1_2345, 0xffff_ffff, 0x7f80_0000, 0xff80_0000,
+        0x0000_0000, 0x8000_0000, 0x0000_0001, 0x807f_ffff, 0x7f7f_ffff, 0x3f80_0000, 0xbf80_0000, 0x4049_0fdb,
+        0x7fbf_ffff, 0xff80_0002, 0x0040_0000, 0x8000_0001, 0x7fc0_0001, 0x4000_0000, 0xc000_0000,
+    };
+    var f32_memory: [f32_items.len * 4]u8 = undefined;
+    for (f32_items, 0..) |bits, index| std.mem.writeInt(u32, f32_memory[index * 4 ..][0..4], bits, .native);
+    var f32_packed: [f32_memory.len]u8 = undefined;
+    packMemoryScalars(.f32, &f32_packed, &f32_memory);
+    var f32_expected: [f32_memory.len]u8 = undefined;
+    for (f32_items, 0..) |bits, index| {
+        writePackedScalar(f32_expected[index * 4 ..][0..4], .f32, .{ .f32_bits = builtins.float_bits.normalizeF32NanBits(@bitCast(@as(f32, @bitCast(bits)))) });
+    }
+    try std.testing.expectEqualSlices(u8, &f32_expected, &f32_packed);
+
+    const f64_items = [_]u64{
+        0x7ff0_0000_0000_0001, 0x7ff1_2345_6789_abcd, 0x7ff8_0000_0000_0000, 0xfff0_0000_0000_0001,
+        0xfff9_2345_6789_abcd, 0xffff_ffff_ffff_ffff, 0x7ff0_0000_0000_0000, 0xfff0_0000_0000_0000,
+        0x0000_0000_0000_0000, 0x8000_0000_0000_0000, 0x0000_0000_0000_0001, 0x800f_ffff_ffff_ffff,
+        0x7fef_ffff_ffff_ffff, 0x3ff0_0000_0000_0000, 0xbff0_0000_0000_0000,
+    };
+    var f64_memory: [f64_items.len * 8]u8 = undefined;
+    for (f64_items, 0..) |bits, index| std.mem.writeInt(u64, f64_memory[index * 8 ..][0..8], bits, .native);
+    var f64_packed: [f64_memory.len]u8 = undefined;
+    packMemoryScalars(.f64, &f64_packed, &f64_memory);
+    var f64_expected: [f64_memory.len]u8 = undefined;
+    for (f64_items, 0..) |bits, index| {
+        writePackedScalar(f64_expected[index * 8 ..][0..8], .f64, .{ .f64_bits = builtins.float_bits.normalizeF64NanBits(@bitCast(@as(f64, @bitCast(bits)))) });
+    }
+    try std.testing.expectEqualSlices(u8, &f64_expected, &f64_packed);
 }
