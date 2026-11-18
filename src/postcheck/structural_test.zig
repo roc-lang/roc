@@ -542,7 +542,20 @@ test "Monotype gates divergent relations and crash dispatches before type instan
     try expectContains(crash_dispatch, ".crash => |reason|");
     try expectContains(crash_dispatch, "addExprWithTypeCell(expected_ret_cell");
     try expectNotContains(crash_dispatch, "unitType()");
-    try expectNotContains(crash_dispatch, "plan.callable_ty");
+    // Only a statically closed procedure may consult its callable type before
+    // the crash gate, because a closed resolution is never a crash dispatch.
+    const before_closed_arm = sourceSliceBetween(crash_dispatch, "fn stepDispatchLower(", ".direct_closed => |direct| {");
+    const after_closed_arm = sourceSliceBetween(crash_dispatch, ".direct_parametric => |direct| {", "const expected_ret_ty:");
+    try expectNotContains(before_closed_arm, "plan.callable_ty");
+    try expectNotContains(after_closed_arm, "plan.callable_ty");
+    const closed_procedure_arm = sourceSliceBetween(crash_dispatch, ".procedure => {", ".intrinsic, .graph_participating => {},");
+    try expectContains(closed_procedure_arm, "self.closedCallRepresentation(plan.callable_ty, true)");
+    const crash_reason = sourceSliceBetween(
+        lower_source,
+        "fn dispatchCrashReason(",
+        "fn methodLookupForEvidenceNode(",
+    );
+    try expectContains(crash_reason, ".direct_closed, .direct_parametric, .structural => null,");
 
     const contextual_gate = sourceSliceBetween(
         lower_source,

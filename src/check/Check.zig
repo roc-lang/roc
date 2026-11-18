@@ -59146,17 +59146,18 @@ test "literal dispatch finalization rejects a strict value cycle through from_nu
     try std.testing.expect(test_env.module_env.hasTopLevelDemandDependency(cycle_defs[1], cycle_defs[0]));
 }
 
-test "top-level destructure bound through its own name is a circular value definition" {
+test "top-level destructure bound through its own name reads its own unfinished binding" {
     const TestEnv = @import("test/TestEnv.zig");
-    // `{x}` on the right is a block returning `x`, so `x` is computed from
-    // itself through the destructure.
+    // `{x}` on the right is a block returning `x`, so the initializer reads
+    // `x` before the destructure that binds it has finished.
     const source =
         \\{x} = {x}
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("Circular Value Definition");
+    try test_env.assertOneCanError("Invalid Assignment To Itself");
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.problems.problems.items.len);
 }
 
 /// Assert that checking reported exactly one circular value definition for
