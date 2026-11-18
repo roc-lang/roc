@@ -29,6 +29,9 @@ nodes: std.ArrayList(Node) = .empty,
 scopes: std.ArrayList(Scope) = .empty,
 environment_index: std.HashMapUnmanaged(Environment, u32, EnvironmentContext, std.hash_map.default_max_load_percentage) = .empty,
 dependencies: collections.DenseMapUnmanaged(types.NominalDecl.Idx, *Dependencies) = .empty,
+/// The backing of the nominal type each root holds, by root, as
+/// `openNominalBackingOf` answered it: `no_view` for an invalid declaration.
+opened: collections.DenseMapUnmanaged(Var, Var) = .empty,
 /// Where the graphs of final declarations live across readers, if anywhere.
 shared: ?Shared = null,
 argument_scratch: std.ArrayList(Var) = .empty,
@@ -192,6 +195,7 @@ pub fn deinit(self: *Self) void {
     std.debug.assert(self.source.len() == self.source_len);
     self.environment_index.deinit(self.gpa);
     self.dependencies.deinit(self.gpa);
+    self.opened.deinit(self.gpa);
     self.nodes.deinit(self.gpa);
     self.scopes.deinit(self.gpa);
     self.argument_scratch.deinit(self.gpa);
@@ -277,6 +281,23 @@ pub fn openNominalBacking(self: *Self, nominal: types.NominalType) Allocator.Err
     for (args, canonical) |arg, *dest| dest.* = self.root(arg);
     const scope = try self.internScope(.{ .declaration = declaration, .args = canonical }, dependencies);
     return try self.view(dependencies, backing_dependency, scope);
+}
+
+/// `openNominalBacking` for the nominal type that `nominal_root` holds,
+/// answered once per root: a root's content is fixed for the reader's life,
+/// and opening the same application always yields the same view.
+pub fn openNominalBackingOf(self: *Self, nominal_root: Var, nominal: types.NominalType) Allocator.Error!?Var {
+    if (std.debug.runtime_safety) std.debug.assert(self.root(nominal_root) == nominal_root);
+    if (self.opened.get(nominal_root)) |backing| {
+        if (std.debug.runtime_safety) {
+            const reopened = try self.openNominalBacking(nominal);
+            std.debug.assert((reopened orelse no_view) == backing);
+        }
+        return if (backing == no_view) null else backing;
+    }
+    const backing = try self.openNominalBacking(nominal);
+    try self.opened.put(self.gpa, nominal_root, backing orelse no_view);
+    return backing;
 }
 
 fn internScope(self: *Self, environment: Environment, dependencies: *const Dependencies) Allocator.Error!u32 {

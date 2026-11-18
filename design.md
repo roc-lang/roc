@@ -1163,7 +1163,10 @@ order a projection visits them. A view names its template root by graph node,
 its children are found by position, and each substitution environment indexes
 its views directly by graph node, so projection never looks a variable up.
 This holds for exactly as long as the graph does: a template is unchanged
-while any graph computed from it is in use.
+while any graph computed from it is in use. Within one reader, opening the
+nominal application a root holds is answered once per root: the root's
+content is fixed for the reader's life, and opening one application always
+yields the same view.
 
 The same graph separately records structural substitution dependencies,
 without the application-ownership dependencies of template-private unknowns.
