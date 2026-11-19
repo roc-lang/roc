@@ -27165,6 +27165,9 @@ const NominalRowReach = struct {
     pending: std.ArrayList(Step) = .empty,
     seen: collections.DenseMapUnmanaged(CheckedTypeId, u2) = .empty,
     marks: std.ArrayList(Mark) = .empty,
+    /// The formal index of each formal of the declaration `computeReach` is
+    /// deciding, filled before its walk and cleared after.
+    formal_index: collections.DenseMapUnmanaged(CheckedTypeId, u32) = .empty,
 
     const Entry = struct {
         state: enum { unvisited, open, finished } = .unvisited,
@@ -27187,6 +27190,7 @@ const NominalRowReach = struct {
         self.pending.deinit(self.allocator);
         self.seen.deinit(self.allocator);
         self.marks.deinit(self.allocator);
+        self.formal_index.deinit(self.allocator);
     }
 
     /// Whether the conversion reaches each argument of `nominal`, or null
@@ -27299,11 +27303,14 @@ const NominalRowReach = struct {
         const formals = declaration.formalArgs(&self.types);
         self.marks.clearRetainingCapacity();
         try self.marks.appendNTimes(self.allocator, .{}, formals.len);
+        std.debug.assert(self.formal_index.count() == 0);
+        defer self.formal_index.clearRetainingCapacity();
+        for (formals, 0..) |formal, index| try self.formal_index.put(self.allocator, formal, @intCast(index));
         self.pending.clearRetainingCapacity();
         self.seen.clearRetainingCapacity();
         try self.push(declaration.backing, .reached);
         while (self.pending.pop()) |step| {
-            if (std.mem.findScalar(CheckedTypeId, formals, step.ty)) |formal| {
+            if (self.formal_index.get(step.ty)) |formal| {
                 switch (step.position) {
                     .reached => self.marks.items[formal].reached = true,
                     .outside => self.marks.items[formal].outside = true,
@@ -27712,7 +27719,7 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
         const formal = declaration.formalArgs(&self.types)[formal_index];
         var reached: std.ArrayList(CheckedTypeId) = .empty;
         defer reached.deinit(allocator);
-        var reached_seen: std.AutoHashMapUnmanaged(CheckedTypeId, void) = .empty;
+        var reached_seen: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty;
         defer reached_seen.deinit(allocator);
         var found = false;
         try reached.append(allocator, declaration.backing);
@@ -27750,11 +27757,11 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
         const allocator = self.allocator;
         var declarations: std.ArrayList(CheckedNominalDeclaration) = .empty;
         defer declarations.deinit(allocator);
-        var declarations_seen: std.AutoHashMapUnmanaged(CheckedNominalDeclarationId, void) = .empty;
+        var declarations_seen: collections.DenseMapUnmanaged(CheckedNominalDeclarationId, void) = .empty;
         defer declarations_seen.deinit(allocator);
         var types_pending: std.ArrayList(CheckedTypeId) = .empty;
         defer types_pending.deinit(allocator);
-        var types_seen: std.AutoHashMapUnmanaged(CheckedTypeId, void) = .empty;
+        var types_seen: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty;
         defer types_seen.deinit(allocator);
         try declarations.append(allocator, from);
         while (declarations.pop()) |declaration| {

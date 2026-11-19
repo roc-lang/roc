@@ -155,4 +155,3 @@ fn findTemplate(artifact: *const CheckedArtifact.CheckedModuleArtifact, name: []
     }
     return null;
 }
-

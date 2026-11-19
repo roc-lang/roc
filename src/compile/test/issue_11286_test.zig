@@ -96,36 +96,41 @@ const job_source =
     \\}
 ;
 
+fn setupFailed(err: anytype) error{TestUnexpectedResult} {
+    std.debug.print("building the test app failed: {s}\n", .{@errorName(err)});
+    return error.TestUnexpectedResult;
+}
+
 /// Write the `Job` platform beside `app_source` and return the app's path.
-fn writeJobApp(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, app: []const u8) ![:0]u8 {
-    try dir.writeFile(io, .{ .sub_path = "app.roc", .data = app });
-    try dir.writeFile(io, .{ .sub_path = "platform.roc", .data = job_platform_source });
-    try dir.writeFile(io, .{ .sub_path = "Job.roc", .data = job_source });
-    return dir.realPathFileAlloc(io, "app.roc", gpa);
+fn writeJobApp(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, app: []const u8) error{TestUnexpectedResult}![:0]u8 {
+    dir.writeFile(io, .{ .sub_path = "app.roc", .data = app }) catch |err| return setupFailed(err);
+    dir.writeFile(io, .{ .sub_path = "platform.roc", .data = job_platform_source }) catch |err| return setupFailed(err);
+    dir.writeFile(io, .{ .sub_path = "Job.roc", .data = job_source }) catch |err| return setupFailed(err);
+    return dir.realPathFileAlloc(io, "app.roc", gpa) catch |err| setupFailed(err);
 }
 
 /// Build the `Job` app `app` and expect exactly the reports titled `titles`,
 /// in order, the first of which contains every string of `contains`.
-fn expectJobAppReports(app: []const u8, titles: []const []const u8, contains: []const []const u8) !void {
+fn expectJobAppReports(app: []const u8, titles: []const []const u8, contains: []const []const u8) error{ TestUnexpectedResult, TestExpectedEqual }!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     const app_path = try writeJobApp(gpa, io, tmp_dir.dir, app);
     defer gpa.free(app_path);
-    const cwd = try tmp_dir.dir.realPathFileAlloc(io, ".", gpa);
+    const cwd = tmp_dir.dir.realPathFileAlloc(io, ".", gpa) catch |err| return setupFailed(err);
     defer gpa.free(cwd);
-    var build_env = try compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
+    var build_env = compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss) catch |err| return setupFailed(err);
     defer build_env.deinit();
-    try build_env.build(app_path);
-    const drained = try build_env.drainReports();
+    build_env.build(app_path) catch |err| return setupFailed(err);
+    const drained = build_env.drainReports() catch |err| return setupFailed(err);
     defer build_env.freeDrainedReports(drained);
     var count: usize = 0;
     for (drained) |module_reports| {
         for (module_reports.reports) |*report| {
             var rendered: std.Io.Writer.Allocating = .init(gpa);
             defer rendered.deinit();
-            try report.render(&rendered.writer, .markdown);
+            report.render(&rendered.writer, .markdown) catch |err| return setupFailed(err);
             const message = rendered.written();
             errdefer std.debug.print("{s}\n", .{message});
             try std.testing.expect(count < titles.len);
