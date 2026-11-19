@@ -1309,6 +1309,11 @@ const Solver = struct {
         for (fns) |fn_id| try self.gen_stack.append(self.allocator, self.program.fn_tys.items[@backingInt(fn_id)]);
         while (self.gen_stack.pop()) |next| {
             var root = types.rootCompressed(next);
+            // Registration precedes every group. Once this signature is
+            // exposed, even a monomorphic group's argument is no longer an
+            // unowned variable a later group may claim for its scheme.
+            if (types.owners.items[@backingInt(root)] == Type.unowned)
+                types.owners.items[@backingInt(root)] = groupOwner(self.current_group.?);
             var content = types.get(root);
             while (content == .mono) {
                 if (self.isCallableFree(content.mono.id)) break;
