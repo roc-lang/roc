@@ -7482,7 +7482,7 @@ const Builder = struct {
                 .function => |checked_fn| {
                     const mono_fn = switch (types.get(item.mono_ty)) {
                         .func => |func| func,
-                        else => Common.invariant("hosted signature function lowered to a non-function Monotype"),
+                        .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst, .hole => Common.invariant("hosted signature function lowered to a non-function Monotype"),
                     };
                     const mono_args = types.span(mono_fn.args);
                     if (mono_args.len != checked_fn.args.len) Common.invariant("hosted signature function arity changed in Monotype");
@@ -7494,7 +7494,7 @@ const Builder = struct {
                 .tuple => |items| {
                     const mono_items = switch (types.get(item.mono_ty)) {
                         .tuple => |span| types.span(span),
-                        else => Common.invariant("hosted signature tuple lowered to a non-tuple Monotype"),
+                        .primitive, .named, .record, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("hosted signature tuple lowered to a non-tuple Monotype"),
                     };
                     if (mono_items.len != items.len) Common.invariant("hosted signature tuple arity changed in Monotype");
                     for (items, mono_items, 0..) |checked_item, mono_item, index| {
@@ -7504,7 +7504,7 @@ const Builder = struct {
                 .record => |record| {
                     const mono_fields = switch (types.get(item.mono_ty)) {
                         .record => |span| types.fieldSpan(span),
-                        else => Common.invariant("hosted signature record lowered to a non-record Monotype"),
+                        .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("hosted signature record lowered to a non-record Monotype"),
                     };
                     var current_fields = record.fields;
                     var current = record.ext;
@@ -7538,7 +7538,7 @@ const Builder = struct {
                 .tag_union => |tag_union| {
                     const mono_tags = switch (types.get(item.mono_ty)) {
                         .tag_union => |span| types.tagSpan(span),
-                        else => Common.invariant("hosted signature tag union lowered to a non-tag-union Monotype"),
+                        .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => Common.invariant("hosted signature tag union lowered to a non-tag-union Monotype"),
                     };
                     var current_tags = tag_union.tags;
                     var current = tag_union.ext;
@@ -7602,14 +7602,14 @@ const Builder = struct {
                         .element => {
                             const elem = switch (types.get(item.mono_ty)) {
                                 .list, .box => |elem| elem,
-                                else => Common.invariant("hosted signature List or Box lowered to another Monotype"),
+                                .primitive, .named, .record, .tuple, .tag_union, .func, .erased, .zst, .hole => Common.invariant("hosted signature List or Box lowered to another Monotype"),
                             };
                             try work.append(self.allocator, .{ .checked_ty = nominal.args[0], .mono_ty = elem, .depth = depth, .step = 0 });
                         },
                         .args => {
                             const mono_args = switch (types.get(item.mono_ty)) {
                                 .named => |named| types.span(named.args),
-                                else => Common.invariant("hosted signature nominal lowered to an unnamed Monotype"),
+                                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("hosted signature nominal lowered to an unnamed Monotype"),
                             };
                             if (mono_args.len != nominal.args.len) Common.invariant("hosted signature nominal arity changed in Monotype");
                             for (nominal.args, mono_args, 0..) |arg, mono_arg, index| {
