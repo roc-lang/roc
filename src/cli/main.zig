@@ -211,6 +211,7 @@ comptime {
         std.testing.refAllDecls(@import("ReplLine.zig"));
         std.testing.refAllDecls(@import("ReplSession.zig"));
         std.testing.refAllDecls(@import("macho/DyldExportStrip.zig"));
+        std.testing.refAllDecls(@import("macho/DwarfSplice.zig"));
     }
 }
 const linker = @import("linker.zig");
@@ -2945,7 +2946,8 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, _: []const u8) CliMa
     // doing so may still be running.
     if (dev_diagnostics.isSet(.trace_run_order)) std.debug.print("run-order: released the build's state\n", .{});
     var child = build_result.child orelse unreachable; // a successful build given `run_output` starts the program
-    const term = try waitCompiledExecutable(ctx, &child, build_result.output_path);
+    defer child.restoreSigint();
+    const term = try waitCompiledExecutable(ctx, &child.process, build_result.output_path);
 
     releaseScratchDir(ctx, temp_dir);
     cleanup_temp_dir = false;
@@ -2967,8 +2969,9 @@ fn runCompiledExecutable(
     argv0: []const u8,
     app_args: []const []const u8,
 ) (CliError || error{OutOfMemory})!std.process.Child.Term {
-    var child = try spawnExecutableWithArgv0(ctx, exe_path, argv0, app_args);
-    return waitCompiledExecutable(ctx, &child, exe_path);
+    var child = try ForegroundApp.spawn(ctx, exe_path, argv0, app_args);
+    defer child.restoreSigint();
+    return waitCompiledExecutable(ctx, &child.process, exe_path);
 }
 
 fn waitCompiledExecutable(
@@ -2983,6 +2986,42 @@ fn waitCompiledExecutable(
         } });
     };
 }
+
+/// The terminal sends SIGINT to both Roc and the app. Stay alive to reap the
+/// app without forwarding a second signal or changing the app's disposition.
+const ForegroundApp = struct {
+    process: std.process.Child,
+    previous: if (is_windows) void else ?std.posix.Sigaction,
+
+    fn catchSigint(_: std.posix.SIG) callconv(.c) void {}
+
+    fn spawn(ctx: *CliCtx, exe_path: []const u8, argv0: []const u8, app_args: []const []const u8) (CliError || Allocator.Error)!ForegroundApp {
+        var app: ForegroundApp = .{ .process = undefined, .previous = if (is_windows) {} else null };
+        if (comptime !is_windows) {
+            var previous: std.posix.Sigaction = undefined;
+            std.posix.sigaction(.INT, null, &previous);
+            // Keep an inherited SIG_IGN (e.g. a shell background job). Otherwise
+            // exec resets a caught handler to SIG_DFL in the new program.
+            if (previous.handler.handler != std.posix.SIG.IGN) {
+                std.posix.sigaction(.INT, &.{
+                    .handler = .{ .handler = &catchSigint },
+                    .mask = std.posix.sigemptyset(),
+                    .flags = std.posix.SA.RESTART,
+                }, null);
+                app.previous = previous;
+            }
+        }
+        errdefer app.restoreSigint();
+        app.process = try spawnExecutableWithArgv0(ctx, exe_path, argv0, app_args);
+        return app;
+    }
+
+    fn restoreSigint(self: *const ForegroundApp) void {
+        if (comptime !is_windows) {
+            if (self.previous) |previous| std.posix.sigaction(.INT, &previous, null);
+        }
+    }
+};
 
 fn spawnExecutableWithArgv0(
     ctx: *CliCtx,
@@ -3124,6 +3163,22 @@ fn finishRunTermination(
             std.process.exit(code);
         },
         .signal => |signal| {
+            if (comptime !is_windows) {
+                if (signal == .INT) {
+                    ctx.io.flush();
+                    // A parent using waitpid must see SIGINT, not exit(130).
+                    std.posix.sigaction(.INT, &.{
+                        .handler = .{ .handler = std.posix.SIG.DFL },
+                        .mask = std.posix.sigemptyset(),
+                        .flags = 0,
+                    }, null);
+                    var set = std.posix.sigemptyset();
+                    std.posix.sigaddset(&set, .INT);
+                    std.posix.sigprocmask(std.posix.SIG.UNBLOCK, &set, null);
+                    _ = std.c.raise(.INT);
+                    unreachable; // SIGINT is unblocked with its default action, so raise terminates the process before returning
+                }
+            }
             const sig_num = @backingInt(signal);
             std.log.debug("Child process {s} killed by signal: {}", .{ exe_path, sig_num });
             const result = platform_validation.targets_validator.ValidationResult{
@@ -3724,16 +3779,12 @@ fn runWithPosixFdInheritance(
 
     std.log.debug("Spawning child process: {s} with {} app args", .{ exe_path, app_args.len });
     std.log.debug("Child process inherits current working directory", .{});
-    var child = try spawnExecutableWithArgv0(ctx, exe_path, source_path, app_args);
-    std.log.debug("Child process spawned successfully (PID: {})", .{child.id});
+    var child = try ForegroundApp.spawn(ctx, exe_path, source_path, app_args);
+    defer child.restoreSigint();
+    std.log.debug("Child process spawned successfully (PID: {})", .{child.process.id});
 
     // Wait for child to complete
-    const term = child.wait(ctx.io.std_io) catch |err| {
-        return ctx.fail(.{ .child_process_wait_failed = .{
-            .command = exe_path,
-            .err = err,
-        } });
-    };
+    const term = try waitCompiledExecutable(ctx, &child.process, exe_path);
 
     // Clean up temp files after child has exited.
     // We wait until after child exits because the child needs to read the coordination
@@ -3748,7 +3799,7 @@ fn runWithPosixFdInheritance(
 }
 
 const HotShimChild = struct {
-    child: std.process.Child,
+    app: ForegroundApp,
     thread: std.Thread,
     done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     term: ?std.process.Child.Term = null,
@@ -3756,7 +3807,7 @@ const HotShimChild = struct {
     joined: bool = false,
 
     fn waitThread(self: *HotShimChild, io: std.Io) void {
-        self.term = self.child.wait(io) catch |err| {
+        self.term = self.app.process.wait(io) catch |err| {
             self.wait_error = err;
             self.done.store(true, .seq_cst);
             return;
@@ -3781,11 +3832,12 @@ const HotShimChild = struct {
     fn shutdown(self: *HotShimChild, ctx: *CliCtx) void {
         if (!self.joined) self.terminate();
         self.join();
+        self.app.restoreSigint();
         ctx.gpa.destroy(self);
     }
 
     fn terminate(self: *HotShimChild) void {
-        const pid = self.child.id orelse return;
+        const pid = self.app.process.id orelse return;
         switch (builtin.os.tag) {
             .windows => {
                 _ = std.os.windows.ntdll.NtTerminateProcess(pid, @fromBackingInt(@intCast(1)));
@@ -3844,16 +3896,15 @@ fn spawnHotShimChild(
     };
     try makeSharedMemoryHandleInheritable(ctx, shm_handle);
 
-    const child = try spawnExecutableWithArgv0(ctx, exe_path, source_path, app_args);
-
     const watched = try ctx.gpa.create(HotShimChild);
+    errdefer ctx.gpa.destroy(watched);
     watched.* = .{
-        .child = child,
+        .app = try ForegroundApp.spawn(ctx, exe_path, source_path, app_args),
         .thread = undefined,
     };
     watched.thread = std.Thread.spawn(.{}, HotShimChild.waitThread, .{ watched, ctx.io.std_io }) catch |err| {
-        watched.child.kill(ctx.io.std_io);
-        ctx.gpa.destroy(watched);
+        watched.app.process.kill(ctx.io.std_io);
+        watched.app.restoreSigint();
         return err;
     };
     return watched;
@@ -5366,7 +5417,7 @@ const BuildResult = struct {
     diagnostics: CheckDiagnosticCounts,
     /// The published executable, started when the build was given
     /// `run_output`; the caller waits for it.
-    child: ?std.process.Child = null,
+    child: ?ForegroundApp = null,
 };
 
 fn checkedArtifactForBuild(
@@ -10337,10 +10388,10 @@ fn finishBuildCommand(
     // program now, after the compiler's last write, so the program runs
     // while the build's state is released (design.md "Runs Of A Built
     // Executable").
-    const child: ?std.process.Child = if (args.run_output) |run| child: {
+    const child: ?ForegroundApp = if (args.run_output) |run| child: {
         ctx.io.flush();
         if (dev_diagnostics.isSet(.trace_run_order)) std.debug.print("run-order: starting the program\n", .{});
-        break :child try spawnExecutableWithArgv0(ctx, final_output_path, run.argv0, run.app_args);
+        break :child try ForegroundApp.spawn(ctx, final_output_path, run.argv0, run.app_args);
     } else null;
     return .{ .output_path = final_output_path, .diagnostics = diag, .child = child };
 }
