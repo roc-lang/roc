@@ -1619,7 +1619,7 @@ pub const Writer = struct {
                 if (builtin.mode == .debug) for (0..len) |index| {
                     var item: [16]u8 = undefined;
                     writePackedScalar(item[0..width], element, self.storeScalar(elem_layout, .{ .ptr = @constCast(memory + index * width) }));
-                    std.debug.assert(std.mem.eql(u8, item[0..width], bytes[index * width ..][0..width]));
+                    for (item[0..width], bytes[index * width ..][0..width]) |expected, stored| std.debug.assert(expected == stored);
                 };
             },
             // A big-endian program's memory holds no scalar wider than a
@@ -2459,7 +2459,9 @@ test "const store writer stores an evaluated scalar list as storing each item wo
                 try testing.expectEqualSlices(u8, expected[0..width], blob[index * width ..][0..width]);
             }
             if (element == .f32 or element == .f64) {
-                try testing.expect(!std.mem.eql(u8, blob, memory[0 .. len * width]));
+                // The first item is a NaN whose low byte Roc's one NaN
+                // clears.
+                try testing.expect(blob[0] != memory[0]);
             } else {
                 try testing.expectEqualSlices(u8, memory[0 .. len * width], blob);
             }
