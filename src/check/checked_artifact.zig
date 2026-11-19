@@ -11159,6 +11159,8 @@ pub const ExprDivergence = body_analyses.ExprDivergence;
 pub const exprDivergence = body_analyses.exprDivergence;
 /// See `body_analyses.assertExprNeverDiverges`.
 pub const assertExprNeverDiverges = body_analyses.assertExprNeverDiverges;
+/// See `body_analyses.exprEvaluationHasNoEffect`.
+pub const exprEvaluationHasNoEffect = body_analyses.exprEvaluationHasNoEffect;
 /// The body facts a checked module owns (`body_analyses.BodyAnalyses`).
 pub const BodyAnalyses = body_analyses.BodyAnalyses;
 /// The CIR-only index of a checked module's bodies.

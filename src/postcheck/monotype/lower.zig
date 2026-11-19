@@ -36110,9 +36110,11 @@ const BodyContext = struct {
     /// A divergent expression evaluates its operands in source order, each
     /// for its effect, up to the operand whose evaluation diverges; a
     /// dispatch that cannot run (`DispatchCrashReason`) evaluates all of its
-    /// operands and then crashes. Every operand before the divergence point
-    /// is observable, so none is skipped. Only the operands up to and
-    /// including the first divergent one are listed: nothing after it runs.
+    /// operands and then crashes. An operand whose evaluation has no effect
+    /// (`operandEvaluationHasNoEffect`) is skipped; every other operand
+    /// before the divergence point is observable and evaluates. Only the
+    /// operands up to and including the first divergent one are listed:
+    /// nothing after it runs.
     const OperandSequenceTask = struct {
         /// The operand expressions in evaluation order. Owned.
         operands: []const ExprSite,
@@ -36140,12 +36142,22 @@ const BodyContext = struct {
     }
 
     /// The operands of a divergent expression whose evaluation diverges at
-    /// one of them: every operand up to and including the first divergent
-    /// one, in evaluation order.
-    fn divergentOperandsStep(self: *BodyContext, operands: []const CIR.Expr.Idx, ty: Type.TypeId) Allocator.Error!LowerStep {
-        const refs = try self.exprRefsOf(operands);
-        defer self.allocator.free(refs);
-        return try self.divergentOperandRefsStep(refs, ty);
+    /// one of them: `head`, when present, then `rest`, in evaluation order,
+    /// walked up to and including the first divergent one. Nothing after it
+    /// is read.
+    fn divergentOperandsStep(self: *BodyContext, head: ?CIR.Expr.Idx, rest: []const CIR.Expr.Idx, ty: Type.TypeId) Allocator.Error!LowerStep {
+        const head_len: usize = @intFromBool(head != null);
+        const len = for (0..head_len + rest.len) |index| {
+            const operand = if (index < head_len) head.? else rest[index - head_len];
+            if (try self.checkedExprDivergesInLoweredRuntime(ExprSite.read(operand))) break index + 1;
+        } else Common.invariant("checked expression was marked divergent but no divergent operand was found");
+        const operands = try self.allocator.alloc(ExprSite, len);
+        for (operands, 0..) |*operand, index| operand.* = ExprSite.read(if (index < head_len) head.? else rest[index - head_len]);
+        return requestLowerTask(self, .{ .operand_sequence = .{
+            .operands = operands,
+            .ty = ty,
+            .tail = .diverges,
+        } });
     }
 
     /// Body expressions as their parents read them. Owned.
@@ -36209,9 +36221,12 @@ const BodyContext = struct {
                 .uninhabited => |scrutinee| return try self.finishOperandSequence(task, try self.zeroBranchMatch(scrutinee, task.ty)),
             }
         }
-        if (task.index < task.operands.len) {
+        while (task.index < task.operands.len) {
             const operand = task.operands[task.index];
             task.index += 1;
+            // An operand whose evaluation has no effect is never lowered: no
+            // value, type, or specialization is requested for it.
+            if (self.operandEvaluationHasNoEffect(operand)) continue;
             return requestLowerTask(self, .{ .discarded = .{ .expr = operand } });
         }
         return switch (task.tail) {
@@ -36224,6 +36239,16 @@ const BodyContext = struct {
                 .ty = task.ty,
                 .data = .{ .checked_error = try self.addStringLiteral("runtime error") },
             })),
+        };
+    }
+
+    /// Whether an operand of an operand sequence evaluates with no effect
+    /// (`exprEvaluationHasNoEffect`): a read of a name, a literal, or a
+    /// closure.
+    fn operandEvaluationHasNoEffect(self: *BodyContext, operand: ExprSite) bool {
+        return switch (operand.kind()) {
+            .read => checked.exprEvaluationHasNoEffect(std.meta.activeTag(self.view.bodies.expr(operand.node()).data)),
+            .coerced_value, .hoisted_root, .hoisted_result, .literal_guard, .literal_value, .literal_conversion => false,
         };
     }
 
@@ -36259,14 +36284,8 @@ const BodyContext = struct {
                 task.finish = .{ .expect_err = checked_expr.source_region };
                 return requestLowerTask(self, .{ .inspected = .{ .expr = ExprSite.read(expect_err.expr), .expect_err_snippet = expect_err.snippet } });
             },
-            .list, .tuple => |items| return try self.divergentOperandsStep(items, ty),
-            .str => |parts| {
-                var operands: std.ArrayList(CIR.Expr.Idx) = .empty;
-                defer operands.deinit(self.allocator);
-                if (parts.first) |first| try operands.append(self.allocator, first);
-                try operands.appendSlice(self.allocator, parts.rest);
-                return try self.divergentOperandsStep(operands.items, ty);
-            },
+            .list, .tuple => |items| return try self.divergentOperandsStep(null, items, ty),
+            .str => |parts| return try self.divergentOperandsStep(parts.first, parts.rest, ty),
             .block => |block| return requestLowerTask(self, .{ .block = try self.boxLowerTask(BlockTask, .{
                 .statements = block.statements,
                 .final_expr = ExprSite.read(block.final_expr),
@@ -36282,24 +36301,18 @@ const BodyContext = struct {
                 task.finish = .expr_as_data;
                 return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = .{ .sealed = ty } } });
             },
-            .call => |call| {
-                var operands: std.ArrayList(CIR.Expr.Idx) = .empty;
-                defer operands.deinit(self.allocator);
-                try operands.append(self.allocator, call.func);
-                try operands.appendSlice(self.allocator, call.args);
-                return try self.divergentOperandsStep(operands.items, ty);
-            },
+            .call => |call| return try self.divergentOperandsStep(call.func, call.args, ty),
             .record => |record| {
                 var operands: std.ArrayList(CIR.Expr.Idx) = .empty;
                 defer operands.deinit(self.allocator);
                 if (record.ext) |ext| try operands.append(self.allocator, ext);
                 for (record.fields) |field| try operands.append(self.allocator, self.view.bodies.recordFieldValue(field));
-                return try self.divergentOperandsStep(operands.items, ty);
+                return try self.divergentOperandsStep(null, operands.items, ty);
             },
-            .tag => |tag| return try self.divergentOperandsStep(tag.args, ty),
+            .tag => |tag| return try self.divergentOperandsStep(null, tag.args, ty),
             .nominal => |nominal| return self.divergentEffectStep(ExprSite.read(nominal.backing_expr), ty),
             .row_coerce => |coerce| return self.divergentEffectStep(coerce.value, ty),
-            .binop => |binop| return try self.divergentOperandsStep(&.{ binop.lhs, binop.rhs }, ty),
+            .binop => |binop| return try self.divergentOperandsStep(binop.lhs, &.{binop.rhs}, ty),
             .unary_minus,
             .dbg,
             => |child| return self.divergentEffectStep(ExprSite.read(child), ty),
@@ -36308,13 +36321,13 @@ const BodyContext = struct {
             else
                 Common.invariant("omitted checked expect reached divergent runtime lowering"),
             .field_access => |field| return self.divergentEffectStep(ExprSite.read(field.receiver), ty),
-            .structural_eq => |eq| return try self.divergentOperandsStep(&.{ eq.lhs, eq.rhs }, ty),
-            .structural_hash => |hash| return try self.divergentOperandsStep(&.{ hash.value, hash.hasher }, ty),
+            .structural_eq => |eq| return try self.divergentOperandsStep(eq.lhs, &.{eq.rhs}, ty),
+            .structural_hash => |hash| return try self.divergentOperandsStep(hash.value, &.{hash.hasher}, ty),
             .tuple_access => |access| return self.divergentEffectStep(ExprSite.read(access.tuple), ty),
             .for_ => |for_| return self.divergentEffectStep(ExprSite.read(for_.expr), ty),
             .run_low_level => |low_level| {
                 for (low_level.args) |arg| {
-                    if (try self.checkedExprDivergesInLoweredRuntime(ExprSite.read(arg))) return try self.divergentOperandsStep(low_level.args, ty);
+                    if (try self.checkedExprDivergesInLoweredRuntime(ExprSite.read(arg))) return try self.divergentOperandsStep(null, low_level.args, ty);
                 }
                 if (low_level.op != .crash) {
                     Common.invariant("checked low-level expression was marked divergent but no divergent argument was found");

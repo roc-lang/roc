@@ -22818,6 +22818,37 @@ operand the divergence column marks divergent, and nothing after it
 Only the divergent path does this work: a value that does not diverge lowers
 through the ordinary operand lowering.
 
+An operand whose evaluation has no effect is skipped by that sequence. The
+shared classification `exprEvaluationHasNoEffect` names those kinds: a read of
+a name (a local, a statically resolved procedure or constant, a platform
+requirement), a literal, an empty collection, a payload-free tag, and a
+closure or lambda. Each is a kind `checkedExprDivergence` never marks
+divergent, which a compile-time check beside the classification enforces.
+Its value is never used and its evaluation cannot be observed, so lowering
+requests no value, type, layout, callable, or specialization for it: a direct
+callee of a divergent call is not materialized as a procedure value (an
+intrinsic wrapper must only ever lower through a checked direct call), and a
+callee whose checked type holds the error type is never instantiated. A
+computed callee or an argument that can call, print, or crash still
+evaluates in source order. The walk stops at the first divergent operand: no
+later operand is read, and the call, comparison, or dispatch itself is never
+built, so its result layout, callable type, dispatch target, and callee
+specialization are never requested.
+
+Boxy applies the same sequence before its ordinary lowering of a call,
+structural equality or hash, list, tuple, tag, record, low-level operation, or
+dispatch requests any representation. It selects the sequence from checked
+types: when a type that ordinary lowering requests before evaluating the
+operands holds the error type (the expression's own type, a call's callee
+type, an equality's or hash's operand types, a low-level operation's argument
+types, or a dispatch's callable type), the expression produces no value,
+checking necessarily marked it divergent, and Boxy reads the operands'
+divergence facts to find where it stops. A dispatch that cannot
+run and none of whose operands diverges evaluates them and then crashes with
+its dispatch crash. An expression free of the error type reads no divergence
+fact, so a successful program's lowering demands no divergence facts beyond
+those its blocks, matches, and declarations already read.
+
 Which expression kinds can be marked divergent is one classification,
 `checkedExprDivergence`, defined with the checked expression kinds: a kind
 diverges through its evaluation (it terminates, or an operand it evaluates

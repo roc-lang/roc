@@ -1277,6 +1277,76 @@ pub fn assertExprNeverDiverges(comptime kind: ExprKind) void {
     };
 }
 
+/// Whether evaluating an expression of this kind has no evaluation effect:
+/// it reads a name (a local, a statically resolved procedure or constant, a
+/// platform requirement) or builds a value from literal text, captures, or
+/// nothing, so it cannot call, print, crash, or diverge.
+///
+/// A divergent expression's operand sequence (design.md "Divergent
+/// expressions evaluate their earlier operands") skips such an operand: its
+/// value is never used, its evaluation is unobservable, and lowering requests
+/// no value, type, layout, or specialization for it. Every such kind is one
+/// that is never marked divergent (`exprDivergence`), which is checked at
+/// compile time below.
+pub fn exprEvaluationHasNoEffect(kind: ExprKind) bool {
+    return switch (kind) {
+        .lookup_local,
+        .lookup_external,
+        .lookup_required,
+        .str_segment,
+        .bytes_literal,
+        .empty_list,
+        .empty_record,
+        .zero_argument_tag,
+        .closure,
+        .lambda,
+        .hosted_lambda,
+        => true,
+        .numeral,
+        .str,
+        .list,
+        .tuple,
+        .match_,
+        .if_,
+        .call,
+        .record,
+        .block,
+        .tag,
+        .nominal,
+        .binop,
+        .unary_minus,
+        .field_access,
+        .dispatch_call,
+        .interpolation,
+        .structural_eq,
+        .structural_hash,
+        .method_eq,
+        .type_dispatch_call,
+        .tuple_access,
+        .runtime_error,
+        .crash,
+        .dbg,
+        .expect_err,
+        .expect,
+        .ellipsis,
+        .anno_only,
+        .break_,
+        .return_,
+        .for_,
+        .run_low_level,
+        => false,
+    };
+}
+
+comptime {
+    for (std.enums.values(ExprKind)) |kind| {
+        if (exprEvaluationHasNoEffect(kind) and !exprDivergence(kind).never()) {
+            @compileError("expression kind ." ++ @tagName(kind) ++
+                " has no evaluation effect (exprEvaluationHasNoEffect) but can be marked divergent (exprDivergence)");
+        }
+    }
+}
+
 /// Decides, in both inline-expect modes at once, whether expressions and
 /// statements always diverge, memoizing each one's answer in a dense array:
 /// one unit's nodes by their position in the unit, or every node of the
