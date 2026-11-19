@@ -24087,7 +24087,12 @@ the ones its own Monotype imposes on every instance of it, which any class
 instantiated from that Monotype already has. Unifying such a leaf with a class already instantiated from the
 same Monotype only joins the clone's fresh callable slots to the class's, so the
 leaf joins the class without materializing. A Monotype that reaches a cycle, or
-that is uninhabited, keeps the ordinary relation. Leaves that survive solving
+that is uninhabited, keeps the ordinary relation. So does a structural
+Monotype meeting a nominal class: the structural-to-nominal link above lifts a
+class instantiated from a structural Monotype into a nominal one, which is
+then an instance of the nominal type, and joining a leaf of the structural
+Monotype to it would make that leaf, possibly the nominal's own backing,
+resolve to the nominal type (`test/cli/ParsedGenericNominalConstantUse.roc`). Leaves that survive solving
 were never unified: their callable slots all close empty and their
 forced-dynamic marks depend only on their Monotype, so finalization gives every
 untouched leaf of one Monotype one shared clone. An expression or pattern that
