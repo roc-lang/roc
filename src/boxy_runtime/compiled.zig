@@ -412,8 +412,9 @@ pub const ListOpRequest = extern struct {
     list2: ?*const RocList,
     /// The element operand's bytes.
     element: ?[*]u8,
-    /// The integer operands, in the operation's operand order.
-    n: [3]u64,
+    /// The integer operands, in the operation's operand order. Aligned to 8
+    /// on every target, including those whose C ABI aligns `u64` to 4.
+    n: [3]u64 align(8),
 };
 
 /// A list of `len` zero-sized items and no spare capacity.
