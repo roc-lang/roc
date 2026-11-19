@@ -2726,13 +2726,7 @@ pub const Builder = struct {
             const values = try self.allocator.alloc(LocalId, payload_types.len);
             defer self.allocator.free(values);
             for (values, payload_types, destination_payloads, 0..) |*slot, payload_ty, destination_ty, index| {
-                const payload = if (committed.tag != .tag_union) blk: {
-                    // A union without storage has only zero-sized payloads.
-                    const payload_local = try self.localOf(payload_ty, .frame);
-                    if (self.store.getLocal(payload_local).layout_idx != .zst) invariant("a storage-free union has a payload with storage");
-                    try self.emitLinear(.{ .assign_struct = .{ .target = payload_local, .fields = LIR.LocalSpan.empty(), .next = undefined } });
-                    break :blk payload_local;
-                } else try self.readTagPayload(value, from, variant, payload_types, index);
+                const payload = try self.readTagPayload(value, from, variant, payload_types, index);
                 slot.* = try self.adaptValue(payload, payload_ty, destination_ty);
             }
             const built = try self.buildTag(to_raw, tag.name, values);
@@ -10342,15 +10336,6 @@ pub const Builder = struct {
                             }
                             const payloads = self.program.store.span(tags[variant].payloads);
                             for (tag.args, 0..) |arg_pattern, arg_index| {
-                                if (committed.tag != .tag_union) {
-                                    // A union without storage has only
-                                    // zero-sized payloads.
-                                    const payload_local = try self.localOf(payloads[arg_index], .frame);
-                                    if (self.store.getLocal(payload_local).layout_idx != .zst) invariant("a storage-free union has a payload with storage");
-                                    try self.emitLinear(.{ .assign_struct = .{ .target = payload_local, .fields = LIR.LocalSpan.empty(), .next = undefined } });
-                                    try pending.append(self.allocator, .{ .pattern = arg_pattern, .value = payload_local, .ty = payloads[arg_index] });
-                                    continue;
-                                }
                                 const payload_local = try self.readTagPayload(item.value, structural, variant, payloads, arg_index);
                                 try pending.append(self.allocator, .{ .pattern = arg_pattern, .value = payload_local, .ty = payloads[arg_index] });
                             }
@@ -11621,8 +11606,16 @@ pub const Builder = struct {
         return local;
     }
 
-    /// `readTagPayload` into `target`.
+    /// `readTagPayload` into `target`. A union whose committed layout has no
+    /// storage holds only zero-sized payloads, so its payload is the
+    /// zero-sized value of the payload's type and reads nothing.
     pub fn readTagPayloadInto(self: *Builder, target: LocalId, value: LocalId, union_ty: TypeId, variant: usize, payloads: []const TypeId, index: usize) Allocator.Error!void {
+        const committed = self.program.result.layouts.getLayout(try self.program.layouts.layoutOf(union_ty));
+        if (committed.tag != .tag_union) {
+            if (self.store.getLocal(target).layout_idx != .zst) invariant("a storage-free union has a payload with storage");
+            try self.emitLinear(.{ .assign_struct = .{ .target = target, .fields = LIR.LocalSpan.empty(), .next = undefined } });
+            return;
+        }
         const payload_layout = try self.variantPayloadLayout(union_ty, variant);
         const whole = LIR.RefOp.tagPayloadStruct(value, @intCast(variant), @intCast(variant));
         if (payloads.len == 1) return try self.readSlotInto(target, whole, payloads[0], payload_layout);

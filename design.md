@@ -19064,6 +19064,14 @@ host allocation and free operations.
   thunks, and no statement whose meaning depends on a path through a type.
   The only conversions are the row conversions and adapters of Sealed Result
   Rows, each between two types the checker relates.
+- Closed tag construction and payload projection both follow the union's
+  committed layout. A single-variant union whose payloads are all zero-sized
+  commits as `.zst`: constructing it writes no payload, and every read of one
+  of its payloads (a pattern, a row conversion, a codec, a stream step) goes
+  through the one closed projection (`Builder.readTagPayloadInto`), which
+  yields the payload type's zero-sized value without a load. A union with
+  storage reads its payloads from the variant's committed payload layout,
+  unboxing recursion boxes.
 - `--timings` reports the strategy's post-check work as `Boxy Lowering`
   followed by the shared `LIR Passes` and `ARC` entries. Progress text reports
   the pipeline position as `Lowering`.

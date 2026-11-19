@@ -572,15 +572,8 @@ pub const Ctx = struct {
         const union_ty = try self.b.structuralType(self.occType(source));
         const start = try self.b.beginBackward();
         if (try self.b.closed(union_ty)) {
-            const committed = self.b.program.result.layouts.getLayout(try self.b.program.layouts.layoutOf(union_ty));
-            if (committed.tag != .tag_union) {
-                // A union without storage has only zero-sized payloads.
-                if (self.b.store.getLocal(dest).layout_idx != .zst) invariant("a storage-free union has a payload with storage");
-                try self.b.emitLinear(.{ .assign_struct = .{ .target = dest, .fields = LIR.LocalSpan.empty(), .next = undefined } });
-            } else {
-                const payloads = self.store().span((try self.unionTags(union_ty))[variant].payloads);
-                try self.b.readTagPayloadInto(dest, source, union_ty, variant, payloads, index);
-            }
+            const payloads = self.store().span((try self.unionTags(union_ty))[variant].payloads);
+            try self.b.readTagPayloadInto(dest, source, union_ty, variant, payloads, index);
         } else {
             try self.b.readDynamicTagPayloadInto(dest, source, try self.b.descOf(union_ty), variant, index, single);
         }
