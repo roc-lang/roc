@@ -23892,6 +23892,28 @@ never infer signature relationships by comparing `TypeId`s from independently
 imported roots: equal type ids describe equal Monotype shapes, not runtime
 value flow.
 
+A hosted function has no body to carry values between its signature's
+positions, yet the host may hand back any position of one declaration
+variable as any other: `transfer! : Box(a) => Box(a)` returns the box it was
+given. Every position of `a` must therefore hold one representation, so a row
+join or an erasure that reaches the argument's `a` reaches the result's `a`
+too. Only the checked declaration still tells one variable's positions from
+another variable's: Monotype instantiates `Box(a), Box(b) => Box(a)` at
+equal types for `a` and `b` to one `TypeId`, and joining every occurrence of
+that `TypeId` would tie `b` to `a` by type identity rather than by the
+declaration. Monotype's hosted completion (`hostedSignatureVars`) walks the
+checked declaration beside the specialization's Monotype function type and
+records, for every variable the declaration names more than once, the path
+to each of its positions (`Mono.FnBody.hosted`, a span of
+`Mono.SignatureVarStep`). Aliases are transparent, a nominal steps to its
+arguments (whose argument scope binds their backing occurrences), and record
+fields and tags are found by name. Lifting carries the span unchanged, and
+Lambda Solved registration follows each path through the hosted function's
+type and unifies the positions of one variable
+(`Solver.relateSignatureVars`), before any body is solved and so while every
+position still has its Monotype's children in order. Distinct variables stay
+unrelated whatever they instantiate to.
+
 ### Lambda Solving
 
 Lambda Solved IR keeps the Monotype Lifted expression storage and adds solved
