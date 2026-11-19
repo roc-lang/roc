@@ -1,5 +1,6 @@
 app [main!] { pf: platform "../../fx/platform/main.roc" }
 
+import Tags
 import pf.Stdin
 import pf.Stdout
 
@@ -30,6 +31,20 @@ floats = build(1000, |index| if index % 7 == 0 { odd_nan } else { index.to_f64()
 points : List({ x : F64, y : U32 })
 points = build(1000, |index| { x: if index % 5 == 0 { odd_nan } else { index.to_f64() }, y: index.to_u32_wrap() * 3 })
 
+## Evaluated `Bool`s and a literal table of tags in the reading module.
+local_flags : List(Bool)
+local_flags = build(4000, |index| index % 7 < 3)
+
+local_lights : List([Red, Amber, Green])
+local_lights = [Green, Green, Amber, Red, Green]
+
+light_weight : [Red, Amber, Green] -> U64
+light_weight = |light| match light {
+    Red => 1
+    Amber => 2
+    Green => 3
+}
+
 literals : List(U16)
 literals = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, 6765, 10946, 17711, 28657, 46368]
 
@@ -42,5 +57,14 @@ main! = || {
     point_nans = points.fold(0.U64, |count, point| if point.x.is_nan() { count + 1 } else { count })
     point_sum = points.fold(0.U64, |sum, point| sum + point.x.to_bits() % 1000 + point.y.to_u64())
     literal_sum = literals.fold(0.U64, |sum, literal| sum + literal.to_u64())
-    Stdout.line!("${byte_sum.to_str()} ${wide_sum.to_str()} ${float_nans.to_str()} ${float_bits.to_str()} ${point_nans.to_str()} ${point_sum.to_str()} ${literal_sum.to_str()}")
+    flag_count = Tags.flags.fold(0.U64, |count, flag| if flag { count + 1 } else { count })
+    local_flag_count = local_flags.fold(0.U64, |count, flag| if flag { count + 1 } else { count })
+    heading_sum = Tags.headings.fold(0.U64, |sum, heading| sum + Tags.weight(heading))
+    picked = match Tags.headings.get(start + 1234) {
+        Ok(heading) => Tags.weight(heading)
+        Err(_) => 0
+    }
+    light_sum = Tags.lights.fold(0.U64, |sum, light| sum + light_weight(light)) * 100 + local_lights.fold(0.U64, |sum, light| sum + light_weight(light))
+    cell_sum = Tags.cells.fold(0.U64, |sum, cell| if cell.alive and cell.light == Red { sum + cell.age.to_u64() } else { sum })
+    Stdout.line!("${byte_sum.to_str()} ${wide_sum.to_str()} ${float_nans.to_str()} ${float_bits.to_str()} ${point_nans.to_str()} ${point_sum.to_str()} ${literal_sum.to_str()} ${flag_count.to_str()} ${local_flag_count.to_str()} ${heading_sum.to_str()} ${picked.to_str()} ${light_sum.to_str()} ${cell_sum.to_str()}")
 }

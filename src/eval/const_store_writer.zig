@@ -691,8 +691,8 @@ pub const Writer = struct {
     }
 
     /// Stores a list whose elements need no nodes of their own (an empty,
-    /// packed-scalar, or packed-product list); false when its elements are
-    /// stored as nodes.
+    /// packed-scalar, or packed-product list, payload-free tags among a
+    /// product's leaves); false when its elements are stored as nodes.
     fn storeListLeaf(
         self: *Writer,
         target_node: checked.ConstNodeId,
@@ -721,12 +721,12 @@ pub const Writer = struct {
                 .runtime => |value| {
                     const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
                     const memory = if (memory_len == 0) &.{} else roc_list.bytes.?[0..memory_len];
-                    try self.storeProductList(target_node, plan, memory, len, capacity);
+                    try self.storeProductList(target_node, elem_plan, elem_layout, plan, memory, len, capacity);
                 },
                 .checked => |expr| {
                     const memory = try self.checkedProductMemory(memory_len, plan.memory_width, elem_plan, elem_layout, self.checkedListItems(expr));
                     defer self.allocator.free(memory);
-                    try self.storeProductList(target_node, plan, memory, len, capacity);
+                    try self.storeProductList(target_node, elem_plan, elem_layout, plan, memory, len, capacity);
                 },
                 // A constant of this list's type stored its items packed by
                 // this same product plan.
@@ -1113,6 +1113,19 @@ pub const Writer = struct {
         return try self.store.addBlobData(bytes);
     }
 
+    /// The name of value-form tag `expr`, which has no payload.
+    fn checkedPayloadFreeTagName(self: *const Writer, expr: CIR.Expr.Idx) []const u8 {
+        const bodies = self.checkedValues().bodies;
+        const data = bodies.exprData(checked.valueFormValueExpr(bodies, expr));
+        const label = if (data == .zero_argument_tag)
+            data.zero_argument_tag.name
+        else if (data == .tag and data.tag.args.len == 0)
+            data.tag.name
+        else
+            writerInvariant("a value-form payload-free tag union value is not a tag without a payload");
+        return bodies.names.tagLabelText(bodies.tagLabel(label));
+    }
+
     /// The memory `items`, value-form products of plan `elem_plan`, would
     /// occupy as a list's elements at layout `elem_layout`, each
     /// `memory_width` bytes, padding zero. A part reading a constant takes
@@ -1185,7 +1198,16 @@ pub const Writer = struct {
                             .runtime => writerInvariant("a value-form product holds an evaluated part"),
                         }
                     },
-                    .pending, .layout_only, .str, .list, .box, .boxed_sequence, .tag_union, .fn_value, .erased_fn, .boxy_fn => writerInvariant("a product plan holds a part other than a number, record, tuple or named type"),
+                    .tag_union => |variants| {
+                        const name = switch (leaf.part) {
+                            .checked => |expr| self.checkedPayloadFreeTagName(expr),
+                            .stored => |stored| storedPayloadFreeTagName(stored),
+                            .runtime => writerInvariant("a value-form product holds an evaluated part"),
+                        };
+                        const variant = variants[try self.checkedValues().schema.tagVariant(leaf.plan, name)];
+                        writeDiscriminant(&self.program.layouts, memory[leaf.offset..].ptr, leaf.layout_idx, variant.discriminant);
+                    },
+                    .pending, .layout_only, .str, .list, .box, .boxed_sequence, .fn_value, .erased_fn, .boxy_fn => writerInvariant("a product plan holds a part other than a number, payload-free tag, record, tuple or named type"),
                 }
             }
         }
@@ -1454,8 +1476,16 @@ pub const Writer = struct {
             },
             .named => |*named| (&named.backing)[0..1],
             .record, .tuple => |children| children,
+            // A union of payload-free tags is a leaf: its discriminant.
+            .tag_union => |variants| {
+                const payload_free = for (variants) |variant| {
+                    if (variant.payloads.len != 0) break false;
+                } else true;
+                try self.product_eligibility.put(id, payload_free);
+                return payload_free;
+            },
             .pending, .layout_only => writerInvariant("product eligibility reached an unfinished const plan"),
-            .str, .list, .box, .boxed_sequence, .tag_union, .fn_value, .erased_fn, .boxy_fn => return false,
+            .str, .list, .box, .boxed_sequence, .fn_value, .erased_fn, .boxy_fn => return false,
         };
         try frames.append(self.allocator, .{ .id = id, .children = children });
         return null;
@@ -1476,9 +1506,18 @@ pub const Writer = struct {
         return if (self.product_plans.getPtr(key).?.*) |*value| value else null;
     }
 
-    /// Store a list of `len` products whose elements lie in `memory` as the
-    /// evaluation's memory holds them.
-    fn storeProductList(self: *Writer, node: checked.ConstNodeId, plan: *const lir.PackedData.Plan, memory: []const u8, len: usize, capacity: u64) Allocator.Error!void {
+    /// Store a list of `len` products of plan `elem_plan` at `elem_layout`
+    /// whose elements lie in `memory` as the evaluation's memory holds them.
+    fn storeProductList(
+        self: *Writer,
+        node: checked.ConstNodeId,
+        elem_plan: LirProgram.ConstPlanId,
+        elem_layout: layout.Idx,
+        plan: *const lir.PackedData.Plan,
+        memory: []const u8,
+        len: usize,
+        capacity: u64,
+    ) Allocator.Error!void {
         const byte_len = std.math.mul(usize, len, plan.packed_width) catch unreachable; // packed leaves are disjoint parts of an element, so this is at most memory_len
         const data = if (plan.memoryIsCanonical(builtin.cpu.arch.endian()))
             try self.store.addBlobData(memory)
@@ -1486,12 +1525,70 @@ pub const Writer = struct {
             plan.encode(try self.store.reserveBlobData(byte_len), memory, len, builtin.cpu.arch.endian());
             break :blk try self.store.commitBlobData(byte_len);
         };
+        if (builtin.mode == .debug) try self.assertPackedTags(elem_plan, elem_layout, plan, self.store.blobData(data), memory, len);
         self.store.fill(node, .{ .list = .{ .items = .{ .packed_bytes = .{
             .bytes = data,
             .len = try checkedU32(len),
             .element = null,
             .product_width = plan.packed_width,
         } }, .capacity = capacity } });
+    }
+
+    /// Every payload-free tag of the `len` products `memory` holds is
+    /// packed in `canonical` as the index, in byte-wise name order, of the
+    /// variant storing the item on its own selects (`selectTagVariant`).
+    fn assertPackedTags(
+        self: *Writer,
+        elem_plan: LirProgram.ConstPlanId,
+        elem_layout: layout.Idx,
+        plan: *const lir.PackedData.Plan,
+        canonical: []const u8,
+        memory: []const u8,
+        len: usize,
+    ) Allocator.Error!void {
+        if (plan.tags.items.len == 0) return;
+        const TagPart = struct { variants: []const LirProgram.ConstTagVariant, layout_idx: layout.Idx, offset: usize };
+        var tags = std.ArrayList(TagPart).empty;
+        defer tags.deinit(self.allocator);
+        // The plan's tag unions in the order the packing plan's leaves are:
+        // components in plan order, which is their fields' original order.
+        const Pending = struct { plan: LirProgram.ConstPlanId, layout_idx: layout.Idx, offset: usize };
+        var pending = std.ArrayList(Pending).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .plan = elem_plan, .layout_idx = elem_layout, .offset = 0 });
+        while (pending.pop()) |part| {
+            const layout_value = self.program.layouts.getLayout(part.layout_idx);
+            if (layout_value.tag == .zst) continue;
+            switch (self.constPlan(part.plan)) {
+                .scalar, .zst => {},
+                .named => |named| try pending.append(self.allocator, .{ .plan = named.backing, .layout_idx = part.layout_idx, .offset = part.offset }),
+                .tag_union => |variants| try tags.append(self.allocator, .{ .variants = variants, .layout_idx = part.layout_idx, .offset = part.offset }),
+                .tuple, .record => |components| {
+                    const struct_idx = layout_value.getStruct().idx;
+                    var index = components.len;
+                    while (index > 0) {
+                        index -= 1;
+                        try pending.append(self.allocator, .{
+                            .plan = components[index],
+                            .layout_idx = self.program.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(index)),
+                            .offset = part.offset + self.program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, @intCast(index)),
+                        });
+                    }
+                },
+                .pending, .layout_only, .str, .list, .box, .boxed_sequence, .fn_value, .erased_fn, .boxy_fn => writerInvariant("a packed product plan holds a part other than a number, payload-free tag, record, tuple or named type"),
+            }
+        }
+        std.debug.assert(tags.items.len == plan.tags.items.len);
+        for (tags.items, plan.tags.items) |tag, leaf| for (0..len) |item| {
+            const selected = self.selectTagVariant(tag.variants, tag.layout_idx, .{ .ptr = @constCast(memory[item * plan.memory_width + tag.offset ..].ptr) });
+            var rank: u64 = 0;
+            for (tag.variants) |variant| {
+                if (std.mem.order(u8, variant.name, selected.name) == .lt) rank += 1;
+            }
+            var index: u64 = 0;
+            for (canonical[item * plan.packed_width + leaf.packed_offset ..][0..leaf.width], 0..) |byte, shift| index |= @as(u64, byte) << @intCast(shift * 8);
+            std.debug.assert(index == rank);
+        };
     }
 
     fn planIsScalar(self: *const Writer, root: LirProgram.ConstPlanId) bool {
@@ -1949,6 +2046,25 @@ fn storedComponents(stored: StoredPart, count: usize) []const checked.ConstNodeI
     };
     if (components.len != count) writerInvariant("a stored product does not have its plan's components");
     return components;
+}
+
+/// The name of stored tag `stored`, which has no payload.
+fn storedPayloadFreeTagName(stored: StoredPart) []const u8 {
+    const value = stored.value();
+    if (value != .tag or value.tag.payloads.len != 0) writerInvariant("a constant read at a payload-free tag union type is not a stored tag without a payload");
+    return value.tag.tag_name;
+}
+
+/// Write discriminant `discriminant` of the tag union at `layout_idx` into
+/// the memory at `ptr` a value of it occupies.
+fn writeDiscriminant(layouts: *const layout.Store, ptr: [*]u8, layout_idx: layout.Idx, discriminant: u32) void {
+    const layout_value = layouts.getLayout(layout_idx);
+    switch (layout_value.tag) {
+        // A union of one tag holds no discriminant.
+        .zst => if (builtin.mode == .debug) std.debug.assert(discriminant == 0),
+        .tag_union => layouts.getTagUnionData(layout_value.getTagUnion().idx).writeDiscriminant(ptr, discriminant, layouts.targetUsize()),
+        .hole, .dynamic, .scalar, .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => writerInvariant("a payload-free tag's layout is not a tag union"),
+    }
 }
 
 /// The backing of stored nominal value `stored`.
@@ -2521,4 +2637,220 @@ test "const store writer stores every NaN of an evaluated product list as Roc's 
         std.mem.writeInt(u32, canonical[12..16], item.int, .little);
     }
     try testing.expectEqualSlices(u8, &expected, artifact.const_store.blobData(packed_items.bytes));
+}
+
+/// Append a plan of a union of the payload-free tags `names`, which are in
+/// byte-wise name order, the order that assigns discriminants.
+fn appendTestTagPlan(program: *LirProgram.Result, names: []const []const u8) Allocator.Error!LirProgram.ConstPlanId {
+    const allocator = std.testing.allocator;
+    const variants = try allocator.alloc(LirProgram.ConstTagVariant, names.len);
+    var filled: usize = 0;
+    errdefer {
+        for (variants[0..filled]) |variant| {
+            allocator.free(variant.name);
+            allocator.free(variant.payloads);
+        }
+        allocator.free(variants);
+    }
+    for (variants, names, 0..) |*variant, name, index| {
+        const owned = try allocator.dupe(u8, name);
+        errdefer allocator.free(owned);
+        variant.* = .{ .name = owned, .checked_name = undefined, .discriminant = @intCast(index), .payloads = try allocator.alloc(LirProgram.ConstPlanId, 0) };
+        filled += 1;
+    }
+    const id: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(allocator, .{ .tag_union = variants });
+    return id;
+}
+
+/// The index in `names` of the tag stored node `node` holds, through any
+/// nominal wrapping.
+fn testStoredTagIndex(store: *const const_store.ConstStore, node: checked.ConstNodeId, names: []const []const u8) error{TestUnexpectedResult}!usize {
+    var value = store.get(node);
+    while (value == .nominal) value = store.get(value.nominal.backing);
+    try std.testing.expect(value == .tag and value.tag.payloads.len == 0);
+    for (names, 0..) |name, index| {
+        if (std.mem.order(u8, name, value.tag.tag_name) == .eq) return index;
+    }
+    return error.TestUnexpectedResult;
+}
+
+/// The little-endian unsigned integer `bytes` hold.
+fn testLittleEndian(bytes: []const u8) u64 {
+    var value: u64 = 0;
+    for (bytes, 0..) |byte, shift| value |= @as(u64, byte) << @intCast(shift * 8);
+    return value;
+}
+
+test "const store writer packs an evaluated list of payload-free tags as storing each item would" {
+    const testing = std.testing;
+    if (builtin.cpu.arch.endian() != .little) return error.SkipZigTest;
+
+    var module_env = try can.ModuleEnv.init(testing.allocator, "");
+    defer module_env.deinit();
+    var artifact = try initTestArtifact(testing.allocator, &module_env);
+    defer deinitTestArtifact(&artifact, testing.allocator);
+    var program = try LirProgram.Result.init(testing.allocator, .u64);
+    defer program.deinit();
+
+    var wide_names: [300][]const u8 = undefined;
+    var wide_text: [300][4]u8 = undefined;
+    for (&wide_names, &wide_text, 0..) |*name, *text, index| {
+        _ = try std.fmt.bufPrint(text, "T{d:0>3}", .{index});
+        name.* = text;
+    }
+    var wide_layouts: [300]layout.Idx = undefined;
+    @memset(&wide_layouts, .zst);
+
+    const bool_names = [_][]const u8{ "False", "True" };
+    const pair_names = [_][]const u8{ "No", "Yes" };
+    const color_names = [_][]const u8{ "Blue", "Cyan", "Green", "Magenta", "Red", "Yellow" };
+    const only_names = [_][]const u8{"Only"};
+
+    const bool_tags = try appendTestTagPlan(&program, &bool_names);
+    // `Bool` is a nominal type wrapping its tags.
+    const bool_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(testing.allocator, .{ .named = .{ .named_type = undefined, .backing = bool_tags } });
+    const pair_plan = try appendTestTagPlan(&program, &pair_names);
+    const color_plan = try appendTestTagPlan(&program, &color_names);
+    const wide_plan = try appendTestTagPlan(&program, &wide_names);
+    const only_plan = try appendTestTagPlan(&program, &only_names);
+
+    const Case = struct { names: []const []const u8, plan: LirProgram.ConstPlanId, tags: LirProgram.ConstPlanId, layout_idx: layout.Idx, width: usize };
+    const cases = [_]Case{
+        .{ .names = &bool_names, .plan = bool_plan, .tags = bool_tags, .layout_idx = .bool, .width = 1 },
+        .{ .names = &pair_names, .plan = pair_plan, .tags = pair_plan, .layout_idx = try program.layouts.putTagUnion(&.{ .zst, .zst }), .width = 1 },
+        .{ .names = &color_names, .plan = color_plan, .tags = color_plan, .layout_idx = try program.layouts.putTagUnion(wide_layouts[0..color_names.len]), .width = 1 },
+        // More tags than one byte numbers.
+        .{ .names = &wide_names, .plan = wide_plan, .tags = wide_plan, .layout_idx = try program.layouts.putTagUnion(&wide_layouts), .width = 2 },
+        // One tag: zero-sized items.
+        .{ .names = &only_names, .plan = only_plan, .tags = only_plan, .layout_idx = try program.layouts.putTagUnion(&.{.zst}), .width = 0 },
+    };
+
+    var writer = Writer.init(testing.allocator, &artifact, &program);
+    defer writer.deinit();
+
+    const max_items = 67;
+    var memory: [max_items * 2]u8 align(16) = undefined;
+    var prng = std.Random.DefaultPrng.init(0x7a65);
+    for (cases) |case| {
+        const list_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+        try program.const_plans.append(testing.allocator, .{ .list = case.plan });
+        const list_layout = try program.layouts.insertLayout(if (case.width == 0) layout.Layout.listOfZst() else layout.Layout.list(case.layout_idx));
+        try testing.expectEqual(case.width, program.layouts.layoutSize(program.layouts.getLayout(case.layout_idx)));
+        for ([_]usize{ 0, 1, max_items }) |len| {
+            for (0..len) |index| {
+                const discriminant = prng.random().uintLessThan(usize, case.names.len);
+                for (0..case.width) |byte| memory[index * case.width + byte] = @truncate(discriminant >> @intCast(byte * 8));
+            }
+            var roc_list = RocList{
+                .bytes = if (case.width == 0) null else &memory,
+                .length = len,
+                .capacity_or_alloc_ptr = RocList.encodeCapacity(max_items),
+            };
+            const stored = try writer.storeRoot(testConstRoot(list_plan, list_layout), .{ .ptr = @ptrCast(&roc_list) });
+            const list = artifact.const_store.get(stored.const_node).list;
+            try testing.expectEqual(@as(u64, max_items), list.capacity);
+            if (len == 0) {
+                try testing.expect(list.items == .empty);
+                continue;
+            }
+            const items = list.items.packed_bytes;
+            try testing.expectEqual(@as(?const_store.ConstPackedScalar, null), items.element);
+            try testing.expectEqual(case.width, items.product_width);
+            try testing.expectEqual(len, items.len);
+            const blob = artifact.const_store.blobData(items.bytes);
+            try testing.expectEqual(len * case.width, blob.len);
+            for (0..len) |index| {
+                const item_value: Value = if (case.width == 0) Value.zst else .{ .ptr = memory[index * case.width ..].ptr };
+                const item = try writer.storeRoot(testConstRoot(case.tags, case.layout_idx), item_value);
+                const expected = try testStoredTagIndex(&artifact.const_store, item.const_node, case.names);
+                try testing.expectEqual(@as(u64, expected), testLittleEndian(blob[index * case.width ..][0..case.width]));
+            }
+        }
+    }
+}
+
+test "const store writer packs an evaluated list of records holding payload-free tags as storing each item would" {
+    const testing = std.testing;
+    if (builtin.cpu.arch.endian() != .little) return error.SkipZigTest;
+
+    var module_env = try can.ModuleEnv.init(testing.allocator, "");
+    defer module_env.deinit();
+    var artifact = try initTestArtifact(testing.allocator, &module_env);
+    defer deinitTestArtifact(&artifact, testing.allocator);
+    var program = try LirProgram.Result.init(testing.allocator, .u64);
+    defer program.deinit();
+
+    const bool_names = [_][]const u8{ "False", "True" };
+    const color_names = [_][]const u8{ "Blue", "Green", "Red" };
+    const scalar_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(testing.allocator, .scalar);
+    const bool_tags = try appendTestTagPlan(&program, &bool_names);
+    const bool_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(testing.allocator, .{ .named = .{ .named_type = undefined, .backing = bool_tags } });
+    const color_plan = try appendTestTagPlan(&program, &color_names);
+    const record_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    const children = try testing.allocator.dupe(LirProgram.ConstPlanId, &.{ color_plan, scalar_plan, bool_plan });
+    program.const_plans.append(testing.allocator, .{ .record = children }) catch |err| {
+        testing.allocator.free(children);
+        return err;
+    };
+    const list_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(testing.allocator, .{ .list = record_plan });
+    const color_layout = try program.layouts.putTagUnion(&.{ .zst, .zst, .zst });
+    const record_layout = try program.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = color_layout },
+        .{ .index = 1, .layout = .u32 },
+        .{ .index = 2, .layout = .bool },
+    });
+    const list_layout = try program.layouts.insertLayout(layout.Layout.list(record_layout));
+    const struct_idx = program.layouts.getLayout(record_layout).getStruct().idx;
+    const width: usize = program.layouts.layoutSize(program.layouts.getLayout(record_layout));
+    const offsets = [3]usize{
+        program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0),
+        program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1),
+        program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 2),
+    };
+
+    var writer = Writer.init(testing.allocator, &artifact, &program);
+    defer writer.deinit();
+
+    const max_items = 67;
+    var memory: [max_items * 8]u8 align(16) = undefined;
+    var prng = std.Random.DefaultPrng.init(0x7a66);
+    for ([_]usize{ 0, 1, max_items }) |len| {
+        // Padding bytes hold whatever the evaluation left there.
+        prng.random().bytes(&memory);
+        for (0..len) |index| {
+            const item = memory[index * width ..][0..width];
+            item[offsets[0]] = prng.random().uintLessThan(u8, color_names.len);
+            item[offsets[2]] = prng.random().uintLessThan(u8, bool_names.len);
+        }
+        var roc_list = RocList{
+            .bytes = &memory,
+            .length = len,
+            .capacity_or_alloc_ptr = RocList.encodeCapacity(len),
+        };
+        const stored = try writer.storeRoot(testConstRoot(list_plan, list_layout), .{ .ptr = @ptrCast(&roc_list) });
+        const list = artifact.const_store.get(stored.const_node).list;
+        if (len == 0) {
+            try testing.expect(list.items == .empty);
+            continue;
+        }
+        const items = list.items.packed_bytes;
+        try testing.expectEqual(@as(?const_store.ConstPackedScalar, null), items.element);
+        // The color, the U32 and the Bool, without padding.
+        try testing.expectEqual(@as(u32, 6), items.product_width);
+        const blob = artifact.const_store.blobData(items.bytes);
+        try testing.expectEqual(len * 6, blob.len);
+        for (0..len) |index| {
+            const item = try writer.storeRoot(testConstRoot(record_plan, record_layout), .{ .ptr = memory[index * width ..].ptr });
+            const fields = artifact.const_store.get(item.const_node).record;
+            const packed_item = blob[index * 6 ..][0..6];
+            try testing.expectEqual(@as(u64, try testStoredTagIndex(&artifact.const_store, fields[0], &color_names)), packed_item[0]);
+            try testing.expectEqual(artifact.const_store.get(fields[1]).scalar.u32, std.mem.readInt(u32, packed_item[1..5], .little));
+            try testing.expectEqual(@as(u64, try testStoredTagIndex(&artifact.const_store, fields[2], &bool_names)), packed_item[5]);
+        }
+    }
 }

@@ -13642,9 +13642,9 @@ fn customDemandCtfeDiagnostics(
 }
 
 /// A helper that reads a checked constant runs while evaluating a constant and
-/// at runtime, and an app reads large table constants. Uncached, cold and warm
-/// dev builds of each app share one cache and must all link and print the
-/// same result.
+/// at runtime, and an app reads large table constants, its own and imported
+/// ones. Uncached, cold and warm dev builds of each app share one cache and
+/// must all link and print the same result.
 fn customCtfeStaticCacheRuntime(
     io: std.Io,
     allocator: Allocator,
@@ -13656,8 +13656,10 @@ fn customCtfeStaticCacheRuntime(
         .{ .path = "test/cli/ctfe_static_cache/CompileTimeAndRuntime.roc", .stdout = "237\n" },
         .{ .path = "test/cli/ctfe_static_cache/RuntimeSeed.roc", .stdout = "472\n" },
         // Large evaluated tables of integers, floats holding a NaN that is
-        // not Roc's one NaN, and records of both, and a literal table.
-        .{ .path = "test/cli/ctfe_static_cache/LargeTables.roc", .stdout = "636550 -150000 143 506072 200 2010436 121392\n" },
+        // not Roc's one NaN, and records of both, and a literal table; and
+        // tables of `Bool`s, of payload-free tags and of records holding
+        // them, evaluated and literal, in the app and imported from `Tags`.
+        .{ .path = "test/cli/ctfe_static_cache/LargeTables.roc", .stdout = "636550 -150000 143 506072 200 2010436 121392 1667 1716 7750 1 1312 80000\n" },
     };
     for (apps) |entry| {
         const name = std.fs.path.basename(entry.path);
@@ -13666,7 +13668,7 @@ fn customCtfeStaticCacheRuntime(
             .dir_name = name,
             .platform = "test/fx/platform/main.roc",
             .platform_spelling = "../../fx/platform/main.roc",
-            .sources = &.{ "test/cli/ctfe_static_cache/Static.roc", entry.path },
+            .sources = &.{ "test/cli/ctfe_static_cache/Static.roc", "test/cli/ctfe_static_cache/Tags.roc", entry.path },
             .app_name = name,
         }, &app)) |failure| return failure;
         const cache = std.fmt.allocPrint(allocator, "{s}/static-cache-{s}", .{ env.dirs.work_dir, name }) catch |err|
