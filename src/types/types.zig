@@ -514,6 +514,7 @@ pub const Descriptor = struct {
                 },
                 .empty_record => .empty_record,
                 .tag_union => |tag_union| kind: {
+                    store.debugAssertTagsInNameOrder(tag_union.tags);
                     putRange(&payload, 0, tag_union.tags);
                     payload[row_ext_payload_word] = @backingInt(tag_union.ext);
                     break :kind .tag_union;

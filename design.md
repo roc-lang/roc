@@ -14222,6 +14222,22 @@ coercion joins it into the result in Lambda Solved (Row Joins).
 `test/cli/IterNextWidenedMatch.roc` and `test/cli/StreamNextWidenedMatch.roc`
 match the result with an extra tag.
 
+### Tag Order
+
+Every tag-union descriptor in a solver type store holds its own tags in name
+order (`Ident.textOrder`). This is the order of one descriptor's range,
+not of a whole union across its extension chain: a union split across
+extensions is ordered within each part, and sealing flattens and sorts the
+whole. Every producer writes its range in order. Annotation generation sorts
+the written tags; unification emits a merged row's shared tags, and when both
+sides extend, merges each side's own tags among them by name as it writes the
+row, a tag both sides hold before a repeat of its label; `?` composition and a
+use's widened row copy sort the tags they gather from a chain, keeping a
+repeated label's occurrences in chain order; instantiation and import copies
+keep their source's order. Encoding a tag-union descriptor asserts the order in
+builds with runtime safety while a checker writes to the store
+(`Store.debugAssertTagsInNameOrder`).
+
 ### Row Union Normalization
 
 A tag union or record row denotes the union of its labels. When a label occurs more than

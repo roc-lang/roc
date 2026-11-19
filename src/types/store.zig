@@ -233,6 +233,11 @@ pub const Store = struct {
 
     gpa: Allocator,
 
+    /// In builds with runtime safety, the identifiers this store's tag names
+    /// index while a checker writes to it, so every tag-union descriptor
+    /// written can be asserted to hold its own tags in name order.
+    debug_idents: if (std.debug.runtime_safety) ?*const base.Ident.Store else void = if (std.debug.runtime_safety) null else {},
+
     /// Type variable storage
     slots: SlotStore,
     descs: DescStore,
@@ -246,6 +251,8 @@ pub const Store = struct {
     /// Storage for compound type parts
     vars: VarSafeList,
     record_fields: RecordFieldSafeMultiList,
+    /// Every tag-union descriptor's own range is in name order
+    /// (`debugAssertTagsInNameOrder`).
     tags: TagSafeMultiList,
     interpolation_parts: InterpolationPartMetadata.SafeList,
     numeral_infos: NumeralInfo.SafeList,
@@ -1481,6 +1488,30 @@ pub const Store = struct {
         return row.payload[0];
     }
 
+    /// The identity row an alias descriptor names (`nominalIdentityRowAt`).
+    pub inline fn aliasIdentityRowAt(self: *const Self, desc_idx: DescStore.Idx) u32 {
+        const row = self.descs.getRow(desc_idx);
+        std.debug.assert(row.word.kind == .alias);
+        return row.payload[0];
+    }
+
+    /// A tag-union descriptor's own range holds its tags in name order. A
+    /// label may repeat only where a copy flattens a row whose extension chain
+    /// repeats it (design.md "Row Union Normalization"), so equal neighbors
+    /// are in order. Checked where a descriptor is encoded, while
+    /// `debug_idents` is known.
+    pub fn debugAssertTagsInNameOrder(self: *const Self, range: TagSafeMultiList.Range) void {
+        if (!std.debug.runtime_safety) return;
+        const idents = self.debug_idents orelse return;
+        if (range.count < 2) return;
+        const names = self.tags.sliceRange(range).items(.name);
+        for (names[0 .. names.len - 1], names[1..]) |prev, next| {
+            if (base.Ident.textOrder(idents.getText(prev), idents.getText(next)) == .gt) {
+                base.invariant("a tag union's own tags are not in name order: {s} before {s}", .{ idents.getText(prev), idents.getText(next) });
+            }
+        }
+    }
+
     /// `desc` as a stored row, interning the identity of a nominal type or
     /// alias.
     inline fn encodeDesc(self: *Self, desc: Desc) Allocator.Error!Desc.Row {
@@ -1557,7 +1588,9 @@ pub const Store = struct {
         };
     }
 
-    /// The row holding `identity`, appending one when no row does.
+    /// The row holding `identity`, appending one when no row does. No two
+    /// rows hold the same identity, so a descriptor copied within the store
+    /// may keep its source's row (`fillFreshPlaceholderWithIdentity`).
     fn internIdentity(
         comptime Identity: type,
         gpa: Allocator,
@@ -1569,7 +1602,8 @@ pub const Store = struct {
         const all = rows.items();
         while (indexed.* < all.len) : (indexed.* += 1) {
             const entry = try index.getOrPut(gpa, all[indexed.*]);
-            if (!entry.found_existing) entry.value_ptr.* = indexed.*;
+            std.debug.assert(!entry.found_existing);
+            entry.value_ptr.* = indexed.*;
         }
         const entry = try index.getOrPut(gpa, identity);
         if (entry.found_existing) return entry.value_ptr.*;
@@ -1842,6 +1876,29 @@ pub const Store = struct {
             std.debug.assert(self.getRootMeta(desc_idx).checked_var == fresh_var);
         }
         try self.setDesc(desc_idx, desc);
+    }
+
+    /// `fillFreshPlaceholder` for a nominal type or alias whose identity is
+    /// row `identity` of this store, as the descriptor it was copied from
+    /// names it. Identity rows are unique (`internIdentity`), so `identity`
+    /// is the row interning `desc`'s identity finds.
+    pub inline fn fillFreshPlaceholderWithIdentity(self: *Self, fresh_var: Var, desc: Desc, identity: u32) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        const desc_idx = self.resolveDescIdx(fresh_var);
+        if (std.debug.runtime_safety) {
+            const word = self.descs.getWord(desc_idx);
+            std.debug.assert(word.kind == .flex and !word.flags().frozen);
+            std.debug.assert(self.getRootMeta(desc_idx).checked_var == fresh_var);
+            switch (desc.content) {
+                .alias => |alias| std.debug.assert(std.meta.eql(self.aliasIdentity(identity), AliasIdentity.of(alias))),
+                .structure => |flat| switch (flat) {
+                    .nominal_type => |nominal| std.debug.assert(std.meta.eql(self.nominalIdentity(identity), NominalIdentity.of(nominal))),
+                    .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => unreachable, // only a nominal type or alias names an identity
+                },
+                .flex, .rigid, .field_presence, .err => unreachable, // only a nominal type or alias names an identity
+            }
+        }
+        try self.setDescRow(desc_idx, desc.encode(identity, self));
     }
 
     /// Show `target_var`'s whole class with `content` until the active
