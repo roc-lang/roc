@@ -855,7 +855,10 @@ const TestSuiteRegistry = struct {
     /// never a second copy of the configuration to fall out of sync.
     fn configuredRun(self: TestSuiteRegistry, spec: TestSuiteSpec) *Step.Run {
         const run = self.b.addRunArtifact(spec.compile);
-        if (spec.namespace) |namespace| run.addArg(self.b.fmt("--roc-test-suite={s}", .{namespace}));
+        if (spec.namespace) |namespace| {
+            run.setName(self.b.fmt("run test {s} {s}", .{ spec.compile.name, spec.step_suffix }));
+            run.addArg(self.b.fmt("--roc-test-suite={s}", .{namespace}));
+        }
         if (self.run_args.len != 0) run.addArgs(self.run_args);
         run.addPassthruArgs();
         for (spec.env) |entry| run.setEnvironmentVariable(entry.key, entry.value);
