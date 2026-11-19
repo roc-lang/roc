@@ -579,3 +579,23 @@ test "nominal views blocker dependency proof includes hidden alias arguments and
     const children = try tupleChildren(&reader, (try reader.openNominalBacking(app)).?);
     for (children) |child| try testing.expect(try reader.hasSourceDependencies(child));
 }
+
+test "nominal views answer the opening of a root's application once" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const a = try f.rigid("a");
+    const actual = try f.store.fresh();
+    const nominal = try f.declaration("Wrapper", &.{a}, try f.tuple(&.{a}));
+    const app = try f.application(nominal, &.{actual});
+    const holder = try f.store.freshFromContent(.{ .structure = .{ .nominal_type = app } });
+    const other_holder = try f.store.freshFromContent(.{ .structure = .{ .nominal_type = app } });
+    var reader = Reader.init(testing.allocator, &f.store);
+    defer reader.deinit();
+    const opened = (try reader.openNominalBackingOf(holder, app)).?;
+    try testing.expectEqual(actual, (try tupleChildren(&reader, opened))[0]);
+    // The remembered answer, a fresh opening and another root that holds the
+    // same application all name one view.
+    try testing.expectEqual(opened, (try reader.openNominalBackingOf(holder, app)).?);
+    try testing.expectEqual(opened, (try reader.openNominalBacking(app)).?);
+    try testing.expectEqual(opened, (try reader.openNominalBackingOf(other_holder, app)).?);
+}

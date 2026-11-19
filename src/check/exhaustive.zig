@@ -46,7 +46,8 @@ const TypeStore = TypeView;
 // TypeView's analysis namespace, including Pattern, Union, assumptions and
 // traversal keys. Only exportBlockers converts back to mutable source roots.
 const Var = types.Var;
-const InhabitednessMemo = @import("inhabitedness_memo.zig").Memo;
+const inhabitedness_memo = @import("inhabitedness_memo.zig");
+const InhabitednessMemo = inhabitedness_memo.Memo;
 
 fn resolveType(store: *TypeStore, var_: Var) error{OutOfMemory}!TypeView.Resolved {
     return store.resolveVar(var_);
@@ -147,7 +148,7 @@ pub const NominalOpenCache = struct {
             .known_absent => &self.inhabited_graphs.known_absent,
             .general => {
                 for (self.inhabited_graphs.general.items) |*entry| {
-                    if (std.mem.eql(Var, entry.known_empty, known_empty)) {
+                    if (inhabitedness_memo.varsEqual(entry.known_empty, known_empty)) {
                         std.debug.assert(entry.graph.store == store);
                         return &entry.graph;
                     }
@@ -969,12 +970,14 @@ const UnionResult = union(enum) {
 /// template with its actual args substituted for the declaration's formals.
 /// Scoped views keep declaration substitution out of the serializable store.
 /// Returns null only for invalid declarations whose error was already reported.
+/// `nominal_root` is the root that holds `nominal`.
 fn openNominalBacking(
     type_store: *TypeStore,
     _: BuiltinIdents,
+    nominal_root: Var,
     nominal: types.NominalType,
 ) error{OutOfMemory}!?Var {
-    return type_store.openNominalBacking(nominal);
+    return type_store.openNominalBackingOf(nominal_root, nominal);
 }
 
 fn getUnionFromType(
@@ -1010,7 +1013,7 @@ fn getUnionFromType(
                 // Nominal types (like Try, Result) are user-defined types that wrap other types
                 // We need to unwrap them to find the underlying tag union
                 .nominal_type => |nominal| {
-                    const backing_var = (try openNominalBacking(type_store, builtin_idents, nominal)) orelse return .not_a_union;
+                    const backing_var = (try openNominalBacking(type_store, builtin_idents, resolved.var_, nominal)) orelse return .not_a_union;
                     return getUnionFromType(allocator, type_store, builtin_idents, backing_var);
                 },
                 .record,
@@ -1463,7 +1466,7 @@ const InhabitedGraph = struct {
                     .alias => |alias| next = .{ .root = self.store.getAliasBackingVar(alias), .role = .union_shape },
                     .structure => |flat| switch (flat) {
                         .tag_union => next = .{ .root = key.root, .role = .union_row },
-                        .nominal_type => |nominal| if (try openNominalBacking(self.store, self.idents, nominal)) |backing| {
+                        .nominal_type => |nominal| if (try openNominalBacking(self.store, self.idents, key.root, nominal)) |backing| {
                             next = .{ .root = backing, .role = .union_shape };
                         },
                         .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => {},
@@ -1581,7 +1584,7 @@ const InhabitedGraph = struct {
                 .nominal_type => |nominal| if (self.mode == .known_absent) {
                     const row = try self.rowNode(.{ .root = root, .role = .union_shape });
                     try self.edge(index, row);
-                } else if (try openNominalBacking(self.store, self.idents, nominal)) |backing| {
+                } else if (try openNominalBacking(self.store, self.idents, root, nominal)) |backing| {
                     try self.typeEdge(index, backing);
                 },
             },
@@ -1760,7 +1763,7 @@ fn collectCtorPayloadBlockersHelp(
                 seen,
             ),
             .nominal_type => |nominal| {
-                const backing_var = (try openNominalBacking(type_store, builtin_idents, nominal)) orelse return;
+                const backing_var = (try openNominalBacking(type_store, builtin_idents, resolved.var_, nominal)) orelse return;
                 try collectCtorPayloadBlockersHelp(
                     type_store,
                     builtin_idents,
@@ -2345,7 +2348,7 @@ fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
                     // substituted for its formals, so the constructor args it
                     // yields are the concrete payload types—no positional
                     // substitution needed.
-                    current = (try openNominalBacking(type_store, builtin_idents, nominal)) orelse return .none;
+                    current = (try openNominalBacking(type_store, builtin_idents, resolved.var_, nominal)) orelse return .none;
                     continue;
                 },
                 .tuple => |tuple| {

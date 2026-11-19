@@ -1157,6 +1157,17 @@ variables, whose template value checking still writes through them; a
 declaration copied from another module is final once its copy returns. No
 other graph outlives its reader.
 
+The graph also carries what projecting a view needs: the formal a template
+root stands for, resolved once per graph, and each root's children in the
+order a projection visits them. A view names its template root by graph node,
+its children are found by position, and each substitution environment indexes
+its views directly by graph node, so projection never looks a variable up.
+This holds for exactly as long as the graph does: a template is unchanged
+while any graph computed from it is in use. Within one reader, opening the
+nominal application a root holds is answered once per root: the root's
+content is fixed for the reader's life, and opening one application always
+yields the same view.
+
 The same graph separately records structural substitution dependencies,
 without the application-ownership dependencies of template-private unknowns.
 Following these dependencies through a view's actual arguments proves when
@@ -3291,6 +3302,21 @@ type by its owning `ConstTypeStore` and type id. The memo belongs to the exact
 destination `Type.Store`: coordinator and specialization workspaces own separate
 maps. Only committed destination ids enter it. Mutable lambda-set row occurrences
 continue to follow the Row Joins contract.
+
+Storing copies a stored type out of the evaluating program's type table into
+the module's `ConstStore` type table, translating each name it uses from the
+program's name store into the module's. A store writer serves one program and
+one module's store, and keeps what it has copied so far
+(`ConstTypeStore.Translation`): for each of the program's types and each of
+those names, by the program's own id, its copy in the module. Every later
+reference to a copied type or name, from another root, a capture, or a type
+nested in another stored type, reads the copy, so the module's table holds one
+copy of each program type per writer however many stored values share it.
+Both tables only grow while a writer lives, so nothing it has recorded goes
+stale, and the table is the writer's own: nothing is shared between writers
+or threads. Stored types are immutable, so sharing a copy changes no type any
+reader sees; a debug build checks each stored type against a copy made on its
+own.
 
 A stored named type names its declaring module, its declaration and its
 argument types, exactly as a Monotype named type does ("Named Type
@@ -6676,6 +6702,15 @@ Let's not?"), except that number literals do not generalize either:
   literal rejects second use at different type", below), and a conditional,
   match, or block whose value is a lambda.
 
+A weak top-level value's type may keep a variable that nothing pins, like the
+item type of `empty = []`. The checker rejects such a value with
+`polymorphic_value` ("Polymorphic Value") only when that variable carries a
+static-dispatch requirement (`reportPolymorphicTopLevelValues`), as `expect
+empty == []` gives it one: nothing chooses the type the method comes from.
+Without a requirement the variable is decided (Decided Variables), and every
+use of the value is accepted, whichever function it is passed to:
+`Str.inspect(empty)` renders `[]`.
+
 An expression-position function generalizes only where its consumer
 instantiates it: a binding's right-hand side, or a stored-value construction
 edge. A lambda that is a direct call operand, or that supplies an enclosing
@@ -6858,10 +6893,17 @@ to name its class's storage root directly; every variable a descriptor, a type
 argument or record field pool, or a nominal declaration holds becomes its
 class's checked representative; and every record and tag union row absorbs the
 rows its extension chain reaches, so a sealed row is flat and its extension is
-never itself a row. A static-dispatch constraint keeps the function variable
-checking recorded for it, because that variable identifies the constraint; a
-reader resolves it with one slot read. The checked type id of a source type is
-its checked representative's bit pattern, so a rendered payload's children
+never itself a row. Canonicalization walks the slots once, the variable and
+field pools once, and the live descriptors once. The descriptor pass reads
+each descriptor's kind and goes further only for a function, a record or a tag
+union, the kinds that hold a variable inline: it replaces a function's return
+or a row's extension by its representative, and resolving an extension also
+tells whether the extension is itself a row, so a row that must absorb its
+chain is found and flattened in that same step. A static-dispatch constraint
+keeps the function variable checking recorded for it, because that variable
+identifies the constraint; a reader resolves it with one slot read. The
+checked type id of a source type is its checked representative's bit pattern,
+so a rendered payload's children
 alias the store's own variable pools and every reader receives
 representatives. Five columns beside the module's synthesized-type store
 complete what a reader needs: the name each identifier the store's types use
@@ -7768,6 +7810,24 @@ it as one exact callable root, never as ConstStore data. Data roots use a separa
 concreteness purpose that rejects a function anywhere in their stored type, so a
 value containing a callable remains one ordinary runtime allocation rather than
 being copied into independently restored callables.
+
+Post-solve pruning answers every concreteness question of one pass over the
+selected roots from one set of shared answers (`HoistedTypeConcreteness`).
+Solving has finished and the pass writes no type, so a type's answer holds for
+the whole pass: each type is inspected once for each purpose and each graph it
+is reached in, and every root that reaches it reads that answer. The graph is
+part of the question because a rigid variable is not concrete in a value type
+and is in a nominal declaration's backing template, where it is one of the
+declaration's formals and stands for an argument the application already
+lists. A type that reaches a non-concrete type has its answer as soon as that
+type is found. A type that reaches none has its answer only once its complete
+recursive component has been inspected, since a type reached again while its
+own inspection is open proves nothing about the rest of that component; the
+members of a completed component then take one answer together
+(`checked_reachability.AnyReachable`). The recursive-dispatch check that asks
+the same question while solving is still changing types scans its type on its
+own at each call, and a debug build compares every shared answer with that
+scan's.
 
 Hoisted-root selection is positional as well as dependency-based, and the
 checker carries that position as explicit checking context while computing
