@@ -29343,7 +29343,11 @@ fn stepTagUnionAnnoGen(self: *Self, frame: *AnnoGenFrame, tag_union: std.meta.fi
     // an anonymous `..` in an output position of an opening annotation
     // means exactly what absence means there, so it is generated the
     // same way (a recorded flex) and the two spellings cannot drift.
-    // Elsewhere `..` stays the rigid `#others` it always was.
+    // Elsewhere `..` is the rigid `#others`, as a named `..others` is a
+    // rigid everywhere. A where-method signature is such an elsewhere at
+    // every position, its direct result row included: the row then ends
+    // in a rigid the enclosing scheme quantifies, so an implementation
+    // may return tags the signature does not list.
     //
     // A union with no tags is exempt from all of this: `[]` asserts
     // uninhabitedness (eg `Try(a, [])` needs no `Err` branch), which
@@ -29355,8 +29359,8 @@ fn stepTagUnionAnnoGen(self: *Self, frame: *AnnoGenFrame, tag_union: std.meta.fi
     else
         null;
     const implicitly_open = output_opening == .implicit_open;
-    // A where-method signature's output row: deferred with the
-    // polarity marker, resolved per body use and per obligation—but
+    // A where-method signature's extensionless output row: deferred with
+    // the polarity marker, resolved per body use and per obligation—but
     // only in a position within the row coercion's reach (design.md
     // "Closed Result Rows At Template Boundaries"). A row nested anywhere
     // else is generated as written, so a body use that widens it is an
@@ -29374,16 +29378,12 @@ fn stepTagUnionAnnoGen(self: *Self, frame: *AnnoGenFrame, tag_union: std.meta.fi
     const ext_var = inner_blk: {
         if (tag_union.ext) |ext_anno_idx| {
             if (state.ext_requested) break :inner_blk ModuleEnv.varFrom(ext_anno_idx);
-            if ((implicitly_open or deferred_open) and self.annoIsAnonymousOpenExt(ext_anno_idx)) {
+            if (implicitly_open and self.annoIsAnonymousOpenExt(ext_anno_idx)) {
                 const open_ext_var = ModuleEnv.varFrom(ext_anno_idx);
                 try self.setVarRank(open_ext_var, env);
                 try self.markTypeAnnoSeen(ext_anno_idx);
-                if (deferred_open) {
-                    try self.unifyWith(open_ext_var, .{ .rigid = Rigid.init(self.cir.idents.polarity_var) }, env);
-                } else {
-                    try self.unifyWith(open_ext_var, .{ .flex = Flex.init() }, env);
-                }
-                if (!deferred_open) try self.types.markAnnotationTagExt(open_ext_var);
+                try self.unifyWith(open_ext_var, .{ .flex = Flex.init() }, env);
+                try self.types.markAnnotationTagExt(open_ext_var);
                 try self.implicit_open_exts.append(self.gpa, .{
                     .var_ = open_ext_var,
                     .region = anno_region,
