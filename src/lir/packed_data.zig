@@ -2,17 +2,23 @@
 
 const std = @import("std");
 const base = @import("base");
+const builtins = @import("builtins");
 const layout = @import("layout");
 
 /// One contiguous region in canonical field order. Scalar leaves are retained
 /// separately so native-endian conversion never reverses an entire aggregate.
 const Leaf = struct { packed_offset: u32, memory_offset: u32, width: u32 };
 
+/// A float leaf's offset in the canonical bytes, whose stored NaN is Roc's
+/// one NaN whatever bits the evaluation produced.
+const FloatLeaf = struct { packed_offset: u32, precision: enum { f32, f64 } };
+
 /// Reusable mapping between canonical product bytes and one committed layout.
 pub const Plan = struct {
     allocator: std.mem.Allocator,
     leaves: std.ArrayList(Leaf) = .empty,
     regions: std.ArrayList(Leaf) = .empty,
+    floats: std.ArrayList(FloatLeaf) = .empty,
     packed_width: u32 = 0,
     memory_width: u32,
 
@@ -28,6 +34,7 @@ pub const Plan = struct {
     pub fn deinit(self: *Plan) void {
         self.leaves.deinit(self.allocator);
         self.regions.deinit(self.allocator);
+        self.floats.deinit(self.allocator);
     }
 
     /// Appends the product's scalar leaves in canonical field order. Nested
@@ -50,7 +57,12 @@ pub const Plan = struct {
                 .zst => {},
                 .scalar => {
                     switch (value.getScalar().tag) {
-                        .int, .frac, .vector => {},
+                        .int, .vector => {},
+                        .frac => switch (value.getScalar().getFrac()) {
+                            .f32 => try self.floats.append(self.allocator, .{ .packed_offset = self.packed_width, .precision = .f32 }),
+                            .f64 => try self.floats.append(self.allocator, .{ .packed_offset = self.packed_width, .precision = .f64 }),
+                            .dec => {},
+                        },
                         .str, .opaque_ptr => base.invariant("packed data invariant violated: fixed product holds a {s} scalar", .{@tagName(value.getScalar().tag)}),
                     }
                     const width = layouts.layoutSize(value);
@@ -94,15 +106,22 @@ pub const Plan = struct {
             (self.memory_width == 0 or (self.regions.items.len == 1 and self.regions.items[0].memory_offset == 0));
     }
 
-    /// Encode CTFE memory, omitting padding and preserving canonical scalar bits.
+    /// Whether a program's memory of `endian` already is the canonical bytes
+    /// `encode` writes: storage is identical and no float leaf has a NaN to
+    /// replace.
+    pub fn memoryIsCanonical(self: *const Plan, endian: std.builtin.Endian) bool {
+        return endian == .little and self.isIdentity() and self.floats.items.len == 0;
+    }
+
+    /// Encode CTFE memory, omitting padding and preserving canonical scalar
+    /// bits: every scalar's bits as they are, except that a float NaN is
+    /// Roc's one NaN.
     pub fn encode(self: *const Plan, out: []u8, memory: []const u8, count: usize, endian: std.builtin.Endian) void {
         std.debug.assert(out.len == count * self.packed_width);
         std.debug.assert(memory.len == count * self.memory_width);
         if (endian == .little and self.isIdentity()) {
             @memcpy(out, memory);
-            return;
-        }
-        for (0..count) |i| {
+        } else for (0..count) |i| {
             const input = memory[i * self.memory_width ..][0..self.memory_width];
             const output = out[i * self.packed_width ..][0..self.packed_width];
             for (if (endian == .little) self.regions.items else self.leaves.items) |part| {
@@ -110,6 +129,20 @@ pub const Plan = struct {
                 @memcpy(destination, input[part.memory_offset..][0..part.width]);
                 if (endian == .big) std.mem.reverse(u8, destination);
             }
+        }
+        if (self.floats.items.len == 0) return;
+        for (0..count) |i| {
+            const output = out[i * self.packed_width ..][0..self.packed_width];
+            for (self.floats.items) |float| switch (float.precision) {
+                .f32 => {
+                    const bits = output[float.packed_offset..][0..4];
+                    std.mem.writeInt(u32, bits, builtins.float_bits.normalizeF32NanBits(std.mem.readInt(u32, bits, .little)), .little);
+                },
+                .f64 => {
+                    const bits = output[float.packed_offset..][0..8];
+                    std.mem.writeInt(u64, bits, builtins.float_bits.normalizeF64NanBits(std.mem.readInt(u64, bits, .little)), .little);
+                },
+            };
         }
     }
 
@@ -162,4 +195,51 @@ test "packed products preserve semantic order and zero nested target padding" {
         plan.encode(&roundtrip, &big_endian, 2, .big);
         try std.testing.expectEqualSlices(u8, &canonical, &roundtrip);
     }
+}
+
+test "packed products store every float NaN as Roc's one NaN" {
+    const gpa = std.testing.allocator;
+    var layouts = try layout.Store.init(gpa, .u64);
+    defer layouts.deinit();
+    const product = try layouts.putStructFields(&.{
+        .{ .index = 0, .layout = .f64 },
+        .{ .index = 1, .layout = .f32 },
+        .{ .index = 2, .layout = .u32 },
+    });
+    var plan = try Plan.init(gpa, &layouts, product);
+    defer plan.deinit();
+    try std.testing.expect(plan.isIdentity());
+    try std.testing.expect(!plan.memoryIsCanonical(.little));
+    const Item = struct { f64_bits: u64, f32_bits: u32, int: u32 };
+    const items = [_]Item{
+        .{ .f64_bits = 0xfff8_0000_0000_0000, .f32_bits = 0xffc0_0000, .int = 0x7fc0_0001 },
+        .{ .f64_bits = 0x7ff0_0000_0000_0001, .f32_bits = 0x7f80_0001, .int = 0xffff_ffff },
+        .{ .f64_bits = 0x8000_0000_0000_0000, .f32_bits = 0x7f80_0000, .int = 0 },
+        .{ .f64_bits = 0x3ff0_0000_0000_0000, .f32_bits = 0x0000_0001, .int = 7 },
+    };
+    var memory: [items.len * 16]u8 = undefined;
+    var expected: [items.len * 16]u8 = undefined;
+    for (items, 0..) |item, index| {
+        const element = memory[index * 16 ..][0..16];
+        std.mem.writeInt(u64, element[0..8], item.f64_bits, .little);
+        std.mem.writeInt(u32, element[8..12], item.f32_bits, .little);
+        std.mem.writeInt(u32, element[12..16], item.int, .little);
+        const canonical = expected[index * 16 ..][0..16];
+        std.mem.writeInt(u64, canonical[0..8], builtins.float_bits.normalizeF64NanBits(item.f64_bits), .little);
+        std.mem.writeInt(u32, canonical[8..12], builtins.float_bits.normalizeF32NanBits(item.f32_bits), .little);
+        std.mem.writeInt(u32, canonical[12..16], item.int, .little);
+    }
+    var out: [expected.len]u8 = undefined;
+    plan.encode(&out, &memory, items.len, .little);
+    try std.testing.expectEqualSlices(u8, &expected, &out);
+
+    var big_endian: [memory.len]u8 = undefined;
+    for (items, 0..) |item, index| {
+        const element = big_endian[index * 16 ..][0..16];
+        std.mem.writeInt(u64, element[0..8], item.f64_bits, .big);
+        std.mem.writeInt(u32, element[8..12], item.f32_bits, .big);
+        std.mem.writeInt(u32, element[12..16], item.int, .big);
+    }
+    plan.encode(&out, &big_endian, items.len, .big);
+    try std.testing.expectEqualSlices(u8, &expected, &out);
 }

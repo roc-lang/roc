@@ -1467,7 +1467,7 @@ pub const Writer = struct {
     /// evaluation's memory holds them.
     fn storeProductList(self: *Writer, node: checked.ConstNodeId, plan: *const lir.PackedData.Plan, memory: []const u8, len: usize, capacity: u64) Allocator.Error!void {
         const byte_len = std.math.mul(usize, len, plan.packed_width) catch unreachable; // packed leaves are disjoint parts of an element, so this is at most memory_len
-        const data = if (plan.isIdentity() and builtin.cpu.arch.endian() == .little)
+        const data = if (plan.memoryIsCanonical(builtin.cpu.arch.endian()))
             try self.store.addBlobData(memory)
         else blk: {
             plan.encode(try self.store.reserveBlobData(byte_len), memory, len, builtin.cpu.arch.endian());
@@ -1583,7 +1583,16 @@ pub const Writer = struct {
         }
         const bytes = try self.store.reserveBlobData(byte_len);
         if (roc_list.bytes) |source| switch (builtin.cpu.arch.endian()) {
-            .little => packMemoryScalars(element, bytes, source[0..byte_len]),
+            .little => {
+                packMemoryScalars(element, bytes, source[0..byte_len]);
+                // The list's bytes are what storing each item on its own
+                // writes.
+                if (builtin.mode == .debug) for (0..roc_list.len()) |index| {
+                    var item: [16]u8 = undefined;
+                    writePackedScalar(item[0..width], element, self.storeScalar(elem_layout, .{ .ptr = source + index * width }));
+                    std.debug.assert(std.mem.eql(u8, item[0..width], bytes[index * width ..][0..width]));
+                };
+            },
             // A big-endian program's memory holds no scalar wider than a
             // byte as its packed little-endian bytes, so each item is
             // packed on its own.
@@ -2363,4 +2372,127 @@ test "packing a little-endian float list's memory matches packing each item" {
         writePackedScalar(f64_expected[index * 8 ..][0..8], .f64, .{ .f64_bits = builtins.float_bits.normalizeF64NanBits(@bitCast(@as(f64, @bitCast(bits)))) });
     }
     try std.testing.expectEqualSlices(u8, &f64_expected, &f64_packed);
+}
+
+test "const store writer stores an evaluated scalar list as storing each item would" {
+    const testing = std.testing;
+    if (builtin.cpu.arch.endian() != .little) return error.SkipZigTest;
+
+    var module_env = try can.ModuleEnv.init(testing.allocator, "");
+    defer module_env.deinit();
+    var artifact = try initTestArtifact(testing.allocator, &module_env);
+    defer deinitTestArtifact(&artifact, testing.allocator);
+    var program = try LirProgram.Result.init(testing.allocator, .u64);
+    defer program.deinit();
+    const scalar_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(testing.allocator, .scalar);
+    const list_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(testing.allocator, .{ .list = scalar_plan });
+
+    var writer = Writer.init(testing.allocator, &artifact, &program);
+    defer writer.deinit();
+
+    // 67 items cross every whole vector of the float packing and leave a
+    // partial one.
+    const max_items = 67;
+    var memory: [max_items * 16]u8 align(16) = undefined;
+    var prng = std.Random.DefaultPrng.init(0x5eed);
+    const elems = [_]layout.Idx{ .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 };
+    for (elems) |elem| {
+        const list_layout = try program.layouts.insertLayout(layout.Layout.list(elem));
+        const element = writer.packedScalarForLayout(elem).?;
+        const width: usize = element.byteWidth();
+        for ([_]usize{ 0, 1, max_items }) |len| {
+            prng.random().bytes(&memory);
+            // NaNs with payloads and signs, which a float list stores as
+            // Roc's one NaN.
+            for (0..len) |index| switch (element) {
+                .f32 => if (index % 3 == 0) std.mem.writeInt(u32, memory[index * 4 ..][0..4], 0xff80_0000 | @as(u32, @intCast(index + 1)), .little),
+                .f64 => if (index % 3 == 0) std.mem.writeInt(u64, memory[index * 8 ..][0..8], 0x7ff0_0000_0000_0000 | @as(u64, index + 1), .little),
+                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => {},
+            };
+            var roc_list = RocList{
+                .bytes = &memory,
+                .length = len,
+                .capacity_or_alloc_ptr = RocList.encodeCapacity(max_items),
+            };
+            const stored = try writer.storeRoot(testConstRoot(list_plan, list_layout), .{ .ptr = @ptrCast(&roc_list) });
+            const list = artifact.const_store.get(stored.const_node).list;
+            try testing.expectEqual(@as(u64, max_items), list.capacity);
+            if (len == 0) {
+                try testing.expect(list.items == .empty);
+                continue;
+            }
+            const items = list.items.packed_bytes;
+            try testing.expectEqual(element, items.element.?);
+            try testing.expectEqual(len, items.len);
+            const blob = artifact.const_store.blobData(items.bytes);
+            try testing.expectEqual(len * width, blob.len);
+            for (0..len) |index| {
+                const item = try writer.storeRoot(testConstRoot(scalar_plan, elem), .{ .ptr = memory[index * width ..].ptr });
+                var expected: [16]u8 = undefined;
+                writePackedScalar(expected[0..width], element, artifact.const_store.get(item.const_node).scalar);
+                try testing.expectEqualSlices(u8, expected[0..width], blob[index * width ..][0..width]);
+            }
+            if (element == .f32 or element == .f64) {
+                try testing.expect(!std.mem.eql(u8, blob, memory[0 .. len * width]));
+            } else {
+                try testing.expectEqualSlices(u8, memory[0 .. len * width], blob);
+            }
+        }
+    }
+}
+
+test "const store writer stores every NaN of an evaluated product list as Roc's one NaN" {
+    const testing = std.testing;
+    if (builtin.cpu.arch.endian() != .little) return error.SkipZigTest;
+
+    var module_env = try can.ModuleEnv.init(testing.allocator, "");
+    defer module_env.deinit();
+    var artifact = try initTestArtifact(testing.allocator, &module_env);
+    defer deinitTestArtifact(&artifact, testing.allocator);
+    var program = try LirProgram.Result.init(testing.allocator, .u64);
+    defer program.deinit();
+    const scalar_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(testing.allocator, .scalar);
+    const record_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    const children = try testing.allocator.dupe(LirProgram.ConstPlanId, &.{ scalar_plan, scalar_plan, scalar_plan });
+    program.const_plans.append(testing.allocator, .{ .record = children }) catch |err| {
+        testing.allocator.free(children);
+        return err;
+    };
+    const list_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(testing.allocator, .{ .list = record_plan });
+    const record_layout = try program.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = .f64 },
+        .{ .index = 1, .layout = .f32 },
+        .{ .index = 2, .layout = .u32 },
+    });
+    const list_layout = try program.layouts.insertLayout(layout.Layout.list(record_layout));
+
+    var writer = Writer.init(testing.allocator, &artifact, &program);
+    defer writer.deinit();
+
+    const Item = extern struct { f64_bits: u64, f32_bits: u32, int: u32 };
+    var items = [_]Item{
+        .{ .f64_bits = 0xfff8_0000_0000_0000, .f32_bits = 0xffc0_0000, .int = 0x7fc0_0001 },
+        .{ .f64_bits = 0x7ff0_0000_0000_0001, .f32_bits = 0x7f80_0001, .int = 0xffff_ffff },
+        .{ .f64_bits = 0x8000_0000_0000_0000, .f32_bits = 0x7f80_0000, .int = 0 },
+    };
+    var roc_list = RocList{
+        .bytes = @ptrCast(&items),
+        .length = items.len,
+        .capacity_or_alloc_ptr = RocList.encodeCapacity(items.len),
+    };
+    const stored = try writer.storeRoot(testConstRoot(list_plan, list_layout), .{ .ptr = @ptrCast(&roc_list) });
+    const packed_items = artifact.const_store.get(stored.const_node).list.items.packed_bytes;
+    try testing.expectEqual(@as(?const_store.ConstPackedScalar, null), packed_items.element);
+    var expected: [items.len * 16]u8 = undefined;
+    for (items, 0..) |item, index| {
+        const canonical = expected[index * 16 ..][0..16];
+        std.mem.writeInt(u64, canonical[0..8], builtins.float_bits.normalizeF64NanBits(item.f64_bits), .little);
+        std.mem.writeInt(u32, canonical[8..12], builtins.float_bits.normalizeF32NanBits(item.f32_bits), .little);
+        std.mem.writeInt(u32, canonical[12..16], item.int, .little);
+    }
+    try testing.expectEqualSlices(u8, &expected, artifact.const_store.blobData(packed_items.bytes));
 }

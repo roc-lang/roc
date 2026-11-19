@@ -12276,7 +12276,19 @@ And Static Storage"), which no stage represents item by item.
 Constant writing and target lowering compile a field-copy plan once per explicit
 representation. Plans use committed layout field indexes and offsets, preserve
 stored scalar bits, and initialize target padding. Compatible contiguous
-regions use bulk copies. Packed data remains a literal through specialization;
+regions use bulk copies.
+
+The constant store writer stores an evaluated list of scalars or fixed
+products with one decision per list, never one per item. A packed item is its
+scalars' little-endian bits, except that every F32 or F64 NaN is Roc's one
+quiet NaN whatever bits the evaluation produced, as a stored scalar's is. On a
+little-endian host an integer, `Dec` or vector list's memory, and a product
+list's memory when its layout has no padding and no float leaf, already is that
+encoding and is stored as it is. A float list is copied in one vectorized pass
+that replaces NaN lanes, and a product list with float leaves is copied by its
+plan's regions and then has each float leaf's NaN replaced. A big-endian host
+packs each item on its own. Debug builds check a bulk-stored scalar list
+against storing each item on its own. Packed data remains a literal through specialization;
 list length must not create per-item LIR statements, including in static
 initializers. Literal backings are shared by explicit owner-relative identity
 through IR stages. Boxy consumes its committed layout without unrolling the
