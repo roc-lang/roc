@@ -12967,6 +12967,25 @@ is unified with every annotation that refers to it; if a mismatch merges any
 of it into an error it is no longer ground, and the next reference
 instantiates a fresh copy.
 
+Before a use that decides markers per occurrence (`.preserve_one_sided`,
+`.resolve_by_polarity`, `.defer_open`) copies anything, a pre-walk
+(`Instantiator.collectMarkerChoices`) joins the sides every marker occurs on
+and so chooses each marker's resolution. The same walk rejects the copy when
+it reaches a declaration whose position equations were rejected. For a
+declaration reference the walk reads only the declaration's committed type
+graph, the position facts of the declarations it reaches, and the position's
+behavior, polarity and adapter reach, so its outcome is a fact of the
+position: the first instantiation at a position records it
+(`Check.polarized_marker_choices`, keyed like the shared ground instances),
+either rejected or accepted with every reached marker's choice (none for a
+declaration without markers), and every later instantiation at that position
+hands it to the instantiator (`Instantiator.marker_choices_memo`) instead of
+walking. Builds with runtime safety walk anyway on every such use and assert
+the recorded outcome equals the walk's. The record is checker-local and never
+published. A where-method signature's per-use instantiation
+(`Check.instantiateWhereMethodForUse`) always walks: its leaves are the
+enclosing scheme's live variables, so its graph is not fixed between uses.
+
 An expected type is copied before the expression checked against it, so the
 expression's own errors can later be related to the type as it was. A ground
 expected type can change only through an explicit write, so one pristine copy

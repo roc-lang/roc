@@ -113,6 +113,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/unify_test.zig"));
     std.testing.refAllDecls(@import("test/instantiate_tag_union_test.zig"));
     std.testing.refAllDecls(@import("test/where_clause_test.zig"));
+    std.testing.refAllDecls(@import("test/marker_choices_memo_test.zig"));
     std.testing.refAllDecls(@import("test/scheme_use_evidence_test.zig"));
     std.testing.refAllDecls(@import("test/dispatch_evidence_test.zig"));
     std.testing.refAllDecls(@import("dispatch_evidence.zig"));
