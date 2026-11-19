@@ -73,6 +73,50 @@ fn exhaustiveInvariant(comptime message: []const u8, args: anytype) noreturn {
     base.invariant(message, args);
 }
 
+/// The inhabitedness of each argument-less nominal declaration whose backing
+/// template is final, per query mode, kept across the exhaustiveness reads of
+/// one source store.
+///
+/// Such a declaration's opened backing names no source variable: a view
+/// substitutes source variables only for formals, and it has none. So no
+/// known-empty assumption, which names source roots, reaches it, and its
+/// answer depends on the query mode and the final template alone. Debug
+/// builds check every reused answer against a from-scratch solve without
+/// assumptions.
+pub const ArglessDeclarationAnswers = struct {
+    gpa: Allocator,
+    /// By `TypeView.nominalDeclarationKey`.
+    answers: std.AutoHashMapUnmanaged(u64, Answers) = .empty,
+
+    const Answers = struct {
+        known: [mode_count]bool = @splat(false),
+        value: [mode_count]bool = @splat(false),
+    };
+    const mode_count = std.enums.values(InhabitedMode).len;
+
+    pub fn init(gpa: Allocator) ArglessDeclarationAnswers {
+        return .{ .gpa = gpa };
+    }
+
+    pub fn deinit(self: *ArglessDeclarationAnswers) void {
+        self.answers.deinit(self.gpa);
+    }
+
+    fn get(self: *const ArglessDeclarationAnswers, key: u64, mode: InhabitedMode) ?bool {
+        const answers = self.answers.get(key) orelse return null;
+        const slot = @backingInt(mode);
+        return if (answers.known[slot]) answers.value[slot] else null;
+    }
+
+    fn put(self: *ArglessDeclarationAnswers, key: u64, mode: InhabitedMode, value: bool) Allocator.Error!void {
+        const entry = try self.answers.getOrPut(self.gpa, key);
+        if (!entry.found_existing) entry.value_ptr.* = .{};
+        const slot = @backingInt(mode);
+        entry.value_ptr.known[slot] = true;
+        entry.value_ptr.value[slot] = value;
+    }
+};
+
 /// Frozen analysis state scoped to one exhaustiveness entry point.
 /// Views own declaration substitutions and complete-query memoization without
 /// appending mutable solver variables or outliving returned constraints.
@@ -90,6 +134,9 @@ pub const NominalOpenCache = struct {
     views: ?TypeView = null,
     /// Declaration dependency graphs kept across reads, if the caller keeps any.
     shared: ?TypeView.Shared = null,
+    /// Settled answers for argument-less declarations kept across reads, if
+    /// the caller keeps any (`ArglessDeclarationAnswers`).
+    argless_answers: ?*ArglessDeclarationAnswers = null,
 
     const InhabitedGraphs = struct {
         payload: ?InhabitedGraph = null,
@@ -119,9 +166,10 @@ pub const NominalOpenCache = struct {
         return .{ .allocator = allocator };
     }
 
-    /// Like `init`, with readers that reuse and extend `shared`'s graphs.
-    pub fn initShared(allocator: std.mem.Allocator, shared: TypeView.Shared) NominalOpenCache {
-        return .{ .allocator = allocator, .shared = shared };
+    /// Like `init`, with readers that reuse and extend `shared`'s graphs and,
+    /// when given, `argless_answers`.
+    pub fn initShared(allocator: std.mem.Allocator, shared: TypeView.Shared, argless_answers: ?*ArglessDeclarationAnswers) NominalOpenCache {
+        return .{ .allocator = allocator, .shared = shared, .argless_answers = argless_answers };
     }
 
     /// Release views and complete-query answers together.
@@ -157,6 +205,7 @@ pub const NominalOpenCache = struct {
                 errdefer self.allocator.free(owned);
                 const entry = try self.inhabited_graphs.general.addOne(self.allocator);
                 entry.* = .{ .known_empty = owned, .graph = .init(self.allocator, store, idents, mode) };
+                entry.graph.useArglessAnswers(self.shared, self.argless_answers);
                 errdefer {
                     entry.graph.deinit();
                     _ = self.inhabited_graphs.general.pop();
@@ -166,7 +215,10 @@ pub const NominalOpenCache = struct {
             },
         };
         std.debug.assert(known_empty.len == 0);
-        if (slot.* == null) slot.* = .init(self.allocator, store, idents, mode);
+        if (slot.* == null) {
+            slot.* = .init(self.allocator, store, idents, mode);
+            slot.*.?.useArglessAnswers(self.shared, self.argless_answers);
+        }
         std.debug.assert(slot.*.?.store == store);
         return &slot.*.?;
     }
@@ -1300,6 +1352,13 @@ const InhabitedGraph = struct {
     /// Parents of edges into settled false nodes, propagated by the next
     /// `settle` exactly as a false child's parent links are.
     settled_false_parents: std.ArrayList(usize) = .empty,
+    /// Settled answers of argument-less declarations kept across reads, and
+    /// the finality of declarations, which decides which answers are kept.
+    argless_answers: ?*ArglessDeclarationAnswers = null,
+    finality: ?TypeView.Shared = null,
+    /// Nodes of argument-less applications this query expands, whose settled
+    /// values `query` keeps for their declarations.
+    argless_nodes: std.ArrayList(struct { nominal: types.NominalType, index: usize }) = .empty,
     stats: if (builtin.is_test) Stats else void = if (builtin.is_test) .{} else {},
 
     const Stats = struct { expanded: usize = 0, rows: usize = 0, edges: usize = 0, propagated: usize = 0 };
@@ -1342,6 +1401,14 @@ const InhabitedGraph = struct {
         };
     }
 
+    /// Answer argument-less applications from, and keep their settled
+    /// answers in, `answers`, deciding finality by `finality`.
+    fn useArglessAnswers(self: *InhabitedGraph, finality: ?TypeView.Shared, answers: ?*ArglessDeclarationAnswers) void {
+        const kept = answers orelse return;
+        self.finality = finality orelse return;
+        self.argless_answers = kept;
+    }
+
     fn rowEntry(self: *InhabitedGraph, key: RowKey) ?*RowEntry {
         const slots = self.rows.getPtr(key.root) orelse return null;
         if (slots.entries[@backingInt(key.role)]) |*entry| return entry;
@@ -1363,6 +1430,7 @@ const InhabitedGraph = struct {
         self.pending.deinit(self.gpa);
         self.false_nodes.deinit(self.gpa);
         self.settled_false_parents.deinit(self.gpa);
+        self.argless_nodes.deinit(self.gpa);
     }
 
     fn node(self: *InhabitedGraph) Allocator.Error!usize {
@@ -1582,11 +1650,25 @@ const InhabitedGraph = struct {
                     const row = try self.rowNode(.{ .root = root, .role = .union_row });
                     try self.edge(index, row);
                 },
-                .nominal_type => |nominal| if (self.mode == .known_absent) {
-                    const row = try self.rowNode(.{ .root = root, .role = .union_shape });
-                    try self.edge(index, row);
-                } else if (try openNominalBacking(self.store, self.idents, root, nominal)) |backing| {
-                    try self.typeEdge(index, backing);
+                .nominal_type => |nominal| {
+                    if (self.argless_answers != null and self.store.sliceNominalArgs(nominal).len == 0) {
+                        if (self.argless_answers.?.get(TypeView.nominalDeclarationKey(nominal), self.mode)) |answer| {
+                            if (comptime builtin.mode == .debug) {
+                                if (answer != try solveInhabitedGraph(self.store, self.idents, root, self.mode, &.{})) {
+                                    exhaustiveInvariant("an argument-less declaration's kept inhabitedness differs from a from-scratch solve", .{});
+                                }
+                            }
+                            if (!answer) try self.markFalse(index);
+                            return;
+                        }
+                        try self.argless_nodes.append(self.gpa, .{ .nominal = nominal, .index = index });
+                    }
+                    if (self.mode == .known_absent) {
+                        const row = try self.rowNode(.{ .root = root, .role = .union_shape });
+                        try self.edge(index, row);
+                    } else if (try openNominalBacking(self.store, self.idents, root, nominal)) |backing| {
+                        try self.typeEdge(index, backing);
+                    }
                 },
             },
         }
@@ -1609,7 +1691,21 @@ const InhabitedGraph = struct {
         const result = try self.typeNode(root);
         while (self.pending.pop()) |next| try self.expand(next.root, next.index);
         try self.settle();
+        try self.keepArglessAnswers();
         return self.nodes.items[result].value;
+    }
+
+    /// Keep the settled answer of each argument-less application this query
+    /// expanded whose declaration's backing is final.
+    fn keepArglessAnswers(self: *InhabitedGraph) Allocator.Error!void {
+        defer self.argless_nodes.clearRetainingCapacity();
+        const answers = self.argless_answers orelse return;
+        const finality = self.finality.?;
+        for (self.argless_nodes.items) |item| {
+            const declaration = self.store.source.lookupNominalDecl(item.nominal) orelse continue;
+            if (!finality.isFinal(finality.owner, declaration)) continue;
+            try answers.put(TypeView.nominalDeclarationKey(item.nominal), self.mode, self.nodes.items[item.index].value);
+        }
     }
 
     /// Pure Boolean propagation; type-reader and mode policies belong solely
@@ -5261,4 +5357,78 @@ test "inhabitedness memo preserves shared DAG queries and assumption isolation" 
     }
     try std.testing.expectEqual(before, store.len());
     try std.testing.expectEqual(@as(u32, 2), cache.inhabitedness.answers.count());
+}
+
+test "argument-less declarations keep their settled inhabitedness across reads" {
+    const gpa = std.testing.allocator;
+    var store = try types.Store.initCapacity(gpa, 16, 0);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 4);
+    defer idents.deinit(gpa);
+    const sentinel = try idents.insert(gpa, try Ident.from_bytes("NotNumeric"));
+    const module: base.ModuleIdentity.Idx = @fromBackingInt(1);
+    const Finality = struct {
+        fn isFinal(_: *const anyopaque, _: types.NominalDecl.Idx) bool {
+            return true;
+        }
+    };
+    var shared = SharedNominalDependencies.init(gpa, &store);
+    defer shared.deinit();
+    var answers = ArglessDeclarationAnswers.init(gpa);
+    defer answers.deinit();
+
+    // `Empty :: []` has no values and `Unit :: [U]` has one; a tuple holding
+    // either asks about the declaration through an argument-less application.
+    var applications: [2]types.NominalType = undefined;
+    var holders: [2]Var = undefined;
+    const unit_tag = try idents.insert(gpa, try Ident.from_bytes("U"));
+    const empty = try store.freshFromContent(.{ .structure = .empty_tag_union });
+    const unit = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{.{ .name = unit_tag, .args = try store.appendVars(&.{}) }}),
+        .ext = try store.freshFromContent(.{ .structure = .empty_tag_union }),
+    } } });
+    for ([_][]const u8{ "Empty", "Unit" }, [_]Var{ empty, unit }, 0..) |name, backing, index| {
+        const ident: types.TypeIdent = .{ .ident_idx = try idents.insert(gpa, try Ident.from_bytes(name)) };
+        const source = try types.NominalType.Source.initChecked(
+            try types.SourceDecl.fromStatementChecked(@intCast(store.nominalDeclCount())),
+            false,
+            false,
+        );
+        const formals = try store.appendVars(&.{});
+        _ = try store.registerNominalDecl(.{
+            .ident = ident,
+            .origin_module = module,
+            .source = source,
+            .formals = formals,
+            .backing = backing,
+            .flags = .{ .valid = true },
+        });
+        applications[index] = .{ .ident = ident, .origin_module = module, .source = source, .args = formals };
+        holders[index] = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{
+            try store.freshFromContent(.{ .structure = .{ .nominal_type = applications[index] } }),
+        }) } } });
+    }
+
+    for (0..2) |read| {
+        var cache = NominalOpenCache.initShared(gpa, .{ .graphs = &shared, .owner = &shared, .isFinal = Finality.isFinal }, &answers);
+        defer cache.deinit();
+        var test_idents: BuiltinIdents = undefined;
+        inline for (base.structFields(BuiltinIdents)) |field| {
+            if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
+        }
+        test_idents.idents = &idents;
+        test_idents.open_cache = &cache;
+        const reader = cache.reader(&store);
+        for ([_]InhabitedMode{ .general, .payload, .known_absent }) |mode| {
+            const graph = try cache.inhabitedGraph(reader, test_idents, mode, &.{});
+            try std.testing.expect(!try graph.query(holders[0]));
+            try std.testing.expect(try graph.query(holders[1]));
+            // The second read answers both declarations without expanding
+            // their backings; the first keeps the answers it settles.
+            if (read == 1) try std.testing.expectEqual(@as(usize, 4), graph.stats.expanded);
+            try std.testing.expectEqual(false, answers.get(TypeView.nominalDeclarationKey(applications[0]), mode).?);
+            try std.testing.expectEqual(true, answers.get(TypeView.nominalDeclarationKey(applications[1]), mode).?);
+        }
+        cache.finishRead();
+    }
 }

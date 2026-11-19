@@ -1227,6 +1227,13 @@ of any other wrapper's payload does: `x : Try(Str, Box(_))` defined as
 `ProvidedByCompiler` tag; post-check stages take these types' representations
 from the compiler, not from the declaration, and Monotype's own
 uninhabitedness proof treats a box as uninhabited exactly when its payload is.
+An application of a declaration that takes no arguments opens to a backing
+that names no source variable, so no known-empty assumption reaches it and its
+answer depends only on the query mode and the declaration's template. Once
+that template is final, a module's check keeps the settled answer per
+declaration and mode across exhaustiveness reads and answers later
+applications from it without expanding the backing; Debug builds check each
+reuse against a from-scratch solve.
 Exact known-empty identities are false. An unconditional witness, such as a
 zero-argument tag, may prune other disjunction dependencies, but a provisional
 cycle answer cannot.
