@@ -31,8 +31,8 @@ const Rank = types_mod.Rank;
 const Polarity = types_mod.Polarity;
 const Ident = base.Ident;
 
-/// Where a position sits relative to the result rows a where-method use may
-/// widen: the signature's direct result row and a `Try` result's error row
+/// Where a position sits relative to the result row a where-method use may
+/// widen: the signature's direct result row
 /// (design.md "Closed Result Rows At Template Boundaries"). The checker's
 /// annotation walk makes this decision for rows written inline in a signature;
 /// this axis makes the same decision for rows a referenced type declaration
@@ -45,10 +45,8 @@ pub const AdapterReachPosition = enum {
     /// annotation put this declaration in, when that is the signature's direct
     /// result.
     result,
-    /// The ERROR argument of a `Try` standing in that direct result.
-    try_row,
-    /// Every other position: inside a `List`, a record field, a tuple, a tag
-    /// payload, a function, or a non-`Try` nominal.
+    /// Every other position: inside a record field, a tuple, a tag payload, a
+    /// function, or an argument of a named type.
     nested,
 };
 
@@ -732,12 +730,9 @@ const NominalFrame = struct {
     args_start: u32,
     args_count: u32,
     vars_base: u32,
-    /// The adapter reach surrounding this nominal application. A `Try` written
-    /// as the direct result passes it to the ERROR argument; every other
-    /// argument of every nominal is a nested position.
+    /// The adapter reach surrounding this nominal application, restored once
+    /// its arguments, which are all nested positions, are instantiated.
     saved_reach: AdapterReachPosition,
-    /// Whether this application is the builtin `Try(ok, err)`.
-    is_try: bool,
 };
 
 const FuncFrame = struct {
@@ -919,26 +914,12 @@ pub const Instantiator = struct {
     /// Where the position currently being instantiated sits relative to the
     /// rows a where-method use may widen. Starts at the reach of the
     /// instantiation ROOT (callers using `.defer_open` set it) and demotes to
-    /// `.nested` under every constructor except a function's result and a
-    /// `Try`'s error argument. Only consulted by `.defer_open`.
+    /// `.nested` under every constructor except the signature's own function
+    /// result. Only consulted by `.defer_open`.
     current_reach: AdapterReachPosition = .nested,
-    /// Identity of the builtin `Try(ok, err)` nominal. When null, no nominal is
-    /// treated as a `Try`, so a `Try` error row reached through a declaration
-    /// reference is a nested position like any other nominal argument.
-    try_nominal: ?TryNominalIdent = null,
     /// Set when the walk shared a source variable instead of copying it, so
     /// the copy names a variable of the source graph.
     shared_any: bool = false,
-
-    /// How to recognize the builtin `Try(ok, err)` nominal while walking. Both
-    /// spellings are needed for the same reason `builtinNominalDeclForIdentInEnv`
-    /// accepts both: a `Try` written through its module interns the qualified
-    /// name. Builtin origin is required on top of the name, so a user nominal
-    /// that shadows `Try` is not mistaken for it.
-    pub const TryNominalIdent = struct {
-        short: Ident.Idx,
-        qualified: Ident.Idx,
-    };
 
     pub const SharedSubtree = struct {
         source: Var,
@@ -1076,16 +1057,6 @@ pub const Instantiator = struct {
 
     fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
         return self.idents.getText(idx);
-    }
-
-    /// Whether this nominal application is the builtin `Try(ok, err)`. Builtin
-    /// origin is required alongside the name, so a user nominal that shadows
-    /// `Try` keeps every one of its type arguments a nested position.
-    fn nominalIsBuiltinTry(self: *const Self, nominal: NominalType) bool {
-        const try_nominal = self.try_nominal orelse return false;
-        if (!nominal.originIsBuiltin()) return false;
-        const name = nominal.ident.ident_idx;
-        return name.eql(try_nominal.short) or name.eql(try_nominal.qualified);
     }
 
     fn scratch(self: *Self) *Scratch {
@@ -1376,13 +1347,12 @@ pub const Instantiator = struct {
                             std.debug.assert(nominal.sourceDeclOptional() == null);
                             break :blk .{ .at = item.polarity };
                         };
-                        const reach: AdapterReachPosition = base.annotation_positions.nominalArgumentReach(item.reach, self.nominalIsBuiltinTry(nominal), index);
                         switch (position) {
-                            .at => |polarity| try pending.append(allocator, .{ .var_ = arg, .polarity = polarity, .reach = reach }),
+                            .at => |polarity| try pending.append(allocator, .{ .var_ = arg, .polarity = polarity, .reach = .nested }),
                             // Visiting the argument at both polarities makes
                             // every marker in it stand on both sides.
                             .both => for ([_]Polarity{ .pos, .neg }) |polarity| {
-                                try pending.append(allocator, .{ .var_ = arg, .polarity = polarity, .reach = reach });
+                                try pending.append(allocator, .{ .var_ = arg, .polarity = polarity, .reach = .nested });
                             },
                         }
                     },
@@ -1809,7 +1779,6 @@ pub const Instantiator = struct {
                             .args_count = arg_span.count,
                             .vars_base = @intCast(machine.value_stack.items.len),
                             .saved_reach = self.current_reach,
-                            .is_try = self.nominalIsBuiltinTry(nominal),
                             .saved_polarity = self.current_polarity,
                         } });
                         return false;
@@ -2164,10 +2133,8 @@ pub const Instantiator = struct {
                     .at => |polarity| polarity,
                     .both => .neg,
                 };
-                // A `Try` written as the direct result passes the adapter's
-                // reach to its ERROR row. The ok row is deliberately NOT
-                // reachable: the adapter asserts the ok type is unchanged.
-                self.current_reach = base.annotation_positions.nominalArgumentReach(frame.saved_reach, frame.is_try, arrived);
+                // An argument of a named type is a nested position.
+                self.current_reach = .nested;
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
             }

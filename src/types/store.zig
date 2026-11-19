@@ -562,39 +562,36 @@ pub const Store = struct {
         }
         for (self.nominal_decls.items()) |*decl| decl.backing = self.representativeVar(decl.backing);
 
-        var live = live_descs.iterator(.{});
-        while (live.next()) |index| {
-            const desc_idx: DescStore.Idx = @fromBackingInt(@intCast(index));
-            var desc = self.descAt(desc_idx);
-            switch (desc.content) {
-                .flex, .rigid, .alias, .field_presence, .err => continue,
-                .structure => |*flat| switch (flat.*) {
-                    .tuple, .nominal_type, .empty_record, .empty_tag_union => continue,
-                    .fn_pure, .fn_effectful, .fn_unbound => |*func| func.ret = self.representativeVar(func.ret),
-                    .record => |*record| record.ext = self.representativeVar(record.ext),
-                    .tag_union => |*tag_union| tag_union.ext = self.representativeVar(tag_union.ext),
-                },
-            }
-            self.descs.setRow(desc_idx, self.encodeDescWithoutIdentity(desc));
-        }
-
+        // One pass over the live descriptors, in index order, reading each
+        // one's kind. Only a function, a record and a tag union hold a
+        // variable inline (a return or an extension), so only those are read
+        // past their word. Resolving a row's extension also tells whether it
+        // is itself a row: such a row absorbs its chain, and every other one
+        // only has its extension replaced. A chain's segments are read as
+        // stored: a segment at a lower index has absorbed its own chain
+        // already, and one at a higher index has not.
         var row_fields: std.ArrayListUnmanaged(RecordField) = .empty;
         defer row_fields.deinit(self.gpa);
         var row_tags: std.ArrayListUnmanaged(Tag) = .empty;
         defer row_tags.deinit(self.gpa);
-        live = live_descs.iterator(.{});
+        var live = live_descs.iterator(.{});
         while (live.next()) |index| {
             const desc_idx: DescStore.Idx = @fromBackingInt(@intCast(index));
-            var desc = self.descAt(desc_idx);
-            const flat = switch (desc.content) {
-                .structure => |*flat| flat,
-                .flex, .rigid, .alias, .field_presence, .err => continue,
-            };
-            switch (flat.*) {
-                .record => |*record| {
-                    if (self.extensionRecord(record.ext) == null) continue;
+            switch (self.descs.getWord(desc_idx).kind) {
+                .flex, .rigid, .alias, .field_presence, .err, .tuple, .nominal_type, .empty_record, .empty_tag_union => {},
+                .fn_pure, .fn_effectful, .fn_unbound => {
+                    const ret: Var = @fromBackingInt(self.descs.getPayloadWord(desc_idx, Desc.fn_ret_payload_word));
+                    self.setInlineVarForSeal(desc_idx, Desc.fn_ret_payload_word, self.representativeVar(ret));
+                },
+                .record => {
+                    const record = self.recordAt(desc_idx);
+                    const ext = self.findStorageRoot(record.ext);
+                    if (self.descs.getWord(ext.desc_idx).kind != .record) {
+                        self.setInlineVarForSeal(desc_idx, Desc.row_ext_payload_word, representativeOf(ext));
+                        continue;
+                    }
                     row_fields.clearRetainingCapacity();
-                    var segment = record.*;
+                    var segment = record;
                     var guard = debug.IterationGuard.init("canonicalizeForSeal.record");
                     while (true) {
                         guard.tick();
@@ -603,12 +600,22 @@ pub const Store = struct {
                         segment = self.extensionRecord(segment.ext) orelse break;
                     }
                     std.mem.sort(RecordField, row_fields.items, idents, RecordField.sortByNameAsc);
-                    record.* = .{ .fields = try self.record_fields.appendSlice(self.gpa, row_fields.items), .ext = segment.ext };
+                    var desc = self.descAt(desc_idx);
+                    desc.content = .{ .structure = .{ .record = .{
+                        .fields = try self.record_fields.appendSlice(self.gpa, row_fields.items),
+                        .ext = self.representativeVar(segment.ext),
+                    } } };
+                    self.descs.setRow(desc_idx, self.encodeDescWithoutIdentity(desc));
                 },
-                .tag_union => |*tag_union| {
-                    if (self.extensionTagUnion(tag_union.ext) == null) continue;
+                .tag_union => {
+                    const tag_union = self.tagUnionAt(desc_idx);
+                    const ext = self.findStorageRoot(tag_union.ext);
+                    if (self.descs.getWord(ext.desc_idx).kind != .tag_union) {
+                        self.setInlineVarForSeal(desc_idx, Desc.row_ext_payload_word, representativeOf(ext));
+                        continue;
+                    }
                     row_tags.clearRetainingCapacity();
-                    var segment = tag_union.*;
+                    var segment = tag_union;
                     var guard = debug.IterationGuard.init("canonicalizeForSeal.tag_union");
                     while (true) {
                         guard.tick();
@@ -617,21 +624,42 @@ pub const Store = struct {
                         segment = self.extensionTagUnion(segment.ext) orelse break;
                     }
                     std.mem.sort(Tag, row_tags.items, idents, Tag.sortByNameAsc);
-                    tag_union.* = .{ .tags = try self.tags.appendSlice(self.gpa, row_tags.items), .ext = segment.ext };
+                    var desc = self.descAt(desc_idx);
+                    desc.content = .{ .structure = .{ .tag_union = .{
+                        .tags = try self.tags.appendSlice(self.gpa, row_tags.items),
+                        .ext = self.representativeVar(segment.ext),
+                    } } };
+                    self.descs.setRow(desc_idx, self.encodeDescWithoutIdentity(desc));
                 },
-                .tuple, .nominal_type, .empty_record, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound => continue,
             }
-            self.descs.setRow(desc_idx, self.encodeDescWithoutIdentity(desc));
         }
     }
 
-    /// The checked representative of `var_`'s class.
-    fn representativeVar(self: *const Self, var_: Var) Var {
-        const representative = self.resolveVar(var_).var_;
+    /// Replace the variable a function or row descriptor holds inline in
+    /// `payload_word`, leaving the rest of its stored row as it is: the row
+    /// is then what encoding the descriptor with that variable gives.
+    fn setInlineVarForSeal(self: *Self, desc_idx: DescStore.Idx, comptime payload_word: usize, var_: Var) void {
+        self.descs.setPayloadWord(desc_idx, payload_word, @backingInt(var_));
+        if (std.debug.runtime_safety) {
+            const reencoded = self.encodeDescWithoutIdentity(self.descAt(desc_idx));
+            if (!std.meta.eql(self.descs.getRow(desc_idx), reencoded)) {
+                base.invariant("a sealed descriptor's stored row is not its descriptor's encoding", .{});
+            }
+        }
+    }
+
+    /// The checked representative of the class `root` stores.
+    fn representativeOf(root: StorageRoot) Var {
+        const representative = root.meta.checked_var;
         if (std.debug.runtime_safety and @backingInt(representative) >= (@as(u32, 1) << 31)) {
             base.invariant("type variable {d} does not fit below the checked synthesized-type bit", .{@backingInt(representative)});
         }
         return representative;
+    }
+
+    /// The checked representative of `var_`'s class.
+    fn representativeVar(self: *const Self, var_: Var) Var {
+        return representativeOf(self.findStorageRoot(var_));
     }
 
     /// The record `ext` resolves to, when it is one.
@@ -3958,6 +3986,17 @@ const DescStore = struct {
     /// Overwrite the word of descriptor `idx`, keeping its payload.
     fn setWord(self: *Self, idx: Idx, word: Desc.Word) void {
         self.backing.items(.word)[@backingInt(idx)] = word;
+    }
+
+    /// One word of descriptor `idx`'s payload.
+    inline fn getPayloadWord(self: *const Self, idx: Idx, comptime word: usize) u32 {
+        return self.backing.items(.payload)[@backingInt(idx)][word];
+    }
+
+    /// Overwrite one word of descriptor `idx`'s payload, keeping its word
+    /// and the rest of its payload.
+    fn setPayloadWord(self: *Self, idx: Idx, comptime word: usize, value: u32) void {
+        self.backing.items(.payload)[@backingInt(idx)][word] = value;
     }
 
     inline fn rowIdx(idx: Idx) Rows.Idx {

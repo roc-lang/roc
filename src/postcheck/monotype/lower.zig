@@ -3502,15 +3502,6 @@ fn selectRequestRepresentation(graph: *InstGraph, declared_node: NodeId, produce
     }
 }
 
-/// A procedure template's checked result row, once it is known closed.
-const ClosedResultRow = struct {
-    /// The checked row itself: the function result's own row, or the error
-    /// argument row of a `Builtin.Try` result.
-    row: checked.CheckedTypeId,
-    /// Whether the row sits inside a `Builtin.Try` result.
-    behind_try: bool,
-};
-
 /// Whether a checked tag row is closed for result-row widening. This is
 /// `CheckedTypePayload.variableSealsToRowDefault`. A rigid tail is
 /// parametric—the caller supplies the row—and is therefore not closed.
@@ -3531,30 +3522,19 @@ fn checkedResultRowIsClosed(view: ModuleView, root: checked.CheckedTypeId) bool 
     Common.invariant("checked result row extension chain was cyclic");
 }
 
-/// The template's checked result row when it is closed, so a request at a
+/// Whether the template's checked result is a closed row, so a request at a
 /// row that includes it widens that row and the template is specialized at
 /// the request's row (design.md "Closed Result Rows At Template Boundaries").
-fn closedResultRowOrNull(view: ModuleView, checked_fn_root: checked.CheckedTypeId) ?ClosedResultRow {
+fn hasClosedResultRow(view: ModuleView, checked_fn_root: checked.CheckedTypeId) bool {
     const function = switch (resolvedPayload(view, checked_fn_root).payload) {
         .function => |function| function,
-        .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+        .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return false,
     };
     const ret = resolvedPayload(view, function.ret);
-    switch (ret.payload) {
-        .nominal => |nominal| {
-            if (nominal.builtin != .try_) return null;
-            if (nominal.args.len != 2) {
-                Common.invariant("Builtin.Try checked type did not have exactly two type arguments");
-            }
-            if (!checkedResultRowIsClosed(view, nominal.args[1])) return null;
-            return .{ .row = nominal.args[1], .behind_try = true };
-        },
-        .tag_union, .empty_tag_union => {
-            if (!checkedResultRowIsClosed(view, ret.root)) return null;
-            return .{ .row = ret.root, .behind_try = false };
-        },
-        .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record => return null,
-    }
+    return switch (ret.payload) {
+        .tag_union, .empty_tag_union => checkedResultRowIsClosed(view, ret.root),
+        .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record => false,
+    };
 }
 
 /// A checked function type's request-determined result row variable, or
@@ -3566,10 +3546,9 @@ const RequestDeterminedResultRow = union(enum) {
 
 /// The variable a function type's result row ends in, when nothing else in
 /// the type reaches it and it carries no constraint that closing a row does
-/// not discharge: the function's direct result row or the error row of its
-/// `Try` result, the positions `closedResultRowOrNull` reads. The variable
-/// may be flex or rigid, with or without a row default, and may be the whole
-/// row. Such a variable is determined by the function's result alone, so a
+/// not discharge: the function's direct result row, the position
+/// `hasClosedResultRow` reads. The variable may be flex or rigid, with or
+/// without a row default, and may be the whole row. Such a variable is determined by the function's result alone, so a
 /// template that quantifies it is specialized at whatever row its request's
 /// result holds there (design.md "Closed Result Rows At Template
 /// Boundaries"). The type reaches the variable only through the chain of
@@ -3593,7 +3572,6 @@ fn requestDeterminedResultRowVariable(
     try others.appendSlice(allocator, function.args);
 
     var current = function.ret;
-    var behind_try = false;
     const variable = while (true) {
         if (chain.items.len >= view.types.typeCount()) {
             Common.invariant("checked result row chain was cyclic");
@@ -3604,16 +3582,6 @@ fn requestDeterminedResultRowVariable(
             .alias => |alias| {
                 try others.appendSlice(allocator, alias.args);
                 current = alias.backing;
-            },
-            .nominal => |nominal| {
-                if (behind_try or nominal.builtin != .try_) return null;
-                if (nominal.args.len != 2) {
-                    Common.invariant("Builtin.Try checked type did not have exactly two type arguments");
-                }
-                behind_try = true;
-                try others.append(allocator, nominal.args[0]);
-                try others.appendSlice(allocator, nominal.padding_field_types);
-                current = nominal.args[1];
             },
             .tag_union => |tag_union| {
                 for (0..tag_union.tags.len()) |tag_index| {
@@ -3626,7 +3594,7 @@ fn requestDeterminedResultRowVariable(
                 if (row_variable.constraints.len() != 0 and !row_variable.row_default_discharges_constraints) return null;
                 break current;
             },
-            .pending, .field_kind, .err, .record, .tuple, .function, .empty_record, .empty_tag_union => return null,
+            .pending, .field_kind, .err, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => return null,
         }
     };
 
@@ -3745,8 +3713,7 @@ fn requestRowIncludesClosedRow(
 }
 
 /// The row a result node presents for widening: a bare tag row itself; a
-/// nominal's structural backing row, through which a `Try`'s error argument
-/// is one tag's payload; null for anything else.
+/// nominal's structural backing row; null for anything else.
 fn resultRowNodeOrNull(graph: *InstGraph, node: NodeId) Allocator.Error!?NodeId {
     return switch ((try graph.content(node))) {
         .tag_union, .empty_tag_union => node,
@@ -3764,8 +3731,8 @@ fn resultRowNodeOrNull(graph: *InstGraph, node: NodeId) Allocator.Error!?NodeId 
 const ResultRowWidening = union(enum) {
     /// The function's own result row.
     result: RequestNodePair,
-    /// The error row of a `Try` result: one payload of one tag of the rows
-    /// the two results present (`resultRowNodeOrNull`).
+    /// A row under the result's own: one payload of one tag of the rows the
+    /// two results present (`resultRowNodeOrNull`).
     payload: struct {
         name: names.TagNameId,
         index: usize,
@@ -3781,24 +3748,20 @@ const ResultRowWidening = union(enum) {
     }
 };
 
-/// Recognize the one result cell a request may widen past the template's
-/// closed row: the function's own result row, or the error row of its `Try`
-/// result, the positions polarity opens per use (design.md "Polarity").
-/// `declared_row` is the checker's own answer for this template; the graph
-/// may present either side as a bare row or as the `Try` nominal, so both
-/// are read as rows and the error row is the payload the two rows share at
-/// one label. Every other component relates exactly, through the ordinary
-/// relation that follows the widening. Nothing is related here.
+/// Recognize the one result cell a request may widen past the closed result
+/// row of a template (`hasClosedResultRow`): the function's own result row,
+/// or a payload row the two results share at one label. The graph may present
+/// either side as a bare row or as a nominal, so both are read as rows. Every
+/// other component relates exactly, through the ordinary relation that
+/// follows the widening. Nothing is related here.
 fn resultRowWideningOrNull(
     graph: *InstGraph,
-    declared_row: ClosedResultRow,
     public_ret: NodeId,
     request_ret: NodeId,
 ) Allocator.Error!?ResultRowWidening {
     const public_row = (try resultRowNodeOrNull(graph, public_ret)) orelse return null;
     const request_row = (try resultRowNodeOrNull(graph, request_ret)) orelse return null;
-    if (!declared_row.behind_try and
-        (try graph.content(public_row)) == .tag_union and
+    if ((try graph.content(public_row)) == .tag_union and
         try requestRowIncludesClosedRow(graph, public_row, request_row))
     {
         return .{ .result = .{ .public = public_row, .request = request_row } };
@@ -3822,17 +3785,17 @@ fn resultRowWideningOrNull(
     return null;
 }
 
-/// Widen a template's closed result row to a request whose row includes it,
-/// so the template is specialized at the request's row (design.md "Closed
-/// Result Rows At Template Boundaries"). A request at the template's own row
-/// widens nothing. The caller relates the two interfaces afterwards.
+/// Widen the closed result row of a template (`hasClosedResultRow`) to a
+/// request whose row includes it, so the template is specialized at the
+/// request's row (design.md "Closed Result Rows At Template Boundaries"). A
+/// request at the template's own row widens nothing. The caller relates the
+/// two interfaces afterwards.
 fn widenClosedResultRow(
     graph: *InstGraph,
-    declared_row: ClosedResultRow,
     public_ret: NodeId,
     request_ret: NodeId,
 ) Allocator.Error!void {
-    const widening = (try resultRowWideningOrNull(graph, declared_row, public_ret, request_ret)) orelse return;
+    const widening = (try resultRowWideningOrNull(graph, public_ret, request_ret)) orelse return;
     const pair = widening.pair();
     if ((try graph.content(pair.public)) != .empty_tag_union) {
         try graph.widenClosedTagRow(pair.public, pair.request);
@@ -3840,7 +3803,7 @@ fn widenClosedResultRow(
     }
     // The empty row's node stands for every empty row in the graph, so the
     // position that holds it is pointed at the request's row instead: the
-    // tag payload, and the `Try` argument that names the same row.
+    // tag payload, and a named type's argument that names the same row.
     const payload = switch (widening) {
         .payload => |payload| payload,
         .result => Common.invariant("a function result widened from an empty row"),
@@ -3863,7 +3826,7 @@ fn widenClosedResultRowToRequest(
     public_fn: NodeId,
     request_fn: NodeId,
 ) Allocator.Error!void {
-    const declared_row = closedResultRowOrNull(view, checked_fn_ty) orelse return;
+    if (!hasClosedResultRow(view, checked_fn_ty)) return;
     if (graph.sameClass(public_fn, request_fn)) return;
     // Only a directly function-shaped pair is inspected here. Reading a
     // function interface through a named backing is the caller's ordinary
@@ -3874,7 +3837,7 @@ fn widenClosedResultRowToRequest(
     if (public.args.len != request.args.len) {
         Common.compilerBug("result-row widening request changed arity from its checked interface");
     }
-    try widenClosedResultRow(graph, declared_row, public.ret, request.ret);
+    try widenClosedResultRow(graph, public.ret, request.ret);
 }
 
 /// Rendered length `hostedExternAbiViolationMessage` never exceeds.
@@ -6960,7 +6923,7 @@ const Builder = struct {
     ) Allocator.Error!bool {
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
-        if (closedResultRowOrNull(view, template.checked_fn_root) != null) return true;
+        if (hasClosedResultRow(view, template.checked_fn_root)) return true;
         return switch (try self.requestDeterminedResultRow(view, template.checked_fn_root)) {
             .none => false,
             .variable => true,
@@ -33381,8 +33344,8 @@ const BodyContext = struct {
             self.builder.countBodyDiagnostic("direct_call_request_reuses");
             if (task.expected_ret_node) |expected| {
                 const fn_nodes = try self.graph.functionNodes(request.fn_node);
-                if (closedResultRowOrNull(self.view, task.source_fn_ty)) |declared_row| {
-                    try widenClosedResultRow(self.graph, declared_row, fn_nodes.ret, expected);
+                if (hasClosedResultRow(self.view, task.source_fn_ty)) {
+                    try widenClosedResultRow(self.graph, fn_nodes.ret, expected);
                 }
                 _ = try checkedMonoRequestNode(self.graph, fn_nodes.ret, expected, .exact);
             }
@@ -33514,9 +33477,9 @@ const BodyContext = struct {
                 // row widens the callee's row: a procedure is specialized at
                 // the row its result flows into, so a function value's row,
                 // which every call shares, is never widened.
-                if (!task.callee_value) if (closedResultRowOrNull(caller.view, task.source_fn_ty)) |declared_row| {
-                    try widenClosedResultRow(self.graph, declared_row, task.ret_node, expected);
-                };
+                if (!task.callee_value and hasClosedResultRow(caller.view, task.source_fn_ty)) {
+                    try widenClosedResultRow(self.graph, task.ret_node, expected);
+                }
                 request_ret = try checkedMonoRequestNode(self.graph, task.ret_node, expected, .exact);
             }
         }
@@ -33615,8 +33578,8 @@ const BodyContext = struct {
             if (try self.graph.containsGeneratedPrivate(expected)) {
                 request_ret = expected;
             } else {
-                if (closedResultRowOrNull(caller.view, plan.callable_ty)) |declared_row| {
-                    try widenClosedResultRow(self.graph, declared_row, task.ret_node, expected);
+                if (hasClosedResultRow(caller.view, plan.callable_ty)) {
+                    try widenClosedResultRow(self.graph, task.ret_node, expected);
                 }
                 request_ret = try checkedMonoRequestNode(self.graph, task.ret_node, expected, .exact);
             }
@@ -39593,7 +39556,7 @@ const BodyContext = struct {
         const target = call.directTarget(self.view) orelse return false;
         if (self.directCallTargetIsLocalProc(target)) return false;
         const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.sourceFnTy(self.view));
-        const declared_row = closedResultRowOrNull(self.view, source_fn_ty) orelse return false;
+        if (!hasClosedResultRow(self.view, source_fn_ty)) return false;
         const proc: checked.ProcedureUseTemplate = switch (self.finalDirectTarget(target).record.ref) {
             .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |proc| proc,
             .platform_required_proc => |required| required.procedure,
@@ -39602,7 +39565,7 @@ const BodyContext = struct {
         };
         if (!try self.builder.templateTakesWiderResultRow(self.builder.templateRefForProcedureUse(proc))) return false;
         const call_ret_node = try self.instNode(checkedExpr(self.view, call_expr).ty);
-        return (try resultRowWideningOrNull(self.graph, declared_row, call_ret_node, expected_node)) != null;
+        return (try resultRowWideningOrNull(self.graph, call_ret_node, expected_node)) != null;
     }
 
     /// Whether a row coercion's value is lowered at the coercion's row rather

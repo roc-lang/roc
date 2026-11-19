@@ -5,6 +5,7 @@
 //! - Redundant patterns produce REDUNDANT PATTERN warnings
 //! - Exhaustive matches pass without errors
 
+const std = @import("std");
 const TestEnv = @import("TestEnv.zig");
 
 // Basic Tag Union Exhaustiveness
@@ -1284,4 +1285,82 @@ test "non-exhaustive - missing tuple reports the uncovered value of each element
         \\
         \\
     );
+}
+
+// Builtin number identity: only the Builtin module's own number declarations
+// are inhabited despite their `[]` backings. A user type that shares a
+// number's name is an ordinary type.
+
+/// Checks `source`, expecting only builtin-shadowing warnings and no type problems.
+fn expectShadowingOnlyAndNoTypeProblems(source: []const u8) TestEnv.TestEnvError!void {
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    const diagnostics = try test_env.module_env.getDiagnostics();
+    defer test_env.gpa.free(diagnostics);
+    for (diagnostics) |diagnostic| {
+        try std.testing.expectEqual(std.meta.activeTag(diagnostic), .builtin_type_shadowed_warning);
+    }
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.problems.problems.items.len);
+}
+
+test "exhaustive - an empty user nominal named like a number needs no Err" {
+    try expectShadowingOnlyAndNoTypeProblems(
+        \\U8 :: []
+        \\
+        \\f : Try(Str, U8) -> Str
+        \\f = |t| match t {
+        \\    Ok(s) => s
+        \\}
+    );
+}
+
+test "exhaustive - an empty user alias named like a number needs no Err" {
+    try expectShadowingOnlyAndNoTypeProblems(
+        \\U8 : []
+        \\
+        \\f : Try(Str, U8) -> Str
+        \\f = |t| match t {
+        \\    Ok(s) => s
+        \\}
+    );
+}
+
+test "exhaustive - an empty user nominal with an ordinary name needs no Err" {
+    try expectShadowingOnlyAndNoTypeProblems(
+        \\V8 :: []
+        \\
+        \\f : Try(Str, V8) -> Str
+        \\f = |t| match t {
+        \\    Ok(s) => s
+        \\}
+    );
+}
+
+test "non-exhaustive - the builtin U8 error payload requires Err" {
+    const source =
+        \\f : Try(Str, U8) -> Str
+        \\f = |t| match t {
+        \\    Ok(s) => s
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Non Exhaustive Match");
+}
+
+test "non-exhaustive - a builtin number reached through a user alias requires Err" {
+    const source =
+        \\Byte : U8
+        \\
+        \\f : Try(Str, Byte) -> Str
+        \\f = |t| match t {
+        \\    Ok(s) => s
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Non Exhaustive Match");
 }

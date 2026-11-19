@@ -27126,12 +27126,271 @@ fn nominalHidesCallableInterface(nominal: CheckedNominalType) bool {
     };
 }
 
+/// Which formals of each nominal declaration a row conversion reaches
+/// (design.md "Sealed Result Rows"), computed from the declarations of one
+/// module's checked types and memoized per declaration.
+///
+/// A value conversion steps through a named type's declared backing, so it
+/// reaches an argument exactly where that backing places the argument's
+/// formal: the backing's own row, a tag payload of a reached row, or an
+/// argument of a named type at such a position whose own declaration reaches
+/// it. A formal with any other occurrence (under a record, a tuple, a
+/// function, or a named type's argument that is not reached) is not reached,
+/// and neither is one the backing never mentions. A named type's recursion is
+/// never stepped through: an argument a backing passes to a declaration of its
+/// own recursive group is not reached, so a conversion never rebuilds a
+/// recursive value.
+///
+/// Recursive groups are the strongly connected components of "this backing
+/// names that declaration", found by Tarjan's algorithm, which finishes every
+/// component a declaration names before the declaration's own.
+const NominalRowReach = struct {
+    allocator: Allocator,
+    types: CheckedTypeStoreView,
+    /// Each declaration's position in `types.nominal_declarations`, by key,
+    /// for the representations that do not name the local position.
+    by_key: std.AutoHashMapUnmanaged(canonical.NominalTypeKey, u32) = .empty,
+    indexed: bool = false,
+    /// One entry per declaration of `types.nominal_declarations`.
+    entries: std.ArrayList(Entry) = .empty,
+    /// Whether the conversion reaches each formal of each finished
+    /// declaration (`Entry.formals_start`).
+    formals: std.ArrayList(bool) = .empty,
+    next_order: u32 = 0,
+    /// Declarations whose component is not finished yet, in visit order.
+    open: std.ArrayList(u32) = .empty,
+    frames: std.ArrayList(Frame) = .empty,
+    /// The declarations each open frame's backing names (`Frame.next`).
+    successors: std.ArrayList(u32) = .empty,
+    pending: std.ArrayList(Step) = .empty,
+    seen: collections.DenseMapUnmanaged(CheckedTypeId, u2) = .empty,
+    marks: std.ArrayList(Mark) = .empty,
+
+    const Entry = struct {
+        state: enum { unvisited, open, finished } = .unvisited,
+        order: u32 = 0,
+        low: u32 = 0,
+        formals_start: u32 = 0,
+    };
+    const Frame = struct { declaration: u32, next: u32, successors_start: u32 };
+    const Position = enum(u1) { reached, outside };
+    const Step = struct { ty: CheckedTypeId, position: Position };
+    const Mark = packed struct { reached: bool = false, outside: bool = false };
+
+    fn deinit(self: *NominalRowReach) void {
+        self.by_key.deinit(self.allocator);
+        self.entries.deinit(self.allocator);
+        self.formals.deinit(self.allocator);
+        self.open.deinit(self.allocator);
+        self.frames.deinit(self.allocator);
+        self.successors.deinit(self.allocator);
+        self.pending.deinit(self.allocator);
+        self.seen.deinit(self.allocator);
+        self.marks.deinit(self.allocator);
+    }
+
+    /// Whether the conversion reaches each argument of `nominal`, or null
+    /// when it reaches none of them because the type has no declared backing.
+    fn of(self: *NominalRowReach, nominal: CheckedNominalType) Allocator.Error!?[]const bool {
+        const index = (try self.declarationIndex(nominal)) orelse return null;
+        if (self.entries.items[index].state != .finished) try self.finish(index);
+        const reached = self.reachedFormals(index);
+        if (reached.len != nominal.args.len) checkedArtifactInvariant("a nominal type's argument count differs from its declaration's formals", .{});
+        return reached;
+    }
+
+    fn reachedFormals(self: *const NominalRowReach, index: u32) []const bool {
+        const count = self.types.nominal_declarations[index].fa_len;
+        return self.formals.items[self.entries.items[index].formals_start..][0..count];
+    }
+
+    /// The position in `types.nominal_declarations` of the declaration whose
+    /// backing a conversion of `nominal` steps through, or null when it steps
+    /// through none.
+    fn declarationIndex(self: *NominalRowReach, nominal: CheckedNominalType) Allocator.Error!?u32 {
+        const count = self.types.nominal_declarations.len;
+        if (self.entries.items.len < count) try self.entries.appendNTimes(self.allocator, .{}, count - self.entries.items.len);
+        switch (nominal.representation) {
+            .opaque_without_backing => return null,
+            .builtin => |builtin_nominal| {
+                if (!builtinNominalHasDeclarationBacking(builtin_nominal)) return null;
+                const declaration = self.types.builtinNominalDeclaration(builtin_nominal) orelse
+                    checkedArtifactInvariant("a builtin nominal payload's declaration was missing from its checked module", .{});
+                return @backingInt(declaration.id);
+            },
+            .local_declaration => |id| return @backingInt(self.types.nominalDeclarationById(id).id),
+            // A box payload capability names its declaration by key, as an
+            // imported declaration does.
+            .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability => {},
+        }
+        if (!self.indexed) {
+            for (self.types.nominal_declarations, 0..) |declaration, index| {
+                try self.by_key.put(self.allocator, declaration.nominal, @intCast(index));
+            }
+            self.indexed = true;
+        }
+        return self.by_key.get(checkedNominalTypeKey(nominal)) orelse
+            checkedArtifactInvariant("a nominal payload's declaration was missing from its checked module", .{});
+    }
+
+    /// Finish the component of `root` and every component its backing names.
+    fn finish(self: *NominalRowReach, root: u32) Allocator.Error!void {
+        std.debug.assert(self.frames.items.len == 0 and self.open.items.len == 0);
+        try self.visit(root);
+        while (self.frames.items.len != 0) {
+            const frame = &self.frames.items[self.frames.items.len - 1];
+            const declaration = frame.declaration;
+            if (frame.next < self.successors.items.len) {
+                const successor = self.successors.items[frame.next];
+                frame.next += 1;
+                const entry = &self.entries.items[declaration];
+                switch (self.entries.items[successor].state) {
+                    .unvisited => try self.visit(successor),
+                    .open => entry.low = @min(entry.low, self.entries.items[successor].order),
+                    .finished => {},
+                }
+                continue;
+            }
+            self.successors.shrinkRetainingCapacity(frame.successors_start);
+            _ = self.frames.pop();
+            const entry = self.entries.items[declaration];
+            if (self.frames.items.len != 0) {
+                const parent = &self.entries.items[self.frames.items[self.frames.items.len - 1].declaration];
+                parent.low = @min(parent.low, entry.low);
+            }
+            if (entry.low != entry.order) continue;
+            // `declaration` roots a component: the open declarations from it
+            // on. Each member's reach reads only finished components.
+            var first = self.open.items.len;
+            while (self.open.items[first - 1] != declaration) first -= 1;
+            first -= 1;
+            for (self.open.items[first..]) |member| try self.computeReach(member);
+            for (self.open.items[first..]) |member| self.entries.items[member].state = .finished;
+            self.open.shrinkRetainingCapacity(first);
+        }
+    }
+
+    /// Open `declaration`: number it and list the declarations its backing
+    /// names, each once per mention.
+    fn visit(self: *NominalRowReach, declaration: u32) Allocator.Error!void {
+        const entry = &self.entries.items[declaration];
+        entry.* = .{ .state = .open, .order = self.next_order, .low = self.next_order };
+        self.next_order += 1;
+        try self.open.append(self.allocator, declaration);
+        const successors_start: u32 = @intCast(self.successors.items.len);
+        try self.frames.append(self.allocator, .{ .declaration = declaration, .next = successors_start, .successors_start = successors_start });
+        self.pending.clearRetainingCapacity();
+        self.seen.clearRetainingCapacity();
+        try self.push(self.types.nominal_declarations[declaration].backing, .outside);
+        while (self.pending.pop()) |step| {
+            const payload = self.types.payload(step.ty);
+            switch (payload) {
+                .nominal => |nominal| if (try self.declarationIndex(nominal)) |named| try self.successors.append(self.allocator, named),
+                .alias, .record, .tuple, .tag_union, .function, .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+            }
+            try self.pushChildren(payload);
+        }
+    }
+
+    /// Decide which formals of `declaration` the conversion reaches, reading
+    /// the reaches of the finished declarations its backing names.
+    fn computeReach(self: *NominalRowReach, declaration_index: u32) Allocator.Error!void {
+        const declaration = self.types.nominal_declarations[declaration_index];
+        const formals = declaration.formalArgs(&self.types);
+        self.marks.clearRetainingCapacity();
+        try self.marks.appendNTimes(self.allocator, .{}, formals.len);
+        self.pending.clearRetainingCapacity();
+        self.seen.clearRetainingCapacity();
+        try self.push(declaration.backing, .reached);
+        while (self.pending.pop()) |step| {
+            if (std.mem.findScalar(CheckedTypeId, formals, step.ty)) |formal| {
+                switch (step.position) {
+                    .reached => self.marks.items[formal].reached = true,
+                    .outside => self.marks.items[formal].outside = true,
+                }
+                continue;
+            }
+            const payload = self.types.payload(step.ty);
+            switch (step.position) {
+                .outside => try self.pushChildren(payload),
+                .reached => switch (payload) {
+                    .alias => |alias| try self.push(alias.backing, .reached),
+                    .tag_union => |tag_union| {
+                        for (0..tag_union.tags.len()) |tag_index| {
+                            for (tag_union.tags.get(tag_index).args) |arg| try self.push(arg, .reached);
+                        }
+                        try self.push(tag_union.ext, .reached);
+                    },
+                    .nominal => |nominal| {
+                        const named = try self.declarationIndex(nominal);
+                        // A declaration still open belongs to this recursive
+                        // group, whose recursion is not stepped through.
+                        const reached: ?[]const bool = if (named) |index|
+                            (if (self.entries.items[index].state == .finished) self.reachedFormals(index) else null)
+                        else
+                            null;
+                        if (reached) |known| {
+                            if (known.len != nominal.args.len) checkedArtifactInvariant("a nominal type's argument count differs from its declaration's formals", .{});
+                            for (nominal.args, known) |arg, on_reach| try self.push(arg, if (on_reach) .reached else .outside);
+                        } else {
+                            for (nominal.args) |arg| try self.push(arg, .outside);
+                        }
+                    },
+                    .record, .tuple, .function => try self.push(step.ty, .outside),
+                    .flex, .rigid, .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
+                },
+            }
+        }
+        self.entries.items[declaration_index].formals_start = @intCast(self.formals.items.len);
+        try self.formals.ensureUnusedCapacity(self.allocator, formals.len);
+        for (self.marks.items) |mark| self.formals.appendAssumeCapacity(mark.reached and !mark.outside);
+    }
+
+    fn push(self: *NominalRowReach, ty: CheckedTypeId, position: Position) Allocator.Error!void {
+        const entry = try self.seen.getOrPut(self.allocator, ty);
+        if (!entry.found_existing) entry.value_ptr.* = 0;
+        const bit = @as(u2, 1) << @backingInt(position);
+        if (entry.value_ptr.* & bit != 0) return;
+        entry.value_ptr.* |= bit;
+        try self.pending.append(self.allocator, .{ .ty = ty, .position = position });
+    }
+
+    /// Push every type `payload` names, outside the reach.
+    fn pushChildren(self: *NominalRowReach, payload: CheckedTypePayload) Allocator.Error!void {
+        switch (payload) {
+            .alias => |alias| {
+                for (alias.args) |arg| try self.push(arg, .outside);
+                try self.push(alias.backing, .outside);
+            },
+            .record => |record| {
+                for (0..record.fields.len()) |index| try self.push(record.fields.get(index).ty, .outside);
+                try self.push(record.ext, .outside);
+            },
+            .tuple => |items| for (items) |item| try self.push(item, .outside),
+            .tag_union => |tag_union| {
+                for (0..tag_union.tags.len()) |index| {
+                    for (tag_union.tags.get(index).args) |arg| try self.push(arg, .outside);
+                }
+                try self.push(tag_union.ext, .outside);
+            },
+            .function => |inner| {
+                for (inner.args) |arg| try self.push(arg, .outside);
+                try self.push(inner.ret, .outside);
+            },
+            .nominal => |nominal| for (nominal.args) |arg| try self.push(arg, .outside),
+            .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+        }
+    }
+};
+
 /// Compute every sealed scheme-variable slot of one template together. A type
 /// can occur on both a coercible result path and an externally involved path;
 /// the visited key therefore includes the traversal mode.
 const SealedSchemeSlots = struct {
     allocator: Allocator,
     types: CheckedTypeStoreView,
+    /// The arguments of each named type a conversion of the result reaches.
+    reach: NominalRowReach,
     candidates: collections.DenseMapUnmanaged(CheckedTypeId, bool) = .empty,
     /// Uncommitted record tails (`RowTail.uncommitted_record`)
     /// still eligible to seal.
@@ -27144,10 +27403,11 @@ const SealedSchemeSlots = struct {
     const Step = struct { ty: CheckedTypeId, mode: Mode };
 
     fn init(allocator: Allocator, checked_types: CheckedTypeStoreView) SealedSchemeSlots {
-        return .{ .allocator = allocator, .types = checked_types };
+        return .{ .allocator = allocator, .types = checked_types, .reach = .{ .allocator = allocator, .types = checked_types } };
     }
 
     fn deinit(self: *SealedSchemeSlots) void {
+        self.reach.deinit();
         self.candidates.deinit(self.allocator);
         self.record_candidates.deinit(self.allocator);
         self.seen.deinit(self.allocator);
@@ -27172,7 +27432,7 @@ const SealedSchemeSlots = struct {
     }
 
     /// Decide which bounded tag-row tails seal: those only the result's
-    /// coercion reach holds.
+    /// conversion reach holds.
     fn sealTagRows(
         self: *SealedSchemeSlots,
         variables: []const CheckedTypeId,
@@ -27239,15 +27499,11 @@ const SealedSchemeSlots = struct {
                         for (0..tag_union.tags.len()) |tag_index| try self.pushSlice(tag_union.tags.get(tag_index).args, .result);
                         try self.push(tag_union.ext, .result);
                     },
-                    .nominal => |nominal| switch (nominal.representation) {
-                        .builtin => |builtin_nominal| if (builtinRuntimeEncoding(builtin_nominal) == .try_nominal and nominal.args.len == 2) {
-                            try self.push(nominal.args[0], .ordinary);
-                            try self.push(nominal.args[1], .result);
-                        } else {
-                            try self.pushSlice(nominal.args, .ordinary);
-                        },
-                        .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => try self.pushSlice(nominal.args, .ordinary),
-                    },
+                    .nominal => |nominal| if (try self.reach.of(nominal)) |reached| {
+                        // `push` computes no reach, so the memo this slice
+                        // points into stays where it is.
+                        for (nominal.args, reached) |arg, on_reach| try self.push(arg, if (on_reach) .result else .ordinary);
+                    } else try self.pushSlice(nominal.args, .ordinary),
                     .record, .tuple, .function => try self.push(step.ty, .ordinary),
                     .flex, .rigid, .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
                 },
@@ -27305,8 +27561,8 @@ const SealedSchemeSlots = struct {
     }
 };
 
-/// Independent scalar oracle, compiled only for tests. Kept unchanged from
-/// the original per-variable implementation to check the batched producer.
+/// Independent scalar oracle, compiled only for tests: a per-variable
+/// implementation that checks the batched producer.
 /// Whether a procedure template's scheme variable is SEALED (design.md
 /// "Sealed Result Rows"), over one module's checked types. The walks share
 /// scratch the walk owns, so a query allocates only to grow it.
@@ -27391,11 +27647,12 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
     }
 
     /// Whether `variable` occurs in the function type `fn_root` anywhere but
-    /// along its result's coercion reach: an argument, or a position under
-    /// the result that a row coercion does not reach (design.md "Row
-    /// Coercion Primitive": the root row, tag payload rows, the error
-    /// argument of a `Try`, and alias backings are reached; records, tuples,
-    /// lists, boxes, functions, and other named types' arguments are not).
+    /// along its result's conversion reach: an argument, or a position under
+    /// the result that a value conversion does not reach (design.md "Sealed
+    /// Result Rows": the root row, tag payload rows, alias backings, and the
+    /// arguments a named type's declared backing places on that same reach
+    /// are reached; records, tuples, functions, and every other argument of
+    /// a named type are not).
     fn occursOutsideResultReach(self: *SealedSchemeVarWalk, fn_root: CheckedTypeId, variable: CheckedTypeId) Allocator.Error!bool {
         const signature = self.function(fn_root) orelse return true;
         const allocator = self.allocator;
@@ -27419,19 +27676,106 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
                     }
                     try self.reached.append(allocator, tag_union.ext);
                 },
-                .nominal => |nominal| switch (nominal.representation) {
-                    .builtin => |builtin_nominal| if (builtinRuntimeEncoding(builtin_nominal) == .try_nominal and nominal.args.len == 2) {
-                        if (try self.mentionsVariable(nominal.args[0], variable)) return true;
-                        try self.reached.append(allocator, nominal.args[1]);
-                    } else {
-                        for (nominal.args) |arg| if (try self.mentionsVariable(arg, variable)) return true;
-                    },
-                    .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {
-                        for (nominal.args) |arg| if (try self.mentionsVariable(arg, variable)) return true;
-                    },
+                .nominal => |nominal| {
+                    const declaration = self.conversionDeclaration(nominal);
+                    for (nominal.args, 0..) |arg, index| {
+                        const on_reach = if (declaration) |known| try self.formalOnReach(known, index) else false;
+                        if (on_reach) {
+                            try self.reached.append(allocator, arg);
+                        } else if (try self.mentionsVariable(arg, variable)) return true;
+                    }
                 },
                 .flex, .rigid, .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
                 .record, .tuple, .function => if (try self.mentionsVariable(ty, variable)) return true,
+            }
+        }
+        return false;
+    }
+
+    /// The declaration whose backing a value conversion of `nominal` steps
+    /// through, or null when it steps through none.
+    fn conversionDeclaration(self: *const SealedSchemeVarWalk, nominal: CheckedNominalType) ?CheckedNominalDeclaration {
+        return switch (nominal.representation) {
+            .opaque_without_backing => null,
+            .builtin => |builtin_nominal| if (builtinNominalHasDeclarationBacking(builtin_nominal)) self.types.builtinNominalDeclaration(builtin_nominal).? else null,
+            .local_declaration => |id| self.types.nominalDeclarationById(id),
+            .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability => self.types.nominalDeclaration(checkedNominalTypeKey(nominal)).?,
+        };
+    }
+
+    /// Whether a value conversion reaches formal `formal_index` of
+    /// `declaration`: the backing mentions it, and only on its own row, in
+    /// tag payloads of reached rows, and in reached arguments of named types
+    /// outside the declaration's own recursion.
+    fn formalOnReach(self: *SealedSchemeVarWalk, declaration: CheckedNominalDeclaration, formal_index: usize) Allocator.Error!bool {
+        const allocator = self.allocator;
+        const formal = declaration.formalArgs(&self.types)[formal_index];
+        var reached: std.ArrayList(CheckedTypeId) = .empty;
+        defer reached.deinit(allocator);
+        var reached_seen: std.AutoHashMapUnmanaged(CheckedTypeId, void) = .empty;
+        defer reached_seen.deinit(allocator);
+        var found = false;
+        try reached.append(allocator, declaration.backing);
+        while (reached.pop()) |ty| {
+            if (ty == formal) {
+                found = true;
+                continue;
+            }
+            if ((try reached_seen.getOrPut(allocator, ty)).found_existing) continue;
+            switch (self.types.payload(ty)) {
+                .alias => |alias| try reached.append(allocator, alias.backing),
+                .tag_union => |tag_union| {
+                    for (0..tag_union.tags.len()) |tag_index| try reached.appendSlice(allocator, tag_union.tags.get(tag_index).args);
+                    try reached.append(allocator, tag_union.ext);
+                },
+                .nominal => |nominal| {
+                    const named = self.conversionDeclaration(nominal);
+                    const stepped = if (named) |known| !try self.declarationNames(known, declaration.id) else false;
+                    for (nominal.args, 0..) |arg, index| {
+                        if (stepped and try self.formalOnReach(named.?, index)) {
+                            try reached.append(allocator, arg);
+                        } else if (try self.mentionsVariable(arg, formal)) return false;
+                    }
+                },
+                .flex, .rigid, .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
+                .record, .tuple, .function => if (try self.mentionsVariable(ty, formal)) return false,
+            }
+        }
+        return found;
+    }
+
+    /// Whether the backing of `from`, or of a declaration it names in turn,
+    /// names the declaration `target`.
+    fn declarationNames(self: *SealedSchemeVarWalk, from: CheckedNominalDeclaration, target: CheckedNominalDeclarationId) Allocator.Error!bool {
+        const allocator = self.allocator;
+        var declarations: std.ArrayList(CheckedNominalDeclaration) = .empty;
+        defer declarations.deinit(allocator);
+        var declarations_seen: std.AutoHashMapUnmanaged(CheckedNominalDeclarationId, void) = .empty;
+        defer declarations_seen.deinit(allocator);
+        var types_pending: std.ArrayList(CheckedTypeId) = .empty;
+        defer types_pending.deinit(allocator);
+        var types_seen: std.AutoHashMapUnmanaged(CheckedTypeId, void) = .empty;
+        defer types_seen.deinit(allocator);
+        try declarations.append(allocator, from);
+        while (declarations.pop()) |declaration| {
+            if ((try declarations_seen.getOrPut(allocator, declaration.id)).found_existing) continue;
+            types_pending.clearRetainingCapacity();
+            types_seen.clearRetainingCapacity();
+            try types_pending.append(allocator, declaration.backing);
+            while (types_pending.pop()) |ty| {
+                if ((try types_seen.getOrPut(allocator, ty)).found_existing) continue;
+                const payload = self.types.payload(ty);
+                switch (payload) {
+                    .nominal => |nominal| if (self.conversionDeclaration(nominal)) |named| {
+                        if (named.id == target) return true;
+                        try declarations.append(allocator, named);
+                    },
+                    .alias, .record, .tuple, .tag_union, .function, .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+                }
+                self.pending.clearRetainingCapacity();
+                try self.pushChildren(payload);
+                try types_pending.appendSlice(allocator, self.pending.items);
+                self.pending.clearRetainingCapacity();
             }
         }
         return false;
@@ -40590,6 +40934,73 @@ const SealedSlotsFixture = struct {
         } });
     }
 
+    /// A named type declaration, reserved before its backing is built so the
+    /// backing can name it.
+    const Declared = struct {
+        representation: CheckedNominalRepresentationRef,
+        source_decl: u32,
+    };
+
+    /// Reserve the next local declaration. Reserved declarations are defined
+    /// in the order they were reserved.
+    fn reserve(self: *SealedSlotsFixture, ahead: u32) Declared {
+        const index: u32 = @intCast(self.store.nominal_declarations.items().len + ahead);
+        return .{ .representation = .{ .local_declaration = @fromBackingInt(index) }, .source_decl = index + 1 };
+    }
+
+    fn formal(self: *SealedSlotsFixture) Allocator.Error!CheckedTypeId {
+        return self.add(.{ .rigid = .{} });
+    }
+
+    /// `declared` applied to `args`.
+    fn apply(self: *SealedSlotsFixture, declared: Declared, args: []const CheckedTypeId) Allocator.Error!CheckedTypeId {
+        const name = try self.names.internTypeName("Declared");
+        const origin_module = try self.origin();
+        return self.add(.{ .nominal = .{
+            .name = name,
+            .origin_module = origin_module,
+            .owner_module = testCheckedModuleKey(1).digest(),
+            .source_decl = declared.source_decl,
+            .builtin = if (declared.representation == .builtin) declared.representation.builtin else null,
+            .is_opaque = false,
+            .representation = declared.representation,
+            .args = try allocator.dupe(CheckedTypeId, args),
+        } });
+    }
+
+    /// Publish `declared` with `formals` and `backing`.
+    fn define(self: *SealedSlotsFixture, declared: Declared, formals: []const CheckedTypeId, backing: CheckedTypeId) Allocator.Error!void {
+        const root = try self.apply(declared, formals);
+        try appendCheckedNominalDeclarationFromPayload(allocator, &self.store, root, backing, &.{}, 0);
+    }
+
+    /// A union of one tag per payload list, named by position.
+    fn unionOf(self: *SealedSlotsFixture, payloads: []const []const CheckedTypeId, ext: CheckedTypeId) Allocator.Error!CheckedTypeId {
+        const labels = [_][]const u8{ "First", "Second", "Third" };
+        var names: [labels.len]canonical.TagLabelId = undefined;
+        for (labels[0..payloads.len], names[0..payloads.len]) |label, *name| name.* = try self.names.internTagLabel(label);
+        const built = try allocator.alloc(CheckedTag, payloads.len);
+        for (payloads, 0..) |payload, index| {
+            const copied = allocator.dupe(CheckedTypeId, payload) catch |err| {
+                for (built[0..index]) |entry| allocator.free(entry.args);
+                allocator.free(built);
+                return err;
+            };
+            built[index] = .{ .name = names[index], .args = copied };
+        }
+        // `add` owns the payload from here, on failure too.
+        return self.add(.{ .tag_union = .{ .tags = built, .ext = ext } });
+    }
+
+    /// The builtin `Try`, declared as `[Ok(ok), Err(err)]`.
+    fn declareTry(self: *SealedSlotsFixture) Allocator.Error!Declared {
+        const declared: Declared = .{ .representation = .{ .builtin = .try_ }, .source_decl = 1000 };
+        const ok = try self.formal();
+        const err = try self.formal();
+        try self.define(declared, &.{ ok, err }, try self.unionOf(&.{ &.{ok}, &.{err} }, try self.add(.empty_tag_union)));
+        return declared;
+    }
+
     fn evidence(self: *SealedSlotsFixture, callable: CheckedTypeId, dispatcher: CheckedTypeId) Allocator.Error!static_dispatch.EvidenceParamRecord {
         return .{ .method = try self.names.internMethodName("apply"), .dispatcher_ty = dispatcher, .callable_ty = callable, .slot = .none };
     }
@@ -40635,7 +41046,7 @@ test "sealed slot batching preserves bounded eligibility and duplicate slot orde
     try f.expectSlots(&variables, unit, &.{}, &.{});
 }
 
-test "sealed slot batching separates full and result reach for aliases Try and containers" {
+test "sealed slot batching separates full and result reach for aliases and containers" {
     var f = SealedSlotsFixture{};
     defer f.deinit();
     const unit = try f.add(.empty_record);
@@ -40657,15 +41068,6 @@ test "sealed slot batching separates full and result reach for aliases Try and c
     try f.expectSlots(&variables, try f.function(&.{only_argument}, unit), &.{}, &.{ 1, 2 });
     const alias_evidence = [_]static_dispatch.EvidenceParamRecord{try f.evidence(only_argument, unit)};
     try f.expectSlots(&variables, try f.function(&.{unit}, unit), &alias_evidence, &.{ 1, 2 });
-    const try_result = try f.nominal(.{ .builtin = .try_ }, &.{ a, b });
-    try f.expectSlots(&variables, try f.function(&.{unit}, try_result), &.{}, &.{ 1, 2 });
-    const success_row = try f.tag(&.{}, a);
-    const error_row = try f.tag(&.{}, b);
-    try f.expectSlots(&variables, try f.function(&.{unit}, try f.nominal(.{ .builtin = .try_ }, &.{ success_row, error_row })), &.{}, &.{ 1, 2 });
-    // The Try exception applies only at exactly two arguments.
-    for ([_][]const CheckedTypeId{ &.{a}, &.{ a, b, c } }, [_][]const u32{ &.{ 1, 2 }, &.{} }) |args, expected| {
-        try f.expectSlots(&variables, try f.function(&.{unit}, try f.nominal(.{ .builtin = .try_ }, args)), &.{}, expected);
-    }
     const containers = [_]CheckedTypeId{
         try f.record(a, unit),
         try f.tuple(&.{a}),
@@ -40692,28 +41094,169 @@ test "sealed slot batching separates full and result reach for aliases Try and c
     try f.expectSlots(&variables, aliased_function, &.{}, &.{ 0, 1, 2 });
 }
 
+test "sealed slots follow a declared backing for Try and a user nominal alike" {
+    var f = SealedSlotsFixture{};
+    defer f.deinit();
+    const unit = try f.add(.empty_record);
+    const empty = try f.add(.empty_tag_union);
+    const a = try f.variable();
+    const b = try f.variable();
+    const c = try f.variable();
+    const variables = [_]CheckedTypeId{ a, b, c };
+    // `Outcome(good, bad) := [Good(good), Bad(bad)]` has the shape of `Try`.
+    const outcome = f.reserve(0);
+    const good = try f.formal();
+    const bad = try f.formal();
+    try f.define(outcome, &.{ good, bad }, try f.unionOf(&.{ &.{good}, &.{bad} }, empty));
+    const try_decl = try f.declareTry();
+    const success_row = try f.tag(&.{}, a);
+    const error_row = try f.tag(&.{}, b);
+    for ([_]SealedSlotsFixture.Declared{ try_decl, outcome }) |declared| {
+        // A row tail standing as an argument, and one ending an argument's row.
+        try f.expectSlots(&variables, try f.function(&.{unit}, try f.apply(declared, &.{ a, b })), &.{}, &.{ 0, 1, 2 });
+        try f.expectSlots(&variables, try f.function(&.{unit}, try f.apply(declared, &.{ success_row, error_row })), &.{}, &.{ 0, 1, 2 });
+        // A reached argument is walked as the result is: a row under a
+        // record, a list or a function in it is outside the reach.
+        try f.expectSlots(&variables, try f.function(&.{unit}, try f.apply(declared, &.{ try f.record(success_row, unit), error_row })), &.{}, &.{ 1, 2 });
+        try f.expectSlots(&variables, try f.function(&.{unit}, try f.apply(declared, &.{ unit, try f.nominal(.{ .builtin = .list }, &.{error_row}) })), &.{}, &.{ 0, 2 });
+        try f.expectSlots(&variables, try f.function(&.{unit}, try f.apply(declared, &.{ unit, try f.function(&.{unit}, error_row) })), &.{}, &.{ 0, 2 });
+        // An argument occurrence disqualifies the variable wherever else it is.
+        const applied = try f.apply(declared, &.{ success_row, error_row });
+        try f.expectSlots(&variables, try f.function(&.{applied}, applied), &.{}, &.{2});
+        // The same type nested in a payload, and as a reached argument of itself.
+        try f.expectSlots(&variables, try f.function(&.{unit}, try f.tag(&.{applied}, c)), &.{}, &.{ 0, 1, 2 });
+        try f.expectSlots(&variables, try f.function(&.{unit}, try f.apply(declared, &.{ applied, try f.tag(&.{}, c) })), &.{}, &.{ 0, 1, 2 });
+    }
+    // A declaration that places a formal on a reached argument of another.
+    const wrapped = f.reserve(0);
+    const inner = try f.formal();
+    try f.define(wrapped, &.{inner}, try f.unionOf(&.{&.{try f.apply(try_decl, &.{ unit, inner })}}, empty));
+    try f.expectSlots(&variables, try f.function(&.{unit}, try f.apply(wrapped, &.{error_row})), &.{}, &.{ 0, 1, 2 });
+    // A backing that is its formal's own row.
+    const bare = f.reserve(0);
+    const whole = try f.formal();
+    try f.define(bare, &.{whole}, whole);
+    try f.expectSlots(&variables, try f.function(&.{unit}, try f.apply(bare, &.{error_row})), &.{}, &.{ 0, 1, 2 });
+}
+
+test "sealed slots keep a variable in a nominal argument no conversion reaches" {
+    var f = SealedSlotsFixture{};
+    defer f.deinit();
+    const unit = try f.add(.empty_record);
+    const empty = try f.add(.empty_tag_union);
+    const a = try f.variable();
+    const b = try f.variable();
+    const variables = [_]CheckedTypeId{ a, b };
+    const row = try f.tag(&.{}, a);
+    const try_decl = try f.declareTry();
+    const Shape = enum { record_field, list_item, function_result, tuple_item, unmentioned, record_backing, both_sides, unreached_argument };
+    for ([_]Shape{ .record_field, .list_item, .function_result, .tuple_item, .unmentioned, .record_backing, .both_sides, .unreached_argument }) |shape| {
+        const declared = f.reserve(0);
+        const formal = try f.formal();
+        const backing = switch (shape) {
+            .record_field => try f.unionOf(&.{&.{try f.record(formal, unit)}}, empty),
+            .list_item => try f.unionOf(&.{&.{try f.nominal(.{ .builtin = .list }, &.{formal})}}, empty),
+            .function_result => try f.unionOf(&.{&.{try f.function(&.{unit}, formal)}}, empty),
+            .tuple_item => try f.unionOf(&.{&.{try f.tuple(&.{formal})}}, empty),
+            .unmentioned => try f.unionOf(&.{&.{unit}}, empty),
+            .record_backing => try f.record(formal, unit),
+            .both_sides => try f.unionOf(&.{ &.{formal}, &.{try f.record(formal, unit)} }, empty),
+            // `Try`'s own argument is reached, but not a row under a record in it.
+            .unreached_argument => try f.unionOf(&.{&.{try f.apply(try_decl, &.{ unit, try f.record(formal, unit) })}}, empty),
+        };
+        try f.define(declared, &.{formal}, backing);
+        try f.expectSlots(&variables, try f.function(&.{unit}, try f.apply(declared, &.{row})), &.{}, &.{1});
+        try f.expectSlots(&variables, try f.function(&.{unit}, try f.apply(declared, &.{a})), &.{}, &.{1});
+    }
+}
+
+test "sealed slots never step through a named type's recursion" {
+    // `Tree(e) := [Leaf(e), Node(Tree(e))]`: converting a tree would rebuild
+    // every node, so the argument is outside the reach.
+    {
+        var f = SealedSlotsFixture{};
+        defer f.deinit();
+        const unit = try f.add(.empty_record);
+        const empty = try f.add(.empty_tag_union);
+        const a = try f.variable();
+        const b = try f.variable();
+        const tree = f.reserve(0);
+        const item = try f.formal();
+        try f.define(tree, &.{item}, try f.unionOf(&.{ &.{item}, &.{try f.apply(tree, &.{item})} }, empty));
+        try f.expectSlots(&.{ a, b }, try f.function(&.{unit}, try f.apply(tree, &.{try f.tag(&.{}, a)})), &.{}, &.{1});
+        // A recursion that does not carry the formal leaves it reached.
+        const list = f.reserve(0);
+        const head = try f.formal();
+        try f.define(list, &.{head}, try f.unionOf(&.{ &.{head}, &.{try f.apply(list, &.{unit})} }, empty));
+        try f.expectSlots(&.{ a, b }, try f.function(&.{unit}, try f.apply(list, &.{try f.tag(&.{}, a)})), &.{}, &.{ 0, 1 });
+    }
+    // `Left(x) := [Leaf(x), Step(Right(x))]` and `Right(e) := [Leaf(e),
+    // Back(Left({}))]` name one another. `Left` hands its formal into the
+    // group and `Right` does not, whichever is asked about first.
+    for ([_]bool{ false, true }) |right_first| {
+        var f = SealedSlotsFixture{};
+        defer f.deinit();
+        const unit = try f.add(.empty_record);
+        const empty = try f.add(.empty_tag_union);
+        const a = try f.variable();
+        const b = try f.variable();
+        const left = f.reserve(0);
+        const right = f.reserve(1);
+        const x = try f.formal();
+        const e = try f.formal();
+        try f.define(left, &.{x}, try f.unionOf(&.{ &.{x}, &.{try f.apply(right, &.{x})} }, empty));
+        try f.define(right, &.{e}, try f.unionOf(&.{ &.{e}, &.{try f.apply(left, &.{unit})} }, empty));
+        const left_root = try f.function(&.{unit}, try f.apply(left, &.{try f.tag(&.{}, a)}));
+        const right_root = try f.function(&.{unit}, try f.apply(right, &.{try f.tag(&.{}, a)}));
+        var batch = SealedSchemeSlots.init(SealedSlotsFixture.allocator, f.store.view());
+        defer batch.deinit();
+        var slots: std.ArrayList(u32) = .empty;
+        defer slots.deinit(SealedSlotsFixture.allocator);
+        // One batch memoizes both declarations across the two templates.
+        for ([_]bool{ right_first, !right_first }) |ask_right| {
+            slots.clearRetainingCapacity();
+            try batch.append(&.{ a, b }, if (ask_right) right_root else left_root, &.{}, &slots);
+            try std.testing.expectEqualSlices(u32, if (ask_right) &.{ 0, 1 } else &.{1}, slots.items);
+        }
+        try f.expectSlots(&.{ a, b }, left_root, &.{}, &.{1});
+        try f.expectSlots(&.{ a, b }, right_root, &.{}, &.{ 0, 1 });
+    }
+}
+
 test "sealed slot batching restricts hidden callable veto to arguments" {
     var f = SealedSlotsFixture{};
     defer f.deinit();
     const unit = try f.add(.empty_record);
+    const empty = try f.add(.empty_tag_union);
     const a = try f.variable();
     const b = try f.variable();
     // Both scalar and batch walks inspect only these representation tags;
-    // they never resolve a capability entry or read its id.
+    // they never resolve a capability entry or read its id. A capability's
+    // declaration is found by its key; each one here holds a callable.
     const representations = [_]CheckedNominalRepresentationRef{
         .{ .local_box_payload_capability = .{ .capability = undefined } },
         .{ .imported_box_payload_capability = .{ .artifact = testCheckedModuleKey(2).digest(), .capability = undefined } },
         .{ .builtin = .parse_tag_union_spec },
     };
-    for (representations) |representation| {
-        const hidden = try f.nominal(representation, &.{});
+    for (representations, 0..) |representation, index| {
+        const source_decl: u32 = @intCast(2000 + 2 * index);
+        const declared: [2]SealedSlotsFixture.Declared = .{
+            .{ .representation = representation, .source_decl = source_decl },
+            .{ .representation = representation, .source_decl = source_decl + 1 },
+        };
+        if (representation != .builtin) {
+            try f.define(declared[0], &.{}, try f.unionOf(&.{&.{try f.function(&.{unit}, unit)}}, empty));
+            const formal = try f.formal();
+            try f.define(declared[1], &.{formal}, try f.unionOf(&.{&.{try f.function(&.{unit}, formal)}}, empty));
+        }
+        const hidden = if (representation == .builtin) try f.nominal(representation, &.{}) else try f.apply(declared[0], &.{});
         const evidence_params = [_]static_dispatch.EvidenceParamRecord{try f.evidence(hidden, unit)};
         try f.expectSlots(&.{ a, b }, try f.function(&.{unit}, hidden), &evidence_params, &.{ 0, 1 });
         // Ordinary/result visits must not suppress the argument-mode veto.
         try f.expectSlots(&.{ a, b }, try f.function(&.{hidden}, hidden), &evidence_params, &.{});
         const nested = try f.record(hidden, unit);
         try f.expectSlots(&.{ a, b }, try f.function(&.{nested}, a), &.{}, &.{});
-        const mentions_a = try f.nominal(representation, &.{a});
+        const mentions_a = if (representation == .builtin) try f.nominal(representation, &.{a}) else try f.apply(declared[1], &.{a});
         try f.expectSlots(&.{ a, b }, try f.function(&.{unit}, mentions_a), &.{}, &.{1});
         const vetoed = try f.function(&.{ a, hidden }, b);
         const eligible = try f.function(&.{unit}, b);
