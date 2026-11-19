@@ -11170,7 +11170,11 @@ generated-private witness, the constructor emits an exact container witness
 that references the child directly and relates matching structure through the
 producer-aware value relation. It never merges the child into the corresponding
 public slot or asks a later consumer to recover the child's runtime
-representation from the public container shape.
+representation from the public container shape. A record update follows the
+same rule for every field it does not supply or unset: that field's child is
+the base value's field, so a generated-private representation the base carries
+there is the update's field type, and the unchanged field has one type in the
+base and the result.
 
 A lambda is such a constructor for its result: a function type carries its
 result's representation, so a lambda that returns a produced iterator has a

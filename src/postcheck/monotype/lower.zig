@@ -51586,12 +51586,16 @@ const BodyContext = struct {
         if (try self.graph.containsGeneratedPrivate(slot_node)) {
             return .{ .slot = slot_node, .requires_witness = false };
         }
-        if (try self.resultCompletesRequest(slot_node, child_node) or
-            try self.producedValueHasExplicitRepresentationEvidence(slot_node, child_node))
+        // The child now completes the slot or carries explicit representation
+        // evidence the slot lacks; anything else is a compiler bug. Both
+        // queries only confirm that, so they run in debug builds alone.
+        if (@import("builtin").mode == .debug and
+            !(try self.resultCompletesRequest(slot_node, child_node) or
+                try self.producedValueHasExplicitRepresentationEvidence(slot_node, child_node)))
         {
-            return .{ .slot = child_node, .requires_witness = true };
+            Common.invariant(missing_evidence_message);
         }
-        Common.invariant(missing_evidence_message);
+        return .{ .slot = child_node, .requires_witness = true };
     }
 
     fn relateLookupExprAtNode(
@@ -53149,16 +53153,41 @@ const BodyContext = struct {
             }
             // An updated field's producer-authored child can carry a
             // representation distinct from the checked-public field slot, so
-            // updates run the same witness selection as closed constructors;
-            // spread-carried fields keep their checked slots from the base.
+            // updates run the same witness selection as closed constructors.
+            // A spread-carried field's value is the base's field, so its
+            // producer is the base value: the base's own field node takes part
+            // in the same selection, and a private representation it carries
+            // (such as a minted iterator) stays the result's field type.
             const target_fields = (try self.graph.recordConstructionNodes(record_node)).fields;
             const produced_fields = try self.allocator.alloc(InstField, target_fields.len);
             defer self.allocator.free(produced_fields);
             var requires_distinct_witness = false;
+            const base_node = try self.exprTypeCell(base_expr).toGraphNode(self.graph);
+            var base_fields = try self.constructionFields(base_node);
+            defer base_fields.deinit(self.allocator);
             for (0..target_fields.len) |index| {
                 const field = target_fields[index];
                 produced_fields[index] = field;
-                const field_value = labels.values.get(field.name) orelse continue;
+                const field_value = labels.values.get(field.name) orelse {
+                    if (labels.unsets.contains(field.name)) continue;
+                    const base_field = base_fields.get(field.name);
+                    const witness = try self.constructorChildWitness(
+                        field.ty,
+                        base_field.ty,
+                        "record graph update carried field differed without explicit representation evidence",
+                    );
+                    if (witness.requires_witness) {
+                        requires_distinct_witness = true;
+                        produced_fields[index] = .{
+                            .name = field.name,
+                            .ty = witness.slot,
+                            .value_ty = base_field.value_ty,
+                            .kind = field.kind,
+                            .default = field.default,
+                        };
+                    }
+                    continue;
+                };
                 // A supplied optional field's child is the slot's Present
                 // payload, not the tagged slot itself, and it was already
                 // wrapped above; its slot keeps the checked representation.
