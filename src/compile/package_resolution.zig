@@ -148,6 +148,8 @@ pub const HeaderKind = enum {
 pub const ScannedDep = struct {
     alias: []const u8,
     spec: []const u8,
+    /// Source field in the normalized declaring header; zero for synthetic inputs.
+    region: base.Region = base.Region.zero(),
     /// True for a platform-marked dependency in an app or package header.
     is_platform: bool,
     /// Present only for compiler-owned platform references such as `platform glue`.
@@ -201,6 +203,8 @@ pub const FetchError = error{
 /// solver can be tested without any filesystem or network.
 pub const Fetcher = struct {
     ctx: ?*anyopaque,
+    /// Diagnostic-only source loading. Synthetic fetchers may omit source text.
+    readSourceFn: ?*const fn (ctx: ?*anyopaque, allocator: Allocator, path: []const u8) Allocator.Error!?[]u8 = null,
     /// Fetch the bundle for `url` (whose trailing hash segment is `hash`),
     /// allocating all returned strings with `allocator`. Must be safe to call
     /// from multiple threads at once. `max_expanded_bytes` is the per-bundle
@@ -376,12 +380,12 @@ pub fn versionBumpNotes(
 /// content_bytes <u64>
 /// root_source_hash <64 lowercase hex digits>
 /// deps <count>
-/// dep <0|1> <-|compiler-owned platform name> <len>:<alias bytes> <len>:<spec bytes>
+/// dep <0|1> <-|compiler-owned platform name> <start> <end> <len>:<alias bytes> <len>:<spec bytes>
 /// ```
 ///
 /// with exactly `count` `dep` lines and nothing after the last one. The
 /// `dep` fields are `is_platform`, `compiler_owned_platform` (`-` for none),
-/// `alias` and `spec`. Numbers are decimal with no sign and no leading zeros.
+/// source byte offsets, `alias` and `spec`. Numbers are decimal with no sign and no leading zeros.
 /// Alias and spec bytes are written raw after their byte length, so they may
 /// contain any bytes, spaces and newlines included.
 ///
@@ -405,7 +409,7 @@ pub const Sidecar = struct {
     root_source_hash: [32]u8,
     deps: []const ScannedDep,
 
-    pub const current_format: u32 = 6;
+    pub const current_format: u32 = 7;
     /// Appended to the package directory's path to name its sidecar.
     pub const file_suffix = ".deps";
     /// Suffix of sidecars in the JSON format, which nothing reads; the
@@ -415,7 +419,7 @@ pub const Sidecar = struct {
     const magic = "roc-package-deps ";
     /// The shortest possible `dep` line, which bounds how many a file of a
     /// given size can hold.
-    const min_dep_line_len = "dep 0 - 0: 0:\n".len;
+    const min_dep_line_len = "dep 0 - 0 0 0: 0:\n".len;
 
     pub fn encode(self: Sidecar, allocator: Allocator) Allocator.Error![]u8 {
         var buffer: std.Io.Writer.Allocating = .init(allocator);
@@ -433,7 +437,7 @@ pub const Sidecar = struct {
         try writer.print("deps {d}\n", .{self.deps.len});
         for (self.deps) |dep| {
             const owned: []const u8 = if (dep.compiler_owned_platform) |platform| @tagName(platform) else "-";
-            try writer.print("dep {d} {s} ", .{ @intFromBool(dep.is_platform), owned });
+            try writer.print("dep {d} {s} {d} {d} ", .{ @intFromBool(dep.is_platform), owned, dep.region.start.offset, dep.region.end.offset });
             try line_record.writeLengthPrefixed(writer, dep.alias);
             try writer.writeByte(' ');
             try line_record.writeLengthPrefixed(writer, dep.spec);
@@ -490,11 +494,15 @@ pub const Sidecar = struct {
                 null
             else
                 std.meta.stringToEnum(CompilerOwnedPlatform, owned_text) orelse return false;
+            const start = reader.decimal(u32, ' ') orelse return false;
+            const end = reader.decimal(u32, ' ') orelse return false;
+            if (end < start) return false;
             const alias = reader.lengthPrefixed(' ') orelse return false;
             const spec = reader.lengthPrefixed('\n') orelse return false;
             dep.* = .{
                 .alias = alias,
                 .spec = spec,
+                .region = .{ .start = .{ .offset = start }, .end = .{ .offset = end } },
                 .is_platform = is_platform,
                 .compiler_owned_platform = compiler_owned_platform,
             };
@@ -566,6 +574,8 @@ const Edge = struct {
     parent: ?[]const u8,
     alias: []const u8,
     spec: []const u8,
+    declaring_file: []const u8 = "",
+    region: base.Region = base.Region.zero(),
     is_platform: bool,
     target: Target,
     /// Index into `Resolver.replacements` when a flag redirected this edge.
@@ -917,6 +927,11 @@ pub const Resolver = struct {
             const item = queue.items[queue_index];
 
             for (item.node.deps) |dep| {
+                const edges_start = result.edges.items.len;
+                defer for (result.edges.items[edges_start..]) |*edge| {
+                    edge.declaring_file = item.node.root_file;
+                    edge.region = dep.region;
+                };
                 if (dep.compiler_owned_platform) |platform| {
                     const group = compiler_platforms.groupKey(platform);
 
@@ -1983,7 +1998,33 @@ pub const Resolver = struct {
                 " depends on {s}, which is a platform. Mark this dependency with the `platform` keyword.",
                 .{edge.spec},
             );
+        } else if (target_kind == .module) {
+            try self.addOwnerDiagnostic(
+                "Invalid Package Dependency",
+                owner,
+                " depends on {s}, which is not a package. A package dependency must name a file with a `package` header.",
+                .{edge.spec},
+            );
+            try self.locateLastDiagnostic(edge);
         }
+    }
+
+    /// Load source only on rejection; cached dependency offsets never require
+    /// parsing a successful dependency graph again.
+    fn locateLastDiagnostic(self: *Resolver, edge: Edge) Allocator.Error!void {
+        if (edge.region.start.offset == edge.region.end.offset) return;
+        const read_source = self.fetcher.readSourceFn orelse return;
+        const source = (try read_source(self.fetcher.ctx, self.gpa, edge.declaring_file)) orelse return;
+        defer self.gpa.free(source);
+        // A file may have changed since its header was scanned. The existing
+        // path diagnostic remains valid, but stale offsets cannot highlight it.
+        if (edge.region.end.offset > source.len) return;
+        var env = try base.CommonEnv.init(self.gpa, source);
+        defer env.deinit(self.gpa);
+        try env.calcLineStarts(self.gpa);
+        const report = &self.diagnostics.items[self.diagnostics.items.len - 1].located.?;
+        const filename = try report.addOwnedString(edge.declaring_file);
+        try report.document.addSourceRegion(env.calcRegionInfo(edge.region), .error_highlight, filename, source, env.line_starts.items());
     }
 
     /// Who declared a dependency, as a diagnostic's text names it: lead
@@ -2131,6 +2172,7 @@ fn copyFetchedPackage(allocator: Allocator, fetched: FetchedPackage) Allocator.E
         dep.* = .{
             .alias = try allocator.dupe(u8, source.alias),
             .spec = try allocator.dupe(u8, source.spec),
+            .region = source.region,
             .is_platform = source.is_platform,
             .compiler_owned_platform = source.compiler_owned_platform,
         };
@@ -2274,11 +2316,13 @@ fn appendPlatformDep(
         .string => {
             const spec = try stringFromExpr(allocator, ast, value_expr);
             try appendScannedDep(allocator, deps, ast.resolve(platform_field.name), spec, true);
+            deps.items[deps.items.len - 1].region = ast.tokenizedRegionToRegion(ast.store.getExpr(value_expr).to_tokenized_region());
         },
         .ident => |ident| {
             const platform = compiler_platforms.fromHeaderIdent(ast.resolve(ident.token)) orelse
                 base.invariant("the parser only accepts compiler-owned platform idents", .{});
             try appendCompilerOwnedScannedDep(allocator, deps, ast.resolve(platform_field.name), platform);
+            deps.items[deps.items.len - 1].region = ast.tokenizedRegionToRegion(ast.store.getExpr(value_expr).to_tokenized_region());
         },
         .int,
         .frac,
@@ -2343,6 +2387,7 @@ fn appendPackagesCollection(
             base.invariant("the parser rejects punned dependency entries", .{});
         const spec = try stringFromExpr(allocator, ast, value_expr);
         try appendScannedDep(allocator, deps, ast.resolve(field.name), spec, false);
+        deps.items[deps.items.len - 1].region = ast.tokenizedRegionToRegion(ast.store.getExpr(value_expr).to_tokenized_region());
     }
 }
 
@@ -2502,9 +2547,18 @@ pub const CtxFetcher = struct {
     /// Optional root for materialized compiler-owned source packages.
     compiler_owned_source_dir: ?[]const u8 = null,
 
+    fn readSourceImpl(ctx: ?*anyopaque, allocator: Allocator, path: []const u8) Allocator.Error!?[]u8 {
+        const self: *CtxFetcher = @ptrCast(@alignCast(ctx.?));
+        return self.readNormalizedSource(allocator, path) catch |err| switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => null,
+        };
+    }
+
     pub fn fetcher(self: *CtxFetcher) Fetcher {
         return .{
             .ctx = self,
+            .readSourceFn = readSourceImpl,
             .fetchUrlFn = fetchUrlImpl,
             .loadLocalFn = loadLocalImpl,
             .loadCompilerOwnedPlatformFn = loadCompilerOwnedPlatformImpl,
@@ -2699,6 +2753,7 @@ pub const CtxFetcher = struct {
             dep.* = .{
                 .alias = try allocator.dupe(u8, source.alias),
                 .spec = try allocator.dupe(u8, source.spec),
+                .region = source.region,
                 .is_platform = source.is_platform,
                 .compiler_owned_platform = source.compiler_owned_platform,
             };
@@ -2953,6 +3008,7 @@ const TestRegistry = struct {
             dep.* = .{
                 .alias = try allocator.dupe(u8, source.alias),
                 .spec = try allocator.dupe(u8, source.spec),
+                .region = source.region,
                 .is_platform = source.is_platform,
                 .compiler_owned_platform = source.compiler_owned_platform,
             };
@@ -3580,6 +3636,108 @@ test "platform targets must be marked and packages may not depend on apps" {
 
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
     try std.testing.expectEqual(@as(usize, 2), resolver.diagnostics.items.len);
+}
+
+test "issue 13111: a module cannot be a package dependency" {
+    // https://github.com/roc-lang/roc/issues/13111
+    // A valid module is a valid check root, but not a package dependency.
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    try registry.locals.put("/workspace/sub/main.roc", .{
+        .deps = &.{.{ .alias = "base", .spec = "../Shared.roc", .is_platform = false }},
+    });
+    try registry.locals.put("/workspace/Shared.roc", .{ .kind = .module });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    var outcome = resolver.resolve("/workspace/sub/main.roc");
+    defer if (outcome) |*resolved| resolved.deinit() else |_| {};
+    try std.testing.expectError(error.ResolutionFailed, outcome);
+    try std.testing.expectEqual(@as(usize, 1), resolver.diagnostics.items.len);
+    try std.testing.expectEqualStrings("Invalid Package Dependency", resolver.diagnostics.items[0].title);
+    try std.testing.expect(std.mem.find(u8, resolver.diagnostics.items[0].message, "../Shared.roc") != null);
+}
+
+test "issue 13111: a standalone module remains a valid resolution root" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+    try registry.locals.put("/workspace/Shared.roc", .{ .kind = .module });
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+    var resolved = try resolver.resolve("/workspace/Shared.roc");
+    defer resolved.deinit();
+    try std.testing.expectEqual(@as(usize, 1), resolved.packages.len);
+    try std.testing.expectEqual(HeaderKind.module, resolved.packages[0].kind);
+}
+
+test "issue 13111: transitive URL dependencies must also have package headers" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+    const url = "https://example.com/shared/1.0.0/hashShared.tar.zst";
+    try registry.locals.put("/workspace/main.roc", .{
+        .deps = &.{.{ .alias = "wrapper", .spec = "wrapper/main.roc", .is_platform = false }},
+    });
+    try registry.locals.put("/workspace/wrapper/main.roc", .{
+        .deps = &.{.{ .alias = "base", .spec = url, .is_platform = false }},
+    });
+    try registry.urls.put(url, .{ .kind = .module });
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/workspace/main.roc"));
+    try std.testing.expectEqual(@as(usize, 1), resolver.diagnostics.items.len);
+    try std.testing.expectEqualStrings("Invalid Package Dependency", resolver.diagnostics.items[0].title);
+}
+
+test "issue 13111: dependency rejection highlights the declaring header" {
+    const gpa = std.testing.allocator;
+    const Source = struct {
+        const text = "package [Uses] {\n    base: \"../Shared.roc\",\n}\n";
+        fn read(_: ?*anyopaque, allocator: Allocator, path: []const u8) Allocator.Error!?[]u8 {
+            std.debug.assert(std.mem.endsWith(u8, path, "main.roc"));
+            return try allocator.dupe(u8, text);
+        }
+    };
+    var reports = HeaderReports.init(gpa);
+    defer deinitHeaderReports(&reports);
+    var scanned = try scanHeaderSource(gpa, gpa, "/workspace/sub/main.roc", Source.text, &reports);
+    defer scanned.deinit(gpa);
+    // Exercise the cached representation as well as the source scanner.
+    const sidecar: Sidecar = .{
+        .kind = scanned.kind,
+        .expanded_bytes = 0,
+        .content_bytes = 0,
+        .root_source_hash = base.SourceDigest.of(Source.text).bytes,
+        .deps = scanned.deps,
+    };
+    const bytes = try sidecar.encode(gpa);
+    defer gpa.free(bytes);
+    const decoded = (try Sidecar.decode(gpa, bytes)).?;
+    defer gpa.free(decoded.deps);
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+    try registry.locals.put("/workspace/sub/main.roc", .{ .deps = decoded.deps });
+    try registry.locals.put("/workspace/Shared.roc", .{ .kind = .module });
+    var fetcher = registry.fetcher();
+    fetcher.readSourceFn = Source.read;
+    var resolver = Resolver.init(gpa, fetcher, .{});
+    defer resolver.deinit();
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/workspace/sub/main.roc"));
+    const report = &resolver.diagnostics.items[0].located.?;
+    var found_region = false;
+    for (report.document.elements.items) |element| {
+        if (element != .source_code_region) continue;
+        const region = element.source_code_region;
+        try std.testing.expectEqual(@as(u32, 2), region.start_line);
+        try std.testing.expectEqual(@as(u32, 11), region.start_column);
+        try std.testing.expectEqualStrings("/workspace/sub/main.roc", region.filename.?);
+        found_region = true;
+    }
+    try std.testing.expect(found_region);
 }
 
 test "package platform dependencies select one exact local platform" {
@@ -5237,7 +5395,7 @@ test "a staging directory younger than a day is not swept" {
 test "a sidecar round-trips aliases and specs containing any bytes" {
     const gpa = std.testing.allocator;
     const deps = [_]ScannedDep{
-        .{ .alias = "pf", .spec = "https://example.com/pf/1.0.0/abc.tar.zst", .is_platform = true },
+        .{ .alias = "pf", .spec = "https://example.com/pf/1.0.0/abc.tar.zst", .is_platform = true, .region = .{ .start = .{ .offset = 7 }, .end = .{ .offset = 50 } } },
         .{ .alias = "glue", .spec = "glue", .is_platform = true, .compiler_owned_platform = .glue },
         .{ .alias = "with space", .spec = "a b\nc 3:x \n", .is_platform = false },
         .{ .alias = "", .spec = "", .is_platform = false },
@@ -5266,6 +5424,7 @@ test "a sidecar round-trips aliases and specs containing any bytes" {
     for (deps, decoded.deps) |expected, actual| {
         try std.testing.expectEqualStrings(expected.alias, actual.alias);
         try std.testing.expectEqualStrings(expected.spec, actual.spec);
+        try std.testing.expectEqual(expected.region, actual.region);
         try std.testing.expectEqual(expected.is_platform, actual.is_platform);
         try std.testing.expectEqual(expected.compiler_owned_platform, actual.compiler_owned_platform);
     }
@@ -5287,14 +5446,14 @@ test "a sidecar is written in the documented line format" {
     const bytes = try sidecar.encode(gpa);
     defer gpa.free(bytes);
     try std.testing.expectEqualStrings(
-        "roc-package-deps 6\n" ++
+        "roc-package-deps 7\n" ++
             "kind package\n" ++
             "expanded_bytes 1234\n" ++
             "content_bytes 567\n" ++
             "root_source_hash " ++ "abababababababababababababababababababababababababababababababab" ++ "\n" ++
             "deps 2\n" ++
-            "dep 1 - 2:pf 14:../pf/main.roc\n" ++
-            "dep 1 glue 4:glue 4:glue\n",
+            "dep 1 - 0 0 2:pf 14:../pf/main.roc\n" ++
+            "dep 1 glue 0 0 4:glue 4:glue\n",
         bytes,
     );
 }
@@ -5302,8 +5461,8 @@ test "a sidecar is written in the documented line format" {
 test "a sidecar that does not match the format exactly is rejected" {
     const gpa = std.testing.allocator;
     const hash_line = "root_source_hash " ++ "0000000000000000000000000000000000000000000000000000000000000000" ++ "\n";
-    const prefix = "roc-package-deps 6\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line;
-    const valid = prefix ++ "deps 1\ndep 0 - 1:a 3:b c\n";
+    const prefix = "roc-package-deps 7\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line;
+    const valid = prefix ++ "deps 1\ndep 0 - 0 0 1:a 3:b c\n";
 
     // The baseline the malformed cases below are variations of.
     const accepted = (try Sidecar.decode(gpa, valid)) orelse return error.TestUnexpectedResult;
@@ -5313,34 +5472,36 @@ test "a sidecar that does not match the format exactly is rejected" {
         "",
         "{\"format\":4}",
         // Unknown and non-canonical format numbers.
-        "roc-package-deps 5\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
-        "roc-package-deps 7\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
-        "roc-package-deps 06\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
-        "roc-package-deps +6\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 6\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 8\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 07\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps +7\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
         // Bad scalar fields.
-        "roc-package-deps 6\nkind library\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
-        "roc-package-deps 6\nkind package\nexpanded_bytes 1_0\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
-        "roc-package-deps 6\nkind package\nexpanded_bytes 18446744073709551616\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
-        "roc-package-deps 6\nkind package\nexpanded_bytes \ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
-        "roc-package-deps 6\nkind package\ncontent_bytes 20\nexpanded_bytes 10\n" ++ hash_line ++ "deps 0\n",
-        "roc-package-deps 6\nkind  package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 7\nkind library\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 7\nkind package\nexpanded_bytes 1_0\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 7\nkind package\nexpanded_bytes 18446744073709551616\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 7\nkind package\nexpanded_bytes \ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 7\nkind package\ncontent_bytes 20\nexpanded_bytes 10\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 7\nkind  package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
         prefix[0 .. prefix.len - hash_line.len] ++ "root_source_hash " ++ "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB" ++ "\ndeps 0\n",
         prefix[0 .. prefix.len - hash_line.len] ++ "root_source_hash " ++ "00000000000000000000000000000000000000000000000000000000000000" ++ "\ndeps 0\n",
         prefix[0 .. prefix.len - hash_line.len] ++ "root_source_hash " ++ "000000000000000000000000000000000000000000000000000000000000000000" ++ "\ndeps 0\n",
         // Dependency counts that disagree with the lines that follow.
-        prefix ++ "deps 2\ndep 0 - 1:a 3:b c\n",
-        prefix ++ "deps 0\ndep 0 - 1:a 3:b c\n",
-        prefix ++ "deps 18446744073709551615\ndep 0 - 1:a 3:b c\n",
+        prefix ++ "deps 2\ndep 0 - 0 0 1:a 3:b c\n",
+        prefix ++ "deps 0\ndep 0 - 0 0 1:a 3:b c\n",
+        prefix ++ "deps 18446744073709551615\ndep 0 - 0 0 1:a 3:b c\n",
         // Bad dependency lines.
-        prefix ++ "deps 1\ndep 2 - 1:a 3:b c\n",
-        prefix ++ "deps 1\ndep 0 other 1:a 3:b c\n",
-        prefix ++ "deps 1\ndep 0 - 2:a 3:b c\n",
-        prefix ++ "deps 1\ndep 0 - 1:a 4:b c\n",
-        prefix ++ "deps 1\ndep 0 - 1:a 2:b c\n",
-        prefix ++ "deps 1\ndep 0 - 01:a 3:b c\n",
-        prefix ++ "deps 1\ndep 0 - 1:a 99:b c\n",
-        prefix ++ "deps 1\ndep 0 - 1:a 3:b c",
-        prefix ++ "deps 1\ndep 0 - 1:a\n",
+        prefix ++ "deps 1\ndep 2 - 0 0 1:a 3:b c\n",
+        prefix ++ "deps 1\ndep 0 other 0 0 1:a 3:b c\n",
+        prefix ++ "deps 1\ndep 0 - 4 3 1:a 3:b c\n",
+        prefix ++ "deps 1\ndep 0 - 0 4294967296 1:a 3:b c\n",
+        prefix ++ "deps 1\ndep 0 - 0 0 2:a 3:b c\n",
+        prefix ++ "deps 1\ndep 0 - 0 0 1:a 4:b c\n",
+        prefix ++ "deps 1\ndep 0 - 0 0 1:a 2:b c\n",
+        prefix ++ "deps 1\ndep 0 - 0 0 01:a 3:b c\n",
+        prefix ++ "deps 1\ndep 0 - 0 0 1:a 99:b c\n",
+        prefix ++ "deps 1\ndep 0 - 0 0 1:a 3:b c",
+        prefix ++ "deps 1\ndep 0 - 0 0 1:a\n",
         // Trailing bytes.
         valid ++ "\n",
         valid ++ "extra 1\n",
@@ -5366,7 +5527,7 @@ test "a malformed sidecar is regenerated from the extracted bundle" {
     const sidecar_name = CacheTestHarness.hash ++ Sidecar.file_suffix;
     const generated = try harness.tmp.dir.readFileAlloc(io, sidecar_name, gpa, .limited(1024 * 1024));
 
-    try harness.tmp.dir.writeFile(io, .{ .sub_path = sidecar_name, .data = "roc-package-deps 6\nkind package\n" });
+    try harness.tmp.dir.writeFile(io, .{ .sub_path = sidecar_name, .data = "roc-package-deps 7\nkind package\n" });
     const fetched = try harness.fetch(gpa);
 
     try std.testing.expectEqual(HeaderKind.package, fetched.kind);

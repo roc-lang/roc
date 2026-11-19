@@ -10,6 +10,7 @@ const base = @import("base");
 const backend = @import("backend");
 const object_image = @import("object_image.zig");
 const builtins = @import("builtins");
+const can = @import("can");
 const check = @import("check");
 const collections = @import("collections");
 const lir = @import("lir");
@@ -338,6 +339,9 @@ const RequestPositionColumn = collections.OptionalIndexColumn(RequestPosition);
 /// A position in the materialized static-data exports.
 const ExportPosition = enum(u32) { _ };
 const ExportPositionColumn = collections.OptionalIndexColumn(ExportPosition);
+/// A position in the value-form roots that read other constants.
+const ReaderPosition = enum(u32) { _ };
+const ReaderPositionColumn = collections.OptionalIndexColumn(ReaderPosition);
 
 /// A prepared module and its checking-owned diagnostic destination.
 pub const ProgramModule = struct {
@@ -991,7 +995,6 @@ fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.Solved
         .reads_branch_expectations = false,
         // Specialization records procedure names for every consumer of the
         // program; a runtime consumer's diagnostics read them.
-        .proc_debug_names = true,
         .site_code_keys = true,
         .owned_proc_signatures = true,
         .post_check_executor = options.post_check_executor,
@@ -2069,7 +2072,6 @@ fn boxyCompileTimeTarget(options: Options) lir.CheckedPipeline.TargetConfig {
         .inline_expects = .run,
         .reads_branch_expectations = false,
         .erased_capture_prefix = if (compilerHostMustUseInterpreterForCtfe()) 0 else builtins.erased_callable.hot_reload_capture_prefix_size,
-        .proc_debug_names = true,
         .post_check_executor = options.post_check_executor,
         .timing = if (options.timing) |timing| &timing.lowering else null,
     };
@@ -2083,7 +2085,6 @@ fn boxyLinkedCompileTimeTarget(source: BoxyObjectSource, options: Options) lir.C
     target.boxy_compile_time = true;
     target.boxy_unit = .{ .imports = source.interfaces, .root = false, .names = source.names };
     target.checked_module_state = .checking_finalization;
-    target.proc_debug_names = true;
     target.post_check_executor = options.post_check_executor;
     target.timing = if (options.timing) |timing| &timing.lowering else null;
     return target;
@@ -2194,14 +2195,19 @@ fn finalizeProgramBoxy(
 
 /// Complete every pending value-form root of `modules` with the checked-value
 /// writer (design.md "Value-Form Roots"): store its value from its checked
-/// expression by the plan, layout and stored type the `.boxy` evaluator would
-/// store it by (`BoxyValueSchema`). Such a root reads no other value, so it
-/// completes before any root an evaluator runs, and none of them waits for
-/// it. The pending roots are those the strategy's `.boxy` evaluation takes:
-/// every root still needing evaluation under `.boxy`, and under `.lss`, where
-/// that evaluation runs before the Solved program is specialized, every root
-/// still pending. Every artifact of one checked identity owns its own store,
-/// so each completes its own roots.
+/// expression, and from the stored values of the constants it reads, by the
+/// plan, layout and stored type the `.boxy` evaluator would store it by
+/// (`BoxyValueSchema`). Such a root reads only roots the writer completes, so
+/// it completes before any root an evaluator runs, and none of them waits
+/// for it. The roots of a module it reads complete before it: the module's
+/// own, because the writer completes the roots that read other constants
+/// after the rest, each after the ones it reads, and an imported module's,
+/// because the writer completes a module after its imports. The pending
+/// roots are those the strategy's `.boxy` evaluation takes: every root still
+/// needing evaluation under `.boxy`, and under `.lss`, where that evaluation
+/// runs before the Solved program is specialized, every root still pending.
+/// Every artifact of one checked identity owns its own store, so each
+/// completes its own roots.
 fn completeValueFormRoots(
     allocator: Allocator,
     modules: []const ProgramModule,
@@ -2220,49 +2226,40 @@ fn completeValueFormRoots(
     }
     const started = Timing.startStep(options.timing);
     defer Timing.finishStep(options.timing, started, .value_form_roots);
-    const target_usize = boxyCompileTimeTarget(options).target_usize;
-    var schema: ?lir.CheckedPipeline.BoxyValueSchema = null;
-    defer if (schema) |*owned| owned.deinit();
-    var completed: u64 = 0;
+    var writing = ValueFormWriting{
+        .allocator = allocator,
+        .lowering_modules = lowering_modules,
+        .shared_schema = shared_schema,
+        .options = options,
+    };
+    defer writing.deinit();
     for (modules, 0..) |entry, index| {
         const module = entry.module;
-        var writer: ?ConstStoreWriter.Writer = null;
-        defer if (writer) |*owned| owned.deinit();
+        var module_writing = ValueFormModuleWriting{ .writing = &writing, .module = module };
+        defer module_writing.deinit();
+        // The roots reading nothing, then those reading other constants, in
+        // an order that completes each after the roots of this module it
+        // reads.
+        var readers = std.ArrayList(checked.RootRequest).empty;
+        defer readers.deinit(allocator);
         for (module.root_requests.compile_time_requests.items()) |request| {
-            const root_id = compileTimeRootForRequest(module, request);
-            const root = module.compile_time_roots.root(root_id);
-            if (root.completion != .write_value) continue;
-            const pending = switch (options.strategy) {
-                .boxy => root.needsEvaluation(.boxy),
-                .lss => root.payload == .pending,
-            };
-            if (!pending) continue;
-            const active_schema = shared_schema orelse active: {
-                if (schema == null) {
-                    const schema_started = Timing.startStep(options.timing);
-                    schema = try lir.CheckedPipeline.BoxyValueSchema.init(allocator, lowering_modules, target_usize);
-                    Timing.finishStep(options.timing, schema_started, .value_form_schema);
-                }
-                break :active &schema.?;
-            };
-            if (writer == null) writer = ConstStoreWriter.Writer.initChecked(allocator, module, .{
-                .bodies = module.bodies(),
-                .schema = active_schema,
-            });
-            const root_schema_started = Timing.startStep(options.timing);
-            const root_schema = try active_schema.root(module.key.digest(), request);
-            Timing.finishStep(options.timing, root_schema_started, .value_form_root_schemas);
-            const payload: checked.CompileTimeRootPayload = .{ .const_node = try writer.?.storeCheckedRoot(root_schema.plan, root_schema.ret_layout, root.rootExpr()) };
-            const root_type = try writer.?.storeType(root_schema.ret_type);
-            module.compile_time_roots.fillPayload(root_id, payload);
-            finishConstRoot(module, root, payload, root_type);
-            completed += 1;
-            if (Timing.detailOf(options.timing)) |timing| timing.roots_by_kind[@backingInt(root.kind)].add(1);
+            const root = module.compile_time_roots.root(compileTimeRootForRequest(module, request));
+            if (!valueFormRootPending(root, options.strategy)) continue;
+            if (root.reads_constants) {
+                try readers.append(allocator, request);
+                continue;
+            }
+            try module_writing.write(request);
+        }
+        if (readers.items.len != 0) {
+            const order = try valueFormReaderOrder(allocator, module, readers.items);
+            defer allocator.free(order);
+            for (order) |position| try module_writing.write(readers.items[position]);
         }
         // A module whose every root is now complete can have its object
         // built; its importers' programs may be waiting for it. The first
         // artifact of a checked identity speaks for the others.
-        if (writer == null) continue;
+        if (module_writing.writer == null) continue;
         const source = options.boxy_objects orelse continue;
         if (module.hasUnevaluatedRequests(.boxy)) continue;
         const first = for (modules[0..index]) |earlier| {
@@ -2270,7 +2267,153 @@ fn completeValueFormRoots(
         } else true;
         if (first) try source.completed(source.context, module);
     }
-    if (options.timing) |timing| timing.roots_completed_directly.add(completed);
+    if (options.timing) |timing| timing.roots_completed_directly.add(writing.completed);
+}
+
+/// Whether the checked-value writer still completes `root` under `strategy`
+/// (`completeValueFormRoots`).
+fn valueFormRootPending(root: checked.CompileTimeRoot, strategy: base.SpecializationStrategy) bool {
+    if (root.completion != .write_value) return false;
+    return switch (strategy) {
+        .boxy => root.needsEvaluation(.boxy),
+        .lss => root.payload == .pending,
+    };
+}
+
+/// The schema `completeValueFormRoots` writes by, made when a root first
+/// needs it unless the caller holds one, and the count of roots written.
+const ValueFormWriting = struct {
+    allocator: Allocator,
+    lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
+    shared_schema: ?*lir.CheckedPipeline.BoxyValueSchema,
+    options: Options,
+    schema: ?lir.CheckedPipeline.BoxyValueSchema = null,
+    completed: u64 = 0,
+
+    fn deinit(self: *ValueFormWriting) void {
+        if (self.schema) |*owned| owned.deinit();
+    }
+
+    fn activeSchema(self: *ValueFormWriting) Allocator.Error!*lir.CheckedPipeline.BoxyValueSchema {
+        if (self.shared_schema) |shared| return shared;
+        if (self.schema == null) {
+            const schema_started = Timing.startStep(self.options.timing);
+            self.schema = try lir.CheckedPipeline.BoxyValueSchema.init(self.allocator, self.lowering_modules, boxyCompileTimeTarget(self.options).target_usize);
+            Timing.finishStep(self.options.timing, schema_started, .value_form_schema);
+        }
+        return &self.schema.?;
+    }
+};
+
+/// The checked-value writer of one module's value-form roots, made when the
+/// module's first root is written.
+const ValueFormModuleWriting = struct {
+    writing: *ValueFormWriting,
+    module: *checked.CheckedModuleArtifact,
+    writer: ?ConstStoreWriter.Writer = null,
+
+    fn deinit(self: *ValueFormModuleWriting) void {
+        if (self.writer) |*owned| owned.deinit();
+    }
+
+    /// Store the value-form root `request` asks for and complete it.
+    fn write(self: *ValueFormModuleWriting, request: checked.RootRequest) FinalizeError!void {
+        const module = self.module;
+        const options = self.writing.options;
+        const root_id = compileTimeRootForRequest(module, request);
+        const root = module.compile_time_roots.root(root_id);
+        const schema = try self.writing.activeSchema();
+        if (self.writer == null) self.writer = ConstStoreWriter.Writer.initChecked(self.writing.allocator, module, .{
+            .bodies = module.bodies(),
+            .schema = schema,
+        });
+        const writer = &self.writer.?;
+        const root_schema_started = Timing.startStep(options.timing);
+        const root_schema = try schema.root(module.key.digest(), request);
+        Timing.finishStep(options.timing, root_schema_started, .value_form_root_schemas);
+        const payload: checked.CompileTimeRootPayload = .{ .const_node = try writer.storeCheckedRoot(root_schema.plan, root_schema.ret_layout, root.rootExpr(), root.reads_constants) };
+        const root_type = try writer.storeType(root_schema.ret_type);
+        module.compile_time_roots.fillPayload(root_id, payload);
+        finishConstRoot(module, root, payload, root_type);
+        self.writing.completed += 1;
+        if (Timing.detailOf(options.timing)) |timing| timing.roots_by_kind[@backingInt(root.kind)].add(1);
+    }
+};
+
+/// An order of `readers`, value-form roots of `module` that read other
+/// constants, as positions in `readers`, that puts each after every root of
+/// `readers` it reads. Publication hands a root reading constants to the
+/// writer only when no cycle of reads reaches it.
+fn valueFormReaderOrder(allocator: Allocator, module: *const checked.CheckedModuleArtifact, readers: []const checked.RootRequest) Allocator.Error![]u32 {
+    const bodies = module.bodies();
+    const digest = module.key.digest();
+    // Each reader's position, by root.
+    var reader_positions = try ReaderPositionColumn.initFilled(allocator, module.compile_time_roots.roots.items().len);
+    defer reader_positions.deinit(allocator);
+    for (readers, 0..) |request, position| reader_positions.set(@backingInt(compileTimeRootForRequest(module, request)), @fromBackingInt(@intCast(position)));
+    // The readers each reader reads, as a run of `reads` per reader.
+    var reads = std.ArrayList(u32).empty;
+    defer reads.deinit(allocator);
+    const runs = try allocator.alloc(struct { start: u32, len: u32 }, readers.len);
+    defer allocator.free(runs);
+    var stack = std.ArrayList(can.CIR.Expr.Idx).empty;
+    defer stack.deinit(allocator);
+    var lookups = std.ArrayList(can.CIR.Expr.Idx).empty;
+    defer lookups.deinit(allocator);
+    for (readers, runs) |request, *run| {
+        const root = module.compile_time_roots.root(compileTimeRootForRequest(module, request));
+        lookups.clearRetainingCapacity();
+        try checked.appendValueFormConstReads(allocator, bodies, root.rootExpr(), &stack, &lookups);
+        run.* = .{ .start = @intCast(reads.items.len), .len = 0 };
+        for (lookups.items) |lookup| {
+            const const_ref = bodies.constLookupRef(lookup) orelse finalizationInvariant("a value-form root reads a lookup that names no constant");
+            if (!const_ref.artifact.eql(digest)) continue;
+            const read_root = switch (const_ref.owner) {
+                .top_level_binding => |top_level| module.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse finalizationInvariant("a constant a value-form root reads has no compile-time root"),
+                .hoisted_root => |hoisted| hoisted.root,
+            };
+            const read_position = reader_positions.get(@backingInt(read_root)) orelse continue;
+            try reads.append(allocator, @backingInt(read_position));
+            run.len += 1;
+        }
+    }
+    // Depth-first, each reader after the readers it reads.
+    const State = enum(u8) { fresh, entered, placed };
+    const states = try allocator.alloc(State, readers.len);
+    defer allocator.free(states);
+    @memset(states, .fresh);
+    const order = try allocator.alloc(u32, readers.len);
+    errdefer allocator.free(order);
+    var placed: usize = 0;
+    var pending = std.ArrayList(u32).empty;
+    defer pending.deinit(allocator);
+    for (0..readers.len) |start| {
+        if (states[start] != .fresh) continue;
+        try pending.append(allocator, @intCast(start));
+        while (pending.items.len != 0) {
+            const position = pending.items[pending.items.len - 1];
+            switch (states[position]) {
+                .placed => _ = pending.pop(),
+                .fresh => {
+                    states[position] = .entered;
+                    const run = runs[position];
+                    for (reads.items[run.start..][0..run.len]) |read| switch (states[read]) {
+                        .fresh => try pending.append(allocator, read),
+                        .placed => {},
+                        .entered => finalizationInvariant("value-form roots read each other in a cycle"),
+                    };
+                },
+                .entered => {
+                    _ = pending.pop();
+                    states[position] = .placed;
+                    order[placed] = position;
+                    placed += 1;
+                },
+            }
+        }
+    }
+    if (builtin.mode == .debug) std.debug.assert(placed == readers.len);
+    return order;
 }
 
 /// Evaluate the pending roots `roots` with the `.boxy` evaluator: each
@@ -5481,8 +5624,9 @@ const FailedAt = struct {
 
 /// Where an interpreter's evaluation failed.
 fn interpreterFailedAt(lir_result: *const lir.Program.Result, interpreter: *const Interpreter, slots: *const StaticSlotEnvironment) FailedAt {
+    const meaning = if (interpreter.getFailedCrashStmt()) |stmt| lir_result.store.failureMeaning(stmt) else null;
     return slots.withProducerOrigin(.{
-        .meaning = if (interpreter.getFailedCrashStmt()) |stmt| lir_result.store.failureMeaning(stmt) else null,
+        .meaning = if (meaning) |known| lir_result.meaningByCheckedKey(known) else null,
         .region = interpreter.getFailedCheckedRegion(),
         .loc = interpreter.getFailedSourceLoc(),
     });
@@ -6656,6 +6800,9 @@ const DevProgram = struct {
     image_selection: BoxyLinkedImages.Selection,
     /// The program's LIR, whose source file table locations index.
     lir_store: *const lir.LirStore,
+    /// The program's lowering, whose module table reads the modules failure
+    /// meanings name (`lir.Program.Result.meaningByCheckedKey`).
+    lir_result: *const lir.Program.Result,
 
     fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, options: Options) FinalizeError!DevProgram {
         const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
@@ -6823,6 +6970,7 @@ const DevProgram = struct {
             .linked_images = options.boxy_linked_images,
             .image_selection = image_selection,
             .lir_store = &lowered.lir_result.store,
+            .lir_result = &lowered.lir_result,
         };
     }
 
@@ -6882,7 +7030,7 @@ const DevProgram = struct {
         const known = point orelse return .{};
         var failed_at = FailedAt{};
         if (known.calls.len != 0) {
-            failed_at.meaning = self.failureMeaningAt(known.calls[0]);
+            if (self.failureMeaningAt(known.calls[0])) |meaning| failed_at.meaning = self.lir_result.meaningByCheckedKey(meaning);
         }
         const statement = for (known.calls) |address| {
             // A return address follows its call instruction.
@@ -7320,10 +7468,15 @@ fn devRootLocation(module: *const checked.CheckedModuleArtifact, root: checked.C
     const info = env.calcRegionInfo(region);
     const source = env.getSourceAll();
     const line_starts = env.getLineStartsAll();
+    // A staged default app's roots are the user's code, so name the user's line.
+    const user_line_idx = if (env.staged_source_map) |map|
+        map.userLineIdx(info.start_line_idx, region.start.offset) orelse info.start_line_idx
+    else
+        info.start_line_idx;
     return .{
         .module_name = env.module_name,
         .line_text = base.RegionInfo.getLineText(source, line_starts, info.start_line_idx, info.start_line_idx),
-        .line = info.start_line_idx + 1,
+        .line = user_line_idx + 1,
         .column = info.start_col_idx + 1,
     };
 }

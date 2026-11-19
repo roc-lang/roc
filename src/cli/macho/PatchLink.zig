@@ -526,7 +526,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     hash_context.dirty_ranges = dirty_ranges.items;
     var hash_ranges: std.ArrayList(fanout.Range) = .empty;
     defer hash_ranges.deinit(gpa);
-    try fanout.addRanges(gpa, &hash_ranges, 0, page_count);
+    try fanout.addRanges(gpa, &hash_ranges, 0, @intCast(page_count));
     var hashes: std.ArrayList(Task) = .empty;
     defer hashes.deinit(gpa);
     for (hash_ranges.items) |range| try hashes.append(gpa, .{ .context = &hash_context, .work = .{ .hashes = range } });
@@ -1002,13 +1002,7 @@ fn rewriteLoadCommands(out: []u8, exe: HostPrelink.Executable, layout: Layout) v
         .{ .name = "__data", .addr = layout.data_vmaddr, .size = layout.data_content, .offset = layout.data_fileoff, .flags = macho.S_REGULAR, .@"align" = 12 },
         .{ .name = "__bss", .addr = layout.data_vmaddr + layout.data_content, .size = layout.bss_size, .offset = 0, .flags = macho.S_ZEROFILL, .@"align" = 4 },
     });
-    // Unmapped, but in address order before `__LINKEDIT`, as dyld requires
-    // of a dylib's segments.
-    at = writeSegment(out, at, "__DWARF", layout.linkedit_vmaddr, 0, layout.dwarf_fileoff, layout.dwarf_size, 0, &.{
-        .{ .name = "__debug_abbrev", .addr = layout.debug_offsets[0] - layout.dwarf_fileoff, .size = layout.debug_sizes[0], .offset = layout.debug_offsets[0], .flags = macho.S_ATTR_DEBUG, .@"align" = 0 },
-        .{ .name = "__debug_info", .addr = layout.debug_offsets[1] - layout.dwarf_fileoff, .size = layout.debug_sizes[1], .offset = layout.debug_offsets[1], .flags = macho.S_ATTR_DEBUG, .@"align" = 0 },
-        .{ .name = "__debug_line", .addr = layout.debug_offsets[2] - layout.dwarf_fileoff, .size = layout.debug_sizes[2], .offset = layout.debug_offsets[2], .flags = macho.S_ATTR_DEBUG, .@"align" = 0 },
-    });
+    at = writeDwarfSegment(out, at, layout);
     std.debug.assert(at == linkedit_command + inserted_commands);
     const Shift = struct {
         insertion: u32,
@@ -1054,6 +1048,21 @@ fn rewriteLoadCommands(out: []u8, exe: HostPrelink.Executable, layout: Layout) v
     std.mem.writeInt(u32, out[signature + 12 ..][0..4], @intCast(layout.signature_size), .little);
     std.mem.writeInt(u32, out[16..20], exe.header.ncmds + 3, .little);
     std.mem.writeInt(u32, out[20..24], exe.header.sizeofcmds + inserted_commands, .little);
+}
+
+/// Write the debug information's segment command. The segment is unmapped,
+/// but sits at `__LINKEDIT`'s address so the segments stay in address order,
+/// as dyld requires of a dylib's. Each section's address is the segment's
+/// plus the section's place in the segment, as in a dSYM: Mach-O readers
+/// reject a section below its segment's address.
+fn writeDwarfSegment(out: []u8, at: usize, layout: Layout) usize {
+    const vmaddr = layout.linkedit_vmaddr;
+    const names = [3][]const u8{ "__debug_abbrev", "__debug_info", "__debug_line" };
+    var sections: [3]SectionSpec = undefined;
+    for (&sections, names, layout.debug_offsets, layout.debug_sizes) |*section, name, offset, size| {
+        section.* = .{ .name = name, .addr = vmaddr + (offset - layout.dwarf_fileoff), .size = size, .offset = offset, .flags = macho.S_ATTR_DEBUG, .@"align" = 0 };
+    }
+    return writeSegment(out, at, "__DWARF", vmaddr, 0, layout.dwarf_fileoff, layout.dwarf_size, 0, &sections);
 }
 
 const SectionSpec = struct { name: []const u8, addr: u64, size: u64, offset: u64, flags: u32, @"align": u32 };
@@ -1117,6 +1126,30 @@ test "a dyld opcode stream ends at its DONE, not at its padding" {
     const bind = [_]u8{ 0x51, 0x11, 0x40 } ++ "_memcpy\x00".* ++ [_]u8{ 0x74, 0x00, 0x90, 0x00, 0x00 };
     try std.testing.expectEqualSlices(u8, bind[0 .. bind.len - 2], withoutDone(&bind, .bind));
     try std.testing.expectEqualSlices(u8, &.{}, withoutDone(&.{}, .rebase));
+}
+
+test "issue 13139: debug sections lie within their segment's addresses" {
+    var layout = std.mem.zeroes(Layout);
+    layout.linkedit_vmaddr = 0x1_0047_8000;
+    layout.dwarf_fileoff = 0x47_8000;
+    layout.debug_offsets = .{ 0x47_8000, 0x47_80b0, 0x4d_9e5e };
+    layout.debug_sizes = .{ 0xb0, 0x6_1dae, 0x1234 };
+    layout.dwarf_size = layout.debug_offsets[2] + layout.debug_sizes[2] - layout.dwarf_fileoff;
+
+    var out: [segment_command_size + 3 * section_header_size]u8 = undefined;
+    try std.testing.expectEqual(out.len, writeDwarfSegment(&out, 0, layout));
+
+    const segment = std.mem.bytesToValue(macho.segment_command_64, out[0..segment_command_size]);
+    try std.testing.expectEqualStrings("__DWARF", segment.segName());
+    try std.testing.expectEqual(layout.linkedit_vmaddr, segment.vmaddr);
+    try std.testing.expectEqual(@as(u32, 3), segment.nsects);
+    const sections = std.mem.bytesToValue([3]macho.section_64, out[segment_command_size..]);
+    for (sections) |section| {
+        // LLVM's Mach-O reader: "addr field of section N ... less than the segment's vmaddr".
+        try std.testing.expect(section.addr >= segment.vmaddr);
+        try std.testing.expectEqual(section.offset - segment.fileoff, section.addr - segment.vmaddr);
+        try std.testing.expect(section.offset + section.size <= segment.fileoff + segment.filesize);
+    }
 }
 
 test "the signature header describes its code directory" {

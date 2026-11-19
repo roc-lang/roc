@@ -205,6 +205,16 @@ pub const StaticDispatchRelationMerge = struct {
     retained_fn_var: Var,
 };
 
+/// Two row parts that each store their own entry for one tag a match pattern
+/// asked for (design.md "Pattern-Only Tags"). The unifier rebuilt the row
+/// `root` resolves to holding a copy of the marked tag `name`, and `part`
+/// keeps its own entry outside that row's extension chain.
+pub const PatternOnlyTagCopy = struct {
+    part: Var,
+    root: Var,
+    name: base.Ident.Idx,
+};
+
 /// An empty tag union a relation can no longer lift: written by an
 /// annotation, or committed after inference closed it. The empty tag union
 /// an opening of a nominal declaration's backing minted is the declaration's
@@ -301,6 +311,10 @@ pub const Store = struct {
     /// graph-copy machine. Runtime-only scratch: never serialized, cloned, or
     /// relocated; capacity persists across instantiations until sealing.
     instantiate_scratch: instantiate.Scratch = .{},
+    /// Openings of nominal declaration backings recorded for replay
+    /// (`instantiate.BackingOpenings`). Runtime-only: never serialized,
+    /// cloned, or relocated; released when the store is sealed.
+    backing_openings: instantiate.BackingOpenings = .{},
 
     /// For each frozen class (see `DescriptorFlags.frozen`), keyed by its
     /// descriptor, the variable it was frozen at. A merge leaves a frozen
@@ -378,6 +392,11 @@ pub const Store = struct {
     /// target instantiation. Sealing releases this journal after checking has
     /// published the selected relations into ModuleEnv.
     static_dispatch_relation_merges: std.ArrayListUnmanaged(StaticDispatchRelationMerge) = .empty,
+    /// Every copy the unifier made of a pattern-only tag whose source part
+    /// outlives the relation (design.md "Pattern-Only Tags"). The
+    /// unmatchable-pattern judgment reads these to carry a producer one copy
+    /// met to the others. Sealing releases this journal.
+    pattern_only_tag_copies: std.ArrayListUnmanaged(PatternOnlyTagCopy) = .empty,
     /// Unused room reserved directly after a constraint range, keyed by the
     /// range's end and holding the room's end, so a receiver whose
     /// requirements grow one use at a time extends its own list in place
@@ -670,6 +689,8 @@ pub const Store = struct {
     fn releaseCheckerBuffers(self: *Self) void {
         self.instantiate_scratch.deinit(self.gpa);
         self.instantiate_scratch = .{};
+        self.backing_openings.deinit(self.gpa);
+        self.backing_openings = .{};
         self.frozen_anchors.deinit();
         self.frozen_anchors = .init(self.gpa);
         self.class_watch.deinit(self.gpa);
@@ -694,6 +715,8 @@ pub const Store = struct {
         self.pending_free_descs = .empty;
         self.static_dispatch_relation_merges.deinit(self.gpa);
         self.static_dispatch_relation_merges = .empty;
+        self.pattern_only_tag_copies.deinit(self.gpa);
+        self.pattern_only_tag_copies = .empty;
         self.static_dispatch_constraint_room.deinit(self.gpa);
         self.static_dispatch_constraint_room = .empty;
         self.nominal_identity_index.deinit(self.gpa);
@@ -811,6 +834,7 @@ pub const Store = struct {
         interpolation_metadata_len: usize,
         static_dispatch_constraints_len: usize,
         static_dispatch_relation_merges_len: usize,
+        pattern_only_tag_copies_len: usize,
         verify_clone: SavepointVerifyClone = savepoint_verify_clone_init,
     };
 
@@ -897,6 +921,7 @@ pub const Store = struct {
             .interpolation_metadata_len = self.interpolation_metadata.items().len,
             .static_dispatch_constraints_len = self.static_dispatch_constraints.items().len,
             .static_dispatch_relation_merges_len = self.static_dispatch_relation_merges.items.len,
+            .pattern_only_tag_copies_len = self.pattern_only_tag_copies.items.len,
             .verify_clone = verify_clone,
         };
 
@@ -1011,6 +1036,7 @@ pub const Store = struct {
         self.interpolation_metadata.shrinkRetainingCapacity(savepoint.interpolation_metadata_len);
         self.static_dispatch_constraints.shrinkRetainingCapacity(savepoint.static_dispatch_constraints_len);
         self.static_dispatch_relation_merges.shrinkRetainingCapacity(savepoint.static_dispatch_relation_merges_len);
+        self.pattern_only_tag_copies.shrinkRetainingCapacity(savepoint.pattern_only_tag_copies_len);
         if (self.derived_map_plans_journaled) {
             // A probe only inserts plan rows, so the journaled rows are no
             // longer than the current list.
@@ -1217,7 +1243,22 @@ pub const Store = struct {
         const next_len = @as(usize, self.descs.backing.len()) + 1;
         try self.descs.backing.ensureTotalCapacity(self.gpa, next_len);
         try self.root_metas.ensureTotalCapacity(self.gpa, next_len);
+        return self.appendNewClassRowAssumeCapacity(row, checked_var);
+    }
 
+    /// `appendClassRow` into descriptor and root metadata room reserved
+    /// earlier. A reissued descriptor's writes may still journal.
+    inline fn appendClassRowAssumeCapacity(self: *Self, row: Desc.Row, checked_var: Var) Allocator.Error!DescStore.Idx {
+        if (self.takeFreeDesc()) |desc_idx| {
+            // As in `appendClassRow`, both writes journal inside a probe.
+            try self.setDescRowUnguarded(desc_idx, row);
+            try self.setRootMeta(desc_idx, .{ .checked_var = checked_var });
+            return desc_idx;
+        }
+        return self.appendNewClassRowAssumeCapacity(row, checked_var);
+    }
+
+    inline fn appendNewClassRowAssumeCapacity(self: *Self, row: Desc.Row, checked_var: Var) DescStore.Idx {
         const desc_idx = self.descs.appendRowAssumeCapacity(row);
         const meta_idx = self.root_metas.appendAssumeCapacity(.{
             .checked_var = checked_var,
@@ -1594,6 +1635,27 @@ pub const Store = struct {
         return self.registerRow(try self.encodeDesc(desc));
     }
 
+    /// Create one new variable per row of `rows`, in order, each holding its
+    /// row, a descriptor already encoded for this store, as `register` does
+    /// for each in turn (`instantiate.BackingOpenings` replays the
+    /// descriptors an opening of a nominal declaration's backing minted).
+    pub fn registerEncodedRows(self: *Self, rows: []const Desc.Row) std.mem.Allocator.Error!void {
+        self.debugAssertUnsealed();
+        try self.slots.ensureUnusedCapacity(self.gpa, rows.len);
+        try self.union_ranks.ensureUnusedCapacity(self.gpa, rows.len);
+        const descs_len = @as(usize, self.descs.backing.len()) + rows.len;
+        try self.descs.backing.ensureTotalCapacity(self.gpa, descs_len);
+        try self.root_metas.ensureTotalCapacity(self.gpa, descs_len);
+        for (rows) |row| {
+            const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(self.slots.len()))));
+            const desc_idx = try self.appendClassRowAssumeCapacity(row, Self.slotIdxToVar(slot_idx));
+            const inserted_slot_idx = self.slots.appendAssumeCapacity(.{ .root = desc_idx });
+            const rank_idx = self.union_ranks.appendAssumeCapacity(0);
+            std.debug.assert(inserted_slot_idx == slot_idx);
+            std.debug.assert(@backingInt(rank_idx) == @backingInt(slot_idx));
+        }
+    }
+
     /// `register` for a descriptor already encoded.
     fn registerRow(self: *Self, row: Desc.Row) std.mem.Allocator.Error!Var {
         self.debugAssertUnsealed();
@@ -1758,6 +1820,22 @@ pub const Store = struct {
         try self.setDesc(resolved.desc_idx, desc);
     }
 
+    /// Give `fresh_var` its descriptor: a variable this store minted as an
+    /// unbound flex placeholder that nothing has unified, written once the
+    /// content it stands for is complete. Construction, not a rewrite of the
+    /// solved graph: the placeholder is its own unfrozen root, so the write
+    /// reaches exactly its descriptor, as `dangerousSetVarDesc` would.
+    pub inline fn fillFreshPlaceholder(self: *Self, fresh_var: Var, desc: Desc) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        const desc_idx = self.resolveDescIdx(fresh_var);
+        if (std.debug.runtime_safety) {
+            const word = self.descs.getWord(desc_idx);
+            std.debug.assert(word.kind == .flex and !word.flags().frozen);
+            std.debug.assert(self.getRootMeta(desc_idx).checked_var == fresh_var);
+        }
+        try self.setDesc(desc_idx, desc);
+    }
+
     /// Show `target_var`'s whole class with `content` until the active
     /// savepoint rolls back: a diagnostic's view of a class as it stood
     /// before a decision. The view is of the class itself, so a frozen class
@@ -1804,6 +1882,13 @@ pub const Store = struct {
 
     pub fn groundEpoch(self: *const Self) u64 {
         return self.ground_epoch;
+    }
+
+    /// Advance the ground epoch by `count` writes (`instantiate.BackingOpenings`
+    /// replays the advance an opening of a nominal declaration's backing made).
+    pub fn advanceGroundEpoch(self: *Self, count: u64) void {
+        self.debugAssertUnsealed();
+        self.ground_epoch +%= count;
     }
 
     /// Set a type variable to the provided content
@@ -2304,7 +2389,8 @@ pub const Store = struct {
     /// Append `s` to the vars pool as a range: its length goes in the slot
     /// just before it (`varRange`), so a stored descriptor keeps only the
     /// range's start. Every range of the pool is made here or by
-    /// `mkAliasWithPackedSourceDecl`.
+    /// `mkAliasWithPackedSourceDecl`, or copied from ranges they made by
+    /// `appendVarsPoolEntries`.
     pub fn appendVars(self: *Self, s: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
         self.debugAssertUnsealed();
         const trace = tracy.traceNamed(@src(), "typesStore.appendVars");
@@ -2333,6 +2419,27 @@ pub const Store = struct {
 
     fn isRangeLengthSlot(slot: Var) bool {
         return @backingInt(slot) & range_length_bit != 0;
+    }
+
+    /// Whether a vars-pool entry is the length slot `appendVars` writes
+    /// before a range rather than a variable.
+    pub fn isVarsPoolLengthSlot(entry: Var) bool {
+        return isRangeLengthSlot(entry);
+    }
+
+    /// Append `entries` to the vars pool as they are, returning the index of
+    /// the first. `entries` is a run of whole ranges as `appendVars` wrote
+    /// them, each led by its length slot (`instantiate.BackingOpenings`
+    /// replays the run an opening of a nominal declaration's backing
+    /// appended).
+    pub fn appendVarsPoolEntries(self: *Self, entries: []const Var) std.mem.Allocator.Error!u32 {
+        self.debugAssertUnsealed();
+        return @backingInt((try self.vars.appendSlice(self.gpa, entries)).start);
+    }
+
+    /// The number of entries in the vars pool.
+    pub fn varsPoolLen(self: *const Self) u32 {
+        return @intCast(self.vars.items.len);
     }
 
     /// What a stored descriptor keeps of the vars range `range`: its start,
@@ -3963,6 +4070,10 @@ test "sealing releases checker-only buffers without allocating" {
         store.instantiate_scratch.reach_state = .init(gpa);
         try store.instantiate_scratch.reach_state.?.put(value, true);
         store.instantiate_scratch.marker_visited = .init(gpa);
+        inline for (.{ "rows", "pool", "fields", "tags", "pinned", "replay_pool", "replay_fields", "replay_tags", "replay_rows", "args" }) |field| {
+            try @field(store.backing_openings, field).ensureTotalCapacity(gpa, 8);
+        }
+        try store.backing_openings.recordings.ensureTotalCapacity(gpa, 8);
         {
             const pool = &store.instantiate_scratch.marker_visited.?;
             var visited = pool.acquire();

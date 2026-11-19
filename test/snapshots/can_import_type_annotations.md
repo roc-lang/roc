@@ -32,8 +32,8 @@ advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)
 advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)
 
 # Test function with multiple type parameters
-combineTrys : Try(a, err), Try(b, err) -> Try((a, b), err)
-combineTrys = |result1, result2|
+combine_tries : Try(a, err), Try(b, err) -> Try((a, b), err)
+combine_tries = |result1, result2|
     match result1 {
         Ok(value1) =>
             match(result2) {
@@ -44,88 +44,42 @@ combineTrys = |result1, result2|
     }
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_import_type_annotations.md:2:1:2:17
-DUPLICATE DEFINITION - can_import_type_annotations.md:3:1:3:32
-BUILTIN TYPE SHADOWED - can_import_type_annotations.md:3:1:3:32
+RESERVED TYPE NAME - can_import_type_annotations.md:2:12:2:17
+RESERVED TYPE NAME - can_import_type_annotations.md:3:13:3:17
 UNUSED VARIABLE - can_import_type_annotations.md:6:19:6:22
 MOD NOT FOUND - can_import_type_annotations.md:5:18:5:25
 MOD NOT FOUND - can_import_type_annotations.md:5:29:5:37
 DOES NOT EXIST - can_import_type_annotations.md:6:24:6:44
-MOD NOT FOUND - can_import_type_annotations.md:8:24:8:30
-DOES NOT EXIST - can_import_type_annotations.md:9:21:9:31
 MOD NOT FOUND - can_import_type_annotations.md:11:17:11:25
-MOD NOT FOUND - can_import_type_annotations.md:11:29:11:32
 MOD NOT FOUND - can_import_type_annotations.md:11:37:11:46
-MOD NOT FOUND - can_import_type_annotations.md:11:52:11:58
-DOES NOT EXIST - can_import_type_annotations.md:13:14:13:25
 DOES NOT EXIST - can_import_type_annotations.md:15:24:15:36
-MOD NOT FOUND - can_import_type_annotations.md:20:14:20:21
-DOES NOT EXIST - can_import_type_annotations.md:21:10:21:28
-MOD NOT FOUND - can_import_type_annotations.md:24:29:24:36
-MOD NOT FOUND - can_import_type_annotations.md:24:45:24:48
-MOD NOT FOUND - can_import_type_annotations.md:24:53:24:59
-MOD NOT FOUND - can_import_type_annotations.md:24:72:24:78
-DOES NOT EXIST - can_import_type_annotations.md:25:40:25:61
-MOD NOT FOUND - can_import_type_annotations.md:28:15:28:18
-MOD NOT FOUND - can_import_type_annotations.md:28:28:28:31
-MOD NOT FOUND - can_import_type_annotations.md:28:43:28:46
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
-		(severity warning)
-		(title "Duplicate Definition")
-		(region (start 2 1) (end 2 17))
+		(severity runtime_error)
+		(title "Reserved Type Name")
+		(region (start 2 12) (end 2 17))
 		(headline
-			(reflow "The name ")
+			(text "This import cannot bind ")
 			(annotated symbol-unqualified "Json")
-			(reflow " is being redeclared here."))
+			(text " because that name is reserved for a builtin type."))
 		(document
-			(source-region (file "can_import_type_annotations.md") (start 2 1) (end 2 17) (annotation error) (line-text "import json.Json"))
+			(reflow "Use `as` to give the imported type a different name.")
 			(line-break)
-			(reflow "In this scope, ")
-			(annotated symbol-unqualified "Json")
-			(reflow " was already defined in ")
-			(source-location
-				(file "can_import_type_annotations.md")
-				(line 1)
-				(column 1))
-			(reflow ".")
-			(line-break)
-			(source-region (file "can_import_type_annotations.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import http.Client as Http exposing [Request, Response]"))))
+			(source-region (file "can_import_type_annotations.md") (start 2 12) (end 2 17) (annotation error) (line-text "import json.Json"))))
 	(report
-		(severity warning)
-		(title "Duplicate Definition")
-		(region (start 3 1) (end 3 32))
+		(severity runtime_error)
+		(title "Reserved Type Name")
+		(region (start 3 13) (end 3 17))
 		(headline
-			(reflow "The name ")
+			(text "This import cannot bind ")
 			(annotated symbol-unqualified "Try")
-			(reflow " is being redeclared here."))
+			(text " because that name is reserved for a builtin type."))
 		(document
-			(source-region (file "can_import_type_annotations.md") (start 3 1) (end 3 32) (annotation error) (line-text "import utils.Try exposing [Try]"))
+			(reflow "Use `as` to give the imported type a different name.")
 			(line-break)
-			(reflow "In this scope, ")
-			(annotated symbol-unqualified "Try")
-			(reflow " was already defined in ")
-			(source-location
-				(file "can_import_type_annotations.md")
-				(line 1)
-				(column 1))
-			(reflow ".")
-			(line-break)
-			(source-region (file "can_import_type_annotations.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import http.Client as Http exposing [Request, Response]"))))
-	(report
-		(severity warning)
-		(title "Builtin Type Shadowed")
-		(region (start 3 1) (end 3 32))
-		(headline
-			(text "The type ")
-			(annotated symbol-unqualified "Try")
-			(text " shadows a builtin type."))
-		(document
-			(reflow "This may make the builtin type inaccessible in this scope.")
-			(line-break)
-			(source-region (file "can_import_type_annotations.md") (start 3 1) (end 3 32) (annotation warning) (line-text "import utils.Try exposing [Try]"))))
+			(source-region (file "can_import_type_annotations.md") (start 3 13) (end 3 17) (annotation error) (line-text "import utils.Try exposing [Try]"))))
 	(report
 		(severity warning)
 		(title "Unused Variable")
@@ -176,27 +130,6 @@ MOD NOT FOUND - can_import_type_annotations.md:28:43:28:46
 	(report
 		(severity runtime_error)
 		(title "Mod Not Found")
-		(region (start 8 24) (end 8 30))
-		(headline
-			(text "This ")
-			(annotated code "Value")
-			(reflow " type is declared to be in ")
-			(annotated code "json.Json")
-			(reflow ", which does not exist."))
-		(document
-			(source-region (file "can_import_type_annotations.md") (start 8 24) (end 8 30) (annotation error) (line-text "parseJson : Str -> Json.Value"))))
-	(report
-		(severity runtime_error)
-		(title "Does Not Exist")
-		(region (start 9 21) (end 9 31))
-		(headline
-			(annotated symbol-unqualified "Json.parse")
-			(reflow " does not exist."))
-		(document
-			(source-region (file "can_import_type_annotations.md") (start 9 21) (end 9 31) (annotation error) (line-text "parseJson = |input| Json.parse(input)"))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
 		(region (start 11 17) (end 11 25))
 		(headline
 			(text "This ")
@@ -206,18 +139,6 @@ MOD NOT FOUND - can_import_type_annotations.md:28:43:28:46
 			(reflow ", which does not exist."))
 		(document
 			(source-region (file "can_import_type_annotations.md") (start 11 17) (end 11 25) (annotation error) (line-text "handleApi : Http.Request -> Try(Http.Response, Json.Error)"))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 11 29) (end 11 32))
-		(headline
-			(text "This ")
-			(annotated code "Try")
-			(reflow " type is declared to be in ")
-			(annotated code "utils.Try")
-			(reflow ", which does not exist."))
-		(document
-			(source-region (file "can_import_type_annotations.md") (start 11 29) (end 11 32) (annotation error) (line-text "handleApi : Http.Request -> Try(Http.Response, Json.Error)"))))
 	(report
 		(severity runtime_error)
 		(title "Mod Not Found")
@@ -232,148 +153,13 @@ MOD NOT FOUND - can_import_type_annotations.md:28:43:28:46
 			(source-region (file "can_import_type_annotations.md") (start 11 37) (end 11 46) (annotation error) (line-text "handleApi : Http.Request -> Try(Http.Response, Json.Error)"))))
 	(report
 		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 11 52) (end 11 58))
-		(headline
-			(text "This ")
-			(annotated code "Error")
-			(reflow " type is declared to be in ")
-			(annotated code "json.Json")
-			(reflow ", which does not exist."))
-		(document
-			(source-region (file "can_import_type_annotations.md") (start 11 52) (end 11 58) (annotation error) (line-text "handleApi : Http.Request -> Try(Http.Response, Json.Error)"))))
-	(report
-		(severity runtime_error)
-		(title "Does Not Exist")
-		(region (start 13 14) (end 13 25))
-		(headline
-			(annotated symbol-unqualified "Json.decode")
-			(reflow " does not exist."))
-		(document
-			(source-region (file "can_import_type_annotations.md") (start 13 14) (end 13 25) (annotation error) (line-text "    result = Json.decode(request.body)"))))
-	(report
-		(severity runtime_error)
 		(title "Does Not Exist")
 		(region (start 15 24) (end 15 36))
 		(headline
 			(annotated symbol-unqualified "Http.success")
 			(reflow " does not exist."))
 		(document
-			(source-region (file "can_import_type_annotations.md") (start 15 24) (end 15 36) (annotation error) (line-text "        Ok(data) => Ok(Http.success(data))"))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 20 14) (end 20 21))
-		(headline
-			(text "This ")
-			(annotated code "Config")
-			(reflow " type is declared to be in ")
-			(annotated code "json.Json")
-			(reflow ", which does not exist."))
-		(document
-			(source-region (file "can_import_type_annotations.md") (start 20 14) (end 20 21) (annotation error) (line-text "config : Json.Config"))))
-	(report
-		(severity runtime_error)
-		(title "Does Not Exist")
-		(region (start 21 10) (end 21 28))
-		(headline
-			(annotated symbol-unqualified "Json.defaultConfig")
-			(reflow " does not exist."))
-		(document
-			(source-region (file "can_import_type_annotations.md") (start 21 10) (end 21 28) (annotation error) (line-text "config = Json.defaultConfig"))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 24 29) (end 24 36))
-		(headline
-			(text "This ")
-			(annotated code "Parser.Config")
-			(reflow " type is declared to be in ")
-			(annotated code "json.Json")
-			(reflow ", which does not exist."))
-		(document
-			(source-region (file "can_import_type_annotations.md") (start 24 29) (end 24 36) (annotation error) (line-text "advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)"))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 24 45) (end 24 48))
-		(headline
-			(text "This ")
-			(annotated code "Try")
-			(reflow " type is declared to be in ")
-			(annotated code "utils.Try")
-			(reflow ", which does not exist."))
-		(document
-			(source-region (file "can_import_type_annotations.md") (start 24 45) (end 24 48) (annotation error) (line-text "advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)"))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 24 53) (end 24 59))
-		(headline
-			(text "This ")
-			(annotated code "Value")
-			(reflow " type is declared to be in ")
-			(annotated code "json.Json")
-			(reflow ", which does not exist."))
-		(document
-			(source-region (file "can_import_type_annotations.md") (start 24 53) (end 24 59) (annotation error) (line-text "advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)"))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 24 72) (end 24 78))
-		(headline
-			(text "This ")
-			(annotated code "Parser.Error")
-			(reflow " type is declared to be in ")
-			(annotated code "json.Json")
-			(reflow ", which does not exist."))
-		(document
-			(source-region (file "can_import_type_annotations.md") (start 24 72) (end 24 78) (annotation error) (line-text "advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)"))))
-	(report
-		(severity runtime_error)
-		(title "Does Not Exist")
-		(region (start 25 40) (end 25 61))
-		(headline
-			(annotated symbol-unqualified "Json.Parser.parseWith")
-			(reflow " does not exist."))
-		(document
-			(source-region (file "can_import_type_annotations.md") (start 25 40) (end 25 61) (annotation error) (line-text "advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)"))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 28 15) (end 28 18))
-		(headline
-			(text "This ")
-			(annotated code "Try")
-			(reflow " type is declared to be in ")
-			(annotated code "utils.Try")
-			(reflow ", which does not exist."))
-		(document
-			(source-region (file "can_import_type_annotations.md") (start 28 15) (end 28 18) (annotation error) (line-text "combineTrys : Try(a, err), Try(b, err) -> Try((a, b), err)"))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 28 28) (end 28 31))
-		(headline
-			(text "This ")
-			(annotated code "Try")
-			(reflow " type is declared to be in ")
-			(annotated code "utils.Try")
-			(reflow ", which does not exist."))
-		(document
-			(source-region (file "can_import_type_annotations.md") (start 28 28) (end 28 31) (annotation error) (line-text "combineTrys : Try(a, err), Try(b, err) -> Try((a, b), err)"))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 28 43) (end 28 46))
-		(headline
-			(text "This ")
-			(annotated code "Try")
-			(reflow " type is declared to be in ")
-			(annotated code "utils.Try")
-			(reflow ", which does not exist."))
-		(document
-			(source-region (file "can_import_type_annotations.md") (start 28 43) (end 28 46) (annotation error) (line-text "combineTrys : Try(a, err), Try(b, err) -> Try((a, b), err)")))))
+			(source-region (file "can_import_type_annotations.md") (start 15 24) (end 15 36) (annotation error) (line-text "        Ok(data) => Ok(Http.success(data))")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -505,7 +291,7 @@ EndOfFile,
 					(e-ident (raw "Json.Parser.parseWith"))
 					(e-ident (raw "parserConfig"))
 					(e-ident (raw "input")))))
-		(s-type-anno (name "combineTrys")
+		(s-type-anno (name "combine_tries")
 			(ty-fn
 				(ty-apply
 					(ty (name "Try"))
@@ -522,7 +308,7 @@ EndOfFile,
 						(ty-var (raw "b")))
 					(ty-var (raw "err")))))
 		(s-decl
-			(p-ident (raw "combineTrys"))
+			(p-ident (raw "combine_tries"))
 			(e-lambda
 				(args
 					(p-ident (raw "result1"))
@@ -587,8 +373,8 @@ advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)
 advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)
 
 # Test function with multiple type parameters
-combineTrys : Try(a, err), Try(b, err) -> Try((a, b), err)
-combineTrys = |result1, result2|
+combine_tries : Try(a, err), Try(b, err) -> Try((a, b), err)
+combine_tries = |result1, result2|
 	match result1 {
 		Ok(value1) =>
 			match (result2) {
@@ -624,7 +410,7 @@ combineTrys = |result1, result2|
 				(ty-malformed))))
 	(d-let
 		(p-assign (ident "config"))
-		(e-runtime-error (tag "qualified_ident_does_not_exist"))
+		(e-runtime-error (tag "builtin_import_conflict"))
 		(annotation
 			(ty-malformed)))
 	(d-let
@@ -636,7 +422,7 @@ combineTrys = |result1, result2|
 				(ty-lookup (name "Str") (builtin))
 				(ty-malformed))))
 	(d-let
-		(p-assign (ident "combineTrys"))
+		(p-assign (ident "combine_tries"))
 		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)

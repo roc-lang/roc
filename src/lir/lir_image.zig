@@ -96,7 +96,18 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      changes.
 /// v78: procedure specs carry the outcome table of a published
 ///      outcome-restitution variant (`rc_outcomes`).
-pub const FORMAT_VERSION: u32 = 78;
+/// v79: procedure specs carry their non-escaping and capture-reusing
+///      function parameters (`nonescaping_fn_params`,
+///      `capture_reuse_fn_params`).
+/// v80: packings carry `frame`, and procedure shapes record packings.
+/// v81: the layout store records which layouts lie on a recursive cycle
+///      (`layouts_on_cycle`), combined with the v78 change.
+/// v82: a lowering module is named by a failure identity, and a tail-call
+///      loop records the frame locals it carries (`TailCalls.params`),
+///      combined with the v79-v81 changes.
+/// v83: procedure specs name their body chunks, and the store carries the
+///      chunk column, combined with the v79-v82 changes.
+pub const FORMAT_VERSION: u32 = 83;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -204,6 +215,7 @@ pub const LirStoreImage = extern struct {
     erased_call_arg_plans: ArrayRef,
     stmt_rows: [LirStore.stmt_row_column_count]ArrayRef,
     proc_specs: ArrayRef,
+    body_chunks: ArrayRef,
     strings: StringLiteralStoreImage,
     next_synthetic_symbol: u64,
     source_file_bytes: ArrayRef,
@@ -211,7 +223,7 @@ pub const LirStoreImage = extern struct {
     source_file_qualified_bytes: ArrayRef,
     source_file_qualified_ends: ArrayRef,
     source_file_identities: ArrayRef,
-    lowering_module_keys: ArrayRef,
+    lowering_module_identities: ArrayRef,
     cf_stmt_sources: ArrayRef,
     stmt_sources: ArrayRef,
     cf_stmt_inline_scopes: ArrayRef,
@@ -238,6 +250,7 @@ pub const LirStoreImage = extern struct {
             .erased_call_arg_plans = try encoder.ref(store.erased_call_arg_plans.unsafeRawItemsForView()),
             .stmt_rows = try stmtRowRefs(encoder, store),
             .proc_specs = try encoder.ref(store.proc_specs.unsafeRawItemsForView()),
+            .body_chunks = try encoder.ref(store.body_chunks.unsafeRawItemsForView()),
             .strings = try StringLiteralStoreImage.fromStore(encoder, &store.strings, &store.string_builder),
             .next_synthetic_symbol = store.next_synthetic_symbol,
             .source_file_bytes = try encoder.ref(store.source_file_bytes.unsafeRawItemsForView()),
@@ -245,7 +258,7 @@ pub const LirStoreImage = extern struct {
             .source_file_qualified_bytes = try encoder.ref(store.source_file_qualified_bytes.unsafeRawItemsForView()),
             .source_file_qualified_ends = try encoder.ref(store.source_file_qualified_ends.unsafeRawItemsForView()),
             .source_file_identities = try encoder.ref(store.source_file_identities.unsafeRawItemsForView()),
-            .lowering_module_keys = try encoder.ref(store.lowering_module_keys.unsafeRawItemsForView()),
+            .lowering_module_identities = try encoder.ref(store.lowering_module_identities.unsafeRawItemsForView()),
             .cf_stmt_sources = try encoder.ref(store.cf_stmt_sources.unsafeRawItemsForView()),
             .stmt_sources = try encoder.ref(store.stmt_sources.unsafeRawItemsForView()),
             .cf_stmt_inline_scopes = try encoder.ref(store.cf_stmt_inline_scopes.unsafeRawItemsForView()),
@@ -289,6 +302,7 @@ pub const LirStoreImage = extern struct {
             .erased_call_arg_plans = try guardedListFromRef(LIR.ErasedCallArgsPlan, "LirStore.erased_call_arg_plans", base_ptr, image_size, self.erased_call_arg_plans),
             .stmt_rows = try self.stmtRowsView(base_ptr, image_size),
             .proc_specs = try guardedListFromRef(LIR.LirProcSpec, "LirStore.proc_specs", base_ptr, image_size, self.proc_specs),
+            .body_chunks = try guardedListFromRef(LIR.BodyChunk, "LirStore.body_chunks", base_ptr, image_size, self.body_chunks),
             .strings = try self.strings.view(base_ptr, image_size),
             .string_builder = try self.strings.viewBuilder(base_ptr, image_size),
             .allocator = allocator,
@@ -298,7 +312,7 @@ pub const LirStoreImage = extern struct {
             .source_file_qualified_bytes = try guardedListFromRef(u8, "LirStore.source_file_qualified_bytes", base_ptr, image_size, self.source_file_qualified_bytes),
             .source_file_qualified_ends = try guardedListFromRef(u32, "LirStore.source_file_qualified_ends", base_ptr, image_size, self.source_file_qualified_ends),
             .source_file_identities = try guardedListFromRef([32]u8, "LirStore.source_file_identities", base_ptr, image_size, self.source_file_identities),
-            .lowering_module_keys = try guardedListFromRef([32]u8, "LirStore.lowering_module_keys", base_ptr, image_size, self.lowering_module_keys),
+            .lowering_module_identities = try guardedListFromRef([32]u8, "LirStore.lowering_module_identities", base_ptr, image_size, self.lowering_module_identities),
             .cf_stmt_sources = try guardedListFromRef(LirStore.StmtSourceId, "LirStore.cf_stmt_sources", base_ptr, image_size, self.cf_stmt_sources),
             .stmt_sources = try guardedListFromRef(LirStore.StmtSource, "LirStore.stmt_sources", base_ptr, image_size, self.stmt_sources),
             .cf_stmt_inline_scopes = try guardedListFromRef(LIR.InlineScopeId, "LirStore.cf_stmt_inline_scopes", base_ptr, image_size, self.cf_stmt_inline_scopes),
@@ -356,6 +370,7 @@ pub const StringLiteralStoreImage = extern struct {
 pub const LayoutStoreImage = extern struct {
     layouts: ArrayRef,
     resolved_list_layouts: ArrayRef,
+    layouts_on_cycle: ArrayRef,
     tuple_elems: ArrayRef,
     struct_fields: StructFieldsImage,
     struct_field_offsets: ArrayRef,
@@ -368,6 +383,7 @@ pub const LayoutStoreImage = extern struct {
         return .{
             .layouts = try encoder.ref(store.layouts.items()),
             .resolved_list_layouts = try encoder.ref(store.resolved_list_layouts.items()),
+            .layouts_on_cycle = try encoder.ref(store.layouts_on_cycle.items()),
             .tuple_elems = try encoder.ref(store.tuple_elems.items()),
             .struct_fields = try StructFieldsImage.fromStore(encoder, &store.struct_fields),
             .struct_field_offsets = try encoder.ref(store.struct_field_offsets.items()),
@@ -387,6 +403,7 @@ pub const LayoutStoreImage = extern struct {
     ) ViewError!layout_mod.Store {
         const layouts = try safeListFromRef(layout_mod.Layout, base_ptr, image_size, self.layouts);
         const resolved_list_layouts = try safeListFromRef(layout_mod.Idx, base_ptr, image_size, self.resolved_list_layouts);
+        const layouts_on_cycle = try safeListFromRef(bool, base_ptr, image_size, self.layouts_on_cycle);
         const tuple_elems = try safeListFromRef(layout_mod.Idx, base_ptr, image_size, self.tuple_elems);
         const struct_field_offsets = try safeListFromRef(layout_mod.WidthValues(u32), base_ptr, image_size, self.struct_field_offsets);
         const struct_field_original_order = try safeListFromRef(u32, base_ptr, image_size, self.struct_field_original_order);
@@ -401,6 +418,7 @@ pub const LayoutStoreImage = extern struct {
             .allocator = allocator,
             .layouts = layouts,
             .resolved_list_layouts = resolved_list_layouts,
+            .layouts_on_cycle = layouts_on_cycle,
             .tuple_elems = tuple_elems,
             .struct_fields = struct_fields,
             .struct_field_offsets = struct_field_offsets,
@@ -515,8 +533,8 @@ comptime {
     // `recursive_digests` serve only commits,
     // which a view never makes; and its `commit_scratch` and
     // `scratch_field_offsets` are scratch that views start empty.
-    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 40);
-    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 21);
+    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 41);
+    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 22);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
     // The header is authored field by field in image storage and is part of a
@@ -905,12 +923,13 @@ const serialized_guarded_fields = [_][]const u8{
     "u32s",
     "erased_call_arg_plans",
     "proc_specs",
+    "body_chunks",
     "source_file_bytes",
     "source_file_ends",
     "source_file_qualified_bytes",
     "source_file_qualified_ends",
     "source_file_identities",
-    "lowering_module_keys",
+    "lowering_module_identities",
     "cf_stmt_sources",
     "stmt_sources",
     "cf_stmt_inline_scopes",
@@ -932,6 +951,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
     var roots: [2]LIR.CFStmtId = undefined;
     var procs: [2]LIR.LirProcSpecId = undefined;
     for (&roots, &procs) |*root, *proc| {
+        const mark = store.bodyMark();
         root.* = try store.addCFStmt(.{ .ret = .{ .value = original } }, .test_fixture);
         proc.* = try store.addProcSpec(.{
             .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
@@ -940,6 +960,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
             .body = .some(root.*),
             .ret_layout = pointer_layout,
         }, .none);
+        try store.recordBodyChunk(proc.*, mark);
     }
     const prefix = store.captureBodyPrefix();
     var first = try store.cloneForProcRewrite(gpa, procs[0]);
@@ -1106,12 +1127,13 @@ test "LIR image copies and round-trips every populated store field" {
     store.strings = .{ .buffer = .fromOwnedSlice(try h.distinct(u8, source_allocator, 24, 0x90)) };
 
     // A layout Store with every serialized list populated distinctively. Only
-    // the nine array-backed fields are serialized; the interning caches are not
+    // the ten array-backed fields are serialized; the interning caches are not
     // read by `fromStore`, so they are left undefined here.
     var layouts = layout_mod.Store{
         .allocator = gpa,
         .layouts = try h.safeList(layout_mod.Layout, source_allocator, 3, 0x40),
         .resolved_list_layouts = try h.safeList(layout_mod.Idx, source_allocator, 4, 0x50),
+        .layouts_on_cycle = try h.safeList(bool, source_allocator, 4, 0x58),
         .tuple_elems = try h.safeList(layout_mod.Idx, source_allocator, 5, 0x60),
         .struct_fields = try h.multiList(layout_mod.StructField, source_allocator, 6, 0x70),
         .struct_field_offsets = try h.safeList(layout_mod.WidthValues(u32), source_allocator, 6, 0x74),
@@ -1177,6 +1199,10 @@ test "LIR image copies and round-trips every populated store field" {
     try h.expectBytesEq(
         std.mem.sliceAsBytes(layouts.resolved_list_layouts.items()),
         std.mem.sliceAsBytes(view.layouts.resolved_list_layouts.items()),
+    );
+    try h.expectBytesEq(
+        std.mem.sliceAsBytes(layouts.layouts_on_cycle.items()),
+        std.mem.sliceAsBytes(view.layouts.layouts_on_cycle.items()),
     );
     try h.expectBytesEq(
         std.mem.sliceAsBytes(layouts.tuple_elems.items()),

@@ -66,7 +66,7 @@ test "boxy integer list call sites target their item type's worker, other instan
             \\    echo!(Str.inspect(second(args)))
             \\    Ok({})
             \\}
-        , .{ .specialization_strategy = .boxy, .proc_debug_names = true, .target_usize = width }, inspect);
+        , .{ .specialization_strategy = .boxy, .target_usize = width }, inspect);
     }
 }
 

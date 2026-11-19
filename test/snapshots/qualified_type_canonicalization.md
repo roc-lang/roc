@@ -44,11 +44,9 @@ transform = |result|
     }
 ~~~
 # EXPECTED
-BUILTIN TYPE SHADOWED - qualified_type_canonicalization.md:1:1:1:18
+RESERVED TYPE NAME - qualified_type_canonicalization.md:1:14:1:18
 MOD NOT IMPORTED - qualified_type_canonicalization.md:15:23:15:38
-MISSING NESTED TYPE - qualified_type_canonicalization.md:19:14:19:21
 UNUSED VARIABLE - qualified_type_canonicalization.md:28:17:28:22
-MISSING NESTED TYPE - qualified_type_canonicalization.md:32:13:32:20
 MOD NOT IMPORTED - qualified_type_canonicalization.md:32:49:32:64
 UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 MOD NOT FOUND - qualified_type_canonicalization.md:1:1:1:18
@@ -71,17 +69,17 @@ DOES NOT EXIST - qualified_type_canonicalization.md:36:25:36:38
 ~~~clojure
 (reports
 	(report
-		(severity warning)
-		(title "Builtin Type Shadowed")
-		(region (start 1 1) (end 1 18))
+		(severity runtime_error)
+		(title "Reserved Type Name")
+		(region (start 1 14) (end 1 18))
 		(headline
-			(text "The type ")
+			(text "This import cannot bind ")
 			(annotated symbol-unqualified "Try")
-			(text " shadows a builtin type."))
+			(text " because that name is reserved for a builtin type."))
 		(document
-			(reflow "This may make the builtin type inaccessible in this scope.")
+			(reflow "Use `as` to give the imported type a different name.")
 			(line-break)
-			(source-region (file "qualified_type_canonicalization.md") (start 1 1) (end 1 18) (annotation warning) (line-text "import Basics.Try"))))
+			(source-region (file "qualified_type_canonicalization.md") (start 1 14) (end 1 18) (annotation error) (line-text "import Basics.Try"))))
 	(report
 		(severity runtime_error)
 		(title "Mod Not Imported")
@@ -92,19 +90,6 @@ DOES NOT EXIST - qualified_type_canonicalization.md:36:25:36:38
 			(reflow " imported into this Roc file."))
 		(document
 			(source-region (file "qualified_type_canonicalization.md") (start 15 23) (end 15 38) (annotation error) (line-text "multiLevelQualified : ModA.ModB.TypeC"))))
-	(report
-		(severity runtime_error)
-		(title "Missing Nested Type")
-		(region (start 19 14) (end 19 21))
-		(headline
-			(annotated code "Try")
-			(reflow " is in scope, but it doesn't have a nested type ")
-			(reflow "that's also ")
-			(reflow "named ")
-			(annotated code "Try")
-			(reflow "."))
-		(document
-			(source-region (file "qualified_type_canonicalization.md") (start 19 14) (end 19 21) (annotation error) (line-text "resultType : Try.Try(I32, Str)"))))
 	(report
 		(severity warning)
 		(title "Unused Variable")
@@ -119,19 +104,6 @@ DOES NOT EXIST - qualified_type_canonicalization.md:36:25:36:38
 			(reflow " to suppress this warning.")
 			(line-break)
 			(source-region (file "qualified_type_canonicalization.md") (start 28 17) (end 28 22) (annotation error) (line-text "processColor = |color|"))))
-	(report
-		(severity runtime_error)
-		(title "Missing Nested Type")
-		(region (start 32 13) (end 32 20))
-		(headline
-			(annotated code "Try")
-			(reflow " is in scope, but it doesn't have a nested type ")
-			(reflow "that's also ")
-			(reflow "named ")
-			(annotated code "Try")
-			(reflow "."))
-		(document
-			(source-region (file "qualified_type_canonicalization.md") (start 32 13) (end 32 20) (annotation error) (line-text "transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC"))))
 	(report
 		(severity runtime_error)
 		(title "Mod Not Imported")
@@ -536,7 +508,7 @@ transform = |result|
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "resultType"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-runtime-error (tag "builtin_import_conflict"))
 		(annotation
 			(ty-malformed)))
 	(d-let

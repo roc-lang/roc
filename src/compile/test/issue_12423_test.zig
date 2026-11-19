@@ -141,5 +141,5 @@ test "issue 12423: LLVM slots addressed by out-of-line calls carry lifetime mark
     // passes must be bracketed by `llvm.lifetime.start` / `llvm.lifetime.end`,
     // so the four exclusive branches can share stack space instead of
     // `walk`'s frame holding every call site's slots at once.
-    try harness.runLoweredInspection(app_body, .{ .proc_debug_names = true }, expectRecursiveCallSlotsHaveLifetimes);
+    try harness.runLoweredInspection(app_body, .{}, expectRecursiveCallSlotsHaveLifetimes);
 }

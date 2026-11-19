@@ -49,16 +49,6 @@ Builtin :: [].{
 	# parse_dict_after_key between a key and its value, and
 	# parse_dict_after_entry.
 	#
-	# A dict entry whose key equals, under the key type's is_eq, a key the
-	# dict already holds is the format's to settle:
-	#
-	#     parse_dict_duplicate_key : encoding, state
-	#         -> Try([KeepFirst(state), KeepLast(state)], err)
-	#
-	# The driver calls it with the state after the entry's value, and only for
-	# such an entry. KeepFirst drops the entry, KeepLast replaces the held
-	# value with the entry's, and Err refuses the input.
-	#
 	# Every fallible operation, including custom nested parsers and tag
 	# payload callbacks, uses the same format-owned err type. A required
 	# field that was not read calls missing_field : encoding, Str -> err.
@@ -1733,10 +1723,6 @@ Builtin :: [].{
 				match state {
 					Input(raw) => Json.parse_record_after_field_from_json(encoding, raw)
 				}
-
-			## A repeated JSON object name keeps the value given last.
-			parse_dict_duplicate_key : JsonEncoding, JsonState -> Try([KeepFirst(JsonState), KeepLast(JsonState)], [InvalidJson(Str)])
-			parse_dict_duplicate_key = |_, state| Ok(KeepLast(state))
 
 			skip_record_field : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str)])
 			skip_record_field = |encoding, state| Json.skip_json_value(encoding, state)
@@ -4604,7 +4590,7 @@ Builtin :: [].{
 					var $out = list_map_cast_unsafe(prepared_list)
 					var $index = 0
 					while $index < length {
-						item = list_map_extract_unsafe($out, $index, transform)
+						item = list_map_extract_unsafe($out, $index, prepared_list)
 						$out = list_map_write_unsafe($out, $index, transform(item))
 						$index = $index + 1
 					}
@@ -6362,42 +6348,6 @@ Builtin :: [].{
 								{ bucket_index, dist_and_fingerprint },
 								key,
 								value,
-							),
-						)
-					}
-				}
-			}
-		}
-
-		## Insert a value into the dictionary at a specified key, unless the
-		## key already exists. An existing key leaves the dictionary unchanged
-		## and returns it along with the key and value that were not inserted.
-		## ```roc
-		## expect match Dict.single("Apples", 12).insert_fresh("Pears", 7) {
-		## 	Inserted(dict) => dict.get("Pears") == Ok(7)
-		## 	Occupied(_) => False
-		## }
-		##
-		## expect match Dict.single("Apples", 12).insert_fresh("Apples", 7) {
-		## 	Inserted(_) => False
-		## 	Occupied({ dict, key, value }) => dict.get("Apples") == Ok(12) and key == "Apples" and value == 7
-		## }
-		## ```
-		insert_fresh : Dict(k, v), k, v -> [Inserted(Dict(k, v)), Occupied({ dict : Dict(k, v), key : k, value : v })]
-			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
-		insert_fresh = |dict, key, value| match dict {
-			HashMap(data) => {
-				match dict_find_for_insert(data, key) {
-					Found({ data: next_data, .. }) => Occupied({ dict: HashMap(next_data), key, value })
-					Missing({ data: next_data, bucket_index, dist_and_fingerprint }) => {
-						Inserted(
-							HashMap(
-								dict_insert_absent_data(
-									next_data,
-									{ bucket_index, dist_and_fingerprint },
-									key,
-									value,
-								),
 							),
 						)
 					}
@@ -16541,9 +16491,10 @@ Builtin :: [].{
 			## expect Dec.times_saturated(Dec.lowest, 2.0) == Dec.lowest
 			##
 			## expect Dec.times_saturated(2.5, 4.0) == 10.0
+			##
+			## expect Dec.times_saturated(1.0, 0.5) == 0.5
 			## ```
 			times_saturated : Dec, Dec -> Dec
-			times_saturated = |a, b| signed_times_saturated_rescaled(Dec.lowest, Dec.highest, 0.0, -1.0, a, b)
 
 			## Raise a [Dec] to a [Dec] power. Results are limited to [Dec]'s
 			## fixed 18 fractional decimal places. Fractional exponents require a
@@ -27020,56 +26971,6 @@ signed_times_try = |a, b|
 		Ok(a.times_wrap(b))
 	}
 
-signed_times_try_rescaled : item, item, item, item, item, item -> Try(item, [Overflow])
-	where [
-		item.is_gt : item, item -> Bool,
-		item.is_lt : item, item -> Bool,
-		item.is_eq : item, item -> Bool,
-		item.minus : item, item -> item,
-		item.times : item, item -> item,
-		item.div_trunc_by : item, item -> item,
-	]
-signed_times_try_rescaled = |lowest, highest, zero, neg_one, a, b|
-	if a == zero {
-		Ok(zero)
-	} else if b == zero {
-		Ok(zero)
-	} else if a == neg_one {
-		if b == lowest {
-			Err(Overflow)
-		} else {
-			Ok(zero - b)
-		}
-	} else if b == neg_one {
-		if a == lowest {
-			Err(Overflow)
-		} else {
-			Ok(zero - a)
-		}
-	} else if a > zero {
-		if b > zero {
-			if a > highest.div_trunc_by(b) {
-				Err(Overflow)
-			} else {
-				Ok(a * b)
-			}
-		} else if b < lowest.div_trunc_by(a) {
-			Err(Overflow)
-		} else {
-			Ok(a * b)
-		}
-	} else if b > zero {
-		if a < lowest.div_trunc_by(b) {
-			Err(Overflow)
-		} else {
-			Ok(a * b)
-		}
-	} else if a < highest.div_trunc_by(b) {
-		Err(Overflow)
-	} else {
-		Ok(a * b)
-	}
-
 signed_div_try : item, item, item, item, item -> Try(item, [DivByZero, Overflow])
 	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
 signed_div_try = |lowest, zero, neg_one, a, b|
@@ -27333,32 +27234,6 @@ signed_times_saturated = |lowest, highest, zero, a, b|
 		}
 	} else {
 		a.times_wrap(b)
-	}
-
-signed_times_saturated_rescaled : item, item, item, item, item, item -> item
-	where [
-		item.is_gt : item, item -> Bool,
-		item.is_lt : item, item -> Bool,
-		item.is_eq : item, item -> Bool,
-		item.minus : item, item -> item,
-		item.times : item, item -> item,
-		item.div_trunc_by : item, item -> item,
-	]
-signed_times_saturated_rescaled = |lowest, highest, zero, neg_one, a, b|
-	match signed_times_try_rescaled(lowest, highest, zero, neg_one, a, b) {
-		Ok(result) => result
-		Err(Overflow) =>
-			if a < zero {
-				if b > zero {
-					lowest
-				} else {
-					highest
-				}
-			} else if b < zero {
-				lowest
-			} else {
-				highest
-			}
 	}
 
 integer_is_even : item, item, item -> Bool
@@ -28062,10 +27937,10 @@ list_map_cast_unsafe : List(input) -> List(output)
 
 # Implemented by the compiler. Moves ownership of the item at the given
 # index out of the list's buffer; the slot keeps stale bytes until
-# list_map_write_unsafe stores its replacement. No bounds checks. The
-# transform is never evaluated: the list's type names only the output item,
-# so the transform's type is what says the slot holds an input item.
-list_map_extract_unsafe : List(output), U64, (input -> output) -> input
+# list_map_write_unsafe stores its replacement. No bounds checks. The input
+# list is never evaluated: the buffer's type names only the output item, so
+# the input list's type is what says the slot holds one of its items.
+list_map_extract_unsafe : List(output), U64, List(input) -> input
 
 # Implemented by the compiler. Stores an owned item into the slot at the
 # given index, which must have been vacated by list_map_extract_unsafe.
@@ -28393,6 +28268,27 @@ utf16_ascii_chunk = |bytes, index, little_endian| {
 	a.bitwise_or(b).gt_lanes(Num.U16x8.splat(127)).to_bitmask() == 0
 }
 
+# The UTF-8 width of the eight code units at `index` when every surrogate among
+# them is a high surrogate directly followed by a low one in the same block,
+# and otherwise 0. Every other unit is a scalar value of its own, so the width
+# is 8 plus one per unit above 0x7F and one more per unit above 0x7FF, less one
+# per surrogate, since a pair's two units encode as four bytes (the UTF-8
+# length computation of simdutf's UTF-16 kernels).
+utf16_block_utf8_width : List(U8), U64, Bool -> U64
+utf16_block_utf8_width = |bytes, index, little_endian| {
+	units = utf16_load(bytes, index, little_endian)
+	tags = units.bitwise_and(Num.U16x8.splat(0xFC00))
+	highs = tags.eq_lanes(Num.U16x8.splat(0xD800)).to_bitmask()
+	lows = tags.eq_lanes(Num.U16x8.splat(0xDC00)).to_bitmask()
+	if lows != highs.shl_wrap(1) or highs >= 0x80 {
+		0
+	} else {
+		above_7f = units.gt_lanes(Num.U16x8.splat(0x7F)).shr_zf_wrap(15)
+		above_7ff = units.gt_lanes(Num.U16x8.splat(0x7FF)).shr_zf_wrap(15)
+		8 + above_7f.plus_wrap(above_7ff).sum_lanes().to_u64() - highs.bitwise_or(lows).count_one_bits().to_u64()
+	}
+}
+
 utf16_step : List(U8), U64, Bool -> { scalar : U64, bytes : U64, status : U8 }
 utf16_step = |bytes, index, little_endian| {
 	remaining = List.len(bytes) - index
@@ -28421,9 +28317,28 @@ decode_utf16 = |bytes, little_endian, lossy| {
 	var $size = 0.U64
 	var $index = 0.U64
 	while $index < len {
-		if len - $index >= 32 and utf16_read(bytes, $index, little_endian) <= 127 and utf16_ascii_chunk(bytes, $index, little_endian) {
-			$size = $size + 16
-			$index = $index + 32
+		if len - $index >= 16 {
+			if len - $index >= 32 and utf16_read(bytes, $index, little_endian) <= 127 and utf16_ascii_chunk(bytes, $index, little_endian) {
+				$size = $size + 16
+				$index = $index + 32
+			} else {
+				block_width = utf16_block_utf8_width(bytes, $index, little_endian)
+				if block_width != 0 {
+					$size = $size + block_width
+					$index = $index + 16
+				} else {
+					# Surrogates not all paired within the block: size it unit by unit.
+					block_end = $index + 16
+					while $index < block_end {
+						step = utf16_step(bytes, $index, little_endian)
+						if step.status != 0 and !lossy {
+							return { index: $index, status: step.status, string: "" }
+						}
+						$size = $size + utf8_width(step.scalar)
+						$index = $index + step.bytes
+					}
+				}
+			}
 		} else {
 			step = utf16_step(bytes, $index, little_endian)
 			if step.status != 0 and !lossy {

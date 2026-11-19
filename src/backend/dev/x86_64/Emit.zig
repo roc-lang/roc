@@ -151,12 +151,30 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.appendSlice(self.allocator, &@as([8]u8, @bitCast(imm)));
         }
 
-        /// MOV reg, imm32 (sign-extended to 64-bit)
+        /// MOV reg, imm32 (sign-extended to 64-bit): always `REX.W C7 /0
+        /// imm32`, seven bytes with the immediate three bytes in.
         pub fn movRegImm32(self: *Self, dst: GeneralReg, imm: i32) Allocator.Error!void {
             try self.emitRex(.w64, null, dst);
             try self.buf.append(self.allocator, 0xC7); // MOV r/m64, imm32
             try self.buf.append(self.allocator, modRM(0b11, 0, dst.enc()));
             try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(imm)));
+        }
+
+        /// MOV r32, imm32 (`B8+rd`), which zero-extends into the full
+        /// 64-bit register.
+        pub fn movRegImm32ZeroExtend(self: *Self, dst: GeneralReg, imm: u32) Allocator.Error!void {
+            try self.emitRex(.w32, null, dst);
+            try self.buf.append(self.allocator, 0xB8 + @as(u8, dst.enc()));
+            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(imm)));
+        }
+
+        /// Load `value` into `dst` with the shortest move that produces it:
+        /// the zero-extending 32-bit move for a value in `0..2^32`, the
+        /// sign-extending one for another `i32`, and `movabs` otherwise.
+        pub fn movRegImm(self: *Self, dst: GeneralReg, value: i64) Allocator.Error!void {
+            if (std.math.cast(u32, value)) |imm| return self.movRegImm32ZeroExtend(dst, imm);
+            if (std.math.cast(i32, value)) |imm| return self.movRegImm32(dst, imm);
+            try self.movRegImm64(dst, value);
         }
 
         // Arithmetic instructions
@@ -257,20 +275,10 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, 4, src.enc())); // /4 = MUL
         }
 
-        /// ADD reg, imm32 (sign-extended)
+        /// ADD reg, imm (sign-extended): the imm8 form when `imm` fits a
+        /// signed byte.
         pub fn addRegImm32(self: *Self, width: RegisterWidth, dst: GeneralReg, imm: i32) Allocator.Error!void {
-            if (width.requiresSizeOverride()) {
-                try self.buf.append(self.allocator, 0x66);
-            }
-            try self.emitRex(width, null, dst);
-            // Use short form for RAX
-            if (dst == .RAX and !width.requiresSizeOverride()) {
-                try self.buf.append(self.allocator, 0x05);
-            } else {
-                try self.buf.append(self.allocator, 0x81);
-                try self.buf.append(self.allocator, modRM(0b11, 0, dst.enc()));
-            }
-            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(imm)));
+            try self.emitAluRegImm(width, 0, 0x05, dst, imm);
         }
 
         /// ADD reg, imm (convenience wrapper using 64-bit width)
@@ -278,18 +286,27 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.addRegImm32(.w64, dst, imm);
         }
 
-        /// SUB reg, imm32 (sign-extended)
+        /// SUB reg, imm (sign-extended): the imm8 form when `imm` fits a
+        /// signed byte.
         pub fn subRegImm32(self: *Self, width: RegisterWidth, dst: GeneralReg, imm: i32) Allocator.Error!void {
-            if (width.requiresSizeOverride()) {
-                try self.buf.append(self.allocator, 0x66);
+            try self.emitAluRegImm(width, 5, 0x2D, dst, imm);
+        }
+
+        /// A group-1 ALU operation (`/digit`) of `reg` with a sign-extended
+        /// immediate: `83 /digit ib` when `imm` fits a signed byte, else the
+        /// one-byte RAX form `rax_opcode imm32` or `81 /digit imm32`. Both
+        /// immediate forms sign-extend, so they compute the same result.
+        fn emitAluRegImm(self: *Self, width: RegisterWidth, digit: u3, rax_opcode: u8, reg: GeneralReg, imm: i32) Allocator.Error!void {
+            std.debug.assert(width == .w32 or width == .w64);
+            try self.emitRex(width, null, reg);
+            if (std.math.cast(i8, imm)) |imm8| {
+                try self.buf.appendSlice(self.allocator, &.{ 0x83, modRM(0b11, digit, reg.enc()), @bitCast(imm8) });
+                return;
             }
-            try self.emitRex(width, null, dst);
-            // Use short form for RAX
-            if (dst == .RAX and !width.requiresSizeOverride()) {
-                try self.buf.append(self.allocator, 0x2D);
+            if (reg == .RAX) {
+                try self.buf.append(self.allocator, rax_opcode);
             } else {
-                try self.buf.append(self.allocator, 0x81);
-                try self.buf.append(self.allocator, modRM(0b11, 5, dst.enc()));
+                try self.buf.appendSlice(self.allocator, &.{ 0x81, modRM(0b11, digit, reg.enc()) });
             }
             try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(imm)));
         }
@@ -304,20 +321,10 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, b.enc(), a.enc()));
         }
 
-        /// CMP reg, imm32
+        /// CMP reg, imm (sign-extended): the imm8 form when `imm` fits a
+        /// signed byte.
         pub fn cmpRegImm32(self: *Self, width: RegisterWidth, reg: GeneralReg, imm: i32) Allocator.Error!void {
-            if (width.requiresSizeOverride()) {
-                try self.buf.append(self.allocator, 0x66);
-            }
-            try self.emitRex(width, null, reg);
-            // Use short form for RAX
-            if (reg == .RAX) {
-                try self.buf.append(self.allocator, 0x3D);
-            } else {
-                try self.buf.append(self.allocator, 0x81);
-                try self.buf.append(self.allocator, modRM(0b11, 7, reg.enc()));
-            }
-            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(imm)));
+            try self.emitAluRegImm(width, 7, 0x3D, reg, imm);
         }
 
         /// TEST reg, reg (AND without storing result, sets flags)
@@ -663,7 +670,7 @@ pub fn Emit(comptime target: RocTarget) type {
 
         // Memory instructions
 
-        /// MOV reg, [base + disp32] (load from memory)
+        /// MOV reg, [base + disp] (load from memory)
         pub fn movRegMem(self: *Self, width: RegisterWidth, dst: GeneralReg, base: GeneralReg, disp: i32) Allocator.Error!void {
             if (width.requiresSizeOverride()) {
                 try self.buf.append(self.allocator, 0x66);
@@ -677,10 +684,10 @@ pub fn Emit(comptime target: RocTarget) type {
             }
 
             // Handle special cases for RSP/R12 (need SIB byte) and RBP/R13 (need disp)
-            try self.emitModRmDisp32(dst.enc(), base, disp);
+            try self.emitModRmDisp(dst.enc(), base, disp);
         }
 
-        /// MOV [base + disp32], reg (store to memory)
+        /// MOV [base + disp], reg (store to memory)
         pub fn movMemReg(self: *Self, width: RegisterWidth, base: GeneralReg, disp: i32, src: GeneralReg) Allocator.Error!void {
             if (width.requiresSizeOverride()) {
                 try self.buf.append(self.allocator, 0x66);
@@ -692,10 +699,10 @@ pub fn Emit(comptime target: RocTarget) type {
                 try self.emitRex(width, src, base);
                 try self.buf.append(self.allocator, 0x89); // MOV r/m, r
             }
-            try self.emitModRmDisp32(src.enc(), base, disp);
+            try self.emitModRmDisp(src.enc(), base, disp);
         }
 
-        /// MOVZX r32, BYTE [base + disp32] (zero-extend byte to 64 bits)
+        /// MOVZX r32, BYTE [base + disp] (zero-extend byte to 64 bits)
         /// 32-bit result auto-zero-extends to 64 bits on x86_64; no REX.W needed.
         pub fn movzxBRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, disp: i32) Allocator.Error!void {
             // REX prefix only for extended registers (R8-R15), never REX.W
@@ -706,10 +713,10 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0xB6); // MOVZX r32, r/m8
-            try self.emitModRmDisp32(dst.enc(), base, disp);
+            try self.emitModRmDisp(dst.enc(), base, disp);
         }
 
-        /// MOVZX r32, WORD [base + disp32] (zero-extend word to 64 bits)
+        /// MOVZX r32, WORD [base + disp] (zero-extend word to 64 bits)
         /// 32-bit result auto-zero-extends to 64 bits on x86_64; no REX.W needed.
         pub fn movzxWRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, disp: i32) Allocator.Error!void {
             // REX prefix only for extended registers (R8-R15), never REX.W
@@ -720,10 +727,10 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0xB7); // MOVZX r32, r/m16
-            try self.emitModRmDisp32(dst.enc(), base, disp);
+            try self.emitModRmDisp(dst.enc(), base, disp);
         }
 
-        /// MOVSX r32, BYTE [base + disp32] (sign-extend byte to 32 bits)
+        /// MOVSX r32, BYTE [base + disp] (sign-extend byte to 32 bits)
         /// 32-bit result auto-zero-extends to 64 bits on x86_64; no REX.W needed.
         pub fn movsxBRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, disp: i32) Allocator.Error!void {
             // REX prefix only for extended registers (R8-R15), never REX.W
@@ -734,10 +741,10 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0xBE); // MOVSX r32, r/m8
-            try self.emitModRmDisp32(dst.enc(), base, disp);
+            try self.emitModRmDisp(dst.enc(), base, disp);
         }
 
-        /// MOVSX r32, WORD [base + disp32] (sign-extend word to 32 bits)
+        /// MOVSX r32, WORD [base + disp] (sign-extend word to 32 bits)
         /// 32-bit result auto-zero-extends to 64 bits on x86_64; no REX.W needed.
         pub fn movsxWRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, disp: i32) Allocator.Error!void {
             // REX prefix only for extended registers (R8-R15), never REX.W
@@ -748,10 +755,10 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0xBF); // MOVSX r32, r/m16
-            try self.emitModRmDisp32(dst.enc(), base, disp);
+            try self.emitModRmDisp(dst.enc(), base, disp);
         }
 
-        /// LEA reg, [base + disp32] (load effective address)
+        /// LEA reg, [base + disp] (load effective address)
         /// LEA reg, [RIP + disp32]—compute PC-relative address
         /// disp is relative to the end of this instruction (7 bytes total).
         pub fn leaRegRipRel(self: *Self, dst: GeneralReg, disp: i32) Allocator.Error!void {
@@ -765,7 +772,7 @@ pub fn Emit(comptime target: RocTarget) type {
         pub fn leaRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, disp: i32) Allocator.Error!void {
             try self.emitRex(.w64, dst, base);
             try self.buf.append(self.allocator, 0x8D); // LEA
-            try self.emitModRmDisp32(dst.enc(), base, disp);
+            try self.emitModRmDisp(dst.enc(), base, disp);
         }
 
         // Stack instructions
@@ -786,16 +793,24 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, 0x58 + @as(u8, reg.enc()));
         }
 
-        /// Emit ModRM (and the SIB byte RSP/R12 bases require) for `[base + disp32]`, then the displacement.
-        fn emitModRmDisp32(self: *Self, reg: u3, base: GeneralReg, disp: i32) Allocator.Error!void {
+        /// Emit ModRM (and the SIB byte RSP/R12 bases require) for `[base +
+        /// disp]`, then the displacement: one signed byte when it fits, else
+        /// four. Every base takes a displacement, so RBP and R13 never need
+        /// the displacement-free form that would mean RIP-relative.
+        fn emitModRmDisp(self: *Self, reg: u3, base: GeneralReg, disp: i32) Allocator.Error!void {
+            const disp8 = std.math.cast(i8, disp);
+            const mod: u2 = if (disp8 != null) 0b01 else 0b10;
             const base_enc = base.enc();
             if (base_enc == 4) {
-                try self.buf.append(self.allocator, modRM(0b10, reg, 0b100));
-                try self.buf.append(self.allocator, 0x24);
+                try self.buf.appendSlice(self.allocator, &.{ modRM(mod, reg, 0b100), 0x24 });
             } else {
-                try self.buf.append(self.allocator, modRM(0b10, reg, base_enc));
+                try self.buf.append(self.allocator, modRM(mod, reg, base_enc));
             }
-            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+            if (disp8) |byte| {
+                try self.buf.append(self.allocator, @bitCast(byte));
+            } else {
+                try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+            }
         }
 
         // Floating-point instructions (SSE/SSE2)
@@ -1102,7 +1117,7 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emitPrefixedSseRegReg(0x66, 0x6F, dst, src);
         }
 
-        /// MOVSD xmm, [base + disp32] (load scalar double from memory)
+        /// MOVSD xmm, [base + disp] (load scalar double from memory)
         pub fn movsdRegMem(self: *Self, dst: FloatReg, base: GeneralReg, disp: i32) Allocator.Error!void {
             try self.buf.append(self.allocator, 0xF2);
             const r: u1 = dst.rexB();
@@ -1112,10 +1127,10 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0x10);
-            try self.emitModRmDisp32(dst.enc(), base, disp);
+            try self.emitModRmDisp(dst.enc(), base, disp);
         }
 
-        /// MOVSS xmm, [base + disp32] (load scalar single from memory)
+        /// MOVSS xmm, [base + disp] (load scalar single from memory)
         pub fn movssRegMem(self: *Self, dst: FloatReg, base: GeneralReg, disp: i32) Allocator.Error!void {
             try self.buf.append(self.allocator, 0xF3);
             const r: u1 = dst.rexB();
@@ -1125,10 +1140,10 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0x10);
-            try self.emitModRmDisp32(dst.enc(), base, disp);
+            try self.emitModRmDisp(dst.enc(), base, disp);
         }
 
-        /// MOVDQU xmm, [base + disp32] (load 128-bit unaligned from memory)
+        /// MOVDQU xmm, [base + disp] (load 128-bit unaligned from memory)
         pub fn movdquRegMem(self: *Self, dst: FloatReg, base: GeneralReg, disp: i32) Allocator.Error!void {
             try self.buf.append(self.allocator, 0xF3);
             const r: u1 = dst.rexB();
@@ -1138,10 +1153,10 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0x6F); // MOVDQU xmm, m128
-            try self.emitModRmDisp32(dst.enc(), base, disp);
+            try self.emitModRmDisp(dst.enc(), base, disp);
         }
 
-        /// MOVSD [base + disp32], xmm (store scalar double to memory)
+        /// MOVSD [base + disp], xmm (store scalar double to memory)
         pub fn movsdMemReg(self: *Self, base: GeneralReg, disp: i32, src: FloatReg) Allocator.Error!void {
             try self.buf.append(self.allocator, 0xF2);
             const r: u1 = src.rexB();
@@ -1151,10 +1166,10 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0x11); // MOVSD m64, xmm
-            try self.emitModRmDisp32(src.enc(), base, disp);
+            try self.emitModRmDisp(src.enc(), base, disp);
         }
 
-        /// MOVSS [base + disp32], xmm (store scalar single to memory)
+        /// MOVSS [base + disp], xmm (store scalar single to memory)
         pub fn movssMemReg(self: *Self, base: GeneralReg, disp: i32, src: FloatReg) Allocator.Error!void {
             try self.buf.append(self.allocator, 0xF3);
             const r: u1 = src.rexB();
@@ -1164,10 +1179,10 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0x11); // MOVSS m32, xmm
-            try self.emitModRmDisp32(src.enc(), base, disp);
+            try self.emitModRmDisp(src.enc(), base, disp);
         }
 
-        /// MOVDQU [base + disp32], xmm (store 128-bit unaligned from XMM to memory)
+        /// MOVDQU [base + disp], xmm (store 128-bit unaligned from XMM to memory)
         /// Used for storing i128 return values from XMM0
         /// IMPORTANT: Uses F3 prefix (MOVDQU) not 66 prefix (MOVDQA) to avoid alignment faults
         pub fn movdquMemReg(self: *Self, base: GeneralReg, disp: i32, src: FloatReg) Allocator.Error!void {
@@ -1179,7 +1194,7 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0x7F); // MOVDQU m128, xmm
-            try self.emitModRmDisp32(src.enc(), base, disp);
+            try self.emitModRmDisp(src.enc(), base, disp);
         }
 
         /// ADDSD xmm, xmm (add scalar double)
@@ -1600,11 +1615,15 @@ test "movdqu load and store unaligned 128-bit values" {
     defer emit.deinit();
 
     try emit.movdquRegMem(.XMM0, .RBP, -16);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xF3, 0x0F, 0x6F, 0x85, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xF3, 0x0F, 0x6F, 0x45, 0xF0 }, emit.buf.items);
 
     emit.buf.clearRetainingCapacity();
     try emit.movdquMemReg(.RBP, -16, .XMM0);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xF3, 0x0F, 0x7F, 0x85, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xF3, 0x0F, 0x7F, 0x45, 0xF0 }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    try emit.movdquMemReg(.RBP, -256, .XMM0);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xF3, 0x0F, 0x7F, 0x85, 0x00, 0xFF, 0xFF, 0xFF }, emit.buf.items);
 }
 
 test "packed integer VEX encodings" {
@@ -1831,15 +1850,78 @@ test "movRegMem - load from [rbp-144]" {
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x8B, 0x85, 0x70, 0xFF, 0xFF, 0xFF }, emit.buf.items);
 }
 
+test "memory operands take a one-byte displacement exactly when it fits" {
+    const cases = [_]struct { disp: i32, bytes: []const u8 }{
+        // mov rax, [rbp+disp]: ModRM 45 (mod:01) + disp8, or 85 (mod:10) + disp32.
+        .{ .disp = 127, .bytes = &.{ 0x48, 0x8B, 0x45, 0x7F } },
+        .{ .disp = -128, .bytes = &.{ 0x48, 0x8B, 0x45, 0x80 } },
+        .{ .disp = 0, .bytes = &.{ 0x48, 0x8B, 0x45, 0x00 } },
+        .{ .disp = 128, .bytes = &.{ 0x48, 0x8B, 0x85, 0x80, 0x00, 0x00, 0x00 } },
+        .{ .disp = -129, .bytes = &.{ 0x48, 0x8B, 0x85, 0x7F, 0xFF, 0xFF, 0xFF } },
+    };
+    for (cases) |case| {
+        var emit = LinuxEmit.init(std.testing.allocator);
+        defer emit.deinit();
+        try emit.movRegMem(.w64, .RAX, .RBP, case.disp);
+        try std.testing.expectEqualSlices(u8, case.bytes, emit.buf.items);
+    }
+    // [r13+0] keeps its displacement byte: mod 00 with r/m 101 is RIP-relative.
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
+    try emit.movMemReg(.w64, .R13, 0, .RAX);
+    try std.testing.expectEqualSlices(u8, &.{ 0x49, 0x89, 0x45, 0x00 }, emit.buf.items);
+}
+
+test "group-1 immediates take the imm8 form exactly when it fits" {
+    const cases = [_]struct { imm: i32, bytes: []const u8 }{
+        // cmp rcx, imm: 83 /7 ib, or 81 /7 id.
+        .{ .imm = 127, .bytes = &.{ 0x48, 0x83, 0xF9, 0x7F } },
+        .{ .imm = -128, .bytes = &.{ 0x48, 0x83, 0xF9, 0x80 } },
+        .{ .imm = 128, .bytes = &.{ 0x48, 0x81, 0xF9, 0x80, 0x00, 0x00, 0x00 } },
+        .{ .imm = -129, .bytes = &.{ 0x48, 0x81, 0xF9, 0x7F, 0xFF, 0xFF, 0xFF } },
+    };
+    for (cases) |case| {
+        var emit = LinuxEmit.init(std.testing.allocator);
+        defer emit.deinit();
+        try emit.cmpRegImm32(.w64, .RCX, case.imm);
+        try std.testing.expectEqualSlices(u8, case.bytes, emit.buf.items);
+    }
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
+    // cmp rax, 1 prefers imm8 to RAX's 3D imm32 form; sub r9d, 4096 needs imm32.
+    try emit.cmpRegImm32(.w64, .RAX, 1);
+    try emit.subRegImm32(.w32, .R9, 4096);
+    try std.testing.expectEqualSlices(u8, &.{ 0x48, 0x83, 0xF8, 0x01, 0x41, 0x81, 0xE9, 0x00, 0x10, 0x00, 0x00 }, emit.buf.items);
+}
+
+test "movRegImm picks the shortest move producing the value" {
+    const cases = [_]struct { reg: Registers.GeneralReg, value: i64, bytes: []const u8 }{
+        // mov r32, imm32 (B8+rd) zero-extends.
+        .{ .reg = .RAX, .value = 0, .bytes = &.{ 0xB8, 0x00, 0x00, 0x00, 0x00 } },
+        .{ .reg = .R9, .value = 0xFFFF_FFFF, .bytes = &.{ 0x41, 0xB9, 0xFF, 0xFF, 0xFF, 0xFF } },
+        // A negative i32 sign-extends with REX.W C7 /0.
+        .{ .reg = .RCX, .value = -1, .bytes = &.{ 0x48, 0xC7, 0xC1, 0xFF, 0xFF, 0xFF, 0xFF } },
+        // Anything wider needs movabs.
+        .{ .reg = .RDX, .value = 0x1_0000_0000, .bytes = &.{ 0x48, 0xBA, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00 } },
+        .{ .reg = .RDX, .value = -0x8000_0001, .bytes = &.{ 0x48, 0xBA, 0xFF, 0xFF, 0xFF, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF } },
+    };
+    for (cases) |case| {
+        var emit = LinuxEmit.init(std.testing.allocator);
+        defer emit.deinit();
+        try emit.movRegImm(case.reg, case.value);
+        try std.testing.expectEqualSlices(u8, case.bytes, emit.buf.items);
+    }
+}
+
 test "movRegMem - load from [rsp+32] requires SIB byte" {
     var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // mov rcx, [rsp+32]
     // RSP as base requires SIB byte (0x24 = scale:00 index:100 base:100)
-    // REX.W (48) + opcode (8B) + ModRM (8C = mod:10 reg:001 rm:100) + SIB (24) + disp32 (32)
+    // REX.W (48) + opcode (8B) + ModRM (4C = mod:01 reg:001 rm:100) + SIB (24) + disp8 (32)
     try emit.movRegMem(.w64, .RCX, .RSP, 32);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x8B, 0x8C, 0x24, 0x20, 0x00, 0x00, 0x00 }, emit.buf.items);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x8B, 0x4C, 0x24, 0x20 }, emit.buf.items);
 }
 
 test "movRegMem - load from [r12+offset] requires SIB byte" {
@@ -1848,9 +1930,9 @@ test "movRegMem - load from [r12+offset] requires SIB byte" {
 
     // mov rax, [r12+16]
     // R12 has same encoding as RSP (100), needs SIB byte
-    // REX.WB (49) + opcode (8B) + ModRM (84 = mod:10 reg:000 rm:100) + SIB (24) + disp32 (16)
+    // REX.WB (49) + opcode (8B) + ModRM (44 = mod:01 reg:000 rm:100) + SIB (24) + disp8 (16)
     try emit.movRegMem(.w64, .RAX, .R12, 16);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x49, 0x8B, 0x84, 0x24, 0x10, 0x00, 0x00, 0x00 }, emit.buf.items);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x49, 0x8B, 0x44, 0x24, 0x10 }, emit.buf.items);
 }
 
 test "movMemReg - store to [rbp-8]" {
@@ -1858,9 +1940,9 @@ test "movMemReg - store to [rbp-8]" {
     defer emit.deinit();
 
     // mov [rbp-8], rax
-    // REX.W (48) + opcode (89) + ModRM (85 = mod:10 reg:000 rm:101) + disp32 (-8)
+    // REX.W (48) + opcode (89) + ModRM (45 = mod:01 reg:000 rm:101) + disp8 (-8)
     try emit.movMemReg(.w64, .RBP, -8, .RAX);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x89, 0x85, 0xF8, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x89, 0x45, 0xF8 }, emit.buf.items);
 }
 
 test "movMemReg - store to [rsp+32] requires SIB byte" {
@@ -1868,9 +1950,9 @@ test "movMemReg - store to [rsp+32] requires SIB byte" {
     defer emit.deinit();
 
     // mov [rsp+32], r11
-    // REX.WR (4C) + opcode (89) + ModRM (9C = mod:10 reg:011 rm:100) + SIB (24) + disp32 (32)
+    // REX.WR (4C) + opcode (89) + ModRM (5C = mod:01 reg:011 rm:100) + SIB (24) + disp8 (32)
     try emit.movMemReg(.w64, .RSP, 32, .R11);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x4C, 0x89, 0x9C, 0x24, 0x20, 0x00, 0x00, 0x00 }, emit.buf.items);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x4C, 0x89, 0x5C, 0x24, 0x20 }, emit.buf.items);
 }
 
 test "leaRegMem - lea rax, [rbp-32]" {
@@ -1878,9 +1960,9 @@ test "leaRegMem - lea rax, [rbp-32]" {
     defer emit.deinit();
 
     // lea rax, [rbp-32]
-    // REX.W (48) + opcode (8D) + ModRM (85 = mod:10 reg:000 rm:101) + disp32 (-32)
+    // REX.W (48) + opcode (8D) + ModRM (45 = mod:01 reg:000 rm:101) + disp8 (-32)
     try emit.leaRegMem(.RAX, .RBP, -32);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x8D, 0x85, 0xE0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x8D, 0x45, 0xE0 }, emit.buf.items);
 }
 
 test "leaRegMem - lea rcx, [rsp+64] requires SIB" {
@@ -1888,9 +1970,9 @@ test "leaRegMem - lea rcx, [rsp+64] requires SIB" {
     defer emit.deinit();
 
     // lea rcx, [rsp+64]
-    // REX.W (48) + opcode (8D) + ModRM (8C = mod:10 reg:001 rm:100) + SIB (24) + disp32 (64)
+    // REX.W (48) + opcode (8D) + ModRM (4C = mod:01 reg:001 rm:100) + SIB (24) + disp8 (64)
     try emit.leaRegMem(.RCX, .RSP, 64);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x8D, 0x8C, 0x24, 0x40, 0x00, 0x00, 0x00 }, emit.buf.items);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x8D, 0x4C, 0x24, 0x40 }, emit.buf.items);
 }
 
 test "subRegImm32 - sub rsp, 80 (stack allocation)" {
@@ -1898,9 +1980,9 @@ test "subRegImm32 - sub rsp, 80 (stack allocation)" {
     defer emit.deinit();
 
     // sub rsp, 80
-    // REX.W (48) + opcode (81) + ModRM (EC = mod:11 reg:101 rm:100) + imm32 (80)
+    // REX.W (48) + opcode (83) + ModRM (EC = mod:11 reg:101 rm:100) + imm8 (80)
     try emit.subRegImm32(.w64, .RSP, 80);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x81, 0xEC, 0x50, 0x00, 0x00, 0x00 }, emit.buf.items);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x83, 0xEC, 0x50 }, emit.buf.items);
 }
 
 test "addRegImm32 - add rsp, 80 (stack deallocation)" {
@@ -1908,9 +1990,9 @@ test "addRegImm32 - add rsp, 80 (stack deallocation)" {
     defer emit.deinit();
 
     // add rsp, 80
-    // REX.W (48) + opcode (81) + ModRM (C4 = mod:11 reg:000 rm:100) + imm32 (80)
+    // REX.W (48) + opcode (83) + ModRM (C4 = mod:11 reg:000 rm:100) + imm8 (80)
     try emit.addRegImm32(.w64, .RSP, 80);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x81, 0xC4, 0x50, 0x00, 0x00, 0x00 }, emit.buf.items);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x83, 0xC4, 0x50 }, emit.buf.items);
 }
 
 test "callReg - call r11" {
@@ -1982,12 +2064,12 @@ test "Windows x64 call sequence - shadow space + call" {
     try emit.addRegImm32(.w64, .RSP, 32);
 
     // Verify total sequence length
-    // sub rsp, 32: 7 bytes
+    // sub rsp, 32: 4 bytes
     // mov rcx, rdi: 3 bytes
     // call r11: 3 bytes
-    // add rsp, 32: 7 bytes
-    // Total: 20 bytes
-    try std.testing.expectEqual(@as(usize, 20), emit.buf.items.len);
+    // add rsp, 32: 4 bytes
+    // Total: 14 bytes
+    try std.testing.expectEqual(@as(usize, 14), emit.buf.items.len);
 }
 
 test "movMemReg 32-bit width" {
@@ -1996,8 +2078,8 @@ test "movMemReg 32-bit width" {
 
     // mov [rbp-16], eax (32-bit store, no REX.W)
     try emit.movMemReg(.w32, .RBP, -16, .RAX);
-    // opcode (89) + ModRM (85) + disp32 (-16)
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x89, 0x85, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+    // opcode (89) + ModRM (45) + disp8 (-16)
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x89, 0x45, 0xF0 }, emit.buf.items);
 }
 
 test "movMemReg 8-bit width" {
@@ -2006,7 +2088,7 @@ test "movMemReg 8-bit width" {
 
     // mov [rbp-16], al
     try emit.movMemReg(.w8, .RBP, -16, .RAX);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x88, 0x85, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x88, 0x45, 0xF0 }, emit.buf.items);
 }
 
 test "movMemReg 8-bit width requires REX for sil" {
@@ -2015,7 +2097,7 @@ test "movMemReg 8-bit width requires REX for sil" {
 
     // mov [rbp-16], sil
     try emit.movMemReg(.w8, .RBP, -16, .RSI);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x40, 0x88, 0xB5, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x40, 0x88, 0x75, 0xF0 }, emit.buf.items);
 }
 
 test "movRegMem 32-bit width" {
@@ -2024,7 +2106,7 @@ test "movRegMem 32-bit width" {
 
     // mov eax, [rbp-16] (32-bit load, no REX.W)
     try emit.movRegMem(.w32, .RAX, .RBP, -16);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x8B, 0x85, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x8B, 0x45, 0xF0 }, emit.buf.items);
 }
 
 test "movRegMem 8-bit width requires REX for sil" {
@@ -2033,7 +2115,7 @@ test "movRegMem 8-bit width requires REX for sil" {
 
     // mov sil, [rbp-16]
     try emit.movRegMem(.w8, .RSI, .RBP, -16);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x40, 0x8A, 0xB5, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x40, 0x8A, 0x75, 0xF0 }, emit.buf.items);
 }
 
 test "jmpRel32 encoding" {
@@ -2062,9 +2144,9 @@ test "movzxBRegMem - zero-extend byte from [rbp-8]" {
 
     // movzx eax, BYTE [rbp-8]
     // No REX prefix (no extended regs, no .W)
-    // 0F B6 85 F8FFFFFF
+    // 0F B6 45 F8
     try emit.movzxBRegMem(.RAX, .RBP, -8);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x0F, 0xB6, 0x85, 0xF8, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x0F, 0xB6, 0x45, 0xF8 }, emit.buf.items);
 }
 
 test "movzxWRegMem - zero-extend word from [rbp-16]" {
@@ -2072,9 +2154,9 @@ test "movzxWRegMem - zero-extend word from [rbp-16]" {
     defer emit.deinit();
 
     // movzx eax, WORD [rbp-16]
-    // 0F B7 85 F0FFFFFF
+    // 0F B7 45 F0
     try emit.movzxWRegMem(.RAX, .RBP, -16);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x0F, 0xB7, 0x85, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x0F, 0xB7, 0x45, 0xF0 }, emit.buf.items);
 }
 
 test "movzxBRegMem - [rsp+offset] requires SIB" {
@@ -2083,9 +2165,9 @@ test "movzxBRegMem - [rsp+offset] requires SIB" {
 
     // movzx ecx, BYTE [rsp+32]
     // No REX (RCX and RSP are not extended)
-    // 0F B6 8C 24 20000000
+    // 0F B6 4C 24 20
     try emit.movzxBRegMem(.RCX, .RSP, 32);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x0F, 0xB6, 0x8C, 0x24, 0x20, 0x00, 0x00, 0x00 }, emit.buf.items);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x0F, 0xB6, 0x4C, 0x24, 0x20 }, emit.buf.items);
 }
 
 test "movzxBRegMem - extended register R8 from [rbp-4]" {
@@ -2093,7 +2175,7 @@ test "movzxBRegMem - extended register R8 from [rbp-4]" {
     defer emit.deinit();
 
     // movzx r8d, BYTE [rbp-4]
-    // REX.R (44) + 0F B6 85 FCFFFFFF
+    // REX.R (44) + 0F B6 45 FC
     try emit.movzxBRegMem(.R8, .RBP, -4);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x44, 0x0F, 0xB6, 0x85, 0xFC, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x44, 0x0F, 0xB6, 0x45, 0xFC }, emit.buf.items);
 }

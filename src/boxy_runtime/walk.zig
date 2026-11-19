@@ -195,7 +195,7 @@ pub fn incref(desc: *const TypeDesc, ptr: [*]u8, count: isize, ops: *RocOps) voi
                 if (d.child.?.size != 0) utils.increfDataPtr(value.word(), count, .atomic, ops);
                 return;
             },
-            .erased_callable => return utils.increfDataPtr(value.word(), count, .atomic, ops),
+            .erased_callable => return erased_callable.incref(value.word(), count, ops),
             .nominal => d = d.child.?,
             .record, .tuple, .tag_union => return increfComposite(d, ptr, count, ops),
         }
@@ -218,7 +218,7 @@ noinline fn increfComposite(desc: *const TypeDesc, ptr: [*]u8, count: isize, ops
                 .str => value.rocStr().incref(@intCast(count), ops),
                 .list => value.rocList().incref(count, d.child.?.flags.contains_refcounted, ops),
                 .box, .recursive_box => if (d.child.?.size != 0) utils.increfDataPtr(value.word(), count, .atomic, ops),
-                .erased_callable => utils.increfDataPtr(value.word(), count, .atomic, ops),
+                .erased_callable => erased_callable.incref(value.word(), count, ops),
                 .record, .tuple => {
                     const fields = d.fields();
                     const slots = d.refcountedFieldSlots();

@@ -209,7 +209,7 @@ NO CHANGE
 				(ty-apply (name "List") (builtin)
 					(ty-lookup (name "Str") (builtin))))))
 	(s-expect
-		(e-call (constraint-fn-var 343)
+		(e-call (constraint-fn-var 345)
 			(e-lookup-external
 				(builtin))
 			(e-runtime-error (tag "erroneous_value_expr"))

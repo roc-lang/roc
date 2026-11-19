@@ -197,7 +197,8 @@ pub const Expr = union(enum) {
     },
     /// An associated value selected through a local type alias declaration.
     /// Checking resolves transparent aliases and replaces this with
-    /// `e_lookup_associated_resolved`.
+    /// `e_lookup_local` when the target is a binding of this module, and with
+    /// `e_lookup_associated_resolved` otherwise.
     e_lookup_associated_local: struct {
         type_node_idx: u32,
         type_ident: Ident.Idx,
@@ -401,13 +402,6 @@ pub const Expr = union(enum) {
     /// -42             # Unary minus on literal
     /// ```
     e_unary_minus: UnaryMinus,
-    /// Unary not expression, sugar for the operand's `not` method.
-    ///
-    /// ```roc
-    /// !x              # x.not()
-    /// !True           # Bool.not on a tag literal
-    /// ```
-    e_unary_not: UnaryNot,
     /// A maximal contiguous record-field access path.
     ///
     /// ```roc
@@ -847,8 +841,6 @@ pub const Expr = union(enum) {
         binop: Binop.Op,
         /// Desugared from unary negation (`-a`).
         unary_minus,
-        /// Desugared from unary logical not (`!a`).
-        unary_not,
     };
 
     /// Unary minus operation for numeric negation.
@@ -857,15 +849,6 @@ pub const Expr = union(enum) {
 
         pub fn init(expr: Expr.Idx) UnaryMinus {
             return UnaryMinus{ .expr = expr };
-        }
-    };
-
-    /// Unary not operation, dispatched to the operand's `not` method.
-    pub const UnaryNot = struct {
-        expr: Expr.Idx,
-
-        pub fn init(expr: Expr.Idx) UnaryNot {
-            return UnaryNot{ .expr = expr };
         }
     };
 
@@ -1329,14 +1312,6 @@ pub const Expr = union(enum) {
             },
             .e_unary_minus => |e| {
                 const begin = try ir.beginSExprNodeAt(tree, "e-unary-minus", expr_idx);
-                const attrs = tree.beginNode();
-
-                try ir.store.getExpr(e.expr).pushToSExprTree(ir, tree, e.expr);
-
-                try tree.endNode(begin, attrs);
-            },
-            .e_unary_not => |e| {
-                const begin = try ir.beginSExprNodeAt(tree, "e-unary-not", expr_idx);
                 const attrs = tree.beginNode();
 
                 try ir.store.getExpr(e.expr).pushToSExprTree(ir, tree, e.expr);

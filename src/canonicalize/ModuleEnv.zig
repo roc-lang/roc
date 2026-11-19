@@ -1112,6 +1112,13 @@ display_module_name_idx: Ident.Idx,
 /// checked, fresh or loaded from a cache. Empty for environments built outside
 /// the coordinator; `qualifiedModuleName` then reports the bare name.
 qualified_module_name: []const u8,
+/// How this module's source lines up with the user's file when the CLI
+/// compiles it from a staged copy (a default app), so post-check source
+/// locations name the user's lines. Workspace information like
+/// `qualified_module_name`: never serialized, and recorded by the coordinator
+/// on every environment it installs for the staged entry module. Hashed into
+/// the module's source inputs, since lowered code carries its locations.
+staged_source_map: ?base.StagedSourceMap = null,
 /// Env-local module identity table: dense `base.ModuleIdentity.Idx` -> 32-byte
 /// deep content hash (see `base.module_identity`). Entry ids are the
 /// `origin_module` values stored on nominal/alias types in this env's type
@@ -1890,6 +1897,9 @@ pub fn pushDiagnostic(self: *Self, reason: CIR.Diagnostic) std.mem.Allocator.Err
 /// Creates a malformed node that represents a runtime error in the IR.
 pub fn pushMalformed(self: *Self, comptime RetIdx: type, reason: CIR.Diagnostic) std.mem.Allocator.Error!RetIdx {
     comptime if (!isCastable(RetIdx)) @compileError("Idx type " ++ @typeName(RetIdx) ++ " is not castable");
+    // The import declaration owns this error. Every use of its rejected name
+    // carries the same explicit recovery reason without reporting it again.
+    if (reason == .builtin_import_conflict) return self.pushRuntimeErrorExpr(RetIdx, reason);
     const diag_idx = try self.addDiagnostic(reason);
     const region = getDiagnosticRegion(reason);
     const malformed_idx = try self.addMalformed(diag_idx, region);
@@ -2326,6 +2336,25 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" is not declared in this scope.");
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
+
+            // Scope construction keeps a for-clause alias out of its own
+            // requirement. Its recorded binder supplies the correction only
+            // on this diagnostic path, not on every successful type lookup.
+            for (self.requires_types.items()) |requirement| {
+                if (data.region.start.offset < requirement.region.start.offset or
+                    data.region.end.offset > requirement.region.end.offset) continue;
+                for (self.for_clause_aliases.sliceRange(requirement.type_aliases)) |alias| {
+                    if (!alias.alias_name.eql(data.name)) continue;
+                    const variable_name = try report.addOwnedString(self.getIdent(alias.rigid_name));
+                    try report.document.addLineBreaks(2);
+                    try report.document.addReflowingText("Use the type variable ");
+                    try report.document.addInlineCode(variable_name);
+                    try report.document.addReflowingText(" in the requirement that introduces it. The alias ");
+                    try report.document.addInlineCode(owned_type_name);
+                    try report.document.addReflowingText(" is available outside this signature, including in functions provided to the host.");
+                    break;
+                }
+            }
 
             break :blk report;
         },
@@ -4016,6 +4045,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getLineStartsAll(),
             );
         },
+        .builtin_import_conflict => |data| try CIR.Diagnostic.buildBuiltinImportConflictReport(
+            allocator,
+            self.getIdent(data.name),
+            self.calcRegionInfo(data.region),
+            filename,
+            self.getSourceAll(),
+            self.getLineStartsAll(),
+        ),
         .builtin_type_shadowed_warning => |data| blk: {
             const new_region_info = self.calcRegionInfo(data.region);
             break :blk try CIR.Diagnostic.buildBuiltinTypeShadowedWarningReport(
@@ -4145,6 +4182,7 @@ pub const Serialized = extern struct {
         .Owner = Self,
         .owner_only_fields = &.{
             "qualified_module_name", // Workspace information, recorded by the coordinator.
+            "staged_source_map", // Workspace information, recorded by the coordinator.
             "loaded_entry", // The process-local mapping or buffer a loaded environment lives in.
         },
         .serialized_only_fields = &.{

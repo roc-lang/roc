@@ -391,11 +391,11 @@ pub const View = struct {
         return self.bytes[0..@intCast(self.trailer.sections_end)];
     }
     pub fn symbols(self: View) []const HostSymbol {
-        const start: [*]const HostSymbol = @ptrCast(@alignCast(self.bytes.ptr + self.trailer.symbols_offset));
+        const start: [*]const HostSymbol = @ptrCast(@alignCast(self.bytes.ptr + @as(usize, @intCast(self.trailer.symbols_offset))));
         return start[0..self.trailer.symbol_count];
     }
     pub fn provides(self: View) []const ProvideRecord {
-        const start: [*]const ProvideRecord = @ptrCast(@alignCast(self.bytes.ptr + self.trailer.provides_offset));
+        const start: [*]const ProvideRecord = @ptrCast(@alignCast(self.bytes.ptr + @as(usize, @intCast(self.trailer.provides_offset))));
         return start[0..self.trailer.provide_count];
     }
     pub fn name(self: View, offset: u32) []const u8 {

@@ -540,7 +540,6 @@ const CheckedClassifier = struct {
             .e_lambda,
             .e_binop,
             .e_unary_minus,
-            .e_unary_not,
             .e_interpolation,
             .e_structural_eq,
             .e_structural_hash,

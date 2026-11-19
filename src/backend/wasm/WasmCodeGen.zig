@@ -342,6 +342,10 @@ rc_helper_funcs: std.AutoHashMap(u64, u32),
 rc_helper_table_indices: std.AutoHashMap(u64, u32),
 /// Atomic helpers explicitly named by static-data relocations.
 static_data_rc_helpers: []const RcHelperKey = &.{},
+/// While a `decref_queued` helper's body is emitted: the local holding the
+/// drop queue it received, which it passes to each `decref_queued` child and
+/// each queued teardown. Null in every other body, which passes a null queue.
+rc_queue_local: ?u32 = null,
 /// Map from proc spec id → wasm table index (for proc_ref literals).
 proc_table_indices: collections.DenseMap(u32, u32),
 /// Map from LIR string backing id → wasm data offset for the backing bytes.
@@ -2399,33 +2403,42 @@ fn emitRawDirectRcPlan(
         },
         .erased_callable_incref => {
             const payload_ptr_local = try self.emitLoadAtToNewLocal(value_ptr_local, .i32, 0);
+            try self.emitFrameCallableSkipBlock(payload_ptr_local);
             if (count_local) |count| {
                 try self.emitDataPtrIncrefByLocal(payload_ptr_local, count);
             } else {
                 try self.emitDataPtrIncref(payload_ptr_local, 1);
             }
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
             return true;
         },
         .erased_callable_decref => {
             const payload_ptr_local = try self.emitLoadAtToNewLocal(value_ptr_local, .i32, 0);
+            try self.emitFrameCallableSkipBlock(payload_ptr_local);
             try self.emitErasedCallableOnDropIfUnique(payload_ptr_local);
             try self.emitDataPtrDecref(
                 payload_ptr_local,
                 builtins.erased_callable.payload_alignment,
                 builtins.erased_callable.allocation_has_refcounted_children,
             );
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
             return true;
         },
         .erased_callable_free => {
             const payload_ptr_local = try self.emitLoadAtToNewLocal(value_ptr_local, .i32, 0);
+            try self.emitFrameCallableSkipBlock(payload_ptr_local);
             try self.emitErasedCallableOnDrop(payload_ptr_local);
             try self.emitDataPtrFree(
                 payload_ptr_local,
                 builtins.erased_callable.payload_alignment,
                 builtins.erased_callable.allocation_has_refcounted_children,
             );
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
             return true;
         },
+        // A queued teardown calls a builtin with a helper callback, which
+        // only a compiled helper's body emits.
+        .list_decref_queued, .list_free_queued, .box_decref_queued, .box_free_queued => return false,
         .struct_, .tag_union, .closure => return false,
     }
 }
@@ -2455,6 +2468,10 @@ fn emitExplicitRcHelperCallForValuePtr(
         .decref, .free => {},
         .host_drop => wasmInvariantFmt(
             "WASM/codegen invariant violated: RC statement used a host-shaped drop adapter",
+            .{},
+        ),
+        .decref_queued => wasmInvariantFmt(
+            "WASM/codegen invariant violated: RC statement used a queued drop helper",
             .{},
         ),
     }
@@ -2900,8 +2917,8 @@ fn emitBuiltinInternalStrRc(self: *Self, comptime kind: RcOpKind, str_ptr_local:
 /// on_drop slots belong to no RC statement and are always requested as
 /// `.atomic`.
 fn rcHelperCacheKey(helper_key: RcHelperKey, atomicity: RcAtomicity) u64 {
-    // RcHelperKey.encode() occupies bits 0..33 (layout index + op).
-    return helper_key.encode() | (@as(u64, @backingInt(atomicity)) << 34);
+    // RcHelperKey.encode() occupies the low `encoded_bits` bits (layout index + op).
+    return helper_key.encode() | (@as(u64, @backingInt(atomicity)) << RcHelperKey.encoded_bits);
 }
 
 fn staticDataRequiresRcHelper(self: *const Self, helper_key: RcHelperKey, atomicity: RcAtomicity) bool {
@@ -2933,12 +2950,55 @@ fn emitRawRcHelperCallByKey(
             try self.emitLocalGet(count_local.?);
         },
         .decref, .free => {},
+        .decref_queued => try self.emitRcQueueArg(),
         .host_drop => wasmInvariantFmt(
             "WASM/codegen invariant violated: RC statement used a host-shaped drop adapter",
             .{},
         ),
     }
     try self.emitCall(helper_func_idx);
+}
+
+/// Push the queue a helper passes to a `decref_queued` child or a queued
+/// teardown: the one it received, or null in a helper that received none.
+fn emitRcQueueArg(self: *Self) Allocator.Error!void {
+    if (self.rc_queue_local) |queue_local| {
+        try self.emitLocalGet(queue_local);
+    } else {
+        try self.emitI32Const(0);
+    }
+}
+
+fn queuedDropMode(atomicity: RcAtomicity) builtins.utils.DropMode {
+    return switch (atomicity) {
+        .atomic => .decref_atomic,
+        .single_thread => .decref_single_thread,
+    };
+}
+
+/// Drop a list on a cycle of its type through the queued teardown builtin
+/// (`builtins.utils.DropQueue`). The builtin takes the list by address, which
+/// is the helper's value pointer, and reaches the element helper through its
+/// table slot.
+fn emitQueuedListDrop(self: *Self, list_plan: layout.RcQueuedListPlan, value_ptr_local: u32, mode: builtins.utils.DropMode) Allocator.Error!void {
+    try self.emitLocalGet(value_ptr_local);
+    try self.emitI32Const(@intCast(list_plan.elem_alignment));
+    try self.emitI32Const(@intCast(list_plan.elem_width));
+    try self.emitFunctionTableIndexConst(try self.rcHelperTableIndex(list_plan.child));
+    try self.emitRcQueueArg();
+    try self.emitI32Const(@intCast(@backingInt(mode)));
+    try self.emitBuiltinCall(.list_drop_queued);
+}
+
+/// Drop a box on a cycle of its type through the queued teardown builtin
+/// (`builtins.utils.DropQueue`).
+fn emitQueuedBoxDrop(self: *Self, box_plan: layout.RcQueuedBoxPlan, value_ptr_local: u32, mode: builtins.utils.DropMode) Allocator.Error!void {
+    try self.emitLoadAt(value_ptr_local, .i32, 0);
+    try self.emitI32Const(@intCast(box_plan.elem_alignment));
+    try self.emitFunctionTableIndexConst(try self.rcHelperTableIndex(box_plan.child));
+    try self.emitRcQueueArg();
+    try self.emitI32Const(@intCast(@backingInt(mode)));
+    try self.emitBuiltinCall(.box_drop_queued);
 }
 
 /// Look up a previously-reserved RC helper's global function index.
@@ -2981,6 +3041,23 @@ fn emitBuiltinInternalBoxChildDropIfUnique(
     try self.emitRawRcHelperCallByKey(child_key, atomicity, box_ptr_local, null);
 
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+}
+
+/// Open a block that a null pointer or a frame callable
+/// (`utils.REFCOUNT_FRAME`, design.md "Frame Callables") branches out of:
+/// an erased callable's retain, release and free do nothing to frame
+/// storage. The caller closes the block.
+fn emitFrameCallableSkipBlock(self: *Self, payload_ptr_local: u32) Allocator.Error!void {
+    const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitVoidBlock();
+    try self.emitLocalGet(payload_ptr_local);
+    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+    try self.emitBrIf(0);
+    try self.emitLoadI32AtPtrOffset(payload_ptr_local, refcount_offset, rc_val);
+    try self.emitLocalGet(rc_val);
+    try self.emitI32Const(@intCast(builtins.utils.targetRefcountFrame(wasm_word_size)));
+    self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+    try self.emitBrIf(0);
 }
 
 fn emitErasedCallableOnDropIfUnique(
@@ -3065,27 +3142,37 @@ fn generateBuiltinInternalRcHelperBody(
             }
             try self.emitDataPtrFree(box_ptr_local, box_plan.elem_alignment, box_plan.child != null);
         },
+        .list_decref_queued => |list_plan| try self.emitQueuedListDrop(list_plan, value_ptr_local, queuedDropMode(atomicity)),
+        .list_free_queued => |list_plan| try self.emitQueuedListDrop(list_plan, value_ptr_local, .free),
+        .box_decref_queued => |box_plan| try self.emitQueuedBoxDrop(box_plan, value_ptr_local, queuedDropMode(atomicity)),
+        .box_free_queued => |box_plan| try self.emitQueuedBoxDrop(box_plan, value_ptr_local, .free),
         .erased_callable_incref => {
             const payload_ptr_local = try self.emitLoadAtToNewLocal(value_ptr_local, .i32, 0);
+            try self.emitFrameCallableSkipBlock(payload_ptr_local);
             try self.emitDataPtrIncrefByLocal(payload_ptr_local, count_local.?);
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
         .erased_callable_decref => {
             const payload_ptr_local = try self.emitLoadAtToNewLocal(value_ptr_local, .i32, 0);
+            try self.emitFrameCallableSkipBlock(payload_ptr_local);
             try self.emitErasedCallableOnDropIfUnique(payload_ptr_local);
             try self.emitDataPtrDecref(
                 payload_ptr_local,
                 builtins.erased_callable.payload_alignment,
                 builtins.erased_callable.allocation_has_refcounted_children,
             );
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
         .erased_callable_free => {
             const payload_ptr_local = try self.emitLoadAtToNewLocal(value_ptr_local, .i32, 0);
+            try self.emitFrameCallableSkipBlock(payload_ptr_local);
             try self.emitErasedCallableOnDrop(payload_ptr_local);
             try self.emitDataPtrFree(
                 payload_ptr_local,
                 builtins.erased_callable.payload_alignment,
                 builtins.erased_callable.allocation_has_refcounted_children,
             );
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
         .struct_ => |struct_plan| {
             const field_count = self.getLayoutStore().rcHelperStructFieldCount(struct_plan);
@@ -3153,6 +3240,7 @@ fn rcPlanNeedsCompiledHelper(helper_plan: RcHelperPlan) bool {
     return switch (helper_plan) {
         .list_incref, .list_decref, .list_free => |list_plan| list_plan.child != null,
         .box_decref, .box_free => |box_plan| box_plan.child != null,
+        .list_decref_queued, .list_free_queued, .box_decref_queued, .box_free_queued => true,
         .struct_, .tag_union, .closure => true,
         .noop, .str_incref, .str_decref, .str_free, .box_incref, .erased_callable_incref, .erased_callable_decref, .erased_callable_free => false,
     };
@@ -3194,6 +3282,9 @@ fn appendRcHelperChildKeys(self: *const Self, helper_plan: RcHelperPlan, out: *s
             }
         },
         .closure => |child_key| try out.append(oa, child_key),
+        // A queued teardown names its child by table slot, which reserves
+        // the child itself (`rcHelperTableIndex`).
+        .list_decref_queued, .list_free_queued, .box_decref_queued, .box_free_queued => {},
         .noop, .str_incref, .str_decref, .str_free, .box_incref, .erased_callable_incref, .erased_callable_decref, .erased_callable_free => {},
     }
 }
@@ -3205,7 +3296,7 @@ fn rcHelperParamTypes(op: layout.RcOp, buf: *[builtins.rc_callback_abi.max_param
     for (roles, 0..) |role, i| {
         buf[i] = switch (role) {
             // wasm32 pointers and the pointer-sized count are both i32.
-            .value_ptr, .count, .ops_ptr => .i32,
+            .value_ptr, .count, .ops_ptr, .drop_queue => .i32,
         };
     }
     return buf[0..roles.len];
@@ -3347,12 +3438,18 @@ fn emitRcHelperBody(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity
     const value_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     const count_local = switch (helper_key.op) {
         .incref => self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory,
-        .decref, .free, .host_drop => null,
+        .decref, .free, .host_drop, .decref_queued => null,
     };
     if (helper_key.op == .host_drop) {
         // The published on-drop ABI's ops slot, which generated adapters ignore.
         _ = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     }
+    const outer_rc_queue_local = self.rc_queue_local;
+    defer self.rc_queue_local = outer_rc_queue_local;
+    self.rc_queue_local = if (helper_key.op == .decref_queued)
+        self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory
+    else
+        null;
     self.fp_local = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory;
 
     try self.emitVoidBlock();
@@ -6574,8 +6671,8 @@ const DecodedRcHelper = struct { key: RcHelperKey, atomicity: RcAtomicity };
 
 fn decodeRcHelperCacheKey(cache_key: u64) DecodedRcHelper {
     return .{
-        .key = RcHelperKey.decode(cache_key & 0x3_ffff_ffff),
-        .atomicity = @fromBackingInt(@as(u1, @intCast((cache_key >> 34) & 1))),
+        .key = RcHelperKey.decode(cache_key),
+        .atomicity = @fromBackingInt(@as(u1, @intCast((cache_key >> RcHelperKey.encoded_bits) & 1))),
     };
 }
 
@@ -8293,6 +8390,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 .on_copy = assign.on_copy,
                 .reuse = assign.reuse,
                 .reuse_unique = assign.reuse_unique,
+                .frame = assign.frame,
             });
             try self.bindAssignedLocal(assign_stmt.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign_stmt.next, .stop = stop } });
@@ -9368,7 +9466,7 @@ fn generateDynRc(self: *Self, value: ProcLocalId, op: layout.RcOp, count: u32) A
             try self.emitBytesAddress(value);
             try self.emitBoxyRuntimeCall(.decref);
         },
-        .free, .host_drop => wasmInvariantFmt("WASM/codegen invariant violated: {s} of dynamic local {d}", .{ @tagName(op), @backingInt(value) }),
+        .free, .host_drop, .decref_queued => wasmInvariantFmt("WASM/codegen invariant violated: {s} of dynamic local {d}", .{ @tagName(op), @backingInt(value) }),
     }
 }
 
@@ -9580,6 +9678,29 @@ fn generateDynFrameAlloc(self: *Self) Allocator.Error!void {
     for (0..locals.len) |i| {
         const local = GuardedList.at(locals, i);
         const dyn = self.localDyn(local) orelse continue;
+        if (dyn.storage == .frame_callable) {
+            // A frame callable's storage: 16-byte aligned, its data pointer
+            // after the 16-byte prefix ending in its refcount word, then the
+            // header and the capture record its descriptor sizes.
+            const prefix: i32 = builtins.erased_callable.payload_alignment;
+            const desc = try self.emitProcLocalToNewLocal(dyn.desc, .i32);
+            try self.emitLocalGet(total);
+            try self.emitI32Const(prefix - 1);
+            try self.emitOps(.{Op.i32_add});
+            try self.emitI32Const(-prefix);
+            try self.emitOps(.{Op.i32_and});
+            try self.emitI32Const(prefix);
+            try self.emitOps(.{Op.i32_add});
+            try self.emitLocalTee(total);
+            try self.emitBindingSet(try self.procLocalBinding(local));
+            try self.emitLocalGet(total);
+            try self.emitI32Const(@intCast(builtins.erased_callable.captureOffset(wasm_word_size)));
+            try self.emitOps(.{Op.i32_add});
+            try self.emitLoadAt(desc, .i32, desc_size_offset);
+            try self.emitOps(.{Op.i32_add});
+            try self.emitLocalSet(total);
+            continue;
+        }
         if (dyn.storage != .frame) continue;
         const desc = try self.emitProcLocalToNewLocal(dyn.desc, .i32);
         try self.emitLoadAt(desc, .i32, desc_alignment_offset);
@@ -9617,7 +9738,7 @@ fn generateDynFrameAlloc(self: *Self) Allocator.Error!void {
     for (0..locals.len) |i| {
         const local = GuardedList.at(locals, i);
         const dyn = self.localDyn(local) orelse continue;
-        if (dyn.storage != .frame) continue;
+        if (dyn.storage != .frame and dyn.storage != .frame_callable) continue;
         const binding = try self.procLocalBinding(local);
         try self.emitBindingGet(binding);
         try self.emitLocalGet(total);
@@ -9803,7 +9924,16 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             try self.emitProcLocal(v.address);
             try self.bindComponentAddress(dst);
         },
-        .closure => |c| {
+        .closure => |c| if (c.frame) |frame| {
+            try self.emitProcTableIndex(c.proc);
+            try self.emitBytesAddress(c.capture);
+            try self.emitBindingGet(try self.procLocalBinding(frame));
+            // No hot-reload header or drop on wasm.
+            try self.emitI32Const(0);
+            try self.emitI32Const(0);
+            try self.emitBoxyRuntimeCall(.closure_frame);
+            try self.bindReturnedScalar(dst, .i32);
+        } else {
             try self.emitProcTableIndex(c.proc);
             try self.emitBytesAddress(c.capture);
             if (c.reuse) |reuse| {
@@ -9868,6 +9998,7 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
 /// operation.
 fn boxyListOp(op: base.LowLevel) ?BoxyListOp {
     return switch (op) {
+        .dec_mul_saturated => null,
         .boxed_sequence_pack, .boxed_sequence_unpack => null,
         .list_capacity => .capacity,
         .list_slack_unique => .slack_unique,
@@ -9922,6 +10053,7 @@ fn generateDynElemLowLevel(self: *Self, assign: anytype) Allocator.Error!void {
     const extra = self.store.stmtRowOrDefault(assign.extra);
 
     switch (assign.op) {
+        .dec_mul_saturated => {},
         .boxed_sequence_pack, .boxed_sequence_unpack => unreachable, // sequence operations never carry list element descriptors
         .list_prefetch => {
             if (self.localDyn(dst) == null) {
@@ -10318,7 +10450,17 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
     };
     const on_drop_table_idx = try self.erasedCallableOnDropTableIndex(c.on_drop);
     const payload_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    if (c.reuse) |reuse| {
+    if (c.frame) {
+        // The callable lives in frame memory of this statement's own,
+        // 16-byte aligned, whose refcount word is the frame marker.
+        const prefix: u32 = builtins.erased_callable.payload_alignment;
+        const offset = try self.allocPersistentStackMemory(prefix + @as(u32, @intCast(builtins.erased_callable.payloadSizeFor(wasm_word_size, capture_size))), builtins.erased_callable.payload_alignment);
+        try self.emitFpOffset(offset + prefix);
+        try self.emitLocalSet(payload_ptr);
+        try self.emitFpOffset(offset + prefix - wasm_word_size);
+        try self.emitI32Const(@intCast(builtins.utils.targetRefcountFrame(wasm_word_size)));
+        try self.emitStoreOpSized(.i32, 4, 0);
+    } else if (c.reuse) |reuse| {
         const reuse_ptr = try self.emitProcLocalToNewLocal(reuse, .i32);
 
         try self.emitLocalGet(reuse_ptr);
@@ -10349,11 +10491,13 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
             self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
 
             try self.emitFreshErasedCallablePayload(payload_ptr, capture_size);
+            try self.emitFrameCallableSkipBlock(reuse_ptr);
             try self.emitDataPtrDecref(
                 reuse_ptr,
                 builtins.erased_callable.payload_alignment,
                 builtins.erased_callable.allocation_has_refcounted_children,
             );
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 
             self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
         }
@@ -11724,6 +11868,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitProcLocal(GuardedList.at(args, 0));
             self.currentCode().append(self.allocator, Op.f64_reinterpret_i64) catch return error.OutOfMemory;
         },
+
+        .dec_mul_saturated => try self.emitDecBinaryMath(args, BuiltinSignatures.kindOf(comptime LowLevelBuiltins.decBinaryArith(.dec_mul_saturated))),
 
         // Float math functions (direct wasm opcodes)
         .num_pow => {

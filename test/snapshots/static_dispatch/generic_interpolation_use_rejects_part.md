@@ -14,20 +14,26 @@ bad : Str
 bad = greet(42.U64)
 ~~~
 # EXPECTED
-TYPE MISMATCH - generic_interpolation_use_rejects_part.md:1:22:1:26
+TYPE MISMATCH - generic_interpolation_use_rejects_part.md:7:7:7:7
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 1 22) (end 1 26))
+		(region (start 7 13) (end 7 19))
 		(headline
-			(reflow "This expression is used in an unexpected way."))
+			(reflow "The")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "argument being passed to this function has the wrong type."))
 		(document
-			(source-region (file "generic_interpolation_use_rejects_part.md") (start 1 22) (end 1 26) (annotation error) (line-text "greet = |name| \"hi ${name}\""))
+			(source-underlines
+				(display (file "generic_interpolation_use_rejects_part.md") (start 7 7) (end 7 20) (annotation dim) (line-text "bad = greet(42.U64)"))
+				(underline (start 7 13) (end 7 19) (annotation error)))
 			(line-break)
-			(reflow "It has the type:")
+			(reflow "This argument has the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -36,7 +42,15 @@ TYPE MISMATCH - generic_interpolation_use_rejects_part.md:1:22:1:26
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "But you are trying to use it as:")
+			(reflow "But")
+			(reflow " ")
+			(annotated code "greet")
+			(reflow " ")
+			(reflow "needs the")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "argument to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -121,7 +135,7 @@ NO CHANGE
 						(e-literal (string "")))))))
 	(d-let
 		(p-assign (ident "ok"))
-		(e-call (constraint-fn-var 283)
+		(e-call (constraint-fn-var 285)
 			(e-lookup-local
 				(p-assign (ident "greet")))
 			(e-string
@@ -130,9 +144,7 @@ NO CHANGE
 			(ty-lookup (name "Str") (builtin))))
 	(d-let
 		(p-assign (ident "bad"))
-		(e-call (constraint-fn-var 293)
-			(e-runtime-error (tag "erroneous_value_expr"))
-			(e-typed-int (value "42") (type "U64")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "Str") (builtin)))))
 ~~~

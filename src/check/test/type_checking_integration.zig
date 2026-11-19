@@ -77,6 +77,64 @@ test "check type - num - float" {
 
 // primitives - strs //
 
+// https://github.com/roc-lang/roc/issues/13112
+test "issue 13112: builtin Try declares its derived JSON encoder" {
+    const source =
+        \\Probe := [].{
+        \\    Outcome(ok, err) := [Ok(ok), Err(err)].{
+        \\        encoder_for : _
+        \\    }
+        \\    mine : Outcome(Str, Str)
+        \\    mine = Ok("x")
+        \\    theirs : Try(Str, Str)
+        \\    theirs = Ok("x")
+        \\}
+        \\expect Json.to_str(Probe.mine) == "{\"Ok\":\"x\"}"
+        \\expect Json.to_str(Probe.theirs) == "{\"Ok\":\"x\"}"
+    ;
+    var test_env = try TestEnv.init("Probe", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "issue 13112: builtin Try declares its derived JSON parser" {
+    const source =
+        \\parsed : Try(Try(Str, Str), _)
+        \\parsed = Json.parse("{\"Ok\":\"x\"}")
+        \\expect parsed == Ok(Ok("x"))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+// https://github.com/roc-lang/roc/issues/13110
+test "issue 13110: nominal tag value cannot inhabit a plain tag union annotation" {
+    const source =
+        \\Color := [Red, Green].{
+        \\    name : Color -> Str
+        \\    name = |color| match color {
+        \\        Red => "red"
+        \\        Green => "green"
+        \\    }
+        \\    plain : [Red, Green]
+        \\    plain = Color.Red
+        \\}
+        \\expect Color.plain.name() == "red"
+    ;
+    var test_env = try TestEnv.init("Color", source);
+    defer test_env.deinit();
+    try test_env.assertFirstTypeError("Type Mismatch");
+}
+
+test "issue 13110: builtin Try cannot return as its structural backing" {
+    const source =
+        \\plain : Try(U64, Str) -> [Ok(U64), Err(Str)]
+        \\plain = |value| value
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
 test "check type - str annotation mismatch with number" {
     const source =
         \\x : I64
@@ -1361,6 +1419,100 @@ test "check type - record - default - list literal absorbs omitted defaulted fie
     try checkTypesModule(source, .{ .pass = .{ .def = "xs" } },
         \\List(Cfg)
     );
+}
+
+test "issue 10886 - Set result annotation supplies defaults to implicit nominal list elements" {
+    // https://github.com/roc-lang/roc/issues/10886
+    const source =
+        \\Foo := { a : U64, b : U64 ?? 0 }.{
+        \\    is_eq : _
+        \\    to_hash : _
+        \\}
+        \\
+        \\set : Set(Foo)
+        \\set = Set.from_list([{ a: 123 }, { a: 456, b: 789 }])
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "set" } }, "Set(Foo)");
+}
+
+test "issue 10886 - generic call result context reaches list element defaults" {
+    const source =
+        \\Foo := { a : U64, b : U64 ?? 0 }
+        \\identity = |xs| xs
+        \\
+        \\items : List(Foo)
+        \\items = identity([{ a: 123 }, { a: 456, b: 789 }])
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "items" } }, "List(Foo)");
+}
+
+test "issue 10886 - nested calls reuse result context for omitted defaults" {
+    const source =
+        \\Foo := { a : U64, b : U64 ?? 0 }
+        \\identity = |value| value
+        \\
+        \\items : List(Foo)
+        \\items = identity(identity([{ a: 123 }, { a: 456, b: 789 }]))
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "items" } }, "List(Foo)");
+}
+
+test "issue 10886 - result context reaches a resolved method's arguments" {
+    const source =
+        \\Foo := { a : U64, b : U64 ?? 0 }
+        \\Factory := [New].{
+        \\    identity : Factory, a -> a
+        \\    identity = |_, value| value
+        \\}
+        \\
+        \\items : List(Foo)
+        \\items = Factory.New.identity([{ a: 123 }, { a: 456, b: 789 }])
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "items" } }, "List(Foo)");
+}
+
+test "issue 10886 - generic result context cannot absorb required fields" {
+    const source =
+        \\Foo := { a : U64, b : U64 }
+        \\identity = |value| value
+        \\
+        \\items : List(Foo)
+        \\items = identity([{ a: 123 }, { a: 456, b: 789 }])
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "issue 10886 - callback result context reaches early and final returns" {
+    const source =
+        \\Foo := { a : U64, b : U64 ?? 0 }
+        \\items : List(Foo)
+        \\items = List.map([True, False], |flag| {
+        \\    if flag { return { a: 123 } }
+        \\    { a: 456, b: 789 }
+        \\})
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "items" } }, "List(Foo)");
+}
+
+test "issue 10886 - rejected result context preserves the callee and argument types" {
+    const source =
+        \\identity = |value| value
+        \\bad : Str
+        \\bad = identity(42.U64)
+        \\good = identity(True)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "issue 10886 - result context still checks actual dispatch obligations" {
+    const source =
+        \\Foo := { a : U64, b : U64 ?? 0 }
+        \\identity : a -> a where [a.missing : a -> a]
+        \\identity = |value| value.missing()
+        \\item : Foo
+        \\item = identity({ a: 123 })
+    ;
+    try checkTypesModule(source, .fail_first, "Missing Method");
 }
 
 test "issue 10886 - call parameter shape reaches nested list record constructions" {
@@ -4518,8 +4670,8 @@ test "check type - unary not" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
-test "check type - unary not infers a where clause for a generic operand" {
-    try checkTypesModule("negate = |value| !value", .{ .pass = .last_def }, "a -> a where [a.not : a -> a]");
+test "check type - unary not infers Bool argument" {
+    try checkTypesModule("negate = |value| !value", .{ .pass = .last_def }, "Bool -> Bool");
 }
 
 test "check type - unary not mutable boolean in loop" {
@@ -4540,164 +4692,22 @@ test "check type - unary not mutable boolean in loop" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
-test "check type - unary not on a type without not is a missing method" {
+test "check type - unary not mismatch" {
     const source =
         \\x = !"Hello"
-    ;
-    try checkTypesModule(source, .fail, "Missing Method");
-}
-
-test "check type - unary not on a nominal type without not is a missing method" {
-    const source =
-        \\Plain := [On, Off]
-        \\
-        \\p : Plain
-        \\p = Plain.On
-        \\
-        \\result = !p
-    ;
-    try checkTypesModule(source, .fail, "Missing Method");
-}
-
-test "check type - unary not on a tag literal resolves at Bool" {
-    try checkTypesModule("x = !True", .{ .pass = .last_def }, "Bool");
-}
-
-test "check type - unary not on a tag literal compared with a tag" {
-    try checkTypesModule("x = !True == False", .{ .pass = .last_def }, "Bool");
-}
-
-test "check type - unary not twice on a tag literal" {
-    try checkTypesModule("x = !!True", .{ .pass = .last_def }, "Bool");
-}
-
-test "check type - unary not on an unannotated tag binding in an if" {
-    const source =
-        \\go : U64 -> U64
-        \\go = |n| {
-        \\    var $done = False
-        \\    if n > 3 { $done = True }
-        \\    if !$done { n } else { 0 }
-        \\}
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "U64 -> U64");
-}
-
-test "check type - unary not on an unannotated tag binding returned unrelated" {
-    const source =
-        \\flip = |_| {
-        \\    done = False
-        \\    !done
-        \\}
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Bool");
-}
-
-test "check type - unary not in a while condition" {
-    const source =
-        \\count : List(U64) -> U64
-        \\count = |items| {
-        \\    var $done = False
-        \\    var $n = 0
-        \\    var $rest = items
-        \\    while !$done {
-        \\        match $rest.first() {
-        \\            Ok(x) => {
-        \\                $n = $n + x
-        \\                $rest = $rest.drop_first(1)
-        \\            }
-        \\            Err(_) => { $done = True }
-        \\        }
-        \\    }
-        \\    $n
-        \\}
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "List(U64) -> U64");
-}
-
-test "check type - unary not on and operands" {
-    try checkTypesModule("x = !True and !False", .{ .pass = .last_def }, "Bool");
-}
-
-test "check type - unary not inside map" {
-    try checkTypesModule("x = [True, False].map(|f| !f)", .{ .pass = .last_def }, "List(Bool)");
-}
-
-test "check type - unary not on a method result" {
-    try checkTypesModule("x = ![1.U8, 2].is_empty()", .{ .pass = .last_def }, "Bool");
-}
-
-test "check type - unary not on a tag union with other tags is a mismatch against Bool" {
-    const source =
-        \\x = !Foo
     ;
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - unary not of a generic function applied to a tag literal is a missing method" {
+test "check type - unary not rejects custom not method" {
     const source =
-        \\negate = |value| !value
-        \\x = negate(True)
-    ;
-    try checkTypesModule(source, .fail, "Missing Method");
-}
-
-test "check type - unary not on a tag literal an annotation pins to a nominal type" {
-    const source =
-        \\Switch := [On, Off].{
-        \\    not : Switch -> Switch
-        \\    not = |s| match s {
-        \\        On => Off
-        \\        Off => On
-        \\    }
+        \\Custom := [Value].{
+        \\    not : Custom -> Custom
+        \\    not = |value| value
         \\}
-        \\
-        \\result : Switch
-        \\result = !On
+        \\result = !Custom.Value
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Switch");
-}
-
-test "check type - unary not on a local tag binding a later annotation pins" {
-    const source =
-        \\Switch := [On, Off].{
-        \\    not : Switch -> Switch
-        \\    not = |s| match s {
-        \\        On => Off
-        \\        Off => On
-        \\    }
-        \\}
-        \\
-        \\result = |_| {
-        \\    v = On
-        \\    flipped = !v
-        \\    pinned : Switch
-        \\    pinned = flipped
-        \\    pinned
-        \\}
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Switch");
-}
-
-// Repro for https://github.com/roc-lang/roc/issues/13001: `!x` is sugar for
-// `x.not()`, so it dispatches to the operand type's `not` method, the same way
-// `-x` dispatches to `negate`.
-test "check type - unary not dispatches to a nominal type's not method" {
-    const source =
-        \\Switch := [On, Off].{
-        \\    not : Switch -> Switch
-        \\    not = |s| match s {
-        \\        On => Off
-        \\        Off => On
-        \\    }
-        \\}
-        \\
-        \\s : Switch
-        \\s = Switch.On
-        \\
-        \\result = !s
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Switch");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 // unary minus

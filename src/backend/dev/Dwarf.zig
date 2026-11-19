@@ -18,7 +18,12 @@ pub const Reloc = @import("object/mod.zig").DebugReloc;
 
 /// One subprogram entry for `.debug_info`.
 pub const ProcEntry = struct {
+    /// What a debugger shows for the subprogram: a procedure's source name
+    /// when it has one, and otherwise its symbol.
     name: []const u8,
+    /// The object symbol the code is linked under, stated only when it
+    /// differs from `name`.
+    linkage_name: ?[]const u8 = null,
     code_start: u64,
     code_size: u64,
     loc: base.SourceLoc,
@@ -59,6 +64,7 @@ const DW_AT_language = 0x13;
 const DW_AT_producer = 0x25;
 const DW_AT_decl_file = 0x3a;
 const DW_AT_decl_line = 0x3b;
+const DW_AT_linkage_name = 0x6e;
 const DW_FORM_addr = 0x01;
 const DW_FORM_data2 = 0x05;
 const DW_FORM_data8 = 0x07;
@@ -271,38 +277,42 @@ fn buildAbbrevSection(gpa: Allocator) Allocator.Error![]u8 {
     try appendUleb(&buf, gpa, 0);
     try appendUleb(&buf, gpa, 0);
 
-    // Abbrev 2: subprogram, no children.
-    try appendUleb(&buf, gpa, 2);
-    try appendUleb(&buf, gpa, DW_TAG_subprogram);
-    try buf.append(gpa, 0); // DW_CHILDREN_no
-    const sp_attrs = [_][2]u8{
-        .{ DW_AT_name, DW_FORM_string },
+    // Subprograms, none with children. An abbreviation states the
+    // declaration attributes only for a subprogram with a source location
+    // (DWARF file index 0 names no file), and the linkage name only for one
+    // whose symbol differs from its name (`subprogramAbbrev`).
+    const name_attr = [2]u8{ DW_AT_name, DW_FORM_string };
+    const linkage_attr = [2]u8{ DW_AT_linkage_name, DW_FORM_string };
+    const pc_attrs = [_][2]u8{
         .{ DW_AT_low_pc, DW_FORM_addr },
         .{ DW_AT_high_pc, DW_FORM_data8 },
+    };
+    const decl_attrs = [_][2]u8{
         .{ DW_AT_decl_file, DW_FORM_udata },
         .{ DW_AT_decl_line, DW_FORM_udata },
     };
-    for (sp_attrs) |attr| {
-        try appendUleb(&buf, gpa, attr[0]);
-        try appendUleb(&buf, gpa, attr[1]);
+    for ([_]bool{ false, true }) |has_linkage_name| {
+        for ([_]bool{ true, false }) |has_loc| {
+            try appendUleb(&buf, gpa, subprogramAbbrev(has_loc, has_linkage_name));
+            try appendUleb(&buf, gpa, DW_TAG_subprogram);
+            try buf.append(gpa, 0); // DW_CHILDREN_no
+            try buf.appendSlice(gpa, &name_attr);
+            if (has_linkage_name) try buf.appendSlice(gpa, &linkage_attr);
+            for (pc_attrs) |attr| try buf.appendSlice(gpa, &attr);
+            if (has_loc) for (decl_attrs) |attr| try buf.appendSlice(gpa, &attr);
+            try appendUleb(&buf, gpa, 0);
+            try appendUleb(&buf, gpa, 0);
+        }
     }
-    try appendUleb(&buf, gpa, 0);
-    try appendUleb(&buf, gpa, 0);
-
-    // Abbrev 3: subprogram with no source location. DWARF file index 0
-    // names no file, so the declaration attributes are absent instead.
-    try appendUleb(&buf, gpa, 3);
-    try appendUleb(&buf, gpa, DW_TAG_subprogram);
-    try buf.append(gpa, 0); // DW_CHILDREN_no
-    for (sp_attrs[0..3]) |attr| {
-        try appendUleb(&buf, gpa, attr[0]);
-        try appendUleb(&buf, gpa, attr[1]);
-    }
-    try appendUleb(&buf, gpa, 0);
-    try appendUleb(&buf, gpa, 0);
 
     try appendUleb(&buf, gpa, 0); // section terminator
     return buf.toOwnedSlice(gpa);
+}
+
+/// The abbreviation code of a subprogram entry with or without a source
+/// location and a linkage name. Code 1 is the compile unit.
+fn subprogramAbbrev(has_loc: bool, has_linkage_name: bool) u8 {
+    return 2 + @as(u8, @intFromBool(!has_loc)) + 2 * @as(u8, @intFromBool(has_linkage_name));
 }
 
 fn buildInfoSection(
@@ -351,9 +361,13 @@ fn buildInfoSection(
     try appendInt(&buf, gpa, u32, 0); // stmt_list
 
     for (procs) |proc| {
-        try appendUleb(&buf, gpa, if (proc.loc.hasLocation()) 2 else 3);
+        try appendUleb(&buf, gpa, subprogramAbbrev(proc.loc.hasLocation(), proc.linkage_name != null));
         try buf.appendSlice(gpa, proc.name);
         try buf.append(gpa, 0);
+        if (proc.linkage_name) |linkage_name| {
+            try buf.appendSlice(gpa, linkage_name);
+            try buf.append(gpa, 0);
+        }
         try relocs.append(gpa, .{
             .section_offset = @intCast(buf.items.len),
             .target = .text,
@@ -474,4 +488,29 @@ test "issue 13150: a compile unit is named after the file most of its code comes
     var unlocated_sections = try build(gpa, "roc test", &files, &entries, &unlocated, 16);
     defer unlocated_sections.deinit(gpa);
     try std.testing.expectEqualStrings("roc", testCompileUnitName(unlocated_sections.debug_info));
+}
+
+test "issue 12943: a subprogram with a source name states its symbol as the linkage name" {
+    const gpa = std.testing.allocator;
+    const files = [_][]const u8{"main"};
+    const entries = [_]LineEntry{};
+    const procs = [_]ProcEntry{
+        .{ .name = "App.answer", .linkage_name = "roc__p00", .code_start = 0, .code_size = 16, .loc = .{ .file = 0, .line = 7, .column = 1 } },
+        .{ .name = "App.helper", .linkage_name = "roc__p01", .code_start = 16, .code_size = 16, .loc = base.SourceLoc.none },
+    };
+    var sections = try build(gpa, "roc test", &files, &entries, &procs, 32);
+    defer sections.deinit(gpa);
+
+    // The last DIE before the children terminator: abbrev code, name,
+    // linkage name, low_pc, high_pc, and nothing after.
+    const last_len = 1 + "App.helper".len + 1 + "roc__p01".len + 1 + 8 + 8;
+    const last_start = sections.debug_info.len - 1 - last_len;
+    try std.testing.expectEqual(subprogramAbbrev(false, true), sections.debug_info[last_start]);
+    try std.testing.expectEqualStrings("App.helper\x00roc__p01\x00", sections.debug_info[last_start + 1 ..][0 .. "App.helper".len + 1 + "roc__p01".len + 1]);
+    // The DIE before it also states its declaration file and line.
+    const first_len = 1 + "App.answer".len + 1 + "roc__p00".len + 1 + 8 + 8 + 1 + 1;
+    const first_start = last_start - first_len;
+    try std.testing.expectEqual(subprogramAbbrev(true, true), sections.debug_info[first_start]);
+    try std.testing.expectEqualStrings("App.answer\x00roc__p00\x00", sections.debug_info[first_start + 1 ..][0 .. "App.answer".len + 1 + "roc__p00".len + 1]);
+    try std.testing.expectEqualSlices(u8, &.{ 1, 7 }, sections.debug_info[last_start - 2 .. last_start]);
 }

@@ -398,7 +398,6 @@ const copied_expr_shapes = [_]CopiedShape{
     .{ .cir = "e_lambda", .tag = .expr_lambda, .payload = "expr_lambda" },
     .{ .cir = "e_binop", .tag = .expr_bin_op, .payload = "expr_bin_op" },
     .{ .cir = "e_unary_minus", .tag = .expr_unary_minus, .payload = "expr_unary" },
-    .{ .cir = "e_unary_not", .tag = .expr_unary_not, .payload = "expr_unary" },
     .{ .cir = "e_block", .tag = .expr_block, .payload = "expr_block" },
 };
 
@@ -514,6 +513,7 @@ const copied_diagnostic_shapes = [_]DiagnosticShape{
     .{ .cir = "nominal_type_redeclared", .tag = .diag_nominal_type_redeclared, .payload = "diag_ident_with_region", .names = &.{ "name", "original_region" } },
     .{ .cir = "type_shadowed_warning", .tag = .diag_type_shadowed_warning, .payload = "diag_ident_with_region", .names = &.{ "name", "original_region" } },
     .{ .cir = "builtin_type_shadowed_warning", .tag = .diag_builtin_type_shadowed_warning, .payload = "diag_single_ident", .names = &.{"name"} },
+    .{ .cir = "builtin_import_conflict", .tag = .diag_builtin_import_conflict, .payload = "diag_single_ident", .names = &.{"name"} },
     .{ .cir = "duplicate_record_field", .tag = .diag_duplicate_record_field, .payload = "diag_ident_with_region", .names = &.{ "field_name", "original_region" } },
     .{ .cir = "duplicate_pattern_binder", .tag = .diag_duplicate_pattern_binder, .payload = "diag_ident_with_region", .names = &.{ "ident", "original_region" } },
     .{ .cir = "duplicate_tag", .tag = .diag_duplicate_tag, .payload = "diag_ident_with_region", .names = &.{ "tag_name", "original_region" } },
@@ -608,7 +608,6 @@ const ExprNodeTag = enum {
     expr_dbg,
     expr_expect_err,
     expr_unary_minus,
-    expr_unary_not,
     expr_ellipsis,
     expr_anno_only,
     expr_derived_method,
@@ -748,6 +747,7 @@ const DiagnosticNodeTag = enum {
     diag_nominal_type_redeclared,
     diag_type_shadowed_warning,
     diag_builtin_type_shadowed_warning,
+    diag_builtin_import_conflict,
     diag_type_parameter_conflict,
     diag_unused_variable,
     diag_used_underscore_variable,
@@ -1251,9 +1251,9 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 96;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 97;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 60;
+pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 21;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -1612,9 +1612,9 @@ fn addMethodCallData(store: *NodeStore, args: CIR.Expr.Span, method_name_region:
 }
 
 // Bidirectional u32 encoding for `CIR.Expr.SurfaceOrigin` in `MethodCallData`.
-// Binop ops are offset past the three unit tags so every `Binop.Op` value has
+// Binop ops are offset past the two unit tags so every `Binop.Op` value has
 // a distinct slot.
-const surface_origin_binop_offset: u32 = 3;
+const surface_origin_binop_offset: u32 = 2;
 comptime {
     // The binop range starts after the unit (payload-less) tags; keep the offset
     // in sync so a new unit variant can't collide with a `Binop.Op` slot.
@@ -1630,7 +1630,6 @@ pub fn encodeSurfaceOrigin(origin: CIR.Expr.SurfaceOrigin) u32 {
     return switch (origin) {
         .method_call => 0,
         .unary_minus => 1,
-        .unary_not => 2,
         .binop => |op| surface_origin_binop_offset + @as(u32, @backingInt(op)),
     };
 }
@@ -1640,7 +1639,6 @@ pub fn decodeSurfaceOrigin(encoded: u32) CIR.Expr.SurfaceOrigin {
     return switch (encoded) {
         0 => .method_call,
         1 => .unary_minus,
-        2 => .unary_not,
         else => .{ .binop = @fromBackingInt(@intCast(encoded - surface_origin_binop_offset)) },
     };
 }
@@ -2150,7 +2148,6 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
         .expr_dbg,
         .expr_expect_err,
         .expr_unary_minus,
-        .expr_unary_not,
         .expr_ellipsis,
         .expr_anno_only,
         .expr_derived_method,
@@ -2166,8 +2163,8 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
     }
 }
 
-/// Replaces an associated lookup whose checked target is a method declared in
-/// a function body with a lookup of that method's local binding.
+/// Replaces an associated lookup whose checked target is a binding of this
+/// module with a lookup of that binding.
 pub fn replaceExprWithLocalLookup(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,
@@ -3780,7 +3777,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_lambda,
         .e_binop,
         .e_unary_minus,
-        .e_unary_not,
         .e_structural_eq,
         .e_structural_hash,
         .e_method_eq,
@@ -5491,6 +5487,7 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .nominal_type_redeclared,
         .type_shadowed_warning,
         .builtin_type_shadowed_warning,
+        .builtin_import_conflict,
         .unused_variable,
         .used_underscore_variable,
         .duplicate_record_field,
@@ -5664,6 +5661,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_nominal_type_redeclared,
         .diag_type_shadowed_warning,
         .diag_builtin_type_shadowed_warning,
+        .diag_builtin_import_conflict,
         .diag_unused_variable,
         .diag_used_underscore_variable,
         .diag_duplicate_record_field,

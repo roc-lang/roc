@@ -1533,7 +1533,6 @@ const DemandAnalyzer = struct {
                 try walk.push(self.allocator, .{ .visit = binop.rhs });
             },
             .e_unary_minus => |unop| try walk.push(self.allocator, .{ .visit = unop.expr }),
-            .e_unary_not => |unop| try walk.push(self.allocator, .{ .visit = unop.expr }),
             .e_block => |block| {
                 try walk.push(self.allocator, .{ .visit = block.final_expr });
                 const stmts = self.cir.store.sliceStatements(block.stmts);
@@ -2128,6 +2127,25 @@ pub fn computeSCCs(
     };
 }
 
+/// The checker's resolution of associated values named through local type
+/// declarations, for `collectNameReferences`.
+pub const AssociatedLocalTargets = struct {
+    context: *anyopaque,
+    top_level_def: *const fn (
+        context: *anyopaque,
+        lookup: @FieldType(CIR.Expr, "e_lookup_associated_local"),
+    ) std.mem.Allocator.Error!?CIR.Def.Idx,
+
+    /// The top-level def of this module the lookup names, or null when it
+    /// names anything else or nothing.
+    fn topLevelDef(
+        self: AssociatedLocalTargets,
+        lookup: @FieldType(CIR.Expr, "e_lookup_associated_local"),
+    ) std.mem.Allocator.Error!?CIR.Def.Idx {
+        return self.top_level_def(self.context, lookup);
+    }
+};
+
 /// Collect every top-level def referenced anywhere in `root_expr`'s expression
 /// tree—including nested lambda bodies and blocks—into `out` (deduplicated).
 ///
@@ -2153,10 +2171,17 @@ pub fn computeSCCs(
 /// through a lambda-valued default (a shape DefaultCycles deliberately keeps:
 /// materializing it only creates the closure).
 ///
+/// An associated value named through a local type declaration
+/// (`Alias.method`) names a def only once the declaration's transparent
+/// aliases are resolved. The checker owns that resolution and supplies it as
+/// `associated_targets`, so the reference contributes the same edge naming
+/// the def directly would.
+///
 /// The walk is an explicit worklist (zero-recursion policy).
 pub fn collectNameReferences(
     cir: *const ModuleEnv,
     pattern_to_def: *const collections.DenseMap(CIR.Pattern.Idx, CIR.Def.Idx),
+    associated_targets: AssociatedLocalTargets,
     root_expr: CIR.Expr.Idx,
     out: *collections.DenseMap(CIR.Def.Idx, void),
     scratch_stack: *std.ArrayList(CIR.Expr.Idx),
@@ -2259,7 +2284,6 @@ pub fn collectNameReferences(
                 try scratch_stack.append(allocator, binop.rhs);
             },
             .e_unary_minus => |unop| try scratch_stack.append(allocator, unop.expr),
-            .e_unary_not => |unop| try scratch_stack.append(allocator, unop.expr),
             .e_block => |block| {
                 for (cir.store.sliceStatements(block.stmts)) |stmt_idx| {
                     switch (cir.store.getStatement(stmt_idx)) {
@@ -2346,13 +2370,18 @@ pub fn collectNameReferences(
             .e_anno_only,
             .e_derived_method,
             .e_hosted_lambda,
+            // An imported type's associated value is another module's def.
             .e_lookup_external,
-            .e_lookup_associated_local,
             .e_lookup_associated,
             .e_lookup_associated_resolved,
             .e_lookup_required,
             .e_crash,
             => {},
+            .e_lookup_associated_local => |lookup| {
+                if (try associated_targets.topLevelDef(lookup)) |def_idx| {
+                    try out.put(def_idx, {});
+                }
+            },
             .e_runtime_error => |runtime_error| try scratch_stack.appendSlice(allocator, cir.store.sliceExpr(runtime_error.evaluated)),
         }
     }
@@ -2373,6 +2402,7 @@ pub fn collectNameReferences(
 pub fn computeCheckOrder(
     cir: *const ModuleEnv,
     all_defs: CIR.Def.Span,
+    associated_targets: AssociatedLocalTargets,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!CheckOrder {
     const defs_slice = cir.store.sliceDefs(all_defs);
@@ -2406,7 +2436,7 @@ pub fn computeCheckOrder(
     for (defs_slice) |def_idx| {
         refs.clearRetainingCapacity();
         const def = cir.store.getDef(def_idx);
-        try collectNameReferences(cir, &pattern_to_def, def.expr, &refs, &scratch_stack, &scratch_seen_defaults, allocator);
+        try collectNameReferences(cir, &pattern_to_def, associated_targets, def.expr, &refs, &scratch_stack, &scratch_seen_defaults, allocator);
         var ref_iter = refs.keyIterator();
         while (ref_iter.next()) |ref_def_idx| {
             try graph.addEdge(def_idx, ref_def_idx.*);

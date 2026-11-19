@@ -59,6 +59,6 @@ test "a perf map line is the start and size in hex, then the name" {
     const gpa = std.testing.allocator;
     var lines: std.ArrayList(u8) = .empty;
     defer lines.deinit(gpa);
-    try writeLine(&lines, gpa, 0x7f12_3400_0010, 0x2c, "roc__p0123456789abcdef0123456789abcdef");
-    try std.testing.expectEqualStrings("7f1234000010 2c roc__p0123456789abcdef0123456789abcdef\n", lines.items);
+    try writeLine(&lines, gpa, 0x7f12_0010, 0x2c, "roc__p0123456789abcdef0123456789abcdef");
+    try std.testing.expectEqualStrings("7f120010 2c roc__p0123456789abcdef0123456789abcdef\n", lines.items);
 }

@@ -1344,6 +1344,9 @@ const Unifier = struct {
         }
         const shared = in_both.rangeToEnd(both_start);
         const pair: MergePair = .{ .a = a.var_, .b = b.var_, .rank = Rank.min(a.word.rank, b.word.rank) };
+        // Each row is one part, and both merge into the row built here, so no
+        // part keeps a tag the merged row copies.
+        const no_marked_copies: u32 = @intCast(self.scratch.marked_tag_copies.items.len);
 
         if (children_related) {
             try self.processSharedTagsAfterChildren(.{
@@ -1352,11 +1355,13 @@ const Unifier = struct {
                 .mb_a_extended_tags = null,
                 .mb_b_extended_tags = null,
                 .ext = a_row.ext,
+                .marked_copies_start = no_marked_copies,
+                .marked_copies_end = no_marked_copies,
             });
             return .related;
         }
         try self.enterGuardedPair(a_var, b_var);
-        try self.unifySharedTags(pair, shared, null, null, a_row.ext);
+        try self.unifySharedTags(pair, shared, null, null, a_row.ext, no_marked_copies);
         return .{ .relate_exts = .{ .a = a_row.ext, .b = b_row.ext } };
     }
 
@@ -2411,22 +2416,24 @@ const Unifier = struct {
         };
 
         const baseline: u32 = @intCast(self.types_store.len());
-        const opened = try instantiate_mod.instantiateNominalBacking(
+        const opening = try instantiate_mod.openNominalBackingRecorded(
             self.types_store,
             self.ident_store,
             &self.scratch.open_var_map,
+            decl_idx,
             decl,
             args,
             Rank.min(vars.a.desc.rank, vars.b.desc.rank),
-            .instantiation,
         );
+        const opened = opening.opened;
 
         // Every var minted by the instantiation needs the caller's post-unify
         // bookkeeping (regions, rank pools), exactly like `fresh()` vars.
         const now: u32 = @intCast(self.types_store.len());
+        try self.scratch.fresh_vars.ensureUnusedCapacity(self.scratch.gpa, now - baseline);
         var fresh_int: u32 = baseline;
         while (fresh_int < now) : (fresh_int += 1) {
-            _ = try self.scratch.fresh_vars.append(self.scratch.gpa, @fromBackingInt(@intCast(fresh_int)));
+            _ = self.scratch.fresh_vars.appendAssumeCapacity(@fromBackingInt(@intCast(fresh_int)));
         }
 
         try self.scratch.opened_nominals.append(self.scratch.gpa, .{
@@ -2437,17 +2444,7 @@ const Unifier = struct {
         // Only an opening made of structure alone may be shared with later
         // calls: a minted variable would carry one call's bindings into the
         // next.
-        var persistable = true;
-        var minted: u32 = baseline;
-        while (minted < now) : (minted += 1) {
-            switch (self.types_store.resolveVar(@fromBackingInt(@intCast(minted))).desc.content) {
-                .flex, .rigid => {
-                    persistable = false;
-                    break;
-                },
-                .alias, .structure, .field_presence, .err => {},
-            }
-        }
+        const persistable = opening.structure_only;
         try self.scratch.opened_nominal_persistable.append(self.scratch.gpa, persistable);
 
         return .{ .opened = opened };
@@ -2585,6 +2582,14 @@ const Unifier = struct {
                 },
                 .structure => |flat_type| {
                     const ext_row = kind.rowOf(flat_type) orelse return try self.finishRowForMerge(kind, range, ext_var);
+                    // This part keeps its entries, and the merged row is
+                    // about to hold copies of them.
+                    if (comptime kind == .tag_union) {
+                        const tags = self.types_store.tags.sliceRange(ext_row.tags);
+                        for (tags.items(.name), tags.items(.pattern_only)) |name, pattern_only| {
+                            if (pattern_only) try self.types_store.pattern_only_tag_copies.append(self.types_store.gpa, .{ .part = resolved.var_, .root = pair.a, .name = name });
+                        }
+                    }
                     try self.mergeRowEntriesIntoScratch(kind, &range, kind.entriesOf(ext_row));
                     ext_var = ext_row.ext;
                 },
@@ -2628,6 +2633,23 @@ const Unifier = struct {
         }
 
         try self.mergeRowAppendedFrom(.tag_union, post.pair, range_start, post.mb_a_extended_tags, post.mb_b_extended_tags, post.ext);
+
+        // The merged row now holds its own entry for each of these tags, and
+        // the part that held it before keeps its own.
+        const copies = self.scratch.marked_tag_copies.items[post.marked_copies_start..post.marked_copies_end];
+        try self.types_store.pattern_only_tag_copies.ensureUnusedCapacity(self.types_store.gpa, copies.len);
+        for (copies) |copy| {
+            self.types_store.pattern_only_tag_copies.appendAssumeCapacity(.{ .part = copy.part, .root = post.pair.a, .name = copy.name });
+        }
+    }
+
+    /// Note every pattern-only tag among `tags`, which `part` holds, as one
+    /// the relation being set up copies into its merged row.
+    fn noteMarkedTagCopies(self: *Self, part: Var, tags: Tag.SafeMultiList.Range) std.mem.Allocator.Error!void {
+        const slice = self.types_store.tags.sliceRange(tags);
+        for (slice.items(.name), slice.items(.pattern_only)) |name, pattern_only| {
+            if (pattern_only) try self.scratch.marked_tag_copies.append(self.scratch.gpa, .{ .part = part, .name = name });
+        }
     }
 
     /// Append each side's unshared entries after the shared entries already
@@ -3821,12 +3843,16 @@ const Unifier = struct {
         var guard = types_mod.debug.IterationGuard.init("gatherRow");
         while (true) {
             guard.tick();
-            switch (self.types_store.resolveVar(ext).desc.content) {
+            const resolved = self.types_store.resolveVar(ext);
+            switch (resolved.desc.content) {
                 .alias => |alias| {
                     ext = self.types_store.getAliasBackingVar(alias);
                 },
                 .structure => |flat_type| {
                     const ext_row = kind.rowOf(flat_type) orelse return .{ .ext = ext, .range = range };
+                    // The relation rebuilds the row flat over the chain's
+                    // tail, and this part keeps its own entries.
+                    if (comptime kind == .tag_union) try self.noteMarkedTagCopies(resolved.var_, ext_row.tags);
                     // Merge extension entries while maintaining sorted order
                     try self.mergeRowEntriesIntoScratch(kind, &range, kind.entriesOf(ext_row));
                     ext = ext_row.ext;
@@ -4268,6 +4294,7 @@ const Unifier = struct {
         // Every relation drains its chain duplicates before returning, so the
         // ones gathered here split exactly into `a`'s and then `b`'s.
         std.debug.assert(self.scratch.chain_duplicate_tags.items.len == 0);
+        const marked_copies_start: u32 = @intCast(self.scratch.marked_tag_copies.items.len);
         // Unwrap all fields for tag unions, erroring on invalid ext var
         const a_gathered_tags = try self.gatherRow(.tag_union, a_tag_union);
         const a_duplicates_end = self.scratch.chain_duplicate_tags.items.len;
@@ -4343,6 +4370,7 @@ const Unifier = struct {
                     null,
                     null,
                     a_gathered_tags.ext,
+                    marked_copies_start,
                 );
 
                 // Unify exts
@@ -4361,6 +4389,7 @@ const Unifier = struct {
                     null,
                     null,
                     only_in_a_var,
+                    marked_copies_start,
                 );
 
                 // Unify the sub tag_union with b's ext
@@ -4379,6 +4408,7 @@ const Unifier = struct {
                     null,
                     null,
                     only_in_b_var,
+                    marked_copies_start,
                 );
 
                 // Unify the sub tag_union with a's ext
@@ -4403,12 +4433,21 @@ const Unifier = struct {
                 // The unique tags must be included because the merged type is what
                 // callers see, and the extension chain via only_in_a_var/only_in_b_var
                 // is for proper type equality, not for visibility
+                // Each side's unique tags are stored both in the merged row
+                // and in the part the other side's extension becomes.
+                for (self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a)) |tag| {
+                    if (tag.pattern_only) try self.scratch.marked_tag_copies.append(self.scratch.gpa, .{ .part = only_in_a_var, .name = tag.name });
+                }
+                for (self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b)) |tag| {
+                    if (tag.pattern_only) try self.scratch.marked_tag_copies.append(self.scratch.gpa, .{ .part = only_in_b_var, .name = tag.name });
+                }
                 try self.unifySharedTags(
                     .of(vars),
                     partitioned.in_both,
                     partitioned.only_in_a,
                     partitioned.only_in_b,
                     new_ext_var,
+                    marked_copies_start,
                 );
 
                 // Unify the sub tag_unions with exts
@@ -4427,6 +4466,7 @@ const Unifier = struct {
         mb_a_extended_tags: ?Tag.SafeList.Range, // Into scratch.only_in_a_tags
         mb_b_extended_tags: ?Tag.SafeList.Range, // Into scratch.only_in_b_tags
         ext: Var,
+        marked_copies_start: u32, // Into scratch.marked_tag_copies
     ) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
@@ -4437,6 +4477,8 @@ const Unifier = struct {
             .mb_a_extended_tags = mb_a_extended_tags,
             .mb_b_extended_tags = mb_b_extended_tags,
             .ext = ext,
+            .marked_copies_start = marked_copies_start,
+            .marked_copies_end = @intCast(self.scratch.marked_tag_copies.items.len),
         } });
 
         var shared_idx: u32 = shared_tags_range.len();
@@ -5108,6 +5150,16 @@ const SharedTagsAfterChildren = struct {
     mb_a_extended_tags: ?Tag.SafeList.Range,
     mb_b_extended_tags: ?Tag.SafeList.Range,
     ext: Var,
+    /// Into scratch.marked_tag_copies
+    marked_copies_start: u32,
+    marked_copies_end: u32,
+};
+
+/// A row part that keeps its own entry for the pattern-only tag `name` while
+/// a relation copies that tag into its merged row.
+const MarkedTagCopy = struct {
+    part: Var,
+    name: Ident.Idx,
 };
 
 const WorkFrame = union(enum) {
@@ -5382,6 +5434,10 @@ pub const Scratch = struct {
     /// occurrence; these pairs relate each repeated occurrence to it.
     chain_duplicate_fields: std.ArrayListUnmanaged(ChainDuplicate(.record)),
     chain_duplicate_tags: std.ArrayListUnmanaged(ChainDuplicate(.tag_union)),
+    /// Pattern-only tags a tag-union relation is about to copy into its merged
+    /// row while the part holding each keeps its own entry. The relation's
+    /// merge journals them (`Store.pattern_only_tag_copies`).
+    marked_tag_copies: std.ArrayListUnmanaged(MarkedTagCopy),
 
     // records - used internal by unification
     gathered_tags: TagSafeList,
@@ -5593,6 +5649,7 @@ pub const Scratch = struct {
             .opened_nominal_persistable = .empty,
             .chain_duplicate_fields = .empty,
             .chain_duplicate_tags = .empty,
+            .marked_tag_copies = .empty,
             .persistent_openings = .empty,
             .persistent_opening_args = try VarSafeList.initCapacity(gpa, 8),
             .persistent_opening_index = .empty,
@@ -5634,6 +5691,7 @@ pub const Scratch = struct {
         self.opened_nominal_args.deinit(self.gpa);
         self.chain_duplicate_fields.deinit(self.gpa);
         self.chain_duplicate_tags.deinit(self.gpa);
+        self.marked_tag_copies.deinit(self.gpa);
         self.opened_nominal_persistable.deinit(self.gpa);
         self.persistent_opening_index.deinit(self.gpa);
         self.persistent_openings.deinit(self.gpa);
@@ -5683,6 +5741,7 @@ pub const Scratch = struct {
         self.opened_nominal_persistable.clearRetainingCapacity();
         self.chain_duplicate_fields.clearRetainingCapacity();
         self.chain_duplicate_tags.clearRetainingCapacity();
+        self.marked_tag_copies.clearRetainingCapacity();
     }
 
     // helpers //

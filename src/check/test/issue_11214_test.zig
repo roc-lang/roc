@@ -29,7 +29,7 @@ test "issue 11214 - pruning hoisted roots resolves an imported associated lookup
         \\    describe = |_| "shape"
         \\}
         \\
-        \\negate! = |b| Bool.not(b)
+        \\negate! = |b| !b
     ;
     var helper_env = try TestEnv.initWithImport("Helper", helper_source, "Shape", &shape_env);
     defer helper_env.deinit();

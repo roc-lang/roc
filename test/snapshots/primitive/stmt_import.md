@@ -12,7 +12,7 @@ UNEXPECTED STATEMENT - stmt_import.md:1:18:1:19
 UNEXPECTED STATEMENT - stmt_import.md:1:19:1:22
 UNEXPECTED STATEMENT - stmt_import.md:1:22:1:23
 TYPE APPLICATION NEEDS PARENTHESES - stmt_import.md:1:27:1:28
-DUPLICATE DEFINITION - stmt_import.md:1:1:1:17
+RESERVED TYPE NAME - stmt_import.md:1:12:1:17
 # PROBLEMS
 ~~~clojure
 (reports
@@ -123,26 +123,17 @@ DUPLICATE DEFINITION - stmt_import.md:1:1:1:17
 			(line-break)
 			(source-region (file "stmt_import.md") (start 1 27) (end 1 28) (annotation error) (line-text "import json.Json [foo, BAR]"))))
 	(report
-		(severity warning)
-		(title "Duplicate Definition")
-		(region (start 1 1) (end 1 17))
+		(severity runtime_error)
+		(title "Reserved Type Name")
+		(region (start 1 12) (end 1 17))
 		(headline
-			(reflow "The name ")
+			(text "This import cannot bind ")
 			(annotated symbol-unqualified "Json")
-			(reflow " is being redeclared here."))
+			(text " because that name is reserved for a builtin type."))
 		(document
-			(source-region (file "stmt_import.md") (start 1 1) (end 1 17) (annotation error) (line-text "import json.Json [foo, BAR]"))
+			(reflow "Use `as` to give the imported type a different name.")
 			(line-break)
-			(reflow "In this scope, ")
-			(annotated symbol-unqualified "Json")
-			(reflow " was already defined in ")
-			(source-location
-				(file "stmt_import.md")
-				(line 1)
-				(column 1))
-			(reflow ".")
-			(line-break)
-			(source-region (file "stmt_import.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json [foo, BAR]")))))
+			(source-region (file "stmt_import.md") (start 1 12) (end 1 17) (annotation error) (line-text "import json.Json [foo, BAR]")))))
 ~~~
 # TOKENS
 ~~~zig

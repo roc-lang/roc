@@ -378,9 +378,23 @@ const win32 = struct {
     }
 };
 
-/// How often a Windows call that a filter driver can transiently deny is
-/// retried, with the delay doubling from 10 ms.
-const windows_attempts: u32 = 6;
+/// Backoff for a Windows call that a filter driver can transiently deny: the
+/// delay doubles from 10 ms up to 250 ms, for about 5 s in all. Defender has
+/// held a freshly written executable for over 2 s (#13127), and the cap keeps
+/// the wait close to however long it actually holds it.
+const WindowsRetry = struct {
+    waited_ms: u32 = 0,
+    delay_ms: u32 = 10,
+
+    /// Sleep before the next try, or return false once the budget is spent.
+    fn wait(self: *WindowsRetry) bool {
+        if (self.waited_ms >= 5000) return false;
+        win32.Sleep(self.delay_ms);
+        self.waited_ms += self.delay_ms;
+        self.delay_ms = @min(self.delay_ms * 2, 250);
+        return true;
+    }
+};
 
 /// A Windows output: a named temporary file beside the destination. Filter
 /// drivers (Defender, EDR agents) can transiently hold a just-created file
@@ -411,16 +425,15 @@ pub const WindowsOutputFile = struct {
             error.OutOfMemory => error.OutOfMemory,
             error.InvalidWtf8 => error.FileNotFound,
         };
-        var attempt: u32 = 0;
-        while (true) : (attempt += 1) {
+        var retry: WindowsRetry = .{};
+        while (true) {
             const handle = win32.CreateFileW(temp_w, win32.GENERIC_READ | win32.GENERIC_WRITE, win32.FILE_SHARE_READ | win32.FILE_SHARE_DELETE, null, win32.CREATE_ALWAYS, win32.FILE_ATTRIBUTE_NORMAL, null);
             if (handle != std.os.windows.INVALID_HANDLE_VALUE) return .{ .handle = handle, .dest = dest, .dest_w = dest_w, .temp_w = temp_w };
             const err = win32.failure(win32.GetLastError());
             switch (err) {
-                error.AccessDenied => if (attempt + 1 >= windows_attempts) return err,
+                error.AccessDenied => if (!retry.wait()) return err,
                 error.NoSpaceLeft, error.FileNotFound, error.Unexpected, error.OutOfMemory => return err,
             }
-            win32.Sleep(@as(u32, 10) << @intCast(attempt));
         }
     }
 
@@ -482,15 +495,14 @@ pub const WindowsOutputFile = struct {
     pub fn publish(self: *WindowsOutputFile, _: Allocator) Error!void {
         if (self.handle) |handle| _ = win32.CloseHandle(handle);
         self.handle = null;
-        var attempt: u32 = 0;
-        while (true) : (attempt += 1) {
+        var retry: WindowsRetry = .{};
+        while (true) {
             if (win32.MoveFileExW(self.temp_w, self.dest_w, win32.MOVEFILE_REPLACE_EXISTING) != 0) return;
             const err = win32.failure(win32.GetLastError());
             switch (err) {
-                error.AccessDenied => if (attempt + 1 >= windows_attempts) return err,
+                error.AccessDenied => if (!retry.wait()) return err,
                 error.NoSpaceLeft, error.FileNotFound, error.Unexpected, error.OutOfMemory => return err,
             }
-            win32.Sleep(@as(u32, 10) << @intCast(attempt));
         }
     }
 

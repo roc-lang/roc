@@ -7,4 +7,5 @@ platform "blub"
 
 import Container
 
+main_for_host! : {} => U64
 main_for_host! = |_| main!({})

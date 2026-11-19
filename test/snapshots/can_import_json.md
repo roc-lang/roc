@@ -10,41 +10,22 @@ import json.Json
 main = Json.utf8
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_import_json.md:1:1:1:17
-DOES NOT EXIST - can_import_json.md:3:8:3:17
+RESERVED TYPE NAME - can_import_json.md:1:12:1:17
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
-		(severity warning)
-		(title "Duplicate Definition")
-		(region (start 1 1) (end 1 17))
-		(headline
-			(reflow "The name ")
-			(annotated symbol-unqualified "Json")
-			(reflow " is being redeclared here."))
-		(document
-			(source-region (file "can_import_json.md") (start 1 1) (end 1 17) (annotation error) (line-text "import json.Json"))
-			(line-break)
-			(reflow "In this scope, ")
-			(annotated symbol-unqualified "Json")
-			(reflow " was already defined in ")
-			(source-location
-				(file "can_import_json.md")
-				(line 1)
-				(column 1))
-			(reflow ".")
-			(line-break)
-			(source-region (file "can_import_json.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json"))))
-	(report
 		(severity runtime_error)
-		(title "Does Not Exist")
-		(region (start 3 8) (end 3 17))
+		(title "Reserved Type Name")
+		(region (start 1 12) (end 1 17))
 		(headline
-			(annotated symbol-unqualified "Json.utf8")
-			(reflow " does not exist."))
+			(text "This import cannot bind ")
+			(annotated symbol-unqualified "Json")
+			(text " because that name is reserved for a builtin type."))
 		(document
-			(source-region (file "can_import_json.md") (start 3 8) (end 3 17) (annotation error) (line-text "main = Json.utf8")))))
+			(reflow "Use `as` to give the imported type a different name.")
+			(line-break)
+			(source-region (file "can_import_json.md") (start 1 12) (end 1 17) (annotation error) (line-text "import json.Json")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -71,7 +52,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "qualified_ident_does_not_exist")))
+		(e-runtime-error (tag "builtin_import_conflict")))
 	(s-import (mod "json.Json")
 		(exposes)))
 ~~~

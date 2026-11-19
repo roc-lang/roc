@@ -296,7 +296,14 @@ test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {
     }
     const after_hosted_call = return_code orelse return error.TestUnexpectedResult;
     const store_start = std.mem.find(u8, after_hosted_call, &.{ 0xF3, 0x0F }) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualSlices(u8, &.{ 0xF3, 0x0F, 0x7F, 0x85 }, after_hosted_call[store_start..][0..4]);
+    try std.testing.expectEqualSlices(u8, &.{ 0xF3, 0x0F, 0x7F }, after_hosted_call[store_start..][0..3]);
+    // ModRM: XMM0 into [rbp + disp8] or [rbp + disp32].
+    try std.testing.expect(isXmm0RbpModRm(after_hosted_call[store_start + 3]));
+}
+
+/// Whether `modrm` names XMM0 and `[rbp + disp8]` or `[rbp + disp32]`.
+fn isXmm0RbpModRm(modrm: u8) bool {
+    return modrm == 0x45 or modrm == 0x85;
 }
 
 test "x86_64 Windows U128 entrypoint return loads all 16 bytes into XMM0" {
@@ -337,5 +344,6 @@ test "x86_64 Windows U128 entrypoint return loads all 16 bytes into XMM0" {
     const entrypoint_code = code[entrypoint.offset..][0..entrypoint.size];
 
     // MOVDQU XMM0, m128 returns the complete value using clang/Rust's convention.
-    try std.testing.expect(std.mem.find(u8, entrypoint_code, &.{ 0xF3, 0x0F, 0x6F, 0x85 }) != null);
+    const load_start = std.mem.find(u8, entrypoint_code, &.{ 0xF3, 0x0F, 0x6F }) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(isXmm0RbpModRm(entrypoint_code[load_start + 3]));
 }

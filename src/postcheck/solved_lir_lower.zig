@@ -134,8 +134,6 @@ pub const Options = struct {
     /// Compile-time evaluation must use deterministic seed zero. Runtime
     /// lowering retains the process-randomized seed operation.
     dict_seed_mode: DictSeedMode = .runtime,
-    /// Preserve source-level procedure names in LIR for runtime diagnostics.
-    proc_debug_names: bool = false,
     /// Record each platform entrypoint's host boundary digest.
     host_boundary_digests: bool = false,
     /// Build ConstStore materialization plans for requested layouts.
@@ -822,7 +820,6 @@ const Lowerer = struct {
     dict_seed_mode: DictSeedMode,
     completed_scalar_values: ?*const ComptimeScalarValues.CompletedScalarValues,
     completed_erased_members: ?*const CompletedErasedMembers,
-    proc_debug_names: bool,
     host_boundary_digests: bool,
     site_code_keys: bool,
     owned_proc_signatures: bool,
@@ -1237,7 +1234,6 @@ const Lowerer = struct {
             .dict_seed_mode = options.dict_seed_mode,
             .completed_scalar_values = options.completed_scalar_values,
             .completed_erased_members = options.completed_erased_members,
-            .proc_debug_names = options.proc_debug_names,
             .host_boundary_digests = options.host_boundary_digests,
             .site_code_keys = options.site_code_keys,
             .owned_proc_signatures = options.owned_proc_signatures,
@@ -2719,6 +2715,7 @@ const Lowerer = struct {
             appended.relocation.tailCalls(shard.prefix, sites)
         else
             null);
+        try self.result.store.addBodyChunk(shard.proc, appended.chunk);
         self.next_join_point = next_join_point;
         try self.folded_map_matches.appendSlice(self.allocator, shard.folded_map_matches);
         self.fn_written.items[@backingInt(shard.fn_id)] = true;
@@ -2765,6 +2762,7 @@ const Lowerer = struct {
         // exact layout in the initializer proc; lower directly into it instead
         // of reconstructing the root layout from the logical type.
         const ret_layout = self.result.store.getProcSpecImmediate(initializer.proc).ret_layout;
+        const body_mark = self.result.store.bodyMark();
         const ret_local = try self.addLocalForLayout(ret_layout);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, where.scaffold());
         const erased_owner_use_start = self.erased_call_owner_uses.items.len;
@@ -2779,6 +2777,7 @@ const Lowerer = struct {
         proc.shapes = proc.shapes.merged(self.result.store.shapes);
         proc.frame_locals = frame_locals;
         proc.stack_probe = self.stackProbeForProc(proc.args, proc.frame_locals, proc.ret_layout);
+        try self.result.store.recordBodyChunk(initializer.proc, body_mark);
     }
 
     fn lowerFnSpec(self: *Lowerer, fn_id: Type.FnId, spec: FnSpec) Common.LowerError!?LoweredFnBody {
@@ -2788,6 +2787,10 @@ const Lowerer = struct {
         self.aggregate_bindings = &aggregates;
         defer self.aggregate_bindings = saved_aggregates;
         const proc_id = try self.procPlaceholder(fn_id);
+        // A body lowered on a worker is a body shard, which its commit
+        // records as one chunk; here the body is the rows appended from
+        // this mark on.
+        const body_mark: ?LirStore.BodyMark = if (self.worker_callback) null else self.result.store.bodyMark();
         // The store accumulates this body's shapes from the statements it
         // appends; a body lowered inside another body keeps its own set.
         const saved_shapes = self.result.store.shapes;
@@ -2934,6 +2937,7 @@ const Lowerer = struct {
                     proc_ptr.stack_probe = lowered_body.?.stack_probe;
                     proc_ptr.tail_calls = .of(lowered_body.?.tail_calls);
                     proc_ptr.shapes = lowered_body.?.shapes;
+                    try self.result.store.recordBodyChunk(proc_id, body_mark.?);
                 }
             },
             .hosted => {
@@ -3120,10 +3124,8 @@ const Lowerer = struct {
             .code_key = code_key,
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         }, proc_loc);
-        if (self.proc_debug_names) {
-            if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
-                try self.result.store.setProcDebugName(proc, self.solved.lifted.names.exportNameText(name));
-            }
+        if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
+            try self.result.store.setProcDebugName(proc, self.solved.lifted.names.exportNameText(name));
         }
         try self.procs_by_identity.putNoClobber(identity, fn_id);
         entry.proc = .some(proc);

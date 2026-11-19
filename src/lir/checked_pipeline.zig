@@ -14,6 +14,7 @@ const core = @import("lir_core");
 const Arc = @import("arc.zig");
 const ImmortalLocals = @import("immortal_locals.zig");
 const TailDrive = @import("tail_drive.zig");
+const FrameCallables = @import("frame_callables.zig");
 const ProcPasses = @import("proc_passes.zig");
 const RangeProve = @import("range_prove.zig");
 const ReturnSlot = @import("return_slot.zig");
@@ -230,8 +231,6 @@ pub const TargetConfig = struct {
     /// compile-time evaluation leave it off so the in-place branches are
     /// dropped during lowering.
     list_in_place_map: bool = false,
-    /// Preserve source-level procedure names in LIR for runtime diagnostics.
-    proc_debug_names: bool = false,
     /// Record each platform entrypoint's host boundary digest in its root
     /// metadata. Only consumers that compare host interfaces across hot
     /// reload generations ask for it.
@@ -889,6 +888,9 @@ pub const PassStep = enum {
     tag_reachability,
     /// Dropping procedures and data nothing references, before ARC.
     reachable_procs_before_arc,
+    /// Solving which function parameters never outlive their call, and
+    /// building the callables passed only to them in their frames.
+    frame_callables,
     tail_drive,
     /// Dropping procedures and data nothing references, after ARC.
     reachable_procs_after_arc,
@@ -1488,7 +1490,6 @@ pub const LirPolicy = struct {
     consume_dead_boxes: bool,
     zero_dict_seed: bool,
     list_in_place_map: bool,
-    proc_debug_names: bool,
     host_boundary_digests: bool,
     site_code_keys: bool,
     owned_proc_signatures: bool,
@@ -1867,7 +1868,6 @@ pub fn prepareCheckedModulesMonotype(
             modules,
             rootRequests(roots, layout_requests, static_data_requests),
             .{
-                .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled() or base.dev_diagnostics.isSet(.range_prove_stats),
                 .post_check_executor = target.post_check_executor,
                 .comptime_value_reads = target.comptime_value_reads,
                 .demand_driven_comptime_roots = target.demand_driven_comptime_roots,
@@ -1989,10 +1989,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         procedure_usage = try postcheck.MonotypeLifted.SpecConstr.collectProcedureUsage(allocator, &solved.lifted);
     }
 
-    var inline_plan_timing_scope = PipelineStageScope.begin(
-        if (target.inline_mode != .none) target.timing else null,
-        .inline_plan,
-    );
+    var inline_plan_timing_scope = PipelineStageScope.begin(target.timing, .inline_plan);
     defer inline_plan_timing_scope.end();
     const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved);
     inline_plan_timing_scope.end();
@@ -2171,7 +2168,6 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .inline_expects = target.inline_expects,
         .list_in_place_map = target.list_in_place_map,
         .dict_seed_mode = if (target.zero_dict_seed) .comptime_zero else .runtime,
-        .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled() or base.dev_diagnostics.isSet(.range_prove_stats),
         .host_boundary_digests = target.host_boundary_digests,
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = prepared.test_plan_metadata,
@@ -2340,6 +2336,9 @@ fn finishLoweredOutput(
     if (target.reuse_boxes) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .box_reuse, pass_timing);
     }
+    // No procedure-local rewrite runs after this, and the steps below append
+    // and replace rows without recording body chunks.
+    lowered.lir_result.store.releaseBodyChunks();
     var return_slot_scope = PassStepScope.begin(target.timing, .return_slot);
     try ReturnSlot.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     return_slot_scope.end();
@@ -2443,6 +2442,22 @@ fn finishLoweredOutput(
     if (arc_detail) |*detail| target.timing.?.addArc(detail);
     arc_timing_scope.end();
 
+    // Which function parameters never outlive their call, and the callables
+    // built in their caller's frame for them (design.md "Frame Callables").
+    // Both read the deferred and frame-replacing calls ARC emitted, after
+    // the certifier checked ARC's placement, and run before tail drive
+    // stamps where pending calls run; a frame callable's capture release
+    // is a reference-count statement, which a handed-up call may precede.
+    if (target.specialization_strategy == .boxy) {
+        var frame_scope = PassStepScope.begin(target.timing, .frame_callables);
+        defer frame_scope.end();
+        const pairs = try allocator.alloc(FrameCallables.PublishedPair, published_variants.items.len);
+        defer allocator.free(pairs);
+        for (published_variants.items, pairs) |published, *pair| pair.* = .{ .worker = published.worker, .variant = published.variant };
+        try FrameCallables.solveParams(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, pairs);
+        _ = try FrameCallables.markFrames(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts);
+    }
+
     var tail_drive_scope = PassStepScope.begin(target.timing, .tail_drive);
     try TailDrive.run(allocator, &lowered.lir_result.store, &.{entered_from_outside.items}, arc_result.deferred_erased_calls);
     tail_drive_scope.end();
@@ -2526,7 +2541,6 @@ pub const PreparedBoxy = struct {
                 .run => .run,
                 .omit => .omit,
             },
-            .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled() or base.dev_diagnostics.isSet(.range_prove_stats),
             .list_in_place_map = target.list_in_place_map,
             .host_boundary_digests = target.host_boundary_digests,
             .compile_time = target.boxy_compile_time,

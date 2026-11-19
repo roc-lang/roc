@@ -73,6 +73,8 @@ pub fn handler(comptime ServerType: type) type {
                         .name_already_in_scope => "that name is already used by another binding that is visible here, so renaming would change what the code means",
                         .scope_unavailable => "this binding's scope could not be determined, so the rename could not be checked for safety",
                         .declaration_not_isolated => "this binding's declaration is not written as a plain name, so renaming it would rewrite the surrounding source",
+                        .ambiguous_method => "not every use of this associated function has an unambiguous editable name",
+                        .changes_resolution => "renaming would change which bindings the document refers to or introduce a declaration conflict",
                     };
                     try self.sendError(id, .request_failed, message);
                 },

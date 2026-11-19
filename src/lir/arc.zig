@@ -1528,6 +1528,7 @@ const EmissionOwner = struct {
 
         try installOwnedBindingOverrides(owned_binding_override, store, solution, dismantles, domain, source_proc, emit_sig);
         domain.installOwnedOnlyResidualDomains(solution, dismantles, owned_binding_override);
+        try inserter.initOwnershipQueries();
 
         const join_bodies = solution.joinBodiesOf(source_proc);
         inserter.join_bodies = join_bodies;
@@ -1726,6 +1727,10 @@ const VariantTable = struct {
             .rc_ret_unique = source_spec.rc_ret_unique,
             .rc_ret_unique_fields = source_spec.rc_ret_unique_fields,
             .rc_ret_conditions = source_spec.rc_ret_conditions,
+            // The defining object solves a worker and its published variant
+            // to one pair of masks.
+            .nonescaping_fn_params = source_spec.nonescaping_fn_params,
+            .capture_reuse_fn_params = source_spec.capture_reuse_fn_params,
         }, store.procLoc(callee));
         try store.copyProcDebugInfo(variant, callee);
         return variant;
@@ -1964,7 +1969,7 @@ fn cloneOwnedSet(source: *const OwnedSet) OwnedSet {
 fn assignOwnedSet(target: *OwnedSet, source: *const OwnedSet) void {
     target.requireSameDomain(source);
     @constCast(source).unique = false;
-    target.entries.assignShared(&source.entries);
+    target.assignShared(source);
     target.unique = false;
 }
 
@@ -1975,7 +1980,7 @@ fn intersectOwnedSetChanged(target: *OwnedSet, other: *const OwnedSet) ResourceE
     target.requireSameDomain(other);
     target.unique = false;
     @constCast(other).unique = false;
-    return target.entries.meetWith(target.domain.set_allocator, &other.entries, {}, OwnedSet.meetEntry);
+    return target.meetChanged(other);
 }
 
 /// Sentinel outside the compact plan-index domain.
@@ -2059,7 +2064,7 @@ const ArcPlanStep = struct {
     post_release: PlanSpan = .{},
 
     comptime {
-        std.debug.assert(@sizeOf(ArcPlanStep) == 184);
+        if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(ArcPlanStep) == 184);
     }
 
     fn reset(self: *ArcPlanStep, stmt: LIR.CFStmtId) void {
@@ -2257,6 +2262,13 @@ const Inserter = struct {
     /// residual masks its entries carry are meaningless and only `contains`
     /// is ever consulted.
     owned_binding_override: *OwnedSet = undefined,
+    /// These facts belong to one frozen binding-override context, not to
+    /// the source shared by its base and owned variants. Places are indexed
+    /// by frame ordinal; span and view facts are allocated only when queried.
+    ownership_places: []collections.OptionalId(LIR.LocalId) = &.{},
+    operand_first: []u32 = &.{},
+    operand_sharing: std.AutoHashMapUnmanaged(LIR.LocalSpan, []const bool) = .empty,
+    view_shell_shapes: collections.DenseMapUnmanaged(LIR.LocalId, ViewShellShape) = .empty,
     /// Parameter locals the current variant's demand vector seeds as born
     /// unique; consumed by `uniqueArgsMask` through `isLocalUniqueHere`.
     /// A membership set in the same sense as `owned_binding_override`.
@@ -2708,26 +2720,49 @@ const Inserter = struct {
         if ((absent_mask & ~container.full_mask) != 0) {
             arcInvariant("ARC representation-shell alias exceeded its committed field domain");
         }
+        if (self.layouts.getLayout(target_layout).tag == .tag_union) {
+            const piece = container.pieceOf(first) orelse arcInvariant("ARC container pieces missed a tag union slot");
+            return if ((absent_mask & (@as(u64, 1) << piece)) != 0)
+                try self.store.addU32Span(&.{0})
+            else
+                .empty();
+        }
         try self.appendAbsentSlots(container, ~absent_mask, target_layout, first, first, &absent);
         return try self.store.addU32Span(absent.items);
     }
 
+    const ViewShellShape = struct {
+        root: LIR.LocalId,
+        piece_mask: u64,
+    };
+
+    /// Placement is fixed by this emission's binding overrides. Only the
+    /// container's residual mask changes while the path solve converges.
+    fn viewShellShape(self: *Inserter, view: LIR.LocalId) ResourceError!ViewShellShape {
+        const entry = try self.view_shell_shapes.getOrPut(self.emission_allocator, view);
+        if (entry.found_existing) return entry.value_ptr.*;
+        const placement = self.viewForEmission(view) orelse arcInvariant("ARC view shell query named a local that is no view");
+        const root = self.unitOf(placement.root);
+        var mask: u64 = 0;
+        if (self.dismantleFor(root)) |container| {
+            const range: arc_dismantle.SlotRange = .{ .first = placement.base, .count = self.layouts.ownershipSlotCount(self.store.getLocal(view).layout_idx) };
+            for (container.pieces, 0..) |piece, index| {
+                if (piece.first < range.end() and range.first < piece.end()) mask |= @as(u64, 1) << @intCast(index);
+            }
+        }
+        entry.value_ptr.* = .{ .root = root, .piece_mask = mask };
+        return entry.value_ptr.*;
+    }
+
     /// The pieces of the container behind `view` that its container no
     /// longer holds on this path and that overlap the view's slots.
-    fn viewShellAbsentMask(self: *const Inserter, owned: *const OwnedSet, view: LIR.LocalId) u64 {
-        const placement = self.viewForEmission(view) orelse arcInvariant("ARC view shell query named a local that is no view");
-        const root_unit = self.unitOf(placement.root);
-        const container = self.dismantleFor(root_unit) orelse return 0;
-        const absent = if (owned.contains(root_unit))
-            container.full_mask & ~owned.residualMask(root_unit)
+    fn viewShellAbsentMask(self: *Inserter, owned: *const OwnedSet, view: LIR.LocalId) ResourceError!u64 {
+        const shape = try self.viewShellShape(view);
+        if (shape.piece_mask == 0) return 0;
+        return if (owned.contains(shape.root))
+            shape.piece_mask & ~owned.residualMask(shape.root)
         else
-            container.full_mask;
-        const range: arc_dismantle.SlotRange = .{ .first = placement.base, .count = self.layouts.ownershipSlotCount(self.store.getLocal(view).layout_idx) };
-        var mask: u64 = 0;
-        for (container.pieces, 0..) |piece, index| {
-            if (piece.first < range.end() and range.first < piece.end()) mask |= @as(u64, 1) << @intCast(index);
-        }
-        return absent & mask;
+            shape.piece_mask;
     }
 
     fn materializeArcPlanStep(self: *Inserter, step: *const ArcPlanStep, tail: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -2829,6 +2864,7 @@ const Inserter = struct {
                             .frozen_capture_layout = assign.frozen_capture_layout,
                             .reuse = assign.reuse,
                             .reuse_unique = step.reuse_unique,
+                            .frame = assign.frame,
                         }),
                         .next = next,
                     } }, origin);
@@ -3108,12 +3144,12 @@ const Inserter = struct {
                     if (any_views and assign.op.kind == .field and self.viewForEmission(assign.target) != null and self.isBindingBorrowed(assign.target)) {
                         // A view copies its container's representation,
                         // including slots already given away on this path.
-                        step.residual_shell_absent_mask = self.viewShellAbsentMask(&segment.owned, assign.target);
+                        step.residual_shell_absent_mask = try self.viewShellAbsentMask(&segment.owned, assign.target);
                         step.residual_shell_view = .some(assign.target);
                     } else if (any_views and assign.op.kind == .local and self.viewForEmission(assign.op.source) != null and self.isBindingBorrowed(assign.op.source) and
                         self.store.getLocal(assign.op.source).layout_idx == self.store.getLocal(assign.target).layout_idx)
                     {
-                        step.residual_shell_absent_mask = self.viewShellAbsentMask(&segment.owned, assign.op.source);
+                        step.residual_shell_absent_mask = try self.viewShellAbsentMask(&segment.owned, assign.op.source);
                         step.residual_shell_view = .some(assign.op.source);
                     } else if (assign.op.kind == .local and
                         self.store.getLocal(assign.op.source).layout_idx == self.store.getLocal(assign.target).layout_idx and
@@ -3172,7 +3208,7 @@ const Inserter = struct {
                                     // source holds a unit of every field,
                                     // and so does the source.
                                     if (transfer.retain_target) {
-                                        moved_residual = try self.wholeMoveResidual(&segment.owned, segment.cursor, 0, &[_]LIR.LocalId{assign.op.source}, assign.op.source);
+                                        moved_residual = try self.wholeMoveResidual(&segment.owned, segment.cursor, 0, null, assign.op.source);
                                     }
                                 } else {
                                     transfer.retain_target = false;
@@ -3360,7 +3396,7 @@ const Inserter = struct {
                         if (position > std.math.maxInt(u8)) break;
                         if (std.mem.findScalar(u32, self.transfer_position_scratch.items, @intCast(position)) != null) continue;
                         const local = GuardedList.at(fields, position);
-                        if (try self.wholeMoveResidual(&segment.owned, segment.cursor, position, fields, local)) |release| {
+                        if (try self.wholeMoveResidual(&segment.owned, segment.cursor, position, assign.fields, local)) |release| {
                             try self.death_scratch.append(self.lane_allocator, release);
                         }
                     }
@@ -3739,7 +3775,7 @@ const Inserter = struct {
     fn collectReleaseDifferenceInto(self: *Inserter, releases: *std.ArrayList(ReleaseDecision), owned: *const OwnedSet, keep: *const OwnedSet) ResourceError!void {
         owned.requireSameDomain(keep);
         releases.clearRetainingCapacity();
-        try owned.entries.differenceWith(&keep.entries, ReleaseDifference{ .inserter = self, .releases = releases }, ReleaseDifference.emit);
+        try owned.differenceWith(keep, ReleaseDifference{ .inserter = self, .releases = releases }, ReleaseDifference.emit);
         // Materialization prepends in list order, so preserve reverse resource
         // order here to emit the same ascending release statements.
         std.mem.reverse(ReleaseDecision, releases.items);
@@ -4413,10 +4449,10 @@ const Inserter = struct {
         };
         result.dead = base.dead;
         var redecide = DeadUnitRedecide{ .inserter = self, .result = &result };
-        try result.source.entries.differenceWith(&base.source.entries, &redecide, DeadUnitRedecide.entryDiffers);
-        try base.source.entries.differenceWith(&result.source.entries, &redecide, DeadUnitRedecide.entryDiffers);
-        try result.reads.words.differenceWith(&base.reads.words, &redecide, DeadUnitRedecide.wordDiffers);
-        try base.reads.words.differenceWith(&result.reads.words, &redecide, DeadUnitRedecide.wordDiffers);
+        try result.source.differenceWith(&base.source, &redecide, DeadUnitRedecide.entryDiffers);
+        try base.source.differenceWith(&result.source, &redecide, DeadUnitRedecide.entryDiffers);
+        try result.reads.differenceWith(&base.reads, &redecide, DeadUnitRedecide.wordDiffers);
+        try base.reads.differenceWith(&result.reads, &redecide, DeadUnitRedecide.wordDiffers);
         return result;
     }
 
@@ -5048,6 +5084,7 @@ const Inserter = struct {
         if (pending.items.len == 0) return &.{};
 
         self.emission_allocator = scratch;
+        try self.initOwnershipQueries();
         self.place_query_seen = .{};
         self.place_query_visited = .empty;
         self.place_query_stack = .empty;
@@ -5591,7 +5628,7 @@ const Inserter = struct {
             }
         }
         const unique_args = if (want_unique)
-            self.uniqueArgsMask(args, rc_effect, target, preserve_consumed_args, owned)
+            try self.uniqueArgsMask(args, rc_effect, target, preserve_consumed_args, owned)
         else
             0;
         const target_consumed = self.maskedArgsContainLocal(args, rc_effect.consume_args, target);
@@ -5883,7 +5920,7 @@ const Inserter = struct {
         target: LIR.LocalId,
         preserve_consumed_args: u64,
         owned: *const OwnedSet,
-    ) u64 {
+    ) ResourceError!u64 {
         const check_mask = rc_effect.may_runtime_uniqueness_check_args;
         if (check_mask == 0) return 0;
         var unique: u64 = 0;
@@ -5913,7 +5950,7 @@ const Inserter = struct {
             // The preserve scan proved the argument's borrow group dead
             // after this statement; a group member appearing as another
             // operand of this same statement is still live at the op.
-            if (self.groupSharesOtherOperand(locals, i, local)) continue;
+            if (try self.groupSharesOtherOperand(span, i)) continue;
             if (self.valueHasAnotherOwnedUnit(local, owned)) continue;
             unique |= bit;
         }
@@ -5952,20 +5989,40 @@ const Inserter = struct {
     /// different fields of one container never share. A solved leader is no
     /// proxy for a place: a borrowed local can lead its own liveness group
     /// while its place follows its borrow source to a container another
-    /// operand also borrows from, so every operand's place is compared.
+    /// operand also borrows from. The span is immutable and sharing does not
+    /// depend on path ownership, so solve it once in this emission context.
     fn groupSharesOtherOperand(
-        self: *const Inserter,
-        locals: anytype,
+        self: *Inserter,
+        span: LIR.LocalSpan,
         position: usize,
-        local: LIR.LocalId,
-    ) bool {
-        const local_place = self.ownershipPlaceLeader(local);
-        for (0..GuardedList.borrowLen(locals)) |j| {
-            if (j == position) continue;
-            const other = GuardedList.at(locals, j);
-            if (other == local or self.ownershipPlaceLeader(other) == local_place) return true;
+    ) ResourceError!bool {
+        std.debug.assert(position < span.len);
+        if (span.len == 1) return false;
+        const entry = try self.operand_sharing.getOrPut(self.emission_allocator, span);
+        if (entry.found_existing) return entry.value_ptr.*[position];
+        const shared = try self.emission_allocator.alloc(bool, span.len);
+        @memset(shared, false);
+        if (self.operand_first.len == 0) {
+            self.operand_first = try self.emission_allocator.alloc(u32, self.domain().frame_locals.len);
         }
-        return false;
+        const locals = self.store.getLocalSpan(span);
+        // Only touched places need clearing; no frame-wide reset per call.
+        for (0..span.len) |i| {
+            const place = self.ownershipPlaceLeader(GuardedList.at(locals, i));
+            self.operand_first[self.domain().frameIndexOf(place)] = std.math.maxInt(u32);
+        }
+        for (0..span.len) |i| {
+            const place = self.ownershipPlaceLeader(GuardedList.at(locals, i));
+            const first = &self.operand_first[self.domain().frameIndexOf(place)];
+            if (first.* == std.math.maxInt(u32)) {
+                first.* = @intCast(i);
+            } else {
+                shared[first.*] = true;
+                shared[i] = true;
+            }
+        }
+        entry.value_ptr.* = shared;
+        return shared[position];
     }
 
     fn procParamCanUseUniqueSeed(
@@ -6157,21 +6214,45 @@ const Inserter = struct {
         return self.ownershipPlaceLeader(local) == place;
     }
 
+    fn initOwnershipQueries(self: *Inserter) ResourceError!void {
+        self.ownership_places = try self.emission_allocator.alloc(collections.OptionalId(LIR.LocalId), self.domain().frame_locals.len);
+        @memset(self.ownership_places, .none);
+        self.operand_first = &.{};
+        self.operand_sharing = .empty;
+        self.view_shell_shapes = .empty;
+    }
+
+    fn ownershipPlaceParent(self: *const Inserter, local: LIR.LocalId) ?LIR.LocalId {
+        if (self.owned_binding_override.contains(local)) return null;
+        return self.dismantles.projectionAliasRoot(local) orelse self.solution.borrowSourceOf(local);
+    }
+
     fn ownershipPlaceLeader(self: *const Inserter, local: LIR.LocalId) LIR.LocalId {
         var cursor = local;
         var steps: usize = 0;
-        while (true) {
-            if (self.owned_binding_override.contains(cursor)) return cursor;
-            if (self.dismantles.projectionAliasRoot(cursor)) |root| {
-                cursor = root;
-            } else if (self.solution.borrowSourceOf(cursor)) |source| {
-                cursor = source;
-            } else {
-                return self.solution.leaderOf(cursor);
-            }
+        const place = while (true) {
+            const slot = &self.ownership_places[self.domain().frameIndexOf(cursor)];
+            if (slot.get()) |resolved| break resolved;
+            const parent = self.ownershipPlaceParent(cursor) orelse {
+                const root = if (self.owned_binding_override.contains(cursor)) cursor else self.solution.leaderOf(cursor);
+                slot.* = .some(root);
+                break root;
+            };
+            cursor = parent;
             steps += 1;
-            if (steps > self.store.localCount()) arcInvariant("ARC ownership-place borrow chain contained a cycle");
+            if (steps > self.ownership_places.len) arcInvariant("ARC ownership-place borrow chain contained a cycle");
+        };
+        // Compress only this context's index, never the solved borrow links.
+        // Each newly visited link is resolved once, without a walk stack.
+        cursor = local;
+        while (true) {
+            const slot = &self.ownership_places[self.domain().frameIndexOf(cursor)];
+            if (slot.* != .none) break;
+            const parent = self.ownershipPlaceParent(cursor) orelse arcInvariant("ARC unresolved place has no parent");
+            slot.* = .some(place);
+            cursor = parent;
         }
+        return place;
     }
 
     /// What one statement does to ownership places, as the place-use query
@@ -6862,7 +6943,7 @@ const Inserter = struct {
                 outcome_sig,
             );
             const projected_alias_conflict = self.dismantles.projectionUnitOf(local) != null and
-                self.groupSharesOtherOperand(locals, position, local);
+                try self.groupSharesOtherOperand(span, position);
             const can_transfer = owned.contains(owner) and
                 (!used_after_call or restitution != null) and
                 !projected_alias_conflict;
@@ -6923,7 +7004,7 @@ const Inserter = struct {
                 // callee. Moving the caller's only unit into this position
                 // would let the callee end it while that position still reads
                 // it, so a shared operand keeps its unit.
-                const shares_other_operand = self.groupSharesOtherOperand(locals, position, local);
+                const shares_other_operand = try self.groupSharesOtherOperand(span, position);
                 const can_transfer = owned.contains(owner) and !used_after_call and !shares_other_operand;
                 const return_borrows_param = same_unit and callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
                 const seed_can_reach_check = if (callee) |direct| self.procParamCanUseUniqueSeed(direct, position) else false;
@@ -6992,7 +7073,7 @@ const Inserter = struct {
             else
                 null;
             const projected_alias_conflict = self.dismantles.projectionUnitOf(local) != null and
-                self.groupSharesOtherOperand(locals, position, local);
+                try self.groupSharesOtherOperand(span, position);
             const can_transfer = owned.contains(owner) and (!used_after_call or restitution != null) and !projected_alias_conflict;
             if (restitution) |claim| try self.setOutcomeRestoration(claim, can_transfer);
 
@@ -7007,7 +7088,7 @@ const Inserter = struct {
                     break :blk self.procParamCanUseUniqueSeed(direct, position);
                 } else false;
                 if (unique_demand and same_unit and seed_can_reach_check and self.isLocalUniqueHere(local) and
-                    !self.groupSharesOtherOperand(locals, position, local))
+                    !try self.groupSharesOtherOperand(span, position))
                 {
                     demanded.unique_params |= arc_sig.paramBit(position).?;
                 }
@@ -7016,7 +7097,7 @@ const Inserter = struct {
                 try self.retain_arg_scratch.append(self.lane_allocator, local);
                 if (call_stmt) |stmt_id| {
                     if (tail_call == null and restitution == null and field_receipt == null and root_receipt == null) {
-                        if (try self.wholeMoveResidual(owned, stmt_id, position, locals, local)) |release| {
+                        if (try self.wholeMoveResidual(owned, stmt_id, position, span, local)) |release| {
                             try self.moved_residual_scratch.append(self.lane_allocator, release);
                         }
                     }
@@ -7751,7 +7832,7 @@ const Inserter = struct {
         owned: *OwnedSet,
         stmt: LIR.CFStmtId,
         position: usize,
-        locals: anytype,
+        span: ?LIR.LocalSpan,
         local: LIR.LocalId,
     ) ResourceError!?ReleaseDecision {
         const plan = self.dismantles.wholeMoveResidualAt(stmt, position) orelse return null;
@@ -7761,7 +7842,9 @@ const Inserter = struct {
         const container = self.dismantleFor(root) orelse return null;
         // Another position lending the same value reads the callee's unit
         // of these fields, which the callee may release first.
-        if (self.groupSharesOtherOperand(locals, position, local)) return null;
+        if (span) |operands| {
+            if (try self.groupSharesOtherOperand(operands, position)) return null;
+        }
         if (owned.residualMask(root) != container.full_mask) return null;
         try owned.takeResidualField(root, plan.field_mask);
         return .{ .residual = .{ .value = root, .field_mask = plan.field_mask } };
@@ -7799,7 +7882,12 @@ const Inserter = struct {
         if (self.dismantles.completeTakeRoot(receipt.projection) != null) return null;
         if (self.dismantles.ownedOnlyContainerOf(receipt.place.root) != null and
             !self.owned_binding_override.contains(receipt.place.root)) return null;
-        return receipt;
+        // A tag-union container's fields are numbered in its payload view,
+        // which holds no unit: the union's unit is the resource whose residual
+        // mask a restituting edge refills.
+        var resolved = receipt;
+        resolved.place.root = self.unitOf(receipt.place.root);
+        return resolved;
     }
 
     /// The dismantle plan for this local's release in the current emission,
@@ -8113,6 +8201,7 @@ const Inserter = struct {
             .incref => .incref,
             .decref, .free => .decref,
             .host_drop => arcInvariant("ARC RC statement carried a host-shaped drop adapter"),
+            .decref_queued => arcInvariant("ARC RC statement carried a queued drop helper"),
         };
     }
 
@@ -8154,13 +8243,32 @@ const OwnedSet = struct {
     /// Fresh sets update their one-owner tree in place until it is copied or
     /// combined with another state.
     unique: bool = true,
+    /// The present resources, when the domain has at most `inline_resources`
+    /// of them (the inline form). Unused in the tree form.
+    present: PresentMask = 0,
     /// Logically one exact entry per resource. Absent resources consume no
     /// tree storage, and control-flow forks share every unchanged subtree.
+    /// In the inline form it holds only the present resources whose residual
+    /// mask is nonzero, so a domain without committed field places never
+    /// allocates.
     entries: ArcSnapshot(OwnedEntry, .{}),
 
     /// Nodes are allocated in the domain's `set_allocator`.
     fn init(domain: *const ProcArcDomain) OwnedSet {
         return .{ .domain = domain, .entries = ArcSnapshot(OwnedEntry, .{}).init(domain.resource_locals.len) };
+    }
+
+    const PresentMask = u128;
+    const inline_resources = @bitSizeOf(PresentMask);
+
+    /// Whether this set's domain uses the inline form. Both forms describe
+    /// the same entries and answer every operation identically.
+    fn isInline(self: *const OwnedSet) bool {
+        return self.domain.resource_locals.len <= inline_resources;
+    }
+
+    fn presentBit(bit: usize) PresentMask {
+        return @as(PresentMask, 1) << @as(std.math.Log2Int(PresentMask), @intCast(bit));
     }
 
     /// Nodes have the surrounding proc arena's exact lifetime and may be
@@ -8191,7 +8299,53 @@ const OwnedSet = struct {
 
     fn eql(self: *const OwnedSet, other: *const OwnedSet) bool {
         self.requireSameDomain(other);
+        if (self.isInline() and self.present != other.present) return false;
         return self.entries.eql(&other.entries);
+    }
+
+    /// Makes this set share `source`'s entries.
+    fn assignShared(self: *OwnedSet, source: *const OwnedSet) void {
+        self.present = source.present;
+        self.entries.assignShared(&source.entries);
+    }
+
+    /// Intersects this set with `other` in place, reporting whether any entry
+    /// changed.
+    fn meetChanged(self: *OwnedSet, other: *const OwnedSet) ResourceError!bool {
+        const met_present = self.present & other.present;
+        const present_changed = met_present != self.present;
+        self.present = met_present;
+        const entries_changed = if (self.isInline())
+            try self.entries.meetWith(self.domain.set_allocator, &other.entries, {}, meetResidualEntry)
+        else
+            try self.entries.meetWith(self.domain.set_allocator, &other.entries, {}, meetEntry);
+        return present_changed or entries_changed;
+    }
+
+    /// `meetEntry` for the inline form's entries, which hold only nonzero
+    /// residual masks: a meet that leaves no residual leaves no entry.
+    fn meetResidualEntry(_: void, lhs: OwnedEntry, rhs: OwnedEntry) OwnedEntry {
+        const met = meetEntry({}, lhs, rhs);
+        return if (met.residual_mask == 0) .{} else met;
+    }
+
+    /// Calls `emitFn` with the resource and both entries of every present
+    /// resource of this set whose entry may differ in `other`, in ascending
+    /// resource order. `emitFn` must treat equal entries as no difference.
+    fn differenceWith(
+        self: *const OwnedSet,
+        other: *const OwnedSet,
+        context: anytype,
+        comptime emitFn: fn (@TypeOf(context), u32, OwnedEntry, OwnedEntry) Allocator.Error!void,
+    ) Allocator.Error!void {
+        if (!self.isInline()) return self.entries.differenceWith(&other.entries, context, emitFn);
+        var members = self.present;
+        while (members != 0) : (members &= members - 1) {
+            const bit: u32 = @ctz(members);
+            const lhs = self.entryAt(bit);
+            const rhs = other.entryAt(bit);
+            if (!std.meta.eql(lhs, rhs)) try emitFn(context, bit, lhs, rhs);
+        }
     }
 
     fn meetEntry(_: void, lhs: OwnedEntry, rhs: OwnedEntry) OwnedEntry {
@@ -8247,29 +8401,54 @@ const OwnedSet = struct {
     }
 
     fn putEntry(self: *OwnedSet, bit: u32, entry: OwnedEntry) ResourceError!void {
+        std.debug.assert(entry.present or entry.residual_mask == 0);
+        var stored = entry;
+        if (self.isInline()) {
+            if (entry.present) self.present |= presentBit(bit) else self.present &= ~presentBit(bit);
+            if (entry.residual_mask == 0) stored = .{};
+        }
         if (self.unique) {
-            try self.entries.putUnique(self.domain.set_allocator, bit, entry);
+            try self.entries.putUnique(self.domain.set_allocator, bit, stored);
         } else {
-            try self.entries.put(self.domain.set_allocator, bit, entry);
+            try self.entries.put(self.domain.set_allocator, bit, stored);
         }
     }
 
     fn clear(self: *OwnedSet) void {
+        self.present = 0;
         self.entries.clear();
     }
 
     fn entryAt(self: *const OwnedSet, bit: usize) OwnedEntry {
+        if (self.isInline()) {
+            if (self.present & presentBit(bit) == 0) return .{};
+            return .{ .present = true, .residual_mask = self.entries.get(@intCast(bit)).residual_mask };
+        }
         return self.entries.get(@intCast(bit));
     }
 
     fn Iterator(comptime options: std.bit_set.IteratorOptions) type {
         if (options.kind != .set) @compileError("ARC ownership sets iterate only present resources");
         return struct {
+            set: *const OwnedSet,
+            /// The inline form's present resources not yet returned.
+            pending: PresentMask,
+            /// The tree form's entries.
             sparse: ArcSnapshot(OwnedEntry, .{}).Iterator,
             /// Entry returned by the most recent successful next call.
             entry: OwnedEntry = .{},
 
             fn next(self: *@This()) ?usize {
+                if (self.set.isInline()) {
+                    if (self.pending == 0) return null;
+                    const bit: usize = switch (options.direction) {
+                        .forward => @ctz(self.pending),
+                        .reverse => inline_resources - 1 - @clz(self.pending),
+                    };
+                    self.pending &= ~presentBit(bit);
+                    self.entry = self.set.entryAt(bit);
+                    return bit;
+                }
                 const item = self.sparse.next() orelse return null;
                 std.debug.assert(item.value.present);
                 self.entry = item.value;
@@ -8279,7 +8458,7 @@ const OwnedSet = struct {
     }
 
     fn iterator(self: *const OwnedSet, comptime options: std.bit_set.IteratorOptions) Iterator(options) {
-        return .{ .sparse = self.entries.iteratorDirection(options.direction) };
+        return .{ .set = self, .pending = self.present, .sparse = self.entries.iteratorDirection(options.direction) };
     }
 
     fn requireSameDomain(self: *const OwnedSet, other: *const OwnedSet) void {
@@ -12684,11 +12863,13 @@ test "RC persistent-set work grows linearly with loop nesting depth" {
     // Liveness rows and keep-sets each hold every enclosing loop's list.
     // Keep-set construction, the liveness certificate, and every other
     // structural set operation must touch only where related sets differ.
-    const small = try loopNestStructuralWork(32);
-    const large = try loopNestStructuralWork(64);
+    // Each level holds two lists, so both depths give domains wider than the
+    // inline forms, which use the persistent trees whose work this measures.
+    const small = try loopNestStructuralWork(128);
+    const large = try loopNestStructuralWork(256);
     if (large > small * 3) {
         std.debug.print(
-            "loop-nest structural set work grew nonlinearly: {d} at depth 32, {d} at depth 64\n",
+            "loop-nest structural set work grew nonlinearly: {d} at depth 128, {d} at depth 256\n",
             .{ small, large },
         );
     }
@@ -19390,6 +19571,166 @@ test "RC recursive tail carrier stops at an owned alias" {
     try f.run();
 }
 
+test "ARC ownership query cache separates contexts and resolves deep borrow chains once" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    var chain: [512]LIR.LocalId = undefined;
+    for (&chain) |*local| local.* = try f.local(.str);
+    const other = try f.local(.str);
+    const result = try f.local(.i64);
+    var body = try f.assignI64(result, 0, try f.ret(result));
+    body = try f.expectStmt(other, body);
+    body = try f.expectStmt(chain[chain.len - 1], body);
+    var index = chain.len - 1;
+    while (index > 0) : (index -= 1) {
+        body = try f.assignRefLocal(chain[index], chain[index - 1], body);
+    }
+    const proc = try f.addProc(&.{ chain[0], other }, body, .i64);
+    var rc: [chain.len + 2]bool = @splat(true);
+    rc[rc.len - 1] = false;
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, true);
+    defer solution.deinit();
+    var dismantles = try arc_dismantle.compute(testing.allocator, &f.store, &f.layouts, &rc, &solution, .{});
+    defer dismantles.deinit();
+    const held = chain[chain.len / 2];
+    try solution.adoptHeldBindings(testing.allocator, &.{held});
+    try testing.expectEqual(held, solution.leaderOf(chain[chain.len - 1]));
+    try testing.expectEqual(chain[0], solution.leaderOf(chain[0]));
+
+    var arena = collections.SingleThreadArena.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var indices = collections.DenseMap(LIR.LocalId, u32).init(allocator);
+    var domain = try ProcArcDomain.init(allocator, &f.store, &solution, &rc, &indices, f.store.getProcSpecImmediate(proc).frame_locals);
+    defer domain.clearGlobalIndices();
+    var overrides = OwnedSet.init(&domain);
+    var inserter = Inserter{
+        .store = &f.store,
+        .layouts = &f.layouts,
+        .options = .{},
+        .solution = &solution,
+        .dismantles = &dismantles,
+        .owned_binding_override = &overrides,
+        .current_domain = &domain,
+        .emission_allocator = allocator,
+    };
+    const operands = try f.span(&.{ chain[0], other, chain[chain.len - 1] });
+    // Spans sharing a start need distinct answers when their lengths differ.
+    const prefix: LIR.LocalSpan = .{ .start = operands.start, .len = 2 };
+    const duplicates = try f.span(&.{ held, held, other });
+    var wide_locals: [96]LIR.LocalId = @splat(other);
+    wide_locals[95] = chain[chain.len - 1];
+    const wide = try f.span(&wide_locals);
+
+    for ([_]bool{ false, true, false }) |owns_held| {
+        if (owns_held) try overrides.set(held) else try overrides.unset(held);
+        inserter.emission_allocator = allocator;
+        try inserter.initOwnershipQueries();
+        const expected = if (owns_held) held else chain[0];
+        try testing.expectEqual(expected, inserter.ownershipPlaceLeader(chain[chain.len - 1]));
+        // One query fills every traversed link, not just its starting local.
+        for (chain[chain.len / 2 ..]) |local| {
+            try testing.expectEqual(expected, inserter.ownership_places[domain.frameIndexOf(local)].get().?);
+        }
+        try testing.expectEqual(!owns_held, try inserter.groupSharesOtherOperand(operands, 0));
+        try testing.expect(!try inserter.groupSharesOtherOperand(operands, 1));
+        try testing.expectEqual(!owns_held, try inserter.groupSharesOtherOperand(operands, 2));
+        try testing.expect(!try inserter.groupSharesOtherOperand(prefix, 0));
+        try testing.expect(!try inserter.groupSharesOtherOperand(prefix, 1));
+        try testing.expect(try inserter.groupSharesOtherOperand(duplicates, 0));
+        try testing.expect(try inserter.groupSharesOtherOperand(duplicates, 1));
+        try testing.expect(!try inserter.groupSharesOtherOperand(duplicates, 2));
+        try testing.expect(try inserter.groupSharesOtherOperand(wide, 94));
+        try testing.expect(!try inserter.groupSharesOtherOperand(wide, 95));
+        try testing.expectEqual(@as(u32, 4), inserter.operand_sharing.count());
+        // Planning revisits consume cached facts without allocating again.
+        inserter.emission_allocator = testing.failing_allocator;
+        for (0..32) |_| {
+            try testing.expectEqual(expected, inserter.ownershipPlaceLeader(chain[chain.len - 1]));
+            try testing.expectEqual(!owns_held, try inserter.groupSharesOtherOperand(operands, 2));
+            try testing.expect(try inserter.groupSharesOtherOperand(wide, 0));
+        }
+    }
+}
+
+test "ARC view shell cache keeps residual state path local and placement context local" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const holder_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = .str },
+        .{ .index = 1, .layout = f.tag_str },
+    });
+    const root_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = .str },
+        .{ .index = 1, .layout = holder_layout },
+    });
+    const root = try f.local(root_layout);
+    const holder = try f.local(holder_layout);
+    const view = try f.local(f.tag_str);
+    const discriminant = try f.local(.u32);
+    const read_tag = try f.assignRefField(view, holder, 1, try f.assignDiscriminant(discriminant, view, try f.ret(discriminant)));
+    const proc = try f.addProc(&.{root}, try f.assignRefField(holder, root, 1, read_tag), .u32);
+    const rc = [_]bool{ true, true, true, false };
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, true);
+    defer solution.deinit();
+    var dismantles = try arc_dismantle.compute(testing.allocator, &f.store, &f.layouts, &rc, &solution, .{});
+    defer dismantles.deinit();
+    // Commit a nested holder's domains explicitly: borrowed contexts view
+    // root slot 2, while owned-holder contexts view holder slot 1.
+    try dismantles.containers.put(root, .{
+        .layout_idx = root_layout,
+        .pieces = &.{ .{ .first = 0, .count = 1 }, .{ .first = 1, .count = 1 }, .{ .first = 2, .count = 1 } },
+        .full_mask = 0b111,
+    });
+    try dismantles.containers.put(holder, .{
+        .layout_idx = holder_layout,
+        .pieces = &.{ .{ .first = 0, .count = 1 }, .{ .first = 1, .count = 1 } },
+        .full_mask = 0b11,
+    });
+    try dismantles.views.put(view, .{ .root = root, .base = 2, .holder = holder, .holder_base = 1 });
+
+    var arena = collections.SingleThreadArena.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var indices = collections.DenseMap(LIR.LocalId, u32).init(allocator);
+    var domain = try ProcArcDomain.init(allocator, &f.store, &solution, &rc, &indices, f.store.getProcSpecImmediate(proc).frame_locals);
+    defer domain.clearGlobalIndices();
+    domain.installResidualDomains(&solution, &dismantles);
+    var overrides = OwnedSet.init(&domain);
+    var inserter = Inserter{
+        .store = &f.store,
+        .layouts = &f.layouts,
+        .options = .{},
+        .solution = &solution,
+        .dismantles = &dismantles,
+        .owned_binding_override = &overrides,
+        .current_domain = &domain,
+        .emission_allocator = allocator,
+    };
+    const read = f.store.getCFStmt(read_tag).assign_ref;
+    for ([_]bool{ false, true, false }) |owns_holder| {
+        if (owns_holder) try overrides.set(holder) else try overrides.unset(holder);
+        inserter.emission_allocator = allocator;
+        try inserter.initOwnershipQueries();
+        const owner = if (owns_holder) holder else root;
+        const bit: u64 = if (owns_holder) 0b10 else 0b100;
+        var owned = OwnedSet.init(&domain);
+        try owned.set(owner);
+        try testing.expectEqual(@as(u64, 0), try inserter.viewShellAbsentMask(&owned, view));
+        const intact = cloneOwnedSet(&owned);
+        try owned.takeResidualField(owner, bit);
+        inserter.emission_allocator = testing.failing_allocator;
+        try testing.expectEqual(bit, try inserter.viewShellAbsentMask(&owned, view));
+        try testing.expectEqual(@as(u64, 0), try inserter.viewShellAbsentMask(&intact, view));
+        // Materializing the union shell needs no temporary allocation.
+        const shell = try inserter.materializeResidualShellAbsentFields(read, bit, false, view);
+        try testing.expectEqual(@as(u32, 1), shell.len);
+        try testing.expectEqual(@as(u32, 0), GuardedList.at(f.store.getU32Span(shell), 0));
+        try owned.unset(owner);
+        try testing.expectEqual(bit, try inserter.viewShellAbsentMask(&owned, view));
+    }
+}
+
 test "RC borrowed alias transfers its nearest owned carrier" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -20084,5 +20425,137 @@ test "ARC unary erased calls retain a directly passed value only when the caller
         try d.run(&.{proc});
         try d.f.expectRc(param, if (reuse) 1 else 0, 0, 0);
         try d.expectDynamicRcShape();
+    }
+}
+
+test "ARC inline ownership sets answer every operation as tree sets do" {
+    var arena = collections.SingleThreadArena.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    // A domain of `inline_resources` uses the inline form and a wider one the
+    // tree form; resources of the narrower domain mirror each other, and
+    // every fifth one is a dismantlable aggregate with three committed field
+    // places.
+    const Domain = struct {
+        locals: []LIR.LocalId,
+        global_local_index: collections.DenseMap(LIR.LocalId, u32),
+        domain: ProcArcDomain,
+
+        fn init(a: Allocator, width: usize) Allocator.Error!*@This() {
+            const self = try a.create(@This());
+            self.locals = try a.alloc(LIR.LocalId, width);
+            self.global_local_index = collections.DenseMap(LIR.LocalId, u32).init(a);
+            var indices = try ArcBitColumn.initFilled(a, width);
+            var absent = try ArcBitColumn.initFilled(a, width);
+            const masks = try a.alloc(u64, width);
+            for (self.locals, masks, 0..) |*local, *mask, ordinal| {
+                local.* = @fromBackingInt(@intCast(ordinal));
+                indices.set(ordinal, @fromBackingInt(@as(u32, @intCast(ordinal))));
+                try self.global_local_index.put(local.*, @intCast(ordinal));
+                mask.* = if (ordinal % 5 == 0) 0b111 else 0;
+            }
+            self.domain = .{
+                .global_local_index = &self.global_local_index,
+                .frame_locals = self.locals,
+                .resource_bit_index = indices.view(),
+                .resource_locals = self.locals,
+                .resource_full_masks = masks,
+                .group_bit_index = absent.view(),
+                .group_leaders = &.{},
+                .value_use_bit_index = absent.view(),
+                .value_use_locals = &.{},
+                .set_allocator = a,
+            };
+            return self;
+        }
+    };
+    const width = OwnedSet.inline_resources;
+    const small_domain = try Domain.init(allocator, width);
+    defer small_domain.global_local_index.deinit();
+    const wide_domain = try Domain.init(allocator, width + 66);
+    defer wide_domain.global_local_index.deinit();
+    const Pair = struct { small: OwnedSet, wide: OwnedSet };
+    var pairs: [4]Pair = undefined;
+    for (&pairs) |*pair| pair.* = .{ .small = OwnedSet.init(&small_domain.domain), .wide = OwnedSet.init(&wide_domain.domain) };
+    try testing.expect(pairs[0].small.isInline() and !pairs[0].wide.isInline());
+    const Difference = struct {
+        entries: std.ArrayList(struct { u32, OwnedEntry, OwnedEntry }) = .empty,
+        allocator: Allocator,
+        fn note(self: *@This(), bit: u32, lhs: OwnedEntry, rhs: OwnedEntry) Allocator.Error!void {
+            if (!std.meta.eql(lhs, rhs)) try self.entries.append(self.allocator, .{ bit, lhs, rhs });
+        }
+    };
+    var rng = std.Random.DefaultPrng.init(0x0473);
+    const random = rng.random();
+    for (0..3000) |_| {
+        const target = &pairs[random.uintLessThan(usize, pairs.len)];
+        const other = &pairs[random.uintLessThan(usize, pairs.len)];
+        const bit = random.uintLessThan(usize, width);
+        const entry = target.small.entryAt(bit);
+        const field: u64 = @as(u64, 1) << random.uintLessThan(u6, 3);
+        const aggregate = bit % 5 == 0;
+        switch (random.uintLessThan(u4, 9)) {
+            0, 1 => {
+                try target.small.set(small_domain.locals[bit]);
+                try target.wide.set(wide_domain.locals[bit]);
+            },
+            2 => {
+                try target.small.unset(small_domain.locals[bit]);
+                try target.wide.unset(wide_domain.locals[bit]);
+            },
+            3 => {
+                const mask: u64 = if (aggregate) random.uintLessThan(u64, 8) else 0;
+                try target.small.setWithResidual(small_domain.locals[bit], mask);
+                try target.wide.setWithResidual(wide_domain.locals[bit], mask);
+            },
+            4 => if (aggregate and entry.present and entry.residual_mask & field != 0) {
+                try target.small.takeResidualField(small_domain.locals[bit], field);
+                try target.wide.takeResidualField(wide_domain.locals[bit], field);
+            },
+            5 => if (aggregate and entry.present and entry.residual_mask & field == 0) {
+                try target.small.restoreResidualField(small_domain.locals[bit], field);
+                try target.wide.restoreResidualField(wide_domain.locals[bit], field);
+            },
+            6 => {
+                const small_changed = try intersectOwnedSetChanged(&target.small, &other.small);
+                const wide_changed = try intersectOwnedSetChanged(&target.wide, &other.wide);
+                try testing.expectEqual(wide_changed, small_changed);
+            },
+            7 => if (random.boolean()) {
+                assignOwnedSet(&target.small, &other.small);
+                assignOwnedSet(&target.wide, &other.wide);
+            } else {
+                target.small = cloneOwnedSet(&other.small);
+                target.wide = cloneOwnedSet(&other.wide);
+            },
+            else => {
+                target.small.clear();
+                target.wide.clear();
+            },
+        }
+        for (pairs) |pair| {
+            for (0..width) |index| try testing.expectEqual(pair.wide.entryAt(index), pair.small.entryAt(index));
+            inline for (.{ .forward, .reverse }) |direction| {
+                var small_members = pair.small.iterator(.{ .direction = direction });
+                var wide_members = pair.wide.iterator(.{ .direction = direction });
+                while (true) {
+                    const expected = wide_members.next();
+                    try testing.expectEqual(expected, small_members.next());
+                    if (expected == null) break;
+                    try testing.expectEqual(wide_members.entry, small_members.entry);
+                }
+            }
+        }
+        try testing.expectEqual(other.wide.eql(&target.wide), other.small.eql(&target.small));
+        var small_difference = Difference{ .allocator = allocator };
+        var wide_difference = Difference{ .allocator = allocator };
+        try target.small.differenceWith(&other.small, &small_difference, Difference.note);
+        try target.wide.differenceWith(&other.wide, &wide_difference, Difference.note);
+        try testing.expectEqual(wide_difference.entries.items.len, small_difference.entries.items.len);
+        for (wide_difference.entries.items, small_difference.entries.items) |expected, actual| {
+            try testing.expectEqual(expected[0], actual[0]);
+            try testing.expectEqual(expected[1], actual[1]);
+            try testing.expectEqual(expected[2], actual[2]);
+        }
     }
 }

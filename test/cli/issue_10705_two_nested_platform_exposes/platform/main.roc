@@ -7,4 +7,5 @@ platform "nested-types"
 
 import Container
 
+main_for_host! : {} => U16
 main_for_host! = |_| main!({})

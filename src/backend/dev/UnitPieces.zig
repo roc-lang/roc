@@ -24,7 +24,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RUPC";
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 4;
+pub const format_version: u32 = 5;
 
 /// One source file the pieces' lines name, in the order the set indexes them.
 pub const SourceFile = struct {
@@ -174,6 +174,7 @@ pub fn encode(allocator: Allocator, pieces: *const Pieces) Allocator.Error![]u8 
             }
         }
         try writeLoc(&writer, excerpt.loc);
+        try writer.str(excerpt.name);
         try writer.word(@intCast(excerpt.lines.len));
         for (excerpt.lines) |line| {
             try writer.word(line.offset);
@@ -299,6 +300,7 @@ pub fn decode(allocator: Allocator, bytes: []const u8) ReadError!Pieces {
             ref.* = .{ .site = site, .form = form, .veneer = veneer, .binding = binding, .target = target };
         }
         const loc = try readLoc(&reader, source_files.len);
+        const source_name = try sa.dupe(u8, try reader.str());
         const lines = try sa.alloc(CodeExcerpt.LineEntry, try reader.word());
         for (lines) |*line| {
             line.* = .{
@@ -347,6 +349,7 @@ pub fn decode(allocator: Allocator, bytes: []const u8) ReadError!Pieces {
             .data = &.{},
             .data_graph = if (roots.len == 0) null else .{ .graph = graph.graph, .roots = roots },
             .loc = loc,
+            .name = source_name,
         };
     }
     const exported_data = try readData(a, &reader);
@@ -594,6 +597,7 @@ test "pieces round-trip through their encoding" {
         .relocations = try sa.dupe(CodeExcerpt.NamedRelocation, &.{.{ .offset = 0, .name = try sa.dupe(u8, "roc_alloc"), .scope = .shared, .kind = .{ .function = .aarch64_call26 } }}),
         .data = try sa.dupe(CodeExcerpt.DataItem, &.{.{ .name = try sa.dupe(u8, "roc__hcafe"), .bytes = try sa.dupe(u8, "constant"), .alignment = 8, .symbol_offset = 0 }}),
         .loc = .{ .file = 0, .line = 2, .column = 0 },
+        .name = "Main.answer",
     };
     excerpts[1] = .{
         .kind = .{ .entrypoint = try sa.dupe(u8, "roc__main") },
@@ -627,6 +631,7 @@ test "pieces round-trip through their encoding" {
     try std.testing.expectEqualSlices(u8, bytes, again);
     try std.testing.expectEqual(@as(usize, 2), decoded.set.excerpts.len);
     try std.testing.expectEqualStrings("roc__main", decoded.set.excerpts[1].kind.entrypoint);
+    try std.testing.expectEqualStrings("Main.answer", decoded.set.excerpts[0].name);
     try std.testing.expectEqual(@as(u32, 16), decoded.erased_capture_prefix);
     try std.testing.expectEqualStrings("Main.roc", decoded.source_files[0].name);
     try std.testing.expectEqualStrings("roc_answer", decoded.exported_data[0].name);

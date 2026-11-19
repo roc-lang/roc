@@ -2,6 +2,8 @@
 
 - Read `design.md` before making code changes. It is the forward-looking design reference for checked modules, the post-check IR pipeline, LIR, ARC, backends, LirImage, and compiler invariants.
 - Follow `docs/langref-style-guide.md` when writing or editing anything in `docs/langref/`.
+- Report all clock times and timestamps to Richard Feldman (rtfeldman) in US Eastern Time (`America/New_York`, observing daylight saving time), explicitly labeled `ET`. Never leave the time zone implicit.
+- Richard Feldman (rtfeldman) never wants performance statistics for a Debug build of the Roc compiler. Do not benchmark Debug compilers or report their timings, instruction counts, memory usage, or other performance statistics. Use an optimized ReleaseFast compiler for performance work and verify its build mode first. If one is unavailable, say performance was not measured rather than substituting Debug measurements. Debug builds remain appropriate for correctness testing.
 - Workarounds are categorically forbidden in this code base.
 - Fallbacks are categorically forbidden in every stage of compilation other than specifically parsing and error reporting.
 - Heuristics are categorically forbidden in every stage of compilation other than specifically parsing and error reporting.

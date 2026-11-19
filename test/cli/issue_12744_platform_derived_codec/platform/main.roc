@@ -1,6 +1,6 @@
 platform ""
     requires {
-        [Model : model, Msg : msg] for init : Str -> (Model, Msg)
+        [Model : model, Msg : msg] for init : Str -> (model, msg)
     }
     exposes []
     packages {}
