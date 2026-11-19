@@ -1,72 +1,34 @@
-# Nested expects in x86_64 macOS test units
+# Nested expects in x86_64 test units
 
 Issue: https://github.com/roc-lang/roc/issues/13186
 
-## Reproduction
+A test unit loads each expect-site id as a 32-bit field relocated against
+`roc__expect_site_base`, which each loaded image binds to its first
+program-wide site id. On x86_64 the id is loaded with `mov r32, imm32`, which
+zero-extends it, and the field is an unsigned `abs32_field` relocation that
+ELF (`R_X86_64_32`), Mach-O (`X86_64_RELOC_UNSIGNED`, four bytes) and COFF
+(`IMAGE_REL_AMD64_ADDR32`) all encode. A module with an `expect` inside a
+function emits such a site even when nothing calls the function, because a
+test unit compiles every procedure.
 
-The host-independent regression exercises the actual x64mac expect-site
-emitter and constructs its unit-image object:
+## Regression coverage
 
-```sh
-zig build run-test-zig-module-backend -j2 \
-  -Dtest-filter='issue 13186' -Dtest-filter='backend tests' \
-  -Dtest-filter='backend module imports' -- --test-filter 'issue 13186'
-```
-
-It crashes with:
-
-```text
-Mach-O invariant violated: an abs32s data relocation, which only an x86_64 test unit emits
-```
-
-The test asserts successful construction, preservation of the site addend,
-and the expect-site-base symbol, not a particular instruction encoding.
-It will pass unchanged after the emitter/writer contract is corrected.
-
-The source-level regression is `test/cli/Issue13186NestedExpect.roc`,
-registered in the CLI subcommands suite as `issue 13186`. On Intel macOS:
+The backend tests in `src/backend/dev/LirCodeGen.zig` exercise the real
+x86_64 emitter without needing an x86_64 host:
 
 ```sh
-zig-out/bin/roc test test/cli/Issue13186NestedExpect.roc
+zig build run-test-zig-module-backend -- --test-filter 'issue 13186'
+zig build run-test-zig-module-backend -- --test-filter 'expect sites are zero-extended'
 ```
 
-Expected: `All (2) tests passed`. The Intel CLI command was not run here:
-this host is ARM64 macOS without x86_64 execution support.
-The exact command above passes on this ARM64 host with the locally built
-ReleaseFast compiler, confirming the issue's architecture-specific control.
+- `issue 13186: x64mac inline expect site survives unit image construction`
+  builds an x64mac unit-image object from an emitted site and checks its
+  relocation's addend and symbol.
+- `x86_64 expect sites are zero-extended 32-bit fields in every object format`
+  checks the exact instruction bytes (including a register that needs a REX
+  prefix and the largest u32 id), the relocations, and that the encoded
+  object reads back into the same unit image, for x64mac, x64linux and x64win.
 
-## Root cause
-
-`src/compile/boxy_unit.zig:822-824` enables relocatable expect sites for
-test units. `LirCodeGen.emitRelocatableExpectSite`
-(`src/backend/dev/LirCodeGen.zig:22479`) selects `mov r64, imm32` with a
-signed `abs32s` relocation for every x86_64 target. That relocation reaches
-`ObjectWriter.emitIndexed`, which sends it to the target's format writer.
-`src/backend/dev/object/macho.zig:387` explicitly rejects it.
-
-This is a producer/format contract violation, not a large allocation. The
-current checkout exposes an invariant failure at this boundary; the issue's
-reported compiler surfaced an out-of-memory diagnostic. No old compiler was
-used to establish how that version translated the failure.
-
-ARM64 uses an `abs64_field` literal supported by Mach-O. Linux has an ELF
-`R_X86_64_32S` encoding. Interpreter, LSS, and optimized test execution do
-not use this Boxy test-unit relocation path. Compiling every procedure in
-the module explains why an uncalled function containing an expect suffices.
-
-## Recommended fix
-
-Represent an expect site as the unsigned 32-bit id it actually is. Emit
-`mov r32, imm32` via `movRegImm32ZeroExtend` on x86_64 and carry an explicit
-unsigned absolute 32-bit field relocation, including its in-field addend.
-Support that producer-selected kind coherently through `Relocation.zig`,
-ELF (`R_X86_64_32`), Mach-O (`X86_64_RELOC_UNSIGNED`, four-byte field), COFF,
-and unit-image conversion/loading. Preserve the existing ARM64 literal path.
-
-This avoids both the unsupported signed Mach-O encoding and an unnecessary
-signed-id limit. It is smaller than the current sign-extending instruction
-and needs neither an extra load nor a full 64-bit immediate. Account for the
-optional REX prefix when recording the field offset. Verify ordinary and
-extended registers, nonzero addends/base ids, the full u32 range, and
-encoded-object/direct-image equivalence. Update the test-unit design contract.
-Do not turn a format mismatch into an allocation error or bypass test units.
+The CLI suite runs `test/cli/Issue13186NestedExpect.roc` under `roc test` as
+`issue 13186: nested expects run from test unit images`; on an x86_64 macOS
+host it covers the issue's original failure end to end.
