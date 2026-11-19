@@ -1443,8 +1443,9 @@ const BoxyObjects = struct {
     /// The units offered and not yet known, by module.
     units: std.AutoHashMapUnmanaged([32]u8, *UnitTask) = .empty,
     /// The units waiting for each module's object: its importers among the
-    /// units whose imports are not all known.
-    waiting: std.AutoHashMapUnmanaged([32]u8, std.ArrayList(*UnitTask)) = .empty,
+    /// units whose imports are not all known. Keep the checked artifact, not
+    /// its task: another import may rule the task out before this one settles.
+    waiting: std.AutoHashMapUnmanaged([32]u8, std.ArrayList(*const Artifact)) = .empty,
     /// Units whose imports are all known, not submitted yet.
     ready: std.ArrayList(*UnitTask) = .empty,
     /// The compile-time programs the evaluation asked to build, not
@@ -1457,8 +1458,8 @@ const BoxyObjects = struct {
     /// Modules declaring hosted functions, offered while no checked platform
     /// module bound them. They are offered again when one is checked.
     unbound_hosted: std.ArrayList(*const Artifact) = .empty,
-    /// The modules whose import closures are known (`closureKnown`).
-    closures_known: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
+    /// Settled program inputs for this naming epoch (`closureKnown`).
+    closures_known: std.AutoHashMapUnmanaged([32]u8, enum { objects, shared }) = .empty,
     /// Completed immutable import closures, owned by `arena` for this naming epoch.
     object_sets: std.AutoHashMapUnmanaged([32]u8, eval.CompileTimeFinalization.BoxyObjectSet) = .empty,
     /// The pieces of every object recorded with its pieces, kept for the
@@ -1601,13 +1602,13 @@ const BoxyObjects = struct {
         return self.pieces.get(artifact.key.bytes);
     }
 
-    /// Whether the objects of `module`'s import closure are all known,
-    /// offering the ones not offered yet: the compile-time program
-    /// evaluating `module`'s roots links against them.
+    /// Whether the program evaluating `module`'s roots can choose between
+    /// linking its imports' objects and shared lowering.
     fn objectsReady(context: *anyopaque, module: *const Artifact) Error!bool {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
-        try self.offerClosure(module);
         if (self.first_error) |err| return err;
+        if (self.closures_known.contains(module.key.bytes)) return true;
+        try self.offerClosure(module);
         const known = try self.closureKnown(module);
         if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: objects for {s}: {s}, {d} known, {d} units in progress, {d} ready\n", .{ module.moduleEnvConst().module_name, if (known) "ready" else "waiting", self.records.count(), self.units.count(), self.ready.items.len });
         return known;
@@ -1618,6 +1619,7 @@ const BoxyObjects = struct {
     /// found them known.
     fn objectSet(context: *anyopaque, module: *const Artifact) Error!?eval.CompileTimeFinalization.BoxyObjectSet {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
+        if (self.closures_known.get(module.key.bytes).? == .shared) return null;
         if (self.object_sets.get(module.key.bytes)) |known| return known;
         var ordered = std.ArrayList(Object).empty;
         var visited = std.AutoHashMapUnmanaged([32]u8, *const Artifact).empty;
@@ -1704,29 +1706,41 @@ const BoxyObjects = struct {
         const entry = try visited.getOrPut(gpa, artifact.key.bytes);
         if (entry.found_existing) return true;
         entry.value_ptr.* = artifact;
+        const known = self.records.get(artifact.key.bytes) orelse Coordinator.coordinatorInvariant("a compile-time program's import closure was not known when its objects were gathered", .{});
+        const object = known.object orelse return false;
         for (artifact.direct_import_module_keys.items()) |key| {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse return false;
             if (!try self.visit(imported, visited, ordered)) return false;
         }
-        const known = self.records.get(artifact.key.bytes) orelse Coordinator.coordinatorInvariant("a compile-time program's import closure was not known when its objects were gathered", .{});
-        const object = known.object orelse return false;
         try ordered.append(self.arena.allocator(), object);
         return true;
     }
 
-    /// Whether every module of `module`'s import closure, the compiler's
-    /// Builtin module included, has a known object or is known to have none.
-    /// Objects only become known, so a closure once known stays known until
-    /// the build starts over under the link's names.
+    const Availability = enum { pending, available, unavailable };
+
+    fn availability(self: *const BoxyObjects, key: [32]u8) Availability {
+        const known = self.records.getPtr(key) orelse return .pending;
+        return if (known.object != null) .available else .unavailable;
+    }
+
+    /// A standalone object implies its imports have objects too. Only direct
+    /// inputs (including Builtin) need checking. One negative record selects
+    /// shared lowering even if another input is still pending.
     fn closureKnown(self: *BoxyObjects, module: *const Artifact) Allocator.Error!bool {
-        if (self.closures_known.contains(module.key.bytes)) return true;
-        if (!self.records.contains(self.coordinator.builtin_modules.checked_artifact.key.bytes)) return false;
+        var inputs = self.availability(self.coordinator.builtin_modules.checked_artifact.key.bytes);
         for (module.direct_import_module_keys.items()) |key| {
-            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
-            if (!self.records.contains(imported.key.bytes)) return false;
-            if (!try self.closureKnown(imported)) return false;
+            if (inputs == .unavailable) break;
+            switch (self.availability(key.bytes)) {
+                .available => {},
+                .pending => inputs = .pending,
+                .unavailable => inputs = .unavailable,
+            }
         }
-        try self.closures_known.put(self.coordinator.gpa, module.key.bytes, {});
+        try self.closures_known.put(self.coordinator.gpa, module.key.bytes, switch (inputs) {
+            .available => .objects,
+            .unavailable => .shared,
+            .pending => return false,
+        });
         return true;
     }
 
@@ -1936,35 +1950,36 @@ const BoxyObjects = struct {
         const eligible = self.eligibility(artifact);
         if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: offer {s}: {s}\n", .{ artifact.moduleEnvConst().module_name, @tagName(eligible) });
         switch (eligible) {
-            .never => {
-                try self.records.put(gpa, artifact.key.bytes, .{ .object = null });
-                try self.release(artifact.key.bytes);
-                return;
-            },
+            .never => return self.noObject(artifact),
             .later => {
                 if (artifact.hosted_procs.procs.items().len != 0) try self.unbound_hosted.append(gpa, artifact);
                 return;
             },
             .now => {},
         }
-        const task = try gpa.create(UnitTask);
-        errdefer gpa.destroy(task);
-        task.* = .{ .objects = self, .artifact = artifact, .prepared = try self.prepare(artifact), .remaining = 0 };
-        task.offered_ns = lir.CheckedPipeline.Timing.startDetail(task.prepared.unit.config.timing);
-        errdefer task.prepared.deinit(gpa);
-        try self.units.put(gpa, artifact.key.bytes, task);
-        errdefer _ = self.units.remove(artifact.key.bytes);
+        const offered_ns = lir.CheckedPipeline.Timing.startDetail(self.lowering.config.timing);
+        var remaining: u32 = 0;
         for (artifact.direct_import_module_keys.items()) |key| {
-            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
+            const imported = self.checkedImport(key);
             try self.offer(imported);
-            if (self.records.contains(imported.key.bytes)) continue;
-            // The import's unit is in progress, or the import is offered
-            // again once it can have an object; either way, knowing its
-            // object releases this unit.
-            const waiting = try self.waiting.getOrPut(gpa, imported.key.bytes);
+            switch (self.availability(key.bytes)) {
+                .available => continue,
+                .unavailable => return self.noObject(artifact),
+                .pending => {},
+            }
+            const waiting = try self.waiting.getOrPut(gpa, key.bytes);
             if (!waiting.found_existing) waiting.value_ptr.* = .empty;
-            try waiting.value_ptr.append(gpa, task);
-            task.remaining += 1;
+            try waiting.value_ptr.append(gpa, artifact);
+            remaining += 1;
+        }
+        // A recursive offer may have settled a previously registered import.
+        if (remaining != 0 and self.records.contains(artifact.key.bytes)) return;
+        const task = try gpa.create(UnitTask);
+        {
+            errdefer gpa.destroy(task);
+            task.* = .{ .objects = self, .artifact = artifact, .prepared = try self.prepare(artifact), .remaining = remaining, .offered_ns = offered_ns };
+            errdefer task.prepared.deinit(gpa);
+            try self.units.put(gpa, artifact.key.bytes, task);
         }
         if (task.remaining == 0) {
             task.markReady();
@@ -1978,9 +1993,12 @@ const BoxyObjects = struct {
     fn offerClosure(self: *BoxyObjects, module: *const Artifact) Error!void {
         try self.offer(&self.coordinator.builtin_modules.checked_artifact);
         for (module.direct_import_module_keys.items()) |key| {
-            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
-            try self.offer(imported);
+            try self.offer(self.checkedImport(key));
         }
+    }
+
+    fn checkedImport(self: *BoxyObjects, key: CheckedArtifact.CheckedModuleArtifactKey) *const Artifact {
+        return self.coordinator.checkedArtifactByKey(key.digest()) orelse Coordinator.coordinatorInvariant("a Boxy unit references an unpublished checked import", .{});
     }
 
     /// Whether this compilation links `artifact`'s object as the scheduler
@@ -2161,14 +2179,43 @@ const BoxyObjects = struct {
         try self.submitReady();
     }
 
-    /// Ready the units waiting for the object of the module with checked key
-    /// `module`, now known.
+    /// A negative result settles importers immediately. Their other reverse
+    /// edges still name valid artifacts, but no longer have a unit to notify.
+    fn noObject(self: *BoxyObjects, artifact: *const Artifact) Allocator.Error!void {
+        const gpa = self.coordinator.gpa;
+        if (!try self.recordNoObject(artifact)) return;
+        const entry = self.waiting.fetchRemove(artifact.key.bytes) orelse return;
+        var work = entry.value;
+        defer work.deinit(gpa);
+        while (work.pop()) |dependent| {
+            if (!try self.recordNoObject(dependent)) continue;
+            if (self.units.fetchRemove(dependent.key.bytes)) |unit| unit.value.destroy(gpa);
+            if (self.waiting.fetchRemove(dependent.key.bytes)) |next| {
+                var list = next.value;
+                defer list.deinit(gpa);
+                try work.appendSlice(gpa, list.items);
+            }
+        }
+    }
+
+    fn recordNoObject(self: *BoxyObjects, artifact: *const Artifact) Allocator.Error!bool {
+        const entry = try self.records.getOrPut(self.coordinator.gpa, artifact.key.bytes);
+        if (entry.found_existing) {
+            std.debug.assert(entry.value_ptr.object == null);
+            return false;
+        }
+        entry.value_ptr.* = .{ .object = null };
+        return true;
+    }
+
+    /// Ready the remaining units waiting for a newly available object.
     fn release(self: *BoxyObjects, module: [32]u8) Allocator.Error!void {
         const gpa = self.coordinator.gpa;
         const entry = self.waiting.fetchRemove(module) orelse return;
         var list = entry.value;
         defer list.deinit(gpa);
-        for (list.items) |dependent| {
+        for (list.items) |artifact| {
+            const dependent = self.units.get(artifact.key.bytes) orelse continue;
             dependent.remaining -= 1;
             if (dependent.remaining == 0) {
                 dependent.markReady();
@@ -15048,6 +15095,79 @@ test "Boxy definitions sharing a name are distinct workers" {
     const cold = try runEditLoop(allocator, path, cache);
     try std.testing.expectEqual(@as(?i64, 1138), cold.answer);
     try expectLeafEdit(allocator, &tmp, path, cache, "helper : I64 -> I64\n", "extra : I64 -> I64\nextra = |s| s * 3\n\nhelper : I64 -> I64\n", true, 1138);
+}
+
+test "Boxy no-object notifications settle both sides of a pending diamond" {
+    if (is_freestanding or eval.CompileTimeFinalization.compilerHostMustUseInterpreterForCtfe()) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    for ([_][2][]const u8{
+        .{ "Child", "module [same]\nsame = |s| s" },
+        .{ "Host", "import Child\nHost := [].{ line! : Str => {} }" },
+        .{ "Left", "module [left!]\nimport Host\nleft! = |s| Host.line!(s)" },
+        .{ "Right", "module [right!]\nimport Host\nright! = |s| Host.line!(s)" },
+        .{ "Both", "module [both!]\nimport Left\nimport Right\nboth! = |s| { Left.left!(s)\nRight.right!(s) }" },
+        .{ "Root", "module [run!]\nimport Both\nrun! = |s| Both.both!(s)" },
+    }) |file| {
+        const name = try std.fmt.allocPrint(gpa, "{s}.roc", .{file[0]});
+        defer gpa.free(name);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = name, .data = file[1] });
+    }
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, "Root.roc", gpa);
+    defer gpa.free(root);
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", gpa);
+    defer gpa.free(cache);
+    const core = CoreCtx.os(gpa, gpa, std.testing.io);
+    var manager = CacheManager.init(gpa, .{ .enabled = true, .cache_dir = cache }, core);
+    defer manager.deinit();
+    const target = roc_target.RocTarget.detectNative();
+    var coord = try Coordinator.init(gpa, .single_threaded, 1, target, try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, core, .boxy);
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+    const pkg = try coord.ensurePackage("pf", std.fs.path.dirname(root).?);
+    coord.markPlatformPackage(pkg.name);
+    const root_id = try pkg.ensureModule(gpa, "Root", root);
+    pkg.remaining_modules = 1;
+    coord.total_remaining = 1;
+    try coord.start();
+    try coord.enqueueParseTask(pkg.name, root_id);
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    // Exercise both sides of the frontend-complete boundary without relying
+    // on the order in which workers check the modules.
+    coord.boxy_object_lowering = .{
+        .target = target,
+        .config = .{ .specialization_strategy = .boxy, .owned_proc_signatures = true },
+        .opt = "dev",
+        .inline_expects = false,
+    };
+    const objects = (try coord.boxyObjects()).?;
+    const module = struct {
+        fn get(p: *PackageState, name: []const u8) *const BoxyObjects.Artifact {
+            return p.getModule(p.getModuleId(name).?).?.checkedArtifact().?;
+        }
+    }.get;
+    coord.frontend_complete = false;
+    try objects.offer(module(pkg, "Both"));
+    try std.testing.expect(objects.waiting.get(module(pkg, "Host").key.bytes).?.items.len == 2);
+    try std.testing.expect(objects.units.contains(module(pkg, "Both").key.bytes));
+
+    coord.frontend_complete = true;
+    try objects.offerUnboundHosted();
+    // Root is offered only after Both was ruled out. No offer descended
+    // through Host; the evaluator must not ask for Child's record.
+    try objects.offer(module(pkg, "Root"));
+    for ([_][]const u8{ "Host", "Left", "Right", "Both", "Root" }) |name| {
+        try std.testing.expect(objects.records.get(module(pkg, name).key.bytes).?.object == null);
+    }
+    try std.testing.expect(!objects.records.contains(module(pkg, "Child").key.bytes));
+    try std.testing.expect(try objects.closureKnown(module(pkg, "Root")));
+    try std.testing.expect((try BoxyObjects.objectSet(objects, module(pkg, "Root"))) == null);
+    try objects.waitAll();
+    try std.testing.expectEqual(0, objects.waiting.count());
 }
 
 test "Boxy object record reservation OOM releases the transferred unit" {
