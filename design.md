@@ -1216,12 +1216,17 @@ the compiler implements therefore declare a backing that states whether they
 have values. Numbers, `Str`, `List`, and the SIMD vectors declare the one-tag
 backing `[ProvidedByCompiler]`, which is inhabited whatever their arguments
 are: the empty list exists for every item type. `Dict` and `Set` are inhabited
-through their Roc backings, whose entries are a `List`. `Box(item)` also
-declares `[ProvidedByCompiler]`, which does not mention `item`, so every box
-counts as inhabited, including a `Box([])` that has no values; a `match` on
-`Try(Str, Box([]))` therefore requires an `Err` branch. Nothing constructs or
-matches a `ProvidedByCompiler` tag; post-check stages take these types'
-representations from the compiler, not from the declaration.
+through their Roc backings, whose entries are a `List`. `Box(item)` declares
+`[ProvidedByCompiler(item)]`: a box holds exactly one item, so it has a value
+exactly when `item` does, as a user wrapper `Wrapped(a) := [W(a)]` does.
+`Try(Str, Box([]))` therefore needs no `Err` branch, and an `Err` branch on it
+is unmatchable. The known-absent-payload query reads the same declaration, so
+the `_` of an absent constructor's `Box(_)` payload closes to `[]` as the `_`
+of any other wrapper's payload does: `x : Try(Str, Box(_))` defined as
+`Ok("a")` has the type `Try(Str, Box([]))`. Nothing constructs or matches a
+`ProvidedByCompiler` tag; post-check stages take these types' representations
+from the compiler, not from the declaration, and Monotype's own
+uninhabitedness proof treats a box as uninhabited exactly when its payload is.
 Exact known-empty identities are false. An unconditional witness, such as a
 zero-argument tag, may prune other disjunction dependencies, but a provisional
 cycle answer cannot.

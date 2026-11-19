@@ -1205,8 +1205,9 @@ const GatheredTag = struct {
 ///
 /// Every nominal type, builtin or not, is answered by its declared backing
 /// alone. The types the compiler implements declare a backing that states
-/// whether they have values, such as the one-tag `[ProvidedByCompiler]` of
-/// the numbers, `Str` and `List`.
+/// whether they have values: the one-tag `[ProvidedByCompiler]` of the
+/// numbers, `Str` and `List`, and `[ProvidedByCompiler(item)]` for
+/// `Box(item)`, which has a value exactly when its item does.
 ///
 fn isTypeInhabitedWithKnownEmpty(
     type_store: *TypeStore,

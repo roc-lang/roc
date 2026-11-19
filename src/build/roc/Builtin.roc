@@ -5760,7 +5760,7 @@ Builtin :: [].{
 		}
 	}
 
-	Box(item) :: [ProvidedByCompiler].{
+	Box(item) :: [ProvidedByCompiler(item)].{
 		parser_for : _
 		encoder_for : _
 

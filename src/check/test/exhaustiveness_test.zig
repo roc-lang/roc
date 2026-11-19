@@ -1406,3 +1406,159 @@ test "non-exhaustive - a collection of an empty type requires Err because the em
     try expectErrBranchRequired("Dict(Str, [])");
     try expectErrBranchRequired("Iter([])");
 }
+
+// `Box(item)` has a value exactly when `item` does, exactly like the user
+// wrapper `MyBox(a) := [B(a)]`.
+
+/// Checks that a `match` with only an `Ok` branch on `Try(Str, <error_type>)`
+/// is accepted, which is what an error type without values allows.
+fn expectNoErrBranchNeeded(comptime declarations: []const u8, comptime error_type: []const u8) TestEnv.TestEnvError!void {
+    const body =
+        \\f = |t| match t {
+        \\    Ok(s) => s
+        \\}
+    ;
+    const source = declarations ++ "f : Try(Str, " ++ error_type ++ ") -> Str\n" ++ body;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+/// Checks that an `Err` branch on `Try(Str, <error_type>)` is reported as
+/// unmatchable.
+fn expectErrBranchUnmatchable(comptime declarations: []const u8, comptime error_type: []const u8) TestEnv.TestEnvError!void {
+    const body =
+        \\f = |t| match t {
+        \\    Ok(s) => s
+        \\    Err(_) => ""
+        \\}
+    ;
+    const source = declarations ++ "f : Try(Str, " ++ error_type ++ ") -> Str\n" ++ body;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeWarning("Unmatchable Pattern");
+}
+
+const my_box = "MyBox(a) := [B(a)]\n\n";
+
+test "exhaustive - a Box of an empty type needs no Err, like a user wrapper" {
+    try expectNoErrBranchNeeded("", "Box([])");
+    try expectNoErrBranchNeeded(my_box, "MyBox([])");
+}
+
+test "unmatchable - an Err branch on a Box of an empty type, like a user wrapper" {
+    try expectErrBranchUnmatchable("", "Box([])");
+    try expectErrBranchUnmatchable(my_box, "MyBox([])");
+}
+
+test "non-exhaustive - a Box of a type with values requires Err, like a user wrapper" {
+    try expectErrBranchRequired("Box(Str)");
+    try expectErrBranchRequired("Box(List([]))");
+    try expectErrBranchRequired("Box({})");
+}
+
+test "exhaustive - a Box is empty through nested structure" {
+    try expectNoErrBranchNeeded("", "Box(Box([]))");
+    try expectNoErrBranchNeeded("", "Box({ a : [], b : Str })");
+    try expectNoErrBranchNeeded("", "Box((Str, []))");
+    try expectNoErrBranchNeeded("E := []\n\n", "Box(E)");
+    try expectNoErrBranchNeeded("", "{ boxed : Box([]) }");
+}
+
+test "non-exhaustive - a list of boxes of an empty type requires Err" {
+    try expectErrBranchRequired("List(Box([]))");
+}
+
+// The `_` of an absent constructor's payload closes to `[]` through a `Box`
+// exactly as through the user wrapper `MyBox(a) := [B(a)]`, so a value built
+// with only `Ok` cannot later be used where the box holds a type with values.
+// Writing the payload type keeps every one of these programs valid.
+
+/// Checks `body`, with `W` standing for the wrapper, once for `Box` and once
+/// for the user twin, expecting the same single type error from both.
+fn expectBoxAndTwinTypeMismatch(comptime body: []const u8) TestEnv.TestEnvError!void {
+    inline for (.{ .{ "", "Box" }, .{ my_box, "MyBox" } }) |wrapper| {
+        const source = wrapper[0] ++ comptime replaceWrapper(body, wrapper[1]);
+        var test_env = try TestEnv.init("Test", source);
+        defer test_env.deinit();
+
+        try test_env.assertOneTypeError("Type Mismatch");
+    }
+}
+
+/// Checks `body`, with `W` standing for the wrapper, once for `Box` and once
+/// for the user twin, expecting both to be accepted.
+fn expectBoxAndTwinAccepted(comptime body: []const u8) TestEnv.TestEnvError!void {
+    inline for (.{ .{ "", "Box" }, .{ my_box, "MyBox" } }) |wrapper| {
+        const source = wrapper[0] ++ comptime replaceWrapper(body, wrapper[1]);
+        var test_env = try TestEnv.init("Test", source);
+        defer test_env.deinit();
+
+        try test_env.assertNoErrors();
+    }
+}
+
+fn replaceWrapper(comptime body: []const u8, comptime wrapper: []const u8) []const u8 {
+    comptime var result: []const u8 = "";
+    comptime var start: usize = 0;
+    inline for (body, 0..) |byte, index| {
+        if (byte == '@') {
+            result = result ++ body[start..index] ++ wrapper;
+            start = index + 1;
+        }
+    }
+    return result ++ body[start..];
+}
+
+const absent_payload_top_level =
+    \\x : Try(Str, @(PAYLOAD))
+    \\x = Ok("a")
+    \\
+    \\y : Try(Str, @(U8))
+    \\y = x
+;
+
+const absent_payload_local =
+    \\f : Str -> Try(Str, @(U8))
+    \\f = |s| {
+    \\    x : Try(Str, @(PAYLOAD))
+    \\    x = Ok(s)
+    \\    x
+    \\}
+;
+
+const absent_payload_if_branches =
+    \\f : Str, @(U8) -> Try(Str, @(U8))
+    \\f = |s, b| {
+    \\    x : Try(Str, @(PAYLOAD))
+    \\    x = Ok(s)
+    \\    if s == "" Err(b) else x
+    \\}
+;
+
+fn withPayload(comptime body: []const u8, comptime payload: []const u8) []const u8 {
+    comptime var result: []const u8 = "";
+    comptime var start: usize = 0;
+    comptime var index: usize = 0;
+    inline while (index < body.len) : (index += 1) {
+        if (index + 7 <= body.len and std.mem.eql(u8, body[index..][0..7], "PAYLOAD")) {
+            result = result ++ body[start..index] ++ payload;
+            start = index + 7;
+        }
+    }
+    return result ++ body[start..];
+}
+
+test "type mismatch - an absent Err payload's Box(_) closes to Box([]) like a user wrapper's" {
+    try expectBoxAndTwinTypeMismatch(comptime withPayload(absent_payload_top_level, "_"));
+    try expectBoxAndTwinTypeMismatch(comptime withPayload(absent_payload_local, "_"));
+    try expectBoxAndTwinTypeMismatch(comptime withPayload(absent_payload_if_branches, "_"));
+}
+
+test "a Box of a written payload type with values is unaffected by absent-payload closing" {
+    try expectBoxAndTwinAccepted(comptime withPayload(absent_payload_top_level, "U8"));
+    try expectBoxAndTwinAccepted(comptime withPayload(absent_payload_local, "U8"));
+    try expectBoxAndTwinAccepted(comptime withPayload(absent_payload_if_branches, "U8"));
+}
