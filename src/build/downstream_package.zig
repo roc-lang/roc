@@ -99,7 +99,7 @@ pub fn main(init: std.process.Init) !void {
     const prefix = try std.fs.path.join(arena, &.{ work, "prefix" });
     const cache = try std.fs.path.join(arena, &.{ work, "cache" });
     _ = try command(init, &.{ zig, "build", "--cache-dir", cache, "--prefix", prefix, target_option, cpu_option }, consumer);
-    const smoke_name = "downstream-compiler-smoke" ++ builtin.target.exeFileExt();
+    const smoke_name = try std.fmt.allocPrint(arena, "downstream-compiler-smoke{s}", .{builtin.target.exeFileExt()});
     try std.Io.Dir.cwd().rename(
         try std.fs.path.join(arena, &.{ prefix, "bin", smoke_name }),
         std.Io.Dir.cwd(),
