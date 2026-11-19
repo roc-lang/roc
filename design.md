@@ -12287,8 +12287,11 @@ list's memory when its layout has no padding and no float leaf, already is that
 encoding and is stored as it is. A float list is copied in one vectorized pass
 that replaces NaN lanes, and a product list with float leaves is copied by its
 plan's regions and then has each float leaf's NaN replaced. A big-endian host
-packs each item on its own. Debug builds check a bulk-stored scalar list
-against storing each item on its own. Packed data remains a literal through specialization;
+packs each item on its own. A value-form list of numerals that reads no
+constant encodes its numerals at the item type, decided once for the list,
+into the memory a list of them occupies, and packs that memory as an
+evaluated list's. Debug builds check a bulk-stored scalar list against
+storing each item on its own. Packed data remains a literal through specialization;
 list length must not create per-item LIR statements, including in static
 initializers. Literal backings are shared by explicit owner-relative identity
 through IR stages. Boxy consumes its committed layout without unrolling the

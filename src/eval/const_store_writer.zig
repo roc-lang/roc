@@ -1025,10 +1025,15 @@ pub const Writer = struct {
     /// the evaluator's memory holds it (`exact_numeral.encodeBits`, which the
     /// lowering's numerals are built from).
     fn checkedScalarBytes(self: *Writer, layout_idx: layout.Idx, expr: CIR.Expr.Idx) Allocator.Error![16]u8 {
+        return self.checkedNumeralBytes(self.numeralTarget(layout_idx), expr);
+    }
+
+    /// The number type a value-form numeral at `layout_idx` is encoded at.
+    fn numeralTarget(self: *const Writer, layout_idx: layout.Idx) exact_numeral.Target {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         if (layout_value.tag != .scalar) writerInvariant("a value-form numeral's layout is not a scalar");
         const scalar = layout_value.getScalar();
-        const target: exact_numeral.Target = switch (scalar.tag) {
+        return switch (scalar.tag) {
             .int => switch (scalar.getInt()) {
                 inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |int| @field(exact_numeral.Target, @tagName(int)),
             },
@@ -1039,6 +1044,11 @@ pub const Writer = struct {
             },
             .str, .opaque_ptr, .vector => writerInvariant("a value-form numeral's layout is not a number"),
         };
+    }
+
+    /// Value-form numeral `expr` at `target`, as the evaluator's memory
+    /// holds it.
+    fn checkedNumeralBytes(self: *Writer, target: exact_numeral.Target, expr: CIR.Expr.Idx) Allocator.Error![16]u8 {
         const bodies = self.checkedValues().bodies;
         const value_expr = checked.valueFormValueExpr(bodies, expr);
         if (bodies.exprData(value_expr) != .numeral) writerInvariant("a value-form scalar is not a numeral");
@@ -1087,15 +1097,18 @@ pub const Writer = struct {
         const bytes = try self.allocator.alloc(u8, byte_len);
         defer self.allocator.free(bytes);
         // The items of a root that reads no constant are all literals, which
-        // convert with no per-item check for a read.
-        if (self.checked_reads_constants) {
+        // fill the memory a list of them occupies, packed as an evaluated
+        // list's memory is.
+        if (!self.checked_reads_constants) {
+            const target = self.numeralTarget(elem_layout);
             for (items, 0..) |item, index| {
-                writePackedScalar(bytes[index * width ..][0..width], element, try self.partScalar(elem_layout, self.resolvePart(checkedPart(item))));
+                const encoded = try self.checkedNumeralBytes(target, item);
+                @memcpy(bytes[index * width ..][0..width], encoded[0..width]);
             }
-        } else {
-            for (items, 0..) |item, index| {
-                writePackedScalar(bytes[index * width ..][0..width], element, try self.checkedScalar(elem_layout, item));
-            }
+            return try self.packMemory(elem_layout, element, bytes.ptr, items.len);
+        }
+        for (items, 0..) |item, index| {
+            writePackedScalar(bytes[index * width ..][0..width], element, try self.partScalar(elem_layout, self.resolvePart(checkedPart(item))));
         }
         return try self.store.addBlobData(bytes);
     }
@@ -1574,39 +1587,50 @@ pub const Writer = struct {
             },
         };
 
-        const width: usize = element.byteWidth();
-        if (builtin.mode == .debug) std.debug.assert(self.program.layouts.layoutSize(self.program.layouts.getLayout(elem_layout)) == width);
-        const byte_len = std.math.mul(usize, roc_list.len(), width) catch
-            writerInvariant("packed list byte length overflowed");
         if (roc_list.bytes == null and roc_list.len() != 0) {
             writerInvariant("non-empty packed list had null element pointer");
         }
+        self.store.fill(target_node, .{ .list = .{ .items = .{ .packed_bytes = .{
+            .bytes = try self.packMemory(elem_layout, element, roc_list.bytes, roc_list.len()),
+            .len = try checkedU32(roc_list.len()),
+            .element = element,
+        } }, .capacity = capacity } });
+    }
+
+    /// The interned packed bytes of the `len` scalars of `element` at
+    /// `elem_layout` that a list's memory at `source` holds.
+    fn packMemory(
+        self: *Writer,
+        elem_layout: layout.Idx,
+        element: const_store.ConstPackedScalar,
+        source: ?[*]const u8,
+        len: usize,
+    ) Allocator.Error!const_store.ConstStr {
+        const width: usize = element.byteWidth();
+        if (builtin.mode == .debug) std.debug.assert(self.program.layouts.layoutSize(self.program.layouts.getLayout(elem_layout)) == width);
+        const byte_len = std.math.mul(usize, len, width) catch
+            writerInvariant("packed list byte length overflowed");
         const bytes = try self.store.reserveBlobData(byte_len);
-        if (roc_list.bytes) |source| switch (builtin.cpu.arch.endian()) {
+        if (source) |memory| switch (builtin.cpu.arch.endian()) {
             .little => {
-                packMemoryScalars(element, bytes, source[0..byte_len]);
+                packMemoryScalars(element, bytes, memory[0..byte_len]);
                 // The list's bytes are what storing each item on its own
                 // writes.
-                if (builtin.mode == .debug) for (0..roc_list.len()) |index| {
+                if (builtin.mode == .debug) for (0..len) |index| {
                     var item: [16]u8 = undefined;
-                    writePackedScalar(item[0..width], element, self.storeScalar(elem_layout, .{ .ptr = source + index * width }));
+                    writePackedScalar(item[0..width], element, self.storeScalar(elem_layout, .{ .ptr = @constCast(memory + index * width) }));
                     std.debug.assert(std.mem.eql(u8, item[0..width], bytes[index * width ..][0..width]));
                 };
             },
             // A big-endian program's memory holds no scalar wider than a
             // byte as its packed little-endian bytes, so each item is
             // packed on its own.
-            .big => for (0..roc_list.len()) |index| {
-                const scalar = self.storeScalar(elem_layout, .{ .ptr = source + index * width });
+            .big => for (0..len) |index| {
+                const scalar = self.storeScalar(elem_layout, .{ .ptr = @constCast(memory + index * width) });
                 writePackedScalar(bytes[index * width ..][0..width], element, scalar);
             },
         };
-        const data = try self.store.commitBlobData(byte_len);
-        self.store.fill(target_node, .{ .list = .{ .items = .{ .packed_bytes = .{
-            .bytes = data,
-            .len = try checkedU32(roc_list.len()),
-            .element = element,
-        } }, .capacity = capacity } });
+        return try self.store.commitBlobData(byte_len);
     }
 
     fn selectFnVariant(
