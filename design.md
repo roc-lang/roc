@@ -22837,17 +22837,13 @@ specialization are never requested.
 
 Boxy applies the same sequence before its ordinary lowering of a call,
 structural equality or hash, list, tuple, tag, record, low-level operation, or
-dispatch requests any representation. It selects the sequence from checked
-types: when a type that ordinary lowering requests before evaluating the
-operands holds the error type (the expression's own type, a call's callee
-type, an equality's or hash's operand types, a low-level operation's argument
-types, or a dispatch's callable type), the expression produces no value,
-checking necessarily marked it divergent, and Boxy reads the operands'
-divergence facts to find where it stops. A dispatch that cannot
-run and none of whose operands diverges evaluates them and then crashes with
-its dispatch crash. An expression free of the error type reads no divergence
-fact, so a successful program's lowering demands no divergence facts beyond
-those its blocks, matches, and declarations already read.
+dispatch requests any representation. It selects the sequence from the
+expression's own divergence fact, as its blocks and matches do: a strict
+expression checking marked divergent lowers as its operands up to the first
+divergent one, and one checking did not mark lowers ordinarily. A dispatch
+that cannot run and none of whose operands diverges evaluates them and then
+crashes with its dispatch crash. The value such an expression stands for has
+the expression's type, or no type when that type holds the error type.
 
 Which expression kinds can be marked divergent is one classification,
 `checkedExprDivergence`, defined with the checked expression kinds: a kind

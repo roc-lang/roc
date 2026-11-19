@@ -3907,51 +3907,24 @@ pub const Builder = struct {
         try self.push(.{ .own_expr = expr_id });
     }
 
-    /// A strict expression is lowered as its divergent operand sequence
-    /// (design.md "Divergent expressions evaluate their earlier operands")
-    /// when a representation its ordinary lowering requests before
-    /// evaluating its operands holds the error type: its own type, a call's
-    /// callee type, an equality's or hash's operand types, a low-level
-    /// operation's argument types, or a dispatch's callable type. Such an
-    /// expression produces no value; checking marked it divergent. Its
-    /// operands evaluate in source order, each for its effect, up to and
-    /// including the first divergent one, and an operand whose evaluation
-    /// has no effect (`exprEvaluationHasNoEffect`) is skipped. A dispatch
-    /// that cannot run and none of whose operands diverges crashes once they
-    /// have evaluated. The call, comparison, or dispatch itself is never
-    /// built: no callee, callable type, dispatch target, or result
-    /// representation is requested. An expression free of the error type
-    /// reads no divergence fact and allocates nothing here.
+    /// A strict expression that checking marked divergent is lowered as its
+    /// divergent operand sequence (design.md "Divergent expressions evaluate
+    /// their earlier operands"). Its operands evaluate in source order, each
+    /// for its effect, up to and including the first divergent one, and an
+    /// operand whose evaluation has no effect (`exprEvaluationHasNoEffect`)
+    /// is skipped. A dispatch that cannot run and none of whose operands
+    /// diverges crashes once they have evaluated. The call, comparison, or
+    /// dispatch itself is never built: no callee, callable type, dispatch
+    /// target, or operand representation is requested.
     fn lowerDivergentOperands(self: *Builder, expr_id: ExprId, expr: bodies_mod.Expr) Allocator.Error!bool {
-        const result_has_error = try self.program.hasError(self.module, expr.ty);
-        var crash: ?lower.CrashDictionary = null;
-        var plan: ?static_dispatch.StaticDispatchCallPlan = null;
-        const requests_error = switch (expr.data) {
-            .call => |call| result_has_error or try self.program.hasError(self.module, self.bodies().exprType(call.func)),
-            .structural_eq => |eq| result_has_error or
-                try self.program.hasError(self.module, self.bodies().exprType(eq.lhs)) or
-                try self.program.hasError(self.module, self.bodies().exprType(eq.rhs)),
-            .structural_hash => |hash| result_has_error or
-                try self.program.hasError(self.module, self.bodies().exprType(hash.value)) or
-                try self.program.hasError(self.module, self.bodies().exprType(hash.hasher)),
-            .run_low_level => |run_ll| result_has_error or for (run_ll.args) |arg| {
-                if (try self.program.hasError(self.module, self.bodies().exprType(arg))) break true;
-            } else false,
-            .dispatch_call, .method_eq, .type_dispatch_call => blk: {
-                const call_plan = self.dispatchPlan(self.bodies().dispatchPlan(@backingInt(expr_id)) orelse invariant("a dispatch had no checked plan"));
-                plan = call_plan;
-                crash = switch (call_plan.resolution) {
-                    .checked_error => .checked_error,
-                    .@"unreachable" => .unreachable_value,
-                    .direct_closed, .direct_parametric, .evidence_dependent, .structural, .direct_pending => null,
-                };
-                break :blk result_has_error or try self.program.hasError(self.module, call_plan.callable_ty);
-            },
-            .list, .tuple, .tag, .record => result_has_error,
+        switch (expr.data) {
+            .call, .structural_eq, .structural_hash, .run_low_level, .dispatch_call, .method_eq, .type_dispatch_call, .list, .tuple, .tag, .record => {},
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda => return false,
-        };
-        if (!requests_error) return false;
+        }
+        const mode = self.inlineExpectMode();
+        if (!try self.bodies().exprDiverges(expr_id, mode)) return false;
 
+        var crash: ?lower.CrashDictionary = null;
         var operands: std.ArrayList(ExprId) = .empty;
         defer operands.deinit(self.allocator);
         switch (expr.data) {
@@ -3968,20 +3941,27 @@ pub const Builder = struct {
                 for (record.fields) |field| try operands.append(self.allocator, self.bodies().recordFieldValue(field));
             },
             .run_low_level => |run_ll| try operands.appendSlice(self.allocator, run_ll.args[0 .. run_ll.args.len - run_ll.op.typeOnlyOperands()]),
-            .dispatch_call, .method_eq, .type_dispatch_call => for (plan.?.argsSlice(self.view.view.static_dispatch_plans)) |operand| switch (operand) {
-                .checked_expr => |operand_expr| try operands.append(self.allocator, operand_expr),
-                .generated_interpolation_segments => |interpolation_expr| {
-                    const interpolation = self.bodies().exprData(interpolation_expr).interpolation;
-                    try operands.append(self.allocator, interpolation.first);
-                    try operands.appendSlice(self.allocator, interpolation.parts);
-                },
-                .generated_numeral, .generated_quote => {},
-                .literal_pattern_value, .literal_pattern_conversion => invariant("an expression's dispatch has a custom literal pattern operand"),
+            .dispatch_call, .method_eq, .type_dispatch_call => {
+                const plan = self.dispatchPlan(self.bodies().dispatchPlan(@backingInt(expr_id)) orelse invariant("a dispatch had no checked plan"));
+                crash = switch (plan.resolution) {
+                    .checked_error => .checked_error,
+                    .@"unreachable" => .unreachable_value,
+                    .direct_closed, .direct_parametric, .evidence_dependent, .structural, .direct_pending => null,
+                };
+                for (plan.argsSlice(self.view.view.static_dispatch_plans)) |operand| switch (operand) {
+                    .checked_expr => |operand_expr| try operands.append(self.allocator, operand_expr),
+                    .generated_interpolation_segments => |interpolation_expr| {
+                        const interpolation = self.bodies().exprData(interpolation_expr).interpolation;
+                        try operands.append(self.allocator, interpolation.first);
+                        try operands.appendSlice(self.allocator, interpolation.parts);
+                    },
+                    .generated_numeral, .generated_quote => {},
+                    .literal_pattern_value, .literal_pattern_conversion => invariant("an expression's dispatch has a custom literal pattern operand"),
+                };
             },
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda => unreachable, // only a strict kind reaches here
         }
-        const mode = self.inlineExpectMode();
-        const result: ?TypeId = if (result_has_error) null else try self.exprType(expr_id);
+        const result: ?TypeId = if (try self.program.hasError(self.module, expr.ty)) null else try self.exprType(expr_id);
         if (for (operands.items, 0..) |operand, index| {
             if (try self.bodies().exprDiverges(operand, mode)) break index + 1;
         } else null) |len| {
@@ -3990,7 +3970,11 @@ pub const Builder = struct {
         } else if (crash) |kind| {
             try self.push(.{ .dispatch_crash = .{ .kind = kind, .result = result } });
             try self.pushDiscardedOperands(operands.items);
-        } else invariant("an erroneous checked type reached a strict expression checking did not mark divergent");
+        } else {
+            // The crash operation diverges by running, not through an operand.
+            if (expr.data == .run_low_level) return false;
+            invariant("checking marked a strict expression divergent with no divergent operand");
+        }
         return true;
     }
 
