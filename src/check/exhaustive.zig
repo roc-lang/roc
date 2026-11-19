@@ -2030,6 +2030,42 @@ pub fn collectAlternativePayloadBlockers(
     }
 }
 
+/// The payloads of every alternative of each tag union in `unions` that are
+/// still type variables, constrained or not, resolved through the union's
+/// own type as `collectAlternativePayloadBlockers` resolves them.
+pub fn collectAlternativeVariablePayloads(
+    allocator: std.mem.Allocator,
+    source_store: *types.Store,
+    builtin_idents: BuiltinIdents,
+    unions: []const Var,
+    out: *std.ArrayList(Var),
+) error{OutOfMemory}!void {
+    const type_store = builtin_idents.open_cache.reader(source_store);
+    defer builtin_idents.open_cache.finishRead();
+    var payloads: std.ArrayList(Var) = .empty;
+    defer payloads.deinit(type_store.gpa);
+    for (unions) |union_var| {
+        const union_info = switch (try getUnionFromType(allocator, type_store, builtin_idents, union_var)) {
+            .success => |union_info| union_info,
+            .not_a_union => continue,
+        };
+        for (union_info.alternatives) |alt| {
+            if (ctorNameIdent(alt.name) == null) continue;
+            const arg_types = try getCtorArgTypes(type_store, builtin_idents, union_var, alt.tag_id);
+            for (0..arg_types.len()) |offset| {
+                const arg_type = arg_types.get(type_store, offset);
+                if (!try type_store.hasSourceDependencies(arg_type)) continue;
+                const resolved = try resolveType(type_store, arg_type);
+                if (resolved.desc.content == .flex) try appendUniqueVar(type_store.gpa, &payloads, resolved.var_);
+            }
+        }
+    }
+    exportBlockers(type_store, &payloads);
+    for (payloads.items) |source_var| {
+        try appendUniqueVar(source_store.gpa, out, source_var);
+    }
+}
+
 /// Get the argument types for a constructor.
 /// For nominal types with type arguments (like Try(A, B)), we need to return
 /// the actual type arguments, not the backing type's unsubstituted type params.

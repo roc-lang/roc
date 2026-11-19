@@ -1911,6 +1911,29 @@ test "check - repro - issue 13237 - an Err branch on an all-Ok function's result
     try test_env.assertTypeErrorTitles(&.{"Unmatchable Pattern"});
 }
 
+test "check - repro - issue 13237 - a top-level value's undecided error payload closes when the module finishes" {
+    var test_env = try TestEnv.init("Test",
+        \\x : Try(I64, _)
+        \\x = Ok(42)
+        \\
+        \\expect x == Ok(42)
+    );
+    defer test_env.deinit();
+    try test_env.assertDefType("x", "Try(I64, [])");
+}
+
+test "check - repro - issue 13237 - a top-level value's payload a use decides is not closed" {
+    var test_env = try TestEnv.init("Test",
+        \\x : Try(I64, _)
+        \\x = Ok(42)
+        \\
+        \\y : Try(I64, [B])
+        \\y = x
+    );
+    defer test_env.deinit();
+    try test_env.assertDefType("x", "Try(I64, [B])");
+}
+
 test "check - repro - issue 13237 - a named and an ignored payload variable behave the same" {
     inline for ([_][]const u8{ "payload", "_payload" }) |name| {
         var test_env = try TestEnv.init("Test", "g : [Something, Other(" ++ name ++ ")] -> I64\n" ++

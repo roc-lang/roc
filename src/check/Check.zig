@@ -26724,21 +26724,27 @@ fn definitionBodyExpr(self: *const Self, rhs: CIR.Expr.Idx) CIR.Expr.Idx {
 }
 
 /// After the module solves, close every still-open tag row anywhere in a
-/// top-level value's type (design.md "Value Rows: Uses Share One Row"). The
-/// module's uses have widened the shared rows as far as they will; nothing
-/// outside the module can widen them, so the closed type is the one importers
-/// read and the one the value is evaluated at. A row whose tail is
-/// quantified with a scheme, or carries constraints the row default does not
-/// discharge, is left alone.
+/// top-level value's type, and every constructor payload in the value's data
+/// that is still a type variable (design.md "Value Rows: Uses Share One
+/// Row"). The module's uses have widened the shared rows and decided the
+/// payloads as far as they will; nothing outside the module can, so the
+/// closed type is the one importers read and the one the value is evaluated
+/// at. A variable quantified with a scheme, or carrying constraints the empty
+/// union does not discharge, is left alone.
 fn closeTopLevelValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     const stack = &self.type_visit_stack;
     var tails: std.ArrayListUnmanaged(Var) = .empty;
     defer tails.deinit(self.gpa);
+    var unions: std.ArrayListUnmanaged(Var) = .empty;
+    defer unions.deinit(self.gpa);
+    var data_vars = collections.DenseMap(Var, void).init(self.gpa);
+    defer data_vars.deinit();
     for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
         const def = self.cir.store.getDef(def_idx);
         if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) continue;
         const pattern_var = ModuleEnv.varFrom(def.pattern);
         if (self.isBindingSchemeVar(pattern_var)) continue;
+        try self.closeTopLevelValuePayloads(pattern_var, &data_vars, &unions, env);
         // Collect first: closing a tail unifies, which must not run while the
         // type is being walked.
         tails.clearRetainingCapacity();
@@ -26790,6 +26796,59 @@ fn closeTopLevelValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
             const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, self.getRegionAt(tail));
             _ = try self.unify(tail, empty_tu_var, env);
         }
+    }
+}
+
+/// Close each constructor payload in a top-level value's data that is still
+/// a type variable to the empty tag union: no value of that type is in the
+/// value, and no use is left to decide it (design.md "Value Rows: Uses Share
+/// One Row"). Function types are not data, so their payloads are left alone.
+fn closeTopLevelValuePayloads(
+    self: *Self,
+    value_var: Var,
+    data_vars: *collections.DenseMap(Var, void),
+    unions: *std.ArrayListUnmanaged(Var),
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    data_vars.clearRetainingCapacity();
+    try self.collectDataReachableVars(value_var, data_vars);
+    unions.clearRetainingCapacity();
+    var reached = data_vars.keyIterator();
+    while (reached.next()) |reached_var| {
+        switch (self.types.resolveVar(reached_var.*).desc.content) {
+            .structure => |flat| switch (flat) {
+                .tag_union, .nominal_type => try unions.append(self.gpa, reached_var.*),
+                .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => {},
+            },
+            .flex, .rigid, .alias, .field_presence, .err => {},
+        }
+    }
+    if (unions.items.len == 0) return;
+
+    self.tested_payload_vars.clearRetainingCapacity();
+    {
+        var arena = base.SingleThreadArena.init(self.gpa);
+        defer arena.deinit();
+        var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies());
+        defer open_cache.deinit();
+        try exhaustive.collectAlternativeVariablePayloads(
+            arena.allocator(),
+            self.types,
+            self.exhaustiveBuiltinIdents(&open_cache),
+            unions.items,
+            &self.tested_payload_vars,
+        );
+    }
+    for (self.tested_payload_vars.items) |payload_var| {
+        const resolved = self.types.resolveVar(payload_var);
+        const flex = switch (resolved.desc.content) {
+            .flex => |flex| flex,
+            .rigid, .alias, .structure, .field_presence, .err => continue,
+        };
+        if (resolved.desc.rank == .generalized or resolved.desc.flags.frozen) continue;
+        if (flex.literal != .none or !self.rowDefaultDischargesConstraints(flex.constraints)) continue;
+        const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, self.getRegionAt(resolved.var_));
+        _ = try self.unify(resolved.var_, empty, env);
     }
 }
 

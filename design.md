@@ -13535,6 +13535,13 @@ one rule whether the value is local or top-level:
   value's type with no copy), and the one the value is evaluated at. A row
   whose tail a scheme quantified, or that carries a constraint the empty row
   does not discharge, is left alone.
+- At the same point, every constructor payload in the value's data (not
+  inside a function type) that is still a type variable closes to `[]`
+  (`Check.closeTopLevelValuePayloads`), under the same quantification and
+  constraint conditions. No value of that type is in the value, and no use
+  is left to decide it: `x : Try(I64, _)` with `x = Ok(42)` is
+  `Try(I64, [])` unless a use decided the hole first (Free Payload Variables
+  Close Per Use).
 
 A value's record follows the same rule through its uncommitted tail
 (Uncommitted Record Tails): every use shares it, a use that lifts the record
@@ -13772,11 +13779,12 @@ of such a variable to be `[]`, but only when the variable is free at the use:
 
 Inside `g : Try(I64, err) -> I64`, `match t { Ok(v) => v }` on the parameter is
 not exhaustive, and neither is the same match when the annotation writes `_err`
-or `_` for the error row: each such variable is reached from the parameter. A local `r = f(n)` matched later is
-closed exactly like `f(n)` itself, since its instance reaches no parameter. A
-top-level value annotated `x : Try(I64, _)` with `x = Ok(42)` is a value, so
-every use shares its one type (Value Rows: Uses Share One Row), and the first
-match that tests it decides the hole.
+or `_` for the error row: each such variable is reached from the parameter. A
+local `r = f(n)` matched later is closed exactly like `f(n)` itself, since its
+instance reaches no parameter. A top-level value annotated `x : Try(I64, _)`
+with `x = Ok(42)` is a value, so every use shares its one type (Value Rows:
+Uses Share One Row): the first use that decides the hole decides it for every
+use, and when none does, the module's end closes it.
 
 When the scrutinee's value expression is itself a tag construction (through
 blocks, conditionals, matches and nominal wrappers), the tags it constructs
@@ -17154,6 +17162,15 @@ Other solved-graph mutations:
   function's result, and on a local holding it) and the rejected side (an
   `Ok`-only match on a parameter, whatever its error row is named) are pinned
   by the tests that section names.
+- `closeTopLevelValuePayloads`—policy: Value Rows: Uses Share One Row
+  (above). When the module finishes, each constructor payload in a top-level
+  value's data that is still an unquantified type variable whose constraints
+  the empty union discharges is unified with a fresh empty tag union, beside
+  `closeTopLevelValueRows`. It introduces no redirect rule. The accepted side
+  (`x : Try(I64, _)`, `x = Ok(42)` compared with `==`) and the rejected side
+  (a payload a use already decided stays decided) are pinned by the
+  `issue 13237` top-level value tests in `src/check/test/repros_test.zig` and
+  by `test/cli/issue_11765_default_closed_value_row/`.
 - `closeTagRowsForDerivation`—policy: Polarity and Derived Parser Tag-Row
   Closure (above). Codec dispatch eagerly closes only annotation-proven flexible
   extensions and alias polarity markers; inferred tag tails close at the final
