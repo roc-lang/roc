@@ -1206,12 +1206,27 @@ is not a recursive-path assumption.
 
 Each query defines a finite monotone AND/OR graph: required fields, tuple
 components, and tag payloads are conjunctions; tag alternatives are disjunctions.
-Optional fields require no witness. Functions, recovery types, field-presence
-terms, and builtin numbers retain their existing inhabited leaf behavior. A
-builtin number is one of the Builtin module's own number declarations,
-identified by its builtin origin and declaring statement, never by name: a
-user type or alias named `U8` is an ordinary type, and an alias is always
-followed to its backing.
+Optional fields require no witness. Functions, recovery types, and
+field-presence terms are inhabited leaves. A nominal type has no leaf rule of
+its own: every nominal, builtin or not, is answered by its declared backing
+under its arguments, and an alias is always followed to its backing. No
+inhabitedness query identifies a builtin type by name, origin, or declaring
+statement, so a user type or alias named `U8` is an ordinary type. The types
+the compiler implements therefore declare a backing that states whether they
+have values. Numbers, `Str`, `List`, and the SIMD vectors declare the one-tag
+backing `[ProvidedByCompiler]`, which is inhabited whatever their arguments
+are: the empty list exists for every item type. `Dict` and `Set` are inhabited
+through their Roc backings, whose entries are a `List`. `Box(item)` declares
+`[ProvidedByCompiler(item)]`: a box holds exactly one item, so it has a value
+exactly when `item` does, as a user wrapper `Wrapped(a) := [W(a)]` does.
+`Try(Str, Box([]))` therefore needs no `Err` branch, and an `Err` branch on it
+is unmatchable. The known-absent-payload query reads the same declaration, so
+the `_` of an absent constructor's `Box(_)` payload closes to `[]` as the `_`
+of any other wrapper's payload does: `x : Try(Str, Box(_))` defined as
+`Ok("a")` has the type `Try(Str, Box([]))`. Nothing constructs or matches a
+`ProvidedByCompiler` tag; post-check stages take these types' representations
+from the compiler, not from the declaration, and Monotype's own
+uninhabitedness proof treats a box as uninhabited exactly when its payload is.
 Exact known-empty identities are false. An unconditional witness, such as a
 zero-argument tag, may prune other disjunction dependencies, but a provisional
 cycle answer cannot.

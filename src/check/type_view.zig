@@ -32,6 +32,10 @@ dependencies: collections.DenseMapUnmanaged(types.NominalDecl.Idx, *Dependencies
 /// The backing of the nominal type each root holds, by root, as
 /// `openNominalBackingOf` answered it: `no_view` for an invalid declaration.
 opened: collections.DenseMapUnmanaged(Var, Var) = .empty,
+/// The backing of each valid declaration that takes no arguments, as
+/// `openNominalBacking` answered it: every application of such a declaration
+/// opens to the same view.
+argless_backings: collections.DenseMapUnmanaged(types.NominalDecl.Idx, Var) = .empty,
 /// Where the graphs of final declarations live across readers, if anywhere.
 shared: ?Shared = null,
 argument_scratch: std.ArrayList(Var) = .empty,
@@ -196,6 +200,7 @@ pub fn deinit(self: *Self) void {
     self.environment_index.deinit(self.gpa);
     self.dependencies.deinit(self.gpa);
     self.opened.deinit(self.gpa);
+    self.argless_backings.deinit(self.gpa);
     self.nodes.deinit(self.gpa);
     self.scopes.deinit(self.gpa);
     self.argument_scratch.deinit(self.gpa);
@@ -273,9 +278,23 @@ pub fn openNominalBacking(self: *Self, nominal: types.NominalType) Allocator.Err
         @panic("type view referenced a missing nominal declaration");
     const decl = self.source.getNominalDecl(declaration);
     if (!decl.isValid()) return null;
-    const dependencies = try self.ensureDependencies(declaration);
     const args = self.sliceNominalArgs(nominal);
     std.debug.assert(args.len == decl.formals.count);
+    if (args.len == 0) {
+        if (self.argless_backings.get(declaration)) |backing| {
+            if (std.debug.runtime_safety) std.debug.assert(try self.viewBacking(declaration, args) == backing);
+            return backing;
+        }
+        const backing = try self.viewBacking(declaration, args);
+        try self.argless_backings.put(self.gpa, declaration, backing);
+        return backing;
+    }
+    return try self.viewBacking(declaration, args);
+}
+
+/// The view of a valid declaration's backing under `args`.
+fn viewBacking(self: *Self, declaration: types.NominalDecl.Idx, args: []const Var) Allocator.Error!Var {
+    const dependencies = try self.ensureDependencies(declaration);
     try self.argument_scratch.resize(self.gpa, args.len);
     const canonical = self.argument_scratch.items;
     for (args, canonical) |arg, *dest| dest.* = self.root(arg);
