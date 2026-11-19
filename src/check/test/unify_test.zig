@@ -527,6 +527,70 @@ test "unify - a shared tag is pattern-only only when both rows' tags are" {
     }
 }
 
+/// Whether the store journals `part` as keeping its own entry for the
+/// pattern-only tag `name` that `root`'s row holds a copy of.
+fn journalsPatternOnlyTagCopy(env: *TestEnv, part: Var, root: Var, name: []const u8) std.mem.Allocator.Error!bool {
+    const ident = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text(name));
+    const store = &env.module_env.types;
+    for (store.pattern_only_tag_copies.items) |copy| {
+        if (!copy.name.eql(ident)) continue;
+        if (store.resolveVar(copy.part).var_ != store.resolveVar(part).var_) continue;
+        if (store.resolveVar(copy.root).var_ == store.resolveVar(root).var_) return true;
+    }
+    return false;
+}
+
+test "issue 13105: a producer met through a shared row extension is journaled for the extension's own entry" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const store = &env.module_env.types;
+    var gone = try env.mkTag("Gone", &.{});
+    gone.pattern_only = true;
+    const errors = try store.freshFromContent((try env.mkTagUnionOpen(&.{gone})).content);
+    const requirement = try store.freshFromContent((try env.mkTagUnion(&.{try env.mkTag("Bad", &.{})}, errors)).content);
+    const result = try store.freshFromContent((try env.mkTagUnion(&.{try env.mkTag("Bad", &.{})}, errors)).content);
+    const declared = try store.freshFromContent((try env.mkTagUnionOpen(&.{ try env.mkTag("Bad", &.{}), try env.mkTag("Gone", &.{}) })).content);
+
+    try std.testing.expectEqual(.unified, try env.unify(requirement, declared));
+    // The merged row holds a produced `Gone`. The extension `result` shares
+    // keeps its own marked entry, journaled as the same tag.
+    try std.testing.expect(!try rowTagPatternOnly(&env, requirement, "Gone"));
+    try std.testing.expect(try rowTagPatternOnly(&env, result, "Gone"));
+    try std.testing.expect(try journalsPatternOnlyTagCopy(&env, errors, requirement, "Gone"));
+}
+
+test "unify - both rows' unique pattern-only tags are journaled against the part each extension becomes" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const store = &env.module_env.types;
+    var gone = try env.mkTag("Gone", &.{});
+    gone.pattern_only = true;
+    const a_ext = try store.freshFromContent(.{ .flex = types_mod.Flex.init() });
+    const b_ext = try store.freshFromContent(.{ .flex = types_mod.Flex.init() });
+    const a = try store.freshFromContent((try env.mkTagUnion(&.{gone}, a_ext)).content);
+    const b = try store.freshFromContent((try env.mkTagUnion(&.{try env.mkTag("Bad", &.{})}, b_ext)).content);
+
+    try std.testing.expectEqual(.unified, try env.unify(a, b));
+    try std.testing.expect(try rowTagPatternOnly(&env, a, "Gone"));
+    try std.testing.expect(try rowTagPatternOnly(&env, b_ext, "Gone"));
+    try std.testing.expect(try journalsPatternOnlyTagCopy(&env, b_ext, a, "Gone"));
+}
+
+test "unify - a pattern-only tag meeting a produced tag in an extension journals no copy" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const store = &env.module_env.types;
+    const errors = try store.freshFromContent((try env.mkTagUnionOpen(&.{try env.mkTag("Gone", &.{})})).content);
+    const requirement = try store.freshFromContent((try env.mkTagUnion(&.{try env.mkTag("Bad", &.{})}, errors)).content);
+    var marked_gone = try env.mkTag("Gone", &.{});
+    marked_gone.pattern_only = true;
+    const pattern = try store.freshFromContent((try env.mkTagUnionOpen(&.{marked_gone})).content);
+
+    try std.testing.expectEqual(.unified, try env.unify(pattern, requirement));
+    try std.testing.expect(!try rowTagPatternOnly(&env, pattern, "Gone"));
+    try std.testing.expectEqual(0, store.pattern_only_tag_copies.items.len);
+}
+
 test "unify - a tag repeated along one row's chain is pattern-only only when every occurrence is" {
     for ([_][2]bool{ .{ true, true }, .{ true, false }, .{ false, true } }) |marks| {
         var env = try TestEnv.init(std.testing.allocator);

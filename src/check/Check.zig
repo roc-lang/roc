@@ -22535,12 +22535,16 @@ fn isCompileTimeExecutableRootDef(self: *const Self, def_idx: CIR.Def.Idx) bool 
 /// module.
 fn setupCheckOrder(self: *Self) std.mem.Allocator.Error!void {
     if (self.check_order != null) return;
-    self.check_order = try DependencyGraph.computeCheckOrder(self.cir, self.cir.all_defs, self.gpa);
+    const associated_targets: DependencyGraph.AssociatedLocalTargets = .{
+        .context = self,
+        .top_level_def = associatedLocalTopLevelDef,
+    };
+    self.check_order = try DependencyGraph.computeCheckOrder(self.cir, self.cir.all_defs, associated_targets, self.gpa);
     // A rejected definition no longer references anything, so the groups
     // its references formed are recomputed without it.
     if (try self.rejectUncheckedStrictValueCycles()) {
         self.check_order.?.deinit();
-        self.check_order = try DependencyGraph.computeCheckOrder(self.cir, self.cir.all_defs, self.gpa);
+        self.check_order = try DependencyGraph.computeCheckOrder(self.cir, self.cir.all_defs, associated_targets, self.gpa);
     }
     const sccs = self.check_order.?.sccs;
     try self.group_states.appendNTimes(self.gpa, .pending, sccs.len);
@@ -26966,15 +26970,25 @@ fn reportPatternOnlyMatchTags(self: *Self) std.mem.Allocator.Error!void {
 
     var candidates: std.ArrayListUnmanaged(PatternOnlyCandidate) = .empty;
     defer candidates.deinit(self.gpa);
+    var copies: PatternOnlyTagCopyGroups = .{};
+    defer copies.deinit(self.gpa);
+    var copies_grouped = false;
     for (self.match_tag_patterns.items) |record| {
         if (self.matchHadTypeError(record.alternative.match_expr)) continue;
         const tag_name = self.cir.store.getPattern(record.pattern).applied_tag.name;
         const found = self.findRowTag(ModuleEnv.varFrom(record.pattern), tag_name) orelse continue;
         if (!found.pattern_only) continue;
+        // The mark read above is one stored entry's. A producer may have met
+        // another entry for the same tag instead.
+        if (!copies_grouped) {
+            try self.groupPatternOnlyTagCopies(&copies);
+            copies_grouped = true;
+        }
+        if (copies.produced(found.row_part, tag_name)) continue;
         // A row no producer gave any tag is the type of a value the module
         // never produces at all, such as a stub's result. No single pattern
         // of its match is the mistaken one.
-        if (!self.rowHasProducedTag(ModuleEnv.varFrom(record.pattern))) continue;
+        if (!self.rowHasProducedTag(ModuleEnv.varFrom(record.pattern), &copies)) continue;
         try candidates.append(self.gpa, .{ .record = record, .tag = tag_name, .row_part = found.row_part });
     }
     if (candidates.items.len == 0) return;
@@ -27068,17 +27082,87 @@ fn uselessMatchPartReported(self: *const Self, match_expr: CIR.Expr.Idx, branch_
     return self.useless_match_parts.contains(.{ .match_expr = match_expr, .branch_index = branch_index, .part = part });
 }
 
-/// Whether the tag row `var_` resolves to lists a tag that is not
-/// pattern-only.
-fn rowHasProducedTag(self: *const Self, var_: Var) bool {
+/// The stored entries of pattern-only tags that the unifier's journal of
+/// copies (`Store.pattern_only_tag_copies`) says are one tag, grouped, with
+/// whether any entry of each group is no longer pattern-only (design.md
+/// "Pattern-Only Tags"). An entry is named by the row part that lists it.
+const PatternOnlyTagCopyGroups = struct {
+    entries: std.AutoHashMapUnmanaged(Entry, u32) = .empty,
+    /// Each entry's parent in its group's tree; a group's root is its own.
+    parents: std.ArrayListUnmanaged(u32) = .empty,
+    /// At a group's root, whether a producer gave the tag to any entry.
+    any_produced: std.ArrayListUnmanaged(bool) = .empty,
+
+    const Entry = struct { row_part: Var, name: u32 };
+
+    fn deinit(self: *PatternOnlyTagCopyGroups, gpa: Allocator) void {
+        self.entries.deinit(gpa);
+        self.parents.deinit(gpa);
+        self.any_produced.deinit(gpa);
+    }
+
+    fn root(self: *PatternOnlyTagCopyGroups, entry: u32) u32 {
+        var current = entry;
+        while (self.parents.items[current] != current) {
+            const parent = self.parents.items[current];
+            self.parents.items[current] = self.parents.items[parent];
+            current = parent;
+        }
+        return current;
+    }
+
+    fn entryOf(self: *PatternOnlyTagCopyGroups, gpa: Allocator, found: FoundRowTag, name: Ident.Idx) Allocator.Error!u32 {
+        const slot = try self.entries.getOrPut(gpa, .{ .row_part = found.row_part, .name = @bitCast(name) });
+        if (!slot.found_existing) {
+            slot.value_ptr.* = @intCast(self.parents.items.len);
+            try self.parents.append(gpa, slot.value_ptr.*);
+            try self.any_produced.append(gpa, !found.pattern_only);
+        }
+        return slot.value_ptr.*;
+    }
+
+    fn join(self: *PatternOnlyTagCopyGroups, a: u32, b: u32) void {
+        const a_root = self.root(a);
+        const b_root = self.root(b);
+        if (a_root == b_root) return;
+        self.parents.items[b_root] = a_root;
+        self.any_produced.items[a_root] = self.any_produced.items[a_root] or self.any_produced.items[b_root];
+    }
+
+    /// Whether a producer gave the tag `name` to an entry journaled as the
+    /// same tag as the one `row_part` lists.
+    fn produced(self: *PatternOnlyTagCopyGroups, row_part: Var, name: Ident.Idx) bool {
+        const entry = self.entries.get(.{ .row_part = row_part, .name = @bitCast(name) }) orelse return false;
+        return self.any_produced.items[self.root(entry)];
+    }
+};
+
+/// Group the entries the unifier journaled as copies of one pattern-only tag.
+/// Each journaled copy names two rows that list the tag; the entry each row
+/// lists now is where a later producer's effect on it is stored. A copy one
+/// of whose rows was rejected since names no entry there.
+fn groupPatternOnlyTagCopies(self: *Self, groups: *PatternOnlyTagCopyGroups) std.mem.Allocator.Error!void {
+    for (self.types.pattern_only_tag_copies.items) |copy| {
+        const part = self.rowTagOccurrence(copy.part, copy.name) orelse continue;
+        const merged = self.rowTagOccurrence(copy.root, copy.name) orelse continue;
+        const part_entry = try groups.entryOf(self.gpa, part, copy.name);
+        const merged_entry = try groups.entryOf(self.gpa, merged, copy.name);
+        groups.join(part_entry, merged_entry);
+    }
+}
+
+/// Whether the tag row `var_` resolves to lists a tag a producer gave it: one
+/// that is not pattern-only, or one `copies` groups with such an entry.
+fn rowHasProducedTag(self: *const Self, var_: Var, copies: *PatternOnlyTagCopyGroups) bool {
     var current = self.types.resolveThroughAliases(var_);
     var guard = types_mod.debug.IterationGuard.init("rowHasProducedTag");
     while (true) {
         guard.tick();
         if (current.desc.content != .structure or current.desc.content.structure != .tag_union) return false;
         const tag_union = current.desc.content.structure.tag_union;
-        for (self.types.getTagsSlice(tag_union.tags).items(.pattern_only)) |pattern_only| {
-            if (!pattern_only) return true;
+        const tags = self.types.getTagsSlice(tag_union.tags);
+        for (tags.items(.name), tags.items(.pattern_only)) |name, pattern_only| {
+            if (!pattern_only or copies.produced(current.var_, name)) return true;
         }
         current = self.types.resolveThroughAliases(tag_union.ext);
     }
@@ -27094,9 +27178,17 @@ const FoundRowTag = struct {
 /// or null when `var_` is not a structural tag row (a nominal type, or an
 /// erroneous one). A recorded tag pattern's own tag is always in its row.
 fn findRowTag(self: *const Self, var_: Var, tag_name: Ident.Idx) ?FoundRowTag {
+    const row = self.types.resolveThroughAliases(var_);
+    if (row.desc.content != .structure or row.desc.content.structure != .tag_union) return null;
+    return self.rowTagOccurrence(var_, tag_name) orelse
+        base.invariant("type checker invariant violated: a match tag pattern's row does not list its tag", .{});
+}
+
+/// The first occurrence of `tag_name` along the tag row `var_` resolves to,
+/// or null when the row does not list it.
+fn rowTagOccurrence(self: *const Self, var_: Var, tag_name: Ident.Idx) ?FoundRowTag {
     var current = self.types.resolveThroughAliases(var_);
-    if (current.desc.content != .structure or current.desc.content.structure != .tag_union) return null;
-    var guard = types_mod.debug.IterationGuard.init("findRowTag");
+    var guard = types_mod.debug.IterationGuard.init("rowTagOccurrence");
     while (true) {
         guard.tick();
         switch (current.desc.content) {
@@ -27108,12 +27200,11 @@ fn findRowTag(self: *const Self, var_: Var, tag_name: Ident.Idx) ?FoundRowTag {
                     }
                     current = self.types.resolveThroughAliases(tag_union.ext);
                 },
-                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => break,
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return null,
             },
-            .flex, .rigid, .field_presence, .err, .alias => break,
+            .flex, .rigid, .field_presence, .err, .alias => return null,
         }
     }
-    base.invariant("type checker invariant violated: a match tag pattern's row does not list its tag", .{});
 }
 
 /// Collect in `var_set` every type reachable from a value the module does not
@@ -40815,10 +40906,28 @@ fn checkAssociatedLookup(
     );
 }
 
-/// Returns true when the lookup's target is a method declared in a function
-/// body. That method is a local binding, so the lookup is rewritten to the
-/// same local lookup naming the method through its own type produces, and
-/// the caller checks it as one.
+/// The top-level def of this module an associated lookup through a local type
+/// declaration names, for the check order's name-reference graph
+/// (`DependencyGraph.AssociatedLocalTargets`). Type declarations are generated
+/// before the check order is computed, and the resolution is cached for the
+/// lookup's own check.
+fn associatedLocalTopLevelDef(
+    context: *anyopaque,
+    lookup: @FieldType(CIR.Expr, "e_lookup_associated_local"),
+) Allocator.Error!?CIR.Def.Idx {
+    const self: *Self = @ptrCast(@alignCast(context));
+    const owner_var: Var = @fromBackingInt(@intCast(lookup.type_node_idx));
+    const resolution = (try self.resolveAssociatedLookup(owner_var, lookup.item_ident)) orelse return null;
+    if (!resolution.target.is_this_module) return null;
+    if (self.cir.store.nodes.get(resolution.target.binding.type_node_idx).tag != .def) return null;
+    return resolution.target.binding.def_idx;
+}
+
+/// Returns true when the lookup's target is a binding of this module: a
+/// top-level def, or a method declared in a function body. The lookup is
+/// rewritten to the same local lookup naming the binding through its own type
+/// produces, and the caller checks it as one, so a reference through an alias
+/// follows the binding's checking status exactly as that name does.
 fn checkLocalAssociatedLookup(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
@@ -40830,10 +40939,17 @@ fn checkLocalAssociatedLookup(
     try self.noteTypeDeclReferenceForLocalProcedures(@fromBackingInt(@intCast(lookup.type_node_idx)));
     const owner_var: Var = @fromBackingInt(@intCast(lookup.type_node_idx));
     if (try self.resolveAssociatedLookup(owner_var, lookup.item_ident)) |resolution| {
-        const target_node_idx = resolution.target.binding.type_node_idx;
-        if (resolution.target.is_this_module and self.cir.store.nodes.get(target_node_idx).tag == .statement_decl) {
-            const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(@backingInt(target_node_idx)));
-            self.cir.store.replaceExprWithLocalLookup(expr_idx, self.cir.store.getStatement(statement).s_decl.pattern);
+        if (resolution.target.is_this_module) {
+            const target_node_idx = resolution.target.binding.type_node_idx;
+            const target_tag = self.cir.store.nodes.get(target_node_idx).tag;
+            const pattern = if (target_tag == .def)
+                self.cir.store.getDef(resolution.target.binding.def_idx).pattern
+            else decl: {
+                std.debug.assert(target_tag == .statement_decl);
+                const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(@backingInt(target_node_idx)));
+                break :decl self.cir.store.getStatement(statement).s_decl.pattern;
+            };
+            self.cir.store.replaceExprWithLocalLookup(expr_idx, pattern);
             return true;
         }
     }
@@ -41070,24 +41186,17 @@ test "issue 11214 - hoisted associated lookup preserves ownership when both indi
     const main_def = module.store.getDef(defs[defs.len - 1]);
     const body = module.store.getExpr(main_def.expr).e_lambda.body;
     const callee = module.store.getExpr(body).e_call.func;
-    const lookup = module.store.getExpr(callee).e_lookup_associated_resolved;
+    const lookup = module.store.getExpr(callee).e_lookup_local;
 
-    // Both stores have the same structure, but their self identities name
-    // different modules. The buggy lookup can read a real def in Root without
-    // any bounds failure, so assert the target owner as well as the def index.
-    try std.testing.expectEqual(module.selfModuleIdentity(), lookup.module_identity);
-    try std.testing.expectEqual(root.module_env.selfModuleIdentity(), lookup.module_identity);
-    try std.testing.expect(!base.ModuleIdentity.eql(
-        module.moduleIdentityHash(lookup.module_identity),
-        root.module_env.moduleIdentityHash(lookup.module_identity),
-    ));
-    const imported_def = module.store.getDef(lookup.target_def_idx);
-    const root_def = root.module_env.store.getDef(lookup.target_def_idx);
-    try std.testing.expectEqual(imported_def.expr, root_def.expr);
-
+    // Both stores have the same structure, so the lookup's indices name a
+    // real def in Root as well, without any bounds failure. Assert the target
+    // owner as well as the def.
     const target = (try root.checker.hoistedCallableDefForExpr(module, callee)).?;
     try std.testing.expectEqual(@as(*const ModuleEnv, module), target.module);
-    try std.testing.expectEqual(lookup.target_def_idx, target.def);
+    const imported_def = module.store.getDef(target.def);
+    const root_def = root.module_env.store.getDef(target.def);
+    try std.testing.expectEqual(lookup.pattern_idx, imported_def.pattern);
+    try std.testing.expectEqual(imported_def.expr, root_def.expr);
 }
 
 /// Copy a variable from another module into this module

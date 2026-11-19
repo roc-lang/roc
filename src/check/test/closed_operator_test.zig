@@ -21,8 +21,8 @@ fn countsFor(comptime header: []const u8, comptime item: []const u8, comptime fo
         try std.testing.expectEqual(.builtin_direct, plan.dispatchResolution());
     }
     return .{
-        .constraints = env.checker.types.static_dispatch_constraints.len(),
-        .descriptors = env.checker.types.descs.backing.len(),
+        .constraints = @intCast(env.checker.types.static_dispatch_constraints.len()),
+        .descriptors = @intCast(env.checker.types.descs.backing.len()),
     };
 }
 

@@ -134,7 +134,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     var parsed: HostPrelink.Executable.Parsed = undefined;
     const exe = parsed.parse(host.host()) catch unreachable; // the host record was admitted only after these headers parsed
     const arm64 = exe.machine == HostPrelink.IMAGE_FILE_MACHINE_ARM64;
-    const entry_size: u64 = if (arm64) 8 else 12;
+    const entry_size: usize = if (arm64) 8 else 12;
     const reached_atoms = try gpa.alloc([]const bool, images.items.len);
     defer gpa.free(reached_atoms);
     for (walk.states, reached_atoms) |state, *atoms| atoms.* = if (state) |placed| placed.atoms else &.{};
@@ -359,7 +359,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         for (order.items) |index| gpa.free(symbol_slots[index]);
         gpa.free(symbol_slots);
     }
-    const host_strtab = host.host()[host.trailer.sections_end + exe.symbol_count * symbol_size ..];
+    const host_strtab = host.host()[@intCast(host.trailer.sections_end + exe.symbol_count * symbol_size)..];
     var app_symbol_count: u64 = 0;
     var app_strings: u64 = 0;
     for (order.items) |index| {
