@@ -1659,13 +1659,11 @@ pub const FunctionObjectSource = struct {
 /// thread.
 pub const BoxyObjectSource = struct {
     context: *anyopaque,
-    /// Whether the object of every module of `module`'s import closure is
-    /// known, built or restored, or known not to exist. Asks for the ones
-    /// not yet asked for.
+    /// Whether the imports' objects are available, or an import is known
+    /// to have none. Asks for the ones not yet asked for.
     ready: *const fn (context: *anyopaque, module: *const checked.CheckedModuleArtifact) FinalizeError!bool,
     /// The objects of `module`'s import closure, which `ready` reported
-    /// known. Null when an import has no object of its own: a platform
-    /// module with requirements belongs to its app's program.
+    /// known. Null when an import has no standalone object in this compilation.
     objects: *const fn (context: *anyopaque, module: *const checked.CheckedModuleArtifact) FinalizeError!?BoxyObjectSet,
     functions: *const fn (context: *anyopaque, module: *const checked.CheckedModuleArtifact) FinalizeError!?FunctionObjectSource,
     /// Every compile-time root of `module` is complete, so its object can

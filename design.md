@@ -19581,8 +19581,12 @@ the objects of such a module's import closure the moment the module is
 type-checked, and the units of those that can have an object build while
 checking continues. The evaluation asks for them again, for every such module,
 before it completes the value-form roots and builds the root graph, which
-matters after the scheduler starts over under the link's names. Each unit lowers once its imports' units are
-done, since its calls compile against their export interfaces, and the units
+matters after the scheduler starts over under the link's names. Each unit lowers
+only once its imports have standalone objects, since its calls compile against
+their export interfaces. If an import cannot have an object in this compilation
+(for example, a hosted declaration without its platform), neither can its
+importers. Programs evaluating roots against such imports use shared lowering;
+they still wait for every checked value they read. Independent units
 run on the post-check executor alongside checking, the other units, and the
 evaluations of other modules. The evaluations run the same way: a module's
 program is lowered and compiled as its own task of the scheduler's session once
