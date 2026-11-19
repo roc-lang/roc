@@ -14963,7 +14963,6 @@ const Builder = struct {
             while (def_index < body_draft.defs.items.len) : (def_index += 1) {
                 switch (body_draft.defs.items[def_index].body) {
                     .roc => |body| try ctx.resequenceBody(body),
-                    .hosted => {},
                 }
             }
             var nested_index: usize = 0;
@@ -14979,7 +14978,6 @@ const Builder = struct {
         while (def_index < body_draft.defs.items.len) : (def_index += 1) {
             switch (body_draft.defs.items[def_index].body) {
                 .roc => |body| try ctx.scopeBodyInPlace(body),
-                .hosted => {},
             }
         }
         var nested_index: usize = 0;
@@ -17499,7 +17497,6 @@ const DraftStmt = union(enum(u8)) {
 
 const DraftFnBody = union(enum(u8)) {
     roc: DraftExprId,
-    hosted,
 };
 
 const DraftDef = struct {
@@ -22070,9 +22067,6 @@ const FinalIdOffsets = struct {
     fn fnBody(self: FinalIdOffsets, body: DraftFnBody) Ast.FnBody {
         return switch (body) {
             .roc => |body_expr| .{ .roc = self.expr(body_expr) },
-            // Hosted definitions are completed on the program directly, with
-            // their signature variable occurrences, never through a draft.
-            .hosted => Common.invariant("hosted definition reached a body draft commit"),
         };
     }
 
