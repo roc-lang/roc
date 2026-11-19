@@ -27258,7 +27258,14 @@ const NominalRowReach = struct {
         self.seen.clearRetainingCapacity();
         try self.push(declaration.backing, .reached);
         while (self.pending.pop()) |step| {
-            if (std.mem.findScalar(CheckedTypeId, formals, step.ty)) |formal| {
+            var formal_match: ?usize = null;
+            for (formals, 0..) |formal_ty, formal_index| {
+                if (formal_ty == step.ty) {
+                    formal_match = formal_index;
+                    break;
+                }
+            }
+            if (formal_match) |formal| {
                 switch (step.position) {
                     .reached => self.marks.items[formal].reached = true,
                     .outside => self.marks.items[formal].outside = true,
@@ -27667,7 +27674,7 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
         const formal = declaration.formalArgs(&self.types)[formal_index];
         var reached: std.ArrayList(CheckedTypeId) = .empty;
         defer reached.deinit(allocator);
-        var reached_seen: std.AutoHashMapUnmanaged(CheckedTypeId, void) = .empty;
+        var reached_seen: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty;
         defer reached_seen.deinit(allocator);
         var found = false;
         try reached.append(allocator, declaration.backing);
@@ -27705,11 +27712,11 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
         const allocator = self.allocator;
         var declarations: std.ArrayList(CheckedNominalDeclaration) = .empty;
         defer declarations.deinit(allocator);
-        var declarations_seen: std.AutoHashMapUnmanaged(CheckedNominalDeclarationId, void) = .empty;
+        var declarations_seen: collections.DenseMapUnmanaged(CheckedNominalDeclarationId, void) = .empty;
         defer declarations_seen.deinit(allocator);
         var types_pending: std.ArrayList(CheckedTypeId) = .empty;
         defer types_pending.deinit(allocator);
-        var types_seen: std.AutoHashMapUnmanaged(CheckedTypeId, void) = .empty;
+        var types_seen: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty;
         defer types_seen.deinit(allocator);
         try declarations.append(allocator, from);
         while (declarations.pop()) |declaration| {
@@ -41119,7 +41126,7 @@ test "sealed slots keep a variable in a nominal argument no conversion reaches" 
 }
 
 test "sealed slots never step through a named type's recursion" {
-    // `Tree(e) := [Leaf(e), Node(Tree(e))]`: converting a tree would rebuild
+    // `Tree(e) := [Leaf(e), Node(Tree(e))]`: converting a tree would copy
     // every node, so the argument is outside the reach.
     {
         var f = SealedSlotsFixture{};

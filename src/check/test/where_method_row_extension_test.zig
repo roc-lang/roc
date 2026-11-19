@@ -20,7 +20,7 @@ const types_source =
 
 /// Check `types_source ++ source` and require exactly the problems titled
 /// `titles`, errors and warnings, in order.
-fn expectProblems(comptime source: []const u8, titles: []const []const u8) !void {
+fn expectProblems(comptime source: []const u8, titles: []const []const u8) TestEnv.TestEnvError!void {
     var test_env = try TestEnv.init("Test", types_source ++ source);
     defer test_env.deinit();
     try test_env.assertTypeErrorTitles(titles);
@@ -29,7 +29,7 @@ fn expectProblems(comptime source: []const u8, titles: []const []const u8) !void
 /// `expectProblems` for a method row that `before` leaves unfinished, ended
 /// with a bare `..` and with a named `..others`: both spellings must give the
 /// same problems.
-fn expectBothSpellings(comptime before: []const u8, comptime after: []const u8, titles: []const []const u8) !void {
+fn expectBothSpellings(comptime before: []const u8, comptime after: []const u8, titles: []const []const u8) TestEnv.TestEnvError!void {
     try expectProblems(before ++ ", .." ++ after, titles);
     try expectProblems(before ++ ", ..others" ++ after, titles);
 }

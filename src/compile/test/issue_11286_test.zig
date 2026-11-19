@@ -96,8 +96,15 @@ const job_source =
     \\}
 ;
 
+const JobAppReportsError = compile_build.InitError ||
+    compile_build.BuildRootError ||
+    std.Io.Dir.WriteFileError ||
+    std.Io.Dir.RealPathFileAllocError ||
+    std.Io.Writer.Error ||
+    error{ TestUnexpectedResult, TestExpectedEqual };
+
 /// Write the `Job` platform beside `app_source` and return the app's path.
-fn writeJobApp(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, app: []const u8) ![:0]u8 {
+fn writeJobApp(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, app: []const u8) (std.Io.Dir.WriteFileError || std.Io.Dir.RealPathFileAllocError)![:0]u8 {
     try dir.writeFile(io, .{ .sub_path = "app.roc", .data = app });
     try dir.writeFile(io, .{ .sub_path = "platform.roc", .data = job_platform_source });
     try dir.writeFile(io, .{ .sub_path = "Job.roc", .data = job_source });
@@ -106,7 +113,7 @@ fn writeJobApp(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, app: []const
 
 /// Build the `Job` app `app` and expect exactly the reports titled `titles`,
 /// in order, the first of which contains every string of `contains`.
-fn expectJobAppReports(app: []const u8, titles: []const []const u8, contains: []const []const u8) !void {
+fn expectJobAppReports(app: []const u8, titles: []const []const u8, contains: []const []const u8) JobAppReportsError!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp_dir = std.testing.tmpDir(.{});

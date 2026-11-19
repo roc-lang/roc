@@ -15,7 +15,7 @@ const Verdict = enum { accepted, mismatch };
 
 /// Check `source` and require exactly the problems titled `titles`, errors
 /// and warnings, in order.
-fn expectProblems(source: []const u8, titles: []const []const u8) !void {
+fn expectProblems(source: []const u8, titles: []const []const u8) TestEnv.TestEnvError!void {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try test_env.assertTypeErrorTitles(titles);
@@ -23,7 +23,7 @@ fn expectProblems(source: []const u8, titles: []const []const u8) !void {
 
 /// Check `try_source` and `outcome_source` (after the `Outcome` declaration)
 /// and require `verdict` of both.
-fn expectTwins(verdict: Verdict, try_source: []const u8, comptime outcome_source: []const u8) !void {
+fn expectTwins(verdict: Verdict, try_source: []const u8, comptime outcome_source: []const u8) TestEnv.TestEnvError!void {
     const titles: []const []const u8 = switch (verdict) {
         .accepted => &.{},
         .mismatch => &.{"Type Mismatch"},
@@ -170,7 +170,7 @@ test "a closed value rebuilt tag by tag flows into a wider row" {
 }
 
 /// Check `source` and require no problem.
-fn expectAccepted(source: []const u8) !void {
+fn expectAccepted(source: []const u8) TestEnv.TestEnvError!void {
     try expectProblems(source, &.{});
 }
 
@@ -287,7 +287,7 @@ const where_types =
 
 /// Check `where_types ++ source` and require exactly the problems titled
 /// `titles`.
-fn expectWhereProblems(titles: []const []const u8, comptime source: []const u8) !void {
+fn expectWhereProblems(titles: []const []const u8, comptime source: []const u8) TestEnv.TestEnvError!void {
     try expectProblems(where_types ++ source, titles);
 }
 
