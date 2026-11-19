@@ -4987,8 +4987,9 @@ pub const InstGraph = struct {
     /// roots, so the roots alone determine the direction: the private side's
     /// root is generated-private evidence and the public side's is not. A
     /// public root may still hold generated-private types among its
-    /// arguments, as `Iter(() -> Iter(U8))` holds the produced iterator its
-    /// items return, and those arguments relate as the components they are.
+    /// arguments, as when an earlier selection already gave one of its
+    /// argument classes that argument's representation, and those arguments
+    /// relate as the components they are.
     /// Where neither root is generated-private, the private side holds a
     /// generated-private component and the public side holds none.
     fn isGeneratedPrivateSelectionDirection(self: *InstGraph, public_node: NodeId, private_node: NodeId) Allocator.Error!bool {
