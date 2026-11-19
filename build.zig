@@ -874,10 +874,9 @@ const TestSuiteRegistry = struct {
 };
 
 fn runHasArtifactArg(run: *Step.Run, artifact: *Step.Compile) bool {
-    for (run.argv.items) |arg| switch (arg) {
-        .artifact => |decorated| if (decorated.artifact == artifact) return true,
-        else => {},
-    };
+    for (run.argv.items) |arg| {
+        if (arg == .artifact and arg.artifact.artifact == artifact) return true;
+    }
     return false;
 }
 
