@@ -38,7 +38,17 @@ fn runCacheResult(run: *Step.Run) CacheResult {
             if (output == null) output = out.generated_file;
         },
         .passthru => passthru = true,
-        else => {},
+        .artifact,
+        .lazy_path,
+        .decorated_directory,
+        .file_content,
+        .bytes,
+        .enable_darling,
+        .enable_qemu,
+        .enable_rosetta,
+        .enable_wasmtime,
+        .enable_wine,
+        => {},
     };
     const captured = run.captured_stdout orelse run.captured_stderr;
     const has_side_effects = run.has_side_effects or passthru or switch (run.stdio) {

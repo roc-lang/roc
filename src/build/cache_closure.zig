@@ -19,6 +19,7 @@ const Allocator = std.mem.Allocator;
 const Cache = std.Build.Cache;
 const ManifestFile = Cache.Manifest.File;
 
+/// A cache entry or manifest name, as `std.Build.Cache` writes it.
 pub const HexDigest = Cache.HexDigest;
 
 /// The directories of a cache that hold entries a manifest can name.
@@ -29,6 +30,7 @@ pub const EntryKind = enum {
     c,
 };
 
+/// One entry directory of the local cache: `<kind>/<digest>`.
 pub const Entry = struct {
     kind: EntryKind,
     digest: HexDigest,
@@ -79,6 +81,7 @@ pub const Location = union(enum) {
     elsewhere,
 };
 
+/// Why a path in the local cache names no entry.
 pub const LocateError = error{
     /// A path in the local cache outside every entry, or in an entry
     /// directory whose name is not a digest.
@@ -178,6 +181,8 @@ fn readManifest(arena: Allocator, io: Io, manifest_dir: Io.Dir, name: HexDigest)
 /// produced each entry: final digest to manifest name.
 pub const ManifestIndex = std.AutoHashMapUnmanaged(HexDigest, HexDigest);
 
+/// Reads every manifest in `manifest_dir` and records which entry each one
+/// produced.
 pub fn indexManifests(arena: Allocator, io: Io, manifest_dir: Io.Dir) !ManifestIndex {
     var index: ManifestIndex = .empty;
     var it = manifest_dir.iterate();
@@ -194,6 +199,7 @@ pub fn indexManifests(arena: Allocator, io: Io, manifest_dir: Io.Dir) !ManifestI
     return index;
 }
 
+/// What `select` found that a set of root entries depends on.
 pub const Selection = struct {
     entries: std.AutoArrayHashMapUnmanaged(Entry, void) = .empty,
     /// Names of the manifests in `h`.
@@ -202,6 +208,7 @@ pub const Selection = struct {
     installed: std.StringArrayHashMapUnmanaged(void) = .empty,
 };
 
+/// Why `select` could not follow a root entry to what it depends on.
 pub const SelectError = error{
     /// A root entry that no manifest produced. Every root is the output of a
     /// cached step, whose lookup goes through its manifest.

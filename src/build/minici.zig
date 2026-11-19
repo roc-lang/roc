@@ -57,6 +57,7 @@ const Placement = enum {
     every_host,
 };
 
+/// One `zig build` step MiniCI runs, and how it runs it.
 pub const Job = struct {
     name: []const u8,
     kind: JobKind = .single,
@@ -125,12 +126,14 @@ pub const Host = enum {
 
     /// The host family this program was built for, or null for one CI has no
     /// shards on.
-    pub const current: ?Host = switch (builtin.os.tag) {
-        .linux => .linux,
-        .macos => .macos,
-        .windows => .windows,
-        else => null,
-    };
+    pub const current: ?Host = if (builtin.os.tag == .linux)
+        .linux
+    else if (builtin.os.tag == .macos)
+        .macos
+    else if (builtin.os.tag == .windows)
+        .windows
+    else
+        null;
 };
 
 /// One CI job's slice of MiniCI: the jobs in `selection` that `lane` runs.
@@ -170,6 +173,7 @@ pub const shards = [_]Shard{
     .{ .name = "windows-strategy", .host = .windows, .lane = .all, .selection = .{ .from = strategy_differential_job } },
 };
 
+/// The shard in `shards` named `name`, or null when none is.
 pub fn shardByName(name: []const u8) ?Shard {
     for (shards) |shard| {
         if (std.mem.eql(u8, shard.name, name)) return shard;
@@ -3132,7 +3136,7 @@ test "workflowProblems reports missing, duplicate and unknown shards" {
     try expectWorkflowProblems(text.items, 2);
 
     // A sharded workflow runs no whole lane and no MiniCI job by hand.
-    try text.appendSlice(std.testing.allocator, "run: zig build minici -- --minici-lane secondary\nrun: zig build run-test-cli\n");
+    try text.appendSlice(std.testing.allocator, "run: zig build minici --color off -Dembed-builtin-unit=true -- --minici-lane secondary\nrun: zig build run-test-cli\n");
     try expectWorkflowProblems(text.items, 4);
 }
 

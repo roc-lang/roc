@@ -108,7 +108,7 @@ fn configurationEntry(arena: std.mem.Allocator, io: Io, zig_exe: []const u8, opt
     const result = std.process.run(arena, io, .{ .argv = argv }) catch |err| fail("cannot run `{s} build`: {t}", .{ zig_exe, err });
     switch (result.term) {
         .exited => |code| if (code != 0) fail("`zig build --print-configuration-path` exited with {d}:\n{s}", .{ code, result.stderr }),
-        else => fail("`zig build --print-configuration-path` did not exit normally:\n{s}", .{result.stderr}),
+        .signal, .stopped, .unknown => fail("`zig build --print-configuration-path` did not exit normally:\n{s}", .{result.stderr}),
     }
     const path = std.mem.trim(u8, result.stdout, " \t\r\n");
     const entry = entryAt(path);
@@ -184,7 +184,7 @@ fn writeList(arena: std.mem.Allocator, io: Io, shard_name: []const u8, zig_exe: 
         } else fail("`{s}` is not a top-level build step", .{step});
         var indices = std.mem.tokenizeScalar(u8, cache_roots.top_level_outputs[index], ' ');
         while (indices.next()) |text| {
-            const output = std.fmt.parseInt(usize, text, 10) catch unreachable;
+            const output = std.fmt.parseInt(usize, text, 10) catch unreachable; // cache_roots.zig writes each index with `{d}`
             try roots.append(arena, entryAt(outputs[output]));
         }
         const missing = cache_roots.top_level_unaddressable[index];
@@ -251,6 +251,7 @@ fn writeList(arena: std.mem.Allocator, io: Io, shard_name: []const u8, zig_exe: 
     );
 }
 
+/// Runs the `shard` or `list` command described in `usage`.
 pub fn main(init: std.process.Init) !void {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_state.deinit();
