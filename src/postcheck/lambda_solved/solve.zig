@@ -1699,11 +1699,75 @@ const Solver = struct {
         const args = try self.program.types.addSpanSlots(arg_locals.len);
         for (arg_locals, args.slots) |arg, *slot| slot.* = self.localTy(arg.local);
 
-        return try self.program.types.add(.{ .func = .{
+        const fn_ty = try self.program.types.add(.{ .func = .{
             .args = args.span,
             .callable = callable,
             .ret = try self.lowerTypeFresh(fn_.ret),
         } });
+        switch (fn_.body) {
+            .roc => {},
+            .hosted => |vars| try self.relateSignatureVars(fn_ty, self.lifted.signatureVarSteps(vars)),
+        }
+        return fn_ty;
+    }
+
+    /// A hosted function has no body to carry values between its signature's
+    /// positions, so its producer lists the positions of each declaration
+    /// variable (`Mono.SignatureVarStep`) and they are unified here: a row
+    /// join or erasure reaching one reaches every other, as it would through
+    /// a body that returned the value it took. Registration runs before any
+    /// body is solved, so every position's content still has its Monotype's
+    /// children in order, which the child indices count.
+    fn relateSignatureVars(self: *Solver, fn_ty: Type.TypeVarId, steps: []const Lifted.SignatureVarStep) Allocator.Error!void {
+        if (steps.len == 0) return;
+        var class_vars = std.ArrayList(?Type.TypeVarId).empty;
+        defer class_vars.deinit(self.allocator);
+        var index: usize = 0;
+        while (index < steps.len) {
+            const class = switch (steps[index]) {
+                .occurrence => |class| class,
+                .child => Common.invariant("hosted signature variable path began without its occurrence"),
+            };
+            index += 1;
+            var position = fn_ty;
+            while (index < steps.len) : (index += 1) {
+                switch (steps[index]) {
+                    .occurrence => break,
+                    .child => |child| position = try self.signatureChild(position, child),
+                }
+            }
+            if (class >= class_vars.items.len) try class_vars.appendNTimes(self.allocator, null, class + 1 - class_vars.items.len);
+            if (class_vars.items[class]) |first| {
+                try self.unify(first, position);
+            } else {
+                class_vars.items[class] = position;
+            }
+        }
+    }
+
+    /// The child of `ty` at a `Mono.SignatureVarStep.child` index.
+    fn signatureChild(self: *Solver, ty: Type.TypeVarId, index: u32) Allocator.Error!Type.TypeVarId {
+        const types = &self.program.types;
+        switch (try self.resolvedContent(ty)) {
+            .func => |func| {
+                if (index < func.args.count()) return types.spanItem(func.args, index);
+                if (index == func.args.count()) return func.ret;
+            },
+            .list, .box => |elem| if (index == 0) return elem,
+            .record => |fields| if (index < fields.count()) return types.fieldItem(fields, index).ty,
+            .tuple => |items| if (index < items.count()) return types.spanItem(items, index),
+            .tag_union => |tags| {
+                var remaining = index;
+                for (0..tags.count()) |tag_index| {
+                    const payloads = types.tagItem(tags, tag_index).payloads;
+                    if (remaining < payloads.count()) return types.spanItem(payloads, remaining);
+                    remaining -= @intCast(payloads.count());
+                }
+            },
+            .named => |named| if (index < named.args.count()) return types.spanItem(named.args, index),
+            .link, .unbound, .primitive, .lambda_set, .erased, .zst, .hole, .mono => {},
+        }
+        Common.invariant("hosted signature variable path left its function type");
     }
 
     fn fnRetType(self: *Solver, fn_id: Lifted.FnId) Type.TypeVarId {

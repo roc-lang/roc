@@ -2687,7 +2687,7 @@ const Pass = struct {
                     .spec_constr_pattern = try patternDigest(self.program, spec.pattern),
                     .args = .empty(),
                     .captures = try self.copySpecCaptures(source_fn.captures),
-                    .body = .hosted,
+                    .body = .{ .hosted = .empty() },
                     .ret = source_fn.ret,
                 });
                 spec.fn_id = fn_id;
@@ -3203,7 +3203,7 @@ const Pass = struct {
             .signature = .none,
             .args = try program.addTypedLocalSpan(params),
             .captures = .empty(),
-            .body = .hosted,
+            .body = .{ .hosted = .empty() },
             .ret = ret_ty,
         });
         try self.copyProcDebugName(source_fn.symbol, symbol);
@@ -3541,7 +3541,7 @@ const Pass = struct {
             .signature = .none,
             .args = .empty(),
             .captures = try self.copySpecCaptures(source_fn.captures),
-            .body = .hosted,
+            .body = .{ .hosted = .empty() },
             .ret = source_fn.ret,
         });
         try self.plans[raw].specs.append(self.allocator, .{
@@ -13061,7 +13061,7 @@ const Cloner = struct {
             .signature = .none,
             .args = task.args_span,
             .captures = task.captures_span,
-            .body = .hosted,
+            .body = .{ .hosted = .empty() },
             .ret = source_fn.ret,
         });
         try self.pass.callable_workers.put(worker_key, task.worker_fn_id);
@@ -19556,7 +19556,7 @@ test "SpecConstr redirects a call to its most specific accepting worker" {
             .symbol = @fromBackingInt(@intCast(symbol)),
             .args = .empty(),
             .captures = .empty(),
-            .body = .hosted,
+            .body = .{ .hosted = .empty() },
             .ret = unit_ty,
         });
     }
@@ -20982,7 +20982,7 @@ fn testExitProducer(program: *Ast.Program, ty: Type.TypeId, symbol: u32) std.mem
         .symbol = @fromBackingInt(@intCast(symbol)),
         .args = .empty(),
         .captures = .empty(),
-        .body = .hosted,
+        .body = .{ .hosted = .empty() },
         .ret = ty,
     });
     return program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{ .callee = .{ .lifted = fn_id }, .args = .empty() } } });

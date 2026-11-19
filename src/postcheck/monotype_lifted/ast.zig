@@ -138,7 +138,7 @@ pub const Fn = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(Fn) == 572);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(Fn) == 576);
 }
 
 /// What a lifted function body contains, recorded by whoever emitted its
@@ -176,10 +176,14 @@ pub const FnShapes = packed struct(u8) {
 /// Source procedure names for runtime diagnostics, keyed by generated symbol.
 pub const ProcDebugNameMap = Mono.ProcDebugNameMap;
 
+/// See `Mono.SignatureVarStep`.
+pub const SignatureVarStep = Mono.SignatureVarStep;
+
 /// Body availability for a lifted function.
 pub const FnBody = union(enum) {
     roc: ExprId,
-    hosted,
+    /// See `Mono.FnBody.hosted`.
+    hosted: Span(SignatureVarStep),
 };
 
 /// Root request bound to a lifted function.
@@ -267,6 +271,7 @@ pub const ProgramView = struct {
     branches: []const Branch,
     if_branches: []const IfBranch,
     string_literals: []const Mono.StringLiteral,
+    signature_var_steps: []const SignatureVarStep,
     proc_debug_names: *const ProcDebugNameMap,
     roots: []const Root,
     literal_roots: []const LiteralRoot,
@@ -350,6 +355,10 @@ pub const ProgramView = struct {
 
     pub fn typedLocalSpan(self: ProgramView, span_: Span(TypedLocal)) []const TypedLocal {
         return self.typed_locals[span_.start..][0..span_.len];
+    }
+
+    pub fn signatureVarSteps(self: ProgramView, span_: Span(SignatureVarStep)) []const SignatureVarStep {
+        return self.signature_var_steps[span_.start..][0..span_.len];
     }
 
     pub fn captureOperandSpan(self: ProgramView, span_: Span(CaptureOperand)) []const CaptureOperand {
@@ -480,6 +489,8 @@ pub const Program = struct {
     branches: ProgramList(Branch, "branches"),
     if_branches: ProgramList(IfBranch, "if_branches"),
     string_literals: ProgramList(Mono.StringLiteral, "string_literals"),
+    /// Backing pool for `FnBody.hosted` spans, moved from Monotype.
+    signature_var_steps: ProgramList(SignatureVarStep, "signature_var_steps") = .empty,
     proc_debug_names: ProcDebugNameMap,
     /// Next generated `CaptureId` index for a lift-synthesized capturable local.
     next_lift_capture_id: u32,
@@ -798,6 +809,7 @@ pub const Program = struct {
         self.proc_debug_names.deinit();
         for (self.string_literals.unsafeRawItemsForView()) |literal| literal.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
+        self.signature_var_steps.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
         self.branches.deinit(self.allocator);
         self.str_pattern_steps.deinit(self.allocator);
@@ -851,6 +863,7 @@ pub const Program = struct {
             .branches = self.branches.unsafeRawItemsForView(),
             .if_branches = self.if_branches.unsafeRawItemsForView(),
             .string_literals = self.string_literals.unsafeRawItemsForView(),
+            .signature_var_steps = self.signature_var_steps.unsafeRawItemsForView(),
             .proc_debug_names = &self.proc_debug_names,
             .roots = self.roots.unsafeRawItemsForView(),
             .literal_roots = self.literal_roots.unsafeRawItemsForView(),
@@ -2877,7 +2890,7 @@ fn addSourceDigestFn(
         .source = source,
         .args = Span(TypedLocal).empty(),
         .captures = Span(TypedLocal).empty(),
-        .body = .hosted,
+        .body = .{ .hosted = .empty() },
         .ret = ret_ty,
     });
 }
@@ -2970,7 +2983,7 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
         .spec_constr_pattern = testSourceDigestKey(9),
         .args = Span(TypedLocal).empty(),
         .captures = Span(TypedLocal).empty(),
-        .body = .hosted,
+        .body = .{ .hosted = .empty() },
         .ret = ret_ty,
     });
     program.next_symbol = symbols.next;
@@ -3076,7 +3089,7 @@ test "binding groups are the reference graph's components, callee-first" {
         null,
     };
     for (bodies, fn_ids) |maybe_body, fn_id| {
-        const body: FnBody = if (maybe_body) |data| .{ .roc = try program.addExpr(.{ .ty = ret_ty, .data = data }) } else .hosted;
+        const body: FnBody = if (maybe_body) |data| .{ .roc = try program.addExpr(.{ .ty = ret_ty, .data = data }) } else .{ .hosted = .empty() };
         program.setFn(fn_id, .{
             .symbol = symbols.fresh(),
             .args = Span(TypedLocal).empty(),
