@@ -8133,6 +8133,22 @@ with that scope's retained evidence frame as the head. Scope labels alone
 cannot select evidence: depth/index references are relative to their owning
 frame, not to the innermost frame of the restored closure.
 
+A nested stored function restores in its own body, never in the body that
+requests it, in two steps. The first establishes the stored owner, the
+evidence frame topology, the capture bindings, and the restored lexical scope
+with its declaring-scope identity; a local-method edge of the stored evidence
+materializes there without a declaration context. The second resolves each
+such edge against that owner and scope (`resolveStoredLocalEdges`), checking
+its checked declaration anchor, before relation replay or the body reads the
+evidence. The split is required because resolving a restored declaration reads
+its declaring template's lexical evidence chain: the restored function's own
+chain, or the declaring template's chain stored after it. That stored chain
+materializes once per restoring body, and its own local-method edges resolve
+once the declaration that needed it is visible. Each declaration's context is
+created once per restoring body and shared by every edge naming it; it is
+never shared by declaration alone, since specializations of one declaration
+can differ in their captures.
+
 A block-local value binding whose own binders are referenced inside its
 expression is a recursive value. Canonicalization rejects an eager
 self-reference, so every such reference is delayed through a function in the
