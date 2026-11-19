@@ -10432,7 +10432,11 @@ field. Missing fields and `Null` are never conflated. These two shapes are
 format protocol: checking validates them against the format's methods without
 walking the `Try` backing, and Monotype and Boxy write only the `Ok` payload
 plus the format's null or missing-field condition. Any other `Try` is an
-ordinary tag union whose declared codec is derived from its backing.
+ordinary tag union whose declared codec is derived from its backing. Both
+shapes belong to the builtin `Try` alone: checking, Monotype and Boxy each
+recognize them by the builtin `Try` declaration, so a user nominal whose
+backing is `[Ok(ok), Err([Null])]` or `[Ok(ok), Err([Missing])]` is an
+ordinary tag union to its codec (`test/cli/DerivedCodecTryShapedUserNominal.roc`).
 
 JSON arrays are used for lists, tuples, and sets. Tuples parse with exact arity.
 Sets preserve `Set` insertion order and parse by inserting the array items.

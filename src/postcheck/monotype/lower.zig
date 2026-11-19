@@ -64308,7 +64308,11 @@ const BodyContext = struct {
         return added;
     }
 
+    /// The parts of a builtin `Try(ok, [Null])`, the format's nullable form.
+    /// Any other nominal, however its backing is shaped, is an ordinary tag
+    /// union to its codec.
     fn tryNullInfo(self: *BodyContext, ty: Type.TypeId) ?TryNullInfo {
+        if (!self.typeIsBuiltinTry(ty)) return null;
         const backing_ty = namedBackingType(self.typeStore(), ty) orelse return null;
         const ok_tag = self.monoTagByTextOptional(backing_ty, "Ok") orelse return null;
         const err_tag = self.monoTagByTextOptional(backing_ty, "Err") orelse return null;
