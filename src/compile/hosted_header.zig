@@ -26,21 +26,11 @@ pub const Plan = struct {
         const entries = ast.store.symbolMapEntrySlice(ast.store.getHeader(file.header).platform.hosted);
         if (entries.len == 0) return plan;
 
-        // Use only file-scope imports. A binding in a function cannot shadow
-        // a module name in the platform header.
-        var imports: std.AutoHashMapUnmanaged(u32, parse.AST.DeclIndex.Import) = .empty;
-        defer imports.deinit(gpa);
-        for (ast.decl_index.imports.items) |imp| try imports.put(gpa, imp.region.start, imp);
         const Target = struct { module: []const u8, nested: ?[]const u8 };
         var targets: std.StringHashMapUnmanaged(?Target) = .empty;
         defer targets.deinit(gpa);
-        for (ast.store.statementSlice(file.statements)) |stmt| {
-            const statement = ast.store.getStatement(stmt);
-            if (statement != .import) continue;
-            const i = statement.import;
-            const alias = i.alias_tok orelse i.target.lastToken();
-            const ident = ast.tokens.resolveIdentifier(alias) orelse continue;
-            const imp = imports.get(i.region.start) orelse continue;
+        for (ast.decl_index.imports.items) |imp| {
+            const ident = imp.file_binding orelse continue;
             // Only this platform package's declarations undergo the hosted
             // transform; an external import cannot define its hosted worker.
             const module = if (imp.origin == .local) try discovery.resolveLocalImportLogicalPath(arena, "", .{

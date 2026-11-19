@@ -1279,8 +1279,12 @@ pub const BuildEnv = struct {
         // This neither checks nor adds the platform root to a module test.
         if (self.selected_platform_package_name) |platform_name| {
             coord.markPlatformPackage(platform_name);
-            const parsed = if (std.mem.eql(u8, platform_name, pkg_name)) self.discovered_root_parse else self.discovered_platform_parse;
-            if (parsed) |platform| coord.hosted_header = try @import("hosted_header.zig").Plan.init(self.gpa, platform.ast);
+            // A specialized compilation never schedules Boxy library units.
+            // Its hosted calls use the checked platform, not a library plan.
+            if (self.specialization_strategy == .boxy) {
+                const parsed = if (std.mem.eql(u8, platform_name, pkg_name)) self.discovered_root_parse else self.discovered_platform_parse;
+                if (parsed) |platform| coord.hosted_header = try @import("hosted_header.zig").Plan.init(self.gpa, platform.ast);
+            }
         }
         if (entry_is_only_root) {
             replaceDiscoveredParse(&self.discovered_root_parse, null);
@@ -3950,6 +3954,85 @@ test "BuildEnv coordinator initialization releases every failed allocation" {
             try env.initCoordinator();
         }
     }.run, .{&builtins});
+}
+
+test "hosted library slots agree with the checked platform for aliased nested targets" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDir(io, "platform", .default_dir);
+    try tmp.dir.writeFile(io, .{ .sub_path = "app.roc", .data =
+        \\app [main!] { pf: platform "./platform/main.roc" }
+        \\main! = || {}
+    });
+    try tmp.dir.writeFile(io, .{ .sub_path = "platform/Device.roc", .data =
+        \\Device := [].{
+        \\    number = |_| 42
+        \\    Port := [].{
+        \\        read! : {} => U8
+        \\    }
+        \\    write! : U8 => {}
+        \\}
+    });
+    const app = try tmp.dir.realPathFileAlloc(io, "app.roc", gpa);
+    defer gpa.free(app);
+    try tmp.dir.writeFile(io, .{ .sub_path = "Probe.roc", .data =
+        \\import pf.Device
+        \\expect Device.number({}) == 42
+    });
+    const probe = try tmp.dir.realPathFileAlloc(io, "Probe.roc", gpa);
+    defer gpa.free(probe);
+    const cwd = std.fs.path.dirname(app).?;
+    var builtins = try BuiltinModules.init(gpa, io);
+    defer builtins.deinit();
+
+    const read = "\"roc_in\": Driver.Port.read!";
+    const write = "\"roc_out\": Driver.write!";
+    for ([_][]const u8{ read ++ ", " ++ write, write ++ ", " ++ read }, 0..) |entries, pass| {
+        const platform = try std.fmt.allocPrint(gpa,
+            \\platform ""
+            \\    requires {{ main! : () => {{}} }}
+            \\    exposes [Driver as Device]
+            \\    packages {{}}
+            \\    provides {{ "roc_main": entry! }}
+            \\    hosted {{ {s} }}
+            \\
+            \\import Device as Driver
+            \\entry! = main!
+        , .{entries});
+        defer gpa.free(platform);
+        try tmp.dir.writeFile(io, .{ .sub_path = "platform/main.roc", .data = platform });
+        var env = BuildEnv.initBorrowingBuiltinModules(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, &builtins, .boxy);
+        defer env.deinit();
+        try env.discoverDependencies(app);
+        try env.compileDiscovered();
+        const coord = env.coordinator.?;
+        try std.testing.expect(!coord.hasUserErrors());
+        const pkg = coord.getPackage(env.selected_platform_package_name.?).?;
+        const device = pkg.getModule(pkg.getModuleId("Device").?).?.checkedArtifact().?;
+        const checked_platform = env.getPlatformSemanticData().?.checked_artifact.?;
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        defer arena.deinit();
+        const expected = try @import("boxy_unit.zig").checkedHostedBindings(arena.allocator(), device, check.CheckedArtifact.importedView(checked_platform));
+        var module_env = BuildEnv.initBorrowingBuiltinModules(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, &builtins, .boxy);
+        defer module_env.deinit();
+        module_env.setEntryClosureOnly(true);
+        try module_env.buildResolvingMain(probe, app);
+        const module_coord = module_env.coordinator.?;
+        try std.testing.expect(!module_coord.hasUserErrors());
+        try std.testing.expect(module_env.getPlatformSemanticData() == null);
+        const module_pkg = module_coord.getPackage(module_env.selected_platform_package_name.?).?;
+        const module_device = module_pkg.getModule(module_pkg.getModuleId("Device").?).?.checkedArtifact().?;
+        const actual = (try module_coord.libraryHostedBindings(module_device, arena.allocator())).?;
+        try std.testing.expectEqual(@as(usize, 2), expected.len);
+        try std.testing.expectEqual(expected.len, actual.len);
+        for (expected, actual, 0..) |canonical, slot, index| {
+            try std.testing.expectEqualStrings(if (pass == index) "roc_in" else "roc_out", slot.symbol);
+            try std.testing.expectEqual(index, slot.dispatch_index);
+            try std.testing.expectEqualDeep(canonical, slot);
+        }
+    }
 }
 
 test "BuildEnv collectWatchInputStates includes package root state" {
