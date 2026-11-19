@@ -2064,7 +2064,7 @@ const ArcPlanStep = struct {
     post_release: PlanSpan = .{},
 
     comptime {
-        std.debug.assert(@sizeOf(ArcPlanStep) == 184);
+        if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(ArcPlanStep) == 184);
     }
 
     fn reset(self: *ArcPlanStep, stmt: LIR.CFStmtId) void {
