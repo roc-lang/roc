@@ -1,0 +1,185 @@
+*** The task wake protocol under real thread interleavings.
+***
+*** One parent runs a combinator over two children (spawn both, then await
+*** each report). Children run on any idle host thread, append their report
+*** and wake the parent. Every rule is one atomic memory operation.
+***
+*** Three protocols:
+***   flag       the RFC as written: a wake that arrives while the task runs
+***              sets "woken", and a later park continues instead of parking.
+***   flagClear  flag, plus: a wait clears "woken" before it checks for reports.
+***   counted    the wake word counts undelivered reports; a wait consumes one;
+***              parking is a compare-and-swap that succeeds only at count 0,
+***              and a wake readies the task only if it was parked.
+***
+*** Error states: the parent resumed with nothing to deliver (err), resumed
+*** while not queued (R2), or a run that stops before the parent finishes (a
+*** lost wake: R1/R6).
+
+mod WAKE is
+  protecting NAT .
+  sorts Proto WState PC Conf .
+  ops flag flagClear counted : -> Proto [ctor] .
+  ops running parked woken queued : -> WState [ctor] .
+  op spawn : Nat -> PC [ctor] .
+  ops await check park resumed fin err : -> PC [ctor] .
+
+  op none : -> Conf [ctor] .
+  op __ : Conf Conf -> Conf [ctor assoc comm id: none] .
+  op proto : Proto -> Conf [ctor] .
+  --- parent: pc, wake state, reports appended and not consumed, reports still to come
+  op par : PC WState Nat Nat -> Conf [ctor] .
+  ops qp qc crun cfin cdone : -> Conf [ctor] .   --- host queue entries and child states
+  op idle : Nat -> Conf [ctor] .
+  ops readies parks : Nat -> Conf [ctor] .
+  op r2 : -> Conf [ctor] .                       --- resumed while not queued
+
+  vars R L T N K : Nat . var W : WState . var P : Proto . var PC : PC . var C : Conf .
+
+  --- the parent spawns its children (each is queued with the host)
+  rl [spawn] : par(spawn(s N), running, R, L) => par(spawn(N), running, R, L) qc .
+  rl [spawned] : par(spawn(0), running, R, L) => par(await, running, R, L) .
+
+  --- host threads run children
+  rl [run-child] : qc idle(s T) => crun idle(T) .
+  --- flag protocols: the report becomes visible, then a separate wake
+  crl [append] : proto(P) crun par(PC, W, R, L) => proto(P) cfin par(PC, W, s R, L) if P =/= counted .
+  crl [wake-parked] : proto(P) cfin par(PC, parked, R, L) readies(K) idle(T)
+                   => proto(P) cdone par(PC, queued, R, L) qp readies(s K) idle(s T) if P =/= counted .
+  crl [wake-running] : proto(P) cfin par(PC, running, R, L) idle(T)
+                    => proto(P) cdone par(PC, woken, R, L) idle(s T) if P =/= counted .
+  crl [wake-absorbed] : proto(P) cfin par(PC, W, R, L) idle(T) => proto(P) cdone par(PC, W, R, L) idle(s T)
+    if P =/= counted and (W == woken or W == queued) .
+  --- counted: the report's data is published first; then one atomic
+  --- increment of the wake word counts it and readies a parked task
+  rl [publish] : proto(counted) crun => proto(counted) cfin .
+  rl [wake-counted-parked] : proto(counted) cfin par(PC, parked, R, L) readies(K) idle(T)
+                          => proto(counted) cdone par(PC, queued, s R, L) qp readies(s K) idle(s T) .
+  crl [wake-counted] : proto(counted) cfin par(PC, W, R, L) idle(T)
+                    => proto(counted) cdone par(PC, W, s R, L) idle(s T) if W =/= parked .
+
+  --- a wait
+  crl [clear] : proto(flagClear) par(await, woken, R, L) => proto(flagClear) par(check, running, R, L)
+    if L =/= 0 .
+  crl [no-clear] : proto(P) par(await, W, R, L) => proto(P) par(check, W, R, L)
+    if L =/= 0 and (P =/= flagClear or W =/= woken) .
+  rl [consume] : par(check, W, s R, s L) => par(await, W, R, L) .
+  rl [nothing] : par(check, W, 0, L) => par(park, W, 0, L) .
+  rl [done] : par(await, W, R, 0) idle(T) => par(fin, W, R, 0) idle(s T) .
+
+  --- parking at the end of unwinding
+  crl [park] : proto(P) par(park, running, R, L) parks(K) idle(T)
+            => proto(P) par(resumed, parked, R, L) parks(s K) idle(s T) if P =/= counted .
+  rl [continue] : par(park, woken, R, L) => par(resumed, running, R, L) .
+  rl [park-cas] : proto(counted) par(park, running, 0, L) parks(K) idle(T)
+               => proto(counted) par(resumed, parked, 0, L) parks(s K) idle(s T) .
+  rl [park-cas-fails] : proto(counted) par(park, running, s R, L)
+                     => proto(counted) par(resumed, running, s R, L) .
+
+  --- the host resumes the parent
+  rl [resume] : qp par(resumed, queued, R, L) idle(s T) => par(resumed, running, R, L) idle(T) .
+  crl [resume-bad] : qp par(PC, W, R, L) => r2 par(PC, W, R, L) if W =/= queued .
+
+  --- a resumed wait takes its report
+  rl [deliver] : par(resumed, running, s R, s L) => par(await, running, R, L) .
+  rl [nothing-to-deliver] : par(resumed, running, 0, L) => par(err, running, 0, L) .
+
+  op init : Proto -> Conf .
+  eq init(P) = proto(P) par(spawn(2), running, 0, 2) idle(2) readies(1) parks(0) .
+
+  op ok : Conf -> Bool .
+  eq ok(proto(P) par(fin, W, 0, 0) cdone cdone idle(3) readies(K) parks(N)) = K <= s N .
+  eq ok(C) = false [owise] .
+endm
+
+*** Expected: flag and flagClear reach err; counted never does, never
+*** resumes a task that is not queued, and every final state is ok.
+search [1] init(flag) =>* C:Conf par(err, W:WState, R:Nat, L:Nat) .
+search [1] init(flagClear) =>* C:Conf par(err, W:WState, R:Nat, L:Nat) .
+search init(counted) =>* C:Conf par(err, W:WState, R:Nat, L:Nat) .
+search init(counted) =>* C:Conf r2 .
+search init(counted) =>! C:Conf such that not ok(C:Conf) .
+
+*** A hosted completion racing cancellation of the task waiting on it.
+***
+*** The task is parked on a pending operation. A host thread completes the
+*** operation: under the operation's lock, if it is still pending, it writes
+*** *out and wakes the task inside the lock (mode wakeInLock), or wakes after
+*** unlocking (mode wakeOutside). Concurrently a canceller cancels the task: if it is parked,
+*** it moves it to cancelling, calls roc_task_abort (which takes the same lock
+*** and marks a pending operation aborted), then releases a written result and
+*** frees the task; otherwise it leaves a cancel request that the resume
+*** handles. A host that completes an aborted operation releases the result.
+***
+*** Checked: the result is released exactly once, a freed task is never woken
+*** or written, a task is never resumed unless queued, and a resumed task
+*** always finds its result.
+
+mod HOSTOP is
+  protecting NAT .
+  protecting BOOL .
+  sorts Mode TW Slot OpS HPC XPC Conf .
+  ops wakeInLock wakeOutside : -> Mode [ctor] .
+  ops parked queued running cancelling freed : -> TW [ctor] .
+  ops empty full : -> Slot [ctor] .
+  ops pending completed aborted : -> OpS [ctor] .
+  ops hstart hlocked hwake hunlockThenWake hlateWake hrelease hdone : -> HPC [ctor] .
+  ops xstart xabort xfree xdone : -> XPC [ctor] .
+  op none : -> Conf [ctor] .
+  op __ : Conf Conf -> Conf [ctor assoc comm id: none] .
+  op mode : Mode -> Conf [ctor] .
+  op task : TW Slot Bool -> Conf [ctor] .   --- wake word, result slot, cancel requested
+  op op : OpS Bool -> Conf [ctor] .         --- operation state, lock held
+  op h : HPC -> Conf [ctor] .
+  op x : XPC -> Conf [ctor] .
+  op qd : -> Conf [ctor] .                  --- the task is in the host's ready queue
+  op rel : Nat -> Conf [ctor] .             --- releases of the result
+  op err : -> Conf [ctor] .
+
+  vars W : TW . var S : Slot . var C : Bool . var O : OpS . var N : Nat . var M : Mode .
+
+  --- the waking side of the protocol (one atomic step on the wake word)
+  op wake : Conf -> Conf .
+  eq wake(task(parked, S, C)) = task(queued, S, C) qd .
+  eq wake(task(freed, S, C)) = err .
+  ceq wake(task(W, S, C)) = task(W, S, C) if W =/= parked and W =/= freed .
+
+  --- host completion thread
+  rl [h-lock] : h(hstart) op(O, false) => h(hlocked) op(O, true) .
+  rl [h-write] : h(hlocked) op(pending, true) task(W, S, C) mode(M)
+              => (if M == wakeInLock then h(hwake) else h(hunlockThenWake) fi) op(completed, true)
+                 (if W == freed then err else task(W, full, C) fi) mode(M) .
+  rl [h-aborted] : h(hlocked) op(aborted, true) rel(N) => h(hdone) op(aborted, false) rel(s N) .
+  rl [h-wake-unlock] : h(hwake) op(O, true) task(W, S, C) => h(hdone) op(O, false) wake(task(W, S, C)) .
+  rl [h-unlock] : h(hunlockThenWake) op(O, true) => h(hlateWake) op(O, false) .
+  rl [h-late-wake] : h(hlateWake) task(W, S, C) => h(hdone) wake(task(W, S, C)) .
+
+  --- canceller
+  rl [x-parked] : x(xstart) task(parked, S, C) => x(xabort) task(cancelling, S, C) .
+  rl [x-finished] : x(xstart) task(freed, S, C) => x(xdone) task(freed, S, C) .
+  crl [x-defer] : x(xstart) task(W, S, C) => x(xdone) task(W, S, true)
+    if W == queued or W == running .
+  rl [x-abort] : x(xabort) op(O, false)
+              => x(xfree) op((if O == pending then aborted else O fi), false) .
+  rl [x-free] : x(xfree) task(cancelling, S, C) rel(N)
+             => x(xdone) task(freed, empty, C) rel(if S == full then s N else N fi) .
+
+  --- the host resumes a queued task
+  rl [resume] : qd task(queued, S, C) => task(running, S, C) .
+  rl [run-cancel] : task(running, S, true) rel(N) => task(freed, empty, true) rel(if S == full then s N else N fi) .
+  rl [run-take] : task(running, full, false) rel(N) => task(freed, empty, false) rel(s N) .
+  rl [run-empty] : task(running, empty, false) => err .
+
+  op init : Mode -> Conf .
+  eq init(M) = mode(M) task(parked, empty, false) op(pending, false) h(hstart) x(xstart) rel(0) .
+
+  op ok : Conf -> Bool .
+  eq ok(mode(M) task(freed, empty, C) op(O, false) h(hdone) x(xdone) rel(1)) = true .
+  eq ok(C:Conf) = false [owise] .
+endm
+
+*** Expected: wakeInLock is always ok; wakeOutside can wake a freed task.
+search init(wakeInLock) =>! C:Conf such that not ok(C:Conf) .
+search init(wakeInLock) =>* C:Conf err .
+search [1] init(wakeOutside) =>* C:Conf err .
+quit

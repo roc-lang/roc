@@ -1,0 +1,53 @@
+load rc.maude
+
+mod SCENARIOS is
+  protecting RUNTIME .
+  ops sharedRead moves freshHolds pathCopy nested hostAlias : -> Code .
+
+  *** Two children read the same box; the parent holds it across the window
+  *** and drops it after the join.
+  eq sharedRead =
+    mk('a, none) ;
+    fork(ch(('p1 <- 'a), cp('q1, 'p1) ; drop('q1) ; drop('p1) ; mk('t1, none), 't1, 'r1)
+      || ch(('p2 <- 'a), cp('q2, 'p2) ; drop('q2) ; drop('p2) ; mk('t2, none), 't2, 'r2)) ;
+    drop('r1) ; drop('r2) ; drop('a) .
+
+  *** Each child gets its own box: nothing is shared.
+  eq moves =
+    mk('a, none) ; mk('b, none) ;
+    fork(ch(('p1 <- 'a), cp('q1, 'p1) ; drop('q1) ; drop('p1) ; mk('t1, none), 't1, 'r1)
+      || ch(('p2 <- 'b), cp('q2, 'p2) ; drop('q2) ; drop('p2) ; mk('t2, none), 't2, 'r2)) ;
+    drop('r1) ; drop('r2) ; drop('a) ; drop('b) .
+
+  *** Each child stores the shared box in a fresh container, reads it back
+  *** and frees the container: the container is plain, its field atomic.
+  eq freshHolds =
+    mk('a, none) ;
+    fork(ch(('p1 <- 'a), mk('f1, (l : 'p1)) ; proj('g1, 'f1, l) ; drop('g1) ; drop('f1) ; drop('p1) ; mk('t1, none), 't1, 'r1)
+      || ch(('p2 <- 'a), mk('f2, (l : 'p2)) ; proj('g2, 'f2, l) ; drop('g2) ; drop('f2) ; drop('p2) ; mk('t2, none), 't2, 'r2)) ;
+    drop('r1) ; drop('r2) ; drop('a) .
+
+  *** Path copying: each child replaces the left subtree of a shared node,
+  *** which copies the node because it is shared, and returns the copy.
+  eq pathCopy =
+    mk('x, none) ; mk('y, none) ; mk('t, (l : 'x, r : 'y)) ; drop('x) ; drop('y) ;
+    fork(ch(('p1 <- 't), mk('n1, none) ; setf('u1, 'p1, l, 'n1) ; drop('n1), 'u1, 'r1)
+      || ch(('p2 <- 't), mk('n2, none) ; setf('u2, 'p2, l, 'n2) ; drop('n2), 'u2, 'r2)) ;
+    drop('r1) ; drop('r2) ; drop('t) .
+
+  *** A child forks two grandchildren that share its own capture, and its
+  *** sibling reads the same capture.
+  eq nested =
+    mk('a, none) ;
+    fork(ch(('p1 <- 'a),
+            fork(ch(('g1 <- 'p1), cp('h1, 'g1) ; drop('h1) ; drop('g1) ; mk('w1, none), 'w1, 'v1)
+              || ch(('g2 <- 'p1), cp('h2, 'g2) ; drop('h2) ; drop('g2) ; mk('w2, none), 'w2, 'v2)) ;
+            drop('v1) ; drop('v2) ; drop('p1) ; mk('t1, none), 't1, 'r1)
+      || ch(('p2 <- 'a), cp('q2, 'p2) ; drop('q2) ; drop('p2) ; mk('t2, none), 't2, 'r2)) ;
+    drop('r1) ; drop('r2) ; drop('a) .
+
+  *** An alias made before a hosted call: the host keeps 'a, and 'b names the
+  *** same allocation. Forward-only host seeds miss 'b.
+  eq hostAlias =
+    mk('b, none) ; cp('a, 'b) ; host('a) ; drop('a) ; drop('b) .
+endm

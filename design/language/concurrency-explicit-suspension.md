@@ -16,9 +16,15 @@ futures or a task type to the language. It has three parts:
 2. **A platform opt-in.** A platform declares that it schedules tasks and marks
    the hosted functions that may *suspend*: return to the host before their
    result is ready. The host schedules suspended work however its domain needs.
-3. **A compiler pass.** Every procedure that can reach a suspension point is
-   compiled into a stackless state machine with an explicit frame and an
-   explicit drop procedure, before the backends run.
+3. **A local compiler pass.** Tasks run on the ordinary native stack. When a
+   task pauses, each procedure on its stack saves what it still needs into a
+   small heap record and returns; resuming continues from the innermost
+   record. Only call sites that can pause are touched, and a call that does
+   not pause costs one flag test.
+4. **Crash semantics from Erlang/OTP.** A crash ends the task it happens in,
+   cancels the tasks linked to it through the concurrency structure, and
+   propagates upward until a supervisor (the platform, or a `supervise!` call)
+   decides whether to restart or give up. Roc code never catches a crash.
 
 Roc already separates pure functions (`->`) from effectful ones (`=>`), and has
 no effect polymorphism. Only effectful code can suspend, so the compiler knows
@@ -93,7 +99,8 @@ A design must:
 3. run on native targets and on every wasm engine;
 4. cancel tasks without leaking or running user code;
 5. cost nothing for pure code and for platforms that do not opt in;
-6. follow the compiler's rules: later stages consume explicit data, backends
+6. contain a crash to the work it happens in, as Erlang/OTP does;
+7. follow the compiler's rules: later stages consume explicit data, backends
    follow explicit reference-count statements, and nothing is guessed.
 
 ## Guide-level explanation
@@ -165,6 +172,46 @@ fetch_with_timeout! = |url|
   function it started, and everything those started, has finished or been
   cancelled. Nothing outlives the call that started it.
 
+### Crashes
+
+Roc follows Erlang/OTP's "let it crash" philosophy. Code does not defend
+against bugs it cannot handle; a crash ends the work it happens in, and a
+supervisor restarts or abandons that work from a known state.
+
+- **A crash ends its task.** No Roc code catches it, and no code of the
+  crashed task runs again.
+- **Links follow the structure.** Every task started by a combinator is linked
+  to the combinator's caller. When a child crashes, its siblings are cancelled
+  and the caller crashes with the same message. This is OTP's `one_for_all`
+  behavior, and it matches what structured concurrency requires: a combinator
+  cannot return a result it does not have.
+- **Supervisors stop the propagation.** The platform supervises every root
+  task. A web server platform can fail only the crashed request and keep
+  serving, much as an OTP supervisor restarts one worker. A command-line
+  platform can exit with an error.
+- **`supervise!` puts a supervisor inside a program.** It runs a function as a
+  child task and restarts it after a crash, up to a limit. Past the limit, it
+  crashes itself, escalating to its own supervisor. It never reports the crash
+  to the code that called it, so it cannot be used to catch errors:
+
+```roc
+# Keep a queue consumer running across bugs in individual messages.
+run_consumer! : Queue => {}
+run_consumer! = |queue|
+    Concurrent.supervise!({ max_restarts: 10 }, || consume_forever!(queue))
+```
+
+`supervise!` composes with the other combinators. Wrapping each child in its
+own `supervise!` gives OTP's `one_for_one` behavior:
+
+```roc
+Concurrent.all!(queues.map(|queue| || Concurrent.supervise!({ max_restarts: 10 }, || consume_forever!(queue))))
+```
+
+Errors that a program expects, like a failed request, remain `Err` values.
+Crashes are for bugs and for conditions the program cannot handle, as they are
+today.
+
 ### On platforms that do not schedule tasks
 
 On a platform that does not opt in, the combinators run their functions one at
@@ -175,7 +222,8 @@ a time, in order, starting each only when the previous one has finished:
 - `race!` returns the first function's result, and the others never start.
 
 So the timeout example still returns the fetch result, but the timeout cannot
-interrupt a call that blocks. Packages can use `Concurrent` freely: they get
+interrupt a call that blocks. A crash still stops the whole program on these
+platforms, as it does today, and `supervise!` runs its function once. Packages can use `Concurrent` freely: they get
 concurrency where the platform offers it and sensible sequential behavior
 elsewhere.
 
@@ -208,6 +256,12 @@ Http := [].{
 }
 ```
 
+A platform whose host resumes tasks on several threads at once declares
+`concurrency: ParallelTasks` instead. Everything this RFC says about `Tasks`
+builds applies to both values, except reference counting ("Reference counting
+across tasks"): only `ParallelTasks` makes values shared with child tasks
+atomic.
+
 A hosted function that is not marked, like `Stdout.line!`, always completes
 before it returns and costs nothing extra. A `suspending` declaration in a
 platform without `concurrency: Tasks` is a compile error. The platform's host
@@ -221,7 +275,8 @@ implements the task ABI below and a scheduler.
   through an erased effectful function value in a `Tasks` build without
   lambda-set specialization (see below), or a wait inside `Concurrent`.
 - A procedure is **suspendable** if it may reach a suspension point.
-- A **task** is one running effectful function and its frames. The host starts
+- A **task** is one running effectful function, with its native frames while
+  it runs and its records while it is paused. The host starts
   root tasks through `provides` entries; each function a combinator runs is a
   child task.
 
@@ -254,9 +309,57 @@ each call. Later stages read it and never rediscover it.
   alone.
 - A pure procedure is never suspendable.
 
+### Capture by unwinding
+
+Tasks run on the native stack of whichever thread resumes them, exactly like
+code today. A task's state is captured only when it actually pauses, by
+unwinding: each suspendable procedure on the native stack saves what it still
+needs into a **record** and returns. The chain of records is the paused task:
+a one-shot continuation, captured only on demand. This is the technique of
+Pettyjohn et al.'s *generalized stack inspection*, and of Binaryen's Asyncify,
+restricted to the procedures Roc knows can pause.
+
+The pass is local to each **suspendable call site**: a call to a suspendable
+procedure, a suspending hosted call, an erased effectful call in a `.boxy`
+`Tasks` build, or a combinator wait. It needs no whole-program frame layout.
+
+- **Hidden task parameter.** Every suspendable procedure takes the current task
+  as a hidden parameter, the way a procedure that may leave a call pending
+  takes its caller's pending cell. Erased effectful callables take it too in
+  `Tasks` builds.
+- **Status check.** After each suspendable call site the caller tests a flag
+  in the task header. If it is clear, execution continues as normal; this is
+  the entire cost of a call that does not pause.
+- **Pending edge.** If the flag is set, the caller saves into a new record the
+  values that are live after the call (except the call's own result), a mask
+  saying which of them it owns, and the call site's identity. Then it returns.
+  Its own caller sees the flag and does the same, up to the task's entry.
+- **Resume entry.** Each suspendable procedure gets one resume entry. Given a
+  record and the paused call's result, it restores the saved values into a
+  fresh native frame and jumps to the code just after that call site. Nothing
+  before the call runs again.
+- **Drop entry.** For each call site, the pass emits a drop procedure that
+  releases the record's saved values selected by its owned mask.
+- **Hosted result slots.** Before a suspending hosted call, the caller reserves
+  the result's space in the task's record storage and passes that address as
+  `out`. On the ready path it reads the result and releases the space at once.
+  On the pending path the space becomes part of the record, so the host's later
+  write lands in stable memory.
+
+**Resuming innermost first.** Records link from the innermost paused call
+outward. Resuming a task runs the innermost record's resume entry. When that
+procedure returns a value, the runtime passes it to the next record's resume
+entry, and so on outward. Each resume costs only the work that is actually
+left, not a re-entry from the task's root. If a resumed procedure pauses
+again, the records it creates link to the record that was next in line.
+
+A task has exactly one paused path, because concurrency always goes through
+child tasks. A child task that has not started yet is represented by a start
+record holding its closure; dropping it releases the closure.
+
 ### Position in the pipeline
 
-The pass runs after every pass that changes ownership or frame layout:
+The pass runs after every pass that changes ownership or frame storage:
 
 ```text
 LIR construction -> ARC -> frame_callables (.boxy) -> tail_drive
@@ -264,53 +367,38 @@ LIR construction -> ARC -> frame_callables (.boxy) -> tail_drive
   -> suspension lowering -> diagnostics, backends, LirImage
 ```
 
-It runs after ARC because each frame's drop procedure needs ARC's answer to
-what each state owns. Rust's coroutine transform runs after drop elaboration in
-MIR for the same reason. The output is ordinary LIR: loads and stores into frame
-memory, a switch on the state, calls, returns and explicit reference-count
+The output is ordinary LIR: flag tests, stores into and loads from records,
+calls, returns, a switch at each resume entry, and explicit reference-count
 statements. Backends, the interpreter and LirImage need no knowledge of
 suspension.
 
 ### What ARC must publish
 
-The drop procedures need, for each suspension point, the set of values owned at
-that point. ARC does not publish ownership per program point today, and
-recovering it from the emitted RC statements would be reconstruction. ARC
-therefore records an explicit **suspension ledger**: for each suspension point,
-the units it owns and their release helpers. The debug certifier checks the
-ledger as it checks the rest of ARC's placement. `immortal_locals` removes
-elided units from the ledger along with their statements.
+Each drop entry needs to know which saved values its procedure owns at that
+call site. ARC does not publish ownership per program point today, and
+recovering it from the emitted reference-count statements would be
+reconstruction. ARC therefore records an explicit **suspension ledger**: for
+each suspendable call site, the values live after it and which of those are
+owned. The debug certifier checks the ledger as it checks the rest of ARC's
+placement. `immortal_locals` removes elided units from the ledger along with
+their statements.
 
-### Storage that lived in the native frame
+### Values, never native addresses
 
-Several things the compiler places in a procedure's native frame must survive
-a suspension. The pass moves each one into the coroutine frame when it is live
-across a suspension point:
+A resumed procedure gets a new native frame, generally at a different address.
+Records therefore hold LIR values, never addresses of native-frame storage.
+By-pointer argument passing is a backend matter below LIR, so restoring a
+value restores its bytes into the new frame. Two LIR constructs do hold
+native-frame addresses, and both are handled with explicit data:
 
-- **frame callables** (design.md, "Frame Callables"), which are built in the
-  frame of the procedure that packs them;
-- **pending cells** (design.md, "Pending Cells") of suspendable procedures;
-- every other local that is live across the point.
+- **Frame callables** (design.md, "Frame Callables"). `frame_callables` does
+  not build a callable in the native frame when it is passed to a suspendable
+  call site; such a callable is allocated normally. Suspendability is computed
+  at LIR construction, before that pass runs.
+- **Pending cells** (design.md, "Pending Cells"). A suspendable procedure's
+  pending cell lives in task storage instead of its caller's frame.
 
-Calls between suspendable procedures stop being native calls after lowering
-(see below), so per-backend storage such as the LLVM tail-group argument blocks
-never spans a suspension.
-
-### Frames
-
-For each suspendable procedure the pass produces:
-
-- a **frame layout**: a state tag, the arguments, every value live across some
-  suspension point, and a result slot for each suspending call. Values never
-  live at the same suspension point share storage, as in rustc's coroutine
-  layout;
-- a **resume procedure** that switches on the state and runs to the next
-  suspension point or to completion;
-- a **drop procedure** that switches on the state and releases what the
-  suspension ledger says that state owns. State 0, started but never resumed,
-  owns the arguments.
-
-Example:
+### Example
 
 ```roc
 fetch_two! = |a, b| {
@@ -323,55 +411,55 @@ fetch_two! = |a, b| {
 lowers to, in pseudo-LIR:
 
 ```text
-frame fetch_two { state: u8, a: Str, b: Str, x: Str, slot: Try(Str, [HttpErr(U16)]) }
+fetch_two(task, a, b):
+  slot = reserve(task, Try(Str, [HttpErr(U16)]))
+  roc_http_get_utf8(task, slot, a)               # a moves to the host
+  if task.pending { save(task, site 1, slot, {b}, owned: {b}); return }
+site 1:
+  x = take(slot)?                                # Err: decref b, return
+  slot = reserve(task, Try(Str, [HttpErr(U16)]))
+  roc_http_get_utf8(task, slot, b)               # b moves to the host
+  if task.pending { save(task, site 2, slot, {x}, owned: {x}); return }
+site 2:
+  y = take(slot)?                                # Err: decref x, return
+  return Ok(Str.concat(x, y))
 
-resume(f, task):
-  switch f.state
-    0: poll = roc_http_get_utf8(task, &f.slot, f.a)   # a moves to the host
-       if poll == pending { f.state = 1; return pending }
-       goto 1
-    1: x = f.slot?                                     # Err: decref f.b, return
-       f.x = x
-       poll = roc_http_get_utf8(task, &f.slot, f.b)   # b moves to the host
-       if poll == pending { f.state = 2; return pending }
-       goto 2
-    2: y = f.slot?                                     # Err: decref f.x, return
-       return ready(Ok(Str.concat(f.x, y)))
-
-drop(f):
-  switch f.state
-    0: decref f.a; decref f.b     # never started
-    1: decref f.b                 # waiting on the first request
-    2: decref f.x                 # waiting on the second request
+resume entry (record):  restore saved values; jump to record.site
+drop entry site 1:      decref b
+drop entry site 2:      decref x
 ```
 
-When a hosted call completes immediately (`ready`), execution continues without
-returning. Values only need to be stored in the frame on the pending edge, so an
-operation that does not actually suspend costs a status check.
+If neither request pauses, the procedure runs straight through with two flag
+tests added, and no record is created.
 
 ### Calls between suspendable procedures
 
-- **Direct calls** embed the callee's frame in the caller's frame. Under
-  `.lss` every size is known, so a whole task usually needs one allocation.
-  When a call has several possible targets (a lambda set), the embedded frame
-  is the union of their frames.
-- **Recursion.** In a strongly connected component of suspendable procedures,
-  each call that closes a cycle allocates the callee's frame on the heap. The
-  pass records this on the call (`frame: inline | heap`). Unlike Rust's
-  `Box::pin`, users write nothing. Frame-replacing calls are exempt (next
-  item), and self-tail calls are already loops.
-- **Frame-replacing calls** keep their guarantee of constant space. The members
-  of a tail group share one frame slot, sized for the largest member and tagged
-  with the member that occupies it. A frame-replacing call drops the caller's
-  state and starts the callee in the same slot.
-- **Erased calls** allocate the callee's frame at the call. The
-  erased-callable record of a suspendable callee carries its frame size and its
-  start, resume and drop entry points.
-
-A task has exactly one suspended path, because concurrency always goes
-through child tasks. Resuming a task re-enters its root resume procedure,
-which follows the states down to the innermost frame. Resume cost is linear in
-the depth of embedded frames, as in Rust.
+- **Direct calls and lambda sets** need nothing beyond the status check; each
+  callee unwinds itself.
+- **Recursion** needs nothing special. A deep effectful recursion that pauses
+  leaves one record per level, as much state as the native frames it replaces.
+- **Frame-replacing calls** keep their guarantee of constant space. A
+  frame-replacing call has no code after it, so it has no status check and the
+  caller leaves no record: the pending flag passes straight up. Under the
+  driver schemes used on wasm and LLVM-on-wasm (design.md, "Frame-Replacing
+  Calls"), the driver loop treats the flag like any suspendable call site.
+- **Erased calls** check the flag like direct calls. A record names its call
+  site's resume and drop entries directly, so resuming never needs the erased
+  callee's static type.
+- **Deferred erased calls** (design.md, "Deferred Erased Calls") need two
+  rules. First, a waiter that makes pending calls treats each call it makes
+  as part of its own call site: if that call pauses, the waiter saves a record
+  at that site, and the site's resume entry first goes on making pending calls
+  with the value it is given. Second, a site that hands a pending call up
+  (`handed_up`) treats the pending result as an ordinary value: its resume
+  entry returns it, and it reaches the next record out like any other result,
+  until a waiter makes the call. Because the pending cell is written by a
+  procedure that may have paused and resumed since its waiter's native frame
+  was replaced by a record, suspendable procedures' pending cells live in task
+  storage (C4). No call is ever pending while a task is parked: a pending call
+  arises at a return and is made before anything else can pause. A paused
+  cycle of deferred calls holds records only for the waiter and the procedure
+  that paused: a procedure that handed its call up has already returned.
 
 ### Host ABI
 
@@ -384,7 +472,9 @@ platforms.
 ```c
 typedef struct RocTask RocTask;                          // opaque, owned by Roc
 typedef enum { ROC_READY, ROC_PENDING } RocPoll;
-typedef enum { ROC_TASK_PENDING, ROC_TASK_DONE, ROC_TASK_CANCELLED } RocTaskStatus;
+typedef enum {
+    ROC_TASK_PENDING, ROC_TASK_DONE, ROC_TASK_CANCELLED, ROC_TASK_CRASHED
+} RocTaskStatus;
 
 // A `provides` entry, under its header symbol, starts a root task.
 // The result is written to result_out when the task completes.
@@ -394,7 +484,8 @@ RocTask *roc_main(RocList args, void *result_out);
 RocTaskStatus roc_task_resume(RocTask *task);
 void roc_task_wake(RocTask *task);      // a pending hosted result has been written
 void roc_task_cancel(RocTask *root);    // request cancellation of a root task
-void roc_task_free(RocTask *root);      // after DONE or CANCELLED
+void roc_task_free(RocTask *root);      // after DONE, CANCELLED or CRASHED
+RocStr roc_task_crash_message(RocTask *root);  // after CRASHED; borrowed
 
 // Implemented by the host.
 void roc_task_ready(RocTask *task);     // resume this task once, on any thread
@@ -404,20 +495,33 @@ void roc_task_abort(RocTask *task);     // abandon the operation it is waiting o
 RocPoll roc_http_get_utf8(RocTask *task, HttpResult *out, RocStr url);
 ```
 
-**What the Roc runtime guarantees.** Every task has an atomic wake state:
-running, parked, woken while running, or queued.
+**What the Roc runtime guarantees.** Every task has an atomic wake word: a
+parked bit and a count of completions that have been published but not yet
+consumed.
 
-- `roc_task_ready` is called at most once per park, so a host never resumes a
-  task twice for one wake and never resumes a running task. A wake that arrives
-  while the task is still running (a child finishing on another thread, or a
-  hosted result arriving before the hosted function has returned) is recorded,
-  and the task continues instead of parking.
+- A completion (a child's report, or a hosted result) first publishes its
+  data, then increments the count in one atomic step that also clears the
+  parked bit. It calls `roc_task_ready` only if the task was parked.
+- Each wait consumes one completion and decrements the count. Parking is a
+  compare-and-swap that succeeds only when the count is zero; otherwise the
+  task continues with the completion that is waiting for it.
+- So `roc_task_ready` is called at most once per park, a host never resumes a
+  task twice for one wake or resumes a running task, and a completion that
+  arrives while the task is still running (a child finishing on another
+  thread, or a hosted result arriving before the hosted function has
+  returned) is never lost.
+- A single "woken while running" flag is not enough, even if each wait clears
+  it: it cannot tell a pending wake from one whose report an earlier wait has
+  already consumed, and the task then resumes with nothing to deliver. The
+  [model](concurrency-prototype/README.md) finds this in a plain `all!` over
+  two children on two threads.
 - A child counts as finished, and wakes its parent, only when it and every task
   it started have completed or been dropped.
 - Roc owns child tasks. After `roc_task_resume` returns for a child, the host
   forgets it.
 
-**What the host guarantees.**
+**What the host guarantees.** "Platform obligations" under Invariants restates
+these rules as the targets of the conformance harness.
 
 1. **Resume.** It resumes a root once after creating it and once per
    `roc_task_ready`. A resume on another thread must happen-after the call that
@@ -429,10 +533,20 @@ running, parked, woken while running, or queued.
 3. **Abort.** After `roc_task_abort(t)` returns, the host never writes `t`'s
    result slot or wakes `t`. If the abandoned operation finishes anyway, the
    host releases its result.
-4. **Roots.** After a root returns `ROC_TASK_DONE` or `ROC_TASK_CANCELLED`, the
-   host reads `result_out` (for `DONE`) and calls `roc_task_free`. To cancel a
-   root, it calls `roc_task_cancel` and keeps resuming the root when it is
-   readied until it reports `CANCELLED`.
+4. **Roots.** After a root returns `ROC_TASK_DONE`, `ROC_TASK_CANCELLED` or
+   `ROC_TASK_CRASHED`, the host reads `result_out` (only for `DONE`) or the
+   crash message (only for `CRASHED`), and then calls `roc_task_free`. To
+   cancel a root, it calls `roc_task_cancel` and keeps resuming the root when it
+   is readied until it reports a terminal status. A crashed root is the
+   platform's supervision decision: it may start the entry again, fail one
+   request, or exit.
+5. **No nested resumes.** A hosted function never calls `roc_task_resume`, and
+   a resume never runs inside another resume on the same thread.
+6. **Allocation across threads.** When tasks can move between threads, an
+   allocation made on one thread may be released on another. The platform's
+   `roc_alloc`, `roc_dealloc` and `roc_realloc` must allow that, or its
+   scheduler must keep every task, and every value tasks share, on one
+   allocator's thread.
 
 Breaking these rules is a host bug with undefined behavior, as with a
 `roc_alloc` that returns null today. Debug builds of the runtime check every
@@ -448,6 +562,7 @@ while (scheduler.pop()) |task| switch (roc_task_resume(task)) {
     .pending => {}, // a hosted completion or child will ready it again
     .done => if (task == root) { finish(result); roc_task_free(root); },
     .cancelled => if (task == root) roc_task_free(root),
+    .crashed => if (task == root) { report(roc_task_crash_message(root)); roc_task_free(root); },
 };
 // roc_task_ready(task) pushes onto `scheduler`.
 ```
@@ -460,6 +575,7 @@ Concurrent :: [].{
     all! : List(() => a) => List(a)
     all_ok! : List(() => Try(a, err)) => Try(List(a), err)
     race! : (() => a), List(() => a) => a
+    supervise! : { max_restarts : U64 }, (() => a) => a
 }
 ```
 
@@ -469,7 +585,7 @@ explicit `RcEffect` data:
 | Operation | Meaning in `Tasks` builds | Meaning in `None` builds |
 |---|---|---|
 | `task_spawn(f)` | Create a child task and ready it | Record `f`; run nothing yet |
-| `task_await_any(children)` | Suspend until any child finishes; report which, with its result or `Cancelled` | Run the earliest unstarted child to completion and report it |
+| `task_await_any(children)` | Suspend until any child finishes; report which, with its result, `Cancelled` or `Crashed` | Run the earliest unstarted child to completion and report it |
 | `task_cancel(child)` | Request cancellation; the child later reports `Cancelled` | Discard an unstarted child |
 
 With these definitions, one implementation of each combinator gives both the
@@ -482,60 +598,433 @@ concurrent and the sequential behavior described above:
 - `race!` cancels every other child as soon as one finishes, awaits their
   cancellation, and returns the winner.
 
-Combinators always await cancelled children before returning. Together with the
-runtime's subtree rule, this is what keeps the structure lexical.
+- `supervise!` spawns its function, awaits it, and spawns it again after a
+  `Crashed` report, until `max_restarts` restarts have happened. It then
+  crashes with the last message.
+- Every other combinator treats a `Crashed` report the same way: it cancels the
+  remaining children, awaits them, and crashes with the child's message.
+
+Combinators always await cancelled children before returning or crashing.
+Together with the runtime's subtree rule, this is what keeps the structure
+lexical. `Crashed` is visible only to these builtin implementations;
+`task_await_any` is not exposed to programs, so programs cannot observe a crash.
+
+### Crash mechanics
+
+A crash happens wherever a builtin, an overflow check or `crash` stops
+execution, usually deep inside native frames of a running task, not at a
+suspension point. In `Tasks` builds, the runtime takes a non-local exit back
+to the `roc_task_resume` that is running the task: through `src/sljmp` on
+native targets, and through WebAssembly exception handling (part of
+WebAssembly 3.0) on wasm. Where neither is available, a crash ends every task
+in the process, as crashes do today. Then:
+
+1. The crashed task is marked dead and never resumed. Values held only by its
+   native frames, the procedures that were running when it crashed, are
+   leaked, because their state at the moment of the crash is unknown. Freeing
+   nothing that might still be reachable keeps this safe. The task's remaining
+   records were saved at call sites and are consistent, so they are dropped
+   exactly. Any children it had already started are cancelled and dropped
+   exactly, and the crash is reported upward only after they are gone.
+2. Its parent receives a `Crashed` report at its wait inside the combinator.
+   The parent is paused there, so its state is entirely in consistent records.
+   The combinator cancels the siblings, which are dropped exactly, and then
+   crashes the parent at that same point, so the parent's records are dropped
+   exactly, not leaked.
+3. Propagation stops at a `supervise!`, or at a root, which reports
+   `ROC_TASK_CRASHED` to the host.
+
+Only the task in which the crash happened can leak, and only what its running
+native frames owned. A platform that wants that memory back can use per-root region
+allocation, as the `nea` server does per request, as long as it frees a region
+only when nothing outside the crashed tree can reach it.
 
 ### Reference counting across tasks
 
-A child task may run on another thread, so the closure passed to `task_spawn`
-seeds host visibility in the thread-confined analysis, as a hosted-call
-argument does. Its captures and everything reachable from them use atomic
-counts, and so does each child's result. `RcEffect` gains explicit
-`host_visible_args` and `host_visible_result` masks for this, following
-`result_shares_args`. Values that never leave one task stay confined even when
-the task moves between threads, because of host rule 1.
+[Atomic Reference Counts Across Tasks](concurrency-rc-atomicity.md) derives
+this section from first principles. [rc-atomicity/](rc-atomicity/README.md)
+checks and measures it with three tools:
+- a Maude model searched over every interleaving;
+- Lean proofs of its two theorems;
+- a Python prototype with a typed program fuzzer.
+
+**What must be atomic.** A count update must be atomic only when another
+thread may update the same count at the same moment. Handing an allocation
+from one task to another is not sharing: host rule 1 orders the two tasks, so
+a value moved into a child, or returned from one, can keep plain counts. An
+allocation needs atomic counts only if two tasks that may run in parallel can
+both reach it, or if the host can.
+
+**Parallelism is an explicit platform input.** The `concurrency` field takes
+one of three values:
+
+| Value | Meaning |
+|---|---|
+| `None` | No tasks; combinators run sequentially |
+| `Tasks` | The host runs at most one resume at a time (P10). It may move tasks between threads, under host rule 1 |
+| `ParallelTasks` | Resumes may run at the same time on several threads |
+
+In `Tasks` builds no two tasks' updates can race, so spawning adds nothing,
+and the rest of this section does not apply. That covers wasm hosts without
+threads, JavaScript event loops and single-threaded `epoll` or `io_uring`
+loops. Only `ParallelTasks` builds pay for sharing between tasks.
+
+**Why the current analysis is not enough.** The existing analysis (design.md,
+"Thread-Confined Reference Counts"; `computeVisibilityFromFacts` in
+`src/lir/arc_solve.zig`) joins values into classes with a union-find. It
+links containers with their contents in both directions, and links every call
+site of a procedure specialization with its parameters. Seeded at every
+spawn, one shared value would therefore make atomic every value that passes
+through a specialization the shared value also passes through, together with
+everything those values contain or are contained in.
+
+Suppose a child captures a `Dict(Str, U64)`, and the program also builds
+dictionaries of that type with `Dict.insert`. Then every dictionary of that
+type gets atomic counts, including in code that has nothing to do with
+concurrency. At worst every count becomes atomic. That cost has been
+measured: always-atomic counts (roc-lang/roc#7718, March 2025) slowed the
+previous compiler's benchmarks by up to 62.5%:
+
+| Benchmark | Slowdown |
+|---|---|
+| `n_queens` | 62.5% |
+| `r_b_tree_ck` | 34.8% |
+| `deriv` | 25.6% |
+| `c_fold` | 7.6% |
+| `quicksort` | not significant |
+
+**The proposal: modes, solved as a least fixpoint.**
+
+- **Modes.** Each local gets a mode for each *path* into its value. A mode is
+  plain or atomic, and a path is a sequence of field, element and payload
+  steps, with recursive layouts collapsed.
+  - Atomic is always sound, so the analysis looks for the least assignment.
+  - Plain and atomic updates may be mixed on one allocation as long as they
+    never race. This replaces design.md's stronger requirement that every
+    statement touching an allocation agrees on its atomicity.
+- **Seeds at spawns.** In `ParallelTasks` builds, a child's captured
+  parameter is seeded atomic only if its argument may alias an argument
+  of a sibling. A capture that no sibling can reach is a move, and stays
+  plain however large it is.
+  - The aliasing question needs a points-to analysis that keeps call sites
+    apart.
+  - The existing union-find is too coarse for this decision. In the prototype,
+    two trees that merely passed through the same helper were treated as
+    shared.
+- **Seeds at the host.** Host seeds keep today's equality classes. The host
+  can receive an allocation that existing aliases still hold, so aliases made
+  before the hosted call need the mode too. The Maude model finds a race when
+  host seeds propagate forward only.
+- **Forward propagation.** Every other edge points forward, from source to
+  target:
+  - copy, call argument to parameter, and return to result;
+  - a stored value to its field of the new container;
+  - a field of a value to the local projected out of it.
+
+  None of these edges points back, which is what ends spreading:
+  - a new container holding a shared value is not itself shared;
+  - code that builds a value before the fork, or uses it after the join, keeps
+    plain counts.
+- **Mode specialization.** Procedures are specialized by their parameters'
+  modes, as Roc already specializes them by type. In practice this means one
+  copy for code inside children and one for code outside. Specialization is
+  necessary: without it, a helper shared with the children keeps the
+  parent's private work atomic.
+- **Lending.** Combinators await every child before returning (G5), and a
+  parent is dropped only after its children (R3), so the parent's paused
+  record keeps every capture alive while any child runs. Children therefore
+  borrow their captures instead of owning them.
+  - A child that only reads shared data updates none of its counts. Only
+    handles a child keeps in its result can still race.
+  - Spawned closures need a borrowing variant of the erased-callable
+    convention, whose arguments are all owned today.
+
+**Results.**
+
+- **Theorem A (soundness).** Any object two parallel children both touch is
+  shared, and both touches are atomic. It is proved in Lean (`window_sound`)
+  and checked in Maude over every interleaving.
+- **Theorem B (optimality).** The least solution lies below every solution,
+  so it is optimal for any monotone cost, and solving it is linear-time
+  reachability (`reach_optimal`).
+- **Static limit.** One case is beyond any static mode: a recursive layout
+  whose nodes are shared in one place and new in another, as when a child
+  path-copies a shared tree. *Edge modes* close it, if a benchmark shows it
+  matters: one bit in each handle at such positions, set when the handle is
+  stored and tested only there.
+
+The prototype counted the updates each analysis makes atomic although they
+cannot race. These are counts of events; no timings were measured.
+
+| Program | Current analysis | Forward | Forward + mode specialization | Per-object marking |
+|---|---|---|---|---|
+| A helper shared with children does the parent's private work | 2,081 | 1,950 | 2 | 3, plus a test on all 2,139 updates |
+| Children read a shared tree | 705 | 0 | 0 | 23 |
+| Children path-copy a shared tree | 899 | 459 | 70 | 23 |
+| 3,000 generated programs | 121,736 | 77,370 | 70,968 | 59,004, plus a test on all 213,337 updates and 14,352 objects walked |
+
+With lending, 2 of the 166 racing updates remain when children read a shared
+tree.
+
+**Alternatives.** Lean 4 and Koka choose atomicity per object at run time. A
+negative count marks an object as shared, a spawn marks everything its
+closure reaches, and every count update tests the sign. For Roc that means:
+
+- **A test on every count update in the program.** It is cheap when it
+  predicts well: the previous compiler's per-object bit ran about 4% behind
+  plain counts (commit `f901946455`).
+- **A walk at every spawn,** over moved data as well as shared data.
+- **Permanent marks.** Data shared once keeps atomic counts after the
+  children finish.
+- **Lost in-place updates.** Lean (`lean_is_exclusive`) and Koka
+  (`kk_block_is_unique`) never treat a marked object as unique. The
+  previous compiler's dynamic bit stalled on the same interaction: it never
+  marked values read out of shared containers.
+
+Outside host data, whose equality classes this proposal leaves as they are,
+everything per-object marking catches that the least static solution misses
+is the static limit above. Edge modes cover it without walks or permanent
+marks.
+
+Biased reference counting is not proposed either. It keeps a non-atomic count
+for an owner thread and an atomic one for the others, as free-threaded
+CPython does. That adds an owner field and a merge protocol to every
+allocation, to handle unstructured sharing that structured tasks do not have.
+
+**Real sharing costs the most either way.** When two threads update one
+count, its cache line moves between cores. A C microbenchmark (clang `-O3`,
+Apple M5 Pro, noisy to about ±50%) gave these per-node costs relative to a
+plain fold of the same 1,000-node list:
+
+| Update | Relative cost |
+|---|---|
+| Uncontended atomic | about 1.2–2 times |
+| Sign-tested, on unmarked data | within noise |
+| Contended: two threads folding the list | 3–25 times |
+
+No choice of atomicity makes contended updates cheaper; lending removes them.
+
+**What changes in the compiler.**
+
+- **ARC.** The thread-confined analysis keeps its host seeds and equality
+  classes. It adds:
+  - spawn seeds, through explicit `RcEffect` data on `task_spawn`;
+  - forward edges over (local, path) facts;
+  - mode specialization.
+- **Helper plans** are selected by layout and mode, where a mode is a set of
+  positions closed under going deeper, instead of by a single atomicity flag.
+- **Backends** keep following the explicit atomicity on each RC statement.
+- **The debug certifier** checks the constraints locally, statement by
+  statement (C6).
 
 ### Compile-time evaluation and the interpreter
 
 Effectful code never runs at compile time, so compile-time evaluation is
 unaffected. The interpreter runs the lowered LIR like any backend.
 
-### Verification
+### Cost model
 
-- **Debug LIR certification**, extended: in every state, a frame's drop
-  procedure releases each ledger unit exactly once, and no single-thread
-  reference-count statement names a value reachable from a `task_spawn`
-  capture.
-- **Cancellation at every state.** For each suspension point in a test
-  program, suspend there, cancel, drop, and check that no allocation is
-  leaked or released twice.
-- **Strategy equivalence.** `.lss` and `.boxy` produce the same results and
-  effect traces under a deterministic scheduler.
-- **Wake races under ThreadSanitizer**, with tasks resumed on random threads
-  and hosted results completed before and after the hosted function returns,
-  in the style of `zig build run-test-builtins-tsan`.
-- **Fuzzing** that composes small typed effectful constructs (loops, matches,
-  closures, recursion, combinators) with randomly placed suspension points, as
-  AGENTS.md requires.
+Apart from the microbenchmarks under "Making it fast", nothing here has been
+measured. The figures are first-principles estimates to be replaced by
+ReleaseFast benchmarks on the reference host.
+
+| Situation | Cost |
+|---|---|
+| Pure code | None |
+| Any code, on a platform without `concurrency: Tasks` | None: the pass does not run |
+| Effectful call that does not pause | One load and predictable branch on the task's pending flag; suspending hosted calls return their result through `out` |
+| Code size | A save block per suspendable call site, plus resume and drop entries, in effectful code only. Asyncify's roughly 50% comes from instrumenting conservatively; this pass touches only code that can pause, usually a small share of a program |
+| Spawning a child task | One allocation for the task header and its first record, wake-state setup, and a host enqueue: estimated tens of nanoseconds |
+| Pausing and resuming | Saving and restoring a few values per paused procedure, one or two compare-and-swaps for the wake protocol (more under cross-core contention), the host's queue, and a `setjmp` per resume for crash exits |
+| Values shared with child tasks | None in `Tasks` builds. In `ParallelTasks` builds, atomic counts on the positions children may share, and in the code that runs on them, but not in code before the fork or after the join. Children borrow their captures, so read-only sharing updates no counts. Truly contended updates cost the most, and only lending removes them ("Reference counting across tasks") |
+| `.boxy` dev builds | A flag check after every erased effectful call |
+
+For I/O-bound work these costs are small next to the system calls they wrap,
+which take microseconds. Atomic counts and allocation will matter more than
+pausing itself.
+
+### Making it fast
+
+1. **Don't pause when you don't have to.** A hosted function that can finish at
+   once (buffered data, a cache hit) returns ready, which costs one branch.
+2. **Resume innermost first** (above), so resuming costs the work that is left,
+   not a re-entry from the task's root.
+3. **Reuse memory.** Records follow a predictable lifetime order, so each task
+   keeps them in a reusable buffer, and task headers come from per-thread free
+   lists. That keeps `roc_alloc` off the hot path, as Swift's task allocator
+   does.
+4. **Cheap wake-ups.** A completion on the task's own thread needs no atomics;
+   other threads need one compare-and-swap per park. Host schedulers can run a
+   parent woken by its last child next, like tokio's "LIFO slot".
+5. **Contain atomic counts.** Declare `Tasks` rather than `ParallelTasks`
+   unless the host really runs tasks in parallel. In `ParallelTasks` builds,
+   seed only captures a sibling can reach, propagate modes forward, specialize
+   procedures by mode, and let children borrow their captures ("Reference
+   counting across tasks").
+6. **Batch spawns.** `all!` allocates all of its children in one block.
+
+A stackful switch saves a fixed set of registers at any depth; unwinding saves
+only live values, but once per paused procedure. A hand-lowered C
+microbenchmark ([concurrency-prototype/bench](concurrency-prototype/README.md))
+measures both, on an Apple M5 Pro with clang at `-O2`:
+- The status check after each call that does not pause costs 2.5% to 5% in a
+  kernel made only of calls.
+- One pause and resume, with two live values per frame, costs about 5 ns at
+  depth 1, 12 ns at depth 4 and 40 ns at depth 16 with records from a per-task
+  buffer or free list. With records from `malloc` it costs five times as much.
+- A stackful switch costs 21–44 ns over the same depths, before allocating
+  each task's stack. Unwinding is cheaper up to about 16 paused procedures.
+
+These measure the lowering, not a compiler, and stand until ReleaseFast
+benchmarks on the reference host replace them.
+
+## Invariants
+
+The design rests on four layers of invariants:
+
+- **Language guarantees** are what Roc programmers may rely on.
+- **Compiler invariants** hold for every compiled program.
+- **Runtime invariants** hold for the task runtime, whatever program runs on it.
+- **Platform obligations** are what every opting-in host must satisfy.
+
+Every language guarantee holds if the compiler and runtime invariants hold and
+the platform meets its obligations. Each invariant below names how it is
+established:
+
+- **Certify**: checked by debug-build LIR certification on every compiled
+  program. Following AGENTS.md, these are compiler invariants: debug
+  assertions in debug builds and `unreachable` in release builds.
+- **Model**: proved once on a small executable model of the runtime and the
+  host contract, explored exhaustively over bounded numbers of tasks, threads
+  and event orders (for example with TLA+, or a Zig schedule explorer).
+- **Differential**: the same programs run two ways must produce the same
+  results, effect traces and allocation balance.
+- **Conformance**: a debug harness that a host links against records every ABI
+  event and checks the platform obligations as they happen, driven by a suite
+  of adversarial scenarios. Violations are host bugs, not compiler invariants.
+
+### Language guarantees
+
+| | Guarantee | Rests on |
+|---|---|---|
+| G1 | **Pure code is never interrupted.** Tasks interleave only at suspension points. | C1, C2, R2 |
+| G2 | **No data races.** Tasks share only immutable values, and counts on shared values are atomic. | C6, R2, P2, P6, P10 |
+| G3 | **Concurrency does not change meaning.** On a platform without tasks, a program behaves as it would on a task platform that runs each combinator's children to completion in input order. | C1, C9 |
+| G4 | **Fixed result order.** Combinator results come back in input order. Only effect interleaving, which `Err` arrives first, and which `race!` branch wins depend on scheduling. | R1, R3, Model of combinators |
+| G5 | **Structured lifetimes.** No task outlives the combinator call that started it. | R3, R4 |
+| G6 | **Silent, exact cancellation.** A cancelled task runs no more of its own code and releases everything it owns. | C5, R4, P3, P4 |
+| G7 | **OTP crash semantics.** A crash ends its task, propagates through links to the nearest supervisor, is never observable to other code, and does not affect tasks outside that supervisor's subtree. | R5, R7, P1, P8 |
+| G8 | **Tail calls stay constant-space**, including between effectful functions. | C7 |
+
+### Compiler invariants
+
+| | Invariant | Established by |
+|---|---|---|
+| C1 | **Transparency.** If every suspending call completes immediately, the lowered program's results, effects and crashes equal those of the program without the pass. | Differential: a host that always returns `READY`, against a `None` build |
+| C2 | **Suspension only where declared.** A procedure marked `never` contains no suspendable call site; the pending flag is set only at a suspension point; and every suspension point traces to a `suspending` marker, an erased effectful call in a `.boxy` `Tasks` build, or a combinator wait. | Certify |
+| C3 | **Record completeness.** At every suspendable call site, the pending edge saves every value the procedure uses after that call, other than the call's result. | Certify |
+| C4 | **No native addresses in records.** A record never holds the address of native-frame storage: frame callables passed to suspendable call sites are heap-allocated, and suspendable procedures' pending cells live in task storage. | Certify |
+| C5 | **Ownership conservation.** At each suspendable call site, the suspension ledger equals what ARC owns after the call. Dropping a record releases each owned value exactly once, and so does resuming it to completion. | Certify, plus cancel-at-every-site tests with allocation tracking |
+| C6 | **Atomicity soundness.** An allocation that two tasks able to run in parallel can update counts on, or that the host can reach, uses atomic counts. Hosted arguments and results are seeds, closed under today's equality classes. In `ParallelTasks` builds, a `task_spawn` capture that a sibling may alias is a seed too, and modes propagate forward along copies, calls, returns, construction and projection; child results are not seeds. Every count statement on a position whose mode is atomic is atomic, plain and atomic updates of one allocation never race, and a borrowed capture is never released by a child. | Certify, checking each forward constraint locally (extends the existing rule) |
+| C7 | **Constant-space tail calls.** A frame-replacing call has no status check and leaves no record, so a paused tail cycle holds records only for the procedures actually live. | Certify, plus record-count tests on deep tail cycles that pause |
+| C8 | **Strategy equivalence.** `.lss` and `.boxy` builds produce the same traces under the same deterministic schedule. | Differential |
+| C9 | **Sequential equivalence.** A `None` build's combinator results and effects equal a `Tasks` build's under an input-order schedule. | Differential: a deterministic test host with an input-order policy, against a `None` build |
+| C10 | **Resume fidelity.** A resume entry continues at exactly the call site its record names, with every restored value equal to the saved one. Records resume innermost first, and each result reaches the record that was next in line, exactly as the returns would have. | Certify the entry tables; Differential: a host that pauses every suspending call, against one that never pauses |
+
+### Runtime invariants
+
+All of these are safety properties except R6, which is liveness. All are
+established by **Model**, with the wake-state machine also run under
+ThreadSanitizer with real threads.
+
+| | Invariant |
+|---|---|
+| R1 | **Exactly-once readiness.** For each park there is exactly one `roc_task_ready`. A completion that arrives before the task parks is never lost: it is counted in the wake word, and the task continues instead of parking. No wake readies a task twice, and no task is resumed without a completion to deliver. |
+| R2 | **Exclusive execution.** Given P1 and P2, a task never runs on two threads at once and is never re-entered while running. |
+| R3 | **Tree shape.** Live tasks form a forest. A task reaches a terminal state only after all of its descendants have, and a parent processes a child's report only after that child's subtree is gone. |
+| R4 | **Cancellation finality.** After cancellation is requested, a task runs no more Roc code once it next parks (at once, if already parked). Its drop runs exactly once and runs no user code. |
+| R5 | **Crash containment.** After a crash in task `t`: `t` never runs again and is never dropped; children `t` started are dropped exactly; propagation stops at the nearest `supervise!` or root; tasks outside that supervisor's subtree are unaffected; nothing reachable is freed; `t`'s records are dropped exactly; and the only leak is what `t`'s running native frames owned. |
+| R6 | **Progress.** Tasks wait only on their own children, so waits form no cycles. Given P7, every combinator call whose children's work terminates returns, crashes or is cancelled. |
+| R7 | **Bounded restarts.** `supervise!` restarts at most `max_restarts` times and then crashes with the last crash message. |
+
+### Platform obligations
+
+Each is established by **Conformance**. Breaking P1–P6 or P8–P10 is
+undefined behavior; breaking P7 can only hang tasks.
+
+| | Obligation |
+|---|---|
+| P1 | **Resume discipline.** Resume a root once after creating it and a task once per `roc_task_ready`. Never resume from inside a hosted function or inside another resume. |
+| P2 | **Handoff ordering.** A resume on another thread happens-after the event that readied the task. The counted wake word already orders every resume that follows a wake, since the resume reads the word with acquire ordering after the completion's release, so P2 is what orders a task's first resume after it is spawned, and the host's own data. |
+| P3 | **Completion.** For each `ROC_PENDING`, write `*out` exactly once, then call `roc_task_wake` exactly once, and do neither after an abort. |
+| P4 | **Abort finality.** After `roc_task_abort` returns, never touch that task's result slot or wake it, and release any result that arrives late. A host meets this by writing the result and calling `roc_task_wake` while holding the operation's lock that `roc_task_abort` also takes; waking after releasing that lock can wake a freed task. |
+| P5 | **Ownership.** Release hosted arguments exactly once, even when the operation completes later; ownership of what is written to `*out` passes to Roc. |
+| P6 | **Cross-thread allocation.** Allow an allocation to be released on a different thread, or confine tasks and shared values to one allocator's thread. |
+| P7 | **Liveness.** Eventually resume every readied task, and eventually complete or abort every pending operation. |
+| P8 | **Root lifecycle.** After a terminal status, read `result_out` only for `DONE` and the crash message only for `CRASHED`, then free the root exactly once and never use it again. |
+| P9 | **Region safety**, for platforms that reclaim a crashed tree's memory in bulk: free a region only when nothing outside the crashed tree can reach it. |
+| P10 | **Serial resumes**, for `concurrency: Tasks` platforms: never run two resumes at the same time. Each resume happens-after the previous one ends. |
+
+### What to establish first
+
+The wake protocol and crash containment (R1, R3–R5) are the parts where a
+subtle mistake corrupts memory under rare interleavings, and they can be
+settled on a model before the compiler pass exists. Record completeness,
+native-address freedom and ownership conservation (C3–C5) are next: they carry
+memory safety for every program and fit the existing certifier. The platform obligations become
+testable once the first reference host exists.
+
+[concurrency-prototype/](concurrency-prototype/README.md) establishes the
+first group on models:
+- `maude/wake.maude` searches every thread interleaving of the wake protocol,
+  and of a hosted completion racing cancellation. It finds the flag protocol
+  unsound and the counted wake word sound.
+- An executable Python model of the lowering, runtime and host runs fuzzed
+  programs against a stackful oracle under adversarial schedules, checking
+  C1–C5, C7–C10, G3, G4 and R1–R7, with exact heap accounting after every
+  run, including after crashes and cancellation at every suspension. It
+  includes deferred erased calls and their pending cells.
+- A conformance harness runs hosts that each break one of P1 or P3–P10, and
+  the runtime's monitors or the exact heap catch every one. Conforming hosts
+  pass, including one with a thread-confined allocator and one that reclaims
+  a crashed root's memory as a region.
+- A coverage matrix maps every row of the tables above to the regression
+  tests that establish it, and a test keeps the two in step.
+- `bench/wake_tsan.c` runs the counted wake word on real threads under
+  ThreadSanitizer: it is race-free and readies each park exactly once, and
+  both flag protocols break R1 there too.
+
+Fuzzing composes small typed effectful constructs (loops, matches, closures,
+recursion, combinators) with randomly placed suspension points, crashes and
+cancellations, as AGENTS.md requires, and checks C1, C5, C8 and C10 on what it
+generates.
 
 ## Drawbacks
 
-- **A large new compiler pass**, plus a suspension ledger in ARC and a new host
-  ABI that every opting-in platform must implement correctly.
+- **New compiler and runtime work**: a local pass, a suspension ledger in ARC,
+  and a host ABI that every opting-in platform must implement correctly.
 - **`.boxy` pays more.** In `Tasks` builds every erased effectful call is a
-  suspension point, so dev builds transform more procedures than optimized
-  ones.
-- **Code size.** Each suspendable procedure gains resume and drop code.
-- **Overhead in effectful code.** Spills on pending edges, state dispatch on
-  resume, and resume cost linear in frame depth. Pure code pays nothing.
-- **Recursive effectful functions allocate** a frame per level at each call
-  that closes a cycle.
+  suspension point, so dev builds check the flag at more call sites than
+  optimized builds do.
+- **Code size.** Each suspendable call site gains a save block, and each
+  suspendable procedure a resume entry and per-site drop entries.
+- **Pausing costs grow with depth.** Pausing saves one record per procedure on
+  the native stack, and resuming restores one per procedure as the work
+  continues. A stackful switch costs the same at any depth.
 - **No preemption.** A long pure computation keeps its thread until it
   finishes. Platforms that need fairness use several threads.
-- **Debugging.** A parked task has no native stack, so debuggers and crash
-  traces cannot show where it is waiting without new tooling.
-- **Hot reload** across a change to a suspended procedure's frame layout is not
-  supported.
+- **Debugging.** A parked task has no native stack. Its records name their call
+  sites, so its waiting path can be printed, but debuggers need new tooling to
+  show it.
+- **Hot reload** across a change to a paused procedure's call sites or saved
+  values is not supported.
+- **Crashes leak.** The task a crash happens in leaks what its running native
+  frames owned. Erlang avoids this with per-process heaps; Roc's shared,
+  reference-counted heap cannot. Platforms that crash often need region
+  allocation to get the memory back.
+- **Crash isolation needs a non-local exit** on every target. Native targets
+  rely on `src/sljmp`, and wasm on exception handling; elsewhere a crash still
+  ends the process.
 
 ## Rationale and alternatives
 
@@ -544,19 +1033,26 @@ unaffected. The interpreter runs the lowered LIR like any backend.
 | Stackful green threads, as prototyped | No portable wasm story, leaky cancellation, fixed stacks, per-architecture assembly (see Motivation) |
 | JSPI as the wasm lowering | Browsers only |
 | WasmFX stack switching | Phase 3, not in WebAssembly 3.0; one Wasmtime platform |
-| Asyncify | About 50% code-size and speed cost from conservative instrumentation; Roc knows which procedures to transform |
+| Asyncify itself | Runs after code generation, on wasm only, and instruments conservatively (about 50% code-size and speed cost). This RFC uses the same idea inside the compiler, on every backend, touching only call sites that can pause |
+| State machines with frames embedded in callers (rustc, Kotlin; this RFC's earlier draft) | Needs a whole-program frame layout, unions over lambda sets, special cases for recursion and tail groups, and a frame-size ABI for erased callables, and keeps every value live across a pause in memory even when nothing pauses |
+| LLVM coroutine intrinsics (`llvm.coro.*`) | Only the LLVM backend would get them; the dev and wasm backends and the interpreter would each need their own version |
+| Copying stack segments in and out (as Python's greenlet does) | Impossible on wasm, whose value stack is not addressable |
 | A user-visible `Task` or `async` type | Adds a second function color; Roc replaced `Task` with effectful functions |
 | Platform-defined concurrency modules | Packages using concurrency would be tied to one platform |
 | Unstructured `spawn` | Tasks could outlive their caller, making cancellation and errors ad hoc |
 | The host polls tasks (Rust `Future::poll`) | A wake-and-ready protocol fits io_uring, IOCP, JavaScript promises and callback-based APIs directly |
-| Suspension as a property of every hosted call | Platforms would pay for state machines on calls that never suspend |
+| Suspension as a property of every hosted call | Every effectful call site would pay the flag check and save block, including calls that never pause |
 | Suspending functions listed in the platform header | Packages and `.boxy` units do not import the platform root, so the information must live with the declaration |
+| Catching crashes in Roc (`try`/`catch`, or a combinator returning `Err(Crashed)`) | Turns crashes into a second error channel. OTP's approach keeps expected errors as values and handles crashes only by restarting from a known state |
+| Crash stops the whole program in `Tasks` builds too | One bad request would take down a server; OTP-style isolation is the main reliability benefit of tasks |
 
 The decisive argument: Kotlin and Rust need visible `suspend` and `async`
 markers because their compilers must know which functions to transform. Roc's
 `=>` already carries that information for its own reasons, and the absence of
 effect polymorphism makes it exact. Roc gets the portability of stackless
-coroutines without their usual cost to users.
+coroutines without their usual cost to users. Capturing by unwinding then keeps
+the compiler side small: the transformation is local to each call site that
+can pause, and code that does not pause runs as it does today.
 
 ## Prior art
 
@@ -565,31 +1061,38 @@ coroutines without their usual cost to users.
 | de Moura and Ierusalimschy, *Revisiting Coroutines* (TOPLAS 2009) | Stackful vs. stackless terminology; asymmetric coroutines are as expressive as one-shot continuations |
 | Leijen, *Type Directed Compilation of Row-Typed Algebraic Effects* (POPL 2017) | Selective CPS of only the code whose types say it can perform effects |
 | Xie and Leijen, *Generalized Evidence Passing for Effect Handlers* (ICFP 2021) | Effect handlers compiled to plain C with no stack switching |
-| rustc coroutine transform | State machines over MIR after drop elaboration; storage overlap between states |
-| Kotlin coroutines | CPS state machines; results that are either a value or a suspension marker |
+| Pettyjohn et al., *Continuations from Generalized Stack Inspection* (ICFP 2005) | Capturing continuations by unwinding the stack into heap records and reinstating them, on platforms that cannot switch stacks; the basis of this design |
+| Binaryen Asyncify | The same unwind-and-rewind technique applied to compiled wasm; selective instrumentation is what keeps its cost down |
+| rustc coroutine transform | State machines over MIR after drop elaboration; the main alternative this RFC rejects |
+| Kotlin coroutines | CPS state machines; results that are either a value or a suspension marker, like the pending flag here |
+| LLVM coroutines | Switched-resume, returned-continuation and async lowerings inside one backend |
+| Lean 4 and Koka | Per-object atomicity: a negative count marks an object shared, a spawn marks everything its closure reaches, every count update tests the sign, and shared objects lose in-place reuse. The alternative this RFC rejects in favor of static modes |
+| Choi, Shull and Torrellas, *Biased Reference Counting* (PACT 2018); CPython PEP 703 | Owner-thread counts updated non-atomically, other threads' counts atomically |
+| Rust `Rc` and `Arc` | Atomicity chosen statically per type, written by the programmer; mode specialization infers the same choice per position |
 | Swift concurrency (SE-0304, SE-0317) | Structured task groups and `async let`; frames from a per-task stack-discipline allocator |
 | Zig 0.6–0.10 async | Stackless frames of known size; recursion made frame sizes uncomputable; removed in 0.11 |
 | Java structured concurrency (JEP 505) | Children scoped to a block and cancelled on failure |
 | Trio nurseries | Children cannot outlive their scope |
+| Erlang/OTP | "Let it crash"; links propagate abnormal exits; supervisors trap exits and restart children (`one_for_one`, `one_for_all`); per-process heaps make a crash's memory reclaimable |
 | js_of_ocaml and wasm_of_ocaml | Partial CPS for effects on JavaScript and wasm, with JSPI and stack-switching modes as alternatives |
 
-## Unresolved questions
+## Decisions left to prototypes
 
-1. Is `suspending` the right spelling for the declaration marker, and does
-   `concurrency: Tasks` belong in the header, or should it follow from the
-   presence of a `suspending` declaration?
-2. How should `Concurrent` behave when a branch crashes? Today a crash stops the
-   program, and that may stay the rule.
-3. Should frames come from `roc_alloc`, or from a per-task allocator hook like
-   Swift's task allocator?
-4. How should a host map tasks onto WASI 0.3 and onto JavaScript promises?
-   Both need a scheduler on the host side of the boundary. Reference hosts would
-   answer this.
-5. How do `.boxy` frames hold dynamically sized values: inline after a
-   descriptor-sized header, or as separate allocations?
-6. How does a deferred erased call (design.md, "Deferred Erased Calls") whose
-   target is suspendable hand its pending call up through a suspension?
-7. Does `race!` need a variant that reports which branch won?
+Syntax spellings (`suspending`, `concurrency: Tasks`, `ParallelTasks`) are placeholders and are
+not decided here. The remaining open points are left to experiment, prototype
+or judgement, as follows:
+
+| Decision | Settled by |
+|---|---|
+| Records from `roc_alloc`, or from per-task buffers and per-thread free lists | The prototype's microbenchmark favours buffers and free lists, about five times cheaper than `malloc`. Confirm on the reference host with an optimized compiler |
+| How precise the may-alias analysis behind spawn seeds must be | Prototyped: a points-to analysis that keeps call sites apart removes every false atomic the union-find causes in the prototype. Compare the two on real programs, by the share of count statements left plain (a developer diagnostic in `base.dev_diagnostics`) |
+| Whether edge modes are needed for path-copied shared data | Prototyped: they remove the path-copy residual. Run the roc-lang/roc#7718 benchmarks inside `all!` children that path-copy a shared input, in ReleaseFast `ParallelTasks` builds, against the all-atomic upper bound and a `Tasks` build. Add edge modes only if the residual atomics measurably cost |
+| How hosts map tasks onto WASI 0.3 and onto JavaScript promises | Building the browser and WASI reference hosts |
+| How `.boxy` records hold dynamically sized values: inline after a descriptor-sized header, or as separate allocations | The prototype's microbenchmark favours inline records in the per-task buffer: separate allocations cost 5% to 35% more from the same buffer, and about twice as much from `malloc`. Confirm when prototyping the `.boxy` pass |
+| How a deferred erased call whose target is suspendable hands its pending call up through a suspension | Prototyped: the two rules under "Calls between suspendable procedures". Confirm when building the pass alongside `tail_drive` |
+| Whether `race!` needs a variant that reports which branch won | Judgement after writing real programs against the API |
+| Whether `supervise!` needs a time window for its restart limit, which would require a clock from the platform | Judgement after building a supervised server |
+| Crash exits on targets that `src/sljmp` does not cover yet, such as 32-bit x86 | Porting, or accepting process-wide crashes there |
 
 ## Future possibilities
 
@@ -608,17 +1111,20 @@ coroutines without their usual cost to users.
 
 ## Implementation plan
 
-1. Parse `concurrency` and `suspending`; add the mode to unit keys; record
+1. Model the task runtime and host contract, and check R1–R7 on it.
+2. Parse `concurrency` and `suspending`; add the mode to unit keys; record
    suspendability on LIR procedures and calls.
-2. Add the ARC suspension ledger and its certification.
-3. Implement the pass for `.lss`: frames, resume, drop, embedded and heap
-   frames, tail groups, frame callables and pending cells.
-4. Add the task runtime with its wake protocol, the host ABI, and glue for one
-   native reference platform.
-5. Implement `Concurrent` and its low-level operations, including `None`
-   behavior.
-6. Extend the pass to `.boxy` and erased calls.
-7. Build browser and WASI 0.3 reference hosts.
+3. Add the ARC suspension ledger and its certification (C2–C7, C10).
+4. Implement the pass for `.lss`: flag checks, save blocks, resume and drop
+   entries, hosted result slots, the `frame_callables` rule and task-held
+   pending cells.
+5. Add the task runtime with its wake protocol and crash exit, the host ABI,
+   glue, the conformance harness, and one native reference platform.
+6. Implement `Concurrent`, including `supervise!` and `None` behavior.
+   In `ParallelTasks` builds, add spawn seeds with forward propagation and
+   mode specialization, then borrowed captures, measuring each.
+7. Extend the pass to `.boxy` and erased calls.
+8. Build browser and WASI 0.3 reference hosts.
 
 ## References
 
@@ -626,12 +1132,22 @@ coroutines without their usual cost to users.
 - Leijen, [Type Directed Compilation of Row-Typed Algebraic Effects](https://popl17.sigplan.org/details/POPL-2017-papers/69/Type-Directed-Compilation-of-Row-Typed-Algebraic-Effects), POPL 2017
 - Xie and Leijen, [Generalized Evidence Passing for Effect Handlers](https://www.microsoft.com/en-us/research/uploads/prod/2021/08/genev-icfp21.pdf), ICFP 2021
 - Phipps-Costin et al., [Continuing WebAssembly with Effect Handlers](https://www.microsoft.com/en-us/research/publication/continuing-webassembly-with-effect-handlers/), OOPSLA 2023
+- Pettyjohn, Clements, Marshall, Krishnamurthi and Felleisen, [Continuations from Generalized Stack Inspection](https://cs.brown.edu/~sk/Publications/Papers/Published/pcmkf-cont-from-gen-stack-insp/), ICFP 2005
+- LLVM, [Coroutines in LLVM](https://www.llvm.org/docs/_sources/Coroutines.md.txt)
+- Ullrich and de Moura, [Counting Immutable Beans](https://arxiv.org/abs/1908.05647) (IFL 2019); [Lean reference counting](https://lean-lang.org/doc/reference/4.21.0/Run-Time-Code/Reference-Counting/); [`lean.h`](https://github.com/leanprover/lean4/blob/8009d0a64d2860606c6a5ac5ff6702622b24921e/src/include/lean/lean.h)
+- Reinking, Xie, de Moura and Leijen, [Perceus](https://www.microsoft.com/en-us/research/uploads/prod/2020/11/perceus-tr-v4.pdf) (PLDI 2021); Koka [`kklib.h`](https://github.com/koka-lang/koka/blob/b66091b2a5a7ea20c5ed9498ad1e1f03caee9589/kklib/include/kklib.h)
+- Choi, Shull and Torrellas, [Biased Reference Counting](https://iacoma.cs.uiuc.edu/iacoma-papers/pact18.pdf), PACT 2018; [PEP 703](https://peps.python.org/pep-0703/)
+- roc-lang/roc, [#7718: switch roc to atomic refcounts](https://github.com/roc-lang/roc/pull/7718)
+- tokio, [multi-thread worker and LIFO slot](https://codebrowser.dev/rust/crates/tokio/src/runtime/scheduler/multi_thread/worker.rs.html)
 - rustc, [coroutine transform](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir_transform/coroutine/index.html) and [layout](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir_transform/coroutine/layout/index.html)
 - Kotlin, [Asynchronous programming with coroutines](https://kotlinlang.org/spec/asynchronous-programming-with-coroutines.html) (language specification)
 - Swift, [SE-0304 discussion](https://forums.swift.org/t/se-0304-structured-concurrency/45314), [SE-0317 discussion](https://forums.swift.org/t/se-0317-async-let/48848), [task allocator](https://sources.debian.org/src/swiftlang/6.0.3-2/swift/stdlib/public/Concurrency/TaskAlloc.cpp)
 - Zig, [async in 0.11](https://zig.guide/0.11/async/introduction)
 - OpenJDK, [JEP 505: Structured Concurrency](https://openjdk.org/jeps/505)
 - Smith, [Notes on structured concurrency](https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/)
+- Erlang/OTP, [supervisor](https://www.erlang.org/docs/24/man/supervisor) and [supervision principles](https://www.erlang.org/docs/19/design_principles/sup_princ.html); Hébert, [Who Supervises The Supervisors?](https://learnyousomeerlang.com/supervisors)
+- Erlang, [binary handling and process heaps](https://www.erlang.org/docs/22/efficiency_guide/binaryhandling)
+- WebAssembly, [Wasm 3.0 completed](https://webassembly.org/news/2025-09-17-wasm-3.0/)
 - [js_of_ocaml effect handlers](https://ocsigen.org/js_of_ocaml/latest/js_of_ocaml/effects.html)
 - Bytecode Alliance, [WASI 0.3 launched](https://bytecodealliance.org/articles/WASI-0.3)
 - [Wasmtime proposal status](https://docs.wasmtime.dev/stability-wasm-proposals.html)

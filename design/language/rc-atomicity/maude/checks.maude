@@ -1,0 +1,28 @@
+*** Exhaustive checks: every interleaving of every scenario under each
+*** mode assignment. "No solution" means every final state is ok: no race on
+*** a count word, no use after free, nothing leaked, every party finished.
+load scenarios.maude
+
+*** ---- the proposal is sound ----
+search [1] init(sharedRead, forward(sharedRead)) =>! CF:Conf such that not ok(CF:Conf) .
+search [1] init(moves, forward(moves)) =>! CF:Conf such that not ok(CF:Conf) .
+search [1] init(freshHolds, forward(freshHolds)) =>! CF:Conf such that not ok(CF:Conf) .
+search [1] init(pathCopy, forward(pathCopy)) =>! CF:Conf such that not ok(CF:Conf) .
+search [1] init(nested, forward(nested)) =>! CF:Conf such that not ok(CF:Conf) .
+search [1] init(hostAlias, forward(hostAlias)) =>! CF:Conf such that not ok(CF:Conf) .
+
+*** ---- the current analysis is sound ----
+search [1] init(sharedRead, unify(sharedRead)) =>! CF:Conf such that not ok(CF:Conf) .
+search [1] init(pathCopy, unify(pathCopy)) =>! CF:Conf such that not ok(CF:Conf) .
+
+*** ---- serial schedules need no atomics (T1) ----
+search [1] initSerial(sharedRead, noAnalysis(sharedRead)) =>! CF:Conf such that not ok(CF:Conf) .
+search [1] initSerial(pathCopy, noAnalysis(pathCopy)) =>! CF:Conf such that not ok(CF:Conf) .
+search [1] initSerial(nested, noAnalysis(nested)) =>! CF:Conf such that not ok(CF:Conf) .
+
+*** ---- the checker finds real bugs: each of these must have a solution ----
+search [1] init(sharedRead, noAnalysis(sharedRead)) =>! CF:Conf such that not ok(CF:Conf) .
+search [1] init(freshHolds, forwardNoConstruct(freshHolds)) =>! CF:Conf such that not ok(CF:Conf) .
+search [1] init(hostAlias, forwardHostForward(hostAlias)) =>! CF:Conf such that not ok(CF:Conf) .
+search [1] init(moves, noAnalysis(moves)) =>! CF:Conf such that not ok(CF:Conf) .
+quit

@@ -1,0 +1,503 @@
+*** Executable model of reference-count atomicity across fork-join tasks.
+***
+*** Layers:
+***   SYNTAX    a small first-order RC language: construction, copy,
+***             projection, drop, in-place field update, hosted calls, and
+***             fork-join children with captured parameters.
+***   ANALYSIS  mode assignments (sets of prefix facts m(local, path)) computed
+***             by several analyses: the proposed forward analysis, the current
+***             unification analysis, and deliberately wrong variants.
+***   RUNTIME   an interleaving semantics in which a plain count update is a
+***             read step and a write step, and a race on a count word is
+***             detected directly: any access by another party while a plain
+***             access is in progress is an error.
+***
+*** Exhaustive search over all interleavings then checks that a mode
+*** assignment is race-free, frees exactly once, and leaks nothing.
+
+fmod PATH is
+  sorts Label Path .
+  subsort Label < Path .
+  ops l r : -> Label [ctor] .
+  op eps : -> Path [ctor] .
+  op __ : Path Path -> Path [ctor assoc id: eps] .
+endfm
+
+fmod SYNTAX is
+  protecting PATH .
+  protecting QID .
+  sorts Field Fields Stmt Code Binds Child Children .
+  subsort Field < Fields .
+  subsort Stmt < Code .
+  subsort Child < Children .
+
+  op none : -> Fields [ctor] .
+  op _:_ : Label Qid -> Field [ctor prec 20] .
+  op _,_ : Fields Fields -> Fields [ctor assoc comm id: none prec 30] .
+
+  op nop : -> Code [ctor] .
+  op _;_ : Code Code -> Code [ctor assoc id: nop prec 61] .
+
+  op mk : Qid Fields -> Stmt [ctor] .            *** x := C(l1: y1, ...)
+  op cp : Qid Qid -> Stmt [ctor] .               *** x := y
+  op proj : Qid Qid Label -> Stmt [ctor] .       *** x := y.l
+  op drop : Qid -> Stmt [ctor] .                 *** release x
+  op setf : Qid Qid Label Qid -> Stmt [ctor] .   *** x := y with l = z (consumes y)
+  op host : Qid -> Stmt [ctor] .                 *** pass x to a host that keeps it
+  op fork : Children -> Stmt [ctor] .            *** parallel children, then join
+
+  op nob : -> Binds [ctor] .
+  op _<-_ : Qid Qid -> Binds [ctor prec 20] .            *** param <- parent argument
+  op _&_ : Binds Binds -> Binds [ctor assoc comm id: nob prec 30] .
+
+  *** ch(params, body, result local in child, local it binds in parent)
+  op ch : Binds Code Qid Qid -> Child [ctor] .
+  op noch : -> Children [ctor] .
+  op _||_ : Children Children -> Children [ctor assoc comm id: noch] .
+endfm
+
+fmod ANALYSIS is
+  protecting SYNTAX .
+  protecting BOOL .
+  sorts Edge EdgeSet Fact FactSet LSet Cls ClsSet .
+  subsort Edge < EdgeSet .
+  subsort Fact < FactSet .
+  subsort Qid < LSet .
+  subsort Cls < ClsSet .
+
+  op e : Qid Path Qid Path -> Edge [ctor] .      *** m(x, p s) implies m(y, q s)
+  op noe : -> EdgeSet [ctor] .
+  op __ : EdgeSet EdgeSet -> EdgeSet [ctor assoc comm id: noe] .
+
+  op m : Qid Path -> Fact [ctor] .               *** every path with this prefix is atomic
+  op nof : -> FactSet [ctor] .
+  op __ : FactSet FactSet -> FactSet [ctor assoc comm id: nof] .
+
+  op noq : -> LSet [ctor] .
+  op __ : LSet LSet -> LSet [ctor assoc comm id: noq] .
+  op {_} : LSet -> Cls [ctor] .
+  op nocls : -> ClsSet [ctor] .
+  op __ : ClsSet ClsSet -> ClsSet [ctor assoc comm id: nocls] .
+
+  vars X Y Z A P' R B : Qid .
+  vars P Q S : Path .
+  var L : Label .
+  var FS : Fields .
+  var C : Code .
+  var ST : Stmt .
+  var BS : Binds .
+  vars CH CH' : Children .
+  var ES : EdgeSet .
+  vars F F' : FactSet .
+  vars XS YS : LSet .
+  var CL : ClsSet .
+  var E : Edge .
+
+  eq E E = E .
+  eq X X = X .
+
+  *** ---- value-flow edges ----
+  op edges : Code -> EdgeSet .
+  op edgesS : Stmt -> EdgeSet .
+  op fieldEdges : Qid Fields -> EdgeSet .
+  op childEdges : Children -> EdgeSet .
+  op bindEdges : Binds -> EdgeSet .
+  eq edges(nop) = noe .
+  eq edges(ST ; C) = edgesS(ST) edges(C) .
+  eq edgesS(mk(X, FS)) = fieldEdges(X, FS) .
+  eq fieldEdges(X, none) = noe .
+  eq fieldEdges(X, (L : Y, FS)) = e(Y, eps, X, L) fieldEdges(X, FS) .
+  eq edgesS(cp(X, Y)) = e(Y, eps, X, eps) .
+  eq edgesS(proj(X, Y, L)) = e(Y, L, X, eps) .
+  eq edgesS(drop(X)) = noe .
+  *** The result is either the unique original or a fresh copy, so its root
+  *** is never shared; its other fields keep the original's modes.
+  eq edgesS(setf(X, Y, L, Z)) = e(Y, other(L), X, other(L)) e(Z, eps, X, L) .
+  op other : Label -> Label .
+  eq other(l) = r .
+  eq other(r) = l .
+  eq edgesS(host(X)) = noe .
+  eq edgesS(fork(CH)) = childEdges(CH) .
+  eq childEdges(noch) = noe .
+  eq childEdges(ch(BS, C, R, B) || CH) = bindEdges(BS) e(R, eps, B, eps) edges(C) childEdges(CH) .
+  eq bindEdges(nob) = noe .
+  eq bindEdges((P' <- A) & BS) = e(A, eps, P', eps) bindEdges(BS) .
+
+  *** ---- least closure of prefix facts under edges ----
+  op covered : Qid Path FactSet -> Bool .
+  eq covered(X, P S, m(X, P) F) = true .
+  eq covered(X, P, F) = false [owise] .
+
+  op close : EdgeSet FactSet -> FactSet .
+  ceq close(e(X, P, Y, Q) ES, m(X, P S) F)
+    = close(e(X, P, Y, Q) ES, m(X, P S) m(Y, Q S) F)
+    if not covered(Y, Q S, m(X, P S) F) .
+  ceq close(e(X, P S, Y, Q) ES, m(X, P) F)
+    = close(e(X, P S, Y, Q) ES, m(X, P) m(Y, Q) F)
+    if not covered(Y, Q, m(X, P) F) .
+  eq close(ES, F) = F [owise] .
+
+  *** ---- locals and alias classes (equality-based, both directions) ----
+  op locals : Code -> LSet .
+  op localsS : Stmt -> LSet .
+  op flocals : Fields -> LSet .
+  op clocals : Children -> LSet .
+  op blocals : Binds -> LSet .
+  eq locals(nop) = noq .
+  eq locals(ST ; C) = localsS(ST) locals(C) .
+  eq localsS(mk(X, FS)) = X flocals(FS) .
+  eq flocals(none) = noq .
+  eq flocals((L : Y, FS)) = Y flocals(FS) .
+  eq localsS(cp(X, Y)) = X Y .
+  eq localsS(proj(X, Y, L)) = X Y .
+  eq localsS(drop(X)) = X .
+  eq localsS(setf(X, Y, L, Z)) = X Y Z .
+  eq localsS(host(X)) = X .
+  eq localsS(fork(CH)) = clocals(CH) .
+  eq clocals(noch) = noq .
+  eq clocals(ch(BS, C, R, B) || CH) = blocals(BS) R B locals(C) clocals(CH) .
+  eq blocals(nob) = noq .
+  eq blocals((P' <- A) & BS) = P' A blocals(BS) .
+
+  op singles : LSet -> ClsSet .
+  eq singles(noq) = nocls .
+  eq singles(X XS) = {X} singles(XS) .
+
+  op classes : EdgeSet ClsSet -> ClsSet .
+  eq classes(e(X, P, X, Q) ES, CL) = classes(ES, CL) .
+  eq classes(e(X, P, Y, Q) ES, {X Y XS} CL) = classes(ES, {X Y XS} CL) .
+  eq classes(e(X, P, Y, Q) ES, {X XS} {Y YS} CL) = classes(ES, {X Y XS YS} CL) .
+  eq classes(noe, CL) = CL .
+
+  op aliasClasses : Code -> ClsSet .
+  eq aliasClasses(C) = classes(edges(C), singles(locals(C))) .
+
+  op sameClass : Qid LSet ClsSet -> Bool .
+  eq sameClass(X, X YS, CL) = true .
+  eq sameClass(X, Y YS, {X Y XS} CL) = true .
+  eq sameClass(X, YS, CL) = false [owise] .
+
+  op classOf : Qid ClsSet -> LSet .
+  eq classOf(X, {X XS} CL) = X XS .
+
+  op allPaths : LSet -> FactSet .
+  eq allPaths(noq) = nof .
+  eq allPaths(X XS) = m(X, eps) allPaths(XS) .
+
+  *** ---- spawn seeds: a child's parameter whose argument may alias an
+  *** argument of a sibling ----
+  op forkSeeds : Code ClsSet -> FactSet .
+  op forkSeedsS : Stmt ClsSet -> FactSet .
+  op seedChildren : Children Children ClsSet -> FactSet .
+  op seedBinds : Binds Children ClsSet -> FactSet .
+  op args : Children -> LSet .
+  op bargs : Binds -> LSet .
+  op childCode : Children ClsSet -> FactSet .
+  eq forkSeeds(nop, CL) = nof .
+  eq forkSeeds(ST ; C, CL) = forkSeedsS(ST, CL) forkSeeds(C, CL) .
+  eq forkSeedsS(fork(CH), CL) = seedChildren(CH, CH, CL) childCode(CH, CL) .
+  eq forkSeedsS(ST, CL) = nof [owise] .
+  eq childCode(noch, CL) = nof .
+  eq childCode(ch(BS, C, R, B) || CH, CL) = forkSeeds(C, CL) childCode(CH, CL) .
+  eq seedChildren(noch, CH', CL) = nof .
+  eq seedChildren(ch(BS, C, R, B) || CH, ch(BS, C, R, B) || CH', CL)
+    = seedBinds(BS, CH', CL) seedChildren(CH, ch(BS, C, R, B) || CH', CL) .
+  eq seedBinds(nob, CH, CL) = nof .
+  eq seedBinds((P' <- A) & BS, CH, CL)
+    = (if sameClass(A, args(CH), CL) then m(P', eps) else nof fi) seedBinds(BS, CH, CL) .
+  eq args(noch) = noq .
+  eq args(ch(BS, C, R, B) || CH) = bargs(BS) args(CH) .
+  eq bargs(nob) = noq .
+  eq bargs((P' <- A) & BS) = A bargs(BS) .
+
+  *** ---- host seeds ----
+  op hostArgs : Code -> LSet .
+  op hostArgsS : Stmt -> LSet .
+  op hostChildren : Children -> LSet .
+  eq hostArgs(nop) = noq .
+  eq hostArgs(ST ; C) = hostArgsS(ST) hostArgs(C) .
+  eq hostArgsS(host(X)) = X .
+  eq hostArgsS(fork(CH)) = hostChildren(CH) .
+  eq hostArgsS(ST) = noq [owise] .
+  eq hostChildren(noch) = noq .
+  eq hostChildren(ch(BS, C, R, B) || CH) = hostArgs(C) hostChildren(CH) .
+
+  op classesOf : LSet ClsSet -> LSet .
+  eq classesOf(noq, CL) = noq .
+  eq classesOf(X XS, CL) = classOf(X, CL) classesOf(XS, CL) .
+
+  *** ---- boundary locals for the current unification analysis ----
+  op boundary : Code -> LSet .
+  op boundaryS : Stmt -> LSet .
+  op bChildren : Children -> LSet .
+  eq boundary(nop) = noq .
+  eq boundary(ST ; C) = boundaryS(ST) boundary(C) .
+  eq boundaryS(host(X)) = X .
+  eq boundaryS(fork(CH)) = bChildren(CH) .
+  eq boundaryS(ST) = noq [owise] .
+  eq bChildren(noch) = noq .
+  eq bChildren(ch(BS, C, R, B) || CH) = blocals(BS) R B boundary(C) bChildren(CH) .
+
+  *** ---- the analyses ----
+  *** The host's own count updates are always atomic.
+  op hostFact : -> FactSet .
+  eq hostFact = m('host, eps) .
+
+  op noAnalysis : Code -> FactSet .           *** everything plain
+  eq noAnalysis(C) = hostFact .
+
+  op allAtomic : Code -> FactSet .
+  eq allAtomic(C) = allPaths(locals(C)) hostFact .
+
+  op unify : Code -> FactSet .                *** the current analysis
+  eq unify(C) = allPaths(classesOf(boundary(C), aliasClasses(C))) hostFact .
+
+  op forward : Code -> FactSet .              *** the proposal
+  eq forward(C) = close(edges(C),
+      forkSeeds(C, aliasClasses(C))
+      allPaths(classesOf(hostArgs(C), aliasClasses(C)))
+      hostFact) .
+
+  *** Wrong on purpose: host seeds propagated forward only.
+  op forwardHostForward : Code -> FactSet .
+  eq forwardHostForward(C) = close(edges(C),
+      forkSeeds(C, aliasClasses(C)) allPaths(hostArgs(C)) hostFact) .
+
+  *** Wrong on purpose: construction edges omitted.
+  op dropMk : EdgeSet -> EdgeSet .
+  eq dropMk(e(Y, eps, X, L) ES) = dropMk(ES) .
+  eq dropMk(ES) = ES [owise] .
+  op forwardNoConstruct : Code -> FactSet .
+  eq forwardNoConstruct(C) = close(dropMk(edges(C)),
+      forkSeeds(C, aliasClasses(C))
+      allPaths(classesOf(hostArgs(C), aliasClasses(C))) hostFact) .
+
+  *** Wrong on purpose: seed only captures that every child shares, ignoring
+  *** pairwise aliasing through containment (no alias classes).
+  op forwardNoAlias : Code -> FactSet .
+  eq forwardNoAlias(C) = close(edges(C),
+      forkSeeds(C, singles(locals(C)))
+      allPaths(classesOf(hostArgs(C), aliasClasses(C))) hostFact) .
+endfm
+
+mod RUNTIME is
+  protecting ANALYSIS .
+  protecting NAT .
+  sorts Env OFields Busy Status Active Obj Party Conf Err Mode .
+  subsort Active < Status .
+  subsorts Obj Party < Conf .
+
+  op noenv : -> Env [ctor] .
+  op _|->_ : Qid Nat -> Env [ctor prec 20] .
+  op _,_ : Env Env -> Env [ctor assoc comm id: noenv prec 30] .
+
+  op nofld : -> OFields [ctor] .
+  op _~>_ : Label Nat -> OFields [ctor prec 20] .
+  op _,_ : OFields OFields -> OFields [ctor assoc comm id: nofld prec 30] .
+
+  op idle : -> Busy [ctor] .
+  op busy : Nat -> Busy [ctor] .                  *** a plain access by this party is in progress
+
+  op obj : Nat Nat OFields Busy -> Obj [ctor] .   *** id, count, fields, plain-access state
+  op freed : Nat -> Obj [ctor] .
+
+  op root : -> Active [ctor] .
+  op hostp : -> Active [ctor] .
+  op child : Nat Qid Qid -> Active [ctor] .       *** parent, result local, parent local
+  op wait : Nat Children Active -> Status [ctor] . *** running children, pending children, saved status
+  op crashed : -> Status [ctor] .
+
+  op party : Nat Env Code Status -> Party [ctor] .
+
+  ops atomic plain : -> Mode [ctor] .
+
+  *** internal statements
+  op inc : Nat Qid Path -> Stmt [ctor] .
+  op dec : Nat Qid Path -> Stmt [ctor] .
+  op pincw : Nat Qid Path Nat -> Stmt [ctor] .
+  op pdecw : Nat Qid Path Nat -> Stmt [ctor] .
+  op spawn : Children -> Stmt [ctor] .
+  op spawnHost : Nat -> Stmt [ctor] .
+
+  op empty : -> Conf [ctor] .
+  op __ : Conf Conf -> Conf [ctor assoc comm id: empty] .
+  op facts : FactSet -> Conf [ctor] .
+  op noid : Nat -> Conf [ctor] .
+  op npid : Nat -> Conf [ctor] .
+  op sched : Mode -> Conf [ctor] .                 *** scheduling of fork children
+  ops parallel serialized : -> Mode [ctor] .
+  op stats : Nat Nat -> Conf [ctor] .              *** atomic updates, plain updates
+  op err : Err -> Conf [ctor] .
+  ops race uaf : Nat -> Err [ctor] .
+
+  vars I J K M N N' O : Nat .
+  vars X Y Z R B A P' : Qid .
+  vars P Q : Path .
+  var L : Label .
+  var FS : Fields .
+  vars C C' : Code .
+  var BS : Binds .
+  vars CH CH' : Children .
+  vars E E' : Env .
+  vars OF OF' : OFields .
+  var F : FactSet .
+  var S : Active .
+  var SS : Status .
+  var CF : Conf .
+  vars NA NP : Nat .
+  var BZ : Busy .
+  var ER : Err .
+
+  op mode : Qid Path FactSet -> Mode .
+  eq mode(X, P, F) = if covered(X, P, F) then atomic else plain fi .
+
+  op lk : Qid Env -> Nat .
+  eq lk(X, (X |-> N, E)) = N .
+
+  op resolve : Fields Env -> OFields .
+  eq resolve(none, E) = nofld .
+  eq resolve((L : Y, FS), E) = (L ~> lk(Y, E)), resolve(FS, E) .
+
+  op fieldIncs : Fields Env -> Code .
+  eq fieldIncs(none, E) = nop .
+  eq fieldIncs((L : Y, FS), E) = inc(lk(Y, E), Y, eps) ; fieldIncs(FS, E) .
+
+  op freeOps : Qid Path OFields -> Code .
+  eq freeOps(X, P, nofld) = nop .
+  eq freeOps(X, P, ((L ~> N), OF)) = dec(N, X, P L) ; freeOps(X, P, OF) .
+
+  op copyIncs : Qid OFields -> Code .
+  eq copyIncs(X, nofld) = nop .
+  eq copyIncs(X, ((L ~> N), OF)) = inc(N, X, L) ; copyIncs(X, OF) .
+
+  op argIncs : Children Env -> Code .
+  op bindIncs : Binds Env -> Code .
+  eq argIncs(noch, E) = nop .
+  eq argIncs(ch(BS, C, R, B) || CH, E) = bindIncs(BS, E) ; argIncs(CH, E) .
+  eq bindIncs(nob, E) = nop .
+  eq bindIncs((P' <- A) & BS, E) = inc(lk(A, E), A, eps) ; bindIncs(BS, E) .
+
+  op params : Binds Env -> Env .
+  eq params(nob, E) = noenv .
+  eq params((P' <- A) & BS, E) = (P' |-> lk(A, E)), params(BS, E) .
+
+  op count : Children -> Nat .
+  eq count(noch) = 0 .
+  eq count(ch(BS, C, R, B) || CH) = s count(CH) .
+
+  op children : Children Env Nat Nat -> Conf .     *** parent, parent env, first pid
+  eq children(noch, E, I, M) = empty .
+  eq children(ch(BS, C, R, B) || CH, E, I, M)
+    = party(M, params(BS, E), C, child(I, R, B)) children(CH, E, I, s M) .
+
+  *** ---- source statements ----
+  rl [mk] : party(I, E, mk(X, FS) ; C, S) noid(N)
+    => party(I, (E, X |-> N), fieldIncs(FS, E) ; C, S) obj(N, 1, resolve(FS, E), idle) noid(s N) .
+  rl [cp] : party(I, E, cp(X, Y) ; C, S)
+    => party(I, (E, X |-> lk(Y, E)), inc(lk(Y, E), Y, eps) ; C, S) .
+  rl [proj] : party(I, (Y |-> N, E), proj(X, Y, L) ; C, S) obj(N, K, ((L ~> O), OF), BZ)
+    => party(I, (Y |-> N, E, X |-> O), inc(O, X, eps) ; C, S) obj(N, K, ((L ~> O), OF), BZ) .
+  rl [drop] : party(I, (X |-> N, E), drop(X) ; C, S)
+    => party(I, E, dec(N, X, eps) ; C, S) .
+  rl [host] : party(I, (X |-> N, E), host(X) ; C, S)
+    => party(I, (X |-> N, E), inc(N, X, eps) ; spawnHost(N) ; C, S) .
+  rl [spawnHost] : party(I, E, spawnHost(N) ; C, S) npid(M)
+    => party(I, E, C, S) party(M, noenv, dec(N, 'host, eps), hostp) npid(s M) .
+  rl [fork] : party(I, E, fork(CH) ; C, S)
+    => party(I, E, argIncs(CH, E) ; spawn(CH) ; C, S) .
+
+  *** In-place update when the uniqueness test sees one reference, else copy.
+  *** The test is a read of the count: plain mode makes it a racy access too.
+  crl [setf-unique] : party(I, (Y |-> N, Z |-> N', E), setf(X, Y, L, Z) ; C, S)
+                      obj(N, 1, ((L ~> O), OF), idle) facts(F)
+    => party(I, (Z |-> N', E, X |-> N), inc(N', Z, eps) ; dec(O, Y, L) ; C, S)
+       obj(N, 1, ((L ~> N'), OF), idle) facts(F) stats(1, 0)
+    if mode(Y, eps, F) == atomic .
+  crl [setf-unique-plain] : party(I, (Y |-> N, Z |-> N', E), setf(X, Y, L, Z) ; C, S)
+                      obj(N, 1, ((L ~> O), OF), idle) facts(F)
+    => party(I, (Z |-> N', E, X |-> N), inc(N', Z, eps) ; dec(O, Y, L) ; C, S)
+       obj(N, 1, ((L ~> N'), OF), idle) facts(F) stats(0, 1)
+    if mode(Y, eps, F) == plain .
+  rl [setf-copy] : party(I, (Y |-> N, Z |-> N', E), setf(X, Y, L, Z) ; C, S)
+                    obj(N, s s K, ((L ~> O), OF), idle) noid(M) facts(F)
+    => party(I, (Z |-> N', E, X |-> M), copyIncs(Y, OF) ; inc(N', Z, eps) ; dec(N, Y, eps) ; C, S)
+       obj(N, s s K, ((L ~> O), OF), idle) obj(M, 1, ((L ~> N'), OF), idle) noid(s M) facts(F)
+       stats(if mode(Y, eps, F) == atomic then 1 else 0 fi, if mode(Y, eps, F) == plain then 1 else 0 fi) .
+
+  *** ---- count updates ----
+  crl [inc-atomic] : party(I, E, inc(N, X, P) ; C, S) obj(N, K, OF, idle) facts(F)
+    => party(I, E, C, S) obj(N, s K, OF, idle) facts(F) stats(1, 0)
+    if mode(X, P, F) == atomic .
+  crl [inc-read] : party(I, E, inc(N, X, P) ; C, S) obj(N, K, OF, idle) facts(F)
+    => party(I, E, pincw(N, X, P, K) ; C, S) obj(N, K, OF, busy(I)) facts(F) stats(0, 1)
+    if mode(X, P, F) == plain .
+  rl [inc-write] : party(I, E, pincw(N, X, P, K) ; C, S) obj(N, M, OF, busy(I))
+    => party(I, E, C, S) obj(N, s K, OF, idle) .
+
+  crl [dec-atomic] : party(I, E, dec(N, X, P) ; C, S) obj(N, s K, OF, idle) facts(F)
+    => if K == 0
+       then party(I, E, freeOps(X, P, OF) ; C, S) freed(N)
+       else party(I, E, C, S) obj(N, K, OF, idle) fi
+       facts(F) stats(1, 0)
+    if mode(X, P, F) == atomic .
+  crl [dec-read] : party(I, E, dec(N, X, P) ; C, S) obj(N, K, OF, idle) facts(F)
+    => party(I, E, pdecw(N, X, P, K) ; C, S) obj(N, K, OF, busy(I)) facts(F) stats(0, 1)
+    if mode(X, P, F) == plain .
+  rl [dec-write] : party(I, E, pdecw(N, X, P, s K) ; C, S) obj(N, M, OF, busy(I))
+    => if K == 0
+       then party(I, E, freeOps(X, P, OF) ; C, S) freed(N)
+       else party(I, E, C, S) obj(N, K, OF, idle) fi .
+
+  *** ---- errors: any access during another party's plain access, or after free ----
+  crl [race-inc] : party(I, E, inc(N, X, P) ; C, S) obj(N, K, OF, busy(J))
+    => party(I, E, nop, crashed) obj(N, K, OF, busy(J)) err(race(N)) if I =/= J .
+  crl [race-dec] : party(I, E, dec(N, X, P) ; C, S) obj(N, K, OF, busy(J))
+    => party(I, E, nop, crashed) obj(N, K, OF, busy(J)) err(race(N)) if I =/= J .
+  crl [race-test] : party(I, (Y |-> N, E), setf(X, Y, L, Z) ; C, S) obj(N, K, OF, busy(J))
+    => party(I, (Y |-> N, E), nop, crashed) obj(N, K, OF, busy(J)) err(race(N)) if I =/= J .
+  rl [uaf-inc] : party(I, E, inc(N, X, P) ; C, S) freed(N)
+    => party(I, E, nop, crashed) freed(N) err(uaf(N)) .
+  rl [uaf-dec] : party(I, E, dec(N, X, P) ; C, S) freed(N)
+    => party(I, E, nop, crashed) freed(N) err(uaf(N)) .
+  rl [uaf-proj] : party(I, (Y |-> N, E), proj(X, Y, L) ; C, S) freed(N)
+    => party(I, (Y |-> N, E), nop, crashed) freed(N) err(uaf(N)) .
+  rl [uaf-setf] : party(I, (Y |-> N, E), setf(X, Y, L, Z) ; C, S) freed(N)
+    => party(I, (Y |-> N, E), nop, crashed) freed(N) err(uaf(N)) .
+  rl [uaf-write-inc] : party(I, E, pincw(N, X, P, K) ; C, S) freed(N)
+    => party(I, E, nop, crashed) freed(N) err(uaf(N)) .
+  rl [uaf-write-dec] : party(I, E, pdecw(N, X, P, K) ; C, S) freed(N)
+    => party(I, E, nop, crashed) freed(N) err(uaf(N)) .
+
+  *** ---- fork and join ----
+  rl [spawn-parallel] : sched(parallel) party(I, E, spawn(CH) ; C, S) npid(M)
+    => sched(parallel) party(I, E, C, wait(count(CH), noch, S)) children(CH, E, I, M) npid(M + count(CH)) .
+  rl [spawn-serial] : sched(serialized) party(I, E, spawn(ch(BS, C', R, B) || CH) ; C, S) npid(M)
+    => sched(serialized) party(I, E, C, wait(1, CH, S)) children(ch(BS, C', R, B), E, I, M) npid(s M) .
+  rl [serial-next] : sched(serialized) party(I, E, C, wait(0, ch(BS, C', R, B) || CH, S)) npid(M)
+    => sched(serialized) party(I, E, C, wait(1, CH, S)) children(ch(BS, C', R, B), E, I, M) npid(s M) .
+  rl [join] : party(J, (R |-> N, E'), nop, child(I, R, B)) party(I, E, C, wait(s K, CH, S))
+    => party(I, (E, B |-> N), C, wait(K, CH, S)) .
+  rl [resume] : party(I, E, C, wait(0, noch, S)) => party(I, E, C, S) .
+
+  *** ---- statistics ----
+  eq stats(NA, NP) stats(K, M) = stats(NA + K, NP + M) .
+
+  *** ---- initial states and the final-state check ----
+  op init : Code FactSet -> Conf .
+  eq init(C, F) = party(0, noenv, C, root) facts(F) noid(1) npid(1) stats(0, 0) sched(parallel) .
+  op initSerial : Code FactSet -> Conf .
+  eq initSerial(C, F) = party(0, noenv, C, root) facts(F) noid(1) npid(1) stats(0, 0) sched(serialized) .
+
+  *** A final state is ok when there is no error, every object has been
+  *** freed, and every party has finished.
+  op fin : Code Status -> Bool .
+  eq fin(nop, root) = true .
+  eq fin(nop, hostp) = true .
+  eq fin(C, SS) = false [owise] .
+
+  op ok : Conf -> Bool .
+  eq ok(err(ER) CF) = false .
+  eq ok(obj(N, K, OF, BZ) CF) = false .
+  ceq ok(party(I, E, C, SS) CF) = false if not fin(C, SS) .
+  eq ok(CF) = true [owise] .
+endm
