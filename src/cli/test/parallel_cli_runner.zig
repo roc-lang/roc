@@ -13642,8 +13642,9 @@ fn customDemandCtfeDiagnostics(
 }
 
 /// A helper that reads a checked constant runs while evaluating a constant and
-/// at runtime. Uncached, cold and warm dev builds of each app share one cache
-/// and must all link and print the same result.
+/// at runtime, and an app reads large table constants. Uncached, cold and warm
+/// dev builds of each app share one cache and must all link and print the
+/// same result.
 fn customCtfeStaticCacheRuntime(
     io: std.Io,
     allocator: Allocator,
@@ -13654,6 +13655,9 @@ fn customCtfeStaticCacheRuntime(
     const apps = [_]struct { path: []const u8, stdout: []const u8 }{
         .{ .path = "test/cli/ctfe_static_cache/CompileTimeAndRuntime.roc", .stdout = "237\n" },
         .{ .path = "test/cli/ctfe_static_cache/RuntimeSeed.roc", .stdout = "472\n" },
+        // Large evaluated tables of integers, floats holding a NaN that is
+        // not Roc's one NaN, and records of both, and a literal table.
+        .{ .path = "test/cli/ctfe_static_cache/LargeTables.roc", .stdout = "636550 -150000 143 506072 200 2010436 121392\n" },
     };
     for (apps) |entry| {
         const name = std.fs.path.basename(entry.path);
