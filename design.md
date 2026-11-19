@@ -19009,6 +19009,8 @@ calls; when that worker is generic (a platform relation instantiating a
 generic application procedure), the wrapper supplies the static descriptors
 and dictionaries the relation's instantiation names. A hosted call from a
 generic body is a direct extern call at the hosted declaration's own type.
+The host sees the declared container shape down to each box with an open
+payload: `List(Box(a))` is a list of opaque boxes, not an opaque list.
 `Box(function)` is the erased callable above; `RocBox(RocUnknown)` is opaque
 and is only retained, moved, returned, or shallow-dropped. The erased callable
 is already an allocation of its own, so `Box(function)` has the callable's

@@ -229,6 +229,79 @@ fn hostSeed() callconv(.c) u64 {
     return 255;
 }
 
+fn expectHostedListReports(comptime result: []const u8, expectation: ReportExpectation) TestError!void {
+    try expectHostedDeclarationsRejected(
+        \\app [main!] { pf: platform "./platform/main.roc" }
+        \\import pf.Host
+        \\
+        \\require = |condition, message| if condition {
+        \\    Ok({})
+        \\} else {
+        \\    Err(Failed(message))
+        \\}
+        \\
+        \\run! = || {
+        \\    require(Host.get!(Box.box({})).map(Box.unbox) == [{}], "failed")?
+        \\    Ok({})
+        \\}
+        \\
+        \\main! = |_| {
+        \\    run!() ?? crash "failed"
+        \\    Ok({})
+        \\}
+    , .{
+        .main =
+        \\platform ""
+        \\    requires { main! : List(Str) => Try({}, [Exit(I8)]) }
+        \\    exposes [Host]
+        \\    packages {}
+        \\    provides { "main": entry! }
+        \\    hosted { "get": Host.get! }
+        \\
+        \\import Host
+        \\entry! = main!
+        ,
+        .module_path = "platform/Host.roc",
+        .module =
+        \\Host := [].{
+        \\    get! : Box(a) =>
+        ++ " " ++ result ++ "\n}",
+    }, expectation);
+}
+
+test "issue 13232: a generic hosted list of boxes checks with an inferred helper" {
+    try expectHostedListReports("List(Box(a))", .{});
+}
+
+test "issue 13232: using a rejected hosted signature preserves its declaration diagnostic" {
+    try expectHostedListReports("List(a)", .{ .declaring_module = "Host", .declaration_lines = &.{2} });
+}
+
+fn hostPassList(value: builtins.list.RocList) callconv(.c) builtins.list.RocList {
+    return value;
+}
+
+test "issue 13232: a host round trip preserves a list of generic boxes" {
+    try expectEffectfulHostedAppRuns(
+        \\app [main!] { pf: platform "./platform/main.roc" }
+        \\import pf.Host
+        \\
+        \\main! : () => U64
+        \\main! = || {
+        \\    values = Host.twice!([Box.box(19.U64), Box.box(23.U64)])
+        \\    values.map(Box.unbox).sum()
+        \\}
+    , .{
+        .main = effectful_host_platform_main,
+        .module_path = "platform/Host.roc",
+        .module =
+        \\Host := [].{
+        \\    twice! : List(Box(a)) => List(Box(a))
+        \\}
+        ,
+    }, &.{builtins.host_abi.hostedFn(&hostPassList)}, 42);
+}
+
 test "issue 13191: generic hosted Box round trip preserves a joined tag row" {
     // https://github.com/roc-lang/roc/issues/13191
     // The unselected callable widens the input row, but the host returns

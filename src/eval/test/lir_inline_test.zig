@@ -13903,6 +13903,73 @@ test "tail-call lowering loops a boxy self-call whose resolved ABI needs no retu
     try std.testing.expect(found_walk);
 }
 
+fn expectBoundedCountLoop(strategy: base.SpecializationStrategy, comptime ok_inside: bool) !void {
+    const allocator = std.testing.allocator;
+    const record = "{ value: i, values }";
+    const start = "loop(0.U64, [1.U64])";
+    const source =
+        \\count = |limit| {
+        \\    loop = |i, values| {
+        \\        if i == limit {
+        \\
+    ++ (if (ok_inside) "            Ok(" ++ record ++ ")\n" else "            " ++ record ++ "\n") ++
+        \\        } else if i < 50000 {
+        \\            loop(i + 1, values)
+        \\        } else {
+        \\            loop(i + 1, values)
+        \\        }
+        \\    }
+        \\
+    ++ (if (ok_inside) "    " ++ start ++ "\n" else "    Ok(" ++ start ++ ")\n") ++
+        \\}
+        \\main : Bool
+        \\main = count(3.U64) == Ok({ value: 3, values: [1] })
+    ;
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = strategy });
+    defer lowered.deinit(allocator);
+    const result = &lowered.lowered.lir_result;
+    const counts = try procsNamed(allocator, result, "count");
+    defer allocator.free(counts);
+    try std.testing.expectEqual(@as(usize, 1), counts.len);
+    // The local loop has no stable debug name; it is count's only direct callee.
+    const callees = try collectAssignCallProcs(allocator, &lowered.lowered, counts[0]);
+    defer allocator.free(callees);
+    try std.testing.expectEqual(@as(usize, 1), callees.len);
+    const loop = callees[0];
+    const body = result.store.getProcSpecImmediate(loop).body.get().?;
+    var walk = try lir.BodyClone.ReachableStmts.init(&result.store, body);
+    defer walk.deinit();
+    var ordinary_self_calls: usize = 0;
+    var has_tail_transfer = false;
+    while (try walk.next()) |id| {
+        const stmt = result.store.getCFStmt(id);
+        if (stmt == .assign_call) {
+            const call = stmt.assign_call;
+            if (call.proc == loop) {
+                if (result.store.stmtRowOrDefault(call.extra).replaces_frame) {
+                    has_tail_transfer = true;
+                } else ordinary_self_calls += 1;
+            }
+        } else if (stmt == .join and try containsJumpTo(&result.store, stmt.join.body, stmt.join.id)) {
+            has_tail_transfer = true;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 0), ordinary_self_calls);
+    try std.testing.expect(has_tail_transfer);
+}
+
+test "issue 13228: boxy tail calls when the base case returns Ok of a record" {
+    try expectBoundedCountLoop(.boxy, true);
+}
+
+test "issue 13228: specialized count loop uses bounded stack" {
+    try expectBoundedCountLoop(.lss, true);
+}
+
+test "issue 13228: boxy count loop uses bounded stack with Ok outside" {
+    try expectBoundedCountLoop(.boxy, false);
+}
+
 test "tail-call lowering preserves owning argument permutations" {
     const allocator = std.testing.allocator;
     const source =

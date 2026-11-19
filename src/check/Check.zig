@@ -33179,6 +33179,9 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                     _ = try self.problems.appendProblem(.{ .hosted_type_variable_not_boxed = .{
                         .region = self.cir.store.getAnnotationRegion(annotation_idx),
                     } });
+                    // No extern has this ABI. Uses must follow annotation-error
+                    // recovery rather than reaching host layout construction.
+                    self.cir.store.markAnnotationErroneous(annotation_idx);
                 }
                 try self.checkHostBoundaryType(annotation_var, self.cir.store.getAnnotationRegion(annotation_idx));
                 // The expr will be unified with the expected type below

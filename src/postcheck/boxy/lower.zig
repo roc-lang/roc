@@ -2485,8 +2485,8 @@ pub const Program = struct {
                         if (!named) try residual.append(allocator, candidate);
                     }
                     if (record.ext.get()) |ext| {
-                        const remainder = if (residual.items.len == 0 and other.record.ext == .none)
-                            try store.emptyRecord()
+                        const remainder = if (residual.items.len == 0)
+                            other.record.ext.get() orelse try store.emptyRecord()
                         else
                             try store.intern(.{ .record = .{ .fields = residual.items, .ext = other.record.ext.get() } });
                         try pending.append(allocator, .{ ext, remainder });
@@ -2518,7 +2518,11 @@ pub const Program = struct {
                             },
                             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function => {},
                         };
-                        try pending.append(allocator, .{ ext, try store.intern(.{ .tag_union = .{ .tags = residual.items, .ext = actual.ext } }) });
+                        const remainder = if (residual.items.len == 0 and actual.ext != null)
+                            actual.ext.?
+                        else
+                            try store.intern(.{ .tag_union = .{ .tags = residual.items, .ext = actual.ext } });
+                        try pending.append(allocator, .{ ext, remainder });
                     }
                 },
                 .primitive, .empty_record, .variable => {},
