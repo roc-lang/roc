@@ -6150,6 +6150,25 @@ earlier use may already have added tags to it. Each copy is unified
 with that image. A relation can pin a receiver, so the boundary runs
 another round after relating any use.
 
+Each use is related before anything generalizes its copies, so a use's
+copies are never part of a finished scheme when they meet the body's slots.
+Two rules keep it so. First, static dispatch is type-directed and outside the
+check order, so a definition can dispatch to an annotated method whose group
+has not been checked yet. Such a dispatch use waits, owned by the innermost
+group frame, and every generalization boundary of that frame first checks the
+unchecked group of each target its waiting uses name, in a nested frame, the
+way it checks an unannotated dispatch target's group; the target's body
+records the use against its own scheme, and the target's boundary relates
+it, while the using definition is still open. Second, a use of a binding
+whose group is on the group stack is related by that group's boundary, so
+its copies are pinned at that boundary's rank, as a deferred dispatch
+obligation's vars are pinned at the boundary that resolves it. Nothing
+nested inside the boundary generalizes them first: neither a local definition
+in the binding's own body nor a group checked at the boundary whose
+definitions refer back to the binding, as a method `get` that a function
+`overlay` dispatches to and that calls `overlay` by name does. The pinned copies generalize with the binding, as
+the shared structure of an unannotated dispatch cycle does.
+
 A rejected relation is a Type Mismatch at the use, naming the use's type
 and the definition's final one; the use becomes a runtime error and the
 definition keeps its scheme, as for any other rejected use. A body slot
