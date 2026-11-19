@@ -8910,6 +8910,25 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     return result;
 }
 
+/// `runUnify` for a relation whose operands an earlier relation has often
+/// merged already. Operands in one class are related: the unifier would
+/// compress both paths, as here, and find the pair related before writing
+/// anything, leaving its scratch reset and nothing for the checker to adopt.
+/// Only a constructor-backing root relation can still reject such a pair.
+/// Looking for the shared class costs every other pair two more root lookups
+/// than `runUnify`, so only relations that often find one come through here.
+fn runUnifyOftenRelated(self: *Self, a: Var, b: Var, env: *Env, opts: unifier.Options) Allocator.Error!unifier.Result {
+    if (opts.root_relation == .ordinary and self.types.resolveDescIdx(a) == self.types.resolveDescIdx(b)) {
+        if (opts.on_mismatch == .poison_to_err) self.types.assertNoSavepointActive();
+        _ = self.types.resolveVarWordAndCompressPath(a);
+        _ = self.types.resolveVarWordAndCompressPath(b);
+        self.unify_scratch.reset();
+        self.debugAssertArraysInSync();
+        return .unified;
+    }
+    return self.runUnify(a, b, env, opts);
+}
+
 /// Give each variable the running unification has created so far and that
 /// has no region yet the region its adoption gives it (`adoptUnifyScratch`),
 /// before a link inside that unification creates variables of its own:
@@ -9143,7 +9162,7 @@ fn unifyOwnedRootRelation(
     root_relation: unifier.RootRelation,
     nominal_record_mismatch_role: unifier.NominalRecordMismatchRole,
 ) std.mem.Allocator.Error!unifier.Result {
-    const result = try self.runUnify(expected, actual, env, ownedRelationOptions(
+    const result = try self.runUnifyOftenRelated(expected, actual, env, ownedRelationOptions(
         ctx,
         actual,
         row_width_relation,
@@ -55816,7 +55835,12 @@ inline fn processDeferredDispatchEntryRelations(
                     // instance (`replayDispatchTarget`), so the relation is
                     // established and there is nothing to rewind.
                     if (!receiver_default_decided or method_var == constraint.fn_var) {
-                        break :fn_result try self.unifyInContext(method_var, constraint.fn_var, env, fn_ctx);
+                        break :fn_result try self.runUnifyOftenRelated(
+                            method_var,
+                            constraint.fn_var,
+                            env,
+                            unifyOptionsForContext(fn_ctx, .poison_to_err),
+                        );
                     }
                     // This receiver's type is a default: a type the checker
                     // chose and the program never wrote, with this
@@ -60996,7 +61020,7 @@ fn relateDerivedDispatchOperand(
     actual: Var,
     report_mismatch: bool,
 ) Allocator.Error!bool {
-    const result = try self.runUnify(expected, actual, env, .{ .on_mismatch = .write_no_report });
+    const result = try self.runUnifyOftenRelated(expected, actual, env, .{ .on_mismatch = .write_no_report });
     if (!result.isProblem()) return true;
     if (!report_mismatch) return false;
     if (!try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, failure_expr)) {
