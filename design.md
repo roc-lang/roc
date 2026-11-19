@@ -11170,7 +11170,11 @@ generated-private witness, the constructor emits an exact container witness
 that references the child directly and relates matching structure through the
 producer-aware value relation. It never merges the child into the corresponding
 public slot or asks a later consumer to recover the child's runtime
-representation from the public container shape.
+representation from the public container shape. A record update follows the
+same rule for every field it does not supply or unset: that field's child is
+the base value's field, so a generated-private representation the base carries
+there is the update's field type, and the unchanged field has one type in the
+base and the result.
 
 A lambda is such a constructor for its result: a function type carries its
 result's representation, so a lambda that returns a produced iterator has a
@@ -19617,8 +19621,12 @@ the objects of such a module's import closure the moment the module is
 type-checked, and the units of those that can have an object build while
 checking continues. The evaluation asks for them again, for every such module,
 before it completes the value-form roots and builds the root graph, which
-matters after the scheduler starts over under the link's names. Each unit lowers once its imports' units are
-done, since its calls compile against their export interfaces, and the units
+matters after the scheduler starts over under the link's names. Each unit lowers
+only once its imports have standalone objects, since its calls compile against
+their export interfaces. If an import cannot have an object in this compilation
+(for example, a hosted declaration without its platform), neither can its
+importers. Programs evaluating roots against such imports use shared lowering;
+they still wait for every checked value they read. Independent units
 run on the post-check executor alongside checking, the other units, and the
 evaluations of other modules. The evaluations run the same way: a module's
 program is lowered and compiled as its own task of the scheduler's session once
@@ -23928,6 +23936,28 @@ never infer signature relationships by comparing `TypeId`s from independently
 imported roots: equal type ids describe equal Monotype shapes, not runtime
 value flow.
 
+A hosted function has no body to carry values between its signature's
+positions, yet the host may hand back any position of one declaration
+variable as any other: `transfer! : Box(a) => Box(a)` returns the box it was
+given. Every position of `a` must therefore hold one representation, so a row
+join or an erasure that reaches the argument's `a` reaches the result's `a`
+too. Only the checked declaration still tells one variable's positions from
+another variable's: Monotype instantiates `Box(a), Box(b) => Box(a)` at
+equal types for `a` and `b` to one `TypeId`, and joining every occurrence of
+that `TypeId` would tie `b` to `a` by type identity rather than by the
+declaration. Monotype's hosted completion (`hostedSignatureVars`) walks the
+checked declaration beside the specialization's Monotype function type and
+records, for every variable the declaration names more than once, the path
+to each of its positions (`Mono.FnBody.hosted`, a span of
+`Mono.SignatureVarStep`). Aliases are transparent, a nominal steps to its
+arguments (whose argument scope binds their backing occurrences), and record
+fields and tags are found by name. Lifting carries the span unchanged, and
+Lambda Solved registration follows each path through the hosted function's
+type and unifies the positions of one variable
+(`Solver.relateSignatureVars`), before any body is solved and so while every
+position still has its Monotype's children in order. Distinct variables stay
+unrelated whatever they instantiate to.
+
 ### Lambda Solving
 
 Lambda Solved IR keeps the Monotype Lifted expression storage and adds solved
@@ -24301,6 +24331,29 @@ instance and every copy reads one representation of it), and older classes.
 Scheme nodes are never related again once the group finishes: later groups
 only meet their copies, which is what lets one scheme serve every reference. A scheme is an explicit list of nodes (`Ast.Scheme`); the type store has
 no quantifier node.
+
+That rule requires every lifted `LocalId` to belong to exactly one binding
+group: only functions of that group name it (as an argument, a capture slot,
+a binder, or a read). A local has one type, so a function of a later group
+naming it would relate that type after the first group had generalized it.
+Closure lifting shares locals by design: a lifted closure's capture slots are
+the very locals its enclosing body binds. A capture operand's back edge puts
+the closure in its encloser's group only while the encloser still names it,
+which SpecConstr's rewrites can end (the encloser may call a specialization
+or a callable worker instead, leaving the original closure to a
+specialization of the encloser or to no caller at all). So `bindingGroups`
+also links, both ways, every two functions that name a common local, which
+keeps every closure in its encloser's group. Copies must not lean on that
+link, or every copy would join its source's group and lose its lambda-set
+polymorphism: a SpecConstr specialization copies its source function's
+capture slots (`addLocalCopy`, keeping each slot's capture identity, so the
+capture operands that supply the source supply the copy unchanged) and binds
+them in its cloned body, as its arguments, callable workers, and prefix
+functions already get fresh locals. Debug builds check the rule when Lambda
+Solved starts (`verifyGroupOwnedLocals`). LIR `LocalId`s are a separate id
+space with no such rule: specialized LIR procedures, such as the ARC variants
+of one procedure, share them, and the backends and the certifier scope their
+per-local state to each procedure.
 
 A reference to a function of a generalized group from a later group
 (`fn_ref` or direct `call_proc`) instantiates the group once per referencing
@@ -30672,7 +30725,8 @@ test unit; the ordinary units shared with tests contain no test instrumentation.
 
 Each site id is a relocatable field against one import,
 `roc__expect_site_base`, with the field's bytes holding the unit-local id
-as its addend: an `abs32s` immediate on x86_64, and on arm64, whose
+as its addend: an `abs32_field` immediate on x86_64, which a
+`mov r32, imm32` zero-extends, and on arm64, whose
 immediates cannot hold a relocated id, an `abs64_field` literal in the
 instruction stream that a `ldr` loads and a branch skips. The loader binds
 the import per image to the first program-wide id of that image's sites. The program-wide site table is the
@@ -33065,6 +33119,13 @@ exits with the program's status exactly as when the two ran one after the
 other. Nothing the program reads is released by teardown: the executable
 lives in the run's own scratch directory, which is released only after the
 program exits. A build that fails starts nothing.
+
+On POSIX the terminal sends Ctrl+C to the whole foreground process group.
+Once the app starts, it decides what that interrupt means: Roc waits even
+if the app handles it and keeps running. If the app dies from SIGINT, Roc
+finishes cleanup and terminates by SIGINT too, rather than reporting a crash
+or turning the signal into a normal exit code. This also applies to a
+hot-reloading host; until launch, Ctrl+C still interrupts compilation.
 
 ## Relationship To Cor LSS
 

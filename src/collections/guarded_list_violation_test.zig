@@ -355,7 +355,7 @@ fn dummyLiftedFn(raw: u32, ret: Mono.Type.TypeId) Lifted.Ast.Fn {
         .symbol = @fromBackingInt(@intCast(raw)),
         .args = Lifted.Ast.Span(Lifted.Ast.TypedLocal).empty(),
         .captures = Lifted.Ast.Span(Lifted.Ast.TypedLocal).empty(),
-        .body = .hosted,
+        .body = .{ .hosted = .empty() },
         .ret = ret,
     };
 }
