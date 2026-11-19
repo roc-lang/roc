@@ -92,7 +92,7 @@ pub const ArglessDeclarationAnswers = struct {
         known: [mode_count]bool = @splat(false),
         value: [mode_count]bool = @splat(false),
     };
-    const mode_count = @typeInfo(InhabitedMode).@"enum".fields.len;
+    const mode_count = std.enums.values(InhabitedMode).len;
 
     pub fn init(gpa: Allocator) ArglessDeclarationAnswers {
         return .{ .gpa = gpa };
