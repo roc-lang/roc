@@ -101,7 +101,7 @@ test "nominal views exhaustive boundary returns actual blockers only and permits
     var shared = Reader.SharedDependencies.init(testing.allocator, &f.store);
     defer shared.deinit();
     var finality = FinalityFixture{ .final = true };
-    var cache = exhaustive.NominalOpenCache.initShared(testing.allocator, .{ .graphs = &shared, .owner = &finality, .isFinal = FinalityFixture.isFinal });
+    var cache = exhaustive.NominalOpenCache.initShared(testing.allocator, .{ .graphs = &shared, .owner = &finality, .isFinal = FinalityFixture.isFinal }, null);
     defer cache.deinit();
     const idents = try builtinIdents(&f, &cache);
     const before = f.store.len();
@@ -178,7 +178,7 @@ test "nominal views share a final declaration's dependency graph across reads" {
                 .graphs = &shared,
                 .owner = &finality,
                 .isFinal = FinalityFixture.isFinal,
-            });
+            }, null);
             defer cache.deinit();
             const idents = try builtinIdents(&f, &cache);
             blockers.clearRetainingCapacity();

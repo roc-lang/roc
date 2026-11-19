@@ -361,6 +361,9 @@ type_decl_validity_final: bool = false,
 /// The dependency graphs of nominal declarations whose backing templates are
 /// final (`nominalBackingIsFinal`), shared by every exhaustiveness read.
 nominal_dependencies: exhaustive.SharedNominalDependencies,
+/// The settled inhabitedness of argument-less declarations with final
+/// backings, shared by every exhaustiveness read.
+argless_inhabitedness: exhaustive.ArglessDeclarationAnswers,
 /// Holds one match's exhaustiveness analysis and result; reset after each
 /// match, keeping a bounded chunk for the next one.
 exhaustiveness_arena: base.SingleThreadArena,
@@ -1869,6 +1872,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .type_decl_dependencies = .keyed,
     .type_decl_validity_final = .keyed,
     .nominal_dependencies = .keyed,
+    .argless_inhabitedness = .keyed,
     .exhaustiveness_arena = .scratch,
     .table_scratch = .scratch,
     .exhaustiveness_arena_in_use = .lexical,
@@ -4944,6 +4948,7 @@ fn initAssumePrepared(
         .gpa = gpa,
         .types = types,
         .nominal_dependencies = exhaustive.SharedNominalDependencies.init(gpa, types),
+        .argless_inhabitedness = exhaustive.ArglessDeclarationAnswers.init(gpa),
         .cir = cir,
         .imported_modules = imported_modules,
         .owner_modules = owner_modules,
@@ -37328,7 +37333,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
         self.known_empty_payload_vars_match.clearRetainingCapacity();
         const cond_constructors_known = try self.collectKnownEmptyPayloadVarsForExpr(match.cond, cond_var, &self.known_empty_payload_vars_match);
 
-        var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies());
+        var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies(), &self.argless_inhabitedness);
         defer open_cache.deinit();
         self.beginExhaustivenessArena();
         defer self.endExhaustivenessArena();
@@ -38572,7 +38577,7 @@ fn collectAbsentCtorPayloadBlockers(
     var arena = base.SingleThreadArena.init(self.gpa);
     defer arena.deinit();
 
-    var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies());
+    var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies(), &self.argless_inhabitedness);
     defer open_cache.deinit();
 
     try exhaustive.collectAbsentCtorPayloadBlockersForConstructedTags(
@@ -38713,7 +38718,7 @@ fn checkPatternExhaustiveness(
     // pending record-destructure binds must be judged first.
     try self.judgeRecordDestructBinds(env);
 
-    var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies());
+    var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies(), &self.argless_inhabitedness);
     defer open_cache.deinit();
     self.beginExhaustivenessArena();
     defer self.endExhaustivenessArena();
