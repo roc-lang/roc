@@ -24033,6 +24033,10 @@ pub const PlatformPairing = struct {
         has_dependent_evaluation: bool,
         checked_types: CheckedTypeStore.Serialized,
         templates: SerializedSlice(CheckedProcedureTemplate),
+        scheme_vars: SerializedSlice(CheckedTypeId),
+        scope_roots: SerializedSlice(DispatchRefScope),
+        scheme_evidence: SerializedSlice(static_dispatch.EvidenceParamRecord),
+        site_types: SerializedSlice(CheckedTypeId),
         pairing_types: PairingTypeColumn.Serialized,
         canonical_names: canonical.CanonicalNameStore.Serialized,
         platform_requirement_relations: PlatformRequirementRelationTable.Serialized,
@@ -24104,6 +24108,10 @@ pub const PlatformPairing = struct {
                 "borrowed_types", // Which `checked_types` columns are borrowed.
                 "has_dependent_evaluation", // Whether the evaluation columns are persisted.
                 "templates", // `checked_procedure_templates.templates`.
+                "scheme_vars",
+                "scope_roots",
+                "scheme_evidence",
+                "site_types",
             },
         };
 
@@ -24121,6 +24129,11 @@ pub const PlatformPairing = struct {
             }
             try self.checked_types.serialize(&delta, gpa, writer);
             try self.templates.serialize(artifact.checked_procedure_templates.templates.items(), gpa, writer);
+            const paired = artifact.pairing_types.images.items().len != 0;
+            try self.scheme_vars.serialize(if (paired) artifact.checked_procedure_templates.scheme_vars_pool.items() else &.{}, gpa, writer);
+            try self.scope_roots.serialize(if (paired) artifact.checked_procedure_templates.dispatch_scopes.items() else &.{}, gpa, writer);
+            try self.scheme_evidence.serialize(if (paired) artifact.checked_procedure_templates.evidence_params_pool.items() else &.{}, gpa, writer);
+            try self.site_types.serialize(if (paired) artifact.static_dispatch_plans.site_substitutions.items() else &.{}, gpa, writer);
             try self.pairing_types.serialize(&artifact.pairing_types, gpa, writer);
             try self.canonical_names.serialize(&artifact.canonical_names, gpa, writer);
             try self.platform_requirement_relations.serialize(&artifact.platform_requirement_relations, gpa, writer);
@@ -24183,6 +24196,12 @@ pub const PlatformPairing = struct {
             result.checked_types.attachSynthesizedKeys(synthesized_keys);
             result.checked_procedure_templates.templates = .fromBorrowedSlice(self.templates.deserialize(address));
             result.pairing_types = self.pairing_types.deserialize(address);
+            if (result.pairing_types.images.items().len != 0) {
+                result.checked_procedure_templates.scheme_vars_pool = .fromBorrowedSlice(self.scheme_vars.deserialize(address));
+                result.checked_procedure_templates.dispatch_scopes = .fromBorrowedSlice(self.scope_roots.deserialize(address));
+                result.checked_procedure_templates.evidence_params_pool = .fromBorrowedSlice(self.scheme_evidence.deserialize(address));
+                result.static_dispatch_plans.site_substitutions = .fromBorrowedSlice(self.site_types.deserialize(address));
+            }
             result.body_analyses = analyses;
             result.canonical_names = self.canonical_names.deserialize(address, allocator);
             result.platform_requirement_relations = self.platform_requirement_relations.deserialize(address);
@@ -24249,21 +24268,6 @@ pub fn pairCheckedPlatform(
             record.ref = categorizeRequiredValueRef(required.requires_idx, &result.platform_required_declarations, &result.platform_required_bindings);
         }
     }
-    // Binding requirements can turn computed callables into exact aliases.
-    // Publish the forwarding proof before classifying calls or root demand,
-    // and retain it in the pairing rather than mutating the source platform.
-    result.callable_eval_templates = try copyPairingColumns(CallableEvalTemplateTable, platform.callable_eval_templates, session);
-    publishCallableEvalForwarding(
-        &result.callable_eval_templates,
-        result.bodies(),
-        &result.resolved_value_refs,
-        &result.compile_time_roots,
-        result.key,
-        &result.top_level_procedure_bindings,
-        &.{},
-        available_artifacts,
-        &relations,
-    );
     var type_memo = substitutions.substitutionIn(session);
     defer type_memo.deinit();
     var reaches: ?CheckedTypeSet = if (substitutions.formals.len != 0) try result.checked_types.rootsReachingAny(session, substitutions.formals) else null;
@@ -24286,9 +24290,33 @@ pub fn pairCheckedPlatform(
         result.pairing_types = .{ .images = .fromOwnedSlice(try images.toOwnedSlice(session)) };
     }
 
-    // Pairing can turn a requirement lookup (and aliases forwarding to it)
-    // into a direct procedure. Publish the recipe before classifying calls
-    // and roots, and retain it in the pairing's owned/cacheable columns.
+    // A constrained variable whose method refers to a requirement acquires
+    // a fresh checked root when the app supplies that requirement. Bind that
+    // same root in the worker scheme, its obligations, and its uses.
+    if (result.pairing_types.images.items().len != 0) {
+        const templates = &result.checked_procedure_templates;
+        inline for (.{ "scheme_vars_pool", "dispatch_scopes", "evidence_params_pool" }) |column| {
+            @field(templates, column) = try copyPairingColumns(@TypeOf(@field(templates, column)), @field(platform.checked_procedure_templates, column), session);
+        }
+        for (templates.scheme_vars_pool.items()) |*variable| {
+            const image = result.pairing_types.image(variable.*);
+            // A solved platform parameter is no longer a variable in the
+            // body; its ABI slot must not bind arbitrary uses of its solution.
+            if (checkedTypePayloadIsIdentity(result.checked_types.payload(image))) variable.* = image;
+        }
+        for (templates.dispatch_scopes.items()) |*scope| scope.scheme_root = result.pairing_types.image(scope.scheme_root);
+        for (templates.evidence_params_pool.items()) |*param| {
+            param.dispatcher_ty = result.pairing_types.image(param.dispatcher_ty);
+            param.callable_ty = result.pairing_types.image(param.callable_ty);
+            if (param.source == .constraint_callable)
+                param.source.constraint_callable.callable_ty = result.pairing_types.image(param.source.constraint_callable.callable_ty);
+        }
+        const sites = &result.static_dispatch_plans.site_substitutions;
+        sites.* = try copyPairingColumns(@TypeOf(sites.*), sites.*, session);
+        for (sites.items()) |*ty| ty.* = result.pairing_types.image(ty.*);
+    }
+
+    // Classify forwarding once, against the bound platform bodies.
     result.callable_eval_templates = try copyPairingColumns(CallableEvalTemplateTable, platform.callable_eval_templates, session);
     publishCallableEvalForwarding(
         &result.callable_eval_templates,

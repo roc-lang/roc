@@ -59024,6 +59024,7 @@ const BodyContext = struct {
             callable_node,
             shape_node,
         );
+        if (kind == .encoder) _ = try self.prepareEncoderContainerRoles(expr, callable_node);
         var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         _ = try self.prepareCustomCodecCallsAtNode(expr, kind, shape_node, callable_node, &seen);
@@ -61756,7 +61757,7 @@ const BodyContext = struct {
         });
         defer self.codec_contract_expansion_stack.shrinkRetainingCapacity(ancestry_len);
 
-        var added_relation = false;
+        var added_relation = if (kind == .encoder) try self.prepareEncoderContainerRoles(boundary_expr, boundary_callable_node) else false;
         if (kind == .parser) {
             var invalid_value_seen = collections.DenseMap(NodeId, void).init(self.allocator);
             defer invalid_value_seen.deinit();
@@ -62631,11 +62632,7 @@ const BodyContext = struct {
         return found;
     }
 
-    fn requiredGeneratedCodecTarget(
-        self: *BodyContext,
-        method_name: []const u8,
-        subject_node: ?NodeId,
-    ) Allocator.Error!struct {
+    const RequiredCodecTarget = struct {
         lookup: MethodLookup,
         method_name: []const u8,
         method_role: u32,
@@ -62643,12 +62640,22 @@ const BodyContext = struct {
         callable_node: NodeId,
         contract: EvidenceContract,
         anchor: CheckedCodecContractAnchor,
-    } {
+    };
+
+    fn requiredGeneratedCodecTarget(
+        self: *BodyContext,
+        method_name: []const u8,
+        subject_node: ?NodeId,
+    ) Allocator.Error!RequiredCodecTarget {
         const call = (try self.generatedCodecCall(method_name, subject_node)) orelse
             base.invariant(
                 "postcheck invariant violated: checked generated codec contract was missing required method call {s} (subject: {s})",
                 .{ method_name, if (subject_node == null) "none" else "present" },
             );
+        return self.requiredCodecTargetForCall(call);
+    }
+
+    fn requiredCodecTargetForCall(self: *BodyContext, call: InstantiatedGeneratedCodecCall) Allocator.Error!RequiredCodecTarget {
         const lookup = switch (call.resolution) {
             .callable => try self.generatedCodecCallLookup(call),
             .structural => Common.invariant("generated codec format call resolved to a structural derivation"),
@@ -62976,22 +62983,58 @@ const BodyContext = struct {
         return true;
     }
 
-    fn prepareEncodeContainerCodecCall(
+    /// Distinct checked roles can acquire the same shape during specialization.
+    /// Prepare each obligation by index; freeze checks that coincident shapes
+    /// have equivalent prepared targets.
+    fn prepareEncoderContainerRoles(self: *BodyContext, boundary_expr: DraftExprId, boundary_callable_node: NodeId) Allocator.Error!bool {
+        const active = self.active_codec_contract orelse Common.invariant("encoder preparation had no checked contract");
+        const derivation = active.view.static_dispatch_plans.generated_codec_derivations.items()[@backingInt(active.derivation)];
+        const kinds = std.StaticStringMap(EncodeContainerKind).initComptime(.{
+            .{ "encode_list", .list }, .{ "encode_dict", .dict },   .{ "encode_record", .record },
+            .{ "encode_tag", .tag },   .{ "encode_tuple", .tuple },
+        });
+        var added = false;
+        for (active.method_call_slots) |slot| {
+            const kind = kinds.get(active.view.names.methodNameText(slot.method)) orelse continue;
+            const call = self.activeCodecCalls()[slot.call_index];
+            const subject = call.subject_node orelse Common.invariant("container encoder role had no subject");
+            if (@import("builtin").mode == .debug) {
+                for (self.activeCodecCallsMut()) |*occurrence| {
+                    if (occurrence.checked.method == slot.method and occurrence.checked.method_role == slot.method_role)
+                        occurrence.debug_consumed = true;
+                }
+            }
+            const exact = try self.requiredCodecTargetForCall(call);
+            if (self.preparedRequiredCodecCallExists(boundary_expr, .encoder, exact)) continue;
+            // Emission consumes the public shape, not a declaration's structural
+            // body. Set's format call consumes the list of its elements.
+            var shape = if (derivation.body_shape_ty != derivation.shape_ty and call.checked.subject_ty.get() == derivation.body_shape_ty)
+                active.shape_node
+            else
+                subject;
+            if (kind == .list) {
+                const content = try self.graph.content(shape);
+                if (content == .named and content.named.builtin_owner.get() == .set)
+                    shape = try self.graph.newNode(.{ .list = content.named.args[0] });
+            }
+            try self.prepareEncoderContainerRole(boundary_expr, shape, boundary_callable_node, exact);
+            added = true;
+        }
+        return added;
+    }
+
+    fn prepareEncoderContainerRole(
         self: *BodyContext,
         boundary_expr: DraftExprId,
         shape_node: NodeId,
-        contract_subject_node: NodeId,
         boundary_callable_node: NodeId,
-        method_name: []const u8,
-    ) Allocator.Error!bool {
+        exact: RequiredCodecTarget,
+    ) Allocator.Error!void {
         const boundary = try self.graph.functionNodes(boundary_callable_node);
         if (boundary.args.len != 1) Common.invariant("structural encoder constructor did not have one encoding argument");
         const runtime = try self.graph.functionNodes(boundary.ret);
         if (runtime.args.len != 2) Common.invariant("structural encoder runtime did not have value and state arguments");
         const state_node = runtime.args[1];
-        const exact = try self.requiredGeneratedCodecTarget(method_name, contract_subject_node);
-        if (self.preparedRequiredCodecCallExists(boundary_expr, .encoder, exact)) return false;
-
         const target_node = exact.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len < 1) Common.invariant("container encoder target had no state argument");
@@ -62999,7 +63042,6 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
         try self.appendPreparedRequiredCodecCall(boundary_expr, .encoder, shape_node, exact);
-        return true;
     }
 
     /// The shapes a derived codec reads out of a builtin keyed container: a
@@ -64335,11 +64377,10 @@ const BodyContext = struct {
             .named => |named| if (named.builtin_owner.get()) |owner| switch (owner) {
                 .set => {
                     if (named.args.len != 1) Common.invariant("builtin Set graph node had an unexpected arity");
-                    const list_node = try self.graph.newNode(.{ .list = named.args[0] });
                     var added = if (kind == .parser)
-                        try self.prepareParseListFormatCodecCalls(boundary_expr, list_node, shape_node, boundary_callable_node)
+                        try self.prepareParseListFormatCodecCalls(boundary_expr, try self.graph.newNode(.{ .list = named.args[0] }), shape_node, boundary_callable_node)
                     else
-                        try self.prepareEncodeContainerCodecCall(boundary_expr, list_node, shape_node, boundary_callable_node, "encode_list");
+                        false;
                     added = try self.prepareSetCollectionCodecCall(
                         boundary_expr,
                         kind,
@@ -64354,7 +64395,7 @@ const BodyContext = struct {
                     var added = if (kind == .parser)
                         try self.prepareParseDictFormatCodecCalls(boundary_expr, shape_node, shape_node, boundary_callable_node)
                     else
-                        try self.prepareEncodeContainerCodecCall(boundary_expr, shape_node, shape_node, boundary_callable_node, "encode_dict");
+                        false;
                     added = try self.prepareDictKeyCodecCalls(
                         boundary_expr,
                         kind,
@@ -64409,14 +64450,6 @@ const BodyContext = struct {
                         contract_subject_node,
                         boundary_callable_node,
                     ) or added;
-                } else {
-                    added = try self.prepareEncodeContainerCodecCall(
-                        boundary_expr,
-                        shape_node,
-                        contract_subject_node,
-                        boundary_callable_node,
-                        "encode_list",
-                    ) or added;
                 }
                 added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, elem, boundary_callable_node, seen) or added;
             },
@@ -64429,14 +64462,6 @@ const BodyContext = struct {
                         contract_subject_node,
                         boundary_callable_node,
                     ) or added;
-                } else {
-                    added = try self.prepareEncodeContainerCodecCall(
-                        boundary_expr,
-                        shape_node,
-                        contract_subject_node,
-                        boundary_callable_node,
-                        "encode_tuple",
-                    ) or added;
                 }
                 for (items) |item| {
                     added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, item, boundary_callable_node, seen) or added;
@@ -64448,15 +64473,6 @@ const BodyContext = struct {
                     .zst, .hole, .empty_record => &.{},
                     .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .named, .empty_tag_union, .erased => Common.invariant("record codec preparation reached a non-record shape"),
                 };
-                if (kind == .encoder) {
-                    added = try self.prepareEncodeContainerCodecCall(
-                        boundary_expr,
-                        shape_node,
-                        contract_subject_node,
-                        boundary_callable_node,
-                        "encode_record",
-                    ) or added;
-                }
                 if (kind == .parser) {
                     added = try self.prepareParserMissingFieldCodecCall(
                         boundary_expr,
@@ -64522,15 +64538,6 @@ const BodyContext = struct {
                 }
             },
             .tag_union => {
-                if (kind == .encoder) {
-                    added = try self.prepareEncodeContainerCodecCall(
-                        boundary_expr,
-                        shape_node,
-                        contract_subject_node,
-                        boundary_callable_node,
-                        "encode_tag",
-                    ) or added;
-                }
                 if (kind == .parser) {
                     added = try self.prepareParseTagUnionCodecCall(
                         boundary_expr,
