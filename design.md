@@ -24266,6 +24266,29 @@ Scheme nodes are never related again once the group finishes: later groups
 only meet their copies, which is what lets one scheme serve every reference. A scheme is an explicit list of nodes (`Ast.Scheme`); the type store has
 no quantifier node.
 
+That rule requires every lifted `LocalId` to belong to exactly one binding
+group: only functions of that group name it (as an argument, a capture slot,
+a binder, or a read). A local has one type, so a function of a later group
+naming it would relate that type after the first group had generalized it.
+Closure lifting shares locals by design: a lifted closure's capture slots are
+the very locals its enclosing body binds. A capture operand's back edge puts
+the closure in its encloser's group only while the encloser still names it,
+which SpecConstr's rewrites can end (the encloser may call a specialization
+or a callable worker instead, leaving the original closure to a
+specialization of the encloser or to no caller at all). So `bindingGroups`
+also links, both ways, every two functions that name a common local, which
+keeps every closure in its encloser's group. Copies must not lean on that
+link, or every copy would join its source's group and lose its lambda-set
+polymorphism: a SpecConstr specialization copies its source function's
+capture slots (`addLocalCopy`, keeping each slot's capture identity, so the
+capture operands that supply the source supply the copy unchanged) and binds
+them in its cloned body, as its arguments, callable workers, and prefix
+functions already get fresh locals. Debug builds check the rule when Lambda
+Solved starts (`verifyGroupOwnedLocals`). LIR `LocalId`s are a separate id
+space with no such rule: specialized LIR procedures, such as the ARC variants
+of one procedure, share them, and the backends and the certifier scope their
+per-local state to each procedure.
+
 A reference to a function of a generalized group from a later group
 (`fn_ref` or direct `call_proc`) instantiates the group once per referencing
 expression (`Ast.Polymorphism.expr_insts`): every scheme node gets a fresh

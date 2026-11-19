@@ -357,6 +357,7 @@ fn runWith(
     var program = Ast.Program.init(allocator, lifted);
     errdefer program.deinit();
     program.binding_groups = try program.lifted.bindingGroups(allocator);
+    if (@import("builtin").mode == .debug) try verifyGroupOwnedLocals(allocator, &program.lifted, program.binding_groups);
 
     var counters: WorkCounters = .{};
     const counted = diagnostics.isSet(.lambda_solve_stats);
@@ -376,6 +377,20 @@ fn runWith(
     }
 
     return program;
+}
+
+/// Each local has one type, so only functions of one binding group may name
+/// it: a later group relating it would relate a scheme node of the group that
+/// generalized it (design.md "Lambda Set Generalization"). Lambda symbols are
+/// checked when bodies are solved (`verifyDistinctFnSymbols`).
+fn verifyGroupOwnedLocals(allocator: Allocator, lifted: *const Lifted.Program, groups: Lifted.BindingGroups) Allocator.Error!void {
+    if (try lifted.localSharedAcrossGroups(allocator, groups)) |shared| {
+        Common.invariantFmt("lifted functions {d} and {d} of different binding groups both name local {d}", .{
+            @backingInt(shared.first),
+            @backingInt(shared.second),
+            @backingInt(shared.local),
+        });
+    }
 }
 
 /// The solver holding `program`'s finished solution, with `counters`
