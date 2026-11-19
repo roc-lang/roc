@@ -27194,15 +27194,7 @@ const SealedSchemeSlots = struct {
                         for (0..tag_union.tags.len()) |tag_index| try self.pushSlice(tag_union.tags.get(tag_index).args, .result);
                         try self.push(tag_union.ext, .result);
                     },
-                    .nominal => |nominal| switch (nominal.representation) {
-                        .builtin => |builtin_nominal| if (builtinRuntimeEncoding(builtin_nominal) == .try_nominal and nominal.args.len == 2) {
-                            try self.push(nominal.args[0], .ordinary);
-                            try self.push(nominal.args[1], .result);
-                        } else {
-                            try self.pushSlice(nominal.args, .ordinary);
-                        },
-                        .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => try self.pushSlice(nominal.args, .ordinary),
-                    },
+                    .nominal => |nominal| try self.pushSlice(nominal.args, .ordinary),
                     .record, .tuple, .function => try self.push(step.ty, .ordinary),
                     .flex, .rigid, .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
                 },
@@ -27260,8 +27252,8 @@ const SealedSchemeSlots = struct {
     }
 };
 
-/// Independent scalar oracle, compiled only for tests. Kept unchanged from
-/// the original per-variable implementation to check the batched producer.
+/// Independent scalar oracle, compiled only for tests: a per-variable
+/// implementation that checks the batched producer.
 /// Whether a procedure template's scheme variable is SEALED (design.md
 /// "Sealed Result Rows"), over one module's checked types. The walks share
 /// scratch the walk owns, so a query allocates only to grow it.
@@ -27348,9 +27340,9 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
     /// Whether `variable` occurs in the function type `fn_root` anywhere but
     /// along its result's coercion reach: an argument, or a position under
     /// the result that a row coercion does not reach (design.md "Row
-    /// Coercion Primitive": the root row, tag payload rows, the error
-    /// argument of a `Try`, and alias backings are reached; records, tuples,
-    /// lists, boxes, functions, and other named types' arguments are not).
+    /// Coercion Primitive": the root row, tag payload rows, and alias
+    /// backings are reached; records, tuples, functions, and named types'
+    /// arguments are not).
     fn occursOutsideResultReach(self: *SealedSchemeVarWalk, fn_root: CheckedTypeId, variable: CheckedTypeId) Allocator.Error!bool {
         const signature = self.function(fn_root) orelse return true;
         const allocator = self.allocator;
@@ -27374,17 +27366,7 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
                     }
                     try self.reached.append(allocator, tag_union.ext);
                 },
-                .nominal => |nominal| switch (nominal.representation) {
-                    .builtin => |builtin_nominal| if (builtinRuntimeEncoding(builtin_nominal) == .try_nominal and nominal.args.len == 2) {
-                        if (try self.mentionsVariable(nominal.args[0], variable)) return true;
-                        try self.reached.append(allocator, nominal.args[1]);
-                    } else {
-                        for (nominal.args) |arg| if (try self.mentionsVariable(arg, variable)) return true;
-                    },
-                    .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {
-                        for (nominal.args) |arg| if (try self.mentionsVariable(arg, variable)) return true;
-                    },
-                },
+                .nominal => |nominal| for (nominal.args) |arg| if (try self.mentionsVariable(arg, variable)) return true,
                 .flex, .rigid, .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
                 .record, .tuple, .function => if (try self.mentionsVariable(ty, variable)) return true,
             }
@@ -40583,7 +40565,7 @@ test "sealed slot batching preserves bounded eligibility and duplicate slot orde
     try f.expectSlots(&variables, unit, &.{}, &.{});
 }
 
-test "sealed slot batching separates full and result reach for aliases Try and containers" {
+test "sealed slot batching separates full and result reach for aliases and containers" {
     var f = SealedSlotsFixture{};
     defer f.deinit();
     const unit = try f.add(.empty_record);
@@ -40605,15 +40587,6 @@ test "sealed slot batching separates full and result reach for aliases Try and c
     try f.expectSlots(&variables, try f.function(&.{only_argument}, unit), &.{}, &.{ 1, 2 });
     const alias_evidence = [_]static_dispatch.EvidenceParamRecord{try f.evidence(only_argument, unit)};
     try f.expectSlots(&variables, try f.function(&.{unit}, unit), &alias_evidence, &.{ 1, 2 });
-    const try_result = try f.nominal(.{ .builtin = .try_ }, &.{ a, b });
-    try f.expectSlots(&variables, try f.function(&.{unit}, try_result), &.{}, &.{ 1, 2 });
-    const success_row = try f.tag(&.{}, a);
-    const error_row = try f.tag(&.{}, b);
-    try f.expectSlots(&variables, try f.function(&.{unit}, try f.nominal(.{ .builtin = .try_ }, &.{ success_row, error_row })), &.{}, &.{ 1, 2 });
-    // The Try exception applies only at exactly two arguments.
-    for ([_][]const CheckedTypeId{ &.{a}, &.{ a, b, c } }, [_][]const u32{ &.{ 1, 2 }, &.{} }) |args, expected| {
-        try f.expectSlots(&variables, try f.function(&.{unit}, try f.nominal(.{ .builtin = .try_ }, args)), &.{}, expected);
-    }
     const containers = [_]CheckedTypeId{
         try f.record(a, unit),
         try f.tuple(&.{a}),

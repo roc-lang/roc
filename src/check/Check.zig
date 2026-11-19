@@ -12212,17 +12212,6 @@ fn existingWhereMethodUse(
     base.invariant("where-method use record omitted its signature callable copy", .{});
 }
 
-/// The builtin `Try(ok, err)` identity handed to an instantiation that resolves
-/// polarity markers by position: a `Try` written as a where-method signature's
-/// direct result passes the widening adapter's reach to its ERROR row, so a
-/// referenced declaration standing in that position must too.
-fn tryNominalIdent(self: *const Self) Instantiator.TryNominalIdent {
-    return .{
-        .short = self.cir.idents.@"try",
-        .qualified = self.cir.idents.builtin_try,
-    };
-}
-
 /// Instantiate a type declaration's var for use in a type annotation,
 /// resolving polarity vars (the deferred tag-union extensions of alias
 /// declaration bodies) per `polarity_behavior`, starting the polarity walk at
@@ -12308,7 +12297,6 @@ fn instantiateVarPolarized(
     instantiate_ctx.polarity_var_behavior = polarity_behavior;
     instantiate_ctx.current_polarity = polarity;
     instantiate_ctx.current_reach = reach;
-    instantiate_ctx.try_nominal = self.tryNominalIdent();
     instantiate_ctx.opened_marker_exts = &opened_marker_exts;
     instantiate_ctx.preserved_marker_exts = self.alias_hidden_exts;
     instantiate_ctx.nominal_argument_position = .{ .context = self, .resolve = nominalArgumentPosition };
@@ -13033,7 +13021,6 @@ fn instantiateVarWithSubsPolarizedFromScheme(
     instantiate_ctx.polarity_var_behavior = polarity_behavior;
     instantiate_ctx.current_polarity = polarity;
     instantiate_ctx.current_reach = reach;
-    instantiate_ctx.try_nominal = self.tryNominalIdent();
     instantiate_ctx.opened_marker_exts = &opened_marker_exts;
     instantiate_ctx.preserved_marker_exts = self.alias_hidden_exts;
     instantiate_ctx.nominal_argument_position = .{ .context = self, .resolve = nominalArgumentPosition };
@@ -25234,13 +25221,10 @@ const GenTypeAnnoCtx = union(enum) {
             /// re-aims a function written here to those two reaches.
             signature,
             /// The signature's direct result. A use may widen a row written
-            /// here, and the walk descends into a `Try` result's arguments.
+            /// here, but nothing below it.
             result,
-            /// A type argument of a `Try` result. A use may widen a row
-            /// written here, but nothing below it.
-            try_row,
-            /// Every other position: inside a `List`, a record field, a
-            /// tuple, a tag payload, a function, or a non-`Try` nominal.
+            /// Every other position: inside a record field, a tuple, a tag
+            /// payload, a function, or an argument of a named type.
             nested,
         };
     };
@@ -25278,8 +25262,8 @@ const GenTypeAnnoCtx = union(enum) {
     /// Where a referenced declaration's own root sits relative to the rows a
     /// where-method use may widen. `.defer_open` carries the walk
     /// on from here, so a marker the referenced declaration mints under a
-    /// `List`, a record field, a tuple, a tag payload, a function or a
-    /// non-`Try` nominal closes instead of reopening per use.
+    /// record field, a tuple, a tag payload, a function or an argument of a
+    /// named type closes instead of reopening per use.
     fn instantiationReach(self: GenTypeAnnoCtx) Instantiator.AdapterReach {
         return switch (self) {
             .annotation => |anno_ctx| switch (anno_ctx.adapter_reach) {
@@ -25287,7 +25271,6 @@ const GenTypeAnnoCtx = union(enum) {
                 // is walked by the instantiator from its direct result.
                 .signature => .signature,
                 .result => .result,
-                .try_row => .try_row,
                 .nested => .nested,
             },
             // A declaration body has no use-site result position to reach.
@@ -25313,7 +25296,7 @@ const GenTypeAnnoCtx = union(enum) {
                 // tag union at any depth, and only the ones standing on this
                 // position's own row stay deferred.
                 .per_use => switch (anno_ctx.adapter_reach) {
-                    .signature, .result, .try_row => .defer_open,
+                    .signature, .result => .defer_open,
                     .nested => .close,
                 },
                 .as_written => .close,
@@ -25874,10 +25857,8 @@ fn codecDemandRejectsAuditedTag(
 /// (`coercion_reach_seen`) and every position below one it does not
 /// (`coercion_outside_seen`), exactly as the coercion reaches rows (design.md
 /// "Row Coercion Primitive"): a tag union's tags' payloads and its extension,
-/// an alias's backing, and both arguments of `Try`, whose backing
-/// `[Ok(a), Err(e)]` places each in a tag payload. Every other position—a
-/// record field, a tuple item, a function argument or result, an argument of
-/// `List` or of a user nominal—ends the reach.
+/// and an alias's backing. Every other position—a record field, a tuple item,
+/// a function argument or result, an argument of a named type—ends the reach.
 ///
 /// Reach is a property of POSITIONS, not of variables: a variable at any
 /// position outside the reach is outside it, even when it is also reachable
@@ -25903,14 +25884,7 @@ fn computeCoercionReach(self: *Self, root: Var) std.mem.Allocator.Error!void {
                     }
                     try self.coercion_reach_stack.append(self.gpa, union_.ext);
                 },
-                .nominal_type => |nominal| {
-                    if (self.nominalIsBuiltinTry(nominal)) {
-                        try self.coercion_reach_stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal));
-                    } else {
-                        try self.appendCoercionOutsideChildren(flat);
-                    }
-                },
-                .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record => try self.appendCoercionOutsideChildren(flat),
+                .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record => try self.appendCoercionOutsideChildren(flat),
                 .empty_record, .empty_tag_union => {},
             },
             .flex, .rigid, .err, .field_presence => {},
@@ -25963,10 +25937,6 @@ fn appendCoercionOutsideChildren(self: *Self, flat: FlatType) std.mem.Allocator.
     }
 }
 
-fn nominalIsBuiltinTry(self: *const Self, nominal: types_mod.NominalType) bool {
-    return nominal.originIsBuiltin() and nominal.sourceDeclOptional() == self.builtinTrySourceDecl();
-}
-
 /// Whether the row coercion may widen the row at `var_`: a position it
 /// reaches and no position outside it shares.
 fn coercionMayWiden(self: *const Self, var_: Var) bool {
@@ -26014,23 +25984,7 @@ fn widenedReachCopy(self: *Self, root: Var, use_expr: CIR.Expr.Idx, env: *Env, r
             },
             .structure => |flat| switch (flat) {
                 .tag_union => try self.widenedRowCopy(resolved.var_, env, region),
-                .nominal_type => |nominal| blk: {
-                    // Copying appends to the type store, so read the arguments
-                    // out of it first.
-                    const args = try self.gpa.dupe(Var, self.types.sliceNominalArgs(nominal));
-                    defer self.gpa.free(args);
-                    var changed = false;
-                    for (args) |*arg| {
-                        const arg_copy = self.widenedCopyOf(arg.*);
-                        changed = changed or arg_copy != self.types.resolveVar(arg.*).var_;
-                        arg.* = arg_copy;
-                    }
-                    if (!changed) break :blk resolved.var_;
-                    var widened = nominal;
-                    widened.args = try self.types.appendVars(args);
-                    break :blk try self.freshFromContent(.{ .structure = .{ .nominal_type = widened } }, env, region);
-                },
-                .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record, .empty_record, .empty_tag_union => resolved.var_,
+                .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record, .empty_record, .empty_tag_union => resolved.var_,
             },
             // A variable an enclosing scope owns is still that scope's to
             // determine: a result relation leaves a placeholder in its
@@ -26084,8 +26038,8 @@ fn widenedCopyOf(self: *const Self, var_: Var) Var {
     return self.widened_use_copies.get(resolved) orelse resolved;
 }
 
-/// The variables a reached variable's copy is built from: an alias's backing,
-/// every payload on a tag union's extension chain, and a `Try`'s arguments.
+/// The variables a reached variable's copy is built from: an alias's backing
+/// and every payload on a tag union's extension chain.
 fn appendWidenedReachChildren(self: *Self, var_: Var, children: *std.ArrayListUnmanaged(Var)) std.mem.Allocator.Error!void {
     const resolved = self.types.resolveVar(var_);
     switch (resolved.desc.content) {
@@ -26111,8 +26065,7 @@ fn appendWidenedReachChildren(self: *Self, var_: Var, children: *std.ArrayListUn
                     }
                 }
             },
-            .nominal_type => |nominal| try children.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
-            .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record, .empty_record, .empty_tag_union => {},
+            .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record, .empty_record, .empty_tag_union => {},
         },
         .flex, .rigid, .err, .field_presence => {},
     }
@@ -27106,15 +27059,6 @@ fn annoIsAnonymousOpenExt(self: *const Self, ext_anno_idx: CIR.TypeAnno.Idx) boo
     return ext_anno == .rigid_var and ext_anno.rigid_var.name.eql(self.cir.idents.open_ext);
 }
 
-/// The statement index of the builtin `Try` declaration, in the module that
-/// owns it. Null when this compilation has no builtin module to resolve
-/// against, in which case nothing can be the builtin `Try`.
-fn builtinTrySourceDecl(self: *const Self) ?u32 {
-    if (self.isCheckingBuiltinModuleDirectly()) return self.sourceDeclForBuiltinNominal(.try_type);
-    const indices = self.builtin_ctx.builtin_indices orelse return null;
-    return @backingInt(indices.try_type);
-}
-
 /// Source-formal adapter positions from the completed declaration graph.
 /// Every occurrence participates; an unreachable occurrence keeps a shared
 /// actual closed. The visited (variable, reach) pairs make recursion finite.
@@ -27186,7 +27130,10 @@ fn walkApplicationArgumentReaches(self: *Self, apply: CIR.TypeAnno.Apply, env: *
         for (formals, 0..) |formal, index| {
             if (self.types.resolveVar(formal).var_ != resolved.var_) continue;
             formal_found = true;
-            result[index] = if (!seen_formals.items[index]) item.reach else if (result[index] == .nested or item.reach == .nested) .nested else if (result[index] == item.reach) item.reach else .try_row;
+            // A formal standing both as the whole signature and as its
+            // direct result takes the result's reach, which opens a row
+            // written there and nothing below it.
+            result[index] = if (!seen_formals.items[index]) item.reach else if (result[index] == .nested or item.reach == .nested) .nested else if (result[index] == item.reach) item.reach else .result;
             seen_formals.items[index] = true;
         }
         if (formal_found) continue;
@@ -27198,12 +27145,8 @@ fn walkApplicationArgumentReaches(self: *Self, apply: CIR.TypeAnno.Apply, env: *
                     try pending.append(self.gpa, .{ .var_ = func.ret, .reach = base.annotation_positions.functionReturnReach(item.reach) });
                     for (self.types.sliceVars(func.effect_deps)) |dep| try pending.append(self.gpa, .{ .var_ = dep, .reach = .nested });
                 },
-                .nominal_type => |nominal| {
-                    const is_try = nominal.originIsBuiltin() and nominal.sourceDeclOptional() == self.builtinTrySourceDecl();
-                    for (self.types.sliceNominalArgs(nominal), 0..) |arg, index| try pending.append(self.gpa, .{
-                        .var_ = arg,
-                        .reach = base.annotation_positions.nominalArgumentReach(item.reach, is_try, index),
-                    });
+                .nominal_type => |nominal| for (self.types.sliceNominalArgs(nominal)) |arg| {
+                    try pending.append(self.gpa, .{ .var_ = arg, .reach = .nested });
                 },
                 .tuple => |tuple| for (self.types.sliceVars(tuple.elems)) |arg| {
                     try pending.append(self.gpa, .{ .var_ = arg, .reach = .nested });
@@ -28976,8 +28919,8 @@ fn reportNonFunctionWhereRequirement(
 /// Only the output positions a use may widen open per use
 /// (`AnnotationGenCtx.AdapterReach`). The return starts at
 /// `.result`; every other position of the signature—the receiver, the
-/// arguments, and anything the walk descends into that is not a `Try`
-/// result's rows—keeps its row as written.
+/// arguments, and anything below the result's own row—keeps its row as
+/// written.
 fn whereMethodCtx(ctx: GenTypeAnnoCtx) GenTypeAnnoCtx {
     return switch (ctx) {
         .annotation => |anno_ctx| .{ .annotation = .{
@@ -29029,9 +28972,9 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
         // position is an output position too, while `Handler(e) : e -> Str`
         // holds `e` contravariantly, so the `[A, B]` of `Handler([A, B])`
         // is generated closed exactly like the `[A, B] -> Str` the
-        // reference stands for. A `Try` written as the direct result also
-        // passes the adapter's reach to its ERROR row; every other
-        // application argument puts its arguments out of reach.
+        // reference stands for. An alias passes the adapter's reach to
+        // the formals its backing places on its own row; an argument of a
+        // nominal type is out of reach.
         frame.state.apply.reaches_start = try self.applicationArgumentReaches(a, env, ctx);
         frame.state.apply.positions = switch (try annotation_positions.classify(self.gpa, .{
             .builtin_owner = self.builtin_ctx.builtin_module,
@@ -29422,7 +29365,7 @@ fn stepTagUnionAnnoGen(self: *Self, frame: *AnnoGenFrame, tag_union: std.meta.fi
     const deferred_open = output_opening == .per_use and switch (ctx.annotation.adapter_reach) {
         // Reachable: the row defers its open/closed decision to
         // the use site (a polarity marker).
-        .signature, .result, .try_row => true,
+        .signature, .result => true,
         // Out of reach: generated as written, so a body use that widens
         // it is an ordinary mismatch instead of a widening no lowering
         // can express.
@@ -49869,7 +49812,7 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
             // the result's row (design.md "Row Subsumption"). A host-boundary
             // row is the exception: it never widens, so it is equated with the
             // result and a wider result is a mismatch (design.md "Row Joins").
-            if (gathered.nested or (self.varIsEmptyTagUnion(gathered.tail) and !gathered.host_fixed)) {
+            if (gathered.nested or (self.tryReturnTailGainsNoTag(gathered.tail, composed.err) and !gathered.host_fixed)) {
                 _ = try self.gatherTryReturnRow(root, true);
                 const projection = try self.projectTryReturnRow(gathered.tail, env, self.cir.store.getExprRegion(plan.expr));
                 try rows.projections.put(root, projection);
@@ -49956,8 +49899,9 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
             .projected => |projection| tail = projection.tail,
         }
         if (self.types.resolveVar(tail).var_ == self.types.resolveVar(composed.err).var_) continue;
-        // A closed source row has no residual to relate.
-        if (self.varIsEmptyTagUnion(tail)) continue;
+        // A closed source row, or one its annotation bounds, has no residual
+        // to relate.
+        if (self.tryReturnTailGainsNoTag(tail, composed.err)) continue;
         try self.normalizeTryReturnRow(tail, plan.expr, env);
         const gathered = try self.gatherTryReturnRow(tail, true);
         if (rows.tags.items.len > 0) {
@@ -49991,6 +49935,20 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
     }
 
     return composed_var;
+}
+
+/// Whether a `?` source row ending in `tail` can gain no tag: it is closed,
+/// or its extension is one an annotation bounds (an annotated value's row).
+/// Such a row is included by its heads alone and relates no tail. The
+/// composed result's own row tail is excluded: it is the destination.
+fn tryReturnTailGainsNoTag(self: *Self, tail: Var, composed_err: Var) bool {
+    const resolved = self.types.resolveVar(tail);
+    if (resolved.var_ == self.types.resolveVar(self.tagRowTail(composed_err)).var_) return false;
+    return switch (resolved.desc.content) {
+        .structure => |flat| flat == .empty_tag_union,
+        .flex => resolved.desc.flags.bounded_row_ext,
+        .alias, .rigid, .field_presence, .err => false,
+    };
 }
 
 /// Open a fixpoint for a frame that generalizes at `rank`, returning its index.
