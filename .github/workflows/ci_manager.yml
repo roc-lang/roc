@@ -769,6 +769,9 @@ jobs:
       - name: Test native instruction-cache publication
         run: zig test src/machine_code_shim/instruction_cache.zig -O ReleaseSafe
 
+      - name: Test foreground app interrupts
+        run: python3 ci/test_run_sigint.py ./zig-out/bin/roc
+
       - name: run hello_world.roc
         run: |
           set -euo pipefail

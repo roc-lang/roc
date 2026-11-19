@@ -2116,14 +2116,24 @@ is already known, but it does not interpret an alias annotation to rediscover
 the nominal owner. A lookup through a local or imported alias is explicit CIR
 carrying the alias declaration and requested item. Checking follows the solved
 alias backing to its terminal nominal, resolves that nominal's owner by module
-content identity, and performs the exact owner-and-item method lookup. It then
-replaces the source node with the exact target module identity, type node, and
-definition. A method of a type declared in a function body is a local binding,
-so a lookup selecting one is replaced with the local lookup of that binding,
-exactly what naming the method through its own type canonicalizes to, and is
-checked as one. Alias traversal has no source-text reconstruction or fixed hop
-limit; invalid and cyclic aliases must already resolve to the checker error
-type.
+content identity, and performs the exact owner-and-item method lookup. A
+target in another module replaces the source node with the exact target module
+identity, type node, and definition. A target in this module is a binding of
+this module, whether a top-level def or a method of a type declared in a
+function body, so the lookup is replaced with the local lookup of that
+binding, exactly what naming the method through its own type canonicalizes to,
+and is checked as one. A reference through an alias therefore follows the
+binding's checking status by the same rule a reference by name does (Def
+Checking Order): there is one status-aware same-module reference path, not
+two. Alias traversal has no source-text reconstruction or fixed hop limit;
+invalid and cyclic aliases must already resolve to the checker error type.
+
+A lookup through a local alias that selects a top-level def of this module is
+a name reference to that def, so it contributes an edge to the name-reference
+graph that orders binding groups. Type declarations are generated before the
+check order is computed, so the graph's reference collection asks the checker
+for the lookup's target (`DependencyGraph.AssociatedLocalTargets`) during its
+one walk; the dependency graph never interprets a type declaration itself.
 
 Every other method lookup on a type follows the same rule. An alias
 declaration owns no methods (an alias cannot have an associated block), so a
@@ -5794,8 +5804,9 @@ condensation of the name-reference graph, in deterministic topological order
 (groups ordered by their first member's source position among independent
 groups; members within a group in source order). The graph covers every name
 reference in a def's expression tree—nested lambda bodies and blocks
-included—plus statically-resolvable type-qualified method-call targets. It
-is transient checking input computed from canonicalization output when
+included—plus statically-resolvable type-qualified method-call targets and
+associated values named through a local type alias (Associated Item Lookup
+Through Aliases). It is transient checking input computed from canonicalization output when
 checking starts and freed with the checker; a checked module never stores it.
 
 Because groups are checked in dependency order, a name reference between
@@ -11159,7 +11170,11 @@ generated-private witness, the constructor emits an exact container witness
 that references the child directly and relates matching structure through the
 producer-aware value relation. It never merges the child into the corresponding
 public slot or asks a later consumer to recover the child's runtime
-representation from the public container shape.
+representation from the public container shape. A record update follows the
+same rule for every field it does not supply or unset: that field's child is
+the base value's field, so a generated-private representation the base carries
+there is the update's field type, and the unchanged field has one type in the
+base and the result.
 
 A lambda is such a constructor for its result: a function type carries its
 result's representation, so a lambda that returns a produced iterator has a
@@ -13590,6 +13605,25 @@ The rule is carried by one bit on each tag entry of a row,
   warning, never add one, so copies that rebuild tags field by field
   (instantiation, import, frozen replay copies) leave the copy unmarked.
 
+One tag can be stored as more than one entry, and a producer clears only the
+entry it meets. The unifier rebuilds a related row flat over its chain's tail,
+so a part further along the chain keeps its own entry for each tag the merged
+row now also holds, and stays reachable through every other row that extends
+it. When both rows of a relation hold tags the other lacks, each side's unique
+tags are stored both in the merged row and in the part the other side's
+extension becomes. In both cases a marked tag's two entries are journaled as
+one tag (`Store.pattern_only_tag_copies`: the part that keeps its entry, the
+merged row, and the tag's name), at the merge that makes the copy. A relation
+that copies no marked tag journals nothing, which is every relation of a
+single-part pattern row with the row it matches. The journal is diagnostic
+metadata like the mark, and a savepoint's rollback truncates it with the rest
+of the store.
+
+The judgment reads a tag as pattern-only when the entry its row lists is
+marked and no entry journaled as the same tag, directly or through other
+journaled copies, is unmarked. The entries are grouped once, at judgment, and
+only when some recorded pattern's entry is still marked.
+
 The mark is diagnostic metadata. Unification never reads it to decide a
 relation, and nothing that identifies a type reads it: canonical and sealed
 type keys, digests, snapshot comparison, exhaustiveness, Monotype, and layouts
@@ -13669,7 +13703,9 @@ The rejected side is pinned by
 `test/snapshots/pattern_only_tag_parameter_no_warning.md`,
 `test/snapshots/pattern_only_tag_produced_no_warning.md`, and
 `test/snapshots/pattern_only_tag_derived_parser_no_warning.md`; the merge rule
-by the unifier tests in `src/check/test/unify_test.zig`.
+and the journal of copies by the unifier tests in
+`src/check/test/unify_test.zig`, and a producer met through a shared extension
+by `src/check/test/issue_13105_test.zig`.
 
 ### Hosted Try Question Widening Removed
 
@@ -19581,8 +19617,12 @@ the objects of such a module's import closure the moment the module is
 type-checked, and the units of those that can have an object build while
 checking continues. The evaluation asks for them again, for every such module,
 before it completes the value-form roots and builds the root graph, which
-matters after the scheduler starts over under the link's names. Each unit lowers once its imports' units are
-done, since its calls compile against their export interfaces, and the units
+matters after the scheduler starts over under the link's names. Each unit lowers
+only once its imports have standalone objects, since its calls compile against
+their export interfaces. If an import cannot have an object in this compilation
+(for example, a hosted declaration without its platform), neither can its
+importers. Programs evaluating roots against such imports use shared lowering;
+they still wait for every checked value they read. Independent units
 run on the post-check executor alongside checking, the other units, and the
 evaluations of other modules. The evaluations run the same way: a module's
 program is lowered and compiled as its own task of the scheduler's session once
@@ -23892,6 +23932,28 @@ never infer signature relationships by comparing `TypeId`s from independently
 imported roots: equal type ids describe equal Monotype shapes, not runtime
 value flow.
 
+A hosted function has no body to carry values between its signature's
+positions, yet the host may hand back any position of one declaration
+variable as any other: `transfer! : Box(a) => Box(a)` returns the box it was
+given. Every position of `a` must therefore hold one representation, so a row
+join or an erasure that reaches the argument's `a` reaches the result's `a`
+too. Only the checked declaration still tells one variable's positions from
+another variable's: Monotype instantiates `Box(a), Box(b) => Box(a)` at
+equal types for `a` and `b` to one `TypeId`, and joining every occurrence of
+that `TypeId` would tie `b` to `a` by type identity rather than by the
+declaration. Monotype's hosted completion (`hostedSignatureVars`) walks the
+checked declaration beside the specialization's Monotype function type and
+records, for every variable the declaration names more than once, the path
+to each of its positions (`Mono.FnBody.hosted`, a span of
+`Mono.SignatureVarStep`). Aliases are transparent, a nominal steps to its
+arguments (whose argument scope binds their backing occurrences), and record
+fields and tags are found by name. Lifting carries the span unchanged, and
+Lambda Solved registration follows each path through the hosted function's
+type and unifies the positions of one variable
+(`Solver.relateSignatureVars`), before any body is solved and so while every
+position still has its Monotype's children in order. Distinct variables stay
+unrelated whatever they instantiate to.
+
 ### Lambda Solving
 
 Lambda Solved IR keeps the Monotype Lifted expression storage and adds solved
@@ -24265,6 +24327,29 @@ instance and every copy reads one representation of it), and older classes.
 Scheme nodes are never related again once the group finishes: later groups
 only meet their copies, which is what lets one scheme serve every reference. A scheme is an explicit list of nodes (`Ast.Scheme`); the type store has
 no quantifier node.
+
+That rule requires every lifted `LocalId` to belong to exactly one binding
+group: only functions of that group name it (as an argument, a capture slot,
+a binder, or a read). A local has one type, so a function of a later group
+naming it would relate that type after the first group had generalized it.
+Closure lifting shares locals by design: a lifted closure's capture slots are
+the very locals its enclosing body binds. A capture operand's back edge puts
+the closure in its encloser's group only while the encloser still names it,
+which SpecConstr's rewrites can end (the encloser may call a specialization
+or a callable worker instead, leaving the original closure to a
+specialization of the encloser or to no caller at all). So `bindingGroups`
+also links, both ways, every two functions that name a common local, which
+keeps every closure in its encloser's group. Copies must not lean on that
+link, or every copy would join its source's group and lose its lambda-set
+polymorphism: a SpecConstr specialization copies its source function's
+capture slots (`addLocalCopy`, keeping each slot's capture identity, so the
+capture operands that supply the source supply the copy unchanged) and binds
+them in its cloned body, as its arguments, callable workers, and prefix
+functions already get fresh locals. Debug builds check the rule when Lambda
+Solved starts (`verifyGroupOwnedLocals`). LIR `LocalId`s are a separate id
+space with no such rule: specialized LIR procedures, such as the ARC variants
+of one procedure, share them, and the backends and the certifier scope their
+per-local state to each procedure.
 
 A reference to a function of a generalized group from a later group
 (`fn_ref` or direct `call_proc`) instantiates the group once per referencing
@@ -30636,7 +30721,8 @@ test unit; the ordinary units shared with tests contain no test instrumentation.
 
 Each site id is a relocatable field against one import,
 `roc__expect_site_base`, with the field's bytes holding the unit-local id
-as its addend: an `abs32s` immediate on x86_64, and on arm64, whose
+as its addend: an `abs32_field` immediate on x86_64, which a
+`mov r32, imm32` zero-extends, and on arm64, whose
 immediates cannot hold a relocated id, an `abs64_field` literal in the
 instruction stream that a `ldr` loads and a branch skips. The loader binds
 the import per image to the first program-wide id of that image's sites. The program-wide site table is the
@@ -33029,6 +33115,13 @@ exits with the program's status exactly as when the two ran one after the
 other. Nothing the program reads is released by teardown: the executable
 lives in the run's own scratch directory, which is released only after the
 program exits. A build that fails starts nothing.
+
+On POSIX the terminal sends Ctrl+C to the whole foreground process group.
+Once the app starts, it decides what that interrupt means: Roc waits even
+if the app handles it and keeps running. If the app dies from SIGINT, Roc
+finishes cleanup and terminates by SIGINT too, rather than reporting a crash
+or turning the signal into a normal exit code. This also applies to a
+hot-reloading host; until launch, Ctrl+C still interrupts compilation.
 
 ## Relationship To Cor LSS
 

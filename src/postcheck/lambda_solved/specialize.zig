@@ -946,7 +946,7 @@ const Pass = struct {
             fn_.captures = try cloner.cloneTypedLocals(fn_.captures);
             fn_.body = switch (fn_.body) {
                 .roc => |body| .{ .roc = cloner.expr_map.get(body).? },
-                .hosted => .hosted,
+                .hosted => |vars| .{ .hosted = vars },
             };
             self.program.lifted.setFn(clone, fn_);
             if (self.program.lifted.procDebugName(self.program.lifted.getFn(original).symbol)) |name| try self.program.lifted.setProcDebugName(fn_.symbol, name);

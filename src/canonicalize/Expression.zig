@@ -197,7 +197,8 @@ pub const Expr = union(enum) {
     },
     /// An associated value selected through a local type alias declaration.
     /// Checking resolves transparent aliases and replaces this with
-    /// `e_lookup_associated_resolved`.
+    /// `e_lookup_local` when the target is a binding of this module, and with
+    /// `e_lookup_associated_resolved` otherwise.
     e_lookup_associated_local: struct {
         type_node_idx: u32,
         type_ident: Ident.Idx,

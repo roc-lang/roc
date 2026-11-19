@@ -12522,6 +12522,18 @@ pub fn debugSubprogram(
     );
 }
 
+/// Creates a debug info lexical block metadata entry.
+pub fn debugLexicalBlock(
+    self: *Builder,
+    scope: ?Metadata,
+    file: ?Metadata,
+    line: u32,
+    column: u32,
+) Allocator.Error!Metadata {
+    try self.ensureUnusedMetadataCapacity(1, Metadata.LexicalBlock, 0);
+    return self.debugLexicalBlockAssumeCapacity(scope, file, line, column);
+}
+
 /// Creates a debug info source location metadata entry.
 pub fn debugLocation(
     self: *Builder,
@@ -12840,6 +12852,22 @@ fn debugSubprogramAssumeCapacity(
         .ty = .wrap(ty),
         .di_flags = options.di_flags,
         .compile_unit = .wrap(compile_unit),
+    });
+}
+
+fn debugLexicalBlockAssumeCapacity(
+    self: *Builder,
+    scope: ?Metadata,
+    file: ?Metadata,
+    line: u32,
+    column: u32,
+) Metadata {
+    assert(!self.strip);
+    return self.metadataSimpleAssumeCapacity(.lexical_block, Metadata.LexicalBlock{
+        .scope = .wrap(scope),
+        .file = .wrap(file),
+        .line = line,
+        .column = column,
     });
 }
 
