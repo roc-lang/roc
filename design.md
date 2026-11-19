@@ -5926,7 +5926,7 @@ from its low bit:
 |-------|-------|
 | 0-3   | content kind (`ContentKind`) |
 | 4-10  | the flags every kind can hold: `frozen`, `static_dispatch_rejected`, `default_decided`, `nominal_backing_structure`, `bounded_row_ext`, `deferred_callable`, `annotation_tag_ext` |
-| 11-15 | on a flex: `uncommitted_record_tail`, `uncommitted_copy`, `record_pattern_tail`, and the 2-bit literal marker (`Flex.Literal`); on every other kind: `empty_tag_union_is_default`, `host_fixed_row`, `compared_plain`, `annotation_tag_union`, `uncommitted_tag_tail` |
+| 11-15 | on a flex: `uncommitted_record_tail`, `uncommitted_copy`, `record_pattern_tail`, and the 2-bit literal marker (`Flex.Literal`); on every other kind: `host_fixed_row`, `compared_plain`, `annotation_tag_union`, `uncommitted_tag_tail` |
 | 16-17 | generalization's two scratch marks (`generalizing`, `rank_adjusted`) |
 | 18-31 | the 14-bit rank |
 

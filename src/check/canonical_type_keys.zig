@@ -94,11 +94,10 @@ pub fn identityVarsFromVar(
 }
 
 /// Whether the canonical-key walk enumerates a variable with this descriptor
-/// as an identity variable: a flex, a rigid (`#polarity` markers included), or
-/// an identity the checker explicitly closed to `[]`. Every producer of a
-/// scheme instantiation's substitution pairs exactly these variables.
+/// as an identity variable: a flex or a rigid (`#polarity` markers included).
+/// Every producer of a scheme instantiation's substitution pairs exactly these
+/// variables.
 pub fn isIdentityVariable(desc: types.Descriptor) bool {
-    if (desc.flags.empty_tag_union_is_default) return true;
     return switch (desc.content) {
         .flex, .rigid => true,
         .alias, .field_presence, .structure, .err => false,
@@ -107,7 +106,6 @@ pub fn isIdentityVariable(desc: types.Descriptor) bool {
 
 /// `isIdentityVariable`, judged from the descriptor's stored word.
 pub fn isIdentityVariableWord(word: types.Descriptor.Word) bool {
-    if (word.flags().empty_tag_union_is_default) return true;
     return switch (word.kind) {
         .flex, .rigid => true,
         .alias, .field_presence, .err, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => false,
@@ -623,11 +621,6 @@ const SourceAdapter = struct {
             return .leaf;
         }
 
-        // The checker explicitly records when it closes an otherwise
-        // unresolved identity to `[]`; the surviving root is that identity.
-        if (resolved.desc.flags.empty_tag_union_is_default) {
-            return try self.describeIdentity(sink, var_, .defaulted_empty_tag_union, null, types.StaticDispatchConstraint.SafeList.Range.empty());
-        }
         if (resolved.desc.flags.uncommitted_tag_tail) switch (resolved.desc.content) {
             .structure => |flat| if (flat == .empty_tag_union) {
                 self.saw_uncommitted_tag_tail = true;
@@ -788,7 +781,7 @@ const SourceAdapter = struct {
                     .empty_tag_union => {
                         // The row ends here, so no walk visits its tail as a
                         // node of its own.
-                        if (resolved.desc.flags.uncommitted_tag_tail and !resolved.desc.flags.empty_tag_union_is_default) self.saw_uncommitted_tag_tail = true;
+                        if (resolved.desc.flags.uncommitted_tag_tail) self.saw_uncommitted_tag_tail = true;
                         return null;
                     },
                     .tag_union => |tag_union| {
@@ -1019,7 +1012,6 @@ pub const KeyTag = enum(u8) {
     err_var,
     flex,
     rigid,
-    defaulted_empty_tag_union,
     identity_var_anchor,
     identity_var_ref,
     cycle,
@@ -2147,7 +2139,7 @@ const KeyEncodingReader = struct {
             },
             .cycle, .identity_var_ref => if (try self.varint() == 0) return error.TestUnexpectedResult,
             .identity_var_anchor, .err_var, .opaque_root => _ = try self.varint(),
-            .flex, .rigid, .defaulted_empty_tag_union => {
+            .flex, .rigid => {
                 if (try self.boolean()) try self.lengthPrefixed();
                 if (try self.varint() != 0) return error.TestUnexpectedResult;
             },
@@ -2187,7 +2179,6 @@ const KeyEncodingReader = struct {
                             .err_var,
                             .flex,
                             .rigid,
-                            .defaulted_empty_tag_union,
                             .identity_var_anchor,
                             .identity_var_ref,
                             .cycle,

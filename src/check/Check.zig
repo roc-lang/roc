@@ -9755,7 +9755,6 @@ test "a frozen copy carries exactly the flags an instantiated copy carries" {
     const store = checker.types;
     const original = try store.freshFromContent(.{ .structure = .empty_record });
     const original_flags: types_mod.types.DescriptorFlags = .{
-        .empty_tag_union_is_default = true,
         .static_dispatch_rejected = true,
         .annotation_tag_ext = true,
         .nominal_backing_structure = true,
@@ -16029,7 +16028,6 @@ const ErroneousTypeMemo = struct {
             if (var_state == erroneous) break true;
             try self.setState(var_, visiting);
             try self.visited.append(gpa, var_);
-            if (resolved.desc.flags.empty_tag_union_is_default) continue;
             switch (resolved.desc.content) {
                 .err, .field_presence => break true,
                 .flex => |flex| for (store.sliceStaticDispatchConstraints(flex.constraints)) |constraint| try self.push(constraint.fn_var),
@@ -63090,17 +63088,7 @@ fn constrainDerivedParserErrorEquality(
         const resolved = self.types.resolveVar(current);
         switch (resolved.desc.content) {
             .structure => |structure| switch (structure) {
-                .empty_tag_union => {
-                    // Inclusion commits the instantiated child's absent-error
-                    // proof. Publication must retain a closed row here, not a
-                    // default awaiting a relation to the parent's wider row.
-                    if (resolved.desc.flags.empty_tag_union_is_default) {
-                        const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
-                        const result = try self.unify(resolved.var_, empty, env);
-                        if (!result.isEstablished()) return .reported_error;
-                    }
-                    break;
-                },
+                .empty_tag_union => break,
                 .tag_union => |row| {
                     const tags = self.types.getTagsSlice(row.tags);
                     for (tags.items(.name), tags.items(.args)) |name, args| {
