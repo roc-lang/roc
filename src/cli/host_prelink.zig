@@ -778,7 +778,7 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
     };
     @memcpy(out[0..@sizeOf(Header)], std.mem.asBytes(&header));
     @memcpy(out[host_offset..][0..@intCast(shoff)], exe[0..@intCast(shoff)]);
-    if (moved_strtab) |strtab| @memcpy(out[host_offset + shoff ..][0..strtab.len], strtab);
+    if (moved_strtab) |strtab| @memcpy(out[@intCast(host_offset + shoff)..][0..strtab.len], strtab);
     @memcpy(out[@intCast(sht_offset)..][0..sht.len], sht);
     var host_digest: [32]u8 = undefined;
     std.crypto.hash.Blake3.hash(out[host_offset..][0..@intCast(host_len)], &host_digest, .{});
