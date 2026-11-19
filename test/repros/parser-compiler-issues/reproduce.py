@@ -84,7 +84,7 @@ main! = |_args| {
 '''
             )
         commands = {
-            "13204": ["check", "--no-cache", "-j1", "package/main.roc"],
+            "13204": ["check", "--no-cache", "-j1", "main.roc"],
             "13207": ["build", "--no-cache", "--fuzz", "fuzz/TextProperties.roc"],
             "13208": ["build", "--no-cache", "--opt=speed", "fuzz/XmlSpecConstrRepro.roc"],
             "13213": ["build", "--no-cache", "--fuzz", "fuzz/RecordsProperties.roc"],

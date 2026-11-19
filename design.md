@@ -11356,8 +11356,12 @@ is not merged or reinterpreted.
 
 Lambda Solved transfers callable evidence across a public-to-generated relation
 with a separate structure-preserving walk. That walk validates corresponding
-public and private structure while retaining both sealed Monotype roots, and it
-unifies only callable slots and still-open Lambda Solved slots. This makes a
+public and private structure while retaining both sealed Monotype roots.
+Corresponding functions describe the same runtime call: their callable slots,
+arguments and results unify. In particular, a row join in a step function's
+result must reach calls through either view, even when the join happens after
+the views are related. Outside function boundaries the walk transfers evidence
+without merging the enclosing public and private backings. This makes a
 SpecConstr-authored callable worker visible in the exact private representation
 that contains it without using the public representation as a replacement.
 When the walk reaches a public iterator viewing a minted or forced-dynamic

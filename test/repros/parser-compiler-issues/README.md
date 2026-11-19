@@ -15,24 +15,30 @@ checks without errors. The alternate checkout used by the driver no
 longer crashes either, but reports the two AsciiDoc and one QIF typing
 errors documented in #13207. The #13207 Text fuzz build and the #13208
 optimized XML build both produce executables. The #13213 Records build
-gets past the duplicate-tag invariant but still aborts in
-`SolvedLirLower.stepVariantsBoundary` when lowering a known call's return
-value: `tag union boundary saw two different tag rows`. No ReleaseFast
-comparison has been completed.
+also produces its fuzz executable. After fixing checked row substitution,
+it exposed a second failure at `(iterator.step)()`: the public field
+projection and private backing shared the step's callable slot but not its
+result row. A later join gave the procedure a 16-variant nested row where
+the caller still expected 12. Relating the argument and return types at
+the callable boundary keeps both call ABIs equal without merging the
+enclosing backing records. A Lambda Solved unit test checks both properties.
 
 ## Pinned full-input reproductions
 
 Download and extract these public source archives into separate directories:
 
-- #13204, #13207, #13208:
+- #13204: the published `6.0.0-rc.3` package, SHA-256
+  `50384173e61afd07662dddb96bae8360f0589cf43aad03975454df29f7776265`:
+  https://github.com/lukewilliamboswell/roc-parser/releases/download/6.0.0-rc.3/FTL1xt1rA9nXzoYkhFAW9yF75Kn52bS3cpBr7wZNfPq2.tar.zst
+- #13207, #13208:
   https://codeload.github.com/lukewilliamboswell/roc-parser/tar.gz/0113bc9e9e8aee0277b67223ae1923b114849682
 - #13213:
   https://codeload.github.com/lukewilliamboswell/roc-parser/tar.gz/faa9297b4419b26a5255e9ca7c39eb3d9f816f74
 
-Pass the extracted repository root, not its `package` subdirectory:
+Pass the extracted package root for #13204 and the repository root for the other three:
 
 ```sh
-python3 test/repros/parser-compiler-issues/reproduce.py 13204 --roc zig-out/bin/roc --source /path/to/original
+python3 test/repros/parser-compiler-issues/reproduce.py 13204 --roc zig-out/bin/roc --source /path/to/rc3
 python3 test/repros/parser-compiler-issues/reproduce.py 13207 --roc zig-out/bin/roc --source /path/to/original
 python3 test/repros/parser-compiler-issues/reproduce.py 13208 --roc zig-out/bin/roc --source /path/to/original
 python3 test/repros/parser-compiler-issues/reproduce.py 13213 --roc zig-out/bin/roc --source /path/to/records

@@ -5055,15 +5055,12 @@ const Solver = struct {
                 if (public_fn.args.count() != private_fn.args.count()) {
                     Common.invariant("generated-private evidence relation received functions of different arity");
                 }
-                for (0..public_fn.args.count()) |index| {
-                    try self.pushRelate(
-                        stack,
-                        self.program.types.spanItem(public_fn.args, index),
-                        self.program.types.spanItem(private_fn.args, index),
-                    );
-                }
+                // These are two views of the same callable. Values cross
+                // the call in both directions, not just the callable slot:
+                // a later row join at either view changes the one call ABI.
+                try self.pushSpanPairs(stack, public_fn.args, private_fn.args, "generated-private function argument arity changed");
                 try self.pushUnifyPair(stack, public_fn.callable, private_fn.callable);
-                try self.pushRelate(stack, public_fn.ret, private_fn.ret);
+                try self.pushUnifyPair(stack, public_fn.ret, private_fn.ret);
             },
             .named => |public_named| {
                 if (private_content_tag != .named) {
@@ -7179,7 +7176,10 @@ test "generated-private evidence traverses a public inspectable named backing" {
     defer program.deinit();
 
     const field_name = try program.lifted.names.internRecordFieldLabel("step");
-    const ret_ty = try program.types.add(.zst);
+    const tag_name = try program.lifted.names.internTagLabel("Done");
+    const tags = try program.types.addTags(&.{.{ .name = tag_name, .checked_name = tag_name, .payloads = .empty() }});
+    const public_ret = try program.types.add(.{ .tag_union = tags });
+    const private_ret = try program.types.add(.{ .tag_union = tags });
     const public_callable = try program.types.add(.unbound);
     const private_callable = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{
         .lambda = @fromBackingInt(@intCast(1)),
@@ -7188,12 +7188,12 @@ test "generated-private evidence traverses a public inspectable named backing" {
     const public_fn = try program.types.add(.{ .func = .{
         .args = .empty(),
         .callable = public_callable,
-        .ret = ret_ty,
+        .ret = public_ret,
     } });
     const private_fn = try program.types.add(.{ .func = .{
         .args = .empty(),
         .callable = private_callable,
-        .ret = ret_ty,
+        .ret = private_ret,
     } });
     const public_backing = try program.types.add(.{ .record = try program.types.addFields(&.{.{
         .name = field_name,
@@ -7221,6 +7221,7 @@ test "generated-private evidence traverses a public inspectable named backing" {
         program.types.rootCompressed(public_callable),
         program.types.rootCompressed(private_callable),
     );
+    try std.testing.expectEqual(program.types.rootCompressed(public_ret), program.types.rootCompressed(private_ret));
     try std.testing.expect(program.types.rootCompressed(public_named) != program.types.rootCompressed(private_record));
     try std.testing.expect(program.types.rootCompressed(public_backing) != program.types.rootCompressed(private_record));
 }
