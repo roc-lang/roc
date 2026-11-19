@@ -830,7 +830,7 @@ const ReadDependency = union(enum) {
     local: Ast.LocalId,
     /// A closed value: it reads no runtime local.
     closed,
-    /// A field or tuple projection, which reads part of this receiver.
+    /// A record field read or tuple element read of this receiver.
     receiver: Ast.ExprId,
     /// A function reference, built from these capture operands.
     captures: Ast.Span(Ast.CaptureOperand),
@@ -906,8 +906,9 @@ fn readDependency(program: *const Ast.Program, expr_id: Ast.ExprId) ReadDependen
 }
 
 /// Whether `expr_id` is a substitutable read (`ReadDependency`): a local or
-/// closed leaf, or a projection or function reference whose operands all
-/// are. A projection continues with its single operand; a function
+/// closed leaf, or a field read, tuple element read or function reference
+/// whose operands all are. A field or element read continues with its single
+/// operand; a function
 /// reference's further operands wait on a work stack.
 fn exprIsSubstitutable(program: *const Ast.Program, allocator: Allocator, expr_id: Ast.ExprId) Allocator.Error!bool {
     var stack: std.ArrayList(Ast.ExprId) = .empty;
@@ -15265,7 +15266,7 @@ const Cloner = struct {
     /// Append the runtime locals `root` retains, in depth-first order. A
     /// symbolic value retains what its components retain. An expression
     /// retains the owners of the substitutable read it is (`ReadDependency`):
-    /// a local read its local, a projection its receiver's owners, a
+    /// a local read its local, a field or element read its receiver's owners, a
     /// function reference its capture operands' owners, and a closed value
     /// or marker nothing. A runtime anchor retains what its runtime
     /// expression does, never what its symbolic structure names. The walk
