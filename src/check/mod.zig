@@ -135,6 +135,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/typed_cir_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10338_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10690_test.zig"));
+    std.testing.refAllDecls(@import("test/try_ordinary_nominal_test.zig"));
     std.testing.refAllDecls(@import("test/where_method_row_extension_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10695_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10759_test.zig"));
