@@ -26099,6 +26099,17 @@ generates constraints per statement:
   and demand their consumed inputs too. Read-only slices can still select the
   borrowing operation and keep their lender live. Parameter demands and these
   edges settle together with direct-call demands, including across wrappers.
+  A read-only slice of an owned lender that the slice is the last use of is
+  demanded as well, once signatures and borrowed returns have settled: the
+  lender's place (every member other than the slice and the borrows anchored
+  through it) has no read after the slice, and the consumed input is the
+  lender or a pure alias of it. The borrow would only stretch the whole
+  allocation, dropped items included, to the slice's last read, while the
+  transfer costs no refcount operation, so a unique list shrinks in place and
+  releases the items it drops at once. A demand moves the slice's readers out
+  of its lender's place and can leave another slice of that place the last
+  use, so these demands settle to a fixpoint; they never reach a parameter
+  signature, because the demand stops at a lender that is already owned.
   Every post-ARC statement therefore contains
   the exact concrete operation and effect the backend executes. The variant
   mapping is static low-level-op data, and only ARC may select from it.
