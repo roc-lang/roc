@@ -113,6 +113,7 @@ pub fn run(
         );
         output.comptime_value_roots = Ast.ProgramList(Common.ComptimeValueRoot, "comptime_value_roots").fromArrayList(owned.comptime_value_roots.takeArrayList());
         output.lowering_modules = Ast.ProgramList(checked.ModuleId, "lowering_modules").fromArrayList(owned.lowering_modules.takeArrayList());
+        output.signature_var_steps = Ast.ProgramList(Mono.SignatureVarStep, "signature_var_steps").fromArrayList(owned.signature_var_steps.takeArrayList());
         output.platform_requirement_filling = owned.platform_requirement_filling;
         output.local_name_table = owned.local_name_table;
         owned.local_name_table = .{};
@@ -615,7 +616,7 @@ const Lifter = struct {
                 shapes = self.output.finishFnShapes(outer_shapes);
                 break :blk .{ .roc = body };
             },
-            .hosted => .hosted,
+            .hosted => |vars| .{ .hosted = vars },
         };
         var source = if (def.fn_id.get()) |source_fn_id| self.defSource(source_fn_id, def.fn_def) else null;
         if (source) |*template| template.frozen_fn = def.fn_id;
@@ -2830,7 +2831,7 @@ test "checkCaptureInvariants accepts a well-formed capture and catches a corrupt
         .symbol = @fromBackingInt(@intCast(1)),
         .args = Ast.Span(Ast.TypedLocal).empty(),
         .captures = cap_span,
-        .body = .hosted,
+        .body = .{ .hosted = .empty() },
         .ret = ty,
     });
     const value = try program.addExpr(.{ .ty = ty, .data = .{ .local = cap_local } });

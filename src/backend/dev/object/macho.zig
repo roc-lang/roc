@@ -384,9 +384,16 @@ pub const MachOWriter = struct {
                     .aarch64 => MachO.ARM64_RELOC_PAGEOFF12,
                 },
             },
-            .abs32s => invariant("Mach-O invariant violated: an abs32s data relocation, which only an x86_64 test unit emits", .{}),
             // The field's own bytes hold the addend, as for every Mach-O
             // absolute field.
+            .abs32_field => .{
+                .pcrel = false,
+                .length = @as(u2, 2),
+                .reloc_type = switch (self.arch) {
+                    .x86_64 => MachO.X86_64_RELOC_UNSIGNED,
+                    .aarch64 => invariant("Mach-O invariant violated: abs32_field data relocation in aarch64 code, which only an x86_64 test unit emits", .{}),
+                },
+            },
             .abs64_field => .{
                 .pcrel = false,
                 .length = @as(u2, 3),
