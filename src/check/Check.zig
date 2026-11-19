@@ -37297,9 +37297,37 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
         try self.judgeRecordDestructBinds(env);
         if (self.erroneous_value_exprs.contains(expr_idx)) return .done;
 
-        // A `?` match covers both of its alternatives by construction, and
-        // its `Err` branch forwards whatever the value holds.
-        if (!match.is_try_suffix) {
+        const cond_constructed_tags = try self.scrutineeConstructedTags(match.cond);
+        if (cond_constructed_tags) |constructed_tags| try self.closeFreeNeverConstructedPayloadVars(cond_var, constructed_tags, env, match_region);
+
+        var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies());
+        defer open_cache.deinit();
+        self.beginExhaustivenessArena();
+        defer self.endExhaustivenessArena();
+        // A match whose patterns leave alternatives uncovered closes the
+        // free payload variables of those alternatives and is analyzed once
+        // more. A `?` match covers both of its alternatives by construction,
+        // and its `Err` branch forwards whatever the value holds.
+        var closed_free_payloads = match.is_try_suffix;
+        const result = while (true) {
+            const attempt = exhaustive.checkMatch(
+                &self.exhaustiveness_arena,
+                self.types,
+                self.cir,
+                &self.cir.store,
+                self.exhaustiveBuiltinIdents(&open_cache),
+                match.branches,
+                cond_var,
+                match_region,
+                cond_constructed_tags,
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                // A type error in a pattern: exhaustiveness checking cannot
+                // proceed, and reports nothing.
+                error.TypeError => return .done,
+            };
+            if (attempt.is_exhaustive or closed_free_payloads) break attempt;
+            closed_free_payloads = true;
             var branch_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty;
             defer branch_patterns.deinit(self.gpa);
             for (branch_idxs) |branch_idx| {
@@ -37308,33 +37336,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
                     try branch_patterns.append(self.gpa, self.cir.store.getMatchBranchPattern(branch_pattern_idx).pattern);
                 }
             }
-            try self.closeFreeTestedPayloadVars(branch_patterns.items, env, match_region);
-        }
-        const cond_constructed_tags = try self.scrutineeConstructedTags(match.cond);
-
-        var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies());
-        defer open_cache.deinit();
-        self.beginExhaustivenessArena();
-        defer self.endExhaustivenessArena();
-        const result_or_err = exhaustive.checkMatch(
-            &self.exhaustiveness_arena,
-            self.types,
-            self.cir,
-            &self.cir.store,
-            self.exhaustiveBuiltinIdents(&open_cache),
-            match.branches,
-            cond_var,
-            match_region,
-            cond_constructed_tags,
-        );
-        const result = result_or_err catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.TypeError => {
-                // Type error in pattern - exhaustiveness checking can't proceed
-                // This is expected when there are polymorphic types or type mismatches
-                // Don't report exhaustiveness errors in this case
-                return .done;
-            },
+            if (!try self.closeFreeUncoveredPayloadVars(branch_patterns.items, env, match_region)) break attempt;
         };
 
         try self.closeExhaustiveVars(result, env, match_region);
@@ -38658,24 +38660,18 @@ fn scrutineeConstructedTags(self: *Self, expr: CIR.Expr.Idx) Allocator.Error!?[]
     return self.collected_constructed_tags.items;
 }
 
-/// Close each free payload variable of a union the patterns test to the empty
-/// tag union (design.md "Free Payload Variables Close Per Use").
-///
-/// A tag pattern tests which constructor a value holds. A constructor whose
-/// payload type is an unconstrained flex variable can only hold a value no one
-/// could have built, unless whoever chooses that variable can supply one. The
-/// variable is free at this use when nothing still being decided reaches it:
-/// not the parameters or own type of an enclosing lambda, nor a platform
-/// requirement's value (a caller or the application chooses those), not a
-/// member of a definition group being checked (its signature is still being
-/// inferred), and not the signature of a pending static-dispatch constraint or
-/// parked generated-codec relation (a method choice decides it). A rigid variable is an enclosing annotation's, so it is never free.
-/// Closing a free variable decides this use's own instance of it.
-fn closeFreeTestedPayloadVars(self: *Self, patterns: []const CIR.Pattern.Idx, env: *Env, region: Region) Allocator.Error!void {
+/// Close the free payload variables of each alternative the patterns of a
+/// match or destructure leave uncovered, in every union they test, and return
+/// whether any closed (design.md "Free Payload Variables Close Per Use").
+/// Called for a match or destructure the exhaustiveness analysis found not
+/// exhaustive.
+fn closeFreeUncoveredPayloadVars(self: *Self, patterns: []const CIR.Pattern.Idx, env: *Env, region: Region) Allocator.Error!bool {
     // The type of each tag pattern, nested ones included, is the union it
     // tests. A pattern that binds or ignores a value tests nothing.
     var tested_unions: std.ArrayListUnmanaged(Var) = .empty;
     defer tested_unions.deinit(self.gpa);
+    var tested_tags: std.ArrayListUnmanaged(exhaustive.ExcludedTag) = .empty;
+    defer tested_tags.deinit(self.gpa);
     var pending: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty;
     defer pending.deinit(self.gpa);
     try pending.appendSlice(self.gpa, patterns);
@@ -38707,11 +38703,40 @@ fn closeFreeTestedPayloadVars(self: *Self, patterns: []const CIR.Pattern.Idx, en
             .applied_tag => |p| {
                 try pending.appendSlice(self.gpa, store.slicePatterns(p.args));
                 try tested_unions.append(self.gpa, ModuleEnv.varFrom(pattern_idx));
+                try tested_tags.append(self.gpa, .{ .union_var = ModuleEnv.varFrom(pattern_idx), .name = p.name });
             },
         }
     }
-    if (tested_unions.items.len == 0) return;
+    if (tested_unions.items.len == 0) return false;
+    return try self.closeFreePayloadVars(tested_unions.items, tested_tags.items, env, region);
+}
 
+/// Close the free payload variables of each alternative of a scrutinee's
+/// union that its value expression, a tag construction, never constructs
+/// (design.md "Free Payload Variables Close Per Use").
+fn closeFreeNeverConstructedPayloadVars(self: *Self, value_var: Var, constructed_tags: []const Ident.Idx, env: *Env, region: Region) Allocator.Error!void {
+    var constructed: std.ArrayListUnmanaged(exhaustive.ExcludedTag) = .empty;
+    defer constructed.deinit(self.gpa);
+    for (constructed_tags) |name| try constructed.append(self.gpa, .{ .union_var = value_var, .name = name });
+    _ = try self.closeFreePayloadVars(&.{value_var}, constructed.items, env, region);
+}
+
+/// Close each free payload variable of an alternative of `unions` that
+/// `excluded` does not name to the empty tag union, and return whether any
+/// closed.
+///
+/// A constructor whose
+/// payload type is an unconstrained flex variable can only hold a value no one
+/// could have built, unless whoever chooses that variable can supply one. The
+/// variable is free at this use when nothing still being decided reaches it:
+/// not the parameters or own type of an enclosing lambda, nor a platform
+/// requirement's value (a caller or the application chooses those), not a
+/// member of a definition group being checked (its signature is still being
+/// inferred), and not the signature of a pending static-dispatch constraint or
+/// parked generated-codec relation (a method choice decides it). A rigid
+/// variable is an enclosing annotation's, so it is never free. Closing a free
+/// variable decides this use's own instance of it.
+fn closeFreePayloadVars(self: *Self, unions: []const Var, excluded: []const exhaustive.ExcludedTag, env: *Env, region: Region) Allocator.Error!bool {
     self.tested_payload_vars.clearRetainingCapacity();
     {
         var arena = base.SingleThreadArena.init(self.gpa);
@@ -38722,11 +38747,12 @@ fn closeFreeTestedPayloadVars(self: *Self, patterns: []const CIR.Pattern.Idx, en
             arena.allocator(),
             self.types,
             self.exhaustiveBuiltinIdents(&open_cache),
-            tested_unions.items,
+            unions,
+            excluded,
             &self.tested_payload_vars,
         );
     }
-    if (self.tested_payload_vars.items.len == 0) return;
+    if (self.tested_payload_vars.items.len == 0) return false;
 
     // The signatures still being inferred around this use: each enclosing
     // lambda's parameters and its own type, and the binder and value of each
@@ -38760,7 +38786,7 @@ fn closeFreeTestedPayloadVars(self: *Self, patterns: []const CIR.Pattern.Idx, en
     {
         var tested_reach: collections.DenseMapUnmanaged(Var, void) = .empty;
         defer tested_reach.deinit(self.gpa);
-        try self.collectReachedVars(tested_unions.items, &tested_reach);
+        try self.collectReachedVars(unions, &tested_reach);
         var reached = tested_reach.keyIterator();
         while (reached.next()) |reached_var| {
             const constraints = switch (self.types.resolveVar(reached_var.*).desc.content) {
@@ -38783,6 +38809,7 @@ fn closeFreeTestedPayloadVars(self: *Self, patterns: []const CIR.Pattern.Idx, en
     defer bound.deinit(self.gpa);
     try self.collectReachedVars(signature_vars.items, &bound);
 
+    var closed_any = false;
     for (self.tested_payload_vars.items) |payload_var| {
         // Closing one candidate can resolve another that shares its class.
         const resolved = self.types.resolveVar(payload_var);
@@ -38794,7 +38821,9 @@ fn closeFreeTestedPayloadVars(self: *Self, patterns: []const CIR.Pattern.Idx, en
         if (bound.contains(resolved.var_)) continue;
         const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
         _ = try self.unify(resolved.var_, empty, env);
+        closed_any = true;
     }
+    return closed_any;
 }
 
 fn pendingExhaustivenessMode(self: *const Self) ProblemStore.PendingStaticExhaustivenessMode {
@@ -38833,28 +38862,34 @@ fn checkPatternExhaustiveness(
     // pending record-destructure binds must be judged first.
     try self.judgeRecordDestructBinds(env);
 
-    const value_constructed_tags = if (value_expr_idx) |value_expr| blk: {
-        try self.closeFreeTestedPayloadVars(&.{pattern_idx}, env, region);
-        break :blk try self.scrutineeConstructedTags(value_expr);
-    } else null;
+    const value_constructed_tags = if (value_expr_idx) |value_expr| try self.scrutineeConstructedTags(value_expr) else null;
+    if (value_constructed_tags) |constructed_tags| try self.closeFreeNeverConstructedPayloadVars(value_var, constructed_tags, env, region);
 
     var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies());
     defer open_cache.deinit();
     self.beginExhaustivenessArena();
     defer self.endExhaustivenessArena();
-    const result_or_err = exhaustive.checkDestructure(
-        &self.exhaustiveness_arena,
-        self.types,
-        self.cir,
-        &self.cir.store,
-        self.exhaustiveBuiltinIdents(&open_cache),
-        pattern_idx,
-        value_var,
-        value_constructed_tags,
-    );
-    const result = result_or_err catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.TypeError => return false,
+    // A destructure whose pattern leaves alternatives uncovered closes the
+    // free payload variables of those alternatives and is analyzed once
+    // more.
+    var closed_free_payloads = value_expr_idx == null;
+    const result = while (true) {
+        const attempt = exhaustive.checkDestructure(
+            &self.exhaustiveness_arena,
+            self.types,
+            self.cir,
+            &self.cir.store,
+            self.exhaustiveBuiltinIdents(&open_cache),
+            pattern_idx,
+            value_var,
+            value_constructed_tags,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TypeError => return false,
+        };
+        if (attempt.is_exhaustive or closed_free_payloads) break attempt;
+        closed_free_payloads = true;
+        if (!try self.closeFreeUncoveredPayloadVars(&.{pattern_idx}, env, region)) break attempt;
     };
 
     try self.closeExhaustiveVars(result, env, region);

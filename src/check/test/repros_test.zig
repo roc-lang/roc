@@ -1647,11 +1647,32 @@ test "check - issue 12521 - a hashed row tail that is also a value type is close
 }
 
 // https://github.com/roc-lang/roc/issues/13244
-test "check - repro - issue 13244 - unmatchable pattern report reads a match replaced by a runtime error" {
+test "check - repro - issue 13244 - a match replaced by a runtime error still reports its missing patterns" {
     const src =
         \\f = {
         \\    var $s = match B {
         \\        C(_) => 0
+        \\    }
+        \\    $s = S($s)
+        \\    0
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertHasTypeError("Non Exhaustive Match");
+    try test_env.assertHasTypeError("Anonymous Recursion");
+}
+
+test "check - repro - issue 13244 - unmatchable pattern report reads a match replaced by a runtime error" {
+    const src =
+        \\f = {
+        \\    x : Try(U64, [])
+        \\    x = Ok(1)
+        \\    var $s = match x {
+        \\        Ok(_) => 0
+        \\        Err(_) => 1
         \\    }
         \\    $s = S($s)
         \\    0
@@ -1896,7 +1917,7 @@ test "check - repro - issue 13237 - an Ok-only destructure of a parameter needs 
     try test_env.assertOneTypeError("Non Exhaustive Destructure");
 }
 
-test "check - repro - issue 13237 - an Err branch on an all-Ok function's result can never match" {
+test "check - repro - issue 13237 - an Err branch on an all-Ok function's result leaves the error row undecided" {
     var test_env = try TestEnv.init("Test",
         \\f : U64 -> Try(U64, e)
         \\f = |n| Ok(n)
@@ -1908,7 +1929,7 @@ test "check - repro - issue 13237 - an Err branch on an all-Ok function's result
         \\}
     );
     defer test_env.deinit();
-    try test_env.assertTypeErrorTitles(&.{"Unmatchable Pattern"});
+    try test_env.assertNoErrors();
 }
 
 test "check - repro - issue 13237 - a top-level value's undecided error payload closes when the module finishes" {

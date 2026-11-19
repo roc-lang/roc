@@ -114,6 +114,7 @@ test "nominal views exhaustive boundary returns actual blockers only and permits
         &f.store,
         idents,
         &.{root},
+        &.{},
         &blockers,
     );
     try testing.expectEqualSlices(Var, &.{actual_b}, blockers.items);
@@ -128,6 +129,7 @@ test "nominal views exhaustive boundary returns actual blockers only and permits
         &f.store,
         idents,
         &.{root},
+        &.{},
         &blockers,
     );
     try testing.expectEqual(@as(usize, 0), blockers.items.len);
@@ -185,6 +187,7 @@ test "nominal views share a final declaration's dependency graph across reads" {
                 &f.store,
                 idents,
                 &.{root},
+                &.{},
                 &blockers,
             );
             try testing.expectEqualSlices(Var, &.{actual_b}, blockers.items);

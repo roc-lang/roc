@@ -1986,8 +1986,12 @@ fn ctorNeverConstructed(constructed_tags: ?[]const Ident.Idx, union_info: Union,
     return !identSetContains(tags, name);
 }
 
+/// One alternative, by name, of the union `union_var` is the type of.
+pub const ExcludedTag = struct { union_var: Var, name: Ident.Idx };
+
 /// The unconstrained flex variables that make some constructor's payload
-/// empty, for every alternative of each tag union in `unions`.
+/// empty, for every alternative of each tag union in `unions` that no entry
+/// of `excluded` names.
 ///
 /// Each payload is resolved through the union's own type, not just the
 /// nominal backing type, so `Try(Str, e)` reports `e` as the blocker for
@@ -1997,6 +2001,7 @@ pub fn collectAlternativePayloadBlockers(
     source_store: *types.Store,
     builtin_idents: BuiltinIdents,
     unions: []const Var,
+    excluded: []const ExcludedTag,
     out: *std.ArrayList(Var),
 ) error{OutOfMemory}!void {
     const type_store = builtin_idents.open_cache.reader(source_store);
@@ -2008,8 +2013,13 @@ pub fn collectAlternativePayloadBlockers(
             .success => |union_info| union_info,
             .not_a_union => continue,
         };
+        const union_root = source_store.resolveVar(union_var).var_;
         for (union_info.alternatives) |alt| {
-            if (ctorNameIdent(alt.name) == null) continue;
+            const alt_name = ctorNameIdent(alt.name) orelse continue;
+            const alt_excluded = for (excluded) |excluded_tag| {
+                if (excluded_tag.name.eql(alt_name) and source_store.resolveVar(excluded_tag.union_var).var_ == union_root) break true;
+            } else false;
+            if (alt_excluded) continue;
             const arg_types = try getCtorArgTypes(type_store, builtin_idents, union_var, alt.tag_id);
             for (0..arg_types.len()) |offset| {
                 const arg_type = arg_types.get(type_store, offset);

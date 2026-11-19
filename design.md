@@ -13743,15 +13743,22 @@ use can be `Try(U64, [B])` and another `Try(U64, [C(Str)])`.
 
 A value of type `Try(U64, e)` for every `e` cannot be an `Err`: nothing could
 have built the payload. A `match` (other than a `?` desugaring, which forwards
-whatever the value holds) or a destructure therefore takes its own instance
-of such a variable to be `[]`, but only when the variable is free at the use:
+whatever the value holds) or a destructure whose patterns leave alternatives
+uncovered therefore takes its own instance of such a variable to be `[]`, but
+only when the variable is free at the use:
 
-- The checker reads each tag union a tag pattern of the match or destructure
-  tests, nested tag patterns included. A pattern that binds or ignores a value
-  tests nothing. For every alternative of each such union, the unconstrained
-  flex variables that make the alternative's payload empty under the
-  constructor-payload policy (Potential Inhabitedness Queries) are the
-  candidates (`collectAlternativePayloadBlockers`).
+- The exhaustiveness analysis runs first on the types as they stand. A match
+  or destructure it finds exhaustive closes nothing, so no payload variable is
+  decided by a use that does not need it decided.
+- Otherwise the checker reads each tag union a tag pattern of the match or
+  destructure tests, nested tag patterns included. A pattern that binds or
+  ignores a value tests nothing. For every alternative of each such union
+  that no tag pattern of that union names, the unconstrained flex variables
+  that make the alternative's payload empty under the constructor-payload
+  policy (Potential Inhabitedness Queries) are the candidates
+  (`collectAlternativePayloadBlockers`). An alternative a pattern names is
+  covered by that pattern, so its payload variables are left alone: a branch
+  the author wrote is never made unmatchable by this rule.
 - A candidate is free when, at the use, it is still an unconstrained flex
   variable (no static-dispatch constraint, no literal requirement) and none of
   these reaches it (`Check.collectReachedVars`):
@@ -13769,11 +13776,12 @@ of such a variable to be `[]`, but only when the variable is free at the use:
     a pending method choice decides each variable its signature mentions.
   A rigid variable is never a candidate: it is an enclosing annotation's
   variable, which the caller chooses.
-- Each free candidate is unified with a fresh `[]` before the exhaustiveness
-  analysis reads the scrutinee (`Check.closeFreeTestedPayloadVars`). The
-  analysis then sees an uninhabited alternative: an `Ok`-only match on
-  `f(n)` is exhaustive, and an `Err(_)` branch is reported as an Unmatchable
-  Pattern. The `[]` is an ordinary committed empty union, so lowering reads a
+- Each free candidate is unified with a fresh `[]`
+  (`Check.closeFreeUncoveredPayloadVars`), and when any closed, the analysis
+  runs once more and its result is the one reported. It then sees an
+  uninhabited alternative: an `Ok`-only match on `f(n)` is exhaustive. A
+  match on `f(n)` with both an `Ok` and an `Err(_)` branch is exhaustive as
+  written and leaves the error row undecided. The `[]` is an ordinary committed empty union, so lowering reads a
   closed layout. A later relation that would give the variable a tag is a type
   mismatch, as for any other relation of the closed instance.
 
@@ -13790,11 +13798,14 @@ When the scrutinee's value expression is itself a tag construction (through
 blocks, conditionals, matches and nominal wrappers), the tags it constructs
 are a fact about that scrutinee alone: a root constructor it never constructs
 needs no branch (`exhaustive.checkMatch`'s `scrutinee_constructed_tags`).
-Nothing is written to that constructor's payload type, which may be shared
-with anything, such as a parameter bound by the pattern for it. In
-`f = |n| match Oops { Oops => n, Zero(p) => p }` the type of `p` is the type
-of `n`, `f` is `a -> a`, and the `Zero` branch is reported by Pattern-Only
-Tags.
+Such a constructor holds no value here, so before the analysis its payload
+variables close exactly as an uncovered alternative's do, and only when free
+(`Check.closeFreeNeverConstructedPayloadVars`): `Ok(y) = Err({})` gives `y`
+the type `[]`. A payload variable that is not free is left alone, since it
+may be shared with anything, such as a parameter bound by the pattern for it.
+In `f = |n| match Oops { Oops => n, Zero(p) => p }` the type of `p` is the
+type of `n`, `f` is `a -> a`, and the `Zero` branch is reported by
+Pattern-Only Tags.
 
 The accepted and rejected sides are pinned by the `issue 13236` and
 `issue 13237` tests in `src/check/test/repros_test.zig`, the inferred-hole
@@ -17153,11 +17164,12 @@ Other solved-graph mutations:
   Checking Effects And Const Roots. The immutable boundary formulas are solved
   together before any positive result is written; dispatch-call dependencies
   are checked by ordinary unification, not by a later graph repair.
-- `closeFreeTestedPayloadVars`—policy: Free Payload Variables Close Per Use
-  (above). A probe of which payload variables of the unions a match's or
-  destructure's tag patterns test are free at the use gates an ordinary
-  unification of each with a fresh empty tag union, before the exhaustiveness
-  analysis. It introduces no redirect rule and writes nothing outside
+- `closeFreePayloadVars` (`closeFreeUncoveredPayloadVars`, `closeFreeNeverConstructedPayloadVars`)—policy: Free Payload Variables Close Per Use
+  (above). A probe of which payload variables are free at the use, among
+  those of the alternatives a non-exhaustive match's or destructure's tag
+  patterns leave uncovered and those of the root alternatives a constructing
+  scrutinee never constructs, gates an ordinary unification of each with a
+  fresh empty tag union. It introduces no redirect rule and writes nothing outside
   unification. The accepted side (an `Ok`-only match on an all-`Ok`
   function's result, and on a local holding it) and the rejected side (an
   `Ok`-only match on a parameter, whatever its error row is named) are pinned

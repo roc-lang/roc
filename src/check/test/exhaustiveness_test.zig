@@ -518,7 +518,7 @@ test "exhaustive - direct Try.Ok match only needs Ok" {
     try test_env.assertLastDefType("Str");
 }
 
-test "unmatchable - Err pattern first on inferred wildcard error type is unreachable" {
+test "exhaustive - an Err pattern on an inferred wildcard error type leaves the payload undecided" {
     const source =
         \\x : Try(I64, _)
         \\x = Ok(42)
@@ -531,7 +531,7 @@ test "unmatchable - Err pattern first on inferred wildcard error type is unreach
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("Unmatchable Pattern");
+    try test_env.assertNoErrors();
 }
 
 test "exhaustive - structural tag with inferred wildcard payload is not required" {
