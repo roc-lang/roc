@@ -945,7 +945,7 @@ const OrderedTestItems = struct {
     running: std.atomic.Value(usize) = .init(0),
     fail_item: ?usize = null,
     cancel_commit: ?usize = null,
-    lanes_seen: std.atomic.Value(u64) = .init(0),
+    lanes_seen: std.atomic.Value(usize) = .init(0),
 
     fn init(count: usize) std.mem.Allocator.Error!OrderedTestItems {
         const runs = try std.testing.allocator.alloc(std.atomic.Value(u32), count);
@@ -965,7 +965,7 @@ const OrderedTestItems = struct {
     pub fn runItem(self: *OrderedTestItems, index: usize, worker: Worker) Error!void {
         _ = self.running.fetchAdd(1, .seq_cst);
         defer _ = self.running.fetchSub(1, .seq_cst);
-        _ = self.lanes_seen.fetchOr(@as(u64, 1) << @intCast(worker.id % 64), .monotonic);
+        _ = self.lanes_seen.fetchOr(@as(usize, 1) << @intCast(worker.id % @bitSizeOf(usize)), .monotonic);
         // Scratch dies with the item; use it so a lane's retained arena is
         // exercised.
         const bytes = try worker.scratch.alloc(u8, 64 + (index % 5) * 1024);

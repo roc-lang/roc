@@ -19,8 +19,8 @@ fn buildSource(comptime header: []const u8, comptime item: []const u8, comptime 
 
 fn countsOf(env: *TestEnv) Counts {
     return .{
-        .constraints = env.checker.types.static_dispatch_constraints.len(),
-        .vars = env.checker.types.len(),
+        .constraints = @intCast(env.checker.types.static_dispatch_constraints.len()),
+        .vars = @intCast(env.checker.types.len()),
     };
 }
 

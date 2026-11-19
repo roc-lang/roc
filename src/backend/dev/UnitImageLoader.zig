@@ -245,9 +245,14 @@ pub fn load(gpa: std.mem.Allocator, view: UnitImage.View, resolver: Resolver, di
     }
 
     if (windows) {
-        var old: win32.DWORD = undefined;
-        if (win32.VirtualProtect(memory.ptr, exec_len, win32.PAGE_EXECUTE_READ, &old) == 0) return error.OutOfMemory;
-        _ = win32.FlushInstructionCache(win32.GetCurrentProcess(), memory.ptr, exec_len);
+        // A unit with no code has no executable pages, and VirtualProtect
+        // rejects a zero length (ERROR_INVALID_PARAMETER) where mprotect
+        // accepts one.
+        if (exec_len != 0) {
+            var old: win32.DWORD = undefined;
+            if (win32.VirtualProtect(memory.ptr, exec_len, win32.PAGE_EXECUTE_READ, &old) == 0) return error.OutOfMemory;
+            _ = win32.FlushInstructionCache(win32.GetCurrentProcess(), memory.ptr, exec_len);
+        }
         if (view.pdata().len != 0) {
             const entry_size: usize = if (arm64) 8 else 12;
             const table: *anyopaque = @ptrCast(memory.ptr + unwind_offset);
@@ -510,6 +515,20 @@ test "a loaded image runs, calls its imports and resets its zero-fill" {
     const pointer: *const Fn = @ptrFromInt(exportAddress(&loaded, "answer_pointer"));
     try std.testing.expectEqual(@as(i32, 42), pointer.*());
     try std.testing.expectEqual(@as(usize, if (arm64) 64 else 40), loaded.text().len);
+}
+
+test "an image with no code loads" {
+    // A unit whose module lowers to no procedures has an empty block, so
+    // nothing in its mapping becomes executable.
+    const allocator = std.testing.allocator;
+    const image = try UnitImage.build(allocator, &.{}, .{ .keep_debug = false, .atoms = .whole });
+    defer allocator.free(image);
+    const view = try UnitImage.View.init(image);
+    var resolver = TestResolver{ .ext = null };
+    var diagnostic: Diagnostic = .{};
+    var loaded = try load(allocator, view, .{ .context = &resolver, .resolve = TestResolver.resolve }, &diagnostic);
+    defer loaded.unload();
+    try std.testing.expectEqual(@as(usize, 0), loaded.text().len);
 }
 
 test "a call out of reach goes through a stub, and a missing import is reported" {

@@ -295,7 +295,7 @@ fn redirectDarwinContextToEscape(context: ?*anyopaque, recovery: *const StackOve
 }
 
 /// The id of the thread writing a crash report, or 0 while no thread is.
-var crash_reporter: std.atomic.Value(u64) = .init(0);
+var crash_reporter: std.atomic.Value(std.Thread.Id) = .init(0);
 
 /// Claim the crash report for the calling thread, which then writes the
 /// report and ends the process. Returns only to the claiming thread. A fault
@@ -306,7 +306,7 @@ var crash_reporter: std.atomic.Value(u64) = .init(0);
 /// is neither interleaved nor cut short, and no thread runs the reporting
 /// code on top of another's run of it.
 fn claimCrashReport(exit_code: u8) void {
-    const me: u64 = std.Thread.getCurrentId();
+    const me = std.Thread.getCurrentId();
     const reporter = crash_reporter.cmpxchgStrong(0, me, .acq_rel, .acquire) orelse return;
     if (reporter == me) std.process.exit(exit_code);
     while (true) {
