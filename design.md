@@ -12277,9 +12277,18 @@ Strings and flat scalar or fixed-product lists use one shared content-interned b
 the same bytes, and equal string/list contents reuse one blob. A packed list
 view records its scalar encoding or fixed-product width and item count separately
 from its byte view. Fixed products are records, tuples, and nominal wrappers
-composed entirely of scalars and zero-sized products. Their existing checked
-types define checked field order; bytes concatenate scalar leaves in that
-order without host padding. Lists containing other value shapes retain explicit
+composed entirely of scalars, unions of payload-free tags (`Bool` among them)
+and zero-sized products; a list of payload-free tags is a list of such
+products with one leaf. Their existing checked types define checked field
+order; bytes concatenate leaves in that order without host padding. A
+payload-free tag's leaf is as wide as its union's discriminant (one byte up
+to 256 tags, two up to 65536) and holds the index of the item's tag among its
+union's tags in byte-wise name order, which is the order that assigns
+discriminants, so it is the discriminant's little-endian bytes and every
+reader lays it out as it lays out a scalar; a union of one tag is zero-sized
+and has no leaf. The tag a leaf holds is read through the checked type, as a
+scalar's bits are, and a value's reads share its type, tags included (Value
+Rows: Uses Share One Row). Lists containing other value shapes retain explicit
 child nodes so their graph edges and sharing stay visible. A restored list of
 such values that is data alone is a stored list (see "Compile-Time Evaluation
 And Static Storage"), which no stage represents item by item.
@@ -12291,18 +12300,25 @@ regions use bulk copies.
 
 The constant store writer stores an evaluated list of scalars or fixed
 products with one decision per list, never one per item. A packed item is its
-scalars' little-endian bits, except that every F32 or F64 NaN is Roc's one
-quiet NaN whatever bits the evaluation produced, as a stored scalar's is. On a
+leaves' little-endian bits, except that every F32 or F64 NaN is Roc's one
+quiet NaN whatever bits the evaluation produced, as a stored scalar's is. A
+discriminant is little-endian in memory on every host. On a
 little-endian host an integer, `Dec` or vector list's memory, and a product
-list's memory when its layout has no padding and no float leaf, already is that
+list's memory when its layout has no padding and no float leaf (a list of
+`Bool`s or of other payload-free tags among them), already is that
 encoding and is stored as it is. A float list is copied in one vectorized pass
 that replaces NaN lanes, and a product list with float leaves is copied by its
 plan's regions and then has each float leaf's NaN replaced. A big-endian host
 packs each item on its own. A value-form list of numerals that reads no
 constant encodes its numerals at the item type, decided once for the list,
 into the memory a list of them occupies, and packs that memory as an
-evaluated list's. Debug builds check a bulk-stored scalar list against
-storing each item on its own. Packed data remains a literal through specialization;
+evaluated list's. A value-form list of products writes each item's leaves,
+a payload-free tag as the discriminant of the variant its plan names it, into
+the memory the list occupies and packs that memory as an evaluated list's, so
+a literal list and an evaluated one store the same bytes. Debug builds check a
+bulk-stored scalar list, and every payload-free tag leaf of a packed product
+list, against storing each item on its own, and check every tag leaf a
+packing plan encodes or decodes names one of its union's tags. Packed data remains a literal through specialization;
 list length must not create per-item LIR statements, including in static
 initializers. Literal backings are shared by explicit owner-relative identity
 through IR stages. Boxy consumes its committed layout without unrolling the
