@@ -60903,8 +60903,12 @@ const BodyContext = struct {
         };
     }
 
+    /// The parts of a builtin `Try(ok, [Missing])`, the optional record field
+    /// form. Any other nominal, however its backing is shaped, is an ordinary
+    /// tag union to its codec.
     fn missingTryInfo(self: *BodyContext, try_ty: Type.TypeId) Allocator.Error!?TryInfo {
         if (self.frozenCustomCodecCallForShape(.parser, try_ty) != null) return null;
+        if (!self.typeIsBuiltinTry(try_ty)) return null;
         const info = self.tryInfoOptional(try_ty) orelse return null;
         return if (self.typeIsExactUnitTagUnion(info.err_ty, "Missing")) info else null;
     }
@@ -62761,6 +62765,13 @@ const BodyContext = struct {
         }
     }
 
+    fn typeIsBuiltinTry(self: *BodyContext, ty: Type.TypeId) bool {
+        return switch (self.typeStore().get(ty)) {
+            .named => |named| self.builder.isBuiltinTryDef(self.nameStore(), named.def),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => false,
+        };
+    }
+
     fn graphNodeIsBuiltinTry(self: *BodyContext, node: NodeId) Allocator.Error!bool {
         const named = switch ((try self.graph.content(node))) {
             .named => |named| named,
@@ -64260,7 +64271,11 @@ const BodyContext = struct {
         return added;
     }
 
+    /// The parts of a builtin `Try(ok, [Null])`, the format's nullable form.
+    /// Any other nominal, however its backing is shaped, is an ordinary tag
+    /// union to its codec.
     fn tryNullInfo(self: *BodyContext, ty: Type.TypeId) ?TryNullInfo {
+        if (!self.typeIsBuiltinTry(ty)) return null;
         const backing_ty = namedBackingType(self.typeStore(), ty) orelse return null;
         const ok_tag = self.monoTagByTextOptional(backing_ty, "Ok") orelse return null;
         const err_tag = self.monoTagByTextOptional(backing_ty, "Err") orelse return null;

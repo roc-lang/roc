@@ -9728,7 +9728,25 @@ Derivation needs every part of the receiver: a receiver that is still
 undetermined after numeric defaulting waits for the final codec boundary, and
 one that is undetermined there is reported as a missing method on a part of
 the type that never resolved to a concrete type, and its call becomes a
-checked runtime error.
+checked runtime error. A nominal whose codec is derived from its backing
+reaches its arguments through that backing: opening the backing substitutes
+the application's arguments, so a type variable the walk meets inside it is
+an argument the application has not determined. While a later use can still
+determine it, its obligation belongs to that use, and a variable a
+definition's scheme quantifies is determined by each use, which validates
+its own copy of the relation. At the final codec boundary a variable no
+scheme quantifies is never determined, and the two directions differ. A
+generated parser reads that part of the shape whenever its input names it, so
+`MyTry(U64, _)` parsed through `[Ok(ok), Err(err)]` is reported exactly as
+`List(_)` is. A generated encoder never reaches it: the variable seals to the
+empty tag union, which no value has, so encoding `MyTry.Ok(2)` at
+`MyTry(U64, _)` is accepted and the encoder gives the tag that carries the
+variable no branch (Static Dispatch In Monotype). An argument the backing
+never reads (a phantom parameter) is not part of the shape and blocks neither
+derivation. Pinned by `src/check/test/derived_codec_undetermined_argument_test.zig`,
+`test/cli/DerivedCodecNominalArguments.roc` and
+`test/cli/encoder_for_uninhabited_payload.roc` (accepted) and
+`test/cli/DerivedCodecUndeterminedNominalArgument.roc` (rejected).
 
 `StaticDispatchPlanTable.generated_codec_derivations` stores each parser/encoder
 derivation as an explicit generated-codec contract. It records every generated
@@ -10483,7 +10501,11 @@ field. Missing fields and `Null` are never conflated. These two shapes are
 format protocol: checking validates them against the format's methods without
 walking the `Try` backing, and Monotype and Boxy write only the `Ok` payload
 plus the format's null or missing-field condition. Any other `Try` is an
-ordinary tag union whose declared codec is derived from its backing.
+ordinary tag union whose declared codec is derived from its backing. Both
+shapes belong to the builtin `Try` alone: checking, Monotype and Boxy each
+recognize them by the builtin `Try` declaration, so a user nominal whose
+backing is `[Ok(ok), Err([Null])]` or `[Ok(ok), Err([Missing])]` is an
+ordinary tag union to its codec (`test/cli/DerivedCodecTryShapedUserNominal.roc`).
 
 JSON arrays are used for lists, tuples, and sets. Tuples parse with exact arity.
 Sets preserve `Set` insertion order and parse by inserting the array items.
@@ -24297,7 +24319,12 @@ the ones its own Monotype imposes on every instance of it, which any class
 instantiated from that Monotype already has. Unifying such a leaf with a class already instantiated from the
 same Monotype only joins the clone's fresh callable slots to the class's, so the
 leaf joins the class without materializing. A Monotype that reaches a cycle, or
-that is uninhabited, keeps the ordinary relation. Leaves that survive solving
+that is uninhabited, keeps the ordinary relation. So does a structural
+Monotype meeting a nominal class: the structural-to-nominal link above lifts a
+class instantiated from a structural Monotype into a nominal one, which is
+then an instance of the nominal type, and joining a leaf of the structural
+Monotype to it would make that leaf, possibly the nominal's own backing,
+resolve to the nominal type (`test/cli/ParsedGenericNominalConstantUse.roc`). Leaves that survive solving
 were never unified: their callable slots all close empty and their
 forced-dynamic marks depend only on their Monotype, so finalization gives every
 untouched leaf of one Monotype one shared clone. An expression or pattern that
