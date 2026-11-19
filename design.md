@@ -28139,7 +28139,15 @@ through it of a slot already claimed is a read after a take unless the view's
 residual shell names that slot. A tag union read the same way is a view of
 its parent's one slot: a payload read through it after that slot was claimed
 is a read after a take, and a residual shell naming its slot leaves it
-readable only for its discriminant. Path states keep the first word inline and share sparse
+readable only for its discriminant. A read that yields no refcounted data
+reads only its source's inline bytes, so it requires the source's bound
+representation, not a live unit: a scalar field of a struct, or a scalar
+payload of an ordinary inline tag union, stays readable after every
+refcounted slot has left (derived equality of `[Leaf, Node(Tree, U64)]` takes
+and releases the child's recursion box, then reads the `U64`). Such a tag
+payload read still proves its variant against the value's known variant, and
+no payload, scalar or not, is read through a residual-shell tag union view.
+Path states keep the first word inline and share sparse
 persistent words for higher indices; forks and outcome-restitution receipts retain
 exact prior sets. Join comparison and memo hashing use field-set contents rather
 than snapshot addresses. A container's unit is spent only when its claims equal
