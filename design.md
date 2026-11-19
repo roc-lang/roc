@@ -19090,6 +19090,14 @@ but produces no module interface: nothing links against that program. Its
 table-needs serialization; only its requested roots and their dependencies
 are lowered. Ordinary object producers and compiler-only function-metadata
 producers keep `compile_time = false` and emit their complete module interface.
+
+A module test below an owning app uses the selected platform header without
+checking the platform body. Its hosted library units still implement the same
+ABI as a build: the header gives each binding its target, external symbol and
+dispatch slot, and the target module's checked declarations identify its worker.
+The unit's object key covers its own resolved slots, not the command that
+requested it or how the loader will bind its external symbols. A hosted unit
+publishes its exports before an importing unit can lower a call against them.
 Function-storage metadata does not turn a producer into a CTFE root program.
 
 #### Caching Under `.boxy`

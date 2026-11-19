@@ -1275,6 +1275,13 @@ pub const BuildEnv = struct {
         // entry module is its package's root, exactly as when it is built
         // without an owning `main.roc`.
         const entry_is_only_root = has_separate_entry and self.entry_closure_only;
+        // Resolve the selected header's slots as their owning modules finish.
+        // This neither checks nor adds the platform root to a module test.
+        if (self.selected_platform_package_name) |platform_name| {
+            coord.markPlatformPackage(platform_name);
+            const parsed = if (std.mem.eql(u8, platform_name, pkg_name)) self.discovered_root_parse else self.discovered_platform_parse;
+            if (parsed) |platform| coord.hosted_header = try @import("hosted_header.zig").Plan.init(self.gpa, platform.ast);
+        }
         if (entry_is_only_root) {
             replaceDiscoveredParse(&self.discovered_root_parse, null);
         } else {
@@ -1339,7 +1346,6 @@ pub const BuildEnv = struct {
             const pf_pkg = self.packages.get(platform_name) orelse return error.Internal;
             std.debug.assert(pf_pkg.kind == .platform);
             if (coord.getPackage(platform_name)) |platform_coord_pkg| {
-                coord.markPlatformPackage(platform_coord_pkg.name);
                 // A selected platform that is itself the build root was
                 // already queued above; marking it is sufficient here.
                 if (!entry_is_only_root and !std.mem.eql(u8, platform_name, pkg_name)) {
