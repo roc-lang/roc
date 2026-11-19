@@ -13903,7 +13903,7 @@ test "tail-call lowering loops a boxy self-call whose resolved ABI needs no retu
     try std.testing.expect(found_walk);
 }
 
-fn expectBoundedCountLoop(strategy: base.SpecializationStrategy, comptime ok_inside: bool) !void {
+fn expectBoundedCountLoop(strategy: base.SpecializationStrategy, comptime ok_inside: bool) TestError!void {
     const allocator = std.testing.allocator;
     const record = "{ value: i, values }";
     const start = "loop(0.U64, [1.U64])";
