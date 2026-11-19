@@ -1597,6 +1597,12 @@ plain_decisions_waiting: bool = false,
 /// The walk `waitsForPlainDecision` runs over a compared value's data.
 plain_wait_pending: std.ArrayListUnmanaged(Var) = .empty,
 plain_wait_seen: collections.DenseMapUnmanaged(Var, void) = .empty,
+/// The variables `collectReachableVarsExcluding` has yet to visit.
+reachable_pending: std.ArrayListUnmanaged(Var) = .empty,
+/// The variables a frozen scheme's relation reaches
+/// (`collectFrozenRelationEnclosingVars`), and those an enclosing variable
+/// reaches once its rank is given back (`restoreEnclosingVarRanks`).
+frozen_relation_reachable: collections.DenseMap(Var, void),
 /// The expression that fails when a requirement a row variable holds fails,
 /// keyed by the requirement's callable var: the first one it was held with,
 /// which for a requirement copied from a scheme is the use that instantiated
@@ -2210,6 +2216,8 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .plain_decisions_waiting = .settled,
     .plain_wait_pending = .scratch,
     .plain_wait_seen = .scratch,
+    .reachable_pending = .scratch,
+    .frozen_relation_reachable = .scratch,
     .open_row_failure_exprs = .keyed,
     .interpolation_dispatchers = .keyed,
     .interpolation_part_numerals = .keyed,
@@ -5000,6 +5008,7 @@ fn initAssumePrepared(
         .reach_free_schemes = collections.DenseMap(Var, void).init(gpa),
         .link_var_map = collections.DenseMap(Var, Var).init(gpa),
         .scratch_deferred_placeholders = collections.DenseMap(Var, Var).init(gpa),
+        .frozen_relation_reachable = collections.DenseMap(Var, void).init(gpa),
         .reported_dispatch_vars = collections.DenseMap(Var, void).init(gpa),
         .ambiguity_verdict_vars = collections.DenseMap(Var, void).init(gpa),
         .external_pinnable = collections.DenseMap(Var, void).init(gpa),
@@ -8891,6 +8900,25 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     return result;
 }
 
+/// `runUnify` for a relation whose operands an earlier relation has often
+/// merged already. Operands in one class are related: the unifier would
+/// compress both paths, as here, and find the pair related before writing
+/// anything, leaving its scratch reset and nothing for the checker to adopt.
+/// Only a constructor-backing root relation can still reject such a pair.
+/// Looking for the shared class costs every other pair two more root lookups
+/// than `runUnify`, so only relations that often find one come through here.
+fn runUnifyOftenRelated(self: *Self, a: Var, b: Var, env: *Env, opts: unifier.Options) Allocator.Error!unifier.Result {
+    if (opts.root_relation == .ordinary and self.types.resolveDescIdx(a) == self.types.resolveDescIdx(b)) {
+        if (opts.on_mismatch == .poison_to_err) self.types.assertNoSavepointActive();
+        _ = self.types.resolveVarWordAndCompressPath(a);
+        _ = self.types.resolveVarWordAndCompressPath(b);
+        self.unify_scratch.reset();
+        self.debugAssertArraysInSync();
+        return .unified;
+    }
+    return self.runUnify(a, b, env, opts);
+}
+
 /// Give each variable the running unification has created so far and that
 /// has no region yet the region its adoption gives it (`adoptUnifyScratch`),
 /// before a link inside that unification creates variables of its own:
@@ -9124,7 +9152,7 @@ fn unifyOwnedRootRelation(
     root_relation: unifier.RootRelation,
     nominal_record_mismatch_role: unifier.NominalRecordMismatchRole,
 ) std.mem.Allocator.Error!unifier.Result {
-    const result = try self.runUnify(expected, actual, env, ownedRelationOptions(
+    const result = try self.runUnifyOftenRelated(expected, actual, env, ownedRelationOptions(
         ctx,
         actual,
         row_width_relation,
@@ -20628,8 +20656,8 @@ fn collectReachableVarsExcluding(
     excluded_root: ?Var,
     out: *collections.DenseMap(Var, void),
 ) std.mem.Allocator.Error!void {
-    var pending: std.ArrayList(Var) = .empty;
-    defer pending.deinit(self.gpa);
+    const pending = &self.reachable_pending;
+    pending.clearRetainingCapacity();
     try pending.append(self.gpa, root);
     while (pending.pop()) |var_| {
         const resolved = self.types.resolveVar(var_);
@@ -55382,7 +55410,8 @@ const EnclosingVarRank = struct {
 
 /// Process one deferred dispatch entry, keeping every enclosing-scope
 /// variable its relations reach at its own rank (design.md "Frozen Scheme
-/// Relations Keep Enclosing Variables Monomorphic").
+/// Relations Keep Enclosing Variables Monomorphic"). The entry's relations
+/// record those variables in `enclosing` just before they resolve.
 inline fn processDeferredDispatchEntry(
     self: *Self,
     env: *Env,
@@ -55391,10 +55420,7 @@ inline fn processDeferredDispatchEntry(
 ) std.mem.Allocator.Error!DeferredEntryOutcome {
     var enclosing: std.ArrayList(EnclosingVarRank) = .empty;
     defer enclosing.deinit(self.gpa);
-    if (self.captured_scheme_owners.count() != 0) {
-        try self.collectFrozenRelationEnclosingVars(env.deferred_static_dispatch_constraints.items()[entry_index], &enclosing);
-    }
-    const outcome = try self.processDeferredDispatchEntryRelations(env, drain, entry_index);
+    const outcome = try self.processDeferredDispatchEntryRelations(env, drain, entry_index, &enclosing);
     if (enclosing.items.len != 0) try self.restoreEnclosingVarRanks(enclosing.items, env);
     return outcome;
 }
@@ -55407,17 +55433,17 @@ fn collectFrozenRelationEnclosingVars(
     entry: DeferredConstraintCheck,
     out: *std.ArrayList(EnclosingVarRank),
 ) Allocator.Error!void {
-    var reachable = collections.DenseMap(Var, void).init(self.gpa);
-    defer reachable.deinit();
+    const reachable = &self.frozen_relation_reachable;
+    reachable.clearRetainingCapacity();
     const constraints_start: usize = @backingInt(entry.constraints.start);
     for (0..entry.constraints.len()) |offset| {
         const constraint = self.types.static_dispatch_constraints.items()[constraints_start + offset];
         const owner = (self.dispatch_relation_owners.get(constraint.fn_var) orelse continue).get() orelse continue;
         if (!self.captured_scheme_owners.contains(owner)) continue;
-        try self.collectReachableVars(constraint.fn_var, &reachable);
+        try self.collectReachableVars(constraint.fn_var, reachable);
     }
     if (reachable.count() == 0) return;
-    try self.collectReachableVars(entry.var_, &reachable);
+    try self.collectReachableVars(entry.var_, reachable);
     var iter = reachable.iterator();
     while (iter.next()) |reached| {
         const rank = self.types.resolveVar(reached.key_ptr.*).desc.rank;
@@ -55436,12 +55462,11 @@ fn restoreEnclosingVarRanks(
     enclosing: []const EnclosingVarRank,
     env: *Env,
 ) Allocator.Error!void {
-    var reachable = collections.DenseMap(Var, void).init(self.gpa);
-    defer reachable.deinit();
+    const reachable = &self.frozen_relation_reachable;
     for (enclosing) |entry| {
         if (self.types.resolveVar(entry.var_).desc.rank != .generalized) continue;
         reachable.clearRetainingCapacity();
-        try self.collectReachableVars(entry.var_, &reachable);
+        try self.collectReachableVars(entry.var_, reachable);
         var iter = reachable.iterator();
         while (iter.next()) |reached| {
             const resolved = self.types.resolveVar(reached.key_ptr.*);
@@ -55453,14 +55478,20 @@ fn restoreEnclosingVarRanks(
 }
 
 /// Process the deferred relation at `entry_index` of the drain's queue.
+/// Before relating anything, record in `enclosing` the enclosing-scope
+/// variables its frozen schemes' relations reach
+/// (`collectFrozenRelationEnclosingVars`). An entry that is settled, waits,
+/// or is queued again on its row's value relates nothing and records none.
 inline fn processDeferredDispatchEntryRelations(
     self: *Self,
     env: *Env,
     drain: *StaticDispatchDrain,
     entry_index: usize,
+    enclosing: *std.ArrayList(EnclosingVarRank),
 ) std.mem.Allocator.Error!DeferredEntryOutcome {
     const is_numeric_default_pass = drain.is_numeric_default_pass;
-    var deferred_constraint = env.deferred_static_dispatch_constraints.items()[entry_index];
+    const queued_entry = env.deferred_static_dispatch_constraints.items()[entry_index];
+    var deferred_constraint = queued_entry;
     deferred_constraint.retained_unchanged = false;
     deferred_constraint.waiting_on_repeated_state = false;
     deferred_constraint.waiting_on_plain_decision = false;
@@ -55527,6 +55558,9 @@ inline fn processDeferredDispatchEntryRelations(
         waiting.waiting_on_plain_decision = true;
         try self.scratch_deferred_static_dispatch_constraints.append(waiting);
         return .next;
+    }
+    if (self.captured_scheme_owners.count() != 0) {
+        try self.collectFrozenRelationEnclosingVars(queued_entry, enclosing);
     }
     dispatch_resolution: while (true) {
         if (dispatcher_content == .err) {
@@ -55845,7 +55879,12 @@ inline fn processDeferredDispatchEntryRelations(
                     // instance (`replayDispatchTarget`), so the relation is
                     // established and there is nothing to rewind.
                     if (!receiver_default_decided or method_var == constraint.fn_var) {
-                        break :fn_result try self.unifyInContext(method_var, constraint.fn_var, env, fn_ctx);
+                        break :fn_result try self.runUnifyOftenRelated(
+                            method_var,
+                            constraint.fn_var,
+                            env,
+                            unifyOptionsForContext(fn_ctx, .poison_to_err),
+                        );
                     }
                     // This receiver's type is a default: a type the checker
                     // chose and the program never wrote, with this
@@ -61025,7 +61064,7 @@ fn relateDerivedDispatchOperand(
     actual: Var,
     report_mismatch: bool,
 ) Allocator.Error!bool {
-    const result = try self.runUnify(expected, actual, env, .{ .on_mismatch = .write_no_report });
+    const result = try self.runUnifyOftenRelated(expected, actual, env, .{ .on_mismatch = .write_no_report });
     if (!result.isProblem()) return true;
     if (!report_mismatch) return false;
     if (!try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, failure_expr)) {
