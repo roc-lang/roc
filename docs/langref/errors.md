@@ -62,6 +62,58 @@ And since the error type lists every error that can happen, a `match` on the res
 which errors to handle, and gives an [exhaustiveness](pattern-matching#exhaustiveness) error if
 you forget one.
 
+### Using a `Try` Where More Errors Are Possible {#more-errors}
+
+A call to a function can be used where more errors are possible than the function's own. Each
+call decides for itself which other errors its result sits alongside:
+
+```roc
+parse : Str -> Try(U64, [BadNumStr])
+parse = |str| U64.from_str(str)
+
+parse_nonempty : Str -> Try(U64, [BadNumStr, Empty])
+parse_nonempty = |str| if str == "" Err(Empty) else parse(str)
+```
+
+A `Try` you already have is different. A function argument, a record field, or the result of
+calling a function you were passed has exactly the error type its annotation says, so it can't be
+used as a `Try` with more errors:
+
+```roc
+or_empty : Try(U64, [BadNumStr]), Bool -> Try(U64, [BadNumStr, Empty])
+or_empty = |result, empty| if empty Err(Empty) else result # ERROR! result is a Try(U64, [BadNumStr])
+```
+
+That's because `Try` works like every other [nominal type](tag-unions#nominal-tag-unions).
+`Try(U64, [BadNumStr])` and `Try(U64, [BadNumStr, Empty])` are two different types, the same way
+`List([BadNumStr])` and `List([BadNumStr, Empty])` are. By design, `Try` gets no rules of its own
+here, so a type you define yourself with the same tags behaves exactly the same way.
+
+The [`?` operator](#returning-errors-early) is what combines error types. It takes the `Try`
+apart, so wrapping its result in `Ok` again gives you a `Try` with the function's error type:
+
+```roc
+or_empty : Try(U64, [BadNumStr]), Bool -> Try(U64, [BadNumStr, Empty])
+or_empty = |result, empty| if empty Err(Empty) else Ok(result?)
+```
+
+Rebuilding the error with [`map_err`](../Try#map_err) or a [`match`](pattern-matching#match) works
+too:
+
+```roc
+or_empty = |result, empty| if empty Err(Empty) else result.map_err(|BadNumStr| BadNumStr)
+```
+
+The same goes for a function that hands back a `Try` it was given without taking it apart. A
+call to `keep` gives you the very `Try` you passed in, so it has exactly that `Try`'s errors:
+
+```roc
+keep : Try(U64, [BadNumStr]) -> Try(U64, [BadNumStr])
+keep = |result| result
+
+or_empty = |result, empty| if empty Err(Empty) else keep(result) # ERROR! Same as before.
+```
+
 ## Handling Errors
 
 There are several ways to handle a `Try`, depending on what you want to do with the error.
