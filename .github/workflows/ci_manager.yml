@@ -381,66 +381,39 @@ jobs:
           command: zig build build-ci -Dembed-builtin-unit=true
           retry_count: 3
 
-      # zstd on all cores, instead of upload-artifact's single-threaded zip
-      # deflate, which was the bottleneck (~40-50 MB/s of input). The upload
-      # below stores the already-compressed file as-is (`compression-level: 0`).
-      # Streaming tar into zstd also avoids writing an uncompressed tar the size
-      # of `.zig-cache` next to it. zstd is preinstalled on all three runner
-      # images.
-      #
-      # Windows runners' tar cannot recreate symlinks on extraction, and the
-      # build cache holds some (a versioned shared library such as the glibc
-      # test stub is emitted as `libc.so` -> `libc.so.6` -> `libc.so.6.0.0`),
-      # so there the artifact stores each link's target file instead.
-      #
-      # `zig-pkg` is where Zig 0.17 unpacks dependencies, the LLVM libraries
-      # among them. The cache records those files as link inputs, so a shard
-      # needs them in place before it re-stamps the cache; left out, Zig would
-      # unpack fresh copies afterwards and relink everything that uses LLVM.
-      #
       # `minici-build-runner-image` names the hosted runner image this job ran
       # on. A shard compares it with its own (`--minici-build-runner-image`):
       # on another image the system headers and libraries differ, so compile
       # steps that read them miss the restored cache for a reason that is not
       # build.zig's, and MiniCI's cache-reuse canary says so instead of failing.
-      - name: Pack MiniCI build artifact
+      - name: Record the runner image
         shell: bash
-        run: |
-          set -euo pipefail
-          printf '%s/%s\n' "${ImageOS:?}" "${ImageVersion:?}" > .zig-cache/minici-build-runner-image
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            tar --dereference -cf - .zig-cache zig-pkg zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
-          else
-            tar -cf - .zig-cache zig-pkg zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
-          fi
+        run: printf '%s/%s\n' "${ImageOS:?}" "${ImageVersion:?}" > .zig-cache/minici-build-runner-image
 
-      # Packing is the disk high-water mark of this job. Report free space and
-      # the packed size here, where the peak actually is.
-      - name: Report disk headroom and packed artifact size
-        if: always()
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -uo pipefail
-          df -h "$GITHUB_WORKSPACE" || true
-          if [ -f minici-build.tar.zst ]; then
-            # `wc -c` over `du`: apparent size, comparable across filesystems
-            # and to the uploaded artifact size the log reports later.
-            bytes="$(wc -c < minici-build.tar.zst)"
-            awk -v b="$bytes" 'BEGIN { printf "minici-build.tar.zst %.1f MB (%d bytes)\n", b/1048576, b }'
-          else
-            echo "(no minici-build.tar.zst -- packing did not complete)"
-          fi
+      # Each shard gets an artifact of its own, holding only what its `zig
+      # build` commands read: their configurations, the manifests and entries
+      # of the cached steps in their graphs, the files those record as
+      # inputs, the restamp tool, and `zig-pkg`, where Zig 0.17 unpacks
+      # dependencies (the cache records those files as link inputs). The packer
+      # records where `build-ci` left each entry, so it builds with exactly
+      # `build-ci`'s options and every step it reads is a cache hit.
+      - name: Build the MiniCI artifact packer
+        run: zig build build-minici-pack -Dembed-builtin-unit=true
 
-      - name: Upload MiniCI build artifact
-        uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
-        with:
-          name: minici-build-${{ runner.os }}-${{ runner.arch }}
-          path: minici-build.tar.zst
-          if-no-files-found: error
-          retention-days: 1
-          overwrite: true
-          compression-level: 0
+      # One slot per shard on the host with the most shards; a slot past this
+      # host's last shard does nothing, and a host with more shards fails.
+      - uses: ./.github/actions/pack-minici-shard
+        with: { slot: 0, slots: 6 }
+      - uses: ./.github/actions/pack-minici-shard
+        with: { slot: 1, slots: 6 }
+      - uses: ./.github/actions/pack-minici-shard
+        with: { slot: 2, slots: 6 }
+      - uses: ./.github/actions/pack-minici-shard
+        with: { slot: 3, slots: 6 }
+      - uses: ./.github/actions/pack-minici-shard
+        with: { slot: 4, slots: 6 }
+      - uses: ./.github/actions/pack-minici-shard
+        with: { slot: 5, slots: 6 }
 
   minici-build-macos:
     # macOS and Windows runners are the scarce ones: their lanes wait for the
@@ -523,15 +496,17 @@ jobs:
       - name: Download MiniCI build artifact
         uses: actions/download-artifact@v8.0.1 # ratchet:actions/download-artifact@v8.0.1
         with:
-          name: minici-build-${{ runner.os }}-${{ runner.arch }}
+          name: minici-build-${{ matrix.minici_shard }}
           path: .
 
       - name: Unpack MiniCI build artifact
         shell: bash
+        env:
+          MINICI_SHARD: ${{ matrix.minici_shard }}
         run: |
           set -euo pipefail
-          zstd -dc minici-build.tar.zst | tar -xf -
-          rm minici-build.tar.zst
+          zstd -dc "minici-build-$MINICI_SHARD.tar.zst" | tar -xf -
+          rm "minici-build-$MINICI_SHARD.tar.zst"
 
       # Every file here is new to this machine: the sources come from a fresh
       # checkout and the cache from the archive above, so nothing has the inode
@@ -571,8 +546,11 @@ jobs:
         shell: bash
         run: echo "MINICI_BUILD_RUNNER_IMAGE=$(cat .zig-cache/minici-build-runner-image)" >> "$GITHUB_ENV"
 
+      # The same configuration options as the jobs MiniCI runs
+      # (`configurationArgs` in src/build/minici.zig), so this command reuses
+      # the configuration and steps the artifact carries for them.
       - name: Run MiniCI
-        run: zig build minici -- --minici-skip-build --minici-build-runner-image ${{ env.MINICI_BUILD_RUNNER_IMAGE }} --minici-shard ${{ matrix.minici_shard }}
+        run: zig build minici --color off -Dembed-builtin-unit=true -- --minici-skip-build --minici-build-runner-image ${{ env.MINICI_BUILD_RUNNER_IMAGE }} --minici-shard ${{ matrix.minici_shard }}
 
       # `.zig-cache` doubles as Zig's global cache, its local cache, and the
       # build temp dir. It is restored from the MiniCI build artifact, so the

@@ -25,7 +25,7 @@ const failure_log_head_bytes: usize = 12 * 1024;
 const failure_log_tail_bytes: usize = 4 * 1024;
 
 /// Installed by `build-ci`. See `restampBuildCache`.
-const restamp_exe = "zig-out/bin/restamp-zig-cache" ++ builtin.target.exeFileExt();
+pub const restamp_exe = "zig-out/bin/restamp-zig-cache" ++ builtin.target.exeFileExt();
 const restamp_log = logs_dir ++ "/restamp-zig-cache.txt";
 
 /// Exit status when every phase passed but the cache-reuse canary did not (see
@@ -57,7 +57,7 @@ const Placement = enum {
     every_host,
 };
 
-const Job = struct {
+pub const Job = struct {
     name: []const u8,
     kind: JobKind = .single,
     args: []const []const u8 = &.{},
@@ -80,7 +80,7 @@ const Job = struct {
 
 /// A group of CI jobs that together run each MiniCI job exactly once per host
 /// (see `shards` and the "MiniCI shards cover" tests).
-const Lane = enum {
+pub const Lane = enum {
     /// Source-only checks. Runs once, on Linux, before anything is built.
     source,
     /// The Linux x86_64 lane: every job that needs `build-ci` outputs.
@@ -105,7 +105,7 @@ const Lane = enum {
 
     /// The source lane runs only source checks, and those build their own
     /// small host tools, so running `build-ci` first would be pure waste.
-    fn needsBuildCi(self: Lane) bool {
+    pub fn needsBuildCi(self: Lane) bool {
         return self != .source;
     }
 
@@ -118,12 +118,25 @@ const Lane = enum {
 };
 
 /// The host family a CI shard runs on. Used only to prove shard coverage.
-const Host = enum { linux, macos, windows };
+pub const Host = enum {
+    linux,
+    macos,
+    windows,
+
+    /// The host family this program was built for, or null for one CI has no
+    /// shards on.
+    pub const current: ?Host = switch (builtin.os.tag) {
+        .linux => .linux,
+        .macos => .macos,
+        .windows => .windows,
+        else => null,
+    };
+};
 
 /// One CI job's slice of MiniCI: the jobs in `selection` that `lane` runs.
 /// `.github/workflows/ci_manager.yml` names every shard exactly once through
 /// its `minici_shard:` matrix keys, and `--minici-verify-workflows` checks that.
-const Shard = struct {
+pub const Shard = struct {
     name: []const u8,
     host: Host,
     lane: Lane,
@@ -138,7 +151,7 @@ const Shard = struct {
 /// "MiniCI shards cover" tests prove that, for each host, the shards run every
 /// job exactly once: the Linux shards (`source` included) and the Windows
 /// shards each run every job, and the macOS shards run every `every_host` job.
-const shards = [_]Shard{
+pub const shards = [_]Shard{
     .{ .name = "source", .host = .linux, .lane = .source },
     .{ .name = "linux-core", .host = .linux, .lane = .primary, .selection = .{ .before = "run-test-eval" } },
     .{ .name = "linux-eval", .host = .linux, .lane = .primary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval" } },
@@ -157,7 +170,7 @@ const shards = [_]Shard{
     .{ .name = "windows-strategy", .host = .windows, .lane = .all, .selection = .{ .from = strategy_differential_job } },
 };
 
-fn shardByName(name: []const u8) ?Shard {
+pub fn shardByName(name: []const u8) ?Shard {
     for (shards) |shard| {
         if (std.mem.eql(u8, shard.name, name)) return shard;
     }
@@ -1775,6 +1788,17 @@ fn skipCommand(
 /// as every non-Debug compiler does (design.md "Embedded Units").
 const minici_build_args = [_][]const u8{"-Dembed-builtin-unit=true"};
 
+/// The `zig build` options of every MiniCI command, in the order MiniCI passes
+/// them, followed by `build_args`. These are the options that select a build
+/// configuration: Zig caches a configuration by exactly these options in
+/// exactly this order (`--summary` and `-j` are not among them), so a shard's
+/// artifact carries the configurations they name (see
+/// src/build/minici_pack.zig). CI runs `zig build minici` itself with these
+/// options and no `build_args`.
+pub fn configurationArgs(allocator: std.mem.Allocator, build_args: []const []const u8) ![]const []const u8 {
+    return std.mem.concat(allocator, []const u8, &.{ &.{ "--color", "off" }, &minici_build_args, build_args });
+}
+
 fn buildCommand(
     allocator: std.mem.Allocator,
     zig_exe: []const u8,
@@ -1790,17 +1814,10 @@ fn buildCommand(
     try argv.append(allocator, step);
     try argv.append(allocator, "--summary");
     try argv.append(allocator, "all");
-    try argv.append(allocator, "--color");
-    try argv.append(allocator, "off");
     if (max_jobs) |jobs_count| {
         try argv.append(allocator, try std.fmt.allocPrint(allocator, "-j{d}", .{jobs_count}));
     }
-    for (minici_build_args) |arg| {
-        try argv.append(allocator, arg);
-    }
-    for (build_args) |arg| {
-        try argv.append(allocator, arg);
-    }
+    try argv.appendSlice(allocator, try configurationArgs(allocator, build_args));
     if (stats_path != null or run_args.len != 0) {
         try argv.append(allocator, "--");
     }
@@ -2470,6 +2487,35 @@ fn missingBuildCiArg(command: []const u8) ?[]const u8 {
     return null;
 }
 
+/// Whether a `zig build` command line runs the `minici` step with options
+/// other than exactly `configurationArgs` with no build arguments, in that
+/// order. A shard's artifact carries that configuration and no other (see
+/// src/build/minici_pack.zig). `command` is the text after `zig build`.
+fn runsMiniciWithOtherOptions(command: []const u8) bool {
+    var options: [8][]const u8 = undefined;
+    var count: usize = 0;
+    var runs_minici = false;
+    var tokens = std.mem.tokenizeAny(u8, command, " \t");
+    while (tokens.next()) |token| {
+        if (std.mem.eql(u8, token, "--")) break;
+        if (std.mem.eql(u8, token, "minici")) {
+            runs_minici = true;
+        } else if (count < options.len) {
+            options[count] = token;
+            count += 1;
+        } else {
+            return runs_minici;
+        }
+    }
+    if (!runs_minici) return false;
+    const expected = [_][]const u8{ "--color", "off" } ++ minici_build_args;
+    if (count != expected.len) return true;
+    for (expected, options[0..count]) |want, got| {
+        if (!std.mem.eql(u8, want, got)) return true;
+    }
+    return false;
+}
+
 /// Returns one message per way `text` departs from running MiniCI as `runs`
 /// says: a shard named wrongly (see `WorkflowRuns`), a lane invocation missing,
 /// repeated or naming the wrong lane, a `zig build` command that runs a
@@ -2541,6 +2587,13 @@ fn workflowProblems(allocator: std.mem.Allocator, text: []const u8, runs: Workfl
                     .{arg},
                 ));
             }
+            if (runs == .every_shard and runsMiniciWithOtherOptions(rest[0..command_end])) {
+                try problems.append(allocator, try std.fmt.allocPrint(
+                    allocator,
+                    "runs `zig build minici` with options other than `{s}`, so it misses the configuration shard artifacts carry",
+                    .{try std.mem.join(allocator, " ", try configurationArgs(allocator, &.{}))},
+                ));
+            }
         }
     }
 
@@ -2592,6 +2645,27 @@ fn verifyWorkflows(allocator: std.mem.Allocator, io: std.Io) !void {
         }
     }
     if (failed) std.process.exit(1);
+}
+
+/// Why a run with this selection and lane does not run `jobs[job_index]`, or
+/// null when it runs it.
+fn jobSkipReason(allocator: std.mem.Allocator, job_index: usize, selected_jobs: ResolvedSelection, lane: ?Lane) !?[]const u8 {
+    const job = jobs[job_index];
+    if (!selected_jobs.includes(job_index)) return "excluded by MiniCI selection\n";
+    if (lane) |l| if (!l.runs(job.placement)) {
+        return try std.fmt.allocPrint(allocator, "not run in the {s} lane ({s} job)\n", .{ @tagName(l), @tagName(job.placement) });
+    };
+    return job.skip_reason;
+}
+
+/// The jobs `zig build minici -- --minici-shard <shard>` runs on this host.
+pub fn shardJobs(allocator: std.mem.Allocator, shard: Shard) ![]const Job {
+    const selected_jobs = try resolveSelection(shard.selection);
+    var list = std.ArrayList(Job).empty;
+    for (jobs, 0..) |job, job_index| {
+        if (try jobSkipReason(allocator, job_index, selected_jobs, shard.lane) == null) try list.append(allocator, job);
+    }
+    return list.toOwnedSlice(allocator);
 }
 
 /// Entry point: build the CI artifacts, then run each selected `run-*` job in order,
@@ -2692,12 +2766,7 @@ pub fn main(init: std.process.Init) !void {
         const argv = try buildCommand(allocator, zig_exe, job_build_args, job.name, runPhaseJobs(init.environ_map), stats_path, job.args);
         const progress = Progress{ .current = job_index + 2, .total = total_phases };
         printRunStart(progress, job.name);
-        const skip_reason: ?[]const u8 = if (!selected_jobs.includes(job_index))
-            "excluded by MiniCI selection\n"
-        else if (lane != null and !lane.?.runs(job.placement))
-            try std.fmt.allocPrint(allocator, "not run in the {s} lane ({s} job)\n", .{ @tagName(lane.?), @tagName(job.placement) })
-        else
-            job.skip_reason;
+        const skip_reason = try jobSkipReason(allocator, job_index, selected_jobs, lane);
         var result = if (skip_reason) |reason|
             try skipCommand(io, argv, log_path, reason, run_started_ns)
         else
@@ -2747,6 +2816,27 @@ pub fn main(init: std.process.Init) !void {
 
 test "the suite inventory's own tests run with MiniCI's" {
     std.testing.refAllDecls(zig_test_suites);
+}
+
+test "the shard artifact selection's tests run with MiniCI's" {
+    std.testing.refAllDecls(@import("cache_closure.zig"));
+}
+
+test "CI runs `zig build minici` in the configuration shard artifacts carry" {
+    try std.testing.expect(!runsMiniciWithOtherOptions("minici --color off -Dembed-builtin-unit=true -- --minici-skip-build"));
+    try std.testing.expect(runsMiniciWithOtherOptions("minici -- --minici-skip-build"));
+    try std.testing.expect(runsMiniciWithOtherOptions("minici -Dembed-builtin-unit=true --color off -- --minici-skip-build"));
+    try std.testing.expect(!runsMiniciWithOtherOptions("build-ci -Dembed-builtin-unit=true"));
+}
+
+test "configurationArgs puts the shared options before a job's own" {
+    const args = try configurationArgs(std.testing.allocator, &.{"-Doptimize=ReleaseSafe"});
+    defer std.testing.allocator.free(args);
+    try std.testing.expectEqual(@as(usize, 3 + minici_build_args.len), args.len);
+    try std.testing.expectEqualStrings("--color", args[0]);
+    try std.testing.expectEqualStrings("off", args[1]);
+    try std.testing.expectEqualStrings(minici_build_args[0], args[2]);
+    try std.testing.expectEqualStrings("-Doptimize=ReleaseSafe", args[args.len - 1]);
 }
 
 test "writeProgressPrefix aligns current phase to total width" {
