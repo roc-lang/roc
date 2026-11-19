@@ -2283,18 +2283,15 @@ pub const Instantiator = struct {
         }
     }
 
-    /// Record `fresh_ext`, the copy of a row's ext, when the source ext is a
-    /// flex or rigid with constraints. The descriptor's word tells its kind,
-    /// so only a variable's constraint range is read.
     fn recordConstrainedRowTailCopy(self: *Self, source_ext: Var, fresh_ext: Var) std.mem.Allocator.Error!void {
         const sink = self.constrained_row_tail_copies orelse return;
-        const source = self.store.resolveVarWord(source_ext);
-        switch (source.word.kind) {
-            .flex, .rigid => {},
-            .alias, .field_presence, .err, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return,
-        }
-        if (self.store.variableConstraintsAt(source.desc_idx).len() == 0) return;
-        try sink.put(self.store.resolveVarWord(fresh_ext).var_, {});
+        const constraints = switch (self.store.resolveVar(source_ext).desc.content) {
+            .flex => |flex| flex.constraints,
+            .rigid => |rigid| rigid.constraints,
+            .alias, .structure, .err, .field_presence => return,
+        };
+        if (constraints.len() == 0) return;
+        try sink.put(self.store.resolveVar(fresh_ext).var_, {});
     }
 
     /// Pair each copied field axis on the value stack with its re-fetched
