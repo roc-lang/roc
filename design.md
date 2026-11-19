@@ -30659,7 +30659,8 @@ test unit; the ordinary units shared with tests contain no test instrumentation.
 
 Each site id is a relocatable field against one import,
 `roc__expect_site_base`, with the field's bytes holding the unit-local id
-as its addend: an `abs32s` immediate on x86_64, and on arm64, whose
+as its addend: an `abs32_field` immediate on x86_64, which a
+`mov r32, imm32` zero-extends, and on arm64, whose
 immediates cannot hold a relocated id, an `abs64_field` literal in the
 instruction stream that a `ldr` loads and a branch skips. The loader binds
 the import per image to the first program-wide id of that image's sites. The program-wide site table is the
