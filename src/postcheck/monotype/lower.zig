@@ -51586,12 +51586,16 @@ const BodyContext = struct {
         if (try self.graph.containsGeneratedPrivate(slot_node)) {
             return .{ .slot = slot_node, .requires_witness = false };
         }
-        if (try self.resultCompletesRequest(slot_node, child_node) or
-            try self.producedValueHasExplicitRepresentationEvidence(slot_node, child_node))
+        // The child now completes the slot or carries explicit representation
+        // evidence the slot lacks; anything else is a compiler bug. Both
+        // queries only confirm that, so they run in debug builds alone.
+        if (@import("builtin").mode == .debug and
+            !(try self.resultCompletesRequest(slot_node, child_node) or
+                try self.producedValueHasExplicitRepresentationEvidence(slot_node, child_node)))
         {
-            return .{ .slot = child_node, .requires_witness = true };
+            Common.invariant(missing_evidence_message);
         }
-        Common.invariant(missing_evidence_message);
+        return .{ .slot = child_node, .requires_witness = true };
     }
 
     fn relateLookupExprAtNode(
