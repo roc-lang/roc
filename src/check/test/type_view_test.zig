@@ -72,7 +72,6 @@ fn builtinIdents(f: *Fixture, cache: *exhaustive.NominalOpenCache) (std.mem.Allo
     inline for (base.structFields(exhaustive.BuiltinIdents)) |field| {
         if (field.type == base.Ident.Idx) @field(result, field.name) = sentinel;
     }
-    result.number_decls = @splat(std.math.maxInt(u32));
     result.idents = &f.idents;
     result.open_cache = cache;
     return result;
@@ -102,7 +101,7 @@ test "nominal views exhaustive boundary returns actual blockers only and permits
     var shared = Reader.SharedDependencies.init(testing.allocator, &f.store);
     defer shared.deinit();
     var finality = FinalityFixture{ .final = true };
-    var cache = exhaustive.NominalOpenCache.initShared(testing.allocator, .{ .graphs = &shared, .owner = &finality, .isFinal = FinalityFixture.isFinal });
+    var cache = exhaustive.NominalOpenCache.initShared(testing.allocator, .{ .graphs = &shared, .owner = &finality, .isFinal = FinalityFixture.isFinal }, null);
     defer cache.deinit();
     const idents = try builtinIdents(&f, &cache);
     const before = f.store.len();
@@ -179,7 +178,7 @@ test "nominal views share a final declaration's dependency graph across reads" {
                 .graphs = &shared,
                 .owner = &finality,
                 .isFinal = FinalityFixture.isFinal,
-            });
+            }, null);
             defer cache.deinit();
             const idents = try builtinIdents(&f, &cache);
             blockers.clearRetainingCapacity();
@@ -599,4 +598,21 @@ test "nominal views answer the opening of a root's application once" {
     try testing.expectEqual(opened, (try reader.openNominalBackingOf(holder, app)).?);
     try testing.expectEqual(opened, (try reader.openNominalBacking(app)).?);
     try testing.expectEqual(opened, (try reader.openNominalBackingOf(other_holder, app)).?);
+}
+
+test "nominal views open every application of an argument-less declaration to one view" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const backing = try f.tuple(&.{try f.store.freshFromContent(.{ .structure = .empty_record })});
+    const nominal = try f.declaration("Plain", &.{}, backing);
+    const first = try f.application(nominal, &.{});
+    const second = try f.application(nominal, &.{});
+    var reader = Reader.init(testing.allocator, &f.store);
+    defer reader.deinit();
+    const opened = (try reader.openNominalBacking(first)).?;
+    try testing.expectEqual(@as(usize, 1), (try tupleChildren(&reader, opened)).len);
+    // The remembered answer and a separately built application of the same
+    // declaration name one view.
+    try testing.expectEqual(opened, (try reader.openNominalBacking(first)).?);
+    try testing.expectEqual(opened, (try reader.openNominalBacking(second)).?);
 }

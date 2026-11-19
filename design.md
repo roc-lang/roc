@@ -1206,12 +1206,34 @@ is not a recursive-path assumption.
 
 Each query defines a finite monotone AND/OR graph: required fields, tuple
 components, and tag payloads are conjunctions; tag alternatives are disjunctions.
-Optional fields require no witness. Functions, recovery types, field-presence
-terms, and builtin numbers retain their existing inhabited leaf behavior. A
-builtin number is one of the Builtin module's own number declarations,
-identified by its builtin origin and declaring statement, never by name: a
-user type or alias named `U8` is an ordinary type, and an alias is always
-followed to its backing.
+Optional fields require no witness. Functions, recovery types, and
+field-presence terms are inhabited leaves. A nominal type has no leaf rule of
+its own: every nominal, builtin or not, is answered by its declared backing
+under its arguments, and an alias is always followed to its backing. No
+inhabitedness query identifies a builtin type by name, origin, or declaring
+statement, so a user type or alias named `U8` is an ordinary type. The types
+the compiler implements therefore declare a backing that states whether they
+have values. Numbers, `Str`, `List`, and the SIMD vectors declare the one-tag
+backing `[ProvidedByCompiler]`, which is inhabited whatever their arguments
+are: the empty list exists for every item type. `Dict` and `Set` are inhabited
+through their Roc backings, whose entries are a `List`. `Box(item)` declares
+`[ProvidedByCompiler(item)]`: a box holds exactly one item, so it has a value
+exactly when `item` does, as a user wrapper `Wrapped(a) := [W(a)]` does.
+`Try(Str, Box([]))` therefore needs no `Err` branch, and an `Err` branch on it
+is unmatchable. The known-absent-payload query reads the same declaration, so
+the `_` of an absent constructor's `Box(_)` payload closes to `[]` as the `_`
+of any other wrapper's payload does: `x : Try(Str, Box(_))` defined as
+`Ok("a")` has the type `Try(Str, Box([]))`. Nothing constructs or matches a
+`ProvidedByCompiler` tag; post-check stages take these types' representations
+from the compiler, not from the declaration, and Monotype's own
+uninhabitedness proof treats a box as uninhabited exactly when its payload is.
+An application of a declaration that takes no arguments opens to a backing
+that names no source variable, so no known-empty assumption reaches it and its
+answer depends only on the query mode and the declaration's template. Once
+that template is final, a module's check keeps the settled answer per
+declaration and mode across exhaustiveness reads and answers later
+applications from it without expanding the backing; Debug builds check each
+reuse against a from-scratch solve.
 Exact known-empty identities are false. An unconditional witness, such as a
 zero-argument tag, may prune other disjunction dependencies, but a provisional
 cycle answer cannot.
@@ -9739,7 +9761,25 @@ Derivation needs every part of the receiver: a receiver that is still
 undetermined after numeric defaulting waits for the final codec boundary, and
 one that is undetermined there is reported as a missing method on a part of
 the type that never resolved to a concrete type, and its call becomes a
-checked runtime error.
+checked runtime error. A nominal whose codec is derived from its backing
+reaches its arguments through that backing: opening the backing substitutes
+the application's arguments, so a type variable the walk meets inside it is
+an argument the application has not determined. While a later use can still
+determine it, its obligation belongs to that use, and a variable a
+definition's scheme quantifies is determined by each use, which validates
+its own copy of the relation. At the final codec boundary a variable no
+scheme quantifies is never determined, and the two directions differ. A
+generated parser reads that part of the shape whenever its input names it, so
+`MyTry(U64, _)` parsed through `[Ok(ok), Err(err)]` is reported exactly as
+`List(_)` is. A generated encoder never reaches it: the variable seals to the
+empty tag union, which no value has, so encoding `MyTry.Ok(2)` at
+`MyTry(U64, _)` is accepted and the encoder gives the tag that carries the
+variable no branch (Static Dispatch In Monotype). An argument the backing
+never reads (a phantom parameter) is not part of the shape and blocks neither
+derivation. Pinned by `src/check/test/derived_codec_undetermined_argument_test.zig`,
+`test/cli/DerivedCodecNominalArguments.roc` and
+`test/cli/encoder_for_uninhabited_payload.roc` (accepted) and
+`test/cli/DerivedCodecUndeterminedNominalArgument.roc` (rejected).
 
 `StaticDispatchPlanTable.generated_codec_derivations` stores each parser/encoder
 derivation as an explicit generated-codec contract. It records every generated
@@ -10494,7 +10534,11 @@ field. Missing fields and `Null` are never conflated. These two shapes are
 format protocol: checking validates them against the format's methods without
 walking the `Try` backing, and Monotype and Boxy write only the `Ok` payload
 plus the format's null or missing-field condition. Any other `Try` is an
-ordinary tag union whose declared codec is derived from its backing.
+ordinary tag union whose declared codec is derived from its backing. Both
+shapes belong to the builtin `Try` alone: checking, Monotype and Boxy each
+recognize them by the builtin `Try` declaration, so a user nominal whose
+backing is `[Ok(ok), Err([Null])]` or `[Ok(ok), Err([Missing])]` is an
+ordinary tag union to its codec (`test/cli/DerivedCodecTryShapedUserNominal.roc`).
 
 JSON arrays are used for lists, tuples, and sets. Tuples parse with exact arity.
 Sets preserve `Set` insertion order and parse by inserting the array items.
@@ -24329,7 +24373,12 @@ the ones its own Monotype imposes on every instance of it, which any class
 instantiated from that Monotype already has. Unifying such a leaf with a class already instantiated from the
 same Monotype only joins the clone's fresh callable slots to the class's, so the
 leaf joins the class without materializing. A Monotype that reaches a cycle, or
-that is uninhabited, keeps the ordinary relation. Leaves that survive solving
+that is uninhabited, keeps the ordinary relation. So does a structural
+Monotype meeting a nominal class: the structural-to-nominal link above lifts a
+class instantiated from a structural Monotype into a nominal one, which is
+then an instance of the nominal type, and joining a leaf of the structural
+Monotype to it would make that leaf, possibly the nominal's own backing,
+resolve to the nominal type (`test/cli/ParsedGenericNominalConstantUse.roc`). Leaves that survive solving
 were never unified: their callable slots all close empty and their
 forced-dynamic marks depend only on their Monotype, so finalization gives every
 untouched leaf of one Monotype one shared clone. An expression or pattern that

@@ -32,6 +32,11 @@ dependencies: collections.DenseMapUnmanaged(types.NominalDecl.Idx, *Dependencies
 /// The backing of the nominal type each root holds, by root, as
 /// `openNominalBackingOf` answered it: `no_view` for an invalid declaration.
 opened: collections.DenseMapUnmanaged(Var, Var) = .empty,
+/// The backing of each valid declaration that takes no arguments, as
+/// `openNominalBacking` answered it, by the declaration key its applications
+/// carry (`nominalDeclarationKey`): every application of such a declaration opens to the
+/// same view.
+argless_backings: std.AutoHashMapUnmanaged(u64, Var) = .empty,
 /// Where the graphs of final declarations live across readers, if anywhere.
 shared: ?Shared = null,
 argument_scratch: std.ArrayList(Var) = .empty,
@@ -196,6 +201,7 @@ pub fn deinit(self: *Self) void {
     self.environment_index.deinit(self.gpa);
     self.dependencies.deinit(self.gpa);
     self.opened.deinit(self.gpa);
+    self.argless_backings.deinit(self.gpa);
     self.nodes.deinit(self.gpa);
     self.scopes.deinit(self.gpa);
     self.argument_scratch.deinit(self.gpa);
@@ -269,13 +275,39 @@ pub fn resolveVar(self: *Self, view_id: Var) Allocator.Error!Resolved {
 /// Actuals are already in their caller's scope. Substitution returns them
 /// directly and never interprets their rigid names in the callee's scope.
 pub fn openNominalBacking(self: *Self, nominal: types.NominalType) Allocator.Error!?Var {
+    const argless = self.sliceNominalArgs(nominal).len == 0;
+    if (argless) {
+        if (self.argless_backings.get(nominalDeclarationKey(nominal))) |backing| {
+            if (std.debug.runtime_safety) std.debug.assert(try self.openDeclaredBacking(nominal) == backing);
+            return backing;
+        }
+    }
+    const backing = (try self.openDeclaredBacking(nominal)) orelse return null;
+    if (argless) try self.argless_backings.put(self.gpa, nominalDeclarationKey(nominal), backing);
+    return backing;
+}
+
+/// The declaration key of an application: its origin module and declaring
+/// statement, which name one declaration of the source store.
+pub fn nominalDeclarationKey(nominal: types.NominalType) u64 {
+    return (@as(u64, @backingInt(nominal.origin_module)) << 32) | nominal.statement();
+}
+
+/// The view of the backing of `nominal`'s declaration under its arguments, or
+/// null for an invalid declaration.
+fn openDeclaredBacking(self: *Self, nominal: types.NominalType) Allocator.Error!?Var {
     const declaration = self.source.lookupNominalDecl(nominal) orelse
         @panic("type view referenced a missing nominal declaration");
     const decl = self.source.getNominalDecl(declaration);
     if (!decl.isValid()) return null;
-    const dependencies = try self.ensureDependencies(declaration);
     const args = self.sliceNominalArgs(nominal);
     std.debug.assert(args.len == decl.formals.count);
+    return try self.viewBacking(declaration, args);
+}
+
+/// The view of a valid declaration's backing under `args`.
+fn viewBacking(self: *Self, declaration: types.NominalDecl.Idx, args: []const Var) Allocator.Error!Var {
+    const dependencies = try self.ensureDependencies(declaration);
     try self.argument_scratch.resize(self.gpa, args.len);
     const canonical = self.argument_scratch.items;
     for (args, canonical) |arg, *dest| dest.* = self.root(arg);

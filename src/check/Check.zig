@@ -361,6 +361,9 @@ type_decl_validity_final: bool = false,
 /// The dependency graphs of nominal declarations whose backing templates are
 /// final (`nominalBackingIsFinal`), shared by every exhaustiveness read.
 nominal_dependencies: exhaustive.SharedNominalDependencies,
+/// The settled inhabitedness of argument-less declarations with final
+/// backings, shared by every exhaustiveness read.
+argless_inhabitedness: exhaustive.ArglessDeclarationAnswers,
 /// Holds one match's exhaustiveness analysis and result; reset after each
 /// match, keeping a bounded chunk for the next one.
 exhaustiveness_arena: base.SingleThreadArena,
@@ -369,9 +372,6 @@ table_scratch: collections.ScratchArena,
 /// Whether a check's result still lives in `exhaustiveness_arena`; checks
 /// never nest, so a second one never starts while it is set.
 exhaustiveness_arena_in_use: bool = false,
-/// The Builtin number declarations' statements, found on the first
-/// exhaustiveness check (see `exhaustiveNumberDecls`).
-exhaustive_number_decls: ?exhaustive.BuiltinIdents.NumberDecls = null,
 /// scratch vars used to build up intermediate lists, used for various things
 scratch_vars: base.Scratch(Var),
 /// Each open type application's argument reaches, one run per application
@@ -1872,10 +1872,10 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .type_decl_dependencies = .keyed,
     .type_decl_validity_final = .keyed,
     .nominal_dependencies = .keyed,
+    .argless_inhabitedness = .keyed,
     .exhaustiveness_arena = .scratch,
     .table_scratch = .scratch,
     .exhaustiveness_arena_in_use = .lexical,
-    .exhaustive_number_decls = .keyed,
     .scratch_vars = .scratch,
     .anno_apply_reaches = .scratch,
     .adapter_reach_visited = .scratch,
@@ -4949,6 +4949,7 @@ fn initAssumePrepared(
         .gpa = gpa,
         .types = types,
         .nominal_dependencies = exhaustive.SharedNominalDependencies.init(gpa, types),
+        .argless_inhabitedness = exhaustive.ArglessDeclarationAnswers.init(gpa),
         .cir = cir,
         .imported_modules = imported_modules,
         .owner_modules = owner_modules,
@@ -37371,7 +37372,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
         self.known_empty_payload_vars_match.clearRetainingCapacity();
         const cond_constructors_known = try self.collectKnownEmptyPayloadVarsForExpr(match.cond, cond_var, &self.known_empty_payload_vars_match);
 
-        var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies());
+        var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies(), &self.argless_inhabitedness);
         defer open_cache.deinit();
         self.beginExhaustivenessArena();
         defer self.endExhaustivenessArena();
@@ -38500,35 +38501,14 @@ fn nominalBackingIsFinal(owner: *const anyopaque, declaration: types_mod.Nominal
     return !self.local_type_context_depths.contains(statement);
 }
 
-fn exhaustiveBuiltinIdents(self: *Self, open_cache: *exhaustive.NominalOpenCache) exhaustive.BuiltinIdents {
+fn exhaustiveBuiltinIdents(self: *const Self, open_cache: *exhaustive.NominalOpenCache) exhaustive.BuiltinIdents {
     return .{
         .idents = self.cir.getIdentStoreConst(),
         .open_cache = open_cache,
         .builtin_module = self.cir.idents.builtin_module,
-        .number_decls = self.exhaustiveNumberDecls(),
         .list = self.cir.idents.list,
         .builtin_list = self.cir.idents.builtin_list,
     };
-}
-
-/// The Builtin module's statement for each number declaration. Without a
-/// Builtin module no nominal has a builtin origin, so every entry is a value
-/// no statement index takes.
-fn exhaustiveNumberDecls(self: *Self) exhaustive.BuiltinIdents.NumberDecls {
-    if (self.exhaustive_number_decls) |decls| return decls;
-    var decls: exhaustive.BuiltinIdents.NumberDecls = @splat(std.math.maxInt(u32));
-    if (self.isCheckingBuiltinModuleDirectly() or self.builtin_ctx.builtin_indices != null) {
-        var count: usize = 0;
-        inline for (CIR.builtin_type_specs) |spec| {
-            if (spec.num_kind) |num_kind| {
-                decls[count] = self.sourceDeclForBuiltinNominal(.{ .num = num_kind });
-                count += 1;
-            }
-        }
-        std.debug.assert(count == decls.len);
-    }
-    self.exhaustive_number_decls = decls;
-    return decls;
 }
 
 /// Claim the exhaustiveness arena for one check's analysis and result.
@@ -38636,7 +38616,7 @@ fn collectAbsentCtorPayloadBlockers(
     var arena = base.SingleThreadArena.init(self.gpa);
     defer arena.deinit();
 
-    var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies());
+    var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies(), &self.argless_inhabitedness);
     defer open_cache.deinit();
 
     try exhaustive.collectAbsentCtorPayloadBlockersForConstructedTags(
@@ -38777,7 +38757,7 @@ fn checkPatternExhaustiveness(
     // pending record-destructure binds must be judged first.
     try self.judgeRecordDestructBinds(env);
 
-    var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies());
+    var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies(), &self.argless_inhabitedness);
     defer open_cache.deinit();
     self.beginExhaustivenessArena();
     defer self.endExhaustivenessArena();
@@ -61359,6 +61339,7 @@ fn finishImplicitParse(self: *Self, run: *ImplicitParseRun, validation: DerivedP
             try self.markStaticDispatchRejected(request.constraint);
         },
         .unsupported => try self.reportConstraintErrorAt(request.dispatcher_var, request.constraint, .not_nominal, env, request.failure_expr.get(), request.failure_expr.get()),
+        .undetermined => try self.reportUndeterminedCodecType(request.dispatcher_var, request.constraint, env, request.failure_expr.get()),
     }
     try self.finishCodecDerivationFrame(run.codec_frame, validation == .ok);
 }
@@ -61513,6 +61494,7 @@ fn satisfyImplicitEncoderForConstraint(
             try self.markStaticDispatchRejected(constraint);
         },
         .unsupported => try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, owner_expr),
+        .undetermined => unreachable, // only a parser's walk answers a backing variable with `.undetermined`
     }
 }
 
@@ -62195,6 +62177,9 @@ const DerivedParseContext = enum {
 const DerivedParseValidation = enum {
     ok,
     unsupported,
+    /// A part of a parsed shape never resolved to a concrete type
+    /// (`derivedParseBackingVariable`).
+    undetermined,
     reported_error,
 };
 
@@ -63308,9 +63293,9 @@ fn validateRenameFieldMethod(
 ///
 /// `nominal_backing_depth` counts how many of those backings the walk is
 /// currently inside. Within one, a component that is still a type variable is
-/// a formal standing for whatever an application substitutes, so its
-/// obligation belongs to that application and is discharged where the
-/// application is concrete.
+/// an argument the application has not determined: a parser's walk answers it
+/// with `derivedParseBackingVariable`, and an encoder's walk accepts it
+/// (`stepDerivedEncode`).
 const DerivedCodecWalk = struct {
     visited: collections.DenseMap(Var, void),
     walked_apps: std.ArrayList(WalkedApp),
@@ -63994,7 +63979,7 @@ fn derivedCodecFailed(input: ?DerivedParseValidation) ?DerivedParseValidation {
     const validation = input orelse return null;
     return switch (validation) {
         .ok => null,
-        .unsupported, .reported_error => validation,
+        .unsupported, .undetermined, .reported_error => validation,
     };
 }
 
@@ -64032,12 +64017,11 @@ fn stepDerivedParse(
                 },
                 .alias => |alias| .{ .tail = .{ .var_ = .{ .var_ = self.types.getAliasBackingVar(alias), .context = task.context } } },
                 .err => .{ .done = .ok },
-                // Inside a derived codec's backing shape a type variable is a formal
-                // standing for whatever an application substitutes, so the obligation
-                // on it belongs to that application and is discharged where the
-                // application is concrete. Anywhere else the shape gate has already
-                // decided such a variable, so reaching one here is unsupported.
-                .flex => .{ .done = if (walk.nominal_backing_depth > 0) .ok else .unsupported },
+                // Inside a derived codec's backing shape a type variable stands
+                // for an application's argument (`derivedParseBackingVariable`).
+                // Anywhere else the shape gate has already decided such a
+                // variable, so reaching one here is unsupported.
+                .flex => .{ .done = if (walk.nominal_backing_depth > 0) self.derivedParseBackingVariable(resolved.var_) else .unsupported },
                 // Outside a backing, a type variable the enclosing definition
                 // constrains is read through its declared `parser_for`.
                 .rigid => .{
@@ -64518,6 +64502,23 @@ fn validateDerivedCodecVariable(
     return .ok;
 }
 
+/// The answer for a type variable `var_` a derived parser's walk meets inside
+/// a nominal's backing shape. Opening the backing substituted the
+/// application's arguments for the declaration's formals, so the variable is
+/// (part of) an argument the application has not determined. While a later
+/// event can still determine it, the obligation on it belongs to whatever
+/// type it becomes: a variable a definition's scheme quantifies is
+/// substituted by each use, which validates its own copy of the relation.
+/// At the final codec boundary a variable no scheme quantifies is never
+/// determined again, and the generated parser reads that part of the shape
+/// whenever its input names it, so the parser has a part that never resolved
+/// to a concrete type and cannot be derived.
+fn derivedParseBackingVariable(self: *Self, var_: Var) DerivedParseValidation {
+    if (!self.checking_final_codec_dispatch_constraints) return .ok;
+    if (self.types.resolveVar(self.codecInstanceSource(var_)).desc.rank == .generalized) return .ok;
+    return .undetermined;
+}
+
 /// The template variable a private codec instance's copy `var_` stands for
 /// (`finalCodecRelationInstance`), or `var_` outside such an instance.
 fn codecInstanceSource(self: *Self, var_: Var) Var {
@@ -64859,9 +64860,12 @@ fn stepDerivedEncode(
                 },
                 .alias => |alias| .{ .tail = .{ .var_ = self.types.getAliasBackingVar(alias) } },
                 .err => .{ .done = .ok },
-                // See `stepDerivedParse`: a variable inside a derived codec's
-                // backing shape is a formal whose obligation belongs to the
-                // application that substitutes for it.
+                // Inside a derived codec's backing shape a type variable stands
+                // for an application's argument. One a later use determines
+                // is that use's obligation. One nothing determines seals to
+                // the empty tag union, which no value has: nothing reaches
+                // its encoder, and the generated encoder gives a tag that
+                // carries it no branch.
                 .flex => .{ .done = if (walk.nominal_backing_depth > 0) .ok else .unsupported },
                 .rigid => .{
                     .done = if (walk.nominal_backing_depth > 0) .ok else blk: {
