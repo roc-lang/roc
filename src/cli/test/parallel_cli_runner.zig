@@ -13657,9 +13657,11 @@ fn customCtfeStaticCacheRuntime(
         .{ .path = "test/cli/ctfe_static_cache/RuntimeSeed.roc", .stdout = "472\n" },
         // Large evaluated tables of integers, floats holding a NaN that is
         // not Roc's one NaN, and records of both, and a literal table; and
-        // tables of `Bool`s, of payload-free tags and of records holding
-        // them, evaluated and literal, in the app and imported from `Tags`.
-        .{ .path = "test/cli/ctfe_static_cache/LargeTables.roc", .stdout = "636550 -150000 143 506072 200 2010436 121392 1667 1716 7750 1 1312 80000\n" },
+        // tables of `Bool`s, of tags with no payload or zero-sized ones,
+        // matched with their payloads bound and inspected, and of records
+        // holding them, evaluated and literal, in the app and imported from
+        // `Tags`.
+        .{ .path = "test/cli/ctfe_static_cache/LargeTables.roc", .stdout = "[Hit({}), Miss, Skip({}, Only)] [Hit({}), Miss, Hit({})] 111000 eq\n636550 -150000 143 506072 200 2010436 121392 1667 1716 7750 1 1312 80000\n" },
     };
     for (apps) |entry| {
         const name = std.fs.path.basename(entry.path);

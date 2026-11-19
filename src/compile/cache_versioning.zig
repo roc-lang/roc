@@ -82,8 +82,8 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// Version 53 stores constant stores whose type tables hold one copy of each
 /// type a store writer copied from its program.
 /// Version 54 stores every tag union's own tags in name order.
-/// Version 55 stores lists of payload-free tags, and of records and tuples
-/// holding them, as packed bytes.
+/// Version 55 stores lists of tag unions whose payloads are all zero-sized,
+/// and of records and tuples holding them, as packed bytes.
 /// Platform-pairing entries share it.
 const checked_envelope_version: u32 = 55;
 
