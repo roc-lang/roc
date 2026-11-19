@@ -1645,3 +1645,22 @@ test "check - issue 12521 - a hashed row tail that is also a value type is close
     defer test_env.deinit();
     try test_env.assertNoErrors();
 }
+
+// https://github.com/roc-lang/roc/issues/13244
+test "check - repro - issue 13244 - unmatchable pattern report reads a match replaced by a runtime error" {
+    const src =
+        \\f = {
+        \\    var $s = match B {
+        \\        C(_) => 0
+        \\    }
+        \\    $s = S($s)
+        \\    0
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertHasTypeError("Unmatchable Pattern");
+    try test_env.assertHasTypeError("Anonymous Recursion");
+}
