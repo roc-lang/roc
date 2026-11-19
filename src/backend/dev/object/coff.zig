@@ -406,9 +406,9 @@ pub const CoffWriter = struct {
             },
             // The field's own bytes hold the addend, as for every COFF
             // absolute field.
-            .abs32s => switch (self.arch) {
+            .abs32_field => switch (self.arch) {
                 .x86_64 => COFF.IMAGE_REL_AMD64_ADDR32,
-                .aarch64 => invariant("COFF invariant violated: abs32s data relocation in aarch64 code, which only an x86_64 test unit emits", .{}),
+                .aarch64 => invariant("COFF invariant violated: abs32_field data relocation in aarch64 code, which only an x86_64 test unit emits", .{}),
             },
             .abs64_field => self.arch.absolutePointerRelocType(),
         };

@@ -893,7 +893,7 @@ fn relocationKindForData(kind: DataRelocationKind) RelocationKind {
         .rel32 => .linked_data_rel32,
         .page21 => .linked_data_page21,
         .pageoff12 => .linked_data_pageoff12,
-        .abs32s, .abs64_field => base.invariant("run image invariant violated: an expect-site data relocation, which only a test unit emits, and no run image holds a test unit's code", .{}),
+        .abs32_field, .abs64_field => base.invariant("run image invariant violated: an expect-site data relocation, which only a test unit emits, and no run image holds a test unit's code", .{}),
     };
 }
 

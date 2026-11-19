@@ -177,7 +177,7 @@ pub fn linkObject(allocator: Allocator, arm64: bool, provides: []const Provide, 
     // Windows trap until a build fills them; trampolines branch, each
     // through a branch relocation to its kept symbol.
     if (text_prov_ordinal != 0) {
-        const start = contents_offset + addrs[text_prov_ordinal - 1];
+        const start: usize = @intCast(contents_offset + addrs[text_prov_ordinal - 1]);
         if (arm64) {
             var word: usize = 0;
             while (word < text_prov_size) : (word += 4) std.mem.writeInt(u32, bytes[start + word ..][0..4], brk_instruction, .little);
@@ -186,7 +186,7 @@ pub fn linkObject(allocator: Allocator, arm64: bool, provides: []const Provide, 
         }
     }
     if (tramp_ordinal != 0) {
-        const start = contents_offset + addrs[tramp_ordinal - 1];
+        const start: usize = @intCast(contents_offset + addrs[tramp_ordinal - 1]);
         for (0..keep.len) |index| {
             const trampoline = bytes[start + index * @as(usize, @intCast(trampoline_size)) ..][0..@intCast(trampoline_size)];
             const field_offset: u32 = if (arm64) 0 else 1;
@@ -441,7 +441,7 @@ pub fn finish(allocator: Allocator, exe: []const u8, provides: []const Provide, 
     }
 
     // The mapped segments' page hashes, for the signature.
-    const page_count: u64 = linkedit.fileoff / page_size;
+    const page_count: usize = @intCast(linkedit.fileoff / page_size);
     var host_end: u64 = 0;
     for (image.segments, 0..) |segment, index| {
         if (index == image.linkedit) continue;
@@ -472,7 +472,7 @@ pub fn finish(allocator: Allocator, exe: []const u8, provides: []const Provide, 
     @memcpy(out[@intCast(provides_offset)..][0 .. provide_records.len * @sizeOf(ProvideRecord)], std.mem.sliceAsBytes(provide_records));
     @memcpy(out[@intCast(strings_offset)..][0..strings.items.len], strings.items);
     for (0..page_count) |page| {
-        std.crypto.hash.sha2.Sha256.hash(exe[page * page_size ..][0..page_size], out[@intCast(page_hashes_offset + page * 32)..][0..32], .{});
+        std.crypto.hash.sha2.Sha256.hash(exe[@intCast(page * page_size)..][0..@intCast(page_size)], out[@intCast(page_hashes_offset + page * 32)..][0..32], .{});
     }
     var host_digest: [32]u8 = undefined;
     std.crypto.hash.Blake3.hash(exe[0..@intCast(host_size)], &host_digest, .{});
@@ -539,11 +539,11 @@ pub const View = struct {
         return self.bytes[0..@intCast(self.trailer.linkedit_offset)];
     }
     pub fn symbols(self: View) []const HostSymbol {
-        const start: [*]const HostSymbol = @ptrCast(@alignCast(self.bytes.ptr + self.trailer.symbols_offset));
+        const start: [*]const HostSymbol = @ptrCast(@alignCast(self.bytes.ptr + @as(usize, @intCast(self.trailer.symbols_offset))));
         return start[0..self.trailer.symbol_count];
     }
     pub fn provides(self: View) []const ProvideRecord {
-        const start: [*]const ProvideRecord = @ptrCast(@alignCast(self.bytes.ptr + self.trailer.provides_offset));
+        const start: [*]const ProvideRecord = @ptrCast(@alignCast(self.bytes.ptr + @as(usize, @intCast(self.trailer.provides_offset))));
         return start[0..self.trailer.provide_count];
     }
     pub fn name(self: View, offset: u32) []const u8 {
@@ -555,7 +555,7 @@ pub const View = struct {
     }
     /// The SHA-256 of each page (`pageSize`) of `segments()`.
     pub fn pageHashes(self: View) []const [32]u8 {
-        const start: [*]const [32]u8 = @ptrCast(self.bytes.ptr + self.trailer.page_hashes_offset);
+        const start: [*]const [32]u8 = @ptrCast(self.bytes.ptr + @as(usize, @intCast(self.trailer.page_hashes_offset)));
         return start[0..self.trailer.page_hash_count];
     }
     /// The kept symbol `wanted`, when the host provides it.

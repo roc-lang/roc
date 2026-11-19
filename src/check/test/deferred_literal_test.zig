@@ -28,7 +28,7 @@ test "a literal whose type settles to a builtin number has no conversion constra
             try std.testing.expect(plan.fnVar() == null);
             try std.testing.expectEqual(.builtin_direct, plan.dispatchResolution());
         }
-        const constraints = env.checker.types.static_dispatch_constraints.len();
+        const constraints: usize = @intCast(env.checker.types.static_dispatch_constraints.len());
         if (count == 8) small = constraints else try std.testing.expectEqual(small, constraints);
     }
 }
@@ -100,7 +100,7 @@ test "a string literal whose type settles to Str has no conversion constraint" {
             try std.testing.expect(plan.fnVar() == null);
             try std.testing.expectEqual(.builtin_direct, plan.dispatchResolution());
         }
-        const constraints = env.checker.types.static_dispatch_constraints.len();
+        const constraints: usize = @intCast(env.checker.types.static_dispatch_constraints.len());
         if (count == 8) small = constraints else try std.testing.expectEqual(small, constraints);
     }
 }
@@ -163,7 +163,7 @@ test "a literal pattern matched against a builtin number has no constraint" {
         }
         try std.testing.expectEqual(count, numerals);
         // Neither a conversion nor an equality constraint per pattern.
-        const constraints = env.checker.types.static_dispatch_constraints.len();
+        const constraints: usize = @intCast(env.checker.types.static_dispatch_constraints.len());
         if (count == 4) small = constraints else try std.testing.expectEqual(small, constraints);
     }
 }
