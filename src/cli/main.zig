@@ -3175,7 +3175,7 @@ fn finishRunTermination(
                     std.posix.sigaddset(&set, .INT);
                     std.posix.sigprocmask(std.posix.SIG.UNBLOCK, &set, null);
                     _ = std.c.raise(.INT);
-                    unreachable;
+                    unreachable; // SIGINT is unblocked with its default action, so raise terminates the process before returning
                 }
             }
             const sig_num = @backingInt(signal);
