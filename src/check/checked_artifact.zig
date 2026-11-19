@@ -10517,7 +10517,7 @@ test "independent closed function graphs share one key and add no synthesized ro
     }.inspect);
 }
 
-test "checker marks exhaustiveness-defaulted empty payload provenance" {
+test "an exhaustive match commits a free payload variable to the empty tag union" {
     const TestEnv = @import("test/TestEnv.zig");
     const source =
         \\x : Try(I64, _)
@@ -10543,7 +10543,6 @@ test "checker marks exhaustiveness-defaulted empty payload provenance" {
     try std.testing.expectEqual(@as(usize, 2), args.len);
     const err_desc = test_env.module_env.types.resolveVar(args[1]).desc;
     try std.testing.expectEqual(types.Content{ .structure = .empty_tag_union }, err_desc.content);
-    try std.testing.expect(err_desc.flags.empty_tag_union_is_default);
 }
 
 test "checked output retains defaulted identity inside parent function digest" {

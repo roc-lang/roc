@@ -1161,8 +1161,9 @@ The same graph separately records structural substitution dependencies,
 without the application-ownership dependencies of template-private unknowns.
 Following these dependencies through a view's actual arguments proves when
 no mutable source variable can be exported by blocker collection. In that
-case, known-absent constructor analysis returns no blockers without building
-an inhabitedness graph. This proof applies to the whole structural dependency
+case, tested-payload blocker collection (`collectAlternativePayloadBlockers`)
+returns no blockers for that payload without building an inhabitedness
+graph. This proof applies to the whole structural dependency
 graph, including recursive edges, aliases' hidden arguments, field presence,
 and row extensions; it is not inferred from arity or constructor shape. Only
 the final declaration's dependency summary persists across reads. Actual
@@ -1172,9 +1173,8 @@ no inhabitedness or blocker answer about mutable types is shared.
 An inhabitedness memo stores complete query answers, not provisional answers
 obtained by cutting an active recursive path. Its key includes the resolved
 root and the exact sorted, deduplicated known-empty assumptions; its lifetime is one
-mutation-free analysis. Constructor-payload and known-absent-payload queries,
-which carry no assumptions, keep one memo per query mode with the same
-lifetime. Shared DAG nodes are not recursive cycles. A cyclic
+mutation-free analysis. Constructor-payload queries, which carry no
+assumptions, keep their own memo with the same lifetime. Shared DAG nodes are not recursive cycles. A cyclic
 query implementation must distinguish those states and establish its fixed-point
 or traversal rule before producing a reusable result. The same restriction
 applies to completion-relation memoization in Monotype: no result outlives the
@@ -1200,12 +1200,11 @@ Leaf and tail policy is explicit:
 
 - General queries treat unconstrained flex and rigid leaves, and open union
   tails, as potentially inhabited.
-- Constructor-payload queries treat unbound flex and ignored rigid leaves as
-  empty candidates; constrained leaves remain inhabited. Their tails use the
+- Constructor-payload queries treat unbound flex leaves as empty candidates;
+  constrained flex leaves and every rigid leaf remain inhabited. A rigid is
+  the type the enclosing signature's caller chooses, whatever its name: an
+  underscore only silences the unused-variable warning. Their tails use the
   same constructor-payload policy for union alternatives.
-- Known-absent-payload queries treat every flex and ignored rigid leaf as empty
-  candidates regardless of constraints, ignore open union tails, and retain
-  the existing rejection of non-union nominal backing shapes.
 
 Payload recursion and row-extension cycles are different. Extension traversal
 flattens the finite row and cuts a cyclic extension as closed; it must not turn
@@ -13723,6 +13722,79 @@ and the journal of copies by the unifier tests in
 `src/check/test/unify_test.zig`, and a producer met through a shared extension
 by `src/check/test/issue_13105_test.zig`.
 
+### Free Payload Variables Close Per Use
+
+A definition's type is what its body and annotation infer, and nothing else.
+A `_` in an annotation constrains nothing: the type is exactly what leaving
+that part unannotated infers. A type variable written `_e` is the variable
+`e`; the underscore only silences the unused-variable warning, and checking
+never reads it. So a function whose body builds only `Ok` keeps its error
+row generalized whatever its annotation spells it as:
+`f : U64 -> Try(U64, _)` with `f = |n| if n == 0 Ok(0.U64) else Ok(n)` is
+`U64 -> Try(U64, _a)`, and each use relates its own instance of `_a`, so one
+use can be `Try(U64, [B])` and another `Try(U64, [C(Str)])`.
+
+A value of type `Try(U64, e)` for every `e` cannot be an `Err`: nothing could
+have built the payload. A `match` (other than a `?` desugaring, which forwards
+whatever the value holds) or a destructure therefore takes its own instance
+of such a variable to be `[]`, but only when the variable is free at the use:
+
+- The checker reads each tag union a tag pattern of the match or destructure
+  tests, nested tag patterns included. A pattern that binds or ignores a value
+  tests nothing. For every alternative of each such union, the unconstrained
+  flex variables that make the alternative's payload empty under the
+  constructor-payload policy (Potential Inhabitedness Queries) are the
+  candidates (`collectAlternativePayloadBlockers`).
+- A candidate is free when, at the use, it is still an unconstrained flex
+  variable (no static-dispatch constraint, no literal requirement) and none of
+  these reaches it (`Check.collectReachedVars`):
+  - the parameter types and the own type of every lambda enclosing the use: a
+    parameter is the value a caller chooses, and a caller that chooses `err`
+    can pass an `Err`;
+  - the type of every use of a platform requirement in the module, whose
+    value the application supplies;
+  - the binder and value types of every member of every definition group
+    being checked, which an in-group reference relates to monomorphically,
+    so the variable belongs to a signature still being inferred;
+  - the signature of a static-dispatch constraint on any variable the tested
+    unions reach, of every constraint deferred to the current generalization
+    boundary, and of every generated-codec relation parked for finalization:
+    a pending method choice decides each variable its signature mentions.
+  A rigid variable is never a candidate: it is an enclosing annotation's
+  variable, which the caller chooses.
+- Each free candidate is unified with a fresh `[]` before the exhaustiveness
+  analysis reads the scrutinee (`Check.closeFreeTestedPayloadVars`). The
+  analysis then sees an uninhabited alternative: an `Ok`-only match on
+  `f(n)` is exhaustive, and an `Err(_)` branch is reported as an Unmatchable
+  Pattern. The `[]` is an ordinary committed empty union, so lowering reads a
+  closed layout. A later relation that would give the variable a tag is a type
+  mismatch, as for any other relation of the closed instance.
+
+Inside `g : Try(I64, err) -> I64`, `match t { Ok(v) => v }` on the parameter is
+not exhaustive, and neither is the same match when the annotation writes `_err`
+or `_` for the error row: each such variable is reached from the parameter. A local `r = f(n)` matched later is
+closed exactly like `f(n)` itself, since its instance reaches no parameter. A
+top-level value annotated `x : Try(I64, _)` with `x = Ok(42)` is a value, so
+every use shares its one type (Value Rows: Uses Share One Row), and the first
+match that tests it decides the hole.
+
+When the scrutinee's value expression is itself a tag construction (through
+blocks, conditionals, matches and nominal wrappers), the tags it constructs
+are a fact about that scrutinee alone: a root constructor it never constructs
+needs no branch (`exhaustive.checkMatch`'s `scrutinee_constructed_tags`).
+Nothing is written to that constructor's payload type, which may be shared
+with anything, such as a parameter bound by the pattern for it. In
+`f = |n| match Oops { Oops => n, Zero(p) => p }` the type of `p` is the type
+of `n`, `f` is `a -> a`, and the `Zero` branch is reported by Pattern-Only
+Tags.
+
+The accepted and rejected sides are pinned by the `issue 13236` and
+`issue 13237` tests in `src/check/test/repros_test.zig`, the inferred-hole
+tests in `src/check/test/exhaustiveness_test.zig` and
+`src/check/test/issue_11248_test.zig`, and run by
+`test/cli/Issue13237AllOkErrorRow.roc` and
+`test/cli/Issue13236UnmatchablePayloadParameter.roc`.
+
 ### Hosted Try Question Widening Removed
 
 The checker has no host-specific widening rule for `?` on direct hosted
@@ -14071,7 +14143,8 @@ the narrower row.
 The rule asks only whether the result alone determines the variable, so
 the variable may be flex or rigid, with or without a row default, and may
 be the whole error type (`Try(Str, err)`, or `Try(Str, _)` whose hole
-generalizes). The one exception is a constraint that closing a row does
+generalizes whatever the body constructs; Free Payload Variables Close Per
+Use). The one exception is a constraint that closing a row does
 not discharge (anything beyond `is_eq` and `to_hash`). Such a constraint
 can be a producer, like `parser_for`, whose behavior depends on the row,
 so a wider row would run code the checker never checked. The checker
@@ -17072,16 +17145,15 @@ Other solved-graph mutations:
   Checking Effects And Const Roots. The immutable boundary formulas are solved
   together before any positive result is written; dispatch-call dependencies
   are checked by ordinary unification, not by a later graph repair.
-- `closeAbsentConstructedPayloadVars` /
-  `closeAbsentConstructedPayloadVarsForLambda` / `closePayloadVarToEmpty`—
-  policy: absent-constructor payload closing. A constructed value's
-  unconstrained, ignorable payload vars for tags the expression provably never
-  constructs close to the empty tag union, so matches on constructed values are
-  exhaustive without wildcard arms. A lambda result is constructed by its body
-  tail *or* by any of its early returns, so the lambda form reads the tags of
-  every recorded return operand as well; `?` desugars to one of those returns,
-  and its `Err` is what keeps an inferred error row open (see Try Return-Row
-  Composition above, whose contributions are composed only after this point).
+- `closeFreeTestedPayloadVars`—policy: Free Payload Variables Close Per Use
+  (above). A probe of which payload variables of the unions a match's or
+  destructure's tag patterns test are free at the use gates an ordinary
+  unification of each with a fresh empty tag union, before the exhaustiveness
+  analysis. It introduces no redirect rule and writes nothing outside
+  unification. The accepted side (an `Ok`-only match on an all-`Ok`
+  function's result, and on a local holding it) and the rejected side (an
+  `Ok`-only match on a parameter, whatever its error row is named) are pinned
+  by the tests that section names.
 - `closeTagRowsForDerivation`—policy: Polarity and Derived Parser Tag-Row
   Closure (above). Codec dispatch eagerly closes only annotation-proven flexible
   extensions and alias polarity markers; inferred tag tails close at the final
