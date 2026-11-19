@@ -2757,23 +2757,21 @@ test "RocList list_allocate sizes the allocation exactly" {
     }
 }
 
-/// Static storage for one test list of `u64` items: the static refcount
-/// word, then the items. `list` is the frozen form of a value with `len`
-/// items and room for `capacity`.
+/// Static storage for one test list of `u64` items: a `u64`-aligned header
+/// whose last word is the static refcount, then the items. `list` is the
+/// frozen form of a value with `len` items and room for `capacity`.
 fn StaticTestList(comptime len: usize) type {
-    return struct {
-        words: [1 + len]usize,
+    return extern struct {
+        header: [@sizeOf(u64) / @sizeOf(usize)]usize align(@alignOf(u64)),
+        items: [len]u64,
 
         fn init(items: [len]u64) @This() {
-            var words: [1 + len]usize = undefined;
-            words[0] = @bitCast(utils.REFCOUNT_STATIC_DATA);
-            for (items, 0..) |item, index| words[1 + index] = item;
-            return .{ .words = words };
+            return .{ .header = @splat(@bitCast(utils.REFCOUNT_STATIC_DATA)), .items = items };
         }
 
         fn list(self: *@This(), capacity: usize) RocList {
             return .{
-                .bytes = @ptrCast(@as([*]usize, &self.words) + 1),
+                .bytes = @ptrCast(&self.items),
                 .length = len,
                 .capacity_or_alloc_ptr = RocList.encodeCapacity(capacity),
             };
@@ -2800,7 +2798,7 @@ test "a static list is never unique and its copy keeps the recorded capacity" {
     try std.testing.expectEqual(@as(usize, 100), owned.getCapacity());
     try std.testing.expectEqualSlices(u64, &.{ 10, 20 }, owned.elements(u64).?[0..2]);
     // The static storage is untouched.
-    try std.testing.expectEqual(@as(usize, @bitCast(utils.REFCOUNT_STATIC_DATA)), storage.words[0]);
+    try std.testing.expectEqual(@as(usize, @bitCast(utils.REFCOUNT_STATIC_DATA)), storage.header[storage.header.len - 1]);
 }
 
 test "a shared list's copy is sized by its items" {

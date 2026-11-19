@@ -526,7 +526,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     hash_context.dirty_ranges = dirty_ranges.items;
     var hash_ranges: std.ArrayList(fanout.Range) = .empty;
     defer hash_ranges.deinit(gpa);
-    try fanout.addRanges(gpa, &hash_ranges, 0, page_count);
+    try fanout.addRanges(gpa, &hash_ranges, 0, @intCast(page_count));
     var hashes: std.ArrayList(Task) = .empty;
     defer hashes.deinit(gpa);
     for (hash_ranges.items) |range| try hashes.append(gpa, .{ .context = &hash_context, .work = .{ .hashes = range } });

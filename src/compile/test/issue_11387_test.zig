@@ -221,6 +221,79 @@ fn hostTwice(n: u64) callconv(.c) u64 {
     return n * 2;
 }
 
+fn hostIndex() callconv(.c) u64 {
+    return 0;
+}
+
+fn hostSeed() callconv(.c) u64 {
+    return 255;
+}
+
+test "issue 13191: generic hosted Box round trip preserves a joined tag row" {
+    // https://github.com/roc-lang/roc/issues/13191
+    // The unselected callable widens the input row, but the host returns
+    // the same box: its B must still be read as B.
+    try expectEffectfulHostedAppRuns(
+        \\app [main!] { pf: platform "./platform/main.roc" }
+        \\import pf.Host
+        \\Diagnostic(p) := { problem : p }
+        \\Problem(p) : [B, C, ..p]
+        \\Error : Diagnostic(Problem([]))
+        \\
+        \\failure : U64 -> Error
+        \\failure = |n| if n > 0 { problem: B } else { problem: C }
+        \\
+        \\wide : U64 -> [A, B, C]
+        \\wide = |n| if n == 0 A else failure(n).problem
+        \\
+        \\first! : () => U64
+        \\first! = || {
+        \\    value = Box.unbox(Host.transfer!(Box.box(failure(Host.seed!()))))
+        \\    match value.problem {
+        \\        B => 1
+        \\        _ => 0
+        \\    }
+        \\}
+        \\
+        \\second! : () => U64
+        \\second! = || match wide(Host.seed!()) {
+        \\    B => 1
+        \\    _ => 0
+        \\}
+        \\
+        \\main! : () => U64
+        \\main! = || {
+        \\    cases = [first!, second!]
+        \\    run! = cases.get(Host.index!()) ?? crash "invalid case index"
+        \\    run!()
+        \\}
+    , .{
+        .main =
+        \\platform ""
+        \\    requires { main! : () => U64 }
+        \\    exposes [Host]
+        \\    packages {}
+        \\    provides { "result": result! }
+        \\    hosted { "host_index": Host.index!, "host_seed": Host.seed!, "host_transfer": Host.transfer! }
+        \\import Host
+        \\result! : () => U64
+        \\result! = main!
+        ,
+        .module_path = "platform/Host.roc",
+        .module =
+        \\Host := [].{
+        \\    transfer! : Box(a) => Box(a)
+        \\    index! : () => U64
+        \\    seed! : () => U64
+        \\}
+        ,
+    }, &.{
+        builtins.host_abi.hostedFn(&hostIndex),
+        builtins.host_abi.hostedFn(&hostSeed),
+        builtins.host_abi.hostedFn(&hostPassBox),
+    }, 1);
+}
+
 const erased_hosts = @as([4]builtins.host_abi.HostedFn, @splat(builtins.host_abi.hostedFn(&hostPassBox)));
 
 var expected_result: u64 = 0;

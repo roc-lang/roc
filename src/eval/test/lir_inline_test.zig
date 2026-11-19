@@ -5244,6 +5244,55 @@ test "issue 12976 a function returning a parameter its closure also captures low
     }
 }
 
+test "issue 13208 a record update keeps an iterator field passed through an annotated public Iter" {
+    // repro for https://github.com/roc-lang/roc/issues/13208
+    // `count` declares a public `Iter(U64)` parameter, and its caller passes
+    // `List.iter`'s iterator. `{ ..cursor, n: ... }` leaves the `items` field
+    // unchanged, so the update's result keeps the base's `items` type, and
+    // every inline mode lowers and runs the program to 1 + 2 + 3.
+    const allocator = std.testing.allocator;
+    const source =
+        \\count : Iter(U64) -> Iter(U64)
+        \\count = |items| Iter.custom(
+        \\    { items, n: 0 },
+        \\    Err(Unknown),
+        \\    |cursor| match cursor.items.next() {
+        \\        Done => Err(NoMore)
+        \\        Skip({ rest }) => Ok((0, { ..cursor, items: rest }))
+        \\        One({ rest, .. }) => {
+        \\            next = { ..cursor, n: cursor.n + 1 }
+        \\            Ok((next.n, { ..next, items: rest }))
+        \\        }
+        \\    },
+        \\)
+        \\
+        \\main : U64
+        \\main = {
+        \\    var $sum = 0
+        \\    for n in count(List.iter([10, 20, 30])) {
+        \\        $sum = $sum + n
+        \\    }
+        \\    $sum
+        \\}
+    ;
+    for ([_]lir.CheckedPipeline.InlineMode{ .none, .procedures, .wrappers }) |inline_mode| {
+        var lowered = try lowerModule(allocator, source, inline_mode);
+        defer lowered.deinit(allocator);
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        {
+            const result = &lowered.lowered.lir_result;
+            var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+            defer static_strings.deinit();
+            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
+            defer interpreter.deinit();
+            const evaluated = try interpreter.eval(.{ .proc_id = try rootProc(&lowered.lowered) });
+            try std.testing.expectEqual(@as(u64, 6), evaluated.value.read(u64));
+        }
+        try runtime_env.checkForLeaks();
+    }
+}
+
 test "issue 11317 or-pattern captures reuse one closure with and without specialization" {
     const allocator = std.testing.allocator;
     const source =

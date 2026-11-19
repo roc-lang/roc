@@ -273,8 +273,8 @@ const TestCalls = struct {
     fn stepVaried(ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: usize) callconv(.c) void {
         const pending = callerCell(@ptrFromInt(out)).?;
         const remaining = std.mem.readInt(u64, args.?[0..8], .little);
-        const words = std.mem.readInt(u64, args.?[8..16], .little);
-        if (words != variedWords(remaining)) {
+        const words = variedWords(remaining);
+        if (std.mem.readInt(u64, args.?[8..16], .little) != words) {
             std.mem.writeInt(u64, ret.?[0..8], 0, .little);
             return;
         }
@@ -296,8 +296,8 @@ const TestCalls = struct {
 
     const varied_max_words = wide_words + 2 * 7;
 
-    fn variedWords(remaining: u64) u64 {
-        return wide_words + (remaining % 3) * 7;
+    fn variedWords(remaining: u64) usize {
+        return wide_words + @as(usize, @intCast(remaining % 3)) * 7;
     }
 
     /// Fills `bytes` for `stepVaried` and returns how many it used.

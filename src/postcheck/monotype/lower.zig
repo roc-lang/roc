@@ -7401,6 +7401,235 @@ const Builder = struct {
         return false;
     }
 
+    /// The positions of each type variable the hosted declaration's checked
+    /// type names more than once, as paths into the specialization's Monotype
+    /// function type (`Ast.SignatureVarStep`). The checked declaration is the
+    /// only place that still tells one variable's positions apart from another
+    /// variable instantiated to an equal type, so the walk pairs it with the
+    /// Monotype position by position: aliases are transparent, as in Monotype,
+    /// a nominal steps to its arguments, never its backing (whose occurrences
+    /// the arguments bind), and record fields and tags are found by name.
+    fn hostedSignatureVars(
+        self: *Builder,
+        view: ModuleView,
+        declared_checked_fn_ty: checked.CheckedTypeId,
+        fn_ty: Type.TypeId,
+    ) Allocator.Error!Ast.Span(Ast.SignatureVarStep) {
+        const Work = struct {
+            checked_ty: checked.CheckedTypeId,
+            mono_ty: Type.TypeId,
+            /// Length of the parent's path.
+            depth: u32,
+            /// The child index from the parent, absent for an alias backing.
+            step: ?u32,
+        };
+        const Occurrence = struct {
+            variable: checked.CheckedTypeId,
+            steps_start: u32,
+            steps_end: u32,
+        };
+        var work = std.ArrayListUnmanaged(Work).empty;
+        defer work.deinit(self.allocator);
+        var path = std.ArrayListUnmanaged(u32).empty;
+        defer path.deinit(self.allocator);
+        var occurrence_steps = std.ArrayListUnmanaged(u32).empty;
+        defer occurrence_steps.deinit(self.allocator);
+        var occurrences = std.ArrayListUnmanaged(Occurrence).empty;
+        defer occurrences.deinit(self.allocator);
+
+        try work.append(self.allocator, .{ .checked_ty = declared_checked_fn_ty, .mono_ty = fn_ty, .depth = 0, .step = null });
+        while (work.pop()) |item| {
+            path.shrinkRetainingCapacity(item.depth);
+            if (item.step) |step| try path.append(self.allocator, step);
+            const depth: u32 = @intCast(path.items.len);
+            const start = work.items.len;
+            const types = self.program.types.view();
+            switch (checkedPayload(view, item.checked_ty)) {
+                .flex, .rigid => |variable| if (variable.numeric_default_phase == null and variable.row_default == null) {
+                    const steps_start: u32 = @intCast(occurrence_steps.items.len);
+                    try occurrence_steps.appendSlice(self.allocator, path.items);
+                    try occurrences.append(self.allocator, .{
+                        .variable = item.checked_ty,
+                        .steps_start = steps_start,
+                        .steps_end = @intCast(occurrence_steps.items.len),
+                    });
+                },
+                .empty_record, .empty_tag_union => {},
+                .pending, .field_kind, .err => Common.invariant("unfinished or erroneous checked type reached a hosted signature"),
+                .alias => |alias| try work.append(self.allocator, .{ .checked_ty = alias.backing, .mono_ty = item.mono_ty, .depth = depth, .step = null }),
+                .function => |checked_fn| {
+                    const mono_fn = switch (types.get(item.mono_ty)) {
+                        .func => |func| func,
+                        .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst, .hole => Common.invariant("hosted signature function lowered to a non-function Monotype"),
+                    };
+                    const mono_args = types.span(mono_fn.args);
+                    if (mono_args.len != checked_fn.args.len) Common.invariant("hosted signature function arity changed in Monotype");
+                    for (checked_fn.args, mono_args, 0..) |arg, mono_arg, index| {
+                        try work.append(self.allocator, .{ .checked_ty = arg, .mono_ty = mono_arg, .depth = depth, .step = @intCast(index) });
+                    }
+                    try work.append(self.allocator, .{ .checked_ty = checked_fn.ret, .mono_ty = mono_fn.ret, .depth = depth, .step = @intCast(mono_args.len) });
+                },
+                .tuple => |items| {
+                    const mono_items = switch (types.get(item.mono_ty)) {
+                        .tuple => |span| types.span(span),
+                        .primitive, .named, .record, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("hosted signature tuple lowered to a non-tuple Monotype"),
+                    };
+                    if (mono_items.len != items.len) Common.invariant("hosted signature tuple arity changed in Monotype");
+                    for (items, mono_items, 0..) |checked_item, mono_item, index| {
+                        try work.append(self.allocator, .{ .checked_ty = checked_item, .mono_ty = mono_item, .depth = depth, .step = @intCast(index) });
+                    }
+                },
+                .record => |record| {
+                    const mono_fields = switch (types.get(item.mono_ty)) {
+                        .record => |span| types.fieldSpan(span),
+                        .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("hosted signature record lowered to a non-record Monotype"),
+                    };
+                    var current_fields = record.fields;
+                    var current = record.ext;
+                    while (true) {
+                        for (0..current_fields.len()) |field_index| {
+                            const field = current_fields.get(field_index);
+                            const name = try recordFieldName(&self.program.names, view, field.name);
+                            var mono_index: usize = 0;
+                            while (mono_index < mono_fields.len and mono_fields[mono_index].name != name) mono_index += 1;
+                            if (mono_index == mono_fields.len) Common.invariant("hosted signature record field was missing from its Monotype");
+                            try work.append(self.allocator, .{ .checked_ty = field.ty, .mono_ty = mono_fields[mono_index].ty, .depth = depth, .step = @intCast(mono_index) });
+                        }
+                        switch (checkedPayload(view, current)) {
+                            .alias => |alias| {
+                                current_fields = .empty;
+                                current = alias.backing;
+                            },
+                            .record => |ext_record| {
+                                current_fields = ext_record.fields;
+                                current = ext_record.ext;
+                            },
+                            .empty_record => break,
+                            .flex, .rigid => |variable| {
+                                if (variable.row_default != .empty_record) Common.invariant("open record row reached a hosted signature");
+                                break;
+                            },
+                            .pending, .field_kind, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => Common.invariant("non-record row extension reached a hosted signature"),
+                        }
+                    }
+                },
+                .tag_union => |tag_union| {
+                    const mono_tags = switch (types.get(item.mono_ty)) {
+                        .tag_union => |span| types.tagSpan(span),
+                        .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => Common.invariant("hosted signature tag union lowered to a non-tag-union Monotype"),
+                    };
+                    var current_tags = tag_union.tags;
+                    var current = tag_union.ext;
+                    while (true) {
+                        for (0..current_tags.len()) |tag_index| {
+                            const tag = current_tags.get(tag_index);
+                            const name = try tagName(&self.program.names, view, tag.name);
+                            var payload_start: usize = 0;
+                            var mono_index: usize = 0;
+                            while (mono_index < mono_tags.len and mono_tags[mono_index].checked_name != name) : (mono_index += 1) {
+                                payload_start += mono_tags[mono_index].payloads.len;
+                            }
+                            if (mono_index == mono_tags.len) Common.invariant("hosted signature tag was missing from its Monotype");
+                            const mono_payloads = types.span(mono_tags[mono_index].payloads);
+                            if (mono_payloads.len != tag.args.len) Common.invariant("hosted signature tag payload arity changed in Monotype");
+                            for (tag.args, mono_payloads, 0..) |arg, mono_payload, index| {
+                                try work.append(self.allocator, .{ .checked_ty = arg, .mono_ty = mono_payload, .depth = depth, .step = @intCast(payload_start + index) });
+                            }
+                        }
+                        switch (checkedPayload(view, current)) {
+                            .alias => |alias| {
+                                current_tags = .empty;
+                                current = alias.backing;
+                            },
+                            .tag_union => |ext_union| {
+                                current_tags = ext_union.tags;
+                                current = ext_union.ext;
+                            },
+                            .empty_tag_union => break,
+                            .flex, .rigid => |variable| {
+                                if (variable.row_default != .empty_tag_union) Common.invariant("open tag row reached a hosted signature");
+                                break;
+                            },
+                            .pending, .field_kind, .err, .record, .tuple, .nominal, .function, .empty_record => Common.invariant("non-tag row extension reached a hosted signature"),
+                        }
+                    }
+                },
+                .nominal => |nominal| {
+                    const encoding: enum { none, element, args } = switch (nominal.representation) {
+                        .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
+                            .primitive => .none,
+                            .list, .box => .element,
+                            .bool_tag_union,
+                            .try_nominal,
+                            .iterator,
+                            .parse_tag_union_spec,
+                            .fields,
+                            .field,
+                            .dict,
+                            .set,
+                            .crypto_sha256_digest,
+                            .crypto_sha256_hasher,
+                            .crypto_blake3_digest,
+                            .crypto_blake3_hasher,
+                            => .args,
+                        },
+                        .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => .args,
+                    };
+                    switch (encoding) {
+                        .none => {},
+                        .element => {
+                            const elem = switch (types.get(item.mono_ty)) {
+                                .list, .box => |elem| elem,
+                                .primitive, .named, .record, .tuple, .tag_union, .func, .erased, .zst, .hole => Common.invariant("hosted signature List or Box lowered to another Monotype"),
+                            };
+                            try work.append(self.allocator, .{ .checked_ty = nominal.args[0], .mono_ty = elem, .depth = depth, .step = 0 });
+                        },
+                        .args => {
+                            const mono_args = switch (types.get(item.mono_ty)) {
+                                .named => |named| types.span(named.args),
+                                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("hosted signature nominal lowered to an unnamed Monotype"),
+                            };
+                            if (mono_args.len != nominal.args.len) Common.invariant("hosted signature nominal arity changed in Monotype");
+                            for (nominal.args, mono_args, 0..) |arg, mono_arg, index| {
+                                try work.append(self.allocator, .{ .checked_ty = arg, .mono_ty = mono_arg, .depth = depth, .step = @intCast(index) });
+                            }
+                        },
+                    }
+                },
+            }
+            // Visit children in order, so occurrences are listed in signature order.
+            std.mem.reverse(Work, work.items[start..]);
+        }
+
+        // Only a variable with two or more positions relates anything.
+        var counts = collections.DenseMap(checked.CheckedTypeId, u32).init(self.allocator);
+        defer counts.deinit();
+        for (occurrences.items) |occurrence| {
+            const entry = try counts.getOrPut(occurrence.variable);
+            entry.value_ptr.* = if (entry.found_existing) entry.value_ptr.* + 1 else 1;
+        }
+        var classes = collections.DenseMap(checked.CheckedTypeId, u32).init(self.allocator);
+        defer classes.deinit();
+        var class_count: u32 = 0;
+        for (occurrences.items) |occurrence| {
+            if (counts.get(occurrence.variable).? < 2 or classes.contains(occurrence.variable)) continue;
+            try classes.put(occurrence.variable, class_count);
+            class_count += 1;
+        }
+        if (class_count == 0) return .empty();
+
+        var steps = std.ArrayListUnmanaged(Ast.SignatureVarStep).empty;
+        defer steps.deinit(self.allocator);
+        for (occurrences.items) |occurrence| {
+            const class = classes.get(occurrence.variable) orelse continue;
+            try steps.append(self.allocator, .{ .occurrence = class });
+            for (occurrence_steps.items[occurrence.steps_start..occurrence.steps_end]) |child| {
+                try steps.append(self.allocator, .{ .child = child });
+            }
+        }
+        return try self.program.addSignatureVarSteps(steps.items);
+    }
+
     /// Assert that this hosted specialization emits its extern at the declared
     /// host ABI type.
     ///
@@ -9249,7 +9478,7 @@ const Builder = struct {
                 .fn_def = fn_template,
                 .fn_id = .some(fn_id),
                 .args = Ast.Span(Ast.TypedLocal).empty(),
-                .body = .hosted,
+                .body = .{ .hosted = .empty() },
                 .ret = functionShape(&self.program.types, lower_fn_ty, "procedure template root type was not a function").ret,
             });
             const spec = try self.addTemplateSpecRecord(
@@ -9568,7 +9797,7 @@ const Builder = struct {
                     .fn_def = hosted_fn_template,
                     .fn_id = .some(reservation.fn_id),
                     .args = args,
-                    .body = .hosted,
+                    .body = .{ .hosted = try self.hostedSignatureVars(view, declared_source_fn_ty, lower_fn_ty) },
                     .ret = fn_data.ret,
                 });
                 self.program.setFnSource(reservation.fn_id, hosted_fn_template);
@@ -14576,7 +14805,6 @@ const Builder = struct {
             while (def_index < body_draft.defs.items.len) : (def_index += 1) {
                 switch (body_draft.defs.items[def_index].body) {
                     .roc => |body| try ctx.resequenceBody(body),
-                    .hosted => {},
                 }
             }
             var nested_index: usize = 0;
@@ -14592,7 +14820,6 @@ const Builder = struct {
         while (def_index < body_draft.defs.items.len) : (def_index += 1) {
             switch (body_draft.defs.items[def_index].body) {
                 .roc => |body| try ctx.scopeBodyInPlace(body),
-                .hosted => {},
             }
         }
         var nested_index: usize = 0;
@@ -17078,7 +17305,6 @@ const DraftStmt = union(enum(u8)) {
 
 const DraftFnBody = union(enum(u8)) {
     roc: DraftExprId,
-    hosted,
 };
 
 const DraftDef = struct {
@@ -21641,7 +21867,6 @@ const FinalIdOffsets = struct {
     fn fnBody(self: FinalIdOffsets, body: DraftFnBody) Ast.FnBody {
         return switch (body) {
             .roc => |body_expr| .{ .roc = self.expr(body_expr) },
-            .hosted => .hosted,
         };
     }
 
@@ -50464,12 +50689,16 @@ const BodyContext = struct {
         if (try self.graph.containsGeneratedPrivate(slot_node)) {
             return .{ .slot = slot_node, .requires_witness = false };
         }
-        if (try self.resultCompletesRequest(slot_node, child_node) or
-            try self.producedValueHasExplicitRepresentationEvidence(slot_node, child_node))
+        // The child now completes the slot or carries explicit representation
+        // evidence the slot lacks; anything else is a compiler bug. Both
+        // queries only confirm that, so they run in debug builds alone.
+        if (@import("builtin").mode == .debug and
+            !(try self.resultCompletesRequest(slot_node, child_node) or
+                try self.producedValueHasExplicitRepresentationEvidence(slot_node, child_node)))
         {
-            return .{ .slot = child_node, .requires_witness = true };
+            Common.invariant(missing_evidence_message);
         }
-        Common.invariant(missing_evidence_message);
+        return .{ .slot = child_node, .requires_witness = true };
     }
 
     fn relateLookupExprAtNode(
@@ -52027,16 +52256,41 @@ const BodyContext = struct {
             }
             // An updated field's producer-authored child can carry a
             // representation distinct from the checked-public field slot, so
-            // updates run the same witness selection as closed constructors;
-            // spread-carried fields keep their checked slots from the base.
+            // updates run the same witness selection as closed constructors.
+            // A spread-carried field's value is the base's field, so its
+            // producer is the base value: the base's own field node takes part
+            // in the same selection, and a private representation it carries
+            // (such as a codec representation) stays the result's field type.
             const target_fields = (try self.graph.recordConstructionNodes(record_node)).fields;
             const produced_fields = try self.allocator.alloc(InstField, target_fields.len);
             defer self.allocator.free(produced_fields);
             var requires_distinct_witness = false;
+            const base_node = try self.exprTypeCell(base_expr).toGraphNode(self.graph);
+            var base_fields = try self.constructionFields(base_node);
+            defer base_fields.deinit(self.allocator);
             for (0..target_fields.len) |index| {
                 const field = target_fields[index];
                 produced_fields[index] = field;
-                const field_value = labels.values.get(field.name) orelse continue;
+                const field_value = labels.values.get(field.name) orelse {
+                    if (labels.unsets.contains(field.name)) continue;
+                    const base_field = base_fields.get(field.name);
+                    const witness = try self.constructorChildWitness(
+                        field.ty,
+                        base_field.ty,
+                        "record graph update carried field differed without explicit representation evidence",
+                    );
+                    if (witness.requires_witness) {
+                        requires_distinct_witness = true;
+                        produced_fields[index] = .{
+                            .name = field.name,
+                            .ty = witness.slot,
+                            .value_ty = base_field.value_ty,
+                            .kind = field.kind,
+                            .default = field.default,
+                        };
+                    }
+                    continue;
+                };
                 // A supplied optional field's child is the slot's Present
                 // payload, not the tagged slot itself, and it was already
                 // wrapped above; its slot keeps the checked representation.

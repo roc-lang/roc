@@ -1563,7 +1563,7 @@ fn moduleSections(arena: Allocator, plan: *Layout, exports: []const ExportEntry,
     const data_header_size: u64 = if (data_payload_size == 0) 0 else data_payload_offset - data_start;
 
     // The head: everything before the first function's size prefix.
-    const head = try arena.alloc(u8, head_size + code_header_size);
+    const head = try arena.alloc(u8, @intCast(head_size + code_header_size));
     var out: Writer = .{ .buffer = head };
     out.bytes("\x00asm\x01\x00\x00\x00");
     if (type_payload != 0) {
@@ -1656,7 +1656,7 @@ fn moduleSections(arena: Allocator, plan: *Layout, exports: []const ExportEntry,
     std.debug.assert(out.at == head.len and head.len == code_start + (if (defined_count == 0) 0 else lebSize(defined_count)));
 
     // The data section's header, before the payload the tasks write.
-    const data_header = try arena.alloc(u8, data_header_size);
+    const data_header = try arena.alloc(u8, @intCast(data_header_size));
     if (data_payload_size != 0) {
         var header: Writer = .{ .buffer = data_header };
         header.byte(11);
@@ -1671,7 +1671,7 @@ fn moduleSections(arena: Allocator, plan: *Layout, exports: []const ExportEntry,
     }
 
     // The name section, last.
-    const names = try arena.alloc(u8, sectionSize(names_payload));
+    const names = try arena.alloc(u8, @intCast(sectionSize(names_payload)));
     if (names_payload != 0) {
         var names_out: Writer = .{ .buffer = names };
         names_out.byte(0);

@@ -235,6 +235,16 @@ pub const StaticDispatchRelationMerge = struct {
     retained_fn_var: Var,
 };
 
+/// Two row parts that each store their own entry for one tag a match pattern
+/// asked for (design.md "Pattern-Only Tags"). The unifier rebuilt the row
+/// `root` resolves to holding a copy of the marked tag `name`, and `part`
+/// keeps its own entry outside that row's extension chain.
+pub const PatternOnlyTagCopy = struct {
+    part: Var,
+    root: Var,
+    name: base.Ident.Idx,
+};
+
 /// An empty tag union a relation can no longer lift: written by an
 /// annotation, or committed after inference closed it. The empty tag union
 /// an opening of a nominal declaration's backing minted is the declaration's
@@ -416,6 +426,11 @@ pub const Store = struct {
     /// target instantiation. Sealing releases this journal after checking has
     /// published the selected relations into ModuleEnv.
     static_dispatch_relation_merges: std.ArrayListUnmanaged(StaticDispatchRelationMerge) = .empty,
+    /// Every copy the unifier made of a pattern-only tag whose source part
+    /// outlives the relation (design.md "Pattern-Only Tags"). The
+    /// unmatchable-pattern judgment reads these to carry a producer one copy
+    /// met to the others. Sealing releases this journal.
+    pattern_only_tag_copies: std.ArrayListUnmanaged(PatternOnlyTagCopy) = .empty,
     /// Unused room reserved directly after a constraint range, keyed by the
     /// range's end and holding the room's end, so a receiver whose
     /// requirements grow one use at a time extends its own list in place
@@ -736,6 +751,8 @@ pub const Store = struct {
         self.pending_free_descs = .empty;
         self.static_dispatch_relation_merges.deinit(self.gpa);
         self.static_dispatch_relation_merges = .empty;
+        self.pattern_only_tag_copies.deinit(self.gpa);
+        self.pattern_only_tag_copies = .empty;
         self.static_dispatch_constraint_room.deinit(self.gpa);
         self.static_dispatch_constraint_room = .empty;
         self.nominal_identity_index.deinit(self.gpa);
@@ -853,6 +870,7 @@ pub const Store = struct {
         interpolation_metadata_len: usize,
         static_dispatch_constraints_len: usize,
         static_dispatch_relation_merges_len: usize,
+        pattern_only_tag_copies_len: usize,
         verify_clone: SavepointVerifyClone = savepoint_verify_clone_init,
     };
 
@@ -939,6 +957,7 @@ pub const Store = struct {
             .interpolation_metadata_len = self.interpolation_metadata.items().len,
             .static_dispatch_constraints_len = self.static_dispatch_constraints.items().len,
             .static_dispatch_relation_merges_len = self.static_dispatch_relation_merges.items.len,
+            .pattern_only_tag_copies_len = self.pattern_only_tag_copies.items.len,
             .verify_clone = verify_clone,
         };
 
@@ -1054,6 +1073,7 @@ pub const Store = struct {
         self.interpolation_metadata.shrinkRetainingCapacity(savepoint.interpolation_metadata_len);
         self.static_dispatch_constraints.shrinkRetainingCapacity(savepoint.static_dispatch_constraints_len);
         self.static_dispatch_relation_merges.shrinkRetainingCapacity(savepoint.static_dispatch_relation_merges_len);
+        self.pattern_only_tag_copies.shrinkRetainingCapacity(savepoint.pattern_only_tag_copies_len);
         if (self.derived_map_plans_journaled) {
             // A probe only inserts plan rows, so the journaled rows are no
             // longer than the current list.

@@ -22445,18 +22445,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// address under native execution, by relocation everywhere else.
         /// Load `site`, a unit-local expect site id, into `dst` as a field
         /// against `expect_site_base_symbol` whose bytes hold the id: an
-        /// `abs32s` immediate on x86_64, an `abs64_field` literal in the
-        /// instruction stream on arm64.
+        /// `abs32_field` immediate that the instruction zero-extends on
+        /// x86_64, an `abs64_field` literal in the instruction stream on
+        /// arm64.
         fn emitRelocatableExpectSite(self: *Self, dst: GeneralReg, site: u32) Allocator.Error!void {
             switch (isa) {
                 .x86_64 => {
-                    const start = self.codegen.currentOffset();
-                    // REX.W C7 /0 imm32: the field starts three bytes in.
-                    try self.codegen.emit.movRegImm32(dst, @intCast(site));
+                    // [REX.B] B8+rd imm32: the field is the instruction's
+                    // last four bytes.
+                    try self.codegen.emit.movRegImm32ZeroExtend(dst, site);
                     try self.codegen.relocations.append(self.allocator, .{ .linked_data = .{
-                        .offset = @intCast(start + 3),
+                        .offset = @intCast(self.codegen.currentOffset() - 4),
                         .symbol = try self.codegen.symbols.intern(self.allocator, relocation_mod.expect_site_base_symbol, .shared),
-                        .kind = .abs32s,
+                        .kind = .abs32_field,
                     } });
                 },
                 .aarch64 => {
@@ -24022,6 +24023,93 @@ else
 // Tests
 
 const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
+
+test "issue 13186: x64mac inline expect site survives unit image construction" {
+    // Exercise the target's emitter, not a handwritten relocation, so the
+    // test also covers a change to the instruction/relocation encoding.
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+    var codegen = try LirCodeGen(.x64mac).init(allocator, &store, &test_state.layout_store, .{}, .default);
+    defer codegen.deinit();
+    try codegen.emitRelocatableExpectSite(.RAX, 7);
+    const writer = @import("ObjectWriter.zig");
+    const symbols = [_]writer.Symbol{.{
+        .name = relocation_mod.expect_site_base_symbol,
+        .offset = 0,
+        .size = 0,
+        .is_global = true,
+        .is_function = false,
+        .is_external = true,
+    }};
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const image = try writer.indexedImageObject(
+        arena.allocator(),
+        .x64mac,
+        codegen.codegen.emit.buf.items,
+        &.{},
+        0,
+        &symbols,
+        codegen.codegen.relocations.items,
+        &.{},
+        &.{},
+        null,
+        false,
+    );
+    try std.testing.expectEqual(@as(usize, 1), image.relocs.len);
+    try std.testing.expectEqual(@as(i64, 7), image.relocs[0].addend);
+    try std.testing.expectEqualStrings(relocation_mod.expect_site_base_symbol, image.symbols[image.relocs[0].symbol].name);
+}
+
+test "x86_64 expect sites are zero-extended 32-bit fields in every object format" {
+    const allocator = std.testing.allocator;
+    const writer = @import("ObjectWriter.zig");
+    const symbols = [_]writer.Symbol{.{
+        .name = relocation_mod.expect_site_base_symbol,
+        .offset = 0,
+        .size = 0,
+        .is_global = true,
+        .is_function = false,
+        .is_external = true,
+    }};
+    inline for (.{ .x64mac, .x64linux, .x64win }) |target| {
+        var store = LirStore.init(allocator);
+        defer store.deinit();
+        var test_state = try TestLayoutState.init(allocator);
+        defer test_state.deinit();
+        var codegen = try LirCodeGen(target).init(allocator, &store, &test_state.layout_store, .{}, .default);
+        defer codegen.deinit();
+        // mov eax, imm32 then mov r13d, imm32, which takes a REX.B prefix.
+        try codegen.emitRelocatableExpectSite(.RAX, 0);
+        try codegen.emitRelocatableExpectSite(.R13, std.math.maxInt(u32));
+        const code = codegen.codegen.emit.buf.items;
+        try std.testing.expectEqualSlices(u8, &.{ 0xB8, 0, 0, 0, 0, 0x41, 0xBD, 0xFF, 0xFF, 0xFF, 0xFF }, code);
+
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const image = try writer.indexedImageObject(arena.allocator(), target, code, &.{}, 0, &symbols, codegen.codegen.relocations.items, &.{}, &.{}, null, false);
+        var encoded: std.ArrayList(u8) = .empty;
+        defer encoded.deinit(allocator);
+        try writer.generateIndexedObjectFileWithDebug(allocator, target, code, &.{}, 0, &symbols, codegen.codegen.relocations.items, &.{}, &.{}, null, &encoded);
+        try std.testing.expectEqual(@as(usize, 2), image.relocs.len);
+        for (image.relocs, [_]u64{ 1, 7 }, [_]i64{ 0, std.math.maxInt(u32) }) |reloc, offset, addend| {
+            try std.testing.expectEqual(UnitImage.RelocKind.abs32, reloc.kind);
+            try std.testing.expectEqual(offset, reloc.offset);
+            try std.testing.expectEqual(addend, reloc.addend);
+            try std.testing.expectEqualStrings(relocation_mod.expect_site_base_symbol, image.symbols[reloc.symbol].name);
+        }
+        // The encoded object reads back into the same image.
+        const options: UnitImage.BuildOptions = .{ .keep_debug = false, .atoms = .whole };
+        const from_bytes = try UnitImage.build(allocator, &.{encoded.items}, options);
+        defer allocator.free(from_bytes);
+        const from_object = try UnitImage.buildObjects(allocator, &.{image}, options);
+        defer allocator.free(from_object);
+        try std.testing.expectEqualSlices(u8, from_object, from_bytes);
+    }
+}
 
 const TestLayoutState = struct {
     layout_store: layout.Store,

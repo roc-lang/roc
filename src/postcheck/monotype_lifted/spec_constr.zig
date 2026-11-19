@@ -764,15 +764,31 @@ fn callableValue(
     } };
 }
 
-/// Whether `expr_id` is a substitutable read: a leaf, or an access or
-/// callable whose operands all are. An access continues with its single
-/// operand; a callable's further operands wait on a work stack.
-fn exprIsSubstitutable(program: *const Ast.Program, allocator: Allocator, expr_id: Ast.ExprId) Allocator.Error!bool {
-    var stack: std.ArrayList(Ast.ExprId) = .empty;
-    defer stack.deinit(allocator);
-    var next: ?Ast.ExprId = expr_id;
-    while (next orelse stack.pop()) |id| switch (program.getExpr(id).data) {
-        .local,
+/// The one grammar of substitutable reads, by what each form reads at
+/// runtime. A substitutable read evaluates nothing that could fail or
+/// allocate, so a use may duplicate, drop, or move it. Substitutability
+/// (`exprIsSubstitutable`) and retained ownership
+/// (`Cloner.appendRetainedValueLocals`) both follow the operands it names.
+const ReadDependency = union(enum) {
+    /// A read of this runtime local, which owns the value read.
+    local: Ast.LocalId,
+    /// A closed value: it reads no runtime local.
+    closed,
+    /// A record field read or tuple element read of this receiver.
+    receiver: Ast.ExprId,
+    /// A function reference, built from these capture operands.
+    captures: Ast.Span(Ast.CaptureOperand),
+    /// A marker for a value that is absent or never produced. It reads no
+    /// runtime local, but it is meaningful only where it stands, so it is
+    /// not a substitutable read.
+    marker,
+    /// Anything else: evaluating it does work.
+    work,
+};
+
+fn readDependency(program: *const Ast.Program, expr_id: Ast.ExprId) ReadDependency {
+    return switch (program.getExpr(expr_id).data) {
+        .local => |local| .{ .local = local },
         .unit,
         .int_lit,
         .frac_f32_lit,
@@ -781,23 +797,20 @@ fn exprIsSubstitutable(program: *const Ast.Program, allocator: Allocator, expr_i
         .str_lit,
         .bytes_lit,
         .static_data_candidate,
-        => next = null,
-        .fn_ref => |fn_ref| {
-            next = null;
-            const operand_count: usize = @intCast(fn_ref.captures.len);
-            for (0..operand_count) |index| {
-                try stack.append(allocator, program.captureOperandAt(fn_ref.captures, index).value);
-            }
-        },
-        .field_access => |field| next = field.receiver,
-        .tuple_access => |access| next = access.tuple,
+        => .closed,
+        .fn_ref => |fn_ref| .{ .captures = fn_ref.captures },
+        .field_access => |field| .{ .receiver = field.receiver },
+        .tuple_access => |access| .{ .receiver = access.tuple },
+        .@"unreachable",
+        .uninitialized,
+        .uninitialized_payload,
+        => .marker,
         // A compile-time value read is where the program evaluates that
         // value: its final value guard crashes there when the evaluation
         // failed, so the read is neither dropped nor moved.
         .comptime_value,
         .typed_boundary,
         .row_widen,
-        .@"unreachable",
         .list,
         .tuple,
         .record,
@@ -815,8 +828,6 @@ fn exprIsSubstitutable(program: *const Ast.Program, allocator: Allocator, expr_i
         .structural_hash,
         .match_,
         .if_,
-        .uninitialized,
-        .uninitialized_payload,
         .if_initialized_payload,
         .try_sequence,
         .try_record_sequence,
@@ -834,7 +845,30 @@ fn exprIsSubstitutable(program: *const Ast.Program, allocator: Allocator, expr_i
         .expect_err,
         .literal_rejected,
         .expect,
-        => return false,
+        => .work,
+    };
+}
+
+/// Whether `expr_id` is a substitutable read (`ReadDependency`): a local or
+/// closed leaf, or a field read, tuple element read or function reference
+/// whose operands all are. A field or element read continues with its single
+/// operand; a function
+/// reference's further operands wait on a work stack.
+fn exprIsSubstitutable(program: *const Ast.Program, allocator: Allocator, expr_id: Ast.ExprId) Allocator.Error!bool {
+    var stack: std.ArrayList(Ast.ExprId) = .empty;
+    defer stack.deinit(allocator);
+    var next: ?Ast.ExprId = expr_id;
+    while (next orelse stack.pop()) |id| switch (readDependency(program, id)) {
+        .local, .closed => next = null,
+        .receiver => |receiver| next = receiver,
+        .captures => |captures| {
+            next = null;
+            const operand_count: usize = @intCast(captures.len);
+            for (0..operand_count) |index| {
+                try stack.append(allocator, program.captureOperandAt(captures, index).value);
+            }
+        },
+        .marker, .work => return false,
     };
     return true;
 }
@@ -2511,8 +2545,8 @@ const Pass = struct {
                     .root_identity = source_fn.root_identity,
                     .spec_constr_pattern = try patternDigest(self.program, spec.pattern),
                     .args = .empty(),
-                    .captures = source_fn.captures,
-                    .body = .hosted,
+                    .captures = try self.copySpecCaptures(source_fn.captures),
+                    .body = .{ .hosted = .empty() },
                     .ret = source_fn.ret,
                 });
                 spec.fn_id = fn_id;
@@ -2524,6 +2558,22 @@ const Pass = struct {
             const fn_id: Ast.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(source_index))));
             for (0..self.plans[source_index].specs.items.len) |_| try self.notePrefixCopy(fn_id);
         }
+    }
+
+    /// A specialization's capture slots: a copy of each source slot's local,
+    /// so the specialization binds locals no other function names. Each copy
+    /// keeps its slot's complete capture identity, so the capture operands
+    /// that supply the source function supply the specialization unchanged.
+    fn copySpecCaptures(self: *Pass, source_captures: Ast.Span(Ast.TypedLocal)) Allocator.Error!Ast.Span(Ast.TypedLocal) {
+        if (source_captures.len == 0) return .empty();
+        const source_rows = try ownedWalkRows(self.program, self.allocator, Ast.TypedLocal, source_captures);
+        defer source_rows.deinit(self.allocator);
+        const copies = try self.allocator.alloc(Ast.TypedLocal, source_rows.items.len);
+        defer self.allocator.free(copies);
+        for (source_rows.items, copies) |source, *copy| {
+            copy.* = .{ .local = try self.program.addLocalCopy(source.local, self.symbols.fresh()), .ty = source.ty };
+        }
+        return try self.program.addTypedLocalSpan(copies);
     }
 
     fn createSpecializations(self: *Pass, original_fn_count: usize) Common.LowerError!void {
@@ -3010,7 +3060,7 @@ const Pass = struct {
             .spec_constr_pattern = prefixDigest(prefix_run),
             .args = try program.addTypedLocalSpan(params),
             .captures = .empty(),
-            .body = .hosted,
+            .body = .{ .hosted = .empty() },
             .ret = ret_ty,
         });
         try self.copyProcDebugName(source_fn.symbol, symbol);
@@ -3346,8 +3396,8 @@ const Pass = struct {
             .root_identity = source_fn.root_identity,
             .spec_constr_pattern = try patternDigest(self.program, pattern),
             .args = .empty(),
-            .captures = source_fn.captures,
-            .body = .hosted,
+            .captures = try self.copySpecCaptures(source_fn.captures),
+            .body = .{ .hosted = .empty() },
             .ret = source_fn.ret,
         });
         try self.plans[raw].specs.append(self.allocator, .{
@@ -3389,10 +3439,25 @@ const Pass = struct {
         const spec = &self.plans[@backingInt(source_fn_id)].specs.items[spec_index];
 
         const spec_fn_id = spec.fn_id orelse Common.invariant("call-pattern specialization id was not assigned before cloning");
-        const symbol = self.program.getFn(spec_fn_id).symbol;
+        const reserved = self.program.getFn(spec_fn_id);
+        const symbol = reserved.symbol;
 
         var cloner = Cloner.init(self, source_fn_id, spec.pattern);
         defer cloner.deinit();
+        // The body reads the specialization's own capture slots.
+        {
+            const source_captures = try ownedWalkRows(self.program, self.allocator, Ast.TypedLocal, source_fn.captures);
+            defer source_captures.deinit(self.allocator);
+            const spec_captures = try ownedWalkRows(self.program, self.allocator, Ast.TypedLocal, reserved.captures);
+            defer spec_captures.deinit(self.allocator);
+            if (source_captures.items.len != spec_captures.items.len) {
+                Common.invariant("call-pattern specialization capture count differed from its source function");
+            }
+            for (source_captures.items, spec_captures.items) |source_capture, spec_capture| {
+                const local_expr = try self.program.addExpr(.{ .ty = spec_capture.ty, .data = .{ .local = spec_capture.local } });
+                try cloner.subst.put(self.program, source_capture.local, .{ .expr = local_expr });
+            }
+        }
         cloner.inline_calls = switch (self.clone_inlining) {
             .all_calls => .all,
             .no_calls => .none,
@@ -3418,7 +3483,7 @@ const Pass = struct {
             .root_identity = source_fn.root_identity,
             .spec_constr_pattern = try patternDigest(self.program, spec.pattern),
             .args = args,
-            .captures = source_fn.captures,
+            .captures = reserved.captures,
             .body = body,
             .ret = source_fn.ret,
             .shapes = shapes,
@@ -11160,7 +11225,7 @@ const Cloner = struct {
             .source = worker_source,
             .args = task.args_span,
             .captures = task.captures_span,
-            .body = .hosted,
+            .body = .{ .hosted = .empty() },
             .ret = source_fn.ret,
         });
         try self.pass.callable_workers.put(worker_key, task.worker_fn_id);
@@ -13369,57 +13434,62 @@ const Cloner = struct {
         retained.items.len = len;
     }
 
-    fn appendRetainedExprLocal(
-        self: *Cloner,
-        expr: Ast.ExprId,
-        retained: *std.ArrayList(Ast.TypedLocal),
-    ) Common.LowerError!void {
-        const value = self.pass.program.getExpr(expr);
-        if (value.data == .local) {
-            return try retained.append(self.pass.allocator, .{ .local = value.data.local, .ty = value.ty });
-        }
-        if (value.data == .unit or
-            value.data == .@"unreachable" or
-            value.data == .int_lit or
-            value.data == .frac_f32_lit or
-            value.data == .frac_f64_lit or
-            value.data == .dec_lit or
-            value.data == .str_lit or
-            value.data == .bytes_lit or
-            value.data == .uninitialized or
-            value.data == .uninitialized_payload) return;
-        Common.invariant("SpecConstr retained ownership leaf was neither a runtime local nor a static value");
-    }
-
-    /// Append the runtime locals `root` retains, in depth-first order. The
-    /// walk keeps its own work stack; each entry carries the number of
-    /// nominal layers above it, which a finite value keeps below
-    /// `value_wrapper_strip_cap`.
+    /// Append the runtime locals `root` retains, in depth-first order. A
+    /// symbolic value retains what its components retain. An expression
+    /// retains the owners of the substitutable read it is (`ReadDependency`):
+    /// a local read its local, a field or element read its receiver's owners, a
+    /// function reference its capture operands' owners, and a closed value
+    /// or marker nothing. A runtime anchor retains what its runtime
+    /// expression does, never what its symbolic structure names. The walk
+    /// follows the same operands `exprIsSubstitutable` does, on its own work
+    /// stack; each value entry carries the number of nominal layers above
+    /// it, which a finite value keeps below `value_wrapper_strip_cap`.
     fn appendRetainedValueLocals(
         self: *Cloner,
         root: Value,
         retained: *std.ArrayList(Ast.TypedLocal),
     ) Common.LowerError!void {
-        const Item = struct { value: Value, depth: usize };
+        const Item = union(enum) {
+            value: struct { value: Value, depth: usize },
+            expr: Ast.ExprId,
+        };
         const allocator = self.pass.allocator;
+        const program = self.pass.program;
         var stack: std.ArrayList(Item) = .empty;
         defer stack.deinit(allocator);
-        try stack.append(allocator, .{ .value = root, .depth = 0 });
+        try stack.append(allocator, .{ .value = .{ .value = root, .depth = 0 } });
         while (stack.pop()) |item| {
-            if (item.depth >= value_wrapper_strip_cap) {
-                Common.invariant("SpecConstr retained ownership followed a cyclic value");
-            }
             // Children are appended in order, then reversed.
             const start = stack.items.len;
-            switch (item.value) {
-                .expr => |expr| try self.appendRetainedExprLocal(expr, retained),
-                .runtime_anchor => |anchor| try self.appendRetainedExprLocal(anchor.runtime, retained),
-                .static_data_candidate => {}, // Closed static values retain no caller locals.
-                .tag => |tag| for (tag.payloads) |payload| try stack.append(allocator, .{ .value = payload, .depth = item.depth }),
-                .record => |record| for (record.fields) |field| try stack.append(allocator, .{ .value = field.value, .depth = item.depth }),
-                .tuple => |tuple| for (tuple.items) |value| try stack.append(allocator, .{ .value = value, .depth = item.depth }),
-                .nominal => |nominal| try stack.append(allocator, .{ .value = nominal.backing.*, .depth = item.depth + 1 }),
-                .callable => |callable| for (callable.captures) |capture| try stack.append(allocator, .{ .value = capture.value, .depth = item.depth }),
+            switch (item) {
+                .value => |entry| {
+                    if (entry.depth >= value_wrapper_strip_cap) {
+                        Common.invariant("SpecConstr retained ownership followed a cyclic value");
+                    }
+                    const depth = entry.depth;
+                    switch (entry.value) {
+                        .expr => |expr| try stack.append(allocator, .{ .expr = expr }),
+                        .runtime_anchor => |anchor| try stack.append(allocator, .{ .expr = anchor.runtime }),
+                        .static_data_candidate => {}, // Closed static values retain no caller locals.
+                        .tag => |tag| for (tag.payloads) |payload| try stack.append(allocator, .{ .value = .{ .value = payload, .depth = depth } }),
+                        .record => |record| for (record.fields) |field| try stack.append(allocator, .{ .value = .{ .value = field.value, .depth = depth } }),
+                        .tuple => |tuple| for (tuple.items) |value| try stack.append(allocator, .{ .value = .{ .value = value, .depth = depth } }),
+                        .nominal => |nominal| try stack.append(allocator, .{ .value = .{ .value = nominal.backing.*, .depth = depth + 1 } }),
+                        .callable => |callable| for (callable.captures) |capture| try stack.append(allocator, .{ .value = .{ .value = capture.value, .depth = depth } }),
+                    }
+                },
+                .expr => |expr| switch (readDependency(program, expr)) {
+                    .local => |local| try retained.append(allocator, .{ .local = local, .ty = program.getExpr(expr).ty }),
+                    .closed, .marker => {},
+                    .receiver => |receiver| try stack.append(allocator, .{ .expr = receiver }),
+                    .captures => |captures| {
+                        const operand_count: usize = @intCast(captures.len);
+                        for (0..operand_count) |index| {
+                            try stack.append(allocator, .{ .expr = program.captureOperandAt(captures, index).value });
+                        }
+                    },
+                    .work => Common.invariant("SpecConstr retained ownership reached an expression that is not a substitutable read"),
+                },
             }
             std.mem.reverse(Item, stack.items[start..]);
         }
@@ -16887,6 +16957,82 @@ test "SpecConstr retained locals allocate by exact leaves not unrelated prefix" 
     try std.testing.expectEqual(local, GuardedList.at(program.typedLocalSpan(result), 0).local);
 }
 
+test "issue 13197: retained ownership follows a substitutable tuple projection" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const str_ty = try program.types.add(.{ .primitive = .str });
+    const pair_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ str_ty, str_ty }) });
+    const owner = try program.addLocal(@fromBackingInt(@intCast(1)), pair_ty);
+    const selected = try program.addLocal(@fromBackingInt(@intCast(2)), str_ty);
+    const owner_expr = try program.addExpr(.{ .ty = pair_ty, .data = .{ .local = owner } });
+    const projection = try program.addExpr(.{ .ty = str_ty, .data = .{ .tuple_access = .{
+        .tuple = owner_expr,
+        .elem_index = 0,
+    } } });
+    const source = try program.addTypedLocalSpan(&.{.{ .local = selected, .ty = str_ty }});
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    // SpecConstr permits this exact read to replace the selected binding.
+    // The continuation must retain its runtime owner, not a removed local.
+    try std.testing.expect(try exprIsSubstitutable(&program, allocator, projection));
+    try cloner.subst.put(&program, selected, .{ .expr = projection });
+    const retained = try cloner.cloneRetainedLocals(source);
+    const leaves = program.typedLocalSpan(retained);
+    try std.testing.expectEqual(@as(usize, 1), leaves.len);
+    try std.testing.expectEqualDeep(Ast.TypedLocal{ .local = owner, .ty = pair_ty }, GuardedList.at(leaves, 0));
+}
+
+test "issue 13197: a specialization binds capture locals its source function does not name" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const str_ty = try program.types.add(.{ .primitive = .str });
+    const tag_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+    const leaf = try program.names.internTagLabel("Leaf");
+    const source_arg = try program.addLocal(@fromBackingInt(@intCast(1)), tag_ty);
+    const capture = try program.addLocal(@fromBackingInt(@intCast(2)), str_ty);
+    const capture_id = program.ensureLiftCaptureId(capture);
+    const source_body = try program.addExpr(.{ .ty = str_ty, .data = .{ .local = capture } });
+    const source_fn_id = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(@intCast(3)),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = source_arg, .ty = tag_ty }}),
+        .captures = try program.addTypedLocalSpan(&.{.{ .local = capture, .ty = str_ty }}),
+        .body = .{ .roc = source_body },
+        .ret = str_ty,
+    });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    const pattern_args = try pass.arena.allocator().dupe(Shape, &.{.{ .tag = .{ .ty = tag_ty, .name = leaf, .payloads = &.{} } }});
+    try pass.plans[@backingInt(source_fn_id)].specs.append(allocator, .{ .pattern = .{ .args = pattern_args } });
+    try pass.reserveSpecIds();
+    const spec_fn_id = pass.plans[@backingInt(source_fn_id)].specs.items[0].fn_id orelse return error.TestUnexpectedResult;
+    try pass.writeSpecialization(source_fn_id, 0);
+
+    // Functions naming a common local share a binding group, so a
+    // specialization reading its source's capture locals would lose its own
+    // lambda-set polymorphism. The copied slot keeps its capture identity, so
+    // the operands that supply the source function supply the specialization
+    // unchanged.
+    const spec_fn = program.getFn(spec_fn_id);
+    const spec_captures = program.typedLocalSpan(spec_fn.captures);
+    try std.testing.expectEqual(@as(usize, 1), spec_captures.len);
+    const spec_capture = GuardedList.at(spec_captures, 0);
+    try std.testing.expect(spec_capture.local != capture);
+    try std.testing.expectEqual(str_ty, spec_capture.ty);
+    try std.testing.expectEqual(capture_id, program.captureIdOfLocal(spec_capture.local));
+    const spec_body = switch (spec_fn.body) {
+        .roc => |body| program.getExpr(body),
+        .hosted => return error.TestUnexpectedResult,
+    };
+    if (spec_body.data != .local) return error.TestUnexpectedResult;
+    try std.testing.expectEqual(spec_capture.local, spec_body.data.local);
+}
+
 test "staged SpecConstr submission failure drains accepted tasks" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
@@ -17377,7 +17523,7 @@ test "SpecConstr redirects a call to its most specific accepting worker" {
             .symbol = @fromBackingInt(@intCast(symbol)),
             .args = .empty(),
             .captures = .empty(),
-            .body = .hosted,
+            .body = .{ .hosted = .empty() },
             .ret = unit_ty,
         });
     }
@@ -18907,7 +19053,7 @@ fn testExitProducer(program: *Ast.Program, ty: Type.TypeId, symbol: u32) std.mem
         .symbol = @fromBackingInt(@intCast(symbol)),
         .args = .empty(),
         .captures = .empty(),
-        .body = .hosted,
+        .body = .{ .hosted = .empty() },
         .ret = ty,
     });
     return program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{ .callee = .{ .lifted = fn_id }, .args = .empty() } } });

@@ -7,6 +7,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+const ConcurrentU64 = @import("ConcurrentU64.zig").ConcurrentU64;
 
 /// Whether this compiler reads the developer-diagnostic variables at all: it
 /// was built with developer diagnostics (every Debug compiler, and any other
@@ -142,17 +143,17 @@ pub const TestWork = enum {
     native_test_procedures,
     test_root_execution,
 };
-var test_work: [@typeInfo(TestWork).@"enum".field_names.len]std.atomic.Value(u64) = @splat(.init(0));
+var test_work: [@typeInfo(TestWork).@"enum".field_names.len]ConcurrentU64 = @splat(.init(0));
 
 /// Add `amount` to a test-work counter when test command work tracing is on.
 pub fn countTestWork(counter: TestWork, amount: usize) void {
     if (!isSet(.test_command_work)) return;
-    _ = test_work[@backingInt(counter)].fetchAdd(amount, .monotonic);
+    test_work[@backingInt(counter)].add(amount);
 }
 
 /// The number of times a stage has counted this test work.
 pub fn testWorkCount(counter: TestWork) u64 {
-    return test_work[@backingInt(counter)].load(.monotonic);
+    return test_work[@backingInt(counter)].load();
 }
 
 /// The variable's value, or null when it is unset or this compiler does not

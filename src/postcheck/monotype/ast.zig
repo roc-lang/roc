@@ -1891,13 +1891,37 @@ pub const Def = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(Def) == 532);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(Def) == 536);
 }
 
 /// Body availability for a top-level or generated Monotype definition.
 pub const FnBody = union(enum(u8)) {
     roc: ExprId,
-    hosted,
+    /// A hosted function has no body to relate its signature's positions, so
+    /// it carries the occurrences of its declaration's type variables instead
+    /// (`SignatureVarStep`).
+    hosted: Span(SignatureVarStep),
+};
+
+/// One entry of a hosted function's signature variable occurrences: for every
+/// type variable its checked declaration names more than once, the path from
+/// the function type to each position the variable occupies. One variable's
+/// positions hold one value's representation however its instantiation
+/// changes (a row join, an erased callable), because the host may hand back
+/// any of them as any other. Distinct variables stay unrelated even when they
+/// instantiate to equal types.
+///
+/// An `occurrence` begins one position's path; the `child` entries after it,
+/// up to the next `occurrence`, descend from the function type to the
+/// position. A child index counts, by content: a function's arguments, then
+/// its result; a list's or box's element (0); a record's fields; a tuple's
+/// items; a tag union's payloads, tag after tag in order; a named type's
+/// arguments.
+pub const SignatureVarStep = union(enum(u8)) {
+    /// Begins a path; the payload numbers the declaration variable, densely
+    /// from 0 within one signature.
+    occurrence: u32,
+    child: u32,
 };
 
 /// Nested function definition discovered before lifting.
@@ -2259,6 +2283,8 @@ pub const ProgramBuilder = struct {
     branches: ProgramList(Branch, "branches"),
     if_branches: ProgramList(IfBranch, "if_branches"),
     string_literals: ProgramList(StringLiteral, "string_literals"),
+    /// Backing pool for `FnBody.hosted` spans.
+    signature_var_steps: ProgramList(SignatureVarStep, "signature_var_steps") = .empty,
     const_blob_backings: std.AutoHashMapUnmanaged(ConstBlobKey, *SharedLiteralBacking) = .empty,
     proc_debug_names: ProcDebugNameMap,
     roots: ProgramList(Root, "roots"),
@@ -2367,7 +2393,7 @@ pub const ProgramBuilder = struct {
         result.names = try self.names.clone(allocator);
         result.types = try self.types.cloneFrozen(allocator);
         try result.comptime_value_roots.appendSlice(allocator, self.comptime_value_roots.unsafeRawItemsForView());
-        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_targets", "const_fn_evidence_structurals", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "literal_roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
+        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_targets", "const_fn_evidence_structurals", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "signature_var_steps", "roots", "literal_roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
         try result.proc_debug_names.putAll(self.proc_debug_names.view());
@@ -2430,6 +2456,7 @@ pub const ProgramBuilder = struct {
         while (backings.next()) |owner| owner.*.release();
         self.const_blob_backings.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
+        self.signature_var_steps.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
         self.branches.deinit(self.allocator);
         self.str_pattern_steps.deinit(self.allocator);
@@ -2496,6 +2523,10 @@ pub const ProgramBuilder = struct {
 
     pub fn setFnSource(self: *ProgramBuilder, id: FnId, source: FnTemplate) void {
         self.fns.getPtrImmediate(@backingInt(id)).source = source;
+    }
+
+    pub fn addSignatureVarSteps(self: *ProgramBuilder, steps: []const SignatureVarStep) std.mem.Allocator.Error!Span(SignatureVarStep) {
+        return try Common.appendSpan(SignatureVarStep, &self.signature_var_steps, self.allocator, steps);
     }
 
     pub fn addDef(self: *ProgramBuilder, def: Def) std.mem.Allocator.Error!DefId {
@@ -3233,7 +3264,7 @@ test "monotype call target verifier checks local slots" {
             .symbol = undefined, // symbol is not inspected by the call-target verifier
             .fn_id = .some(fn_id),
             .args = Span(TypedLocal).empty(),
-            .body = .hosted,
+            .body = .{ .hosted = .empty() },
             .ret = unit_ty,
         });
         try std.testing.expectEqual(CallTargetVerifyError.local_fn_definition_arity_mismatch, program.verifyCallTargets().?);
