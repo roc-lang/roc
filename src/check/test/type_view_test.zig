@@ -599,3 +599,20 @@ test "nominal views answer the opening of a root's application once" {
     try testing.expectEqual(opened, (try reader.openNominalBacking(app)).?);
     try testing.expectEqual(opened, (try reader.openNominalBackingOf(other_holder, app)).?);
 }
+
+test "nominal views open every application of an argument-less declaration to one view" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const backing = try f.tuple(&.{try f.store.freshFromContent(.{ .structure = .empty_record })});
+    const nominal = try f.declaration("Plain", &.{}, backing);
+    const first = try f.application(nominal, &.{});
+    const second = try f.application(nominal, &.{});
+    var reader = Reader.init(testing.allocator, &f.store);
+    defer reader.deinit();
+    const opened = (try reader.openNominalBacking(first)).?;
+    try testing.expectEqual(@as(usize, 1), (try tupleChildren(&reader, opened)).len);
+    // The remembered answer and a separately built application of the same
+    // declaration name one view.
+    try testing.expectEqual(opened, (try reader.openNominalBacking(first)).?);
+    try testing.expectEqual(opened, (try reader.openNominalBacking(second)).?);
+}
