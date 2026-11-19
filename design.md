@@ -33112,6 +33112,13 @@ other. Nothing the program reads is released by teardown: the executable
 lives in the run's own scratch directory, which is released only after the
 program exits. A build that fails starts nothing.
 
+On POSIX the terminal sends Ctrl+C to the whole foreground process group.
+Once the app starts, it decides what that interrupt means: Roc waits even
+if the app handles it and keeps running. If the app dies from SIGINT, Roc
+finishes cleanup and terminates by SIGINT too, rather than reporting a crash
+or turning the signal into a normal exit code. This also applies to a
+hot-reloading host; until launch, Ctrl+C still interrupts compilation.
+
 ## Relationship To Cor LSS
 
 The `.lss` runtime lowering strategy mirrors Cor's LSS experiment after
