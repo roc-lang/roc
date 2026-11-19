@@ -12801,21 +12801,25 @@ rather than equality: the demanding expression is routinely a nested local
 binding inside the annotated definition's body, and that is still the
 definition's own codec.
 
-A closed value flowing into an implicitly open output row WIDENS into it: the
-row recorded at that position is the one the annotation declares, whatever
-the body happened to produce. The signature is the whole of what a caller
-reads, so two definitions with identical annotations must be interchangeable
-for every caller, which is precisely what identical signatures already
-promise. The body is bounded by the audit, never by which value a particular
-return path constructed.
+A closed value flowing into an implicitly open output row WIDENS into it
+wherever the row coercion reaches (Row Subsumption): the result's own row and
+the payload rows under it. The row recorded at such a position is the one the
+annotation declares, whatever the body happened to produce. The signature is
+the whole of what a caller reads there, so two definitions with identical
+annotations are interchangeable for every caller. The body is bounded by the
+audit, never by which value a particular return path constructed. A row in an
+argument of a named type is outside that reach, for `Try` as for every other
+named type: a body that forwards a closed value into it binds the
+annotation's extension, and callers then read the row closed.
 
 The extension is an ordinary flex during the body check. A value from a
 closed source (an input-position parameter, a nominal field, a hosted result)
-that flows into the definition's result does not bind it: the value relates to
-the result through a copy of its type with each closed row re-opened, and
-crosses into the result through a row coercion (Row Subsumption). The
-definition's own result row is therefore the annotation's open row whatever
-its body forwards, and two identically annotated definitions have one type.
+that flows into the definition's result does not bind a row the coercion
+reaches: the value relates to the result through a copy of its type with each
+such closed row re-opened, and crosses into the result through a row coercion
+(Row Subsumption). The definition's own result row is therefore the
+annotation's open row whatever its body forwards, and two identically
+annotated definitions have one type.
 `test/fx-open/issue_9963_hosted_try_question_mark.roc` carries both halves of
 that witness in one platform module. `Fallible.via_match!` and
 `Fallible.via_question!` are annotated `{} => Try(Str, [HostErr(Str)])`
@@ -12828,13 +12832,18 @@ Return-Row Composition), so this function's row stays open too.
 
 An anonymous `..` in a positive position of an opening annotation means
 exactly what absence means there and is generated the same way (a recorded
-flex, or the rigid deferral marker where the annotation defers per use), so
-the two spellings cannot drift. Elsewhere `..` remains the rigid
-`#others` it always was, and a named extension (`..others`) is always a
-rigid.
+flex), so the two spellings cannot drift: there the annotated definition is
+the row's producer, and the row is already open for its callers. Elsewhere
+`..` is the rigid `#others`, and a named extension (`..others`) is always a
+rigid. A `where` method's signature is an elsewhere at every position, its
+direct result row included, because the definition does not produce a
+method's result: an implementing type does. A `..` there, bare or named,
+ends the row in a rigid the enclosing function's scheme quantifies, and so
+has a meaning of its own (below).
 
 `roc fmt` deletes exactly such a `..` (`src/fmt/open_rows.zig`), since the
-checker already reports it as a Redundant Open Tag Union. The formatter sees
+checker already reports it as a Redundant Open Tag Union; it never visits a
+`where` method's signature, where no `..` is one. The formatter sees
 only the parse AST, so it answers each question the checker answers from a
 resolved declaration over EVERY declaration the spelling could reach (every
 same-named type declaration in the file, the `Builtin` type of that name, any
@@ -13021,15 +13030,50 @@ nominal field) still serves a widened use: Monotype relates the request to
 the template component-wise without unifying the two result rows, so the
 implementation is specialized at its own declared row, and the two rows are
 one join set where the call's result flows (Row Joins), so the value needs no
-conversion. Per-use opening applies only at the output positions a join
-reaches: the signature's direct result row, and the ERROR row of a `Try`
-result. A `Try`'s ok row is not opened. A tag union in any OTHER output
-position (inside a `List`, a record field, a tuple, a tag payload, a
-non-`Try` nominal) keeps its row as written, exactly as a negative position
+conversion. Per-use opening applies at exactly one output position: the
+signature's direct result row. A tag union in any OTHER output position
+(a record field, a tuple, a tag payload, an argument of any named type, `Try`
+and `List` included) keeps its row as written, exactly as a negative position
 does, so a body use that tries to widen it is an ordinary type mismatch
-reported at the body use. Keeping the set of positions a use may WIDEN within
-the row coercion's reach is the rule this axis holds; it is held BY HAND, by
-a syntactic walk (see "Declaration Position and Adapter Reach" below). (Decided 2026-09-03 as the converse—open
+reported at the body use. `x.parse()` at a requirement
+`a.parse : a -> Try(U64, [BadNum])` therefore has the type
+`Try(U64, [BadNum])` exactly: an implementation returns exactly those tags, a
+`match` on the result needs no catch-all (one is reported as redundant), and
+using the result at `Try(U64, [BadNum, Empty])` takes a `?`
+(`Ok(x.parse()?)`), which composes the closed row into the wider one (Try
+Return-Row Composition). Keeping the set of positions a use may WIDEN within
+the row coercion's reach is the rule this axis holds; it is held BY HAND, by a
+syntactic walk (see "Declaration Position and Adapter Reach" below).
+
+A `..` on a `where` method's result row has ONE meaning wherever the row
+stands: an implementing type's method may return more tags than the row
+lists. It is written bare (`..`) or named (`..others`), on the method's direct
+result row (`a.parse : a -> [BadNum, Fine, ..]`), behind an alias, or in an
+argument of a named type (`a.parse : a -> Try(U64, [BadNum, ..])`). In each
+case the row ends in a rigid the enclosing function's scheme quantifies
+(the anonymous `#others`, or the named variable), and nothing is deferred per
+use. Three things follow, identically for both spellings:
+
+- a type whose method returns the listed tags, or those and more, satisfies
+  the requirement: the call instantiates the rigid at the implementation's
+  other tags;
+- the requiring body sees a row with unknown other tags, so a `match` on it
+  needs a catch-all, and one without is a Non Exhaustive Match;
+- the body cannot add a tag to its copy of the row (the other tags are the
+  implementing type's, not the body's), so using the result at a row listing
+  another tag is a Type Mismatch. A named extension can be handed on:
+  `run : a -> [BadNum, Fine, ..others] where [a.parse : a -> [BadNum, Fine,
+  ..others]]` returns the method's row as it is.
+
+Without `..` nothing above applies: an implementation is bounded by the listed
+tags, and a body use of the direct result row may match its own copy
+exhaustively or widen it. Neither spelling is reported as a Redundant Open Tag
+Union, and `roc fmt` keeps both. A callback PARAMETER's result row is an input
+position, where `..` has the same quantifying meaning by the ordinary polarity
+rule (`describe : (a -> [BadNum, Fine, ..]), a -> Str` accepts a callback
+returning more tags and needs a catch-all). `src/check/test/where_method_row_extension_test.zig`
+pins both sides and both spellings, and `test/cli/WhereMethodOpenResultRow.roc`
+runs them on every backend. (Decided 2026-09-03 as the converse—open
 everywhere, reject a closed implementation at the enclosing-scheme
 instantiation—and reversed 2026-09-14: that instantiation
 (`instantiateTypeScheme`) is itself what closes the markers with
@@ -13090,19 +13134,21 @@ closes at any depth.
 
 `Check.applicationArgumentReaches` follows completed raw declaration backings
 with a visited `(Var, adapter position)` worklist. Alias wrappers are transparent.
-At the signature root a function's return reaches the result; in that result
-only builtin `Try`'s error argument reaches its row. Other children are nested,
-and a shared formal with any nested occurrence stays closed. Source formal
-identities determine the argument mapping; no names, chain limits, or module
-boundary guesses participate. The instantiator carries the same signature,
-result, error-row, and nested positions through hidden alias parameters.
-The formatter determines alias argument reach with a finite declaration/context
-worklist and joins all formal occurrences. It treats nominal bodies as opaque
-and recognizes builtin `Try` only through its compiler-owned source identity.
-Function-return and nominal-argument reach transitions live beside the shared
-position solver and are used by both frontend walks and instantiation.
+At the signature root a function's return reaches the result, and the result
+reaches its own row through alias backings and row extensions. Every other
+child is nested: a tag payload, a record field, a tuple item, a nested
+function, and every argument of a nominal type, whichever type it is. A shared
+formal with any nested occurrence stays closed, and a formal standing both as
+the whole signature and as its direct result takes the result's reach. Source
+formal identities determine the argument mapping; no names, chain limits, or
+module boundary guesses participate. The instantiator carries the same
+signature, result, and nested positions through hidden alias parameters.
+The formatter needs no reach: it leaves every where-method signature as
+written.
+The function-return reach transition lives beside the shared position solver
+and is used by the checker's walk and by instantiation.
 The reachable set is the per-use opening contract for `where` results; it does
-not extend to nested functions, payloads, or `Try` ok rows.
+not extend to nested functions, payloads, or arguments of named types.
 
 The HOST-BOUNDARY row above covers two opt-out sites, both genuine
 non-producers: host-boundary annotations (hosted lambdas and `provides` defs,
@@ -13168,9 +13214,9 @@ closed parameter `x`—is copied with its own tail kept: the copy lists the
 re-opened payload, and every tag either row gains through that shared tail is
 the other's too. A coercion never changes a value's nominal identity, so
 when the relation lifts such a copy into a nominal (the `Try` of an annotated
-result, or a user nominal), the value's own row lifts into the same nominal at
-its own arguments (`Check.liftKeptTailSources`), and the coercion relates the
-nominal at the value's arguments to the nominal at the result's. A user
+result, or any other nominal), the value's own row lifts into the same nominal
+at its own arguments (`Check.liftKeptTailSources`), and the coercion relates
+the nominal at the value's arguments to the nominal at the result's. A
 nominal's arguments are outside the reach, so its backing then relates to the
 value's payloads exactly as an uncoerced value's would. A forwarding
 construction is then interchangeable with one that builds the same payload
@@ -13246,13 +13292,26 @@ only the result, so the argument row stays closed, and a call at a tag the
 argument does not list is still rejected. The function's result is its
 annotated result, open, so every use of the function—a direct call, a method
 call, an imported call, the function as a value—has the type a constructing
-definition would have, and no use site does anything. An author who wants a
+definition would have, and no use site does anything. That holds for the rows
+the coercion reaches. A forwarder whose rows sit in an argument of a named
+type, as in `fwd : Try(U64, [BadNum]) -> Try(U64, [BadNum])` with
+`fwd = |t| t`, relates its body to its result as any two applications of one
+named type relate, argument by argument, so the result's error row is the
+argument's closed row and a caller needing a wider one is a mismatch at the
+caller. A body that builds the result (`match t { Ok(n) => Ok(n), Err(e) =>
+Err(e) }`) or forwards it through `?` (`Ok(t?)`) leaves the row open. An author who wants a
 genuinely closed output row would write the closure explicitly, in the shape
 of `[MyErr, ..[]]`; that spelling does not exist and is not designed.
 
-A `?` whose error row is closed contributes that row's tags to the composed
-result and relates no tail (Try Return-Row Composition): a closed row has no
-residual, and equating it with the result would close the result's row. The
+A `?` whose error row can gain no tag (a closed row, or one an annotation
+bounds) contributes that row's tags to the composed result and relates no
+tail (Try Return-Row Composition): such a row has no residual, and equating
+it with the result would close the result's row or be refused by the bound.
+This is the one widening of a row in a `Try`'s argument, and it belongs to
+`?`: a value of type `Try(ok, [A])` used at `Try(ok, [A, B])` without `?` is
+a type mismatch, exactly as a value of any named type at a different argument
+is, and is written `Ok(t?)`, `t.map_err(...)`, or a `match` that rebuilds
+it. The
 `?` return's error row joins the result's row exactly as a row coercion's rows
 join (Row Joins).
 
@@ -13296,16 +13355,18 @@ The coercion has a fixed REACH, the set of positions the checker widens.
 Starting from the coerced value's own row, it reaches:
 
 1. the row at the root;
-2. every row that is a tag payload of a reached row, recursively;
-3. every row reached by stepping through the backing of a named type that has
-   one (`Try` and user nominals alike) at a reached position.
+2. every row that is a tag payload of a reached row, recursively.
 
 At a reached row the destination lists every tag the source row carries, with
 payloads of the same arity; the empty source row is uninhabited and satisfies
 that trivially. A row at any other position (a record field, a tuple item, a
-list item, a box payload, a function argument or result, or an argument of a
-named type without a backing such as `List`) is outside the reach and is
-identical on both sides. The checker guarantees both. A coercion whose
+function argument or result, or an argument of a named type, `Try`, `List`,
+and user nominals alike) is outside the reach and is identical on both sides.
+The checker guarantees both. A value of a named type is stored as its declared
+backing, so a lowering that converts a coerced value steps through that
+backing to the rows it declares, which are the same on both sides; the
+positions a conversion can rebuild, a superset of this reach, are the
+conversion reach of Sealed Result Rows. A coercion whose
 value diverges diverges, and is lowered by the divergent paths like any other
 wrapper; such a value produces nothing, so the join has nothing to relate.
 
@@ -13332,14 +13393,14 @@ wrapper; such a value produces nothing, so the join has nothing to relate.
   constructed tag's payloads are reached positions of the destination's row
   and are built at its payload types. A child that produces its value (a
   read or a call) has its own type's representation, and when the two types
-  differ it is converted into the destination along the coercion's reach
+  differ it is converted into the destination along the conversion reach
   (Sealed Result Rows): between two closed types by a static row conversion
   of the enclosing module, and into a destination whose row a type variable
   of the body opens by the plan-driven `adapt` (Coercion Plans), whose
   destination discriminant is the one the tag has under the destination's
   descriptor. Either walk descends only into reached positions—tag payloads
-  and nominal backings. Records, lists, boxes, and function values are
-  outside the reach by the checker's rule and copy as they are. The
+  and declared backings. Records, lists, boxes, and function values are
+  outside the reach and copy as they are. The
   conversion is elided when the two types are one or have one committed
   layout. A dictionary of a method whose signature holds a row its consumers'
   type widens is wrapped in an adapter that converts the method's result the
@@ -13491,7 +13552,7 @@ checked types and its imports', never on a module that imports it. Where the
 specialized lowering joins, Boxy converts: a closed value flowing into a
 wider row of the same body, a call whose instantiation widens a callee's
 sealed result, a function value used at a wider type, and a dictionary whose
-method's result its consumer widens are each converted along the coercion's
+method's result its consumer widens are each converted along the conversion
 reach (Sealed Result Rows). An open row of a generic body stays dynamic: its
 descriptor is a type table word whose recipe names its explicit tags and its
 row variable, and an instantiation fixes the row variable to the residual of
@@ -13538,10 +13599,14 @@ it, exactly as an inline row is. `widenedRowCopy` shares a marked row, and `?`
 composition relates it whole, so a result wider than the host's row is a type
 mismatch. The report says the row is fixed by the host, names the host
 function, and shows how to rebuild the value tag by tag
-(`.map_err(|StdoutErr(e)| StdoutErr(e))`). A `where` requirement whose result
-reaches a tag row is opened per use and may be used at a wider union, which a
-hosted implementation cannot serve, so dispatch resolution rejects a hosted
-implementation for such a requirement ("Hosted Function In Where Clause",
+(`.map_err(|StdoutErr(e)| StdoutErr(e))`). The body requiring a `where`
+method may use any tag row its result reaches at a wider union: its direct
+result row is opened per use, a row coercion re-opens a payload row under it,
+and a `?` composes the error row of its `Try` into a wider one. A hosted
+implementation can serve none of these, and the body is checked before any
+implementation is selected, so dispatch resolution rejects a hosted
+implementation whose result reaches a tag row
+("Hosted Function In Where Clause",
 `hosted_where_requirement`) rather than relating the two rows. These are the
 only rows that do not join, and every one of them is a type error the checker
 decides.
@@ -13746,8 +13811,8 @@ The checker has no host-specific widening rule for `?` on direct hosted
 calls. The rule that was removed was a use-site redirect with subset and
 payload probes: it inspected the solved graph and then rewrote it, which is
 why it needed a `RedirectRule`. What exists instead is not host-specific and
-rewrites nothing. A `?` whose error row is closed contributes its tags to the
-composed result and relates no tail (Try Return-Row Composition), and a value
+rewrites nothing. A `?` whose error row can gain no tag contributes its tags
+to the composed result and relates no tail (Try Return-Row Composition), and a value
 with a closed row flowing into an annotated result relates through a copy with
 that row re-opened (Row Subsumption); both are relations the checker chooses
 before unifying, and both lower as row joins (Row Joins). A hosted result's
@@ -13757,11 +13822,12 @@ diagnostic and does not affect acceptance.
 
 Hosted lowering has no host-specific widening graph relation, no
 expected-result request rewrite, and no adapter: a hosted extern is emitted at
-its declared type and nothing re-tags its result. A `where` requirement whose
-result reaches a tag row is opened per use and may be used at a wider union,
-which a hosted implementation cannot serve, so dispatch resolution rejects the
-selection ("Hosted Function In Where Clause") rather than relating the two
-rows, and no hosted extern is ever requested at a widened row. The declared
+its declared type and nothing re-tags its result. The body requiring a
+`where` method may use any tag row its result reaches at a wider union (Row
+Joins, "The host boundary"), which a hosted implementation cannot serve, so
+dispatch resolution rejects the selection ("Hosted Function In Where Clause")
+rather than relating the two rows, and no hosted extern is ever requested at
+a widened row. The declared
 host ABI checks remain independently in force.
 
 A Roc wrapper that combines a hosted error with a wider return row rebuilds
@@ -13824,12 +13890,20 @@ Any tags exposed in a residual source by the payload relations contribute by
 the same rule before its terminal extension is related. A tagless nested
 contribution is the zero-head instance of this same operation.
 
-A contribution whose error row is CLOSED is included by its heads alone,
-through the same fresh spine, and relates no tail: a closed row has no
-residual dependency, and relating its terminal `[]` to the result's residual
-would close the result (Row Subsumption). The body's own result follows the
-same rule. A host-boundary row is the exception: it never widens, so it is
-related whole, and a result wider than it is a mismatch (Row Joins).
+A contribution whose error row CAN GAIN NO TAG is included by its heads
+alone, through the same fresh spine, and relates no tail
+(`Check.tryReturnTailGainsNoTag`). Two rows qualify: a closed row, whose
+terminal `[]` would close the result if it were related to the result's
+residual (Row Subsumption), and a row whose extension an annotation bounds
+(an annotated local or top-level value's row, Value Rows: Uses Share One
+Row), which the unifier refuses to extend, so relating it to a wider result
+would be a mismatch. Neither has a residual dependency. The composed result's
+own tail is never such a source: it is the destination. The body's own result
+follows the same rule. A host-boundary row is the exception: it never widens,
+so it is related whole, and a result wider than it is a mismatch (Row Joins).
+This inclusion is the whole of what widens a `Try`'s error row, and it happens
+only at a `?`: no other relation descends into the arguments of `Try`, which
+is an ordinary nominal type everywhere else in checking.
 
 A TAGLESS open contribution into an unannotated result becomes the result's
 residual tail. The composed row's heads never flow back into it, so a
@@ -14061,13 +14135,16 @@ for it must take that slot by the same rule, so `Err(tag)` forwarding a
 parameter whose row the `?` result widens is not lowered at the result's
 cell. A value that is not such a call—a read of a value, whose row every use
 shares, or a call through a function value—keeps its own row and is widened
-into the destination by a `row_widen`, which Lambda Solved joins (Row Joins). Only two positions widen,
-the template's DIRECT result row and the ERROR row of a `Try` result; a
-`Try`'s ok row and every nested row relate exactly. The graph may present
-either side as a bare row or as the `Try` nominal, and the empty row's node
-stands for every empty row, so an empty error row is widened by pointing its
-position—the `Err` payload and the `Try` argument—at the request's row rather
-than by rewriting the node.
+into the destination by a `row_widen`, which Lambda Solved joins (Row Joins).
+Only a template whose DIRECT result is a closed row takes a wider request
+(`hasClosedResultRow`): the request widens that row, or one payload row the
+two results hold under the same label. A result that is a named type, `Try`
+included, relates exactly, so its call keeps its own row and a `?` or a
+`row_widen` joins it. The graph may present either side as a bare row or as a
+nominal, and the empty row's node stands for every empty row, so an empty
+payload row is widened by pointing its position—the tag payload, and a named
+type's argument naming the same row—at the request's row rather than by
+rewriting the node.
 
 When the closed row ends in a variable the template QUANTIFIES, and nothing
 else in the template's type reaches that variable—no argument, payload,
@@ -14087,8 +14164,9 @@ the narrower row.
 
 The rule asks only whether the result alone determines the variable, so
 the variable may be flex or rigid, with or without a row default, and may
-be the whole error type (`Try(Str, err)`, or `Try(Str, _)` whose hole
-generalizes). The one exception is a constraint that closing a row does
+be the whole result row. It reads the direct result row only: a variable in
+an argument of a named type is an ordinary scheme variable, bound by the
+substitution the use recorded. The one exception is a constraint that closing a row does
 not discharge (anything beyond `is_eq` and `to_hash`). Such a constraint
 can be a producer, like `parser_for`, whose behavior depends on the row,
 so a wider row would run code the checker never checked. The checker
@@ -14106,8 +14184,8 @@ one by these two rules: the template's OWN root has a closed result row or
 a request-determined result row variable
 (`Builder.templateTakesWiderResultRow`). The call's instantiated type is
 not enough. A template whose result row variable it shares with an
-argument, like `same : Try(ok, err) -> Try(ok, err)`, is closed at a call
-whose argument builds no error tags (`same(Ok(x))`), yet its request's
+argument, like `same : [Done, ..rest] -> [Done, ..rest]`, is closed at a call
+whose argument builds no other tag (`same(Done)`), yet its request's
 result row is its argument's, which the request does not widen. Such a
 call keeps its own row and is widened by a `row_widen`.
 
@@ -14121,8 +14199,8 @@ That withholding is by POSITION, not by declaration. A type declaration
 defers every extensionless tag union it writes, at any depth, because the
 declaration cannot know where its references will stand; a reference resolves
 those deferrals by where the reference itself sits. A marker on the referenced
-declaration's own row—reached only through alias backings, and through the
-ERROR argument of a `Try` standing in the signature's direct result—stays
+declaration's own row—reached only through alias backings from the
+signature's direct result—stays
 deferred; a marker reached under any other constructor is closed as written.
 So `Statuses : List([Ok(Str), Err(Str)])` named as a where-method's result
 contributes a closed row, exactly as the same type written inline there does.
@@ -17172,7 +17250,10 @@ Other solved-graph mutations:
   contributes through a fresh spine with unchanged payload identities, and
   relates its residual tail after visible tags have merged; a tagless
   contribution into an unannotated result becomes its residual tail, and
-  other independent contributions retain full-row equality. A contribution whose source ends in
+  other independent contributions retain full-row equality. A source row that
+  can gain no tag, closed or bounded by an annotation
+  (`tryReturnTailGainsNoTag`), contributes by its heads alone through the same
+  fresh spine and relates no tail. A contribution whose source ends in
   a row still open in a fixpoint (`collectOpenTryRowTails`) waits for that
   fixpoint's boundary (`relateTryRowFixpoint`), where cyclic components
   collapse by ordinary unification before the rest relate as classified. No
@@ -17655,13 +17736,76 @@ root program lowers the platform at the app type that variable solved to
 variable is no hidden descriptor of the template's worker either.
 
 Sealing is sound only where every value typed with the variable crosses the
-worker's boundary at a place that knows both rows, which is its result. So a
-bounded variable keeps its descriptor when it occurs anywhere outside the
-result's coercion reach (the direct result row, a tag payload row under it,
-or the error row of a `Try` result): in an argument, including a callback
+worker's boundary at a place that knows both rows and can convert between
+them, which is its result. A value conversion (below) has a fixed CONVERSION
+REACH. Starting from the result type, it reaches:
+
+1. the result's own row, through alias backings;
+2. every tag payload of a reached row, and the row's extension;
+3. each argument of a named type at a reached position that the type's
+   DECLARATION places on this same reach.
+
+Rule 3 is decided once per declaration, from its declared backing
+(`NominalRowReach`). A formal is REACHED when the backing mentions it and
+every mention stands on the backing's own row, in a tag payload of a reached
+row, or in a reached argument of another named type. A formal with any
+mention under a record, a tuple, a function, or an unreached argument is not
+reached. Neither is a formal the backing never mentions, or an argument of a
+type with no declared backing (`List`, `Box`, the numbers). A named type's
+representation does not enter into it: a user type published with a box
+payload capability is found by its key like an imported one, so a type
+reaches the same formals in every module that names it. Recursion is
+never stepped through: declarations whose backings name one another form a
+recursive group (a strongly connected component of that relation), and an
+argument a backing passes to a declaration of its own group is not reached.
+No type is recognized by name or by origin. `Try(ok, err) := [Ok(ok),
+Err(err)]` reaches both formals because its backing holds each as a tag
+payload, and a user's `Outcome(good, bad) := [Good(good), Bad(bad)]` reaches
+both of its own for the same reason, so `List.get : List(a), U64 -> Try(a,
+[OutOfBounds])` and a function returning `Outcome(a, [OutOfBounds])` seal the
+same variable. `Held(e) := [Held(List(e))]` and `Tree(e) := [Leaf(e),
+Node(Tree(e))]` reach nothing.
+
+So a bounded variable keeps its descriptor when it occurs anywhere outside
+the result's conversion reach: in an argument, including a callback
 parameter's row that polarity also opens, or under a record, list, box,
-function, or other named type's argument in the result
-(the result-reach traversal of `SealedSchemeSlots`). It also keeps its descriptor when a
+function, or unreached named-type argument in the result
+(the result-reach traversal of `SealedSchemeSlots`).
+
+The reach is exactly the set of positions a conversion can rebuild, which is
+what makes the rule sound:
+
+- **Every caller can convert.** `Program.storageDifference` compares the
+  callee's result type at an instantiation with the call's own type, a named
+  type's by its arguments, and `Builder.convertValue` rebuilds a value one row
+  at a time: it peels a named type to its declared backing at the type's
+  arguments (`structuralType`), switches on the source discriminant, and
+  converts each payload whose two types differ. A row is convertible exactly
+  when the path from the result to it passes only through rows, tag payloads,
+  and declared backings, which is rules 1 to 3. A sealed variable occurs
+  nowhere else, so the two types of a value crossing the boundary differ only
+  where the conversion descends. Every module that can name the callee's
+  result holds the declaration of each named type in it (a checked module
+  embeds every declaration its types reach), and reads the same backing the
+  sealing module read.
+- **Published output is independent of importers.** A formal's reach is a
+  function of its declaration and of the declarations its backing names, and
+  never of a use. `sealed_slots` is a function of the template's checked
+  signature and those declarations, so a module's sealed slots, layouts, and
+  workers are decided by its own checked module and its imports' (Per-Module
+  Output).
+- **Conversions are finite.** The reach never enters a recursive group, and
+  an alias cannot be recursive, so each step of a conversion descends into a
+  strictly smaller type: a conversion worker never calls itself, and no
+  conversion rebuilds a recursive value.
+
+The checker's row coercion (Row Coercion Primitive) reaches a subset of these
+positions, rules 1 and 2, because a coercion never widens a named type's
+argument. Rule 3 serves instantiation: a caller may instantiate a quantified
+row in a named type's argument at a wider row, and that is the widening a
+sealed worker's callers convert.
+
+A bounded variable also keeps its descriptor when a
 callable the worker receives from its caller could involve it, since such a
 callable carries the caller's instantiation: a `where` requirement whose
 interface mentions the variable (the dictionary's methods), or any
@@ -17692,9 +17836,11 @@ that record among the template's closed row nodes
 
 Checked-module output computes all of a template's sealed slots together. It first
 collects the bounded candidates, then traverses its current immutable checked
-types with three explicit modes: arguments, ordinary reach, and result-coercion
-reach. Arguments and evidence callable types expose every type edge; result
-reach follows only the coercion paths above. Only argument reach can veto all
+types with three explicit modes: arguments, ordinary reach, and result
+conversion reach. Arguments and evidence callable types expose every type
+edge; result reach follows only the conversion reach above, reading each named
+type's reached formals from `NominalRowReach`, which computes a declaration's
+answer on first use and keeps it for the module's other templates. Only argument reach can veto all
 candidates because of a nominal with a callable payload. A type reached in one
 mode remains visitable in another: sharing or recursion must not hide an
 externally involved occurrence. Each `(type, mode)` is expanded at most once
@@ -17713,7 +17859,7 @@ callers, so widening becomes a CONVERSION at the instantiation that widens:
 
 - A call whose instantiation widens the callee's sealed result converts the
   result after the call, from the callee's result type at that instantiation
-  to the call's own type.
+  to the call's own type, along the conversion reach.
 - A `return`, a `?` return, or a row coercion that flows a produced value (a
   read or a call) into the enclosing worker's sealed result converts it
   there; a constructed value is built at the destination's row (Row Coercion
@@ -17832,9 +17978,10 @@ discriminant, one arm per source variant building the destination's variant
 of the same name, with each payload whose types differ converted by the
 worker for that payload pair—so ARC, the LIR passes, and the backends see
 nothing but ordinary code and payloads move rather than copy. The walk
-descends only into the coercion's reach (tag payloads and nominal backings);
-records, lists, boxes, and function values are identical on both sides by
-the checker's rule. The reach never recurses (nominal rows are declared and
+descends only into the conversion reach (tag payloads and declared
+backings); records, lists, boxes, and function values are identical on both
+sides, by the checker's rule for a coercion and by the sealing rule for an
+instantiation. The reach never recurses (it enters no recursive group, and
 aliases cannot be recursive), so every conversion worker is finite. A
 conversion whose destination row a type variable of the body opens is the
 plan-driven `adapt` (Coercion Plans), whose plan re-tags each source

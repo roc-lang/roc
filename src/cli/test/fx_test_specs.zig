@@ -846,6 +846,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test for #12692: a record argument returned to its caller on a switched result outcome keeps the field its callee passed to a hosted call",
     },
     .{
+        .roc_file = "test/fx/where_method_try_question_hosted_wrapper.roc",
+        .io_spec = "1>twice: ok 14|1>forward: ok 7|1>broken twice: closed|1>broken forward: closed",
+        .description = "Issue #11286: a where-method served by a Roc method that rebuilds a hosted error has its Try error row composed into a wider one with `?`",
+    },
+    .{
         .roc_file = "test/fx/issue_12746_single_field_handle.roc",
         .io_spec = "1>method call: 1|1>qualified call: 2|1>match return: 3|1>recursive helper: 4|1>scalar sibling: 5|1>tag payload: 6",
         .description = "Regression test for #12746: an argument returned to its caller on a switched result outcome keeps the handle its callee reads through an ownership-complete projection and passes to a hosted call",
